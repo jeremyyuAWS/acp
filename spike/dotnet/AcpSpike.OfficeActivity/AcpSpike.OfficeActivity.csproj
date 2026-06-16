@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    DERISK SPIKE (gated on D1 license). Wraps devSEAL's UNCHANGED DocxAnalyser
+    as a Temporal .NET activity to prove the engine-as-activity seam end to end.
+    The ProjectReferences point at the read-only diligence clone by relative
+    path; the productized build would consume the analysers as a packaged lib.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <NoWarn>$(NoWarn);S1481;S3267;S3217</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Temporalio" Version="1.*" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.*" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../../../_review-digital-accessibility/DigitalA11y.Analysers.DotNet/DigitalA11y.Analysers.DotNet.csproj" />
+    <ProjectReference Include="../../../../_review-digital-accessibility/DigitalA11y.Core/DigitalA11y.Core.csproj" />
+  </ItemGroup>
+
+</Project>
