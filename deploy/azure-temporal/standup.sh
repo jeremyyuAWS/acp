@@ -65,9 +65,13 @@ fi
 source "$ENVFILE"
 echo "  resource region: $ACP_RLOC"
 
-echo "== 3/5 temporal databases =="
+echo "== 3/5 temporal databases + required extensions =="
 az postgres flexible-server db create -g "$RG" -s "$PG" -d temporal -o none 2>/dev/null || true
 az postgres flexible-server db create -g "$RG" -s "$PG" -d temporal_visibility -o none 2>/dev/null || true
+# Temporal's visibility schema needs btree_gin; Azure Postgres gates extensions
+# behind an allow-list (azure.extensions) — without this, schema setup fails.
+az postgres flexible-server parameter set -g "$RG" -s "$PG" \
+  -n azure.extensions -v BTREE_GIN,BTREE_GIST,PG_TRGM -o none
 
 echo "== 4/5 container apps environment ($ACP_RLOC) =="
 az containerapp env show -g "$RG" -n "$ENVNAME" -o none 2>/dev/null || \
