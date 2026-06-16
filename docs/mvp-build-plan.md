@@ -6,9 +6,8 @@ read-only, secure, deployable into the customer's own cloud. See
 [ADR 0001](adr/0001-read-only-assessment-spine-on-mdk.md) for the architecture
 and rationale.
 
-> **Gate:** nothing in "harvest" lands until **D1 (license)** is resolved in
-> writing. Net-new work (Drive connector, workflow, rubric, UI) can start
-> against stub engines before then.
+> **Status:** ADR 0001 **accepted**; D1 license **resolved** (the repo ships no
+> LICENSE; reuse governed commercially) — engine reuse is cleared to proceed.
 
 ## Two paths
 

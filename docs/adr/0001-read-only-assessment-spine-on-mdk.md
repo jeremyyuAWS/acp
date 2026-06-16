@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Proposed — **gated on D1 (license)** |
+| **Status** | **Accepted** (2026-06-16) |
 | **Date** | 2026-06-16 |
 | **Owners** | Jeremy (eng) · Deva (partnership) |
 | **Supersedes** | — |
@@ -118,13 +118,14 @@ ASP.NET Identity (use MDK + Google OAuth) · per-tenant migrations · Node
   in behind a contract. Commercially cleaner — the engines stay **identifiable
   IP behind a seam**, not absorbed into Movate code.
 - Polyglot operational surface remains (2 engine runtimes) — **accepted**.
-- **Hard gate (D1):** no engine or connector harvest until IP rights are granted
-  in writing. This ADR is *Proposed* until then.
+- **Engine reuse approved to proceed.** The diligence repo ships no LICENSE
+  (default "all rights reserved"); reuse is governed by the Movate ↔ devSEAL
+  commercial relationship, owned outside this ADR. No longer a technical gate.
 
 ## Open decisions
 
-- **D1 (blocking):** license/commercial rights to the engines + the
-  SharePoint/OneDrive connectors.
+- **D1:** ~~license/commercial rights~~ — **resolved**: reuse proceeds, governed
+  commercially (no separate LICENSE file). No longer gating.
 - **D3:** Drive auth — recommend **domain-wide read-only delegation** for
   org-wide scanning; per-user OAuth for self-serve demos.
 - **Drive write-back default** and **remediation** are deferred (not in this MVP).

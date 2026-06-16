@@ -3,8 +3,8 @@
 # MVP-grade: single-replica frontend via the temporalio/auto-setup image, standard
 # (SQL) visibility on Postgres. Idempotent-ish; safe to re-run.
 #
-#   ./standup.sh           # provision
-#   ./standup.sh teardown  # delete the whole resource group
+#   bash standup.sh           # provision
+#   bash standup.sh teardown  # delete the whole resource group
 #
 # Security posture:
 #   - Temporal frontend ingress is INTERNAL — reachable only from inside the
@@ -17,9 +17,10 @@
 set -euo pipefail
 
 SUB="${ACP_SUB:-Azure subscription 1}"
-LOC="${ACP_LOC:-eastus}"
+LOC="${ACP_LOC:-eastus}"                       # resource-group metadata region
+RLOCS="${ACP_RLOCS:-eastus2 centralus westus2 southcentralus westus3 canadacentral eastus}"
 RG="${ACP_RG:-rg-acp-temporal}"
-PG="${ACP_PG:-acp-temporal-pg-3a51d3}"        # must be globally unique
+PG="${ACP_PG:-acp-temporal-pg-3a51d3}"         # must be globally unique
 PGADMIN="${ACP_PGADMIN:-tmpladmin}"
 ENVNAME="${ACP_ENV:-acp-temporal-env}"
 APP="${ACP_APP:-temporal-frontend}"
@@ -30,38 +31,47 @@ ENVFILE="$HERE/.env.local"
 az account set --subscription "$SUB"
 
 if [[ "${1:-}" == "teardown" ]]; then
-  echo "Deleting resource group $RG ..."
-  az group delete -n "$RG" --yes --no-wait
-  exit 0
+  echo "Deleting resource group $RG ..."; az group delete -n "$RG" --yes --no-wait; exit 0
 fi
 
 echo "== 1/5 resource group =="
 az group create -n "$RG" -l "$LOC" -o none
 
-echo "== 2/5 postgres flexible server ($PG) — the long pole, ~5-8 min =="
-if ! az postgres flexible-server show -g "$RG" -n "$PG" -o none 2>/dev/null; then
-  PGPWD="$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)Aa1!"
-  printf 'ACP_PG_FQDN=%s.postgres.database.azure.com\nACP_PGADMIN=%s\nACP_PGPWD=%s\n' \
-    "$PG" "$PGADMIN" "$PGPWD" > "$ENVFILE"
-  az postgres flexible-server create \
-    --resource-group "$RG" --name "$PG" --location "$LOC" \
-    --tier Burstable --sku-name Standard_B1ms \
-    --version 16 --storage-size 32 \
-    --admin-user "$PGADMIN" --admin-password "$PGPWD" \
-    --public-access 0.0.0.0 --yes -o none
-else
+echo "== 2/5 postgres flexible server ($PG) — probing allowed regions, ~5-8 min =="
+if az postgres flexible-server show -g "$RG" -n "$PG" -o none 2>/dev/null; then
   echo "  exists; reusing $ENVFILE"
+else
+  PGPWD="$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)Aa1!"
+  RLOC=""
+  for r in $RLOCS; do
+    echo "  trying $r ..."
+    if az postgres flexible-server create \
+        --resource-group "$RG" --name "$PG" --location "$r" \
+        --tier Burstable --sku-name Standard_B1ms --version 16 --storage-size 32 \
+        --admin-user "$PGADMIN" --admin-password "$PGPWD" \
+        --public-access 0.0.0.0 --yes -o none 2>/tmp/acp_pgerr; then
+      RLOC="$r"; echo "  ✔ created in $r"; break
+    elif grep -qiE 'restricted|not available|NotAvailableForSubscription|capacity' /tmp/acp_pgerr; then
+      echo "  ✗ $r unavailable, next"; continue
+    else
+      echo "  unexpected error:"; cat /tmp/acp_pgerr; exit 1
+    fi
+  done
+  [ -n "$RLOC" ] || { echo "no allowed region in: $RLOCS"; exit 1; }
+  printf 'ACP_PG_FQDN=%s.postgres.database.azure.com\nACP_PGADMIN=%s\nACP_PGPWD=%s\nACP_RLOC=%s\n' \
+    "$PG" "$PGADMIN" "$PGPWD" "$RLOC" > "$ENVFILE"
 fi
 # shellcheck disable=SC1090
 source "$ENVFILE"
+echo "  resource region: $ACP_RLOC"
 
 echo "== 3/5 temporal databases =="
 az postgres flexible-server db create -g "$RG" -s "$PG" -d temporal -o none 2>/dev/null || true
 az postgres flexible-server db create -g "$RG" -s "$PG" -d temporal_visibility -o none 2>/dev/null || true
 
-echo "== 4/5 container apps environment =="
+echo "== 4/5 container apps environment ($ACP_RLOC) =="
 az containerapp env show -g "$RG" -n "$ENVNAME" -o none 2>/dev/null || \
-  az containerapp env create -g "$RG" -n "$ENVNAME" --location "$LOC" -o none
+  az containerapp env create -g "$RG" -n "$ENVNAME" --location "$ACP_RLOC" -o none
 
 echo "== 5/5 temporal server container app =="
 az containerapp create -g "$RG" -n "$APP" --environment "$ENVNAME" \
