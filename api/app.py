@@ -25,6 +25,9 @@ from rubric import Rubric
 
 ACP = Path(__file__).resolve().parent.parent
 app = FastAPI(title="acp — accessibility compliance API", version="0.1.0")
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
+                   allow_methods=["*"], allow_headers=["*"])
 store = Store()
 rb = Rubric.load(ACP / "config/rubric.default.json")
 
