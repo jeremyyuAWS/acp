@@ -198,6 +198,32 @@ input:focus-visible, [role="tab"]:focus-visible {
 /* assess sub-views */
 .subtabs { display: flex; gap: 8px; margin: 18px 0 4px; }
 
+/* remediate — before/after diff + confidence */
+.diffbox { border-radius: 8px; padding: 9px 12px; margin: 6px 0; }
+.diffbox code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-word; display: block; }
+.diffbox.before { background: #FCEBEB; }
+.diffbox.before code { color: #A32D2D; }
+.diffbox.after { background: #EAF3DE; }
+.diffbox.after code { color: #27500A; }
+.difftag { display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.7; margin-bottom: 4px; }
+.conf { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+.conftrack { width: 84px; height: 6px; background: #f0edf2; border-radius: 999px; overflow: hidden; }
+.conftrack > i { display: block; height: 100%; }
+
+/* report — compliance lift + live audit feed */
+.lift { display: flex; align-items: center; gap: 18px; margin: 10px 0 6px; }
+.liftcol { text-align: center; }
+.liftnum { font-size: 36px; font-weight: 600; line-height: 1; }
+.liftarrow { font-size: 22px; color: #c8c2cd; }
+.liftgain { background: #EAF3DE; color: #3B6D11; border-radius: 999px; padding: 6px 13px; font-size: 13px; font-weight: 600; }
+.auditfeed { display: flex; flex-direction: column; }
+.auditrow { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); opacity: 1; animation: auditslide 0.4s ease; }
+.auditrow:first-child { border-top: none; }
+.auditkind { font-size: 11px; padding: 2px 9px; border-radius: 999px; flex: 0 0 auto; min-width: 62px; text-align: center; }
+.auditwhat { flex: 1; font-size: 13px; min-width: 0; }
+.auditactor { font-size: 12px; flex: 0 0 auto; }
+@keyframes auditslide { from { transform: translateY(-7px); } to { transform: none; } }
+
 /* clickable inventory rows + file detail drawer */
 .filerow { cursor: pointer; }
 .filerow:hover { background: var(--bg); }
