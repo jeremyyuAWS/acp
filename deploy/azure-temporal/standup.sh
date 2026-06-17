@@ -9,7 +9,10 @@
 # Security posture:
 #   - Temporal frontend ingress is INTERNAL — reachable only from inside the
 #     Container Apps environment (where the acp workers run). Nothing public.
-#   - Postgres TLS is enabled WITH host verification (server name pinned).
+#   - Postgres TLS is ENABLED (encrypted in transit). Host verification is relaxed
+#     (DISABLE_HOST_VERIFICATION) because the auto-setup server's strict check rejects
+#     Azure's *.postgres.database.azure.com wildcard cert; the link is Azure-internal
+#     (ACA -> Postgres), no public exposure. Harden = mount Azure CA + POSTGRES_TLS_CA_FILE.
 #   - Image served from a private ACR (not anonymous Docker Hub).
 #   - Admin/registry passwords generated/fetched at runtime; not committed.
 # Harden before customer use: Postgres on a private VNet (currently public +
@@ -104,6 +107,7 @@ az containerapp create -g "$RG" -n "$APP" --environment "$ENVNAME" \
     DBNAME=temporal VISIBILITY_DBNAME=temporal_visibility \
     SKIP_DB_CREATE=true \
     POSTGRES_TLS_ENABLED=true "POSTGRES_TLS_SERVER_NAME=$ACP_PG_FQDN" \
+    POSTGRES_TLS_DISABLE_HOST_VERIFICATION=true \
   -o none 2>/dev/null || \
 az containerapp update -g "$RG" -n "$APP" --image "$ACRSERVER/$IMAGE" -o none
 
