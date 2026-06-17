@@ -17,12 +17,14 @@ import sys
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from scanner import run_scan
 from store import Store
+from report import build_report
 from rubric import Rubric
 
 ACP = Path(__file__).resolve().parent.parent
@@ -95,6 +97,19 @@ def scan(sid: str):
     if res is None:
         raise HTTPException(404, "scan not found")
     return res
+
+
+@app.get("/scans/{sid}/report.pdf")
+def report_pdf(sid: str):
+    res = store.get_scan(sid)
+    if res is None:
+        raise HTTPException(404, "scan not found")
+    rb = active_rubric()
+    meta = {"target": rb.cfg.get("conformance_target"), "version": rb.version,
+            "hash": res["run"].get("rubric_hash") or rb.hash}
+    pdf = build_report(res["run"], res["files"], meta)
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="acp-report-{sid}.pdf"'})
 
 
 @app.get("/inventory")

@@ -106,3 +106,7 @@ button.small { padding: 6px 12px; font-size: 13px; }
 .slider::before { content: ""; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; background: #fff; border-radius: 50%; transition: 0.15s; }
 .switch input:checked + .slider { background: #639922; }
 .switch input:checked + .slider::before { transform: translateX(14px); }
+
+.dashtoolbar { display: flex; justify-content: flex-end; margin: 16px 0 -6px; }
+.exportbtn { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; background: #fff; color: var(--plum); border: 1px solid var(--line); border-radius: 9px; padding: 8px 14px; font-size: 14px; }
+.exportbtn:hover { background: var(--bg); }

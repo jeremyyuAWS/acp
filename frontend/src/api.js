@@ -14,5 +14,6 @@ export const updateRubric = (body) =>
 export const listScans = () => fetch(`${BASE}/scans`).then(j)
 export const getScan = (id) => fetch(`${BASE}/scans/${id}`).then(j)
 export const getInventory = () => fetch(`${BASE}/inventory`).then(j)
+export const reportUrl = (id) => `${BASE}/scans/${id}/report.pdf`
 export const runScan = (source = 'local') =>
   fetch(`${BASE}/scans?source=${source}`, { method: 'POST' }).then(j)

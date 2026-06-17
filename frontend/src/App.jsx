@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getMe, getSources, getRubric, listScans, getScan, runScan } from './api'
+import { getMe, getSources, getRubric, listScans, getScan, runScan, reportUrl } from './api'
 import KnowledgeGraph from './KnowledgeGraph.jsx'
 import SignIn from './SignIn.jsx'
 import Rubric from './Rubric.jsx'
@@ -104,6 +104,9 @@ export default function App() {
 
       {view === 'dashboard' && (run ? (
         <>
+          <div className="dashtoolbar">
+            <a className="exportbtn" href={reportUrl(run.id)} target="_blank" rel="noreferrer">⤓ Export PDF report</a>
+          </div>
           <section className="metrics">
             <div className="metric"><span>Files</span><b>{run.files}</b></div>
             <div className="metric"><span>Avg score</span><b>{run.avg_score ?? '—'}</b></div>
