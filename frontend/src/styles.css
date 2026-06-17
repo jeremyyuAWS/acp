@@ -110,3 +110,17 @@ button.small { padding: 6px 12px; font-size: 13px; }
 .dashtoolbar { display: flex; justify-content: flex-end; margin: 16px 0 -6px; }
 .exportbtn { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; background: #fff; color: var(--plum); border: 1px solid var(--line); border-radius: 9px; padding: 8px 14px; font-size: 14px; }
 .exportbtn:hover { background: var(--bg); }
+
+.hero { display: flex; gap: 30px; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 24px; margin: 18px 0; flex-wrap: wrap; }
+.ring { position: relative; flex: 0 0 auto; }
+.delta { position: absolute; top: 4px; right: -10px; font-size: 14px; font-weight: 600; animation: floatup 1.9s ease forwards; }
+.delta.up { color: #3B6D11; }
+.delta.down { color: #A32D2D; }
+@keyframes floatup { 0% { opacity: 0; transform: translateY(10px); } 25% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-22px); } }
+.heroright { flex: 1; min-width: 230px; }
+.herostats { display: flex; gap: 26px; flex-wrap: wrap; }
+.herostat b { font-size: 25px; font-weight: 600; display: block; line-height: 1.1; }
+.herostat span { font-size: 12px; color: var(--muted); }
+.herotrend { margin-top: 16px; }
+.herotrend .muted { display: block; margin-bottom: 2px; font-size: 12px; }
+.spark { display: block; }

@@ -3,6 +3,7 @@ import { getMe, getSources, getRubric, listScans, getScan, runScan, reportUrl } 
 import KnowledgeGraph from './KnowledgeGraph.jsx'
 import SignIn from './SignIn.jsx'
 import Rubric from './Rubric.jsx'
+import { ScoreRing, Sparkline } from './ScoreRing.jsx'
 
 const CRIT = {
   SC_1_1_1: '1.1.1 non-text', SC_1_3_1: '1.3.1 structure', SC_2_4_2: '2.4.2 page titled',
@@ -31,21 +32,29 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
   const [view, setView] = useState('sources')
+  const [scanList, setScanList] = useState([])
+  const [delta, setDelta] = useState(null)
+  const [deltaKey, setDeltaKey] = useState(0)
 
   useEffect(() => {
     if (!me) return
     getRubric().then(setRubric).catch(() => {})
     getSources().then(setSources).catch(() => {})
-    listScans().then((l) => l.length && getScan(l[0].id).then(setScan)).catch(() => {})
+    listScans().then((l) => { setScanList(l); if (l.length) getScan(l[0].id).then(setScan) }).catch(() => {})
   }, [me])
 
   if (!me) return <SignIn onSignedIn={setMe} />
 
   const doScan = async (source) => {
     setBusy(true); setErr(null)
+    const prevAvg = scan?.run?.avg_score
     try {
       const r = await runScan(source)
-      setScan(await getScan(r.scan_id))
+      const fresh = await getScan(r.scan_id)
+      setScan(fresh)
+      setScanList(await listScans())
+      const newAvg = fresh.run.avg_score
+      if (prevAvg != null && newAvg != null && newAvg !== prevAvg) { setDelta(newAvg - prevAvg); setDeltaKey((k) => k + 1) }
       setView('dashboard')
     } catch (e) { setErr(`scan failed: ${e}`) } finally { setBusy(false) }
   }
@@ -55,6 +64,7 @@ export default function App() {
   const critFails = {}
   files.forEach((f) => new Set(f.issues.map((i) => i.wcag)).forEach((c) => { critFails[c] = (critFails[c] || 0) + 1 }))
   const maxFail = Math.max(1, ...Object.values(critFails))
+  const trend = [...scanList].reverse().map((s) => s.avg_score).filter((x) => x != null)
 
   return (
     <div className="app">
@@ -107,12 +117,22 @@ export default function App() {
           <div className="dashtoolbar">
             <a className="exportbtn" href={reportUrl(run.id)} target="_blank" rel="noreferrer">⤓ Export PDF report</a>
           </div>
-          <section className="metrics">
-            <div className="metric"><span>Files</span><b>{run.files}</b></div>
-            <div className="metric"><span>Avg score</span><b>{run.avg_score ?? '—'}</b></div>
-            <div className="metric"><span>Certifiable</span><b style={{ color: '#3B6D11' }}>{run.certifiable}</b></div>
-            <div className="metric"><span>Uncertain</span><b style={{ color: '#854F0B' }}>{run.uncertain}</b></div>
-            <div className="metric"><span>Unanalysable</span><b style={{ color: '#A32D2D' }}>{run.error}</b></div>
+          <section className="hero">
+            <ScoreRing score={run.avg_score} delta={delta} deltaKey={deltaKey} />
+            <div className="heroright">
+              <div className="herostats">
+                <div className="herostat"><b style={{ color: '#3B6D11' }}>{run.certifiable}</b><span>certifiable</span></div>
+                <div className="herostat"><b style={{ color: '#854F0B' }}>{run.uncertain}</b><span>uncertain</span></div>
+                <div className="herostat"><b style={{ color: '#A32D2D' }}>{run.error}</b><span>unanalysable</span></div>
+                <div className="herostat"><b>{run.files}</b><span>files</span></div>
+              </div>
+              {trend.length > 1 && (
+                <div className="herotrend">
+                  <span className="muted">compliance trend · {trend.length} scans</span>
+                  <Sparkline points={trend} />
+                </div>
+              )}
+            </div>
           </section>
           {Object.keys(critFails).length > 0 && (
             <section className="panel">
