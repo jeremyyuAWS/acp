@@ -25,7 +25,9 @@ _retry() {  # ACA serializes revision writes; retry the conflict it raises when 
 RG="${ACP_RG:-rg-acp-temporal}"
 ACR="${ACP_ACR:-acptemporalacr3a51d3}"
 APP="${ACP_APP:-acp-app}"
-TAG="$(git rev-parse --short HEAD 2>/dev/null || echo manual)"
+# unique per build: ACA caches images by tag, so a reused tag (e.g. uncommitted
+# working tree → same HEAD sha twice) is never re-pulled. Timestamp suffix forces it.
+TAG="$(git rev-parse --short HEAD 2>/dev/null || echo manual)-$(date +%s)"
 IMAGE="acp-app:${TAG}"
 ADC_FILE="${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/application_default_credentials.json}"
 CODE="${ACP_ACCESS_CODE:-$(openssl rand -hex 6)}"
