@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getRubric, listScans, getScan, runScan } from './api'
+import KnowledgeGraph from './KnowledgeGraph.jsx'
 
 const CRIT = {
   SC_1_1_1: '1.1.1 non-text', SC_1_3_1: '1.3.1 structure', SC_2_4_2: '2.4.2 page titled',
@@ -25,6 +26,7 @@ export default function App() {
   const [scan, setScan] = useState(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
+  const [view, setView] = useState('dashboard')
 
   const loadLatest = async () => {
     const list = await listScans()
@@ -72,6 +74,12 @@ export default function App() {
 
       {run && (
         <>
+          <div className="tabs">
+            <button className={view === 'dashboard' ? 'tab on' : 'tab'} onClick={() => setView('dashboard')}>Dashboard</button>
+            <button className={view === 'graph' ? 'tab on' : 'tab'} onClick={() => setView('graph')}>Knowledge graph</button>
+          </div>
+
+          {view === 'dashboard' && (<>
           <section className="metrics">
             <div className="metric"><span>Files</span><b>{run.files}</b></div>
             <div className="metric"><span>Avg score</span><b>{run.avg_score ?? '—'}</b></div>
@@ -120,6 +128,9 @@ export default function App() {
               </tbody>
             </table>
           </section>
+          </>)}
+
+          {view === 'graph' && <KnowledgeGraph files={files} />}
         </>
       )}
       {!run && !err && <p className="muted">No scans yet — run one above.</p>}

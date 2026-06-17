@@ -58,3 +58,12 @@ td { padding: 10px 0; border-top: 1px solid var(--line); }
 .badge { font-size: 12px; padding: 3px 10px; border-radius: 8px; }
 .scorecell { display: inline-flex; align-items: center; gap: 8px; }
 .scorecell > span:first-child { min-width: 22px; }
+
+.tabs { display: flex; gap: 6px; margin: 22px 0 4px; }
+.tab { background: #fff; color: var(--muted); border: 1px solid var(--line); border-radius: 9px; padding: 7px 14px; font-size: 14px; }
+.tab.on { background: var(--plum); color: #fff; border-color: var(--plum); }
+
+.kglegend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.kglegend span { display: flex; align-items: center; gap: 6px; }
+.kglegend i { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+.kgdetail { background: var(--bg); border-radius: 8px; padding: 10px 12px; margin-top: 8px; font-size: 13px; min-height: 20px; }
