@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { reportUrl } from './api'
 import { ScoreRing, Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
+import FileDrawer from './FileDrawer.jsx'
 
 const CRIT = {
   SC_1_1_1: '1.1.1 non-text', SC_1_3_1: '1.3.1 structure', SC_2_4_2: '2.4.2 page titled',
@@ -14,6 +16,7 @@ const BADGE = {
 }
 
 export default function Dashboard({ run, files, trend, delta, deltaKey }) {
+  const [sel, setSel] = useState(null)
   const critFails = {}
   files.forEach((f) => new Set(f.issues.map((i) => i.wcag)).forEach((c) => { critFails[c] = (critFails[c] || 0) + 1 }))
   const maxFail = Math.max(1, ...Object.values(critFails))
@@ -59,14 +62,16 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
         </section>
       )}
       <section className="panel">
-        <h2>File inventory</h2>
+        <h2>File inventory · <span style={{ fontWeight: 400 }}>click a row for details</span></h2>
         <table>
           <thead><tr><th>file</th><th>status</th><th>score</th><th>findings</th></tr></thead>
           <tbody>
             {files.map((f) => {
               const st = statusOf(f); const [bg, fg] = BADGE[st]
               return (
-                <tr key={f.file}>
+                <tr key={f.file} className="filerow" role="button" tabIndex={0}
+                  onClick={() => setSel(f)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSel(f) } }}>
                   <td className="fname">{f.file}</td>
                   <td><span className="badge" style={{ background: bg, color: fg }}>{st}</span></td>
                   <td>{f.score === null ? <span className="muted">n/a</span> : (
@@ -80,6 +85,7 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
           </tbody>
         </table>
       </section>
+      {sel && <FileDrawer file={sel} onClose={() => setSel(null)} />}
     </>
   )
 }
