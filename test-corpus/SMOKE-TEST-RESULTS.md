@@ -25,16 +25,28 @@ oracle (`manifest.json`).** Harness: `scripts/scan.py` + `spike/dotnet/AcpScan.C
 | XLSX | `XLSX-TITLE-001 · XLSX-LANG-001 · XLSX-ALT-001` (alt throws — see below) |
 | PDF  | `pdf.tagged · pdf.document-language · pdf.display-doc-title` |
 
-## 🐞 Issues identified (the point of the smoke test)
+## 🐞 Issues — root-caused
 
-1. **PPTX alt-text rule never fires.** `pptx-noncompliant` embeds a picture with no alt
-   text; engine returns only TITLE+LANG, deterministically. DOCX alt-text works, so this
-   is PPTX-specific. **TODO:** confirm engine gap vs. synthetic-file issue (verify the
-   `p:cNvPr@descr` is actually empty in the generated pptx).
-2. **XLSX `XLSX-ALT-001` throws on the Drive-stored copy** of `xlsx-compliant.xlsx` —
-   not reproduced across 2 local runs. The AltText rule (ClosedXML) appears fragile to
-   Drive's OOXML round-trip. **TODO:** download the Drive copy, diff vs local, repro the
-   exception, harden the rule.
+### 1. PPTX alt-text "miss" → RESOLVED (test-corpus bug, engine is correct)
+`python-pptx` auto-fills `p:cNvPr@descr` with the image **filename** (`_img.png`), so the
+generated picture *had* alt text and the engine correctly didn't flag it. Fixed
+`generate.py` to drop `descr`; `pptx-noncompliant` now fires `PPTX-ALT-001` as expected.
+- **Engine validated.** Minor devSEAL coverage note: a *filename* used as alt text passes
+  the rule (placeholder list is narrow — `{image,picture,photo,slide}`), a real-world miss.
+
+### 2. Engine reports a file CLEAN when a rule couldn't run → REAL DEFECT (ship-relevant)
+The Drive-served copy of `xlsx-compliant.xlsx` has a **corrupt `xl/workbook.xml`** — it
+fails to decompress in **Info-ZIP, Python zlib, and .NET alike** (genuine bad deflate
+stream, not a reader-strictness issue). The .NET engine caught the per-rule exception,
+**swallowed it, and returned `succeeded=true` with zero issues** → **false-clean.**
+- **Durable finding:** for a *compliance* product, "rule could not evaluate" must surface
+  as **degraded / uncertain**, never as a pass. The score/report must reflect unevaluated
+  criteria. This is independent of what corrupted the file.
+- **Cause of the corruption (open, lower severity):** likely a **one-off in the upload
+  path** for this file — `xlsx-noncompliant.xlsx` round-tripped through Drive fine, and
+  PDFs did too. The binary upload went through the **Claude Drive MCP connector**, not the
+  Drive API directly. **TODO:** re-upload via the real (Drive-API) connector to confirm
+  one-off vs systematic; prefer Drive-API-direct for binary fidelity in the demo.
 
 ## Notes
 

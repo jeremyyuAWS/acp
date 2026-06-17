@@ -111,7 +111,8 @@ def pptx_noncompliant():
     prs = Presentation()  # no language
     s = prs.slides.add_slide(prs.slide_layouts[6])  # Blank — no title placeholder
     tb = s.shapes.add_textbox(PInches(1), PInches(1), PInches(4), PInches(1)); tb.text_frame.text="Big News"
-    s.shapes.add_picture(str(IMG), PInches(1), PInches(3), PInches(1), PInches(1))  # no alt
+    pic = s.shapes.add_picture(str(IMG), PInches(1), PInches(3), PInches(1), PInches(1))
+    pic._element.nvPicPr.cNvPr.attrib.pop("descr", None)  # python-pptx auto-fills descr=filename; drop it for a true 'no alt'
     prs.save(OUT/"pptx-noncompliant.pptx")
     record("pptx-noncompliant.pptx","pptx","non-compliant","analysed",
            ["PPTX-TITLE-001","PPTX-ALT-001","PPTX-LANG-001"],"no slide title, image w/o alt, no language (rule ids approximate)")
