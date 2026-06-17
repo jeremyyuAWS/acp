@@ -48,6 +48,15 @@ stream, not a reader-strictness issue). The .NET engine caught the per-rule exce
   Drive API directly. **TODO:** re-upload via the real (Drive-API) connector to confirm
   one-off vs systematic; prefer Drive-API-direct for binary fidelity in the demo.
 
+## Fix shipped — incomplete analysis is never a pass
+
+`scripts/result_model.py` classifies every result: **error** (unopenable → unscored),
+**uncertain** (≥1 rule threw and was skipped → score is an *upper bound*, cannot be
+certified), **analysed** (trustworthy). Re-running the live scan, the previously
+"100/clean" `xlsx-compliant` (corrupt Drive copy, **5 rules skipped**) now reports
+`uncertain · <=100`, and the compliance gate shows **0 certifiable-clean** — not a false
+pass. This is the seed of the Phase-4 rubric.
+
 ## Notes
 
 - Scoring is a placeholder rubric (CRITICAL 25 / SERIOUS 15 / MODERATE 8 / MINOR 3,

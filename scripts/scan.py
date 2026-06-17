@@ -15,16 +15,13 @@ from pathlib import Path
 import google.auth
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
+import result_model as rm
 
 FOLDER = "1W27ULZsstP7gYGzgKKBId0qEfNxeKn0_"
 ACP = Path(__file__).resolve().parent.parent
 WP = Path(os.path.expanduser("~/projects/_review-digital-accessibility/worker-python"))
 DOTNET = os.path.expanduser("~/.dotnet/dotnet")
 CLI = ACP / "spike/dotnet/AcpScan.Cli"
-SEV = {"CRITICAL": 25, "SERIOUS": 15, "MODERATE": 8, "MINOR": 3}
-
-def score(issues):
-    return max(0, 100 - sum(SEV.get(i["severity"], 5) for i in issues))
 
 # ── 1. download the corpus from Drive (keyless ADC) ──────────────────────────
 creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/drive.readonly"])
@@ -82,39 +79,40 @@ if out_json.exists():
 else:
     print("!! .NET CLI produced no output:\n", proc.stdout[-800:], proc.stderr[-800:])
 
-# ── 4. score + diff against the oracle ───────────────────────────────────────
+# ── 4. assess (status/score) + compliance gate + oracle diff ─────────────────
 oracle = {m["file"]: m for m in json.loads((ACP / "test-corpus/manifest.json").read_text())}
+print(f"{'file':24} {'engine':12} {'status':10} {'score':>30}  findings")
+print("-" * 100)
+certifiable = uncertain = errored = 0
+for name in sorted(results):
+    r = results[name]
+    a = rm.assess(r["succeeded"], r["issues"], r["errors"])
+    certifiable += a["compliant"]
+    uncertain += a["status"] == "uncertain"
+    errored += a["status"] == "error"
+    rules = sorted({i["ruleId"] for i in r["issues"]})
+    detail = ",".join(rules) if rules else (r["errors"][0][:34] if r["errors"] else "clean")
+    print(f"{name:24} {r['engine']:12} {a['status']:10} {rm.render_score(a):>30}  {detail}")
+
+print("\n=== compliance gate (the Track-A fix in action) ===")
+print(f"  certifiable-clean: {certifiable}    uncertain (rule skipped): {uncertain}    error (unanalysable): {errored}")
+print("  → only fully-analysed files can be certified; 'uncertain' and 'error' are NOT passes.")
+
+# oracle diff: status vs expected outcome (all files); exact rule ids (docx only)
 bugs = []
-print(f"{'file':24} {'engine':12} {'outcome':9} {'score':>5}  findings")
-print("-" * 78)
 for name in sorted(results):
     r = results[name]
     m = oracle.get(name, {})
-    outcome = "error" if not r["succeeded"] else "analysed"
-    exp_outcome = m.get("expected_outcome", "?")
-    rules = sorted({i["ruleId"] for i in r["issues"]})
-    sc = score(r["issues"]) if r["succeeded"] else 0
-    ok = "OK" if outcome == exp_outcome else "MISMATCH"
-    print(f"{name:24} {r['engine']:12} {outcome:9} {sc:>5}  {','.join(rules) if rules else ('(' + (r['errors'][0][:38] if r['errors'] else 'clean') + ')')}")
-    # outcome bug (exact for all files)
-    if outcome != exp_outcome:
-        bugs.append(f"{name}: expected '{exp_outcome}' but got '{outcome}'  errors={r['errors']}")
-    # rule-id bug (exact only for docx oracle; others marked approximate)
+    a = rm.assess(r["succeeded"], r["issues"], r["errors"])
+    got = "error" if a["status"] == "error" else "analysed"
+    exp = m.get("expected_outcome", "?")
+    if got != exp:
+        bugs.append(f"{name}: expected '{exp}' but got '{got}'")
     exp_rules = set(m.get("expected_rule_ids", []))
-    if exp_outcome == "analysed" and exp_rules and not name.endswith((".pptx", ".xlsx")) and not name.startswith("pdf"):
-        missing, extra = exp_rules - set(rules), set(rules) - exp_rules
-        if missing or extra:
-            bugs.append(f"{name}: rule mismatch — missing={sorted(missing)} extra={sorted(extra)}")
-
-print("\n=== oracle diff / bug list ===")
-if bugs:
-    for b in bugs:
-        print("  ✗", b)
-else:
-    print("  ✓ no deviations from the oracle on exact checks")
-
-print("\n=== actual rule ids discovered (to pin the 'approximate' oracle entries) ===")
-for name in sorted(results):
-    rules = sorted({i["ruleId"] for i in results[name]["issues"]})
-    if rules:
-        print(f"  {name}: {rules}")
+    if exp == "analysed" and exp_rules and name.startswith("docx"):
+        rules = {i["ruleId"] for i in r["issues"]}
+        miss, extra = exp_rules - rules, rules - exp_rules
+        if miss or extra:
+            bugs.append(f"{name}: rule mismatch missing={sorted(miss)} extra={sorted(extra)}")
+print("\n=== oracle diff ===")
+print("\n".join("  ✗ " + b for b in bugs) if bugs else "  ✓ no deviations on exact checks")
