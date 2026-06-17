@@ -3,6 +3,7 @@ import { reportUrl } from './api'
 import { ScoreRing, Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import FileDrawer from './FileDrawer.jsx'
+import Tag from './Tag.jsx'
 
 const CRIT = {
   SC_1_1_1: '1.1.1 non-text', SC_1_3_1: '1.3.1 structure', SC_2_4_2: '2.4.2 page titled',
@@ -72,7 +73,12 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
                 <tr key={f.file} className="filerow" role="button" tabIndex={0}
                   onClick={() => setSel(f)}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSel(f) } }}>
-                  <td className="fname">{f.file}</td>
+                  <td className="fname">{f.file}
+                    <div className="filemeta">
+                      {f.sourceName && <span className="srcpill">{f.sourceName}</span>}
+                      {(f.tags || []).slice(0, 4).map((t) => <Tag key={t} t={t} />)}
+                    </div>
+                  </td>
                   <td><span className="badge" style={{ background: bg, color: fg }}>{st}</span></td>
                   <td>{f.score === null ? <span className="muted">n/a</span> : (
                     <span className="scorecell"><span>{st === 'uncertain' ? '≤' : ''}{f.score}</span>

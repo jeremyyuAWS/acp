@@ -263,6 +263,16 @@ input:focus-visible, [role="tab"]:focus-visible {
 .emptyactions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 .loadingbox { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); font-size: 14px; padding: 60px 0; }
 
+/* agent-assigned tags + source pills */
+.tag { font-size: 11px; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.srcpill { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: #ece7ec; color: #5f5660; white-space: nowrap; }
+.filemeta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; align-items: center; }
+.taglist { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* unified-estate banner (integrations) */
+.estatebar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 18px; margin: 6px 0 16px; font-size: 14px; }
+
 /* integrations grid */
 .intgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
 .intcard { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 14px; min-height: 150px; justify-content: flex-start; }

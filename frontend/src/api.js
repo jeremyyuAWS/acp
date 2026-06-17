@@ -1,28 +1,30 @@
+import { SIM, IDENTITY, SOURCES, simStartScan, simGetJob, simGetScan, simListScans, simRules } from './sim.js'
+
 const BASE = import.meta.env.VITE_API ?? 'http://localhost:8077'
 
-// Per-user Drive access token from GIS "Sign in with Google" (demo mode: stays null
-// and the server falls back to its ADC identity).
+// Per-user Drive token (real mode only). In SIM mode nothing touches a real Drive.
 let driveToken = null
 export const setDriveToken = (t) => { driveToken = t }
-
 const headers = (extra = {}) => ({ ...extra, ...(driveToken ? { 'X-Drive-Token': driveToken } : {}) })
 
-const j = (r) => {
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
-  return r.json()
-}
+const j = (r) => { if (!r.ok) throw new Error(`${r.status} ${r.statusText}`); return r.json() }
+const sim = (value, ms = 220) => new Promise((res) => setTimeout(() => res(value), ms))
 
-export const getConfig = () => fetch(`${BASE}/config`).then(j)
-export const getMe = () => fetch(`${BASE}/me`, { headers: headers() }).then(j)
-export const getSources = () => fetch(`${BASE}/sources`, { headers: headers() }).then(j)
-export const getRubric = () => fetch(`${BASE}/rubric`, { headers: headers() }).then(j)
-export const getRules = () => fetch(`${BASE}/rules`, { headers: headers() }).then(j)
-export const updateRubric = (body) =>
-  fetch(`${BASE}/rubric`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) }).then(j)
-export const listScans = () => fetch(`${BASE}/scans`, { headers: headers() }).then(j)
-export const getScan = (id) => fetch(`${BASE}/scans/${id}`, { headers: headers() }).then(j)
-export const getInventory = () => fetch(`${BASE}/inventory`, { headers: headers() }).then(j)
-export const reportUrl = (id) => `${BASE}/scans/${id}/report.pdf`
-export const startScan = (source = 'local') =>
-  fetch(`${BASE}/scans?source=${source}`, { method: 'POST', headers: headers() }).then(j)
-export const getJob = (id) => fetch(`${BASE}/scans/jobs/${id}`, { headers: headers() }).then(j)
+export const getConfig = () => (SIM ? sim({ google_client_id: null, auth: 'demo', sim: true }) : fetch(`${BASE}/config`).then(j))
+export const getMe = () => (SIM ? sim({ email: IDENTITY.email, name: IDENTITY.name }) : fetch(`${BASE}/me`, { headers: headers() }).then(j))
+export const getSources = () => (SIM
+  ? sim(SOURCES.map((s) => ({ type: s.kind, name: s.name, id: s.id, files: s.files, access: s.access, dept: s.dept, agent: s.agent })))
+  : fetch(`${BASE}/sources`, { headers: headers() }).then(j))
+export const getRubric = () => (SIM
+  ? sim({ name: 'WCAG 2.1 AA', version: '1', hash: 'e85fcf7e14f9040c', target: 'WCAG 2.1 AA', threshold: 90, criteria: {} })
+  : fetch(`${BASE}/rubric`, { headers: headers() }).then(j))
+export const getRules = () => (SIM ? sim(simRules()) : fetch(`${BASE}/rules`, { headers: headers() }).then(j))
+export const updateRubric = (body) => (SIM
+  ? sim({ hash: 'e85fcf7e14f9040c', disabled_rules: body.disabled_rules || [], threshold: body.compliant_threshold || 90 })
+  : fetch(`${BASE}/rubric`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) }).then(j))
+export const listScans = () => (SIM ? sim(simListScans()) : fetch(`${BASE}/scans`, { headers: headers() }).then(j))
+export const getScan = (id) => (SIM ? sim(simGetScan(id)) : fetch(`${BASE}/scans/${id}`, { headers: headers() }).then(j))
+export const getInventory = () => (SIM ? sim([]) : fetch(`${BASE}/inventory`, { headers: headers() }).then(j))
+export const reportUrl = (id) => (SIM ? '#' : `${BASE}/scans/${id}/report.pdf`)
+export const startScan = (source = 'local') => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}`, { method: 'POST', headers: headers() }).then(j))
+export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/scans/jobs/${id}`, { headers: headers() }).then(j))

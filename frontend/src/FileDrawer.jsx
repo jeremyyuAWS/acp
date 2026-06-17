@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import Tag from './Tag.jsx'
 
 const CRIT = {
   SC_1_1_1: '1.1.1 non-text content', SC_1_3_1: '1.3.1 info & relationships',
@@ -52,7 +53,7 @@ export default function FileDrawer({ file, onClose }) {
         <div className="drawerhead">
           <div>
             <div className="fname" style={{ fontSize: 15 }}>{file.file}</div>
-            <div className="muted" style={{ marginTop: 4 }}>{file.engine}</div>
+            <div className="muted" style={{ marginTop: 4 }}>{file.sourceName ? `${file.sourceName} · ${file.dept} · ` : ''}{file.engine}</div>
           </div>
           <button className="ghost small" aria-label="Close" onClick={onClose}>✕</button>
         </div>
@@ -62,6 +63,13 @@ export default function FileDrawer({ file, onClose }) {
           <span className="drawerscore">{file.score === null ? 'n/a' : `${st === 'uncertain' ? '≤' : ''}${file.score}`}<span className="muted"> / 100</span></span>
           {st === 'uncertain' && <span className="muted">{file.skipped_rules} rule(s) skipped — score is an upper bound</span>}
         </div>
+
+        {(file.tags || []).length > 0 && (
+          <>
+            <h4 className="drawerh">Tags · auto-assigned by agent</h4>
+            <div className="taglist">{file.tags.map((t) => <Tag key={t} t={t} />)}</div>
+          </>
+        )}
 
         <h4 className="drawerh">Findings {issues.length > 0 && <span className="muted">({issues.length})</span>}</h4>
         {issues.length === 0 ? (

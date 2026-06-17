@@ -1,58 +1,50 @@
-// Steps 1-3: Discover & Inventory (live) + Classify & Prioritize + Retain/Archive/Delete.
-// Source connection + scan are live; the priority/retention columns are an illustrative
-// preview of the governance layer (engines not built yet).
+import Tag from './Tag.jsx'
+
+// Steps 1-3: Discover & Inventory + Classify & Prioritize + Retain/Archive/Delete.
+// The agent auto-tags and classifies every document as it's discovered across sources.
 const PRIORITY = { error: ['high', '#FCEBEB', '#A32D2D'], issues: ['high', '#FCEBEB', '#A32D2D'],
   uncertain: ['medium', '#FAEEDA', '#854F0B'], ok: ['low', '#F1EFE8', '#5F5E5A'] }
-
 function classify(f) {
   const st = f.status === 'error' ? 'error' : f.status === 'uncertain' ? 'uncertain' : f.compliant ? 'ok' : 'issues'
   return PRIORITY[st]
 }
-function retention(name) {
+function retention(name, tags) {
   const n = name.toLowerCase()
-  if (/temp|draft|copy|old|backup/.test(n)) return ['delete', '#FCEBEB', '#A32D2D']
-  if (/2019|2020|archive|deprecated/.test(n)) return ['archive', '#FAEEDA', '#854F0B']
+  if (/temp|draft|copy|old|backup|2019|2020/.test(n)) return ['archive', '#FAEEDA', '#854F0B']
+  if ((tags || []).includes('legal-hold')) return ['retain (legal hold)', '#EEEDFE', '#3C3489']
   return ['keep', '#E7F0DC', '#3B6D11']
 }
 
 export default function Discover({ sources, files, busy, onScan }) {
+  const tagged = files.filter((f) => (f.tags || []).length).length
   return (
     <>
-      <section className="panel">
-        <h2>Connected sources</h2>
-        {sources.length === 0 && <p className="muted">No sources connected.</p>}
-        {sources.map((s) => (
-          <div className="source" key={s.id}>
-            <div className="srcleft">
-              <span className="srcicon" aria-hidden="true">▦</span>
-              <div>
-                <div className="srcname">{s.name}</div>
-                <div className="muted">Google Drive · {s.files} files · {s.access}</div>
-              </div>
-            </div>
-            <button disabled={busy} onClick={() => onScan('drive')}>{busy ? 'scanning…' : 'Run scan'}</button>
-          </div>
-        ))}
-        <div className="source ghosted">
-          <div className="srcleft"><span className="srcicon" aria-hidden="true">＋</span>
-            <div><div className="srcname">Connect another source</div><div className="muted">SharePoint · OneDrive · Box · S3 — coming soon</div></div>
-          </div>
-          <button className="ghost" disabled>Connect</button>
+      <div className="estatebar">
+        <div>
+          <b>{files.length} documents</b> discovered &amp; classified across {sources.length} sources
+          <div className="muted" style={{ marginTop: 2 }}>the agent auto-tags each by content, risk (PII, legal-hold), and public exposure — {tagged} tagged</div>
         </div>
-        <p className="muted" style={{ marginTop: 14 }}>Or <a href="#" onClick={(e) => { e.preventDefault(); onScan('local') }}>run a scan on the bundled sample corpus</a>.</p>
-      </section>
+        <button disabled={busy} onClick={() => onScan('all')}>{busy ? 'scanning…' : 'Re-scan all sources'}</button>
+      </div>
 
-      {files.length > 0 && (
+      {files.length === 0 ? (
+        <p className="muted">No documents yet — run a scan from Integrations.</p>
+      ) : (
         <section className="panel">
-          <h2>Inventory · classified &amp; prioritized</h2>
+          <h2>Inventory · auto-classified &amp; tagged</h2>
           <table>
             <thead><tr><th>document</th><th>priority</th><th>retention</th></tr></thead>
             <tbody>
               {files.map((f) => {
-                const [p, pbg, pfg] = classify(f); const [r, rbg, rfg] = retention(f.file)
+                const [p, pbg, pfg] = classify(f); const [r, rbg, rfg] = retention(f.file, f.tags)
                 return (
                   <tr key={f.file}>
-                    <td className="fname">{f.file}</td>
+                    <td className="fname">{f.file}
+                      <div className="filemeta">
+                        {f.sourceName && <span className="srcpill">{f.sourceName}</span>}
+                        {(f.tags || []).slice(0, 4).map((t) => <Tag key={t} t={t} />)}
+                      </div>
+                    </td>
                     <td><span className="badge" style={{ background: pbg, color: pfg }}>{p}</span></td>
                     <td><span className="badge" style={{ background: rbg, color: rfg }}>{r}</span></td>
                   </tr>
@@ -60,7 +52,7 @@ export default function Discover({ sources, files, busy, onScan }) {
               })}
             </tbody>
           </table>
-          <p className="muted" style={{ marginTop: 12 }}>AI flags duplicates, superseded, and legal-hold before assessment. <span style={{ color: '#854F0B' }}>Priority &amp; retention are a preview.</span></p>
+          <p className="muted" style={{ marginTop: 12 }}>Tags, priority &amp; retention are assigned by the agent — duplicates, superseded, and legal-hold are flagged before assessment.</p>
         </section>
       )}
     </>

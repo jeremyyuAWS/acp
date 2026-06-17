@@ -26,6 +26,7 @@ function progressText(p) {
   const m = {
     queued: 'Queued…', connecting: 'Connecting to source…', discovering: 'Discovering files…',
     reading: `Reading files · ${p.files_done}/${p.files_found}`,
+    tagging: 'mova Agent classifying & tagging documents…',
     analysing: `Analysing documents · ${p.files_done}/${p.files_found}`,
     scoring: 'Scoring against rubric…', done: 'Complete', error: 'Error',
   }
