@@ -16,3 +16,6 @@ node_modules/
 dist/
 # os
 .DS_Store
+
+# base64 upload sidecars
+test-corpus/files/*.b64
