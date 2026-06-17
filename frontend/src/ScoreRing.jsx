@@ -29,7 +29,7 @@ export function ScoreRing({ score, delta, deltaKey }) {
   const R = 56, C = 2 * Math.PI * R
   return (
     <div className="ring">
-      <svg width="150" height="150" viewBox="0 0 150 150">
+      <svg width="150" height="150" viewBox="0 0 150 150" role="img" aria-label={`average compliance score ${score ?? 0} out of 100`}>
         <circle cx="75" cy="75" r={R} fill="none" stroke="#ece7ec" strokeWidth="13" />
         <circle cx="75" cy="75" r={R} fill="none" stroke={ringColor(score ?? 0)} strokeWidth="13"
           strokeLinecap="round" strokeDasharray={`${(C * prog).toFixed(1)} ${C.toFixed(1)}`}

@@ -10,6 +10,7 @@ import Dashboard from './Dashboard.jsx'
 import Remediate from './Remediate.jsx'
 import Report from './Report.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
+import ErrorBoundary from './ErrorBoundary.jsx'
 
 const TABS = [
   ['overview', 'Overview', 'at a glance'],
@@ -106,45 +107,47 @@ export default function App() {
         </div>
       </header>
 
-      <div className="tabs">
+      <div className="tabs" role="tablist" aria-label="Compliance workflow">
         {TABS.map(([k, label, rg]) => (
-          <button key={k} className={view === k ? 'tab on' : 'tab'} onClick={() => setView(k)}>
+          <button key={k} role="tab" aria-selected={view === k} className={view === k ? 'tab on' : 'tab'} onClick={() => setView(k)}>
             {label}<span className="rg">{rg}</span>
           </button>
         ))}
-        {run && <span className="muted runinfo">last run {run.completed_at?.slice(0, 19).replace('T', ' ')}</span>}
       </div>
+      {run && <div className="muted runinfo">last run {run.completed_at?.slice(0, 19).replace('T', ' ')}</div>}
 
-      {err && <div className="err">{err}</div>}
+      {err && <div className="err" role="alert">{err}</div>}
       {busy && progress && (
-        <div className="scanprog">
+        <div className="scanprog" role="status" aria-live="polite">
           <div className="scanprogline"><span className="spinner" />{progressText(progress)}{progress.files_found ? <span className="muted"> · {progress.files_found} files found</span> : null}</div>
           <div className="track"><i style={{ width: `${progress.files_found ? Math.round((progress.files_done / progress.files_found) * 100) : 6}%`, background: '#F5B400', transition: 'width .3s' }} /></div>
         </div>
       )}
 
-      {view === 'overview' && (run ? <Overview run={run} files={files} trend={trend} onGo={setView} /> : placeholder)}
+      <ErrorBoundary key={view}>
+        {view === 'overview' && (run ? <Overview run={run} files={files} trend={trend} onGo={setView} /> : placeholder)}
 
-      {view === 'integrations' && <Integrations sources={sources} onScan={doScan} busy={busy} />}
+        {view === 'integrations' && <Integrations sources={sources} onScan={doScan} busy={busy} />}
 
-      {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} />}
+        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} />}
 
-      {view === 'assess' && (
-        <>
-          <div className="subtabs">
-            <button className={assess === 'results' ? 'fchip on' : 'fchip'} onClick={() => setAssess('results')}>Results</button>
-            <button className={assess === 'graph' ? 'fchip on' : 'fchip'} onClick={() => setAssess('graph')}>Knowledge graph</button>
-            <button className={assess === 'rubric' ? 'fchip on' : 'fchip'} onClick={() => setAssess('rubric')}>Rubric</button>
-          </div>
-          {assess === 'results' && (run ? <Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} /> : placeholder)}
-          {assess === 'graph' && (run ? <KnowledgeGraph files={files} /> : placeholder)}
-          {assess === 'rubric' && <Rubric onSaved={() => getRubric().then(setRubric)} />}
-        </>
-      )}
+        {view === 'assess' && (
+          <>
+            <div className="subtabs" role="tablist" aria-label="Assessment views">
+              <button role="tab" aria-selected={assess === 'results'} className={assess === 'results' ? 'fchip on' : 'fchip'} onClick={() => setAssess('results')}>Results</button>
+              <button role="tab" aria-selected={assess === 'graph'} className={assess === 'graph' ? 'fchip on' : 'fchip'} onClick={() => setAssess('graph')}>Knowledge graph</button>
+              <button role="tab" aria-selected={assess === 'rubric'} className={assess === 'rubric' ? 'fchip on' : 'fchip'} onClick={() => setAssess('rubric')}>Rubric</button>
+            </div>
+            {assess === 'results' && (run ? <Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} /> : placeholder)}
+            {assess === 'graph' && (run ? <KnowledgeGraph files={files} /> : placeholder)}
+            {assess === 'rubric' && <Rubric onSaved={() => getRubric().then(setRubric)} />}
+          </>
+        )}
 
-      {view === 'remediate' && (run ? <Remediate run={run} files={files} /> : placeholder)}
+        {view === 'remediate' && (run ? <Remediate run={run} files={files} /> : placeholder)}
 
-      {view === 'report' && (run ? <Report run={run} /> : placeholder)}
+        {view === 'report' && (run ? <Report run={run} /> : placeholder)}
+      </ErrorBoundary>
     </div>
   )
 }

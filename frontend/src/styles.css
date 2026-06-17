@@ -81,7 +81,13 @@ td { padding: 10px 0; border-top: 1px solid var(--line); }
 .userbox { display: flex; align-items: center; gap: 10px; }
 .user { font-size: 13px; color: var(--ink); }
 button.small { padding: 6px 12px; font-size: 13px; }
-.runinfo { margin-left: 8px; }
+.runinfo { margin: 4px 0 2px 2px; }
+
+/* keyboard focus — this is an accessibility product; it should be accessible */
+button:focus-visible, a:focus-visible, .tab:focus-visible, .fchip:focus-visible,
+input:focus-visible, [role="tab"]:focus-visible {
+  outline: 2px solid #7a5c8e; outline-offset: 2px;
+}
 
 .source { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0; border-top: 1px solid var(--line); }
 .source:first-of-type { border-top: none; }
