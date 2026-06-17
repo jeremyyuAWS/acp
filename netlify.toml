@@ -1,0 +1,28 @@
+# Netlify build config for the mova.io accessibility-compliance SPA.
+#
+# Netlify hosts the static React frontend only; it talks to the live backend API
+# on Azure Container Apps (the API can't run on Netlify — it needs the .NET +
+# Python analysis engines). VITE_API below points the SPA at that backend.
+#
+# To deploy: push this repo to GitHub, then in Netlify "Add new site → Import
+# from Git", pick the repo, and Netlify auto-detects this file. Override VITE_API
+# in Site settings → Environment variables if your backend URL differs.
+#
+# IMPORTANT: for "Sign in with Google" to work from the Netlify origin, add your
+# Netlify site URL (e.g. https://your-site.netlify.app) to the Web OAuth client's
+# "Authorized JavaScript origins" in Google Cloud Console (project acp-drive).
+
+[build]
+  base = "frontend"
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+  VITE_API = "https://acp-app.icydune-047a2877.eastus2.azurecontainerapps.io"
+
+# SPA fallback so deep links / refreshes resolve to index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
