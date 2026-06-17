@@ -1,11 +1,11 @@
 """Reusable scan core: source -> engines -> rubric -> report dict.
 
-Shared by the CLI and the API. Source is 'local' (the bundled corpus) or 'drive'
-(read acp-demo-corpus via keyless ADC). Returns the same report shape the dashboards
-consume. The real app runs this as a Temporal workflow; here it runs in-process.
+Emits progress via a callback (phase / files_found / files_done / current) so the
+control plane can stream live activity. Ephemeral working copies are deleted when the
+scan finishes (the "documents never retained" guarantee).
 """
 from __future__ import annotations
-import io, json, os, subprocess, sys, tempfile, uuid
+import io, json, os, shutil, subprocess, sys, tempfile, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,27 +22,41 @@ from rubric import Rubric
 OFFICE = (".docx", ".pptx", ".xlsx")
 
 
-def _fetch(source: str, dest: Path) -> list[str]:
+def _noop(_):
+    pass
+
+
+def _list(source: str) -> list[dict]:
     if source == "local":
-        for p in (ACP / "test-corpus/files").glob("*"):
-            if p.suffix.lower() in OFFICE + (".pdf",):
-                (dest / p.name).write_bytes(p.read_bytes())
-        return sorted(p.name for p in dest.iterdir())
+        return [{"name": p.name, "path": str(p)} for p in sorted((ACP / "test-corpus/files").glob("*"))
+                if p.suffix.lower() in OFFICE + (".pdf",)]
     import google.auth
     from googleapiclient.discovery import build
-    from googleapiclient.http import MediaIoBaseDownload
     creds, _ = google.auth.default(scopes=SCOPES)
     svc = build("drive", "v3", credentials=creds, cache_discovery=False)
     files = svc.files().list(q=f"'{FOLDER}' in parents and trashed=false",
-                             fields="files(id,name)", pageSize=100, orderBy="name").execute().get("files", [])
-    for f in files:
-        buf = io.BytesIO()
-        dl = MediaIoBaseDownload(buf, svc.files().get_media(fileId=f["id"]))
-        done = False
-        while not done:
-            _, done = dl.next_chunk()
-        (dest / f["name"]).write_bytes(buf.getvalue())
-    return sorted(f["name"] for f in files)
+                             fields="files(id,name)", pageSize=200, orderBy="name").execute().get("files", [])
+    return [{"name": f["name"], "id": f["id"]} for f in files]
+
+
+def _download(item: dict, dest: Path, cache: dict) -> None:
+    out = dest / item["name"]
+    if "path" in item:
+        out.write_bytes(Path(item["path"]).read_bytes())
+        return
+    svc = cache.get("svc")
+    if svc is None:
+        import google.auth
+        from googleapiclient.discovery import build
+        creds, _ = google.auth.default(scopes=SCOPES)
+        svc = cache["svc"] = build("drive", "v3", credentials=creds, cache_discovery=False)
+    from googleapiclient.http import MediaIoBaseDownload
+    buf = io.BytesIO()
+    dl = MediaIoBaseDownload(buf, svc.files().get_media(fileId=item["id"]))
+    done = False
+    while not done:
+        _, done = dl.next_chunk()
+    out.write_bytes(buf.getvalue())
 
 
 def _analyse_pdf(path: Path) -> dict:
@@ -78,29 +92,42 @@ def _analyse_office(dest: Path) -> dict:
     return res
 
 
-def run_scan(source: str = "local") -> dict:
+def run_scan(source: str = "local", progress=_noop) -> dict:
     rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
     tmp = Path(tempfile.mkdtemp(prefix="acp-api-scan-"))
-    names = _fetch(source, tmp)
+    try:
+        progress({"phase": "connecting", "files_found": 0, "files_done": 0, "current": None})
+        items = _list(source)
+        n = len(items)
+        progress({"phase": "discovering", "files_found": n, "files_done": 0, "current": None})
 
-    office = _analyse_office(tmp)
-    raw: dict[str, dict] = {}
-    for name in names:
-        ext = Path(name).suffix.lower()
-        if ext == ".pdf":
-            raw[name] = {"engine": "python/pdf", **_analyse_pdf(tmp / name)}
-        elif ext in OFFICE:
-            raw[name] = {"engine": ".net/office",
-                         **office.get(name, {"succeeded": False, "issues": [], "errors": ["no engine result"]})}
+        cache = {}
+        for i, it in enumerate(items):
+            progress({"phase": "reading", "files_found": n, "files_done": i, "current": it["name"]})
+            _download(it, tmp, cache)
 
-    assessed = {n: rb.assess(r["succeeded"], r["issues"], r["errors"]) for n, r in raw.items()}
-    return {
-        "rubric": {"name": rb.name, "version": rb.version, "hash": rb.hash},
-        "summary": rb.aggregate(assessed),
-        "started_at": started,
-        "completed_at": datetime.now(timezone.utc).isoformat(),
-        "source": source,
-        "files": [{"file": n, "engine": raw[n]["engine"], **assessed[n], "issues": raw[n]["issues"]}
-                  for n in sorted(raw)],
-    }
+        office = _analyse_office(tmp)
+        raw: dict[str, dict] = {}
+        for i, it in enumerate(items):
+            name, ext = it["name"], Path(it["name"]).suffix.lower()
+            progress({"phase": "analysing", "files_found": n, "files_done": i, "current": name})
+            if ext == ".pdf":
+                raw[name] = {"engine": "python/pdf", **_analyse_pdf(tmp / name)}
+            elif ext in OFFICE:
+                raw[name] = {"engine": ".net/office",
+                             **office.get(name, {"succeeded": False, "issues": [], "errors": ["no engine result"]})}
+
+        progress({"phase": "scoring", "files_found": n, "files_done": n, "current": None})
+        assessed = {k: rb.assess(r["succeeded"], r["issues"], r["errors"]) for k, r in raw.items()}
+        return {
+            "rubric": {"name": rb.name, "version": rb.version, "hash": rb.hash},
+            "summary": rb.aggregate(assessed),
+            "started_at": started,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "source": source,
+            "files": [{"file": k, "engine": raw[k]["engine"], **assessed[k], "issues": raw[k]["issues"]}
+                      for k in sorted(raw)],
+        }
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)  # ephemeral: documents never retained

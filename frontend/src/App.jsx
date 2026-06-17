@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getMe, getSources, getRubric, listScans, getScan, runScan, reportUrl } from './api'
+import { getMe, getSources, getRubric, listScans, getScan, startScan, getJob, reportUrl } from './api'
 import KnowledgeGraph from './KnowledgeGraph.jsx'
 import SignIn from './SignIn.jsx'
 import Rubric from './Rubric.jsx'
@@ -13,6 +13,19 @@ const scoreColor = (s) => (s >= 90 ? '#639922' : s >= 50 ? '#F5B400' : '#F0524A'
 const statusOf = (f) => (f.status === 'error' ? 'unanalysable' : f.compliant ? 'certifiable' : 'issues')
 const BADGE = {
   certifiable: ['#E7F0DC', '#3B6D11'], issues: ['#FAEEDA', '#854F0B'], unanalysable: ['#EEEDEA', '#5F5E5A'],
+}
+
+function progressText(p) {
+  if (!p) return ''
+  const m = {
+    queued: 'Queued…', connecting: 'Connecting to source…', discovering: 'Discovering files…',
+    reading: `Reading files · ${p.files_done}/${p.files_found}`,
+    analysing: `Analysing documents · ${p.files_done}/${p.files_found}`,
+    scoring: 'Scoring against rubric…', done: 'Complete', error: 'Error',
+  }
+  let s = m[p.phase] ?? p.phase
+  if (p.current && (p.phase === 'reading' || p.phase === 'analysing')) s += ` · ${p.current}`
+  return s
 }
 
 function Logo() {
@@ -35,6 +48,7 @@ export default function App() {
   const [scanList, setScanList] = useState([])
   const [delta, setDelta] = useState(null)
   const [deltaKey, setDeltaKey] = useState(0)
+  const [progress, setProgress] = useState(null)
 
   useEffect(() => {
     if (!me) return
@@ -46,17 +60,24 @@ export default function App() {
   if (!me) return <SignIn onSignedIn={setMe} />
 
   const doScan = async (source) => {
-    setBusy(true); setErr(null)
+    setBusy(true); setErr(null); setProgress({ phase: 'queued' })
     const prevAvg = scan?.run?.avg_score
     try {
-      const r = await runScan(source)
-      const fresh = await getScan(r.scan_id)
+      const { job_id } = await startScan(source)
+      let job
+      do {
+        await new Promise((r) => setTimeout(r, 350))
+        job = await getJob(job_id)
+        setProgress(job)
+      } while (!job.done)
+      if (job.error) throw new Error(job.error)
+      const fresh = await getScan(job.scan_id)
       setScan(fresh)
       setScanList(await listScans())
       const newAvg = fresh.run.avg_score
       if (prevAvg != null && newAvg != null && newAvg !== prevAvg) { setDelta(newAvg - prevAvg); setDeltaKey((k) => k + 1) }
       setView('dashboard')
-    } catch (e) { setErr(`scan failed: ${e}`) } finally { setBusy(false) }
+    } catch (e) { setErr(`scan failed: ${e}`) } finally { setBusy(false); setProgress(null) }
   }
 
   const run = scan?.run
@@ -85,6 +106,12 @@ export default function App() {
         {run && <span className="muted runinfo">last run {run.completed_at?.slice(0, 19).replace('T', ' ')}</span>}
       </div>
       {err && <div className="err">{err}</div>}
+      {busy && progress && (
+        <div className="scanprog">
+          <div className="scanprogline"><span className="spinner" />{progressText(progress)}{progress.files_found ? <span className="muted"> · {progress.files_found} files found</span> : null}</div>
+          <div className="track"><i style={{ width: `${progress.files_found ? Math.round((progress.files_done / progress.files_found) * 100) : 6}%`, background: '#F5B400', transition: 'width .3s' }} /></div>
+        </div>
+      )}
 
       {view === 'sources' && (
         <section className="panel">

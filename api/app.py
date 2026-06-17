@@ -14,6 +14,8 @@ Temporal workflow and returns immediately (see temporal/).
 from __future__ import annotations
 import json
 import sys
+import threading
+import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -33,6 +35,8 @@ from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
                    allow_methods=["*"], allow_headers=["*"])
 store = Store()
+JOBS: dict[str, dict] = {}
+WCAG_LEVEL = {"SC_1_4_3": "AA", "SC_3_1_2": "AA"}  # everything else in our set is level A
 
 
 def active_rubric():
@@ -56,8 +60,10 @@ def rubric():
 def rules():
     catalog = json.loads((ACP / "config/rule-catalog.json").read_text())
     disabled = set(active_rubric().disabled)
-    return {fmt: [{**r, "enabled": r["id"] not in disabled} for r in items]
-            for fmt, items in catalog.items()}
+    findings = store.rule_findings()
+    return {fmt: [{**r, "enabled": r["id"] not in disabled,
+                   "findings": findings.get(r["id"], 0), "level": WCAG_LEVEL.get(r["wcag"], "A")}
+                  for r in items] for fmt, items in catalog.items()}
 
 
 class RubricUpdate(BaseModel):
@@ -80,10 +86,32 @@ def update_rubric(body: RubricUpdate):
 
 
 @app.post("/scans")
-def start_scan(source: str = Query("local", pattern="^(local|drive)$")):
-    report = run_scan(source)          # sync for the MVP; Temporal in production
-    sid = store.save_scan(report)
-    return {"scan_id": sid, "source": source, "summary": report["summary"]}
+def start_scan(source: str = Query("local", pattern="^(local|drive)$"), sync: bool = False):
+    if sync:  # synchronous path for scripts/tests
+        report = run_scan(source)
+        return {"scan_id": store.save_scan(report), "source": source, "summary": report["summary"]}
+    job_id = uuid.uuid4().hex[:12]
+    JOBS[job_id] = {"phase": "queued", "files_found": 0, "files_done": 0, "current": None,
+                    "done": False, "scan_id": None, "error": None, "source": source}
+
+    def work():
+        try:
+            report = run_scan(source, progress=lambda d: JOBS[job_id].update(d))
+            JOBS[job_id].update({"phase": "done", "done": True, "scan_id": store.save_scan(report),
+                                 "files_done": JOBS[job_id].get("files_found", 0)})
+        except Exception as e:
+            JOBS[job_id].update({"phase": "error", "done": True, "error": str(e)})
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"job_id": job_id}
+
+
+@app.get("/scans/jobs/{job_id}")
+def scan_job(job_id: str):
+    j = JOBS.get(job_id)
+    if j is None:
+        raise HTTPException(404, "job not found")
+    return j
 
 
 @app.get("/scans")

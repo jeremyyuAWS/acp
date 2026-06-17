@@ -91,3 +91,12 @@ class Store:
         with self._c() as c:
             return [dict(r) for r in c.execute(
                 "SELECT file,first_seen,last_seen,last_status,last_score FROM inventory ORDER BY file")]
+
+    def rule_findings(self) -> dict:
+        """Per-rule finding counts from the most recent scan (drives the rubric impact column)."""
+        with self._c() as c:
+            latest = c.execute("SELECT id FROM scan_runs ORDER BY completed_at DESC LIMIT 1").fetchone()
+            if not latest:
+                return {}
+            return {r["rule_id"]: r["n"] for r in c.execute(
+                "SELECT rule_id, COUNT(*) AS n FROM issue_records WHERE scan_id=? GROUP BY rule_id", (latest["id"],))}

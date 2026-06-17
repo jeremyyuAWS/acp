@@ -97,7 +97,7 @@ button.small { padding: 6px 12px; font-size: 13px; }
 .rubricsave input { width: 56px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; font: inherit; }
 .rulegroup { margin: 6px 0; }
 .rulefmt { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 16px 0 4px; }
-.rulerow { display: grid; grid-template-columns: 40px 1fr 92px 76px; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.rulerow { display: grid; grid-template-columns: 38px 1fr 92px 72px 70px; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
 .rulerow.off { opacity: 0.5; }
 .rulewcag { color: var(--muted); font-size: 13px; }
 .switch { position: relative; display: inline-block; width: 34px; height: 20px; }
@@ -106,6 +106,23 @@ button.small { padding: 6px 12px; font-size: 13px; }
 .slider::before { content: ""; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; background: #fff; border-radius: 50%; transition: 0.15s; }
 .switch input:checked + .slider { background: #639922; }
 .switch input:checked + .slider::before { transform: translateX(14px); }
+.rubrictools { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin: 16px 0 6px; }
+.sevdist { display: flex; gap: 8px; flex-wrap: wrap; }
+.sevpill { font-size: 12px; padding: 4px 11px; border-radius: 999px; }
+.rubricfilters { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rsearch { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 13px; width: 140px; }
+.fchip { background: #fff; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+.fchip.on { background: var(--plum); color: #fff; border-color: var(--plum); }
+.rulecard { border: 1px solid var(--line); border-radius: 12px; margin: 12px 0; overflow: hidden; }
+.rulecardhdr { display: flex; justify-content: space-between; align-items: center; background: var(--bg); padding: 10px 16px; }
+.rulefmtname { font-size: 14px; font-weight: 500; }
+.bulk { display: flex; align-items: center; gap: 8px; }
+.linkbtn { background: none; border: none; color: var(--plum); font: inherit; font-size: 13px; cursor: pointer; padding: 0; }
+.rulecard .rulerow { padding: 9px 16px; }
+.rulecard .rulerow:first-of-type { border-top: none; }
+.lvl { display: inline-block; background: #ece7ec; color: var(--plum); font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 4px; margin-right: 4px; }
+.ruleimpact { text-align: right; font-size: 13px; }
+.impact { background: #FAEEDA; color: #854F0B; padding: 2px 9px; border-radius: 999px; font-size: 12px; }
 
 .dashtoolbar { display: flex; justify-content: flex-end; margin: 16px 0 -6px; }
 .exportbtn { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; background: #fff; color: var(--plum); border: 1px solid var(--line); border-radius: 9px; padding: 8px 14px; font-size: 14px; }
@@ -124,3 +141,8 @@ button.small { padding: 6px 12px; font-size: 13px; }
 .herotrend { margin-top: 16px; }
 .herotrend .muted { display: block; margin-bottom: 2px; font-size: 12px; }
 .spark { display: block; }
+
+.scanprog { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; margin: 14px 0; }
+.scanprogline { display: flex; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 10px; }
+.spinner { width: 14px; height: 14px; border: 2px solid #ece7ec; border-top-color: var(--plum); border-radius: 50%; animation: spin 0.8s linear infinite; flex: 0 0 auto; }
+@keyframes spin { to { transform: rotate(360deg); } }
