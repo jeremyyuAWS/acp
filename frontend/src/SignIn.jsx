@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { getMe } from './api'
+import { useEffect, useState } from 'react'
+import { getMe, getConfig, setDriveToken } from './api'
 
 function GoogleG() {
   return (
@@ -15,12 +15,41 @@ function GoogleG() {
 export default function SignIn({ onSignedIn }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
-  const signIn = async () => {
+  const [clientId, setClientId] = useState(null)  // set => real GIS; null => demo identity
+
+  useEffect(() => { getConfig().then((c) => setClientId(c.google_client_id || null)).catch(() => {}) }, [])
+
+  const finish = async () => onSignedIn(await getMe())
+
+  // Demo mode: the server is already connected to a Google account (baked ADC).
+  const demoSignIn = async () => {
     setBusy(true); setErr(null)
-    try { onSignedIn(await getMe()) }
+    try { await finish() }
     catch (e) { setErr(`sign-in failed — connect a Google account first (${e})`) }
     finally { setBusy(false) }
   }
+
+  // GIS mode: pop the Google consent, get a drive.readonly access token, then resolve
+  // identity server-side via that token.
+  const gisSignIn = () => {
+    setErr(null)
+    const oauth2 = window.google?.accounts?.oauth2
+    if (!oauth2) { setErr('Google sign-in is still loading — try again in a moment'); return }
+    setBusy(true)
+    oauth2.initTokenClient({
+      client_id: clientId,
+      scope: 'https://www.googleapis.com/auth/drive.readonly',
+      callback: async (resp) => {
+        try {
+          if (resp.error || !resp.access_token) throw new Error(resp.error || 'no access token')
+          setDriveToken(resp.access_token)
+          await finish()
+        } catch (e) { setErr(`sign-in failed (${e})`) }
+        finally { setBusy(false) }
+      },
+    }).requestAccessToken()
+  }
+
   return (
     <div className="signin">
       <div className="signin-card">
@@ -29,7 +58,7 @@ export default function SignIn({ onSignedIn }) {
           <span className="io"><span>io</span></span>
         </span>
         <p className="signin-sub">accessibility compliance</p>
-        <button className="gbtn" disabled={busy} onClick={signIn}>
+        <button className="gbtn" disabled={busy} onClick={clientId ? gisSignIn : demoSignIn}>
           <GoogleG /> {busy ? 'signing in…' : 'Sign in with Google'}
         </button>
         {err && <div className="err">{err}</div>}
