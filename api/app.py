@@ -12,13 +12,15 @@ Scans run synchronously here for simplicity; the productized control plane start
 Temporal workflow and returns immediately (see temporal/).
 """
 from __future__ import annotations
+import base64
 import json
+import os
 import sys
 import threading
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -34,9 +36,37 @@ app = FastAPI(title="acp — accessibility compliance API", version="0.1.0")
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
                    allow_methods=["*"], allow_headers=["*"])
+
+# Public-deploy access gate: if ACP_ACCESS_CODE is set, every request except the
+# liveness probe needs HTTP Basic auth whose password matches it. No-op locally
+# (env unset). This is a thin shared-passcode gate in front of the demo; it is
+# replaced by per-user "Sign in with Google" (GIS) once a Web OAuth client exists.
+ACCESS_CODE = os.environ.get("ACP_ACCESS_CODE")
+# When a Web OAuth client id is configured, the SPA does per-user "Sign in with
+# Google" (GIS) and sends each user's Drive access token as X-Drive-Token; the
+# passcode gate is then disabled at deploy time. Unset = demo mode (baked ADC).
+GOOGLE_CLIENT_ID = os.environ.get("ACP_GOOGLE_CLIENT_ID") or None
+DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+
+
+@app.middleware("http")
+async def _access_gate(request, call_next):
+    if ACCESS_CODE and request.url.path != "/healthz":
+        ok = False
+        hdr = request.headers.get("authorization", "")
+        if hdr.startswith("Basic "):
+            try:
+                ok = base64.b64decode(hdr[6:]).decode().split(":", 1)[1] == ACCESS_CODE
+            except Exception:
+                ok = False
+        if not ok:
+            return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="acp"'})
+    return await call_next(request)
+
+
 store = Store()
 JOBS: dict[str, dict] = {}
-WCAG_LEVEL = {"SC_1_4_3": "AA", "SC_3_1_2": "AA"}  # everything else in our set is level A
+WCAG_LEVEL = {"SC_1_4_3": "AA"}  # the only AA criterion in our rule set; rest are level A
 
 
 def active_rubric():
@@ -46,6 +76,14 @@ def active_rubric():
 @app.get("/healthz")
 def healthz():
     return {"ok": True, "service": "acp", "rubric_hash": active_rubric().hash}
+
+
+@app.get("/config")
+def config():
+    """Tells the SPA how to authenticate: GIS per-user (client id present) vs demo."""
+    return {"google_client_id": GOOGLE_CLIENT_ID,
+            "drive_scope": DRIVE_SCOPES[0],
+            "auth": "gis" if GOOGLE_CLIENT_ID else "demo"}
 
 
 @app.get("/rubric")
@@ -86,9 +124,12 @@ def update_rubric(body: RubricUpdate):
 
 
 @app.post("/scans")
-def start_scan(source: str = Query("local", pattern="^(local|drive)$"), sync: bool = False):
+def start_scan(request: Request, source: str = Query("local", pattern="^(local|drive)$"), sync: bool = False):
+    token = request.headers.get("x-drive-token")  # per-user Drive token (GIS); captured before the thread
+    if source == "drive" and GOOGLE_CLIENT_ID and not token:
+        raise HTTPException(401, "sign in with Google to scan your Drive")
     if sync:  # synchronous path for scripts/tests
-        report = run_scan(source)
+        report = run_scan(source, drive_token=token)
         return {"scan_id": store.save_scan(report), "source": source, "summary": report["summary"]}
     job_id = uuid.uuid4().hex[:12]
     JOBS[job_id] = {"phase": "queued", "files_found": 0, "files_done": 0, "current": None,
@@ -96,7 +137,7 @@ def start_scan(source: str = Query("local", pattern="^(local|drive)$"), sync: bo
 
     def work():
         try:
-            report = run_scan(source, progress=lambda d: JOBS[job_id].update(d))
+            report = run_scan(source, progress=lambda d: JOBS[job_id].update(d), drive_token=token)
             JOBS[job_id].update({"phase": "done", "done": True, "scan_id": store.save_scan(report),
                                  "files_done": JOBS[job_id].get("files_found", 0)})
         except Exception as e:
@@ -145,28 +186,47 @@ def inventory():
     return store.inventory()
 
 
-def _drive():
-    import google.auth
+def _drive(request: Request | None = None):
+    """Drive client for the request. A per-user GIS token (X-Drive-Token) scans that
+    user's Drive; otherwise ADC (demo identity). In GIS mode a token is required."""
     from googleapiclient.discovery import build
-    creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/drive.readonly"])
+    token = request.headers.get("x-drive-token") if request is not None else None
+    if token:
+        from google.oauth2.credentials import Credentials
+        creds = Credentials(token=token, scopes=DRIVE_SCOPES)
+    elif GOOGLE_CLIENT_ID:
+        raise HTTPException(401, "sign in with Google to connect your Drive")
+    else:
+        import google.auth
+        creds, _ = google.auth.default(scopes=DRIVE_SCOPES)
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
 @app.get("/me")
-def me():
-    """Signed-in identity = the connected Google account (real, via the Drive API).
-    Production swaps in a 'Sign in with Google' (GIS) flow; the screen is the same."""
+def me(request: Request):
+    """Signed-in identity = the connected Google account (real, via the Drive API)."""
     try:
-        u = _drive().about().get(fields="user").execute().get("user", {})
+        u = _drive(request).about().get(fields="user").execute().get("user", {})
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(401, f"no connected Google account: {e}")
     return {"email": u.get("emailAddress"), "name": u.get("displayName"), "photo": u.get("photoLink")}
 
 
 @app.get("/sources")
-def sources():
-    folder = "1W27ULZsstP7gYGzgKKBId0qEfNxeKn0_"
-    n = len(_drive().files().list(q=f"'{folder}' in parents and trashed=false",
-                                  fields="files(id)", pageSize=200).execute().get("files", []))
+def sources(request: Request):
+    folder = os.environ.get("ACP_DRIVE_FOLDER") or "1W27ULZsstP7gYGzgKKBId0qEfNxeKn0_"
+    n = len(_drive(request).files().list(q=f"'{folder}' in parents and trashed=false",
+                                         fields="files(id)", pageSize=200).execute().get("files", []))
     return [{"type": "google_drive", "name": "acp-demo-corpus", "id": folder,
              "files": n, "access": "read-only"}]
+
+
+# Serve the built React SPA same-origin in the deploy container (ACP_STATIC_DIR
+# points at the vite `dist`). Registered last so all /api routes take precedence;
+# unset locally (the SPA runs on the vite dev server instead).
+_static = os.environ.get("ACP_STATIC_DIR")
+if _static and Path(_static).is_dir():
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/", StaticFiles(directory=_static, html=True), name="spa")

@@ -1,0 +1,24 @@
+# keep the acr build context small; the Dockerfile COPYs only what it needs
+.git
+.venv-drive
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.secrets
+acp.db
+
+# frontend: ship source only, build inside the image
+frontend/node_modules
+frontend/dist
+
+# .NET: keep AcpScan.Cli/bin/Release (the engine artifacts we ship); drop the rest
+spike/dotnet/AcpSpike.OfficeActivity
+spike/dotnet/*/obj
+
+# generated / oversized corpus sidecars
+test-corpus/*.b64
+test-corpus/last-scan.json
+test-corpus/SMOKE-TEST-RESULTS.md
