@@ -79,7 +79,7 @@ def _analyse_office(dest: Path) -> dict:
 
 
 def run_scan(source: str = "local") -> dict:
-    rb = Rubric.load(ACP / "config/rubric.default.json")
+    rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
     tmp = Path(tempfile.mkdtemp(prefix="acp-api-scan-"))
     names = _fetch(source, tmp)

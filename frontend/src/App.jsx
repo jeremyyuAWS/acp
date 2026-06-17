@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { getMe, getSources, getRubric, listScans, getScan, runScan } from './api'
 import KnowledgeGraph from './KnowledgeGraph.jsx'
 import SignIn from './SignIn.jsx'
+import Rubric from './Rubric.jsx'
 
 const CRIT = {
   SC_1_1_1: '1.1.1 non-text', SC_1_3_1: '1.3.1 structure', SC_2_4_2: '2.4.2 page titled',
@@ -70,6 +71,7 @@ export default function App() {
         <button className={view === 'sources' ? 'tab on' : 'tab'} onClick={() => setView('sources')}>Sources</button>
         <button className={view === 'dashboard' ? 'tab on' : 'tab'} onClick={() => setView('dashboard')}>Dashboard</button>
         <button className={view === 'graph' ? 'tab on' : 'tab'} onClick={() => setView('graph')}>Knowledge graph</button>
+        <button className={view === 'rubric' ? 'tab on' : 'tab'} onClick={() => setView('rubric')}>Rubric</button>
         {run && <span className="muted runinfo">last run {run.completed_at?.slice(0, 19).replace('T', ' ')}</span>}
       </div>
       {err && <div className="err">{err}</div>}
@@ -146,6 +148,8 @@ export default function App() {
       ) : <p className="muted">No scan yet — run one from Sources.</p>)}
 
       {view === 'graph' && (run ? <KnowledgeGraph files={files} /> : <p className="muted">No scan yet — run one from Sources.</p>)}
+
+      {view === 'rubric' && <Rubric onSaved={() => getRubric().then(setRubric)} />}
     </div>
   )
 }

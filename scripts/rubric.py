@@ -40,6 +40,11 @@ class Rubric:
     def load(cls, path) -> "Rubric":
         return cls(json.loads(Path(path).read_text()))
 
+    @classmethod
+    def load_active(cls, config_dir) -> "Rubric":
+        active = Path(config_dir) / "rubric.active.json"
+        return cls.load(active if active.exists() else Path(config_dir) / "rubric.default.json")
+
     def _penalty(self, severity: str) -> int:
         return self.weights.get(severity, self.weights.get("_default", 5))
 

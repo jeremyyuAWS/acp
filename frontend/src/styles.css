@@ -90,3 +90,19 @@ button.small { padding: 6px 12px; font-size: 13px; }
 .srcname { font-weight: 500; font-size: 15px; }
 .source.ghosted { opacity: 0.7; }
 .app a { color: var(--plum); }
+
+.rubrichdr { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+.rubricsave { display: flex; align-items: center; gap: 12px; }
+.rubricsave label { font-size: 13px; color: var(--muted); }
+.rubricsave input { width: 56px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; font: inherit; }
+.rulegroup { margin: 6px 0; }
+.rulefmt { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 16px 0 4px; }
+.rulerow { display: grid; grid-template-columns: 40px 1fr 92px 76px; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.rulerow.off { opacity: 0.5; }
+.rulewcag { color: var(--muted); font-size: 13px; }
+.switch { position: relative; display: inline-block; width: 34px; height: 20px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; inset: 0; background: #cfc9d3; border-radius: 999px; transition: 0.15s; cursor: pointer; }
+.slider::before { content: ""; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; background: #fff; border-radius: 50%; transition: 0.15s; }
+.switch input:checked + .slider { background: #639922; }
+.switch input:checked + .slider::before { transform: translateX(14px); }

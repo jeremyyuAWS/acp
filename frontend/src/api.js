@@ -8,6 +8,9 @@ const j = (r) => {
 export const getMe = () => fetch(`${BASE}/me`).then(j)
 export const getSources = () => fetch(`${BASE}/sources`).then(j)
 export const getRubric = () => fetch(`${BASE}/rubric`).then(j)
+export const getRules = () => fetch(`${BASE}/rules`).then(j)
+export const updateRubric = (body) =>
+  fetch(`${BASE}/rubric`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(j)
 export const listScans = () => fetch(`${BASE}/scans`).then(j)
 export const getScan = (id) => fetch(`${BASE}/scans/${id}`).then(j)
 export const getInventory = () => fetch(`${BASE}/inventory`).then(j)

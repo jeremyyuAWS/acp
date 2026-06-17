@@ -1,0 +1,41 @@
+{
+  "docx": [
+    { "id": "DOCX-ALT-001", "title": "Image missing alt text", "wcag": "SC_1_1_1", "severity": "CRITICAL" },
+    { "id": "DOCX-TITLE-001", "title": "Document title not set", "wcag": "SC_2_4_2", "severity": "SERIOUS" },
+    { "id": "DOCX-LANG-001", "title": "Document language not declared", "wcag": "SC_3_1_1", "severity": "SERIOUS" },
+    { "id": "DOCX-HEAD-001", "title": "Heading structure incorrect", "wcag": "SC_1_3_1", "severity": "SERIOUS" },
+    { "id": "DOCX-TABLE-001", "title": "Table has no header row", "wcag": "SC_1_3_1", "severity": "SERIOUS" },
+    { "id": "DOCX-CONTRAST-001", "title": "Insufficient colour contrast", "wcag": "SC_1_4_3", "severity": "SERIOUS" },
+    { "id": "DOCX-LINK-001", "title": "Link text not descriptive", "wcag": "SC_2_4_4", "severity": "MODERATE" },
+    { "id": "DOCX-LANGPART-001", "title": "Language of parts not set", "wcag": "SC_3_1_2", "severity": "MODERATE" },
+    { "id": "DOCX-BOOKMARK-001", "title": "Long document has no bookmarks", "wcag": "SC_4_1_2", "severity": "MINOR" }
+  ],
+  "pptx": [
+    { "id": "PPTX-ALT-001", "title": "Image missing alt text", "wcag": "SC_1_1_1", "severity": "CRITICAL" },
+    { "id": "PPTX-TITLE-001", "title": "Slide title not set", "wcag": "SC_2_4_2", "severity": "SERIOUS" },
+    { "id": "PPTX-LANG-001", "title": "Document language not declared", "wcag": "SC_3_1_1", "severity": "SERIOUS" },
+    { "id": "PPTX-ORDER-001", "title": "Reading order undefined", "wcag": "SC_1_3_2", "severity": "SERIOUS" },
+    { "id": "PPTX-TABLE-001", "title": "Table has no header row", "wcag": "SC_1_3_1", "severity": "SERIOUS" },
+    { "id": "PPTX-CONTRAST-001", "title": "Insufficient colour contrast", "wcag": "SC_1_4_3", "severity": "SERIOUS" },
+    { "id": "PPTX-LINK-001", "title": "Link text not descriptive", "wcag": "SC_2_4_4", "severity": "MODERATE" },
+    { "id": "PPTX-ANIM-001", "title": "Problematic animation order", "wcag": "SC_2_2_2", "severity": "MINOR" }
+  ],
+  "xlsx": [
+    { "id": "XLSX-ALT-001", "title": "Image missing alt text", "wcag": "SC_1_1_1", "severity": "CRITICAL" },
+    { "id": "XLSX-TITLE-001", "title": "Document title not set", "wcag": "SC_2_4_2", "severity": "SERIOUS" },
+    { "id": "XLSX-LANG-001", "title": "Document language not declared", "wcag": "SC_3_1_1", "severity": "SERIOUS" },
+    { "id": "XLSX-TABLE-001", "title": "Data range has no header row", "wcag": "SC_1_3_1", "severity": "SERIOUS" },
+    { "id": "XLSX-SHEET-001", "title": "Generic sheet name", "wcag": "SC_1_3_1", "severity": "MODERATE" },
+    { "id": "XLSX-MERGE-001", "title": "Merged cells break navigation", "wcag": "SC_1_3_1", "severity": "MODERATE" },
+    { "id": "XLSX-HIDDEN-001", "title": "Hidden content", "wcag": "SC_1_3_1", "severity": "MINOR" }
+  ],
+  "pdf": [
+    { "id": "pdf.missing-alt-text", "title": "Image missing alt text", "wcag": "SC_1_1_1", "severity": "CRITICAL" },
+    { "id": "pdf.tagged", "title": "PDF is not tagged", "wcag": "SC_1_3_1", "severity": "SERIOUS" },
+    { "id": "pdf.document-title", "title": "Document title not set", "wcag": "SC_2_4_2", "severity": "SERIOUS" },
+    { "id": "pdf.document-language", "title": "Document language not declared", "wcag": "SC_3_1_1", "severity": "SERIOUS" },
+    { "id": "pdf.reading-order", "title": "Reading order undefined", "wcag": "SC_1_3_2", "severity": "SERIOUS" },
+    { "id": "pdf.display-doc-title", "title": "Viewer not set to show title", "wcag": "SC_2_4_2", "severity": "MODERATE" },
+    { "id": "pdf.missing-bookmarks", "title": "No navigation bookmarks", "wcag": "SC_4_1_2", "severity": "MINOR" }
+  ]
+}

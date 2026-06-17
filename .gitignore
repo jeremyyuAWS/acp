@@ -26,3 +26,6 @@ test-corpus/files/*.b64
 
 # local sqlite
 acp.db
+
+# runtime-edited rubric
+config/rubric.active.json
