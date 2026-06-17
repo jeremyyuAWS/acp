@@ -1,19 +1,24 @@
 import { useEffect, useState } from 'react'
-import { getMe, getSources, getRubric, listScans, getScan, startScan, getJob, reportUrl } from './api'
+import { getMe, getSources, getRubric, listScans, getScan, startScan, getJob } from './api'
 import KnowledgeGraph from './KnowledgeGraph.jsx'
 import SignIn from './SignIn.jsx'
 import Rubric from './Rubric.jsx'
-import { ScoreRing, Sparkline } from './ScoreRing.jsx'
+import Overview from './Overview.jsx'
+import Integrations from './Integrations.jsx'
+import Discover from './Discover.jsx'
+import Dashboard from './Dashboard.jsx'
+import Remediate from './Remediate.jsx'
+import Report from './Report.jsx'
+import EmptyState, { Loading } from './EmptyState.jsx'
 
-const CRIT = {
-  SC_1_1_1: '1.1.1 non-text', SC_1_3_1: '1.3.1 structure', SC_2_4_2: '2.4.2 page titled',
-  SC_2_4_4: '2.4.4 link purpose', SC_3_1_1: '3.1.1 language',
-}
-const scoreColor = (s) => (s >= 90 ? '#639922' : s >= 50 ? '#F5B400' : '#F0524A')
-const statusOf = (f) => (f.status === 'error' ? 'unanalysable' : f.compliant ? 'certifiable' : 'issues')
-const BADGE = {
-  certifiable: ['#E7F0DC', '#3B6D11'], issues: ['#FAEEDA', '#854F0B'], unanalysable: ['#EEEDEA', '#5F5E5A'],
-}
+const TABS = [
+  ['overview', 'Overview', 'at a glance'],
+  ['integrations', 'Integrations', 'data sources'],
+  ['discover', 'Discover', 'steps 1–3'],
+  ['assess', 'Assess', 'steps 4–5'],
+  ['remediate', 'Remediate', 'steps 6–8'],
+  ['report', 'Report', 'steps 9–10'],
+]
 
 function progressText(p) {
   if (!p) return ''
@@ -44,17 +49,22 @@ export default function App() {
   const [scan, setScan] = useState(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
-  const [view, setView] = useState('sources')
+  const [view, setView] = useState('overview')
+  const [assess, setAssess] = useState('results')
   const [scanList, setScanList] = useState([])
   const [delta, setDelta] = useState(null)
   const [deltaKey, setDeltaKey] = useState(0)
   const [progress, setProgress] = useState(null)
+  const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
     if (!me) return
     getRubric().then(setRubric).catch(() => {})
     getSources().then(setSources).catch(() => {})
-    listScans().then((l) => { setScanList(l); if (l.length) getScan(l[0].id).then(setScan) }).catch(() => {})
+    listScans()
+      .then(async (l) => { setScanList(l); if (l.length) setScan(await getScan(l[0].id)) })
+      .catch(() => {})
+      .finally(() => setLoaded(true))
   }, [me])
 
   if (!me) return <SignIn onSignedIn={setMe} />
@@ -76,16 +86,14 @@ export default function App() {
       setScanList(await listScans())
       const newAvg = fresh.run.avg_score
       if (prevAvg != null && newAvg != null && newAvg !== prevAvg) { setDelta(newAvg - prevAvg); setDeltaKey((k) => k + 1) }
-      setView('dashboard')
+      setView('overview')
     } catch (e) { setErr(`scan failed: ${e}`) } finally { setBusy(false); setProgress(null) }
   }
 
   const run = scan?.run
   const files = scan?.files ?? []
-  const critFails = {}
-  files.forEach((f) => new Set(f.issues.map((i) => i.wcag)).forEach((c) => { critFails[c] = (critFails[c] || 0) + 1 }))
-  const maxFail = Math.max(1, ...Object.values(critFails))
   const trend = [...scanList].reverse().map((s) => s.avg_score).filter((x) => x != null)
+  const placeholder = loaded ? <EmptyState onScan={doScan} busy={busy} /> : <Loading />
 
   return (
     <div className="app">
@@ -99,12 +107,14 @@ export default function App() {
       </header>
 
       <div className="tabs">
-        <button className={view === 'sources' ? 'tab on' : 'tab'} onClick={() => setView('sources')}>Sources</button>
-        <button className={view === 'dashboard' ? 'tab on' : 'tab'} onClick={() => setView('dashboard')}>Dashboard</button>
-        <button className={view === 'graph' ? 'tab on' : 'tab'} onClick={() => setView('graph')}>Knowledge graph</button>
-        <button className={view === 'rubric' ? 'tab on' : 'tab'} onClick={() => setView('rubric')}>Rubric</button>
+        {TABS.map(([k, label, rg]) => (
+          <button key={k} className={view === k ? 'tab on' : 'tab'} onClick={() => setView(k)}>
+            {label}<span className="rg">{rg}</span>
+          </button>
+        ))}
         {run && <span className="muted runinfo">last run {run.completed_at?.slice(0, 19).replace('T', ' ')}</span>}
       </div>
+
       {err && <div className="err">{err}</div>}
       {busy && progress && (
         <div className="scanprog">
@@ -113,93 +123,28 @@ export default function App() {
         </div>
       )}
 
-      {view === 'sources' && (
-        <section className="panel">
-          <h2>Connected sources</h2>
-          {sources.length === 0 && <p className="muted">No sources connected.</p>}
-          {sources.map((s) => (
-            <div className="source" key={s.id}>
-              <div className="srcleft">
-                <span className="srcicon" aria-hidden="true">▦</span>
-                <div>
-                  <div className="srcname">{s.name}</div>
-                  <div className="muted">Google Drive · {s.files} files · {s.access}</div>
-                </div>
-              </div>
-              <button disabled={busy} onClick={() => doScan('drive')}>{busy ? 'scanning…' : 'Run scan'}</button>
-            </div>
-          ))}
-          <div className="source ghosted">
-            <div className="srcleft"><span className="srcicon" aria-hidden="true">＋</span>
-              <div><div className="srcname">Connect another source</div><div className="muted">SharePoint · OneDrive — coming soon</div></div>
-            </div>
-            <button className="ghost" disabled onClick={() => {}}>Connect</button>
+      {view === 'overview' && (run ? <Overview run={run} files={files} trend={trend} onGo={setView} /> : placeholder)}
+
+      {view === 'integrations' && <Integrations sources={sources} onScan={doScan} busy={busy} />}
+
+      {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} />}
+
+      {view === 'assess' && (
+        <>
+          <div className="subtabs">
+            <button className={assess === 'results' ? 'fchip on' : 'fchip'} onClick={() => setAssess('results')}>Results</button>
+            <button className={assess === 'graph' ? 'fchip on' : 'fchip'} onClick={() => setAssess('graph')}>Knowledge graph</button>
+            <button className={assess === 'rubric' ? 'fchip on' : 'fchip'} onClick={() => setAssess('rubric')}>Rubric</button>
           </div>
-          <p className="muted" style={{ marginTop: 14 }}>Or <a href="#" onClick={(e) => { e.preventDefault(); doScan('local') }}>run a scan on the bundled sample corpus</a>.</p>
-        </section>
+          {assess === 'results' && (run ? <Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} /> : placeholder)}
+          {assess === 'graph' && (run ? <KnowledgeGraph files={files} /> : placeholder)}
+          {assess === 'rubric' && <Rubric onSaved={() => getRubric().then(setRubric)} />}
+        </>
       )}
 
-      {view === 'dashboard' && (run ? (
-        <>
-          <div className="dashtoolbar">
-            <a className="exportbtn" href={reportUrl(run.id)} target="_blank" rel="noreferrer">⤓ Export PDF report</a>
-          </div>
-          <section className="hero">
-            <ScoreRing score={run.avg_score} delta={delta} deltaKey={deltaKey} />
-            <div className="heroright">
-              <div className="herostats">
-                <div className="herostat"><b style={{ color: '#3B6D11' }}>{run.certifiable}</b><span>certifiable</span></div>
-                <div className="herostat"><b style={{ color: '#854F0B' }}>{run.uncertain}</b><span>uncertain</span></div>
-                <div className="herostat"><b style={{ color: '#A32D2D' }}>{run.error}</b><span>unanalysable</span></div>
-                <div className="herostat"><b>{run.files}</b><span>files</span></div>
-              </div>
-              {trend.length > 1 && (
-                <div className="herotrend">
-                  <span className="muted">compliance trend · {trend.length} scans</span>
-                  <Sparkline points={trend} />
-                </div>
-              )}
-            </div>
-          </section>
-          {Object.keys(critFails).length > 0 && (
-            <section className="panel">
-              <h2>WCAG 2.1 criteria failing, by file count</h2>
-              {Object.entries(critFails).sort((a, b) => b[1] - a[1]).map(([c, n]) => (
-                <div className="critrow" key={c}>
-                  <span className="critlabel">{CRIT[c] ?? c}</span>
-                  <span className="track"><i style={{ width: `${(n / maxFail) * 100}%`, background: n >= maxFail ? '#F0524A' : '#F5B400' }} /></span>
-                  <span className="critn">{n}</span>
-                </div>
-              ))}
-            </section>
-          )}
-          <section className="panel">
-            <h2>File inventory</h2>
-            <table>
-              <thead><tr><th>file</th><th>status</th><th>score</th><th>findings</th></tr></thead>
-              <tbody>
-                {files.map((f) => {
-                  const st = statusOf(f); const [bg, fg] = BADGE[st]
-                  return (
-                    <tr key={f.file}>
-                      <td className="fname">{f.file}</td>
-                      <td><span className="badge" style={{ background: bg, color: fg }}>{st}</span></td>
-                      <td>{f.score === null ? <span className="muted">n/a</span> : (
-                        <span className="scorecell"><span>{f.score}</span>
-                          <span className="track sm"><i style={{ width: `${f.score}%`, background: scoreColor(f.score) }} /></span></span>)}</td>
-                      <td className="muted">{f.issues.length ? `${f.issues.length} issue(s)` : (f.status === 'error' ? 'could not analyse' : 'clean')}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </section>
-        </>
-      ) : <p className="muted">No scan yet — run one from Sources.</p>)}
+      {view === 'remediate' && (run ? <Remediate run={run} files={files} /> : placeholder)}
 
-      {view === 'graph' && (run ? <KnowledgeGraph files={files} /> : <p className="muted">No scan yet — run one from Sources.</p>)}
-
-      {view === 'rubric' && <Rubric onSaved={() => getRubric().then(setRubric)} />}
+      {view === 'report' && (run ? <Report run={run} /> : placeholder)}
     </div>
   )
 }

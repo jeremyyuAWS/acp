@@ -46,17 +46,22 @@ export function ScoreRing({ score, delta, deltaKey }) {
   )
 }
 
-export function Sparkline({ points }) {
+export function Sparkline({ points, width = 200, height = 46 }) {
   if (!points || points.length < 2) return null
-  const w = 200, h = 46, pad = 6
-  const min = Math.max(0, Math.min(...points) - 6), max = 100
+  const w = width, h = height, pad = 8
+  // scale to the data's own range (not 0-100) so small movements read; pad so it isn't pinned to the edges
+  const lo = Math.min(...points), hi = Math.max(...points)
+  const range = Math.max(hi - lo, 4)
+  const min = lo - range * 0.4, max = hi + range * 0.4
   const xs = points.map((_, i) => pad + (i * (w - 2 * pad)) / (points.length - 1))
   const ys = points.map((p) => h - pad - ((p - min) / (max - min)) * (h - 2 * pad))
-  const d = xs.map((x, i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${ys[i].toFixed(1)}`).join(' ')
+  const line = xs.map((x, i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${ys[i].toFixed(1)}`).join(' ')
+  const area = `${line} L${xs[xs.length - 1].toFixed(1)},${h} L${xs[0].toFixed(1)},${h} Z`
   return (
     <svg width={w} height={h} className="spark">
-      <path d={d} fill="none" stroke="#46303F" strokeWidth="2" />
-      <circle cx={xs[xs.length - 1]} cy={ys[ys.length - 1]} r="3.5" fill={ringColor(points[points.length - 1])} />
+      <path d={area} fill="#7a5c8e" opacity="0.12" />
+      <path d={line} fill="none" stroke="#7a5c8e" strokeWidth="2" />
+      {xs.map((x, i) => <circle key={i} cx={x} cy={ys[i]} r={i === xs.length - 1 ? 3.5 : 2} fill={i === xs.length - 1 ? ringColor(points[i]) : '#7a5c8e'} />)}
     </svg>
   )
 }
