@@ -23,3 +23,6 @@ test-corpus/files/*.b64
 # service-account keys / secrets
 .secrets/
 *-sa.json
+
+# local sqlite
+acp.db
