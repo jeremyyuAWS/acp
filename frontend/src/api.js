@@ -5,6 +5,8 @@ const j = (r) => {
   return r.json()
 }
 
+export const getMe = () => fetch(`${BASE}/me`).then(j)
+export const getSources = () => fetch(`${BASE}/sources`).then(j)
 export const getRubric = () => fetch(`${BASE}/rubric`).then(j)
 export const listScans = () => fetch(`${BASE}/scans`).then(j)
 export const getScan = (id) => fetch(`${BASE}/scans/${id}`).then(j)

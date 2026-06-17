@@ -67,3 +67,30 @@ def scan(sid: str):
 @app.get("/inventory")
 def inventory():
     return store.inventory()
+
+
+def _drive():
+    import google.auth
+    from googleapiclient.discovery import build
+    creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/drive.readonly"])
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+
+@app.get("/me")
+def me():
+    """Signed-in identity = the connected Google account (real, via the Drive API).
+    Production swaps in a 'Sign in with Google' (GIS) flow; the screen is the same."""
+    try:
+        u = _drive().about().get(fields="user").execute().get("user", {})
+    except Exception as e:
+        raise HTTPException(401, f"no connected Google account: {e}")
+    return {"email": u.get("emailAddress"), "name": u.get("displayName"), "photo": u.get("photoLink")}
+
+
+@app.get("/sources")
+def sources():
+    folder = "1W27ULZsstP7gYGzgKKBId0qEfNxeKn0_"
+    n = len(_drive().files().list(q=f"'{folder}' in parents and trashed=false",
+                                  fields="files(id)", pageSize=200).execute().get("files", []))
+    return [{"type": "google_drive", "name": "acp-demo-corpus", "id": folder,
+             "files": n, "access": "read-only"}]

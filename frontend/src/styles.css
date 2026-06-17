@@ -67,3 +67,26 @@ td { padding: 10px 0; border-top: 1px solid var(--line); }
 .kglegend span { display: flex; align-items: center; gap: 6px; }
 .kglegend i { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
 .kgdetail { background: var(--bg); border-radius: 8px; padding: 10px 12px; margin-top: 8px; font-size: 13px; min-height: 20px; }
+
+.signin { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+.signin-card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 40px 44px; text-align: center; max-width: 360px; }
+.logo.big .word { font-size: 38px; }
+.logo.big .io > span { font-size: 30px; padding: 0 11px; }
+.logo.big .io { padding: 4px; border-radius: 12px; }
+.signin-sub { color: var(--muted); margin: 12px 0 26px; font-size: 15px; }
+.signin-foot { margin-top: 18px; font-size: 12px; }
+.gbtn { display: inline-flex; align-items: center; gap: 10px; background: #fff; color: #3c4043; border: 1px solid #dadce0; border-radius: 9px; padding: 11px 20px; font-size: 14px; font-weight: 500; }
+.gbtn:hover { background: #f8f9fa; }
+
+.userbox { display: flex; align-items: center; gap: 10px; }
+.user { font-size: 13px; color: var(--ink); }
+button.small { padding: 6px 12px; font-size: 13px; }
+.runinfo { margin-left: 8px; }
+
+.source { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0; border-top: 1px solid var(--line); }
+.source:first-of-type { border-top: none; }
+.srcleft { display: flex; align-items: center; gap: 14px; }
+.srcicon { width: 38px; height: 38px; border-radius: 10px; background: #f3eef6; color: var(--plum); display: inline-flex; align-items: center; justify-content: center; font-size: 18px; }
+.srcname { font-weight: 500; font-size: 15px; }
+.source.ghosted { opacity: 0.7; }
+.app a { color: var(--plum); }
