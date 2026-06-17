@@ -5,6 +5,7 @@
 __pycache__/
 *.pyc
 .venv/
+.venv-drive/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
@@ -29,3 +30,10 @@ acp.db
 
 # runtime-edited rubric
 config/rubric.active.json
+
+# generated scan artifacts
+test-corpus/last-scan.json
+test-corpus/files/_office.json
+
+# vendored compiled engine for the deploy image (not committed)
+deploy/public/vendor/

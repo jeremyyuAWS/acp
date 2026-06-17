@@ -4,7 +4,7 @@
 Activities run outside the workflow sandbox, so heavy imports / I/O live here.
 """
 from __future__ import annotations
-import io, json, os, subprocess, sys, tempfile, uuid
+import io, json, os, shutil, subprocess, sys, tempfile, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,8 +37,15 @@ async def discover() -> list:
 
 @activity.defn
 async def analyse(file: dict) -> dict:
-    svc = _drive()
     tmp = Path(tempfile.mkdtemp(prefix="acp-act-"))
+    try:
+        return await _analyse(file, tmp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)  # ephemeral: document copy deleted after analysis
+
+
+async def _analyse(file: dict, tmp: Path) -> dict:
+    svc = _drive()
     path = tmp / file["name"]
     buf = io.BytesIO()
     dl = MediaIoBaseDownload(buf, svc.files().get_media(fileId=file["id"]))

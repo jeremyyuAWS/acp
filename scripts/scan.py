@@ -138,3 +138,7 @@ report = {
 report_path = ACP / "test-corpus/last-scan.json"
 report_path.write_text(json.dumps(report, indent=2))
 print(f"\nreport -> {report_path}")
+
+if "--local" not in sys.argv:  # ephemeral: delete the temp working dir (never a --local source)
+    import shutil
+    shutil.rmtree(tmp, ignore_errors=True)

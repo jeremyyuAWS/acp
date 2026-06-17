@@ -48,9 +48,14 @@ class Rubric:
     def _penalty(self, severity: str) -> int:
         return self.weights.get(severity, self.weights.get("_default", 5))
 
+    @staticmethod
+    def _err_rule(e):
+        return e.get("rule") if isinstance(e, dict) else None
+
     def assess(self, succeeded: bool, issues: list, errors: list) -> dict:
-        # rubric resolution: drop disabled rules' issues
+        # rubric resolution: a disabled rule contributes neither findings nor a skipped-rule error
         issues = [i for i in issues if i.get("ruleId") not in self.disabled]
+        errors = [e for e in errors if self._err_rule(e) not in self.disabled]
         status = (Status.ERROR if not succeeded
                   else Status.UNCERTAIN if errors else Status.ANALYSED)
         score = None if status is Status.ERROR else max(
