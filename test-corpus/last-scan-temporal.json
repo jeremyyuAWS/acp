@@ -1,0 +1,669 @@
+{
+  "files": [
+    {
+      "compliant": false,
+      "engine": ".net/office",
+      "file": "edge-corrupt.docx",
+      "issues": [],
+      "per_criterion": [
+        {
+          "criterion": "SC_1_1_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Non-text Content",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_3_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Info and Relationships",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_3_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Meaningful Sequence",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_4_3",
+          "issues": 0,
+          "level": "AA",
+          "name": "Contrast (Minimum)",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_2_4_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Page Titled",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_2_4_4",
+          "issues": 0,
+          "level": "A",
+          "name": "Link Purpose (In Context)",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_3_1_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Language of Page",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_3_1_2",
+          "issues": 0,
+          "level": "AA",
+          "name": "Language of Parts",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_4_1_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Name, Role, Value",
+          "result": "pass"
+        }
+      ],
+      "rubric_hash": "e85fcf7e14f9040c",
+      "score": null,
+      "score_is_upper_bound": false,
+      "skipped_rules": 1,
+      "status": "error"
+    },
+    {
+      "compliant": false,
+      "engine": ".net/office",
+      "file": "edge-pdf-as.docx",
+      "issues": [],
+      "per_criterion": [
+        {
+          "criterion": "SC_1_1_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Non-text Content",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_3_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Info and Relationships",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_3_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Meaningful Sequence",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_4_3",
+          "issues": 0,
+          "level": "AA",
+          "name": "Contrast (Minimum)",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_2_4_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Page Titled",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_2_4_4",
+          "issues": 0,
+          "level": "A",
+          "name": "Link Purpose (In Context)",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_3_1_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Language of Page",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_3_1_2",
+          "issues": 0,
+          "level": "AA",
+          "name": "Language of Parts",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_4_1_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Name, Role, Value",
+          "result": "pass"
+        }
+      ],
+      "rubric_hash": "e85fcf7e14f9040c",
+      "score": null,
+      "score_is_upper_bound": false,
+      "skipped_rules": 1,
+      "status": "error"
+    },
+    {
+      "compliant": false,
+      "engine": ".net/office",
+      "file": "edge-plaintext.docx",
+      "issues": [],
+      "per_criterion": [
+        {
+          "criterion": "SC_1_1_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Non-text Content",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_3_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Info and Relationships",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_3_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Meaningful Sequence",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_4_3",
+          "issues": 0,
+          "level": "AA",
+          "name": "Contrast (Minimum)",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_2_4_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Page Titled",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_2_4_4",
+          "issues": 0,
+          "level": "A",
+          "name": "Link Purpose (In Context)",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_3_1_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Language of Page",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_3_1_2",
+          "issues": 0,
+          "level": "AA",
+          "name": "Language of Parts",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_4_1_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Name, Role, Value",
+          "result": "pass"
+        }
+      ],
+      "rubric_hash": "e85fcf7e14f9040c",
+      "score": null,
+      "score_is_upper_bound": false,
+      "skipped_rules": 1,
+      "status": "error"
+    },
+    {
+      "compliant": false,
+      "engine": "python/pdf",
+      "file": "pdf-encrypted.pdf",
+      "issues": [],
+      "per_criterion": [
+        {
+          "criterion": "SC_1_1_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Non-text Content",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_3_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Info and Relationships",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_3_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Meaningful Sequence",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_4_3",
+          "issues": 0,
+          "level": "AA",
+          "name": "Contrast (Minimum)",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_2_4_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Page Titled",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_2_4_4",
+          "issues": 0,
+          "level": "A",
+          "name": "Link Purpose (In Context)",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_3_1_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Language of Page",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_3_1_2",
+          "issues": 0,
+          "level": "AA",
+          "name": "Language of Parts",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_4_1_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Name, Role, Value",
+          "result": "pass"
+        }
+      ],
+      "rubric_hash": "e85fcf7e14f9040c",
+      "score": null,
+      "score_is_upper_bound": false,
+      "skipped_rules": 1,
+      "status": "error"
+    },
+    {
+      "compliant": false,
+      "engine": "python/pdf",
+      "file": "pdf-titled-lang.pdf",
+      "issues": [
+        {
+          "ruleId": "pdf.tagged",
+          "severity": "CRITICAL",
+          "wcag": "SC_1_3_1"
+        },
+        {
+          "ruleId": "pdf.display-doc-title",
+          "severity": "MODERATE",
+          "wcag": "SC_2_4_2"
+        }
+      ],
+      "per_criterion": [
+        {
+          "criterion": "SC_1_1_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Non-text Content",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_3_1",
+          "issues": 1,
+          "level": "A",
+          "name": "Info and Relationships",
+          "result": "fail"
+        },
+        {
+          "criterion": "SC_1_3_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Meaningful Sequence",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_4_3",
+          "issues": 0,
+          "level": "AA",
+          "name": "Contrast (Minimum)",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_2_4_2",
+          "issues": 1,
+          "level": "A",
+          "name": "Page Titled",
+          "result": "fail"
+        },
+        {
+          "criterion": "SC_2_4_4",
+          "issues": 0,
+          "level": "A",
+          "name": "Link Purpose (In Context)",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_3_1_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Language of Page",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_3_1_2",
+          "issues": 0,
+          "level": "AA",
+          "name": "Language of Parts",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_4_1_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Name, Role, Value",
+          "result": "pass"
+        }
+      ],
+      "rubric_hash": "e85fcf7e14f9040c",
+      "score": 67,
+      "score_is_upper_bound": false,
+      "skipped_rules": 0,
+      "status": "analysed"
+    },
+    {
+      "compliant": false,
+      "engine": "python/pdf",
+      "file": "pdf-untagged.pdf",
+      "issues": [
+        {
+          "ruleId": "pdf.tagged",
+          "severity": "CRITICAL",
+          "wcag": "SC_1_3_1"
+        },
+        {
+          "ruleId": "pdf.display-doc-title",
+          "severity": "MODERATE",
+          "wcag": "SC_2_4_2"
+        },
+        {
+          "ruleId": "pdf.document-language",
+          "severity": "SERIOUS",
+          "wcag": "SC_3_1_1"
+        }
+      ],
+      "per_criterion": [
+        {
+          "criterion": "SC_1_1_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Non-text Content",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_3_1",
+          "issues": 1,
+          "level": "A",
+          "name": "Info and Relationships",
+          "result": "fail"
+        },
+        {
+          "criterion": "SC_1_3_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Meaningful Sequence",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_4_3",
+          "issues": 0,
+          "level": "AA",
+          "name": "Contrast (Minimum)",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_2_4_2",
+          "issues": 1,
+          "level": "A",
+          "name": "Page Titled",
+          "result": "fail"
+        },
+        {
+          "criterion": "SC_2_4_4",
+          "issues": 0,
+          "level": "A",
+          "name": "Link Purpose (In Context)",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_3_1_1",
+          "issues": 1,
+          "level": "A",
+          "name": "Language of Page",
+          "result": "fail"
+        },
+        {
+          "criterion": "SC_3_1_2",
+          "issues": 0,
+          "level": "AA",
+          "name": "Language of Parts",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_4_1_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Name, Role, Value",
+          "result": "pass"
+        }
+      ],
+      "rubric_hash": "e85fcf7e14f9040c",
+      "score": 52,
+      "score_is_upper_bound": false,
+      "skipped_rules": 0,
+      "status": "analysed"
+    },
+    {
+      "compliant": false,
+      "engine": ".net/office",
+      "file": "xlsx-compliant.xlsx",
+      "issues": [],
+      "per_criterion": [
+        {
+          "criterion": "SC_1_1_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Non-text Content",
+          "result": "uncertain"
+        },
+        {
+          "criterion": "SC_1_3_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Info and Relationships",
+          "result": "uncertain"
+        },
+        {
+          "criterion": "SC_1_3_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Meaningful Sequence",
+          "result": "uncertain"
+        },
+        {
+          "criterion": "SC_1_4_3",
+          "issues": 0,
+          "level": "AA",
+          "name": "Contrast (Minimum)",
+          "result": "uncertain"
+        },
+        {
+          "criterion": "SC_2_4_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Page Titled",
+          "result": "uncertain"
+        },
+        {
+          "criterion": "SC_2_4_4",
+          "issues": 0,
+          "level": "A",
+          "name": "Link Purpose (In Context)",
+          "result": "uncertain"
+        },
+        {
+          "criterion": "SC_3_1_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Language of Page",
+          "result": "uncertain"
+        },
+        {
+          "criterion": "SC_3_1_2",
+          "issues": 0,
+          "level": "AA",
+          "name": "Language of Parts",
+          "result": "uncertain"
+        },
+        {
+          "criterion": "SC_4_1_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Name, Role, Value",
+          "result": "uncertain"
+        }
+      ],
+      "rubric_hash": "e85fcf7e14f9040c",
+      "score": 100,
+      "score_is_upper_bound": true,
+      "skipped_rules": 5,
+      "status": "uncertain"
+    },
+    {
+      "compliant": false,
+      "engine": ".net/office",
+      "file": "xlsx-noncompliant.xlsx",
+      "issues": [
+        {
+          "ruleId": "XLSX-TITLE-001",
+          "severity": "SERIOUS",
+          "wcag": "SC_2_4_2"
+        },
+        {
+          "ruleId": "XLSX-LANG-001",
+          "severity": "SERIOUS",
+          "wcag": "SC_3_1_1"
+        }
+      ],
+      "per_criterion": [
+        {
+          "criterion": "SC_1_1_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Non-text Content",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_3_1",
+          "issues": 0,
+          "level": "A",
+          "name": "Info and Relationships",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_3_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Meaningful Sequence",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_1_4_3",
+          "issues": 0,
+          "level": "AA",
+          "name": "Contrast (Minimum)",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_2_4_2",
+          "issues": 1,
+          "level": "A",
+          "name": "Page Titled",
+          "result": "fail"
+        },
+        {
+          "criterion": "SC_2_4_4",
+          "issues": 0,
+          "level": "A",
+          "name": "Link Purpose (In Context)",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_3_1_1",
+          "issues": 1,
+          "level": "A",
+          "name": "Language of Page",
+          "result": "fail"
+        },
+        {
+          "criterion": "SC_3_1_2",
+          "issues": 0,
+          "level": "AA",
+          "name": "Language of Parts",
+          "result": "pass"
+        },
+        {
+          "criterion": "SC_4_1_2",
+          "issues": 0,
+          "level": "A",
+          "name": "Name, Role, Value",
+          "result": "pass"
+        }
+      ],
+      "rubric_hash": "e85fcf7e14f9040c",
+      "score": 70,
+      "score_is_upper_bound": false,
+      "skipped_rules": 0,
+      "status": "analysed"
+    }
+  ],
+  "rubric": {
+    "hash": "e85fcf7e14f9040c",
+    "name": "WCAG 2.1 AA \u2014 default",
+    "version": "2026.06.1"
+  },
+  "summary": {
+    "avg_score": 72,
+    "certifiable": 0,
+    "criterion_failures": {
+      "SC_1_3_1": 2,
+      "SC_2_4_2": 3,
+      "SC_3_1_1": 2
+    },
+    "error": 4,
+    "files": 8,
+    "rubric": "WCAG 2.1 AA \u2014 default v2026.06.1",
+    "rubric_hash": "e85fcf7e14f9040c",
+    "uncertain": 1
+  }
+}
