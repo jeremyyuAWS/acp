@@ -9,10 +9,11 @@
 # Security posture:
 #   - Temporal frontend ingress is INTERNAL — reachable only from inside the
 #     Container Apps environment (where the acp workers run). Nothing public.
-#   - Postgres TLS is ENABLED (encrypted in transit). Host verification is relaxed
-#     (DISABLE_HOST_VERIFICATION) because the auto-setup server's strict check rejects
-#     Azure's *.postgres.database.azure.com wildcard cert; the link is Azure-internal
-#     (ACA -> Postgres), no public exposure. Harden = mount Azure CA + POSTGRES_TLS_CA_FILE.
+#   - Postgres TLS ENABLED + VERIFIED. KEY GOTCHA: the schema tool reads POSTGRES_TLS_*,
+#     but the SERVER config template reads SQL_TLS_* (SQL_TLS_ENABLED / SQL_HOST_NAME /
+#     SQL_HOST_VERIFICATION). Set only POSTGRES_TLS_* and the server connects PLAINTEXT,
+#     which Azure (require_secure_transport=on) rejects -> "no usable database connection".
+#     Both prefixes set here; verified against Azure's *.postgres.database.azure.com cert.
 #   - Image served from a private ACR (not anonymous Docker Hub).
 #   - Admin/registry passwords generated/fetched at runtime; not committed.
 # Harden before customer use: Postgres on a private VNet (currently public +
@@ -107,7 +108,7 @@ az containerapp create -g "$RG" -n "$APP" --environment "$ENVNAME" \
     DBNAME=temporal VISIBILITY_DBNAME=temporal_visibility \
     SKIP_DB_CREATE=true \
     POSTGRES_TLS_ENABLED=true "POSTGRES_TLS_SERVER_NAME=$ACP_PG_FQDN" \
-    POSTGRES_TLS_DISABLE_HOST_VERIFICATION=true \
+    SQL_TLS_ENABLED=true "SQL_HOST_NAME=$ACP_PG_FQDN" SQL_HOST_VERIFICATION=true \
   -o none 2>/dev/null || \
 az containerapp update -g "$RG" -n "$APP" --image "$ACRSERVER/$IMAGE" -o none
 
