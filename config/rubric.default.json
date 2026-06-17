@@ -1,0 +1,19 @@
+{
+  "name": "WCAG 2.1 AA — default",
+  "version": "2026.06.1",
+  "conformance_target": "WCAG 2.1 AA",
+  "compliant_threshold": 90,
+  "severity_weights": { "CRITICAL": 25, "SERIOUS": 15, "MODERATE": 8, "MINOR": 3, "_default": 5 },
+  "disabled_rules": [],
+  "criteria": {
+    "SC_1_1_1": { "name": "Non-text Content", "level": "A" },
+    "SC_1_3_1": { "name": "Info and Relationships", "level": "A" },
+    "SC_1_3_2": { "name": "Meaningful Sequence", "level": "A" },
+    "SC_1_4_3": { "name": "Contrast (Minimum)", "level": "AA" },
+    "SC_2_4_2": { "name": "Page Titled", "level": "A" },
+    "SC_2_4_4": { "name": "Link Purpose (In Context)", "level": "A" },
+    "SC_3_1_1": { "name": "Language of Page", "level": "A" },
+    "SC_3_1_2": { "name": "Language of Parts", "level": "AA" },
+    "SC_4_1_2": { "name": "Name, Role, Value", "level": "A" }
+  }
+}

@@ -50,15 +50,18 @@ stream, not a reader-strictness issue). The .NET engine caught the per-rule exce
 
 ## Fix shipped — incomplete analysis is never a pass
 
-`scripts/result_model.py` classifies every result: **error** (unopenable → unscored),
-**uncertain** (≥1 rule threw and was skipped → score is an *upper bound*, cannot be
-certified), **analysed** (trustworthy). Re-running the live scan, the previously
-"100/clean" `xlsx-compliant` (corrupt Drive copy, **5 rules skipped**) now reports
-`uncertain · <=100`, and the compliance gate shows **0 certifiable-clean** — not a false
-pass. This is the seed of the Phase-4 rubric.
+`scripts/rubric.py` — driven by the versioned, content-addressed config
+`config/rubric.default.json` and stamped on each run via `rubric_hash` — classifies every
+result: **error** (unopenable → unscored), **uncertain** (≥1 rule threw and was skipped →
+score is an *upper bound*, cannot be certified), **analysed** (trustworthy). It also emits
+a **per-WCAG-criterion** breakdown and a per-run aggregate (estate-level criterion-failure
+distribution). Re-running the live scan, the previously "100/clean" `xlsx-compliant`
+(corrupt Drive copy, **5 rules skipped**) now reports `uncertain · <=100`, gate = **0
+certifiable** — not a false pass. Full 14-file run: 4 certifiable, 4 error, avg 72; top
+failing criteria SC 2.4.2 (5 files), SC 3.1.1 (4), SC 1.3.1 / SC 1.1.1 (3).
 
 ## Notes
 
-- Scoring is a placeholder rubric (CRITICAL 25 / SERIOUS 15 / MODERATE 8 / MINOR 3,
-  floor 0) — replace with the real versioned rubric (Phase 4).
+- Scoring is now a **versioned rubric** (`config/rubric.default.json`, `rubric_hash`):
+  weights / disabled-rules / threshold are config-driven and resolved at scan time.
 - This run is direct (no Temporal); Temporal orchestration is the productization step.

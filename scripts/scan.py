@@ -15,28 +15,33 @@ from pathlib import Path
 import google.auth
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-import result_model as rm
+from rubric import Rubric, render_score
 
 FOLDER = "1W27ULZsstP7gYGzgKKBId0qEfNxeKn0_"
 ACP = Path(__file__).resolve().parent.parent
 WP = Path(os.path.expanduser("~/projects/_review-digital-accessibility/worker-python"))
 DOTNET = os.path.expanduser("~/.dotnet/dotnet")
 CLI = ACP / "spike/dotnet/AcpScan.Cli"
+RB = Rubric.load(ACP / "config/rubric.default.json")
 
-# ── 1. download the corpus from Drive (keyless ADC) ──────────────────────────
-creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/drive.readonly"])
-svc = build("drive", "v3", credentials=creds, cache_discovery=False)
-files = svc.files().list(q=f"'{FOLDER}' in parents and trashed=false",
-                         fields="files(id,name)", pageSize=100, orderBy="name").execute().get("files", [])
-tmp = Path(tempfile.mkdtemp(prefix="acp-scan-"))
-for f in files:
-    buf = io.BytesIO()
-    dl = MediaIoBaseDownload(buf, svc.files().get_media(fileId=f["id"]))
-    done = False
-    while not done:
-        _, done = dl.next_chunk()
-    (tmp / f["name"]).write_bytes(buf.getvalue())
-print(f"downloaded {len(files)} files from acp-demo-corpus -> {tmp}\n")
+# ── 1. get the corpus: Drive (keyless ADC) by default, or --local <dir> ──────
+if "--local" in sys.argv:
+    tmp = Path(sys.argv[sys.argv.index("--local") + 1]).expanduser()
+    print(f"scanning local dir {tmp}\n")
+else:
+    creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/drive.readonly"])
+    svc = build("drive", "v3", credentials=creds, cache_discovery=False)
+    files = svc.files().list(q=f"'{FOLDER}' in parents and trashed=false",
+                             fields="files(id,name)", pageSize=100, orderBy="name").execute().get("files", [])
+    tmp = Path(tempfile.mkdtemp(prefix="acp-scan-"))
+    for f in files:
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, svc.files().get_media(fileId=f["id"]))
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        (tmp / f["name"]).write_bytes(buf.getvalue())
+    print(f"downloaded {len(files)} files from acp-demo-corpus -> {tmp}\n")
 
 results: dict[str, dict] = {}
 
@@ -79,31 +84,33 @@ if out_json.exists():
 else:
     print("!! .NET CLI produced no output:\n", proc.stdout[-800:], proc.stderr[-800:])
 
-# ── 4. assess (status/score) + compliance gate + oracle diff ─────────────────
+# ── 4. rubric assess + per-criterion + run aggregate + oracle diff ───────────
 oracle = {m["file"]: m for m in json.loads((ACP / "test-corpus/manifest.json").read_text())}
+assessed = {name: RB.assess(r["succeeded"], r["issues"], r["errors"]) for name, r in results.items()}
+
 print(f"{'file':24} {'engine':12} {'status':10} {'score':>30}  findings")
 print("-" * 100)
-certifiable = uncertain = errored = 0
 for name in sorted(results):
-    r = results[name]
-    a = rm.assess(r["succeeded"], r["issues"], r["errors"])
-    certifiable += a["compliant"]
-    uncertain += a["status"] == "uncertain"
-    errored += a["status"] == "error"
+    r, a = results[name], assessed[name]
     rules = sorted({i["ruleId"] for i in r["issues"]})
     detail = ",".join(rules) if rules else (r["errors"][0][:34] if r["errors"] else "clean")
-    print(f"{name:24} {r['engine']:12} {a['status']:10} {rm.render_score(a):>30}  {detail}")
+    print(f"{name:24} {r['engine']:12} {a['status']:10} {render_score(a):>30}  {detail}")
 
-print("\n=== compliance gate (the Track-A fix in action) ===")
-print(f"  certifiable-clean: {certifiable}    uncertain (rule skipped): {uncertain}    error (unanalysable): {errored}")
-print("  → only fully-analysed files can be certified; 'uncertain' and 'error' are NOT passes.")
+agg = RB.aggregate(assessed)
+print(f"\n=== run summary · {agg['rubric']} · rubric_hash={agg['rubric_hash']} ===")
+print(f"  files={agg['files']}  certifiable-clean={agg['certifiable']}  "
+      f"uncertain={agg['uncertain']}  error={agg['error']}  avg_score={agg['avg_score']}")
+print("  → only fully-analysed files can be certified; 'uncertain'/'error' are NOT passes.")
+if agg["criterion_failures"]:
+    print("\n  WCAG criteria failing across the estate (file count):")
+    for crit, n in agg["criterion_failures"].items():
+        meta = RB.criteria.get(crit, {})
+        print(f"    {crit:10} {meta.get('level',''):2}  {meta.get('name','?'):28} {n}")
 
 # oracle diff: status vs expected outcome (all files); exact rule ids (docx only)
 bugs = []
 for name in sorted(results):
-    r = results[name]
-    m = oracle.get(name, {})
-    a = rm.assess(r["succeeded"], r["issues"], r["errors"])
+    r, a, m = results[name], assessed[name], oracle.get(name, {})
     got = "error" if a["status"] == "error" else "analysed"
     exp = m.get("expected_outcome", "?")
     if got != exp:
