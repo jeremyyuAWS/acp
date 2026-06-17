@@ -13,7 +13,7 @@
         "Code": "OPEN_FAILED",
         "Message": "Failed to open the Docx file.",
         "Detail": "System.IO.FileFormatException: File contains corrupted data.\n   at System.IO.Packaging.ZipPackage..ctor(Stream s, FileMode packageFileMode, FileAccess packageFileAccess)\n   at System.IO.Packaging.Package.Open(Stream stream, FileMode packageMode, FileAccess packageAccess)\n   at DocumentFormat.OpenXml.Features.StreamPackageFeature.InitializePackage(Nullable\u00601 mode, Nullable\u00601 access)\n   at DocumentFormat.OpenXml.Features.StreamPackageFeature..ctor(Stream stream, PackageOpenMode openMode, Boolean isOwned)\n   at DocumentFormat.OpenXml.Features.FilePackageFeature..ctor(String path, PackageOpenMode mode)\n   at DocumentFormat.OpenXml.Builder.OpenXmlPackageBuilderExtensions.Open[TPackage](IPackageFactory\u00601 builder, String file, PackageOpenMode mode)\n   at DocumentFormat.OpenXml.Builder.OpenXmlPackageBuilderExtensions.Open[TPackage](IPackageFactory\u00601 builder, String file, Boolean isEditing)\n   at DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(String path, Boolean isEditable, OpenSettings openSettings)\n   at DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(String path, Boolean isEditable)\n   at DigitalA11y.Analysers.DotNet.Docx.DocxAnalyser.AnalyseAsync(String filePath, String jobId, String fileId, String fileName, IEnumerable\u00601 disabledRuleIds) in /Users/css173265/projects/_review-digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/DocxAnalyser.cs:line 61",
-        "OccurredAt": "2026-06-17T02:49:58.189037+00:00"
+        "OccurredAt": "2026-06-17T02:55:13.18014+00:00"
       }
     ],
     "issues": []
@@ -119,7 +119,7 @@
         "Code": "OPEN_FAILED",
         "Message": "Failed to open the Docx file.",
         "Detail": "System.IO.FileFormatException: File contains corrupted data.\n   at System.IO.Packaging.ZipPackage..ctor(Stream s, FileMode packageFileMode, FileAccess packageFileAccess)\n   at System.IO.Packaging.Package.Open(Stream stream, FileMode packageMode, FileAccess packageAccess)\n   at DocumentFormat.OpenXml.Features.StreamPackageFeature.InitializePackage(Nullable\u00601 mode, Nullable\u00601 access)\n   at DocumentFormat.OpenXml.Features.StreamPackageFeature..ctor(Stream stream, PackageOpenMode openMode, Boolean isOwned)\n   at DocumentFormat.OpenXml.Features.FilePackageFeature..ctor(String path, PackageOpenMode mode)\n   at DocumentFormat.OpenXml.Builder.OpenXmlPackageBuilderExtensions.Open[TPackage](IPackageFactory\u00601 builder, String file, PackageOpenMode mode)\n   at DocumentFormat.OpenXml.Builder.OpenXmlPackageBuilderExtensions.Open[TPackage](IPackageFactory\u00601 builder, String file, Boolean isEditing)\n   at DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(String path, Boolean isEditable, OpenSettings openSettings)\n   at DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(String path, Boolean isEditable)\n   at DigitalA11y.Analysers.DotNet.Docx.DocxAnalyser.AnalyseAsync(String filePath, String jobId, String fileId, String fileName, IEnumerable\u00601 disabledRuleIds) in /Users/css173265/projects/_review-digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/DocxAnalyser.cs:line 61",
-        "OccurredAt": "2026-06-17T02:49:58.428276+00:00"
+        "OccurredAt": "2026-06-17T02:55:13.420673+00:00"
       }
     ],
     "issues": []
@@ -132,7 +132,7 @@
         "Code": "OPEN_FAILED",
         "Message": "Failed to open the Docx file.",
         "Detail": "System.IO.FileFormatException: File contains corrupted data.\n   at System.IO.Packaging.ZipPackage..ctor(Stream s, FileMode packageFileMode, FileAccess packageFileAccess)\n   at System.IO.Packaging.Package.Open(Stream stream, FileMode packageMode, FileAccess packageAccess)\n   at DocumentFormat.OpenXml.Features.StreamPackageFeature.InitializePackage(Nullable\u00601 mode, Nullable\u00601 access)\n   at DocumentFormat.OpenXml.Features.StreamPackageFeature..ctor(Stream stream, PackageOpenMode openMode, Boolean isOwned)\n   at DocumentFormat.OpenXml.Features.FilePackageFeature..ctor(String path, PackageOpenMode mode)\n   at DocumentFormat.OpenXml.Builder.OpenXmlPackageBuilderExtensions.Open[TPackage](IPackageFactory\u00601 builder, String file, PackageOpenMode mode)\n   at DocumentFormat.OpenXml.Builder.OpenXmlPackageBuilderExtensions.Open[TPackage](IPackageFactory\u00601 builder, String file, Boolean isEditing)\n   at DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(String path, Boolean isEditable, OpenSettings openSettings)\n   at DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(String path, Boolean isEditable)\n   at DigitalA11y.Analysers.DotNet.Docx.DocxAnalyser.AnalyseAsync(String filePath, String jobId, String fileId, String fileName, IEnumerable\u00601 disabledRuleIds) in /Users/css173265/projects/_review-digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/DocxAnalyser.cs:line 61",
-        "OccurredAt": "2026-06-17T02:49:58.429167+00:00"
+        "OccurredAt": "2026-06-17T02:55:13.42123+00:00"
       }
     ],
     "issues": []

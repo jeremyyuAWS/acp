@@ -123,3 +123,18 @@ for name in sorted(results):
             bugs.append(f"{name}: rule mismatch missing={sorted(miss)} extra={sorted(extra)}")
 print("\n=== oracle diff ===")
 print("\n".join("  ✗ " + b for b in bugs) if bugs else "  ✓ no deviations on exact checks")
+
+# ── 5. structured report (feeds the UI / downstream) ─────────────────────────
+report = {
+    "rubric": {"name": RB.name, "version": RB.version, "hash": RB.hash,
+               "target": RB.cfg.get("conformance_target")},
+    "summary": agg,
+    "files": [
+        {"file": name, "engine": results[name]["engine"], **assessed[name],
+         "issues": results[name]["issues"]}
+        for name in sorted(results)
+    ],
+}
+report_path = ACP / "test-corpus/last-scan.json"
+report_path.write_text(json.dumps(report, indent=2))
+print(f"\nreport -> {report_path}")
