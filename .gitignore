@@ -19,3 +19,7 @@ dist/
 
 # base64 upload sidecars
 test-corpus/files/*.b64
+
+# service-account keys / secrets
+.secrets/
+*-sa.json
