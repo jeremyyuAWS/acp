@@ -33,6 +33,7 @@ const SUGGEST = ["What's my compliance score?", 'Which department has the most i
 
 export default function ChatWidget({ files = [], run }) {
   const [open, setOpen] = useState(false)
+  const [expanded, setExpanded] = useState(false)
   const [msgs, setMsgs] = useState([{ role: 'bot', text: "Hi, I'm Aria. Ask me anything about your scanned documents." }])
   const [input, setInput] = useState('')
   const endRef = useRef(null)
@@ -53,8 +54,15 @@ export default function ChatWidget({ files = [], run }) {
         )}
       </button>
       {open && (
-        <aside className="chatpanel" role="dialog" aria-label="Ask Aria">
-          <div className="chathead"><b>Ask Aria</b><span className="muted"> · about your scan</span></div>
+        <aside className={expanded ? 'chatpanel expanded' : 'chatpanel'} role="dialog" aria-label="Ask Aria">
+          <div className="chathead">
+            <div><b>Ask Aria</b><span className="muted"> · about your scan</span></div>
+            <button className="chatexpand" aria-label={expanded ? 'Collapse chat' : 'Expand chat'} title={expanded ? 'Collapse' : 'Expand'} onClick={() => setExpanded((e) => !e)}>
+              {expanded
+                ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 9H4M9 9V4M9 9 4 4M15 9h5M15 9V4m0 5 5-5M9 15H4m5 0v5m0-5-5 5m11-5h5m-5 0v5m0-5 5 5" /></svg>
+                : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>}
+            </button>
+          </div>
           <div className="chatmsgs">
             {msgs.map((m, i) => <div key={i} className={`chatmsg ${m.role}`}>{m.text}</div>)}
             <div ref={endRef} />

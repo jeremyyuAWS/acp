@@ -306,8 +306,11 @@ input:focus-visible, [role="tab"]:focus-visible {
 /* persistent "Ask Aria" chat widget */
 .chatfab { position: fixed; bottom: 24px; right: 24px; width: 56px; height: 56px; border-radius: 50%; background: var(--plum); color: #fff; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 6px 20px rgba(40, 30, 48, 0.3); z-index: 60; font-size: 17px; }
 .chatfab:hover { background: #3a2735; }
-.chatpanel { position: fixed; bottom: 92px; right: 24px; width: 360px; max-width: 92vw; height: 500px; max-height: 72vh; background: var(--card); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 12px 40px rgba(40, 30, 48, 0.2); z-index: 60; display: flex; flex-direction: column; overflow: hidden; }
-.chathead { padding: 14px 16px; border-bottom: 1px solid var(--line); font-size: 15px; flex: 0 0 auto; }
+.chatpanel { position: fixed; bottom: 92px; right: 24px; width: 360px; max-width: 92vw; height: 500px; max-height: 72vh; background: var(--card); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 12px 40px rgba(40, 30, 48, 0.2); z-index: 60; display: flex; flex-direction: column; overflow: hidden; transition: width 0.18s ease, height 0.18s ease; }
+.chatpanel.expanded { width: min(780px, 94vw); height: 84vh; max-height: 84vh; }
+.chathead { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); font-size: 15px; flex: 0 0 auto; }
+.chatexpand { background: none; border: none; color: var(--muted); cursor: pointer; padding: 4px; border-radius: 6px; line-height: 0; flex: 0 0 auto; }
+.chatexpand:hover { color: var(--plum); background: var(--bg); }
 .chatmsgs { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
 .chatmsg { max-width: 86%; padding: 9px 12px; border-radius: 12px; font-size: 13px; line-height: 1.45; }
 .chatmsg.bot { align-self: flex-start; background: var(--bg); color: var(--ink); border-bottom-left-radius: 4px; }
