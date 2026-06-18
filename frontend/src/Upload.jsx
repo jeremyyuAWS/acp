@@ -5,6 +5,7 @@ import Logo from './Logo.jsx'
 import BeforeAfter from './BeforeAfter.jsx'
 
 const isHtml = (name) => /\.html?$/i.test(name || '')
+const isPdf = (name) => /\.pdf$/i.test(name || '')
 
 // Single-document walkthrough: upload → scan → assess → remediate → human review →
 // certified. Self-contained demo (no backend); findings are keyed off the file type so
@@ -30,22 +31,34 @@ export default function Upload({ onCertified }) {
   const [issues, setIssues] = useState([])
   const [drag, setDrag] = useState(false)
   const [srcText, setSrcText] = useState(null)
+  const [pdfUrl, setPdfUrl] = useState(null)
+  const blobUrl = useRef(null)
 
-  const start = (f, text = null) => {
-    setFile(f); setSrcText(text); setScanning(true); setStep(0)
+  const start = (f, { text = null, url = null } = {}) => {
+    setFile(f); setSrcText(text); setPdfUrl(url); setScanning(true); setStep(0)
     const phases = ['Connecting…', 'Reading document…', 'mova Agent classifying & tagging…', 'Analysing against WCAG 2.1 AA…', 'Scoring…']
     let i = 0
     const tick = () => { if (i < phases.length) { setPhase(phases[i++]); setTimeout(tick, 640) } else { setScanning(false); setIssues(issuesFor(f.name)); setStep(1) } }
     setTimeout(tick, 300)
   }
-  const handleFile = (f) => { const meta = { name: f.name, size: f.size }; if (isHtml(f.name)) f.text().then((t) => start(meta, t)).catch(() => start(meta)); else start(meta) }
+  const handleFile = (f) => {
+    const meta = { name: f.name, size: f.size }
+    if (isHtml(f.name)) f.text().then((t) => start(meta, { text: t })).catch(() => start(meta))
+    else if (isPdf(f.name)) { const url = URL.createObjectURL(f); blobUrl.current = url; start(meta, { url }) }
+    else start(meta)
+  }
   const onInput = (e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }
   const onDrop = (e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f) handleFile(f) }
   const sample = async (name) => {
-    try { const r = await fetch(`${import.meta.env.BASE_URL}samples/${name}`); if (isHtml(name)) { const t = await r.text(); start({ name, size: t.length }, t) } else { const b = await r.blob(); start({ name, size: b.size }) } }
+    try {
+      const url = `${import.meta.env.BASE_URL}samples/${name}`
+      if (isHtml(name)) { const t = await (await fetch(url)).text(); start({ name, size: t.length }, { text: t }) }
+      else if (isPdf(name)) { const b = await (await fetch(url)).blob(); start({ name, size: b.size }, { url }) }
+      else { const b = await (await fetch(url)).blob(); start({ name, size: b.size }) }
+    }
     catch { start({ name, size: 100 * 1024 }) }
   }
-  const reset = () => { setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null) }
+  const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null) }
   const certify = () => { if (file) onCertified?.({ file: file.name }); setStep(4) }
 
   const score = Math.max(0, 100 - issues.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0))
@@ -135,7 +148,7 @@ export default function Upload({ onCertified }) {
               </div>
             ))}
           </div>
-          <BeforeAfter issues={issues} srcText={srcText} />
+          <BeforeAfter file={file} issues={issues} srcText={srcText} pdfUrl={pdfUrl} />
           <p className="muted" style={{ marginTop: 12 }}>{autoFixed.length} issue(s) auto-fixed · <b>{review.length}</b> routed to human review (low confidence).</p>
           <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 4 }}><button onClick={() => setStep(3)}>Human review →</button></div>
         </section>

@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import PdfPreview from './PdfPreview.jsx'
 
 // Side-by-side "what you'd get" preview. For HTML we genuinely remediate the
 // uploaded markup and render both versions in sandboxed iframes (contrast fixes
@@ -80,8 +81,17 @@ function baFor(sc) {
   }
 }
 
-export default function BeforeAfter({ issues = [], srcText }) {
+export default function BeforeAfter({ file, issues = [], srcText, pdfUrl }) {
   const rem = useMemo(() => (srcText ? remediateHtml(srcText) : null), [srcText])
+  const downloadFixed = () => {
+    if (!rem) return
+    const blob = new Blob([rem.html], { type: 'text/html' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `remediated-${(file?.name || 'page').replace(/\.[^.]+$/, '')}.html`
+    document.body.appendChild(a); a.click(); a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
   return (
     <div className="bawrap">
       {rem && (
@@ -92,6 +102,14 @@ export default function BeforeAfter({ issues = [], srcText }) {
             <figure><figcaption className="bafcap after">remediated</figcaption><iframe sandbox="" title="remediated" srcDoc={rem.html} /></figure>
           </div>
           {rem.changes.length > 0 && <div className="bachanges">{rem.changes.map((c, i) => <span key={i} className="bachip">✓ {c}</span>)}</div>}
+          <div style={{ marginTop: 11 }}><button className="ghost small" onClick={downloadFixed}>⤓ Download the remediated HTML</button></div>
+        </div>
+      )}
+      {pdfUrl && !rem && (
+        <div className="balive">
+          <div className="bahd"><b>Your document</b><span className="muted"> — {file?.name}, rendered in your browser</span></div>
+          <div className="bapdf"><PdfPreview url={pdfUrl} /></div>
+          <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>Accessibility fixes (tags, alt text, reading order) are structural — see exactly what changes below.</p>
         </div>
       )}
       <div className="bacards">

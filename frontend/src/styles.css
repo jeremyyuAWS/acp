@@ -556,6 +556,11 @@ input:focus-visible, [role="tab"]:focus-visible {
 .bafcap.before { background: #FCEBEB; color: #A32D2D; }
 .bafcap.after { background: #E7F0DC; color: #3B6D11; }
 .baframes iframe { width: 100%; height: 230px; border: 1px solid var(--line); border-radius: 0 10px 10px 10px; background: #fff; display: block; }
+.bapdf { width: 100%; max-height: 460px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; background: #f4f1f5; }
+.pdfpreview { padding: 12px; }
+.pdfpages { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.pdfpage { max-width: 100%; height: auto; box-shadow: 0 2px 10px rgba(40, 30, 48, 0.14); border-radius: 3px; background: #fff; }
+.bapdffallback { padding: 30px; text-align: center; }
 .bachanges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; }
 .bachip { font-size: 11.5px; font-weight: 600; color: #3B6D11; background: #E7F0DC; border-radius: 999px; padding: 3px 10px; }
 .bacards { display: flex; flex-direction: column; gap: 9px; }
