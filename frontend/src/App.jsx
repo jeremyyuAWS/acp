@@ -6,6 +6,7 @@ import ChatWidget from './ChatWidget.jsx'
 import KnowledgeGraph from './KnowledgeGraph.jsx'
 import SignIn from './SignIn.jsx'
 import Rubric from './Rubric.jsx'
+import WcagCoverage from './WcagCoverage.jsx'
 import Overview from './Overview.jsx'
 import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
@@ -141,10 +142,12 @@ export default function App() {
               <button role="tab" aria-selected={assess === 'results'} className={assess === 'results' ? 'fchip on' : 'fchip'} onClick={() => setAssess('results')}>Results</button>
               <button role="tab" aria-selected={assess === 'graph'} className={assess === 'graph' ? 'fchip on' : 'fchip'} onClick={() => setAssess('graph')}>Knowledge graph</button>
               <button role="tab" aria-selected={assess === 'rubric'} className={assess === 'rubric' ? 'fchip on' : 'fchip'} onClick={() => setAssess('rubric')}>Rubric</button>
+              <button role="tab" aria-selected={assess === 'coverage'} className={assess === 'coverage' ? 'fchip on' : 'fchip'} onClick={() => setAssess('coverage')}>WCAG coverage</button>
             </div>
             {assess === 'results' && (run ? <Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} /> : placeholder)}
             {assess === 'graph' && (run ? <KnowledgeGraph files={files} /> : placeholder)}
             {assess === 'rubric' && <Rubric onSaved={() => getRubric().then(setRubric)} />}
+            {assess === 'coverage' && <WcagCoverage />}
           </>
         )}
 

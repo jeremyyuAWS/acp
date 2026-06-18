@@ -3,6 +3,7 @@ import { Donut, Bars, statusSegments } from './charts.jsx'
 import { Sparkline } from './ScoreRing.jsx'
 import { critLabel } from './FileDrawer.jsx'
 import { IDENTITY } from './sim.js'
+import Monitoring from './Monitoring.jsx'
 
 const JOURNEY = [
   { label: 'discovered', s: 'done' }, { label: 'classified', s: 'done' },
@@ -58,6 +59,8 @@ export default function Report({ run, files = [], trend = [], trendDates = [], c
 
   return (
     <>
+      <Monitoring files={files} />
+
       <div className="dashtoolbar">
         <button className="exportbtn" onClick={doExport} disabled={exporting}>{exporting ? 'Generating PDF…' : '⤓ Export PDF report'}</button>
       </div>

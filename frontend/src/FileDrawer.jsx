@@ -1,6 +1,18 @@
 import Drawer from './Drawer.jsx'
 import Tag from './Tag.jsx'
 
+// Prescriptive-action styling, shared with the Discover inventory.
+export const REC_STYLE = {
+  auto: ['Auto-remediate', '#E7F0DC', '#3B6D11', '⚡'],
+  assisted: ['Remediate + review', '#FAEEDA', '#854F0B', '✎'],
+  review: ['Human review', '#FAECE7', '#993C1D', '◐'],
+  archive: ['Archive', '#EEEDFE', '#3C3489', '📦'],
+  keep: ['Keep · monitor', '#E7F0DC', '#3B6D11', '✓'],
+  manual: ['Manual rebuild', '#FCEBEB', '#A32D2D', '⚠'],
+}
+export const fmtEffort = (m) => m == null ? '—' : m === 0 ? 'no work' : m >= 90 ? `~${(m / 60).toFixed(1)} hrs` : `~${Math.round(m)} min`
+const MODE_LABEL = { auto: 'fully automatic', assisted: 'AI + human review', manual: 'manual', monitor: 'monitor only' }
+
 const CRIT = {
   SC_1_1_1: '1.1.1 non-text content', SC_1_3_1: '1.3.1 info & relationships',
   SC_1_3_2: '1.3.2 meaningful sequence', SC_2_1_1: '2.1.1 keyboard',
@@ -12,6 +24,12 @@ const SEV = {
   CRITICAL: ['#FCEBEB', '#A32D2D'], SERIOUS: ['#FAECE7', '#993C1D'],
   MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'],
 }
+const SEV_LEGEND = [
+  ['critical', '#A32D2D', '#FCEBEB', 'Completely blocks a group of users — e.g. an unlabelled image or a keyboard trap. Almost always WCAG Level A.'],
+  ['serious', '#993C1D', '#FAECE7', 'A major barrier that’s hard to work around — e.g. missing table headers or an empty document title.'],
+  ['moderate', '#854F0B', '#FAEEDA', 'Noticeable difficulty, but the content is still reachable — e.g. wrong reading order or undeclared language.'],
+  ['minor', '#5F5E5A', '#F1EFE8', 'A minor annoyance or best-practice gap — e.g. unclear worksheet names.'],
+]
 export const statusOf = (f) => (f.status === 'error' ? 'unanalysable' : f.status === 'uncertain' ? 'uncertain' : f.compliant ? 'certifiable' : 'issues')
 export const STATUS_BADGE = {
   certifiable: ['#E7F0DC', '#3B6D11'], issues: ['#FAEEDA', '#854F0B'],
@@ -49,6 +67,35 @@ export default function FileDrawer({ file, onClose }) {
         {st === 'uncertain' && <span className="muted">{file.skipped_rules} rule(s) skipped — score is an upper bound</span>}
       </div>
 
+      {file.rec && (() => {
+        const r = file.rec; const [label, bg, fg, icon] = REC_STYLE[r.action] || REC_STYLE.review
+        return (
+          <div className="reccard" style={{ borderColor: fg + '55' }}>
+            <div className="recheadrow">
+              <span className="recbadge" style={{ background: bg, color: fg }}>{icon} {label}</span>
+              <span className="receta">{fmtEffort(r.etaMin)}</span>
+            </div>
+            <p className="recwhy">{r.rationale}</p>
+            <div className="recmeta">
+              <span><b>{MODE_LABEL[r.mode] || r.mode}</b><span className="muted"> mode</span></span>
+              {r.confidence != null && <span><b>{r.confidence}%</b><span className="muted"> confidence</span></span>}
+              {r.savingsPct != null && r.savingsPct > 0 && <span style={{ color: '#3B6D11' }}><b>{r.savingsPct}%</b><span className="muted"> faster than manual</span></span>}
+            </div>
+          </div>
+        )
+      })()}
+
+      <h4 className="drawerh">Document metadata</h4>
+      <div className="metagrid">
+        <div><span className="muted">Last modified</span><b>{file.modifiedAge || '—'}</b></div>
+        <div><span className="muted">Last accessed</span><b>{file.lastAccessed || '—'}</b></div>
+        <div><span className="muted">Views · 90d</span><b>{file.views90d != null ? file.views90d.toLocaleString() : '—'}</b></div>
+        <div><span className="muted">Size</span><b>{file.sizeKB ? (file.sizeKB >= 1024 ? `${(file.sizeKB / 1024).toFixed(1)} MB` : `${file.sizeKB} KB`) : '—'}</b></div>
+        <div><span className="muted">{file.sheets ? 'Sheets' : 'Pages'}</span><b>{file.pages || file.sheets || '—'}</b></div>
+        <div><span className="muted">Owner</span><b>{file.owner || '—'}</b></div>
+      </div>
+      {file.superseded && <p className="muted" style={{ marginTop: 6 }}>⚠ A newer version of this document exists — flagged as superseded.</p>}
+
       {(file.tags || []).length > 0 && (
         <>
           <h4 className="drawerh">Tags · auto-assigned by agent</h4>
@@ -60,20 +107,34 @@ export default function FileDrawer({ file, onClose }) {
       {issues.length === 0 ? (
         <p className="muted">{st === 'unanalysable' ? 'Could not analyse — file unreadable.' : 'No findings — clean.'}</p>
       ) : (
-        <div className="findings">
-          {issues.map((i, n) => {
-            const [bg, fg] = SEV[i.severity] || SEV.MINOR
-            return (
-              <div className="finding" key={n}>
-                <span className="badge" style={{ background: bg, color: fg }}>{(i.severity || '').toLowerCase()}</span>
-                <div className="findingmain">
-                  <div>{critLabel(i.wcag)}</div>
-                  <div className="muted fname" style={{ fontSize: 12 }}>{i.rule_id ?? i.ruleId}</div>
+        <>
+          <div className="findings">
+            {issues.map((i, n) => {
+              const [bg, fg] = SEV[i.severity] || SEV.MINOR
+              return (
+                <div className="finding" key={n}>
+                  <span className="badge" style={{ background: bg, color: fg }}>{(i.severity || '').toLowerCase()}</span>
+                  <div className="findingmain">
+                    <div className="findingtop">{critLabel(i.wcag)}{i.level && <span className="lvlchip">Level {i.level}</span>}</div>
+                    {i.detail && <div className="findingdetail">{i.detail}</div>}
+                    {i.impact && <div className="muted findingimpact">{i.impact}</div>}
+                    {i.fix && <div className="findingfix"><span className={i.auto ? 'fixauto' : 'fixreview'}>{i.auto ? '⚡ auto-fixable' : '✎ needs review'}</span> · {i.fix}<span className="muted"> · {i.rule_id ?? i.ruleId}</span></div>}
+                  </div>
                 </div>
+              )
+            })}
+          </div>
+          <details className="sevhelp">
+            <summary>How is severity classified?</summary>
+            <p className="muted" style={{ margin: '8px 0' }}>Severity reflects <b>user impact × how many users are affected × the WCAG level</b> (A is the most fundamental). It follows the axe-core / engine impact model — independent of which rule fired.</p>
+            {SEV_LEGEND.map(([name, fg, bg, desc]) => (
+              <div className="sevrow" key={name}>
+                <span className="badge" style={{ background: bg, color: fg, flex: '0 0 auto' }}>{name}</span>
+                <span className="muted">{desc}</span>
               </div>
-            )
-          })}
-        </div>
+            ))}
+          </details>
+        </>
       )}
 
       {Object.keys(byCrit).length > 0 && (

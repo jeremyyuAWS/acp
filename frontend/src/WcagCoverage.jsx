@@ -1,0 +1,105 @@
+import { useState } from 'react'
+import { WCAG } from './wcagCatalog.js'
+
+// WCAG 2.1 + 2.2 coverage matrix — all 87 success criteria, colour-coded by what
+// the platform checks today vs. what's on the roadmap beyond the partner. Backs
+// the "we go beyond a raw scanner" story with the real catalog + LOE estimate.
+const SRC = {
+  'Shipped (demo)': ['Live now', '#3B6D11', '#E7F0DC'],
+  'Partner baseline': ['Partner-provided', '#3C3489', '#EEEDFE'],
+  'MDK net-new': ['Roadmap', '#854F0B', '#FAEEDA'],
+}
+const PRINCIPLES = ['Perceivable', 'Operable', 'Understandable', 'Robust']
+const FILTERS = [
+  ['all', 'All 87'], ['A', 'Level A'], ['AA', 'Level AA'], ['2.2', 'New in 2.2'],
+  ['Shipped (demo)', 'Live now'], ['MDK net-new', 'Roadmap'],
+]
+
+const mid = (r) => (r.lo + r.hi) / 2
+const wks = (d) => `${(d / 5).toFixed(0)}–${Math.round(d / 5)}`
+
+export default function WcagCoverage() {
+  const [filter, setFilter] = useState('all')
+  const [sel, setSel] = useState(null)
+
+  const match = (r) => filter === 'all' ? true
+    : filter === '2.2' ? r.added === '2.2'
+    : filter === 'A' || filter === 'AA' ? r.level === filter
+    : r.source === filter
+
+  const shown = WCAG.filter(match)
+  const tally = (src) => WCAG.filter((r) => r.source === src).length
+  const net = WCAG.filter((r) => r.source === 'MDK net-new')
+  const req = net.filter((r) => r.phase.startsWith('Phase 1') || r.phase.startsWith('Phase 2'))
+  const reqLo = req.reduce((a, r) => a + r.lo, 0) + 20
+  const reqHi = req.reduce((a, r) => a + r.hi, 0) + 33
+
+  return (
+    <>
+      <div className="estatebar" style={{ marginTop: 6 }}>
+        <div>
+          <b>WCAG 2.1 + 2.2 coverage</b> · all 87 success criteria
+          <div className="muted" style={{ marginTop: 2 }}>what the platform validates today vs. the roadmap beyond the partner’s automated checks</div>
+        </div>
+        <div className="covlegend">
+          {Object.entries(SRC).map(([k, [label, fg, bg]]) => (
+            <span key={k} className="covkey"><i style={{ background: bg, borderColor: fg }} />{label} · {tally(k)}</span>
+          ))}
+        </div>
+      </div>
+
+      <div className="covstat">
+        <div className="covstatcard"><b>{tally('Shipped (demo)')}</b><span className="muted">checks live in this demo</span></div>
+        <div className="covstatcard"><b>{tally('Partner baseline')}</b><span className="muted">automated A/AA from partner</span></div>
+        <div className="covstatcard"><b>{net.length}</b><span className="muted">net-new beyond partner</span></div>
+        <div className="covstatcard"><b>{Math.round(reqLo / 5)}–{Math.round(reqHi / 5)} wks</b><span className="muted">to full Required A/AA conformance</span></div>
+      </div>
+
+      <div className="chiprow" style={{ margin: '4px 0 14px' }}>
+        {FILTERS.map(([k, label]) => (
+          <button key={k} className={filter === k ? 'fchip on' : 'fchip'} onClick={() => setFilter(k)}>{label}</button>
+        ))}
+      </div>
+
+      {PRINCIPLES.map((p) => {
+        const items = shown.filter((r) => r.principle === p)
+        if (!items.length) return null
+        return (
+          <div className="covgroup" key={p}>
+            <div className="covgrouphd">{p} <span className="muted">· {items.length}</span></div>
+            <div className="covgrid">
+              {items.map((r) => {
+                const [, fg, bg] = SRC[r.source]
+                return (
+                  <button key={r.sc} className="covcell" style={{ background: bg, borderColor: fg + '55' }} onClick={() => setSel(r)}>
+                    <div className="covsc"><b>{r.sc}</b><span className="covlvl">{r.level}</span></div>
+                    <div className="covname">{r.name}</div>
+                    <div className="covtag" style={{ color: fg }}>{SRC[r.source][0]}</div>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
+
+      {sel && (
+        <div className="covdrawer" role="dialog" aria-label={`${sel.sc} detail`} onClick={() => setSel(null)}>
+          <div className="covpanel" onClick={(e) => e.stopPropagation()}>
+            <button className="covclose" aria-label="Close" onClick={() => setSel(null)}>✕</button>
+            <div className="covsc" style={{ fontSize: 18 }}><b>{sel.sc}</b> {sel.name}</div>
+            <div className="muted" style={{ margin: '4px 0 12px' }}>Level {sel.level} · {sel.principle} · added in WCAG {sel.added} · {sel.legal}</div>
+            <div className="covrows">
+              <div><span className="muted">Validation approach</span><b>{sel.approach}</b></div>
+              <div><span className="muted">Coverage today</span><b style={{ color: SRC[sel.source][1] }}>{SRC[sel.source][0]}</b></div>
+              <div><span className="muted">Build tier</span><b>{sel.tier}</b></div>
+              <div><span className="muted">Roadmap phase</span><b>{sel.phase}</b></div>
+              {sel.source === 'MDK net-new' && <div><span className="muted">Estimated effort</span><b>{sel.lo}–{sel.hi} dev-days</b></div>}
+            </div>
+            {sel.source !== 'MDK net-new' && <p className="muted" style={{ marginTop: 12 }}>{sel.source === 'Shipped (demo)' ? 'Already validated by the platform in this demo.' : 'Covered by the partner’s automated engine for web; net-new only for PDF/Office formats.'}</p>}
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
