@@ -20,6 +20,16 @@
 [build.environment]
   NODE_VERSION = "20"
 
+# Optional chat LLM endpoint (no-op unless ANTHROPIC_API_KEY is set in env)
+[functions]
+  directory = "netlify/functions"
+
+# keep function calls from being swallowed by the SPA catch-all below
+[[redirects]]
+  from = "/.netlify/functions/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+
 # SPA fallback so refreshes / deep links resolve to index.html
 [[redirects]]
   from = "/*"
