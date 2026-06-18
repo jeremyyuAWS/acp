@@ -8,8 +8,19 @@ const CRIT = {
   SC_2_2_2: ['2.2.2', 'pause, stop, hide'], SC_2_4_2: ['2.4.2', 'page titled'],
   SC_2_4_4: ['2.4.4', 'link purpose'], SC_3_1_1: ['3.1.1', 'language of page'],
   SC_3_1_2: ['3.1.2', 'language of parts'], SC_4_1_2: ['4.1.2', 'name, role, value'],
+  SC_1_2_1: ['1.2.1', 'audio/video transcript'], SC_1_2_2: ['1.2.2', 'captions'],
+  SC_1_2_3: ['1.2.3', 'audio description / alt'], SC_1_2_5: ['1.2.5', 'audio description'],
 }
 const fileColor = (d) => (d.status === 'error' ? '#888780' : d.compliant ? '#639922' : '#EF9F27')
+
+// Cap the graph to the highest-priority documents so it stays readable at scale.
+const LIMIT = 45
+const SR_W = { Executive: 3, Director: 2, Manager: 1, Staff: 0 }
+const priority = (f) => {
+  const tags = f.tags || []
+  return (tags.includes('public-facing') ? 3 : 0) + (tags.includes('high-traffic') ? 2 : 0) + (SR_W[f.seniority] || 0)
+    + (f.issues || []).filter((i) => i.severity === 'CRITICAL').length * 2 + (f.issues || []).filter((i) => i.severity === 'SERIOUS').length
+}
 
 export default function KnowledgeGraph({ files }) {
   const ref = useRef(null)
@@ -18,14 +29,18 @@ export default function KnowledgeGraph({ files }) {
   const [showClean, setShowClean] = useState(false)
   const [focusCrit, setFocusCrit] = useState(null)
   const [selFile, setSelFile] = useState(null)
+  const [showAll, setShowAll] = useState(false)
 
   const depts = useMemo(() => [...new Set(files.map((f) => f.department).filter(Boolean))], [files])
-  const graphFiles = useMemo(() => {
+  const { graphFiles, total } = useMemo(() => {
     let s = dept ? files.filter((f) => f.department === dept) : files
     if (!showClean) s = s.filter((f) => (f.issues || []).length) // only failing files are linked
     if (focusCrit) s = s.filter((f) => (f.issues || []).some((i) => i.wcag === focusCrit))
-    return s
-  }, [files, dept, showClean, focusCrit])
+    const t = s.length
+    if (!showAll && !focusCrit && t > LIMIT) s = [...s].sort((a, b) => priority(b) - priority(a)).slice(0, LIMIT)
+    return { graphFiles: s, total: t }
+  }, [files, dept, showClean, focusCrit, showAll])
+  const capped = graphFiles.length < total
 
   useEffect(() => {
     if (!ref.current) return
@@ -43,7 +58,7 @@ export default function KnowledgeGraph({ files }) {
     const tie = (a, b) => { (adj[a] ??= new Set([a])).add(b); (adj[b] ??= new Set([b])).add(a) }
     graphFiles.forEach((f) => [...new Set(f.issues.map((i) => i.wcag))].forEach((c) => { links.push({ source: f.file, target: c }); tie(f.file, c) }))
 
-    const W = 860, H = 470
+    const W = 860, H = 520
     const maxN = d3.max(nodes, (n) => (n.t === 'crit' ? n.n : 0)) || 1
     const rscale = d3.scaleSqrt().domain([1, maxN]).range([11, 30])
     const crad = (d) => rscale(d.n)
@@ -84,10 +99,12 @@ export default function KnowledgeGraph({ files }) {
     })
 
     const sim = d3.forceSimulation(nodes)
-      .force('link', d3.forceLink(links).id((d) => d.id).distance(60).strength(0.55))
-      .force('charge', d3.forceManyBody().strength(-180))
+      .force('link', d3.forceLink(links).id((d) => d.id).distance(74).strength(0.45))
+      .force('charge', d3.forceManyBody().strength(-265))
       .force('center', d3.forceCenter(W / 2, H / 2))
-      .force('collide', d3.forceCollide((d) => (d.t === 'crit' ? crad(d) : frad(d)) + 7))
+      .force('x', d3.forceX(W / 2).strength(0.05))
+      .force('y', d3.forceY(H / 2).strength(0.07))
+      .force('collide', d3.forceCollide((d) => (d.t === 'crit' ? crad(d) : frad(d)) + 9))
       .on('tick', () => {
         nodes.forEach((d) => { d.x = Math.max(14, Math.min(W - 14, d.x)); d.y = Math.max(16, Math.min(H - 14, d.y)) })
         link.attr('x1', (d) => d.source.x).attr('y1', (d) => d.source.y).attr('x2', (d) => d.target.x).attr('y2', (d) => d.target.y)
@@ -109,8 +126,10 @@ export default function KnowledgeGraph({ files }) {
           {depts.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
         <button className={showClean ? 'fchip on' : 'fchip'} onClick={() => setShowClean((s) => !s)}>show compliant</button>
+        {capped && <button className="fchip" onClick={() => setShowAll(true)}>show all {total}</button>}
+        {showAll && !focusCrit && <button className="fchip on" onClick={() => setShowAll(false)}>top priority only ✕</button>}
         {focusCrit && <button className="fchip on" onClick={() => { setFocusCrit(null); setDetail(null) }}>focused: WCAG {CRIT[focusCrit]?.[0] ?? focusCrit} ✕</button>}
-        <span className="muted" style={{ marginLeft: 'auto' }}>{graphFiles.length} document(s) · click a criterion to focus</span>
+        <span className="muted" style={{ marginLeft: 'auto' }}>{capped ? `top ${graphFiles.length} of ${total} by priority` : `${graphFiles.length} document(s)`} · click a criterion to focus</span>
       </div>
       <div className="kglegend">
         <span><i style={{ background: '#EF9F27' }} />has issues</span>
