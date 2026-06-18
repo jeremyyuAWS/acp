@@ -492,6 +492,30 @@ input:focus-visible, [role="tab"]:focus-visible {
 .qdone { background: #f6faf0; }
 .selfstatus { margin-top: 6px; font-size: 12.5px; display: flex; align-items: center; gap: 7px; }
 .okline { color: #3B6D11; font-weight: 600; }
+
+/* --- rotating fix carousel (Remediate) --- */
+.fixhd { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+.fixcard { animation: fadein 0.4s ease; }
+.fixmeta { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; flex-wrap: wrap; }
+.fmtchip { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--plum); background: #f0eaf0; border-radius: 6px; padding: 2px 8px; }
+.fixdots { display: flex; gap: 6px; justify-content: center; margin-top: 12px; }
+.fixdot { width: 7px; height: 7px; border-radius: 50%; border: none; background: #d8d2dd; cursor: pointer; padding: 0; }
+.fixdot.on { background: var(--plum); }
+
+/* --- WCAG conformance-level ramp --- */
+.levelramp { display: flex; align-items: stretch; gap: 0; margin: 0 0 14px; flex-wrap: wrap; }
+.levelstep { display: flex; align-items: stretch; gap: 0; flex: 1; min-width: 220px; }
+.levelcard { flex: 1; border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px; background: var(--card); display: flex; flex-direction: column; gap: 5px; }
+.levelcard.target { border-color: #c7b8d4; background: #faf7fc; box-shadow: 0 2px 10px rgba(70, 48, 63, 0.08); }
+.leveltop { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.levelk { font-size: 15px; font-weight: 700; color: var(--ink); }
+.leveltag { font-size: 11px; font-weight: 600; color: var(--plum); text-transform: uppercase; letter-spacing: 0.02em; }
+.leveldesc { font-size: 12.5px; line-height: 1.4; color: var(--ink); }
+.levelex { font-size: 11.5px; }
+.leveltarget { font-size: 11.5px; font-weight: 600; color: #3B6D11; margin-top: 2px; }
+.levelarrow { display: flex; align-items: center; color: #b7afbd; font-size: 18px; padding: 0 9px; }
+.levelnote { font-size: 12px; font-weight: 600; color: var(--plum); background: #f0eaf0; border-radius: 7px; padding: 5px 10px; display: inline-block; margin-bottom: 12px; }
+@media (max-width: 760px) { .levelarrow { transform: rotate(90deg); padding: 4px 0; } .levelstep { flex-direction: column; min-width: 100%; } }
 .plancards { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 10px; margin-top: 12px; }
 .plancard { border-radius: 12px; padding: 11px 13px; }
 .plancardtop { display: flex; align-items: baseline; justify-content: space-between; }

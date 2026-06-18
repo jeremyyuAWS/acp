@@ -45,22 +45,30 @@ export const simGetSources = () => {
   return SOURCES.filter((s) => present.has(s.id)).map((s) => ({ type: s.kind, name: s.name, id: s.id, files: s.files, access: s.access, dept: s.dept, agent: s.agent }))
 }
 
-const TYPES = ['pdf', 'docx', 'pptx', 'xlsx', 'html']
-const ENG = { docx: '.net/office', pptx: '.net/office', xlsx: '.net/office', pdf: 'python/pdf', html: 'axe/web' }
+// Formats span documents, web, AND time-based media (video/audio) — the full
+// reach of WCAG 2.1. The estate simulates all of them; the Upload tab is kept to
+// what the partner tech can process live today (PDF / Office / web).
+const TYPES = ['pdf', 'docx', 'pptx', 'xlsx', 'html', 'video', 'audio']
+const EXT = { video: 'mp4', audio: 'mp3' }
+const ENG = { docx: '.net/office', pptx: '.net/office', xlsx: '.net/office', pdf: 'python/pdf', html: 'axe/web', video: 'media/asr+caption', audio: 'media/asr' }
 const NAMES = {
   pdf: ['patient-handbook', 'care-pathway', 'discharge-instructions', 'clinical-guideline', 'consent-form', 'annual-summary'],
   docx: ['policy', 'procedure', 'protocol', 'sop', 'charter', 'guidelines'],
   pptx: ['town-hall', 'training-deck', 'grand-rounds', 'orientation'],
   xlsx: ['metrics-tracker', 'roster', 'budget', 'schedule'],
   html: ['intranet-page', 'public-page', 'faq', 'news-post'],
+  video: ['patient-explainer', 'training-video', 'town-hall-recording', 'procedure-walkthrough', 'welcome-message'],
+  audio: ['podcast-episode', 'wellness-segment', 'ivr-prompt', 'audio-guide'],
 }
-const SRC_FOR = { pdf: ['box', 'gdrive', 'sharepoint'], docx: ['sharepoint', 'confluence'], pptx: ['gdrive', 'box'], xlsx: ['box', 'sharepoint'], html: ['cms'] }
+const SRC_FOR = { pdf: ['box', 'gdrive', 'sharepoint'], docx: ['sharepoint', 'confluence'], pptx: ['gdrive', 'box'], xlsx: ['box', 'sharepoint'], html: ['cms'], video: ['gdrive', 'box', 'cms'], audio: ['box', 'cms'] }
 const ISS_POOL = {
   pdf: [['pdf.tagged', 'SC_1_3_1', 'SERIOUS'], ['pdf.alt-text', 'SC_1_1_1', 'CRITICAL'], ['pdf.document-language', 'SC_3_1_1', 'MODERATE'], ['pdf.reading-order', 'SC_1_3_2', 'MODERATE']],
   docx: [['DOCX-ALT-001', 'SC_1_1_1', 'CRITICAL'], ['DOCX-TITLE-001', 'SC_2_4_2', 'SERIOUS'], ['DOCX-TABLE-001', 'SC_1_3_1', 'SERIOUS'], ['DOCX-LINK-001', 'SC_2_4_4', 'MODERATE']],
   pptx: [['PPTX-ALT-001', 'SC_1_1_1', 'CRITICAL'], ['PPTX-TITLE-001', 'SC_2_4_2', 'SERIOUS'], ['PPTX-ORDER-001', 'SC_1_3_2', 'MODERATE']],
   xlsx: [['XLSX-ALT-001', 'SC_1_1_1', 'MODERATE'], ['XLSX-HEADER-001', 'SC_1_3_1', 'MODERATE'], ['XLSX-SHEET-001', 'SC_2_4_2', 'MINOR']],
   html: [['WEB-ALT-001', 'SC_1_1_1', 'CRITICAL'], ['WEB-CONTRAST-001', 'SC_1_4_3', 'SERIOUS'], ['WEB-LABEL-001', 'SC_1_3_1', 'MODERATE'], ['WEB-LANG-001', 'SC_3_1_1', 'MINOR']],
+  video: [['VIDEO-CAPTIONS-001', 'SC_1_2_2', 'CRITICAL'], ['VIDEO-AUDIODESC-001', 'SC_1_2_5', 'SERIOUS'], ['VIDEO-TRANSCRIPT-001', 'SC_1_2_3', 'MODERATE']],
+  audio: [['AUDIO-TRANSCRIPT-001', 'SC_1_2_1', 'CRITICAL'], ['AUDIO-CAPTION-001', 'SC_1_2_2', 'MODERATE']],
 }
 const DEPT_TAGS = {
   'Patient Education': ['public-facing', 'high-traffic'], 'Communications': ['public-facing', 'high-traffic', 'marketing'],
@@ -83,6 +91,11 @@ const FIND = {
   SC_3_1_1: () => ({ detail: 'Document language is not declared', impact: 'Screen readers may read the text with the wrong pronunciation engine.', fix: 'Set the document language attribute.', auto: true, level: 'A' }),
   SC_1_4_3: (s) => { const t = 6 + s % 12, bad = 2 + s % 6; return { detail: `${bad} of ${t} text elements fall below the 4.5:1 contrast minimum`, impact: 'Low-vision users can’t read low-contrast text.', fix: 'Adjust colours to meet 4.5:1 — needs a design review.', auto: false, level: 'AA' } },
   SC_2_1_1: (s) => { const n = 1 + s % 4; return { detail: `${n} interactive element${n > 1 ? 's' : ''} not reachable by keyboard`, impact: 'Keyboard-only users can’t operate these controls.', fix: 'Add proper focus handling — needs a developer.', auto: false, level: 'A' } },
+  // time-based media (video / audio)
+  SC_1_2_2: (s) => { const m = 2 + s % 12, sec = (s * 7) % 60; return { detail: `No synchronized captions (${m}:${String(sec).padStart(2, '0')} of media)`, impact: 'Deaf / hard-of-hearing users can’t follow the spoken content.', fix: 'AI drafts captions (speech-to-text); a human reviews timing & accuracy.', auto: false, level: 'A' } },
+  SC_1_2_5: () => ({ detail: 'No audio-description track for the visual content', impact: 'Blind users miss information shown only on screen.', fix: 'Script + record an audio description — human produced.', auto: false, level: 'AA' }),
+  SC_1_2_3: () => ({ detail: 'No audio description or full text alternative', impact: 'Blind users miss the visual-only information in the video.', fix: 'Provide an audio description or a complete text alternative.', auto: false, level: 'A' }),
+  SC_1_2_1: () => ({ detail: 'No text transcript provided', impact: 'Deaf / hard-of-hearing users can’t access the audio at all.', fix: 'AI drafts a transcript from speech-to-text; a human verifies.', auto: false, level: 'A' }),
 }
 const findingDetail = (is, seed) => (FIND[is.wcag] ? FIND[is.wcag](seed) : {})
 
@@ -101,9 +114,13 @@ const fmtAge = (days) => days < 45 ? `${days}d ago` : days < 600 ? `${Math.round
 // headings and reading order are mechanical (auto); contrast and link-purpose
 // are judgement calls (human). Legal-hold docs are never auto-edited.
 const NEEDS_HUMAN_WCAG = new Set(['SC_1_4_3', 'SC_2_4_4'])
+// Time-based media — captions, audio description, transcripts. AI can draft them
+// (ASR), but a human always finalizes; never silently auto-applied.
+const MEDIA_WCAG = new Set(['SC_1_2_1', 'SC_1_2_2', 'SC_1_2_3', 'SC_1_2_5'])
 function recommendFor(f) {
   const issues = f.issues || []; const n = issues.length
   const hasCritical = issues.some((x) => x.severity === 'CRITICAL')
+  const mediaFinding = issues.some((x) => MEDIA_WCAG.has(x.wcag))
   const hardFinding = issues.some((x) => NEEDS_HUMAN_WCAG.has(x.wcag))
   const legalHold = (f.tags || []).includes('legal-hold')
   const sensitive = (f.tags || []).some((t) => t === 'PII' || t === 'legal-hold')
@@ -134,13 +151,13 @@ function recommendFor(f) {
   // Escalate to a human only when the fix needs judgement (contrast / link), the
   // content is legally frozen, or a critical finding sits on a public, high-traffic
   // page. Everything else is mechanical and safe to auto-remediate + re-validate.
-  const escalate = hardFinding || legalHold || (hasCritical && publicDoc)
+  const escalate = mediaFinding || hardFinding || legalHold || (hasCritical && publicDoc)
   if (!escalate) {
     const eta = Math.max(1, Math.round(n * (f.type === 'pdf' ? 1.6 : 1.0)))
     return { action: 'auto', mode: 'auto', confidence: 90 + (n % 9), etaMin: eta, manualMin, savingsPct: sav(eta), rationale: `All ${n} finding${n === 1 ? '' : 's'} are mechanical (alt text, headings, language, titles) — fixed automatically and re-validated. No human needed.` }
   }
   const eta = issues.reduce((a, x) => a + (ASSIST_MIN[x.severity] || 5), 0) + 6
-  const reason = hardFinding ? 'A contrast / link-purpose finding needs a human judgement call' : legalHold ? 'Legal-hold content is never auto-edited' : 'A critical finding on a public, high-traffic page'
+  const reason = mediaFinding ? 'Captions / audio description are AI-drafted, then finalized by a human' : hardFinding ? 'A contrast / link-purpose finding needs a human judgement call' : legalHold ? 'Legal-hold content is never auto-edited' : 'A critical finding on a public, high-traffic page'
   return { action: 'assisted', mode: 'assisted', confidence: 70 + (n % 14), etaMin: eta, manualMin, savingsPct: sav(eta), rationale: `${reason} — a human approves the AI fix before publish.` }
 }
 
@@ -151,9 +168,10 @@ function genCorpus() {
     for (let j = 0; j < count; j++) {
       const type = TYPES[(di + j) % TYPES.length]
       const opts = SRC_FOR[type]; const source = opts[(di + j) % opts.length]
+      const ext = EXT[type] || type
       const base = `${slug(dept)}-${NAMES[type][j % NAMES[type].length]}`
-      let file = `${base}.${type}`; let k = 2
-      while (seen.has(file)) { file = `${base}-${k++}.${type}` }
+      let file = `${base}.${ext}`; let k = 2
+      while (seen.has(file)) { file = `${base}-${k++}.${ext}` }
       seen.add(file)
       const status = STATUS_CYCLE[i % STATUS_CYCLE.length]
       const score = status === 'certifiable' ? 100 : status === 'error' ? null : status === 'uncertain' ? 88 + (i % 5) : 48 + ((i * 13) % 38)
@@ -165,16 +183,20 @@ function genCorpus() {
       const ageDays = AGE_DAYS[(i * 5 + j) % AGE_DAYS.length]
       const hiTraffic = tags.includes('high-traffic') || tags.includes('public-facing')
       const views90d = hiTraffic ? 380 + ((i * 137) % 8200) : 3 + ((i * 53) % 240)
+      const isMedia = type === 'video' || type === 'audio'
       const pages = type === 'pdf' ? 6 + ((i * 11) % 52) : type === 'docx' ? 2 + ((i * 7) % 32) : type === 'pptx' ? 9 + ((i * 5) % 40) : null
       const sheets = type === 'xlsx' ? 1 + (i % 6) : null
-      const sizeKB = type === 'pdf' ? 120 + pages * 38 : type === 'pptx' ? 800 + pages * 140 : type === 'xlsx' ? 24 + sheets * 60 : type === 'html' ? 18 + ((i * 9) % 90) : 30 + pages * 16
+      const durMin = type === 'video' ? 2 + ((i * 3) % 18) : type === 'audio' ? 8 + ((i * 5) % 42) : null
+      const duration = isMedia ? `${durMin}:${String((i * 7) % 60).padStart(2, '0')}` : null
+      const sizeKB = type === 'video' ? 24000 + durMin * 9500 : type === 'audio' ? 1400 + durMin * 950
+        : type === 'pdf' ? 120 + pages * 38 : type === 'pptx' ? 800 + pages * 140 : type === 'xlsx' ? 24 + sheets * 60 : type === 'html' ? 18 + ((i * 9) % 90) : 30 + pages * 16
       const superseded = ageDays >= 600 && i % 3 === 0 && status !== 'error'
       const f = {
         file, source, sourceName: SRC[source].name, department: dept, dept, type, owner: OWNERS[(i + di) % OWNERS.length],
         status, score, compliant: status === 'certifiable', skipped_rules: status === 'uncertain' ? 2 : 0,
         engine: ENG[type], tags, issues,
         ageDays, modified: dateStr(ageDays), modifiedAge: fmtAge(ageDays), lastAccessed: dateStr(Math.max(1, Math.round(ageDays / 2.5))),
-        views90d, pages, sheets, sizeKB, superseded,
+        views90d, pages, sheets, duration, sizeKB, superseded,
       }
       f.rec = recommendFor(f)
       out.push(f)

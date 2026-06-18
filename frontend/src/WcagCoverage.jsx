@@ -14,6 +14,13 @@ const FILTERS = [
   ['all', 'All 87'], ['A', 'Level A'], ['AA', 'Level AA'], ['2.2', 'New in 2.2'],
   ['Shipped (demo)', 'Live now'], ['MDK net-new', 'Roadmap'],
 ]
+// Plain-language meaning of the three conformance levels, for users new to WCAG.
+const LEVELS = [
+  { k: 'A', tag: 'Must have', desc: 'The basics — fail these and some users are fully blocked.', ex: 'alt text · keyboard navigation · form labels' },
+  { k: 'AA', tag: 'Should have · legal target', target: true, desc: 'Fixes the most common, high-impact barriers. What most laws & organizations require.', ex: 'contrast 4.5:1 · captions · visible focus' },
+  { k: 'AAA', tag: 'Nice to have', desc: 'The highest bar — aspirational, rarely met across a whole estate.', ex: 'contrast 7:1 · sign language · plain language' },
+]
+const LEVEL_MEANING = { A: 'must-have baseline', AA: 'should-have · the legal target', AAA: 'nice-to-have enhancement' }
 
 const mid = (r) => (r.lo + r.hi) / 2
 const wks = (d) => `${(d / 5).toFixed(0)}–${Math.round(d / 5)}`
@@ -55,6 +62,20 @@ export default function WcagCoverage() {
         <div className="covstatcard"><b>{Math.round(reqLo / 5)}–{Math.round(reqHi / 5)} wks</b><span className="muted">to full Required A/AA conformance</span></div>
       </div>
 
+      <div className="levelramp">
+        {LEVELS.map((lv, i) => (
+          <div className="levelstep" key={lv.k}>
+            <div className={lv.target ? 'levelcard target' : 'levelcard'}>
+              <div className="leveltop"><span className="levelk">Level {lv.k}</span><span className="leveltag">{lv.tag}</span></div>
+              <div className="leveldesc">{lv.desc}</div>
+              <div className="muted levelex">e.g. {lv.ex}</div>
+              {lv.target && <div className="leveltarget">★ This platform reports Level AA by default</div>}
+            </div>
+            {i < LEVELS.length - 1 && <span className="levelarrow" aria-hidden="true">→</span>}
+          </div>
+        ))}
+      </div>
+
       <div className="chiprow" style={{ margin: '4px 0 14px' }}>
         {FILTERS.map(([k, label]) => (
           <button key={k} className={filter === k ? 'fchip on' : 'fchip'} onClick={() => setFilter(k)}>{label}</button>
@@ -88,7 +109,8 @@ export default function WcagCoverage() {
           <div className="covpanel" onClick={(e) => e.stopPropagation()}>
             <button className="covclose" aria-label="Close" onClick={() => setSel(null)}>✕</button>
             <div className="covsc" style={{ fontSize: 18 }}><b>{sel.sc}</b> {sel.name}</div>
-            <div className="muted" style={{ margin: '4px 0 12px' }}>Level {sel.level} · {sel.principle} · added in WCAG {sel.added} · {sel.legal}</div>
+            <div className="muted" style={{ margin: '4px 0 6px' }}>Level {sel.level} · {sel.principle} · added in WCAG {sel.added} · {sel.legal}</div>
+            <div className="levelnote">Level {sel.level} — {LEVEL_MEANING[sel.level]}</div>
             <div className="covrows">
               <div><span className="muted">Validation approach</span><b>{sel.approach}</b></div>
               <div><span className="muted">Coverage today</span><b style={{ color: SRC[sel.source][1] }}>{SRC[sel.source][0]}</b></div>

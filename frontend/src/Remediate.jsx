@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
 
@@ -11,11 +11,15 @@ const FIX_TYPES = [
   { label: 'language set', value: 9, color: '#7F77DD' },
   { label: 'table headers', value: 6, color: '#BA7517' },
 ]
-const DIFF = {
-  where: 'benefits-guide.pdf · figure 3', rule: 'WCAG 1.1.1 — non-text content',
-  before: '<img src="chart.png">',
-  after: '<img src="chart.png" alt="Q3 benefits enrollment by region — West 38%, Northeast 24%, South 22%, Midwest 16%">',
-}
+// Rotating gallery of real fix examples across formats — replaces the old static
+// before/after so it visibly changes and shows the agent working on each type.
+const FIX_EXAMPLES = [
+  { fmt: 'PDF', wcag: 'WCAG 1.1.1 · alt text', auto: true, before: 'figure 3 — no alt text', after: 'alt: “Q3 benefits enrollment by region — West 38%, NE 24%, South 22%, Midwest 16%”' },
+  { fmt: 'Video', wcag: 'WCAG 1.2.2 · captions', auto: false, before: '4:12 video — no caption track', after: 'Synchronized captions drafted (speech-to-text) — pending human review' },
+  { fmt: 'Excel', wcag: 'WCAG 1.3.1 · table headers', auto: true, before: 'merged cells A1:C1, no header row', after: 'header row tagged <th scope="col"> so structure is announced' },
+  { fmt: 'Web', wcag: 'WCAG 1.4.3 · contrast', auto: false, before: 'body text at 3.1:1 on grey', after: 'recoloured to 4.8:1 — now passes AA (design-reviewed)' },
+  { fmt: 'Audio', wcag: 'WCAG 1.2.1 · transcript', auto: false, before: 'podcast episode — no transcript', after: 'transcript drafted from speech-to-text — pending human review' },
+]
 const QUEUE0 = [
   { id: 1, icon: '▦', title: 'chart on slide 7 — alt-text', meta: 'suggested alt-text', conf: 61, file: 'open-enrollment-deck.pptx', rule: 'WCAG 1.1.1 — non-text content',
     before: '<pic alt="">', after: '<pic alt="Q3 revenue by region — West 38%, NE 24%, South 22%, Midwest 16%">' },
@@ -25,7 +29,40 @@ const QUEUE0 = [
     before: 'tab order: right column before left', after: 'tab order: left column → right (natural)' },
   { id: 4, icon: '◫', title: 'scanned page — needs OCR + tags', meta: 'low text confidence', conf: 42, file: 'vendor-contract-acme.pdf', rule: 'WCAG 1.3.1 — info & relationships',
     note: 'Image-only PDF — the agent recommends OCR + manual tagging before this can be certified; no auto-fix proposed.' },
+  { id: 5, icon: '🎬', title: 'video captions — AI draft ready', meta: 'ASR captions need review', conf: 58, file: 'patient-explainer.mp4', rule: 'WCAG 1.2.2 — captions',
+    before: '4:12 video — no caption track', after: 'Synchronized captions drafted (speech-to-text) — review timing & accuracy' },
 ]
+
+function FixCarousel() {
+  const [idx, setIdx] = useState(0)
+  const [paused, setPaused] = useState(false)
+  useEffect(() => {
+    if (paused) return
+    const t = setInterval(() => setIdx((i) => (i + 1) % FIX_EXAMPLES.length), 3800)
+    return () => clearInterval(t)
+  }, [paused])
+  const ex = FIX_EXAMPLES[idx]
+  return (
+    <section className="panel" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}>
+      <div className="fixhd">
+        <h2 style={{ margin: 0 }}>AI remediation · live <span className="livedot" aria-hidden="true" /></h2>
+        <span className="muted" style={{ fontSize: 12 }}>{idx + 1} / {FIX_EXAMPLES.length}</span>
+      </div>
+      <div className="fixcard" key={idx}>
+        <div className="fixmeta">
+          <span className="fmtchip">{ex.fmt}</span>
+          <span className="muted" style={{ fontSize: 12 }}>{ex.wcag}</span>
+          <span className={ex.auto ? 'fixauto' : 'fixreview'} style={{ marginLeft: 'auto', fontSize: 12 }}>{ex.auto ? '⚡ auto-applied' : '✎ AI draft · human review'}</span>
+        </div>
+        <div className="diffbox before"><span className="difftag">before</span>{ex.before}</div>
+        <div className="diffbox after"><span className="difftag">after</span>{ex.after}</div>
+      </div>
+      <div className="fixdots">
+        {FIX_EXAMPLES.map((_, i) => <button key={i} className={i === idx ? 'fixdot on' : 'fixdot'} aria-label={`example ${i + 1}`} onClick={() => setIdx(i)} />)}
+      </div>
+    </section>
+  )
+}
 
 export default function Remediate({ run, files }) {
   const needFix = run ? Math.max(0, run.files - run.certifiable) : 0
@@ -59,12 +96,7 @@ export default function Remediate({ run, files }) {
 
       <div className="chartrow">
         <section className="panel"><h2>Automated fixes applied · by type</h2><Bars items={FIX_TYPES} cols="140px 1fr 30px" /></section>
-        <section className="panel">
-          <h2>Before → after · AI alt-text</h2>
-          <div className="muted" style={{ marginBottom: 8 }}>{DIFF.where} · {DIFF.rule}</div>
-          <div className="diffbox before"><span className="difftag">before</span><code>{DIFF.before}</code></div>
-          <div className="diffbox after"><span className="difftag">after</span><code>{DIFF.after}</code></div>
-        </section>
+        <FixCarousel />
       </div>
 
       <section className="panel">

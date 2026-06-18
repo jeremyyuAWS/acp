@@ -18,6 +18,8 @@ const CRIT = {
   SC_1_3_2: '1.3.2 meaningful sequence', SC_2_1_1: '2.1.1 keyboard',
   SC_2_4_2: '2.4.2 page titled', SC_2_4_4: '2.4.4 link purpose',
   SC_3_1_1: '3.1.1 language of page', SC_1_4_3: '1.4.3 contrast',
+  SC_1_2_1: '1.2.1 audio/video transcript', SC_1_2_2: '1.2.2 captions',
+  SC_1_2_3: '1.2.3 audio description / alt', SC_1_2_5: '1.2.5 audio description',
 }
 export const critLabel = (w) => CRIT[w] ?? (w || '').replace(/^SC_/, '').replace(/_/g, '.')
 const SEV = {
@@ -91,7 +93,7 @@ export default function FileDrawer({ file, onClose }) {
         <div><span className="muted">Last accessed</span><b>{file.lastAccessed || '—'}</b></div>
         <div><span className="muted">Views · 90d</span><b>{file.views90d != null ? file.views90d.toLocaleString() : '—'}</b></div>
         <div><span className="muted">Size</span><b>{file.sizeKB ? (file.sizeKB >= 1024 ? `${(file.sizeKB / 1024).toFixed(1)} MB` : `${file.sizeKB} KB`) : '—'}</b></div>
-        <div><span className="muted">{file.sheets ? 'Sheets' : 'Pages'}</span><b>{file.pages || file.sheets || '—'}</b></div>
+        <div><span className="muted">{file.duration ? 'Duration' : file.sheets ? 'Sheets' : 'Pages'}</span><b>{file.duration || file.pages || file.sheets || '—'}</b></div>
         <div><span className="muted">Owner</span><b>{file.owner || '—'}</b></div>
       </div>
       {file.superseded && <p className="muted" style={{ marginTop: 6 }}>⚠ A newer version of this document exists — flagged as superseded.</p>}
