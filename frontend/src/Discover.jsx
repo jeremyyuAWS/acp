@@ -1,20 +1,22 @@
 import { useState } from 'react'
 import Tag from './Tag.jsx'
 import FileDrawer, { retentionOf } from './FileDrawer.jsx'
+import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
 
-// Steps 1–3: Discover & Inventory · Classify & Prioritize · Retain / Archive / Delete.
-// Pure lifecycle — classification (tags, risk) and retention. Accessibility findings
-// and scoring live in the Assess step; nothing assessment-related is shown here.
-// Assessment-status tags (set by scoring) — excluded so Discover stays classification-only.
+// Steps 1–3 isolated as sub-steps: 1 Discover & Inventory · 2 Classify & Prioritize
+// · 3 Retain / Archive / Delete. Pure lifecycle — no accessibility assessment.
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
 const RET_BUCKET = (f) => { const l = retentionOf(f).label; return l.startsWith('Retain') ? 'retain' : l.startsWith('Archive') ? 'archive' : 'keep' }
 const RET_COLOR = { keep: '#639922', archive: '#7a5c8e', retain: '#D85A30' }
 const RET_ORDER = ['keep', 'archive', 'retain']
 const RET_BADGE = { keep: ['Keep', '#E7F0DC', '#3B6D11'], archive: ['Archive', '#EEEDFE', '#3C3489'], retain: ['Retain · legal hold', '#FAEEDA', '#854F0B'] }
+const exposureOf = (f) => (f.tags || []).includes('public-facing') ? 'public-facing' : (f.tags || []).includes('high-traffic') ? 'high-traffic' : 'internal'
+const SUBS = [['inventory', '1 · Inventory'], ['classify', '2 · Classify'], ['retain', '3 · Retain']]
 
 export default function Discover({ sources, files, busy, onScan }) {
+  const [sub, setSub] = useState('inventory')
   const [sel, setSel] = useState(null)
   const [open, setOpen] = useState(() => new Set())
   const toggle = (d) => setOpen((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n })
@@ -24,62 +26,86 @@ export default function Discover({ sources, files, busy, onScan }) {
   const deptOrder = [...DEPARTMENTS.filter((d) => groups[d]), ...Object.keys(groups).filter((d) => !DEPARTMENTS.includes(d))]
   const lifecycleFlagged = files.filter((f) => RET_BUCKET(f) !== 'keep').length
 
+  const countTag = (t) => files.filter((f) => (f.tags || []).includes(t)).length
+  const PLUM = '#7a5c8e'
+  const riskData = [
+    { label: 'PII', value: countTag('PII'), color: '#A32D2D' },
+    { label: 'legal-hold', value: countTag('legal-hold'), color: '#854F0B' },
+    { label: 'public-facing', value: countTag('public-facing'), color: '#D85A30' },
+    { label: 'high-traffic', value: countTag('high-traffic'), color: '#BA7517' },
+  ].filter((d) => d.value)
+  const byType = Object.entries(files.reduce((m, f) => { const k = (f.type || '').toUpperCase(); m[k] = (m[k] || 0) + 1; return m }, {})).sort((a, b) => b[1] - a[1]).map(([label, value]) => ({ label, value, color: PLUM }))
+  const expData = ['public-facing', 'high-traffic', 'internal'].map((k) => ({ label: k, value: files.filter((f) => exposureOf(f) === k).length, color: { 'public-facing': '#A32D2D', 'high-traffic': '#D85A30', internal: '#9a948f' }[k] })).filter((d) => d.value)
+
+  const deptList = (showRetain) => deptOrder.map((d) => {
+    const fs = groups[d]
+    const counts = { keep: 0, archive: 0, retain: 0 }
+    fs.forEach((f) => { counts[RET_BUCKET(f)] += 1 })
+    const pii = fs.filter((f) => (f.tags || []).includes('PII')).length
+    const pub = fs.filter((f) => (f.tags || []).includes('public-facing')).length
+    const isOpen = open.has(d)
+    return (
+      <div className="deptcard" key={d}>
+        <button className="deptheader" onClick={() => toggle(d)} aria-expanded={isOpen}>
+          <span className="deptchev" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
+          <span className="deptname">{d}</span>
+          <span className="muted deptcount">{fs.length} docs · {pii} PII · {pub} public-facing</span>
+          {showRetain && <span className="deptbar" aria-hidden="true">{RET_ORDER.map((k) => counts[k] ? <i key={k} style={{ width: `${(counts[k] / fs.length) * 100}%`, background: RET_COLOR[k] }} title={`${counts[k]} ${k}`} /> : null)}</span>}
+        </button>
+        {isOpen && (
+          <table className="depttable">
+            <tbody>
+              {fs.map((f) => {
+                const rb = RET_BUCKET(f); const [rlabel, rbg, rfg] = RET_BADGE[rb]
+                return (
+                  <tr key={f.file} className="filerow" role="button" tabIndex={0}
+                    onClick={() => setSel(f)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSel(f) } }}>
+                    <td className="fname">{f.file}
+                      <div className="filemeta">
+                        <span className="srcpill">{f.sourceName}</span>
+                        <span className="muted">{f.modifiedAge} · {f.views90d?.toLocaleString()} views/90d{f.superseded ? ' · superseded' : ''}</span>
+                        {classTags(f).slice(0, 3).map((t) => <Tag key={t} t={t} />)}
+                      </div>
+                    </td>
+                    {showRetain && <td><span className="badge" style={{ background: rbg, color: rfg }}>{rlabel}</span></td>}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    )
+  })
+
   return (
     <>
       <div className="estatebar">
         <div>
           <b>{files.length} documents</b> discovered &amp; classified across {sources.length} sources · {Object.keys(groups).length} departments
-          <div className="muted" style={{ marginTop: 2 }}>the agent crawls metadata, tags each by content &amp; risk, and flags lifecycle — {lifecycleFlagged} are archive or legal-hold candidates</div>
+          <div className="muted" style={{ marginTop: 2 }}>the agent crawls metadata, classifies by content &amp; risk, and flags lifecycle — {lifecycleFlagged} are archive or legal-hold candidates</div>
         </div>
         <button disabled={busy} onClick={() => onScan('all')}>{busy ? 'scanning…' : 'Re-scan all sources'}</button>
       </div>
 
-      {files.length === 0 ? <p className="muted">No documents yet — run a scan from Integrations.</p> : (
+      <div className="subtabs" role="tablist" aria-label="Discover steps">
+        {SUBS.map(([k, label]) => <button key={k} role="tab" aria-selected={sub === k} className={sub === k ? 'fchip on' : 'fchip'} onClick={() => setSub(k)}>{label}</button>)}
+      </div>
+
+      {files.length === 0 ? <p className="muted">No documents yet — run a scan from Integrations.</p> : sub === 'classify' ? (
         <>
-          <div className="muted" style={{ margin: '6px 0 8px' }}>Inventory by department · click a department to expand</div>
-          {deptOrder.map((d) => {
-            const fs = groups[d]
-            const counts = { keep: 0, archive: 0, retain: 0 }
-            fs.forEach((f) => { counts[RET_BUCKET(f)] += 1 })
-            const pii = fs.filter((f) => (f.tags || []).includes('PII')).length
-            const pub = fs.filter((f) => (f.tags || []).includes('public-facing')).length
-            const isOpen = open.has(d)
-            return (
-              <div className="deptcard" key={d}>
-                <button className="deptheader" onClick={() => toggle(d)} aria-expanded={isOpen}>
-                  <span className="deptchev" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
-                  <span className="deptname">{d}</span>
-                  <span className="muted deptcount">{fs.length} docs · {pii} PII · {pub} public-facing</span>
-                  <span className="deptbar" aria-hidden="true">
-                    {RET_ORDER.map((k) => counts[k] ? <i key={k} style={{ width: `${(counts[k] / fs.length) * 100}%`, background: RET_COLOR[k] }} title={`${counts[k]} ${k}`} /> : null)}
-                  </span>
-                </button>
-                {isOpen && (
-                  <table className="depttable">
-                    <tbody>
-                      {fs.map((f) => {
-                        const rb = RET_BUCKET(f); const [rlabel, rbg, rfg] = RET_BADGE[rb]
-                        return (
-                          <tr key={f.file} className="filerow" role="button" tabIndex={0}
-                            onClick={() => setSel(f)}
-                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSel(f) } }}>
-                            <td className="fname">{f.file}
-                              <div className="filemeta">
-                                <span className="srcpill">{f.sourceName}</span>
-                                <span className="muted">{f.modifiedAge} · {f.views90d?.toLocaleString()} views/90d{f.superseded ? ' · superseded' : ''}</span>
-                                {classTags(f).slice(0, 3).map((t) => <Tag key={t} t={t} />)}
-                              </div>
-                            </td>
-                            <td><span className="badge" style={{ background: rbg, color: rfg }}>{rlabel}</span></td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            )
-          })}
+          <div className="muted" style={{ margin: '4px 0 10px' }}>Step 2 · how the agent classifies &amp; prioritizes the estate by content and risk</div>
+          <div className="chartrow">
+            <section className="panel"><h2>By risk flag</h2><Bars items={riskData} cols="118px 1fr 30px" /><p className="muted ppfoot">PII &amp; legal-hold content carries the highest exposure if mishandled.</p></section>
+            <section className="panel"><h2>By exposure</h2><Bars items={expData} cols="110px 1fr 30px" /><p className="muted ppfoot">public-facing pages are the top legal-exposure surface under ADA / EAA.</p></section>
+          </div>
+          <section className="panel"><h2>By document type</h2><Bars items={byType} cols="70px 1fr 30px" /></section>
+        </>
+      ) : (
+        <>
+          <div className="muted" style={{ margin: '4px 0 8px' }}>{sub === 'retain' ? 'Step 3 · keep / archive / retain recommendation per document' : 'Step 1 · inventory by department · click a department to expand'}</div>
+          {deptList(sub === 'retain')}
         </>
       )}
       {sel && <FileDrawer file={sel} context="discover" onClose={() => setSel(null)} />}

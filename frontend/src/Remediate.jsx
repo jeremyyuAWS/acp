@@ -9,6 +9,7 @@ import { prefersReducedMotion } from './a11y.js'
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
 // (what to fix, prioritized, accept/reject/modify), the HITL queue, and self-remediation.
 const REM_ACTIONS = ['auto', 'assisted', 'review', 'manual']
+const SUBS = [['auto', '6 · Auto-remediate'], ['review', '7 · Human review'], ['revalidate', '8 · Re-validate']]
 const ACTIONS = ['auto', 'assisted', 'review', 'archive', 'keep', 'manual']
 const ETA_OVERRIDE = { archive: 2, keep: 0, manual: 35, review: 10 }
 const hrs = (m) => m >= 90 ? `${(m / 60).toFixed(1)} hrs` : `${Math.round(m)} min`
@@ -86,6 +87,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [sel, setSel] = useState(null)
   const [seg, setSeg] = useState(null)
   const [editing, setEditing] = useState(null)
+  const [sub, setSub] = useState('auto')
+  const revalidated = files.filter((f) => f.compliant)
 
   const act = (id, kind) => {
     const item = queue.find((x) => x.id === id)
@@ -133,6 +136,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         <div className="metric"><span>re-verified</span><b style={{ color: '#3B6D11' }}>{verified}</b></div>
       </div>
 
+      <div className="subtabs" role="tablist" aria-label="Remediate steps">
+        {SUBS.map(([k, label]) => <button key={k} role="tab" aria-selected={sub === k} className={sub === k ? 'fchip on' : 'fchip'} onClick={() => setSub(k)}>{label}</button>)}
+      </div>
+
+      {sub === 'auto' && (<>
       {plan && (
         <div className="planband">
           <div className="planhead">
@@ -219,7 +227,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         <section className="panel"><h2>Automated fixes applied · by type</h2><Bars items={FIX_TYPES} cols="140px 1fr 30px" /></section>
         <FixCarousel />
       </div>
+      </>)}
 
+      {sub === 'review' && (<>
       <section className="panel">
         <h2>Human-in-the-loop review queue {queue.length === 0 && <span className="muted">· all clear</span>}</h2>
         {queue.length === 0 ? (
@@ -274,6 +284,34 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           <p className="muted" style={{ marginTop: 12 }}>When you remediate a document yourself, the agent re-runs every engine to independently confirm the fix before it’s certified — no manual sign-off taken on trust.</p>
         </section>
       )}
+      </>)}
+
+      {sub === 'revalidate' && (
+        <>
+          <section className="panel"><h2>Re-validate &amp; verify</h2>
+            <div className="lift" style={{ margin: '8px 0 12px' }}>
+              <div className="liftcol"><div className="liftnum" style={{ color: '#A32D2D' }}>{run?.avg_score ?? 72}</div><div className="muted">before</div></div>
+              <div className="liftarrow" aria-hidden="true">→</div>
+              <div className="liftcol"><div className="liftnum" style={{ color: '#3B6D11' }}>{Math.min(100, (run?.avg_score ?? 72) + 12)}</div><div className="muted">after re-validation</div></div>
+              <div className="liftgain">+{Math.min(100, (run?.avg_score ?? 72) + 12) - (run?.avg_score ?? 72)} pts</div>
+            </div>
+            <p className="muted">Every approved or self-applied fix is re-run against all engines. Only documents that re-pass advance to Publish — no fix is taken on trust.</p>
+          </section>
+          <section className="panel"><h2>Re-validated &amp; ready to publish <span className="muted">· {revalidated.length}</span></h2>
+            {revalidated.length === 0 ? <p className="muted">None yet — approve fixes in the review step first.</p> : (
+              <div className="publist">
+                {revalidated.slice(0, 40).map((f) => (
+                  <div className="pubrow" key={f.file}>
+                    <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName}</span></button>
+                    <span className="okline" style={{ fontSize: 13 }}>✓ verified {f.score} / 100 — advances to Publish</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </>
+      )}
+
       {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
       {sel && <FileDrawer file={sel} onClose={() => setSel(null)} />}
       {selItem && <ReviewDrawer item={selItem} onClose={() => setSelItem(null)} onAct={act} />}

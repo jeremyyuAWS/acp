@@ -7,6 +7,7 @@ import KnowledgeGraph from './KnowledgeGraph.jsx'
 import SignIn from './SignIn.jsx'
 import Settings from './Settings.jsx'
 import Monitor from './Monitor.jsx'
+import Publish from './Publish.jsx'
 import Overview from './Overview.jsx'
 import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
@@ -22,7 +23,8 @@ const TABS = [
   ['discover', 'Discover', 'steps 1–3'],
   ['assess', 'Assess', 'steps 4–5'],
   ['remediate', 'Remediate', 'steps 6–8'],
-  ['monitor', 'Monitor', 'monitor · live'],
+  ['publish', 'Publish', 'step 9'],
+  ['monitor', 'Monitor', 'step 10'],
   ['upload', 'Upload', 'try it live'],
 ]
 
@@ -150,8 +152,8 @@ export default function App() {
         {view === 'assess' && (
           <>
             <div className="subtabs" role="tablist" aria-label="Assessment views">
-              <button role="tab" aria-selected={assess === 'results'} className={assess === 'results' ? 'fchip on' : 'fchip'} onClick={() => setAssess('results')}>Results</button>
-              <button role="tab" aria-selected={assess === 'graph'} className={assess === 'graph' ? 'fchip on' : 'fchip'} onClick={() => setAssess('graph')}>Knowledge graph</button>
+              <button role="tab" aria-selected={assess === 'results'} className={assess === 'results' ? 'fchip on' : 'fchip'} onClick={() => setAssess('results')}>4 · Assess</button>
+              <button role="tab" aria-selected={assess === 'graph'} className={assess === 'graph' ? 'fchip on' : 'fchip'} onClick={() => setAssess('graph')}>5 · Risk &amp; findings</button>
             </div>
             {assess === 'results' && (run ? <Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} /> : placeholder)}
             {(assess === 'graph' || assess === 'rubric' || assess === 'coverage') && (run ? <KnowledgeGraph files={files} /> : placeholder)}
@@ -159,6 +161,8 @@ export default function App() {
         )}
 
         {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} /> : placeholder)}
+
+        {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} /> : placeholder)}
 
         {view === 'monitor' && (run ? <Monitor sources={sources} files={files} /> : placeholder)}
 

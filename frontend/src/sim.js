@@ -37,7 +37,7 @@ export const PERSONAS = [
     allow: ['overview', 'integrations', 'monitor', 'settings'] },
   { id: 'compliance', name: 'Alex Rivera', role: 'Compliance Officer', email: 'alex.rivera@utsouthwestern.edu', sso: 'Okta',
     scope: { label: 'Full estate · all 10 departments', departments: 'all' },
-    allow: ['overview', 'discover', 'assess', 'remediate', 'monitor', 'upload'] },
+    allow: ['overview', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'upload'] },
   { id: 'depthead', name: 'Marcus Chen', role: 'Department Head — Finance', email: 'marcus.chen@utsouthwestern.edu', sso: 'Microsoft',
     scope: { label: 'Finance, Legal, HR, Research & Comms — incl. confidential', departments: ['Finance', 'Legal & Compliance', 'Human Resources', 'Research Administration', 'Communications'] },
     allow: ['overview', 'assess', 'monitor'] },

@@ -529,6 +529,16 @@ input:focus-visible, [role="tab"]:focus-visible {
 .remrow.rowrej { opacity: 0.5; }
 .remrow.rowrej .remname { text-decoration: line-through; }
 
+/* --- Publish (step 9) --- */
+.pubsteps { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.pubstep { background: var(--bg); border: 1px solid var(--line); border-radius: 11px; padding: 11px 13px; display: flex; flex-direction: column; gap: 3px; }
+.pubstep b { font-size: 13px; }
+.pubstep .muted { font-size: 12px; line-height: 1.4; }
+.publist { display: flex; flex-direction: column; max-height: 460px; overflow-y: auto; }
+.pubrow { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; padding: 9px 4px; border-bottom: 1px solid var(--line); }
+.pubrow:last-child { border-bottom: none; }
+.pubrow.pubdone { opacity: 0.7; }
+
 /* --- Discover business-priority charts --- */
 .prioritypanel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 18px; margin: 0 0 16px; }
 .priorityhd { font-size: 14px; }
