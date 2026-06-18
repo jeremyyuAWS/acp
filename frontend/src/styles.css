@@ -47,7 +47,11 @@ button.ghost { background: #fff; color: var(--plum); border: 1px solid var(--lin
 .metric span { display: block; color: var(--muted); font-size: 13px; }
 .metric b { font-size: 26px; font-weight: 600; }
 
-.panel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; margin: 16px 0; }
+.panel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; margin: 16px 0; position: relative; }
+.insighteye { position: absolute; top: 14px; right: 14px; background: none; border: none; color: #b7afbd; cursor: pointer; padding: 4px; border-radius: 6px; line-height: 0; }
+.insighteye:hover, .insighteye.on { color: var(--plum); background: var(--bg); }
+.insightbox { display: flex; align-items: flex-start; gap: 8px; background: #f3eef6; border: 1px solid #e6dcec; border-radius: 10px; padding: 9px 12px; margin-top: 12px; font-size: 13px; line-height: 1.5; color: var(--ink); }
+.aibadge { background: var(--plum); color: #fff; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; flex: 0 0 auto; margin-top: 2px; }
 .panel h2 { margin: 0 0 14px; font-size: 14px; font-weight: 600; color: var(--muted); }
 
 .critrow { display: grid; grid-template-columns: 150px 1fr 28px; align-items: center; gap: 12px; margin: 9px 0; font-size: 14px; }

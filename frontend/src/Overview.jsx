@@ -5,6 +5,7 @@ import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer, { statusOf, critLabel } from './FileDrawer.jsx'
 import { IDENTITY } from './sim.js'
 import WordCloud from './WordCloud.jsx'
+import Insight from './Insight.jsx'
 
 // Discover/Assess/Remediate are real (from the latest scan); Verify/Publish are projected.
 export default function Overview({ run, files, trend, onGo }) {
@@ -41,6 +42,20 @@ export default function Overview({ run, files, trend, onGo }) {
   const wm = {}; files.forEach((f) => (f.issues || []).forEach((i) => { wm[i.wcag] = (wm[i.wcag] || 0) + 1 }))
   const wcCloud = Object.entries(wm).sort((a, b) => b[1] - a[1]).map(([w, n]) => ({ text: critLabel(w).replace(/^[\d.]+\s*/, ''), value: n, full: critLabel(w) }))
 
+  // on-demand AI insights (computed from the data; norm-aware, actionable)
+  const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0)
+  const sevTotal = severity.reduce((a, s) => a + s.value, 0)
+  const sevHigh = severity.filter((s) => s.label === 'critical' || s.label === 'serious').reduce((a, s) => a + s.value, 0)
+  const issuesOnly = Math.max(0, n - run.certifiable - run.uncertain - run.error)
+  const INS = {
+    status: `${auditReady}% of documents are certifiable — ${auditReady < 45 ? 'below' : 'around'} the ~45% typical once remediation is underway. Most of the ${issuesOnly} flagged documents are auto-fixable, so a first pass lifts this quickly.`,
+    severity: sevTotal ? `Critical & serious findings (${sevHigh}) are ${pct(sevHigh, sevTotal)}% of all findings — ${pct(sevHigh, sevTotal) > 40 ? 'above' : 'near'} the ~40% you'd expect pre-remediation, driven by missing alt-text and untagged content. Clear these first to cut the most legal risk.` : 'No open findings.',
+    source: bySource[0] ? `${bySource[0].label} holds the most documents (${bySource[0].value}). Weight remediation toward public web/CMS content — it's your highest-exposure surface under ADA/EAA even when smaller.` : '',
+    type: byType[0] ? `${byType[0].label} is your largest format. PDFs are typically the hardest to remediate (tagging & reading order), so expect them to need the most human review.` : '',
+    dept: byDept[0] ? `${byDept[0].label} has the most documents (${byDept[0].value}). Clinical and legal departments hold PII and legal-hold content, so closing their gaps first reduces the most risk.` : '',
+    wcag: wcCloud[0] ? `WCAG ${wcCloud[0].full} is by far the most common failure (${wcCloud[0].value} documents). It's largely automatable — one class of fix would resolve a big share of your findings.` : '',
+  }
+
   return (
     <>
       <div className="metrics">
@@ -51,20 +66,21 @@ export default function Overview({ run, files, trend, onGo }) {
       </div>
 
       <div className="chartrow">
-        <section className="panel"><h2>Compliance status <span className="muted" style={{ fontWeight: 400 }}>· click to drill in</span></h2><Donut segments={statusSegments(run)} caption="documents" onPick={pickStatus} /></section>
+        <section className="panel"><h2>Compliance status <span className="muted" style={{ fontWeight: 400 }}>· click to drill in</span></h2><Donut segments={statusSegments(run)} caption="documents" onPick={pickStatus} /><Insight text={INS.status} /></section>
         <section className="panel"><h2>Findings by severity</h2>
           {severity.length ? <Bars items={severity} onPick={pickSeverity} /> : <p className="muted">No open findings.</p>}
+          <Insight text={INS.severity} />
         </section>
       </div>
 
       <div className="muted" style={{ margin: '20px 0 2px' }}>Inventory distribution</div>
       <div className="chartrow">
-        <section className="panel"><h2>By source system</h2><Bars items={bySource} cols="118px 1fr 28px" /></section>
-        <section className="panel"><h2>By document type</h2><Bars items={byType} cols="62px 1fr 28px" /></section>
+        <section className="panel"><h2>By source system</h2><Bars items={bySource} cols="118px 1fr 28px" /><Insight text={INS.source} /></section>
+        <section className="panel"><h2>By document type</h2><Bars items={byType} cols="62px 1fr 28px" /><Insight text={INS.type} /></section>
       </div>
       <div className="chartrow">
-        <section className="panel"><h2>By department · {IDENTITY.org}</h2><Bars items={byDept} cols="150px 1fr 28px" /></section>
-        <section className="panel"><h2>Top WCAG violations</h2><WordCloud items={wcCloud} /></section>
+        <section className="panel"><h2>By department · {IDENTITY.org}</h2><Bars items={byDept} cols="150px 1fr 28px" /><Insight text={INS.dept} /></section>
+        <section className="panel"><h2>Top WCAG violations</h2><WordCloud items={wcCloud} /><Insight text={INS.wcag} /></section>
       </div>
 
       <section className="panel">
