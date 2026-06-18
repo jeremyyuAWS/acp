@@ -18,7 +18,7 @@ const FIX = { 'pdf.alt-text': ['<Figure>', '<Figure alt="bar chart: enrollment b
 const extOf = (name) => { const m = /\.([a-z0-9]+)$/i.exec(name || ''); return (m ? m[1] : 'pdf').toLowerCase() }
 const issuesFor = (name) => (EXT_ISSUES[extOf(name)] || EXT_ISSUES.pdf).map(([rule, wcag, sev, detail]) => ({ rule, wcag, sev, detail }))
 
-export default function Upload() {
+export default function Upload({ onCertified }) {
   const [step, setStep] = useState(0)
   const [file, setFile] = useState(null)
   const [scanning, setScanning] = useState(false)
@@ -37,6 +37,7 @@ export default function Upload() {
   const onDrop = (e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f) start({ name: f.name, size: f.size }) }
   const sample = (name, kb) => start({ name, size: kb * 1024 })
   const reset = () => { setStep(0); setFile(null); setIssues([]); setScanning(false) }
+  const certify = () => { if (file) onCertified?.({ file: file.name }); setStep(4) }
 
   const score = Math.max(0, 100 - issues.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0))
   const review = issues.slice(-1)
@@ -130,8 +131,8 @@ export default function Upload() {
               <div className="qrow" key={n}>
                 <span className="qico" aria-hidden="true">⚑</span>
                 <div className="qmain"><div className="qtitle">{i.wcag}</div><div className="qmeta">{i.detail} · agent confidence 52%</div></div>
-                <button className="qbtn approve" onClick={() => setStep(4)}>✓ approve</button>
-                <button className="qbtn reject" onClick={() => setStep(4)}>✕ reject</button>
+                <button className="qbtn approve" onClick={certify}>✓ approve</button>
+                <button className="qbtn reject" onClick={certify}>✕ reject</button>
               </div>
             ))}
           </div>

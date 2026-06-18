@@ -60,6 +60,7 @@ export default function App() {
   const [deltaKey, setDeltaKey] = useState(0)
   const [progress, setProgress] = useState(null)
   const [loaded, setLoaded] = useState(false)
+  const [certifiedDocs, setCertifiedDocs] = useState([])
 
   useEffect(() => {
     if (!me) return
@@ -149,9 +150,9 @@ export default function App() {
 
         {view === 'remediate' && (run ? <Remediate run={run} files={files} /> : placeholder)}
 
-        {view === 'report' && (run ? <Report run={run} files={files} trend={trend} /> : placeholder)}
+        {view === 'report' && (run ? <Report run={run} files={files} trend={trend} certified={certifiedDocs} /> : placeholder)}
 
-        {view === 'upload' && <Upload />}
+        {view === 'upload' && <Upload onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
       </ErrorBoundary>
     </div>
   )

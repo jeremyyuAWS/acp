@@ -223,6 +223,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .auditfeed { display: flex; flex-direction: column; }
 .auditrow { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); opacity: 1; animation: auditslide 0.4s ease; }
 .auditrow:first-child { border-top: none; }
+.auditrow.pinned { background: #f1f8ea; border-radius: 8px; padding-left: 8px; padding-right: 8px; }
 .auditkind { font-size: 11px; padding: 2px 9px; border-radius: 999px; flex: 0 0 auto; min-width: 62px; text-align: center; }
 .auditwhat { flex: 1; font-size: 13px; min-width: 0; }
 .auditactor { font-size: 12px; flex: 0 0 auto; }

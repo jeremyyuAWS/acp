@@ -21,7 +21,7 @@ const AUDIT = [
 const ACTOR = { 'auto-fix': 'mova engine', review: 'A. Chen', publish: 'mova engine', 're-scan': 'mova engine', archive: 'mova engine' }
 const ACOLOR = { 'auto-fix': '#1D9E75', review: '#854F0B', publish: '#185FA5', 're-scan': '#3B6D11', archive: '#5F5E5A' }
 
-export default function Report({ run, files = [], trend = [] }) {
+export default function Report({ run, files = [], trend = [], certified = [] }) {
   const ref = useRef(null)
   const [on, setOn] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -34,6 +34,7 @@ export default function Report({ run, files = [], trend = [] }) {
   }, [])
 
   const certifiable = run ? run.certifiable : 0
+  const published = certifiable + certified.length
   const before = run?.avg_score ?? 72
   const after = Math.min(100, before + 12)
 
@@ -72,7 +73,7 @@ export default function Report({ run, files = [], trend = [] }) {
 
         <div className="metrics">
           <div className="metric"><span>estate score</span><b style={{ color: '#3B6D11' }}>{before}</b></div>
-          <div className="metric"><span>published</span><b>{certifiable}</b></div>
+          <div className="metric"><span>published</span><b>{published}</b></div>
           <div className="metric"><span>documents</span><b>{run?.files ?? files.length}</b></div>
           <div className="metric"><span>next re-scan</span><b style={{ fontSize: 17 }}>in 6 days</b></div>
         </div>
@@ -124,6 +125,13 @@ export default function Report({ run, files = [], trend = [] }) {
         <section className="panel">
           <h2>Audit trail · live <span className="livedot" aria-hidden="true" /></h2>
           <div className="auditfeed">
+            {certified.map((c) => (
+              <div className="auditrow pinned" key={'cert' + c.id}>
+                <span className="auditkind" style={{ background: '#E7F0DC', color: '#3B6D11' }}>certified</span>
+                <span className="auditwhat">remediated &amp; certified via Upload · <span className="fname" style={{ fontSize: 12 }}>{c.file}</span></span>
+                <span className="muted auditactor">you · just now</span>
+              </div>
+            ))}
             {feed.map((row) => {
               const [kind, what, file] = row.e
               return (
