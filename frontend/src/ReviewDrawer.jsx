@@ -19,10 +19,12 @@ export default function ReviewDrawer({ item, onClose, onAct }) {
 
       <p className="muted" style={{ marginTop: 12 }}>{item.note || 'The agent proposes this fix; a human confirms because confidence is below the auto-apply threshold. Approving re-validates the file against all engines.'}</p>
 
-      <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 16 }}>
+      <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 16, flexWrap: 'wrap' }}>
         <button onClick={() => onAct(item.id, 'approved')}>✓ approve fix</button>
+        <button className="ghost" onClick={() => onAct(item.id, 'self')}>✋ I’ll fix it myself</button>
         <button className="ghost" onClick={() => onAct(item.id, 'rejected')}>✕ reject</button>
       </div>
+      <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>Choose “I’ll fix it myself” to take ownership — you remediate in the source, then re-scan to confirm.</p>
     </Drawer>
   )
 }

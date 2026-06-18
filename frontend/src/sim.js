@@ -214,6 +214,24 @@ const MON_ALERTS = [
   ['drift', 'med', 'Alt-text removed on figure 2 during a content update — flagged', (c) => c.find((f) => f.type === 'pdf' && f.issues.length)?.file || 'care-pathway.pdf', '1d ago'],
   ['recerted', 'info', 'Auto-remediated and re-certified at 100/100 after re-scan', (c) => c.find((f) => f.status === 'issues' && (f.tags || []).includes('auto-fixable'))?.file || 'onboarding.pdf', '1d ago'],
 ]
+// Per-source watch state for the Monitor tab — what's being polled, how often,
+// and what's changed since the last sweep. Deterministic from the source list.
+const WATCH_CADENCE = ['live', 'hourly', 'daily', 'weekly']
+const WATCH_POLLED = ['just now', '1m ago', '3m ago', '8m ago', '14m ago', '22m ago']
+const WATCH_NEXT = ['streaming', 'in 41m', 'in 18h', 'in 6d']
+export function sourceWatch(sources, files) {
+  const byName = {}; (files || []).forEach((f) => { (byName[f.sourceName] = byName[f.sourceName] || []).push(f) })
+  return (sources || []).map((s, i) => {
+    const docs = s.files || (byName[s.name] || []).length
+    const ci = i % WATCH_CADENCE.length
+    return {
+      name: s.name, kind: s.type, id: s.id, docs,
+      cadence: WATCH_CADENCE[ci], next: WATCH_NEXT[ci], polled: WATCH_POLLED[i % WATCH_POLLED.length],
+      newFiles: (i * 3 + 2) % 5, changed: (i * 2 + 1) % 4, status: 'watching',
+    }
+  })
+}
+
 export function monitoringState(files) {
   const docs = files.length || CORPUS.length
   const sources = new Set(files.map((f) => f.sourceName)).size || 6

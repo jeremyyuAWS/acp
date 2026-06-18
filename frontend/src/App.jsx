@@ -7,6 +7,7 @@ import KnowledgeGraph from './KnowledgeGraph.jsx'
 import SignIn from './SignIn.jsx'
 import Rubric from './Rubric.jsx'
 import WcagCoverage from './WcagCoverage.jsx'
+import Monitor from './Monitor.jsx'
 import Overview from './Overview.jsx'
 import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
@@ -23,7 +24,8 @@ const TABS = [
   ['discover', 'Discover', 'steps 1–3'],
   ['assess', 'Assess', 'steps 4–5'],
   ['remediate', 'Remediate', 'steps 6–8'],
-  ['report', 'Report', 'steps 9–10'],
+  ['report', 'Report', 'step 9'],
+  ['monitor', 'Monitor', 'step 10 · live'],
   ['upload', 'Upload', 'try it live'],
 ]
 
@@ -154,6 +156,8 @@ export default function App() {
         {view === 'remediate' && (run ? <Remediate run={run} files={files} /> : placeholder)}
 
         {view === 'report' && (run ? <Report run={run} files={files} trend={trend} trendDates={trendDates} certified={certifiedDocs} /> : placeholder)}
+
+        {view === 'monitor' && (run ? <Monitor sources={sources} files={files} /> : placeholder)}
 
         {view === 'upload' && <Upload onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
       </ErrorBoundary>

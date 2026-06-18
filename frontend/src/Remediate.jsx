@@ -33,11 +33,19 @@ export default function Remediate({ run, files }) {
   const [queue, setQueue] = useState(QUEUE0)
   const [acted, setActed] = useState({ approved: 0, rejected: 0 })
   const [selItem, setSelItem] = useState(null)
+  const [self, setSelf] = useState([])
   const act = (id, kind) => {
+    const item = queue.find((x) => x.id === id)
     setQueue((q) => q.filter((x) => x.id !== id))
-    setActed((a) => ({ ...a, [kind]: a[kind] + 1 }))
     setSelItem(null)
+    if (kind === 'self') { if (item) setSelf((s) => [{ ...item, status: 'awaiting' }, ...s]); return }
+    setActed((a) => ({ ...a, [kind]: a[kind] + 1 }))
   }
+  const rescan = (id) => {
+    setSelf((s) => s.map((x) => x.id === id ? { ...x, status: 'scanning' } : x))
+    setTimeout(() => setSelf((s) => s.map((x) => x.id === id ? { ...x, status: 'verified' } : x)), 1700)
+  }
+  const verified = self.filter((x) => x.status === 'verified').length
 
   return (
     <>
@@ -45,7 +53,8 @@ export default function Remediate({ run, files }) {
         <div className="metric"><span>auto-fixed issues</span><b style={{ color: '#3B6D11' }}>{autoFixed}</b></div>
         <div className="metric"><span>in review queue</span><b style={{ color: '#854F0B' }}>{queue.length}</b></div>
         <div className="metric"><span>approved</span><b>{acted.approved}</b></div>
-        <div className="metric"><span>files in remediation</span><b>{needFix}</b></div>
+        <div className="metric"><span>self-remediated</span><b style={{ color: '#185FA5' }}>{self.length}</b></div>
+        <div className="metric"><span>re-verified</span><b style={{ color: '#3B6D11' }}>{verified}</b></div>
       </div>
 
       <div className="chartrow">
@@ -78,6 +87,7 @@ export default function Remediate({ run, files }) {
                   </div>
                 </div>
                 <button className="qbtn approve" onClick={(e) => { e.stopPropagation(); act(q.id, 'approved') }}>✓ approve</button>
+                <button className="qbtn self" onClick={(e) => { e.stopPropagation(); act(q.id, 'self') }} title="Take ownership — fix it yourself, then re-scan to confirm">✋ I’ll fix it</button>
                 <button className="qbtn reject" onClick={(e) => { e.stopPropagation(); act(q.id, 'rejected') }}>✕ reject</button>
               </div>
             ))}
@@ -85,6 +95,32 @@ export default function Remediate({ run, files }) {
         )}
         <p className="muted" style={{ marginTop: 12 }}>↻ Re-validated against all engines after each approved fix — only re-passing files advance to publish.</p>
       </section>
+
+      {self.length > 0 && (
+        <section className="panel">
+          <h2>Self-remediation <span className="muted">· you’re fixing these — re-scan to confirm</span></h2>
+          <div className="queue">
+            {self.map((it) => (
+              <div className={`qrow${it.status === 'verified' ? ' qdone' : ''}`} key={it.id}>
+                <span className="qico" aria-hidden="true">{it.icon}</span>
+                <div className="qmain">
+                  <div className="qtitle">{it.title} <span className="muted" style={{ fontSize: 12 }}>· {it.file}</span></div>
+                  <div className="qmeta">{it.rule}</div>
+                  <div className="selfstatus">
+                    {it.status === 'awaiting' && <span className="muted">awaiting your fix — apply it in the source, then confirm</span>}
+                    {it.status === 'scanning' && <span className="muted"><span className="spinner" /> re-scanning across all engines…</span>}
+                    {it.status === 'verified' && <span className="okline">✓ verified — finding cleared, now passing 100 / 100</span>}
+                  </div>
+                </div>
+                {it.status === 'verified'
+                  ? <span className="qbtn verified">✓ confirmed</span>
+                  : <button className="qbtn rescan" disabled={it.status === 'scanning'} onClick={() => rescan(it.id)}>↻ Re-scan to confirm</button>}
+              </div>
+            ))}
+          </div>
+          <p className="muted" style={{ marginTop: 12 }}>When you remediate a document yourself, the agent re-runs every engine to independently confirm the fix before it’s certified — no manual sign-off taken on trust.</p>
+        </section>
+      )}
       {selItem && <ReviewDrawer item={selItem} onClose={() => setSelItem(null)} onAct={act} />}
     </>
   )

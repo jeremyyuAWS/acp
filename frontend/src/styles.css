@@ -419,7 +419,79 @@ input:focus-visible, [role="tab"]:focus-visible {
 
 /* --- prescriptive action plan (Discover) --- */
 .planband { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 18px; margin: 0 0 16px; }
-.planhead { font-size: 14px; }
+.planhead { font-size: 14px; display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.plandec { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; font-size: 12px; }
+.plandec button { padding: 6px 13px; font-size: 13px; }
+.plandec button:disabled { opacity: 0.45; cursor: default; }
+
+/* per-document accept / reject / modify controls */
+.reccell { white-space: normal; }
+.reccell .badge { white-space: nowrap; }
+.dectag { font-size: 11px; font-weight: 600; margin-left: 7px; padding: 1px 7px; border-radius: 6px; }
+.dectag.ok { color: #3B6D11; background: #E7F0DC; }
+.dectag.ov { color: #3C3489; background: #EEEDFE; }
+.dectag.rj { color: #A32D2D; background: #FCEBEB; }
+.decctl { display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle; }
+.decbtn { width: 25px; height: 25px; border: 1px solid var(--line); background: #fff; border-radius: 7px; cursor: pointer; font-size: 12px; line-height: 1; color: var(--muted); padding: 0; }
+.decbtn:hover { background: var(--bg); }
+.decbtn.ok:hover { color: #3B6D11; border-color: #cfe3bd; }
+.decbtn.rj:hover { color: #A32D2D; border-color: #f0cfcf; }
+.decbtn.ed:hover { color: #3C3489; border-color: #d6d2f3; }
+.modchips { display: inline-flex; flex-wrap: wrap; gap: 5px; margin-left: 8px; vertical-align: middle; }
+.modchip { font-size: 11px; font-weight: 600; border: 1px solid var(--line); background: #fff; border-radius: 7px; padding: 3px 8px; cursor: pointer; }
+.modchip:hover { background: var(--bg); }
+.modchip.cancel { color: var(--muted); font-weight: 500; }
+.rowrej { opacity: 0.5; }
+.rowrej .fname { text-decoration: line-through; }
+
+/* --- Monitor tab --- */
+.watchgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.watchcard { border: 1px solid var(--line); border-radius: 12px; padding: 12px 13px; background: var(--bg); }
+.watchtop { display: flex; align-items: center; gap: 10px; }
+.watchico { font-size: 18px; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; background: var(--card); border: 1px solid var(--line); border-radius: 8px; flex: 0 0 auto; }
+.watchname { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; }
+.watchpulse { flex: 0 0 auto; }
+.watchmeta { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 12px; }
+.cadsel { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
+.cadsel select { font-size: 12px; border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; background: var(--card); color: var(--ink); cursor: pointer; }
+.watchchips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+.wchip { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; }
+.wchip.new { color: #185FA5; background: #E7F0FB; }
+.wchip.chg { color: #854F0B; background: #FAEEDA; }
+.wchip.ok { color: #3B6D11; background: #E7F0DC; }
+.wchip.off { color: #5F5E5A; background: #EEEDEA; }
+.scanctl { display: grid; grid-template-columns: 1.3fr 1fr; gap: 22px; }
+.ctlsub { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 10px; }
+.togrow { display: flex; align-items: flex-start; gap: 11px; width: 100%; background: none; border: none; padding: 7px 0; cursor: pointer; text-align: left; }
+.tsw { flex: 0 0 auto; width: 34px; height: 20px; border-radius: 999px; background: #d6d0db; position: relative; transition: background 0.15s ease; margin-top: 1px; }
+.tsw.on { background: #639922; }
+.tsw i { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform 0.15s ease; }
+.tsw.on i { transform: translateX(14px); }
+.toglabel { font-size: 13.5px; color: var(--ink); display: flex; flex-direction: column; gap: 1px; }
+.tog-hint { font-size: 11.5px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.segbtn { border: none; background: #fff; padding: 6px 12px; font-size: 12px; cursor: pointer; color: var(--ink); border-right: 1px solid var(--line); text-transform: capitalize; }
+.segbtn:last-child { border-right: none; }
+.segbtn:hover { background: var(--bg); }
+.cadsummary { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.cadpill { font-size: 11px; color: var(--muted); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; text-transform: capitalize; }
+.monfeedhd { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.simbtns { display: flex; gap: 7px; }
+.evkind { font-weight: 600; }
+.schedlist { display: flex; flex-direction: column; }
+.schedrow { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.schedrow:last-child { border-bottom: none; }
+.schedcad { text-transform: capitalize; font-size: 12px; }
+.schednext { font-size: 12px; color: var(--ink); font-weight: 600; white-space: nowrap; }
+
+/* --- self-remediation (Remediate) --- */
+.qbtn.self { background: #fff; color: #185FA5; border-color: var(--line); }
+.qbtn.rescan { background: #185FA5; color: #fff; border-color: #185FA5; }
+.qbtn.rescan:disabled { opacity: 0.6; cursor: default; }
+.qbtn.verified { background: #E7F0DC; color: #3B6D11; border-color: #cfe3bd; cursor: default; }
+.qdone { background: #f6faf0; }
+.selfstatus { margin-top: 6px; font-size: 12.5px; display: flex; align-items: center; gap: 7px; }
+.okline { color: #3B6D11; font-weight: 600; }
 .plancards { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 10px; margin-top: 12px; }
 .plancard { border-radius: 12px; padding: 11px 13px; }
 .plancardtop { display: flex; align-items: baseline; justify-content: space-between; }

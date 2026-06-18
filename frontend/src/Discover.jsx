@@ -9,11 +9,21 @@ import { DEPARTMENTS, recommendationSummary } from './sim.js'
 const SEGCOLOR = { certifiable: '#639922', issues: '#F5B400', uncertain: '#D85A30', unanalysable: '#9a948f' }
 const SEGORDER = ['certifiable', 'issues', 'uncertain', 'unanalysable']
 const hrs = (m) => m >= 90 ? `${(m / 60).toFixed(1)} hrs` : `${Math.round(m)} min`
+const ACTIONS = ['auto', 'assisted', 'review', 'archive', 'keep', 'manual']
+const ETA_OVERRIDE = { archive: 2, keep: 0, manual: 35, review: 10 }
 
 export default function Discover({ sources, files, busy, onScan }) {
   const [sel, setSel] = useState(null)
   const [open, setOpen] = useState(() => new Set())
+  const [decisions, setDecisions] = useState({})
+  const [editing, setEditing] = useState(null)
   const toggle = (d) => setOpen((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n })
+  const decide = (file, d) => { setDecisions((s) => ({ ...s, [file]: d })); setEditing(null) }
+  const undo = (file) => setDecisions((s) => { const n = { ...s }; delete n[file]; return n })
+  const acceptAll = () => setDecisions((s) => { const n = { ...s }; files.forEach((f) => { if (!n[f.file]) n[f.file] = { state: 'accepted' } }); return n })
+  const dvals = files.map((f) => decisions[f.file])
+  const dcount = (st) => dvals.filter((d) => d?.state === st).length
+  const pending = files.length - dcount('accepted') - dcount('override') - dcount('rejected')
 
   const groups = {}
   files.forEach((f) => { const d = f.department || 'Unassigned'; (groups[d] = groups[d] || []).push(f) })
@@ -38,6 +48,10 @@ export default function Discover({ sources, files, busy, onScan }) {
               <div className="muted" style={{ marginTop: 2 }}>
                 ≈ <b style={{ color: 'var(--ink)' }}>{hrs(plan.remediateMin)}</b> of remediation across {plan.remediableDocs} documents · <b style={{ color: '#3B6D11' }}>{plan.autoPct}% fully automatic</b> · saves ≈ <b style={{ color: '#3B6D11' }}>{hrs(plan.savedMin)}</b> vs. manual
               </div>
+            </div>
+            <div className="plandec">
+              <span className="muted">{dcount('accepted')} accepted · {dcount('override')} modified · {dcount('rejected')} rejected · {pending} pending</span>
+              <button disabled={!pending} onClick={acceptAll}>✓ Accept all</button>
             </div>
           </div>
           <div className="plancards">
@@ -77,9 +91,12 @@ export default function Discover({ sources, files, busy, onScan }) {
                   <table className="depttable">
                     <tbody>
                       {fs.map((f) => {
-                        const rec = f.rec || {}; const [label, rbg, rfg, icon] = REC_STYLE[rec.action] || REC_STYLE.review
+                        const rec = f.rec || {}; const dec = decisions[f.file]
+                        const effAction = dec?.state === 'override' ? dec.action : rec.action
+                        const [label, rbg, rfg, icon] = REC_STYLE[effAction] || REC_STYLE.review
+                        const effEta = dec?.state === 'override' ? (ETA_OVERRIDE[dec.action] ?? rec.etaMin) : rec.etaMin
                         return (
-                          <tr key={f.file} className="filerow" role="button" tabIndex={0}
+                          <tr key={f.file} className={`filerow${dec?.state === 'rejected' ? ' rowrej' : ''}`} role="button" tabIndex={0}
                             onClick={() => setSel(f)}
                             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSel(f) } }}>
                             <td className="fname">{f.file}
@@ -89,8 +106,27 @@ export default function Discover({ sources, files, busy, onScan }) {
                                 {(f.tags || []).slice(0, 2).map((t) => <Tag key={t} t={t} />)}
                               </div>
                             </td>
-                            <td><span className="badge" style={{ background: rbg, color: rfg }}>{icon} {label}</span></td>
-                            <td className="etacell">{fmtEffort(rec.etaMin)}{rec.confidence != null && <div className="muted" style={{ fontSize: 11 }}>{rec.confidence}% conf.</div>}</td>
+                            <td className="reccell">
+                              <span className="badge" style={{ background: rbg, color: rfg }}>{icon} {label}</span>
+                              {dec?.state === 'accepted' && <span className="dectag ok">✓ accepted</span>}
+                              {dec?.state === 'override' && <span className="dectag ov">modified</span>}
+                              {dec?.state === 'rejected' && <span className="dectag rj">rejected</span>}
+                              {editing === f.file ? (
+                                <div className="modchips" onClick={(e) => e.stopPropagation()}>
+                                  {ACTIONS.map((a) => { const [l, , fg, ic] = REC_STYLE[a]; return <button key={a} className="modchip" style={{ color: fg }} onClick={() => decide(f.file, a === rec.action ? { state: 'accepted' } : { state: 'override', action: a })}>{ic} {l}</button> })}
+                                  <button className="modchip cancel" onClick={() => setEditing(null)}>cancel</button>
+                                </div>
+                              ) : (
+                                <span className="decctl" onClick={(e) => e.stopPropagation()}>
+                                  {!dec ? (<>
+                                    <button className="decbtn ok" title="Accept recommendation" onClick={() => decide(f.file, { state: 'accepted' })}>✓</button>
+                                    <button className="decbtn rj" title="Reject" onClick={() => decide(f.file, { state: 'rejected' })}>✕</button>
+                                    <button className="decbtn ed" title="Modify action" onClick={() => setEditing(f.file)}>✎</button>
+                                  </>) : <button className="decbtn undo" title="Undo" onClick={() => undo(f.file)}>↺</button>}
+                                </span>
+                              )}
+                            </td>
+                            <td className="etacell">{fmtEffort(effEta)}{rec.confidence != null && !dec && <div className="muted" style={{ fontSize: 11 }}>{rec.confidence}% conf.</div>}</td>
                           </tr>
                         )
                       })}
