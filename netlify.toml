@@ -1,16 +1,16 @@
-# Netlify build config for the mova.io accessibility-compliance SPA.
+# Netlify build config for the mova.io accessibility-compliance demo.
 #
-# Netlify hosts the static React frontend only; it talks to the live backend API
-# on Azure Container Apps (the API can't run on Netlify — it needs the .NET +
-# Python analysis engines). VITE_API below points the SPA at that backend.
+# The app runs as a FULLY SELF-CONTAINED static SPA — it ships with a simulated
+# multi-source estate (see frontend/src/sim.js, SIM flag) and makes NO backend
+# calls, so there's nothing to connect, no API, and nothing to secure. Just a
+# public "art of the possible" demo.
 #
-# To deploy: push this repo to GitHub, then in Netlify "Add new site → Import
-# from Git", pick the repo, and Netlify auto-detects this file. Override VITE_API
-# in Site settings → Environment variables if your backend URL differs.
+# Deploy: push this repo to GitHub, then in Netlify "Add new site -> Import from
+# Git", pick the repo. Netlify auto-detects this file and builds the SPA. The
+# resulting URL is public by design (no passcode).
 #
-# IMPORTANT: for "Sign in with Google" to work from the Netlify origin, add your
-# Netlify site URL (e.g. https://your-site.netlify.app) to the Web OAuth client's
-# "Authorized JavaScript origins" in Google Cloud Console (project acp-drive).
+# (To run against the real backend instead, set SIM=false in sim.js and provide
+# VITE_API; not needed for the demo.)
 
 [build]
   base = "frontend"
@@ -19,9 +19,8 @@
 
 [build.environment]
   NODE_VERSION = "20"
-  VITE_API = "https://acp-app.icydune-047a2877.eastus2.azurecontainerapps.io"
 
-# SPA fallback so deep links / refreshes resolve to index.html
+# SPA fallback so refreshes / deep links resolve to index.html
 [[redirects]]
   from = "/*"
   to = "/index.html"
