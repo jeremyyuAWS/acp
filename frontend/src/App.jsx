@@ -147,7 +147,7 @@ export default function App() {
 
         {view === 'remediate' && (run ? <Remediate run={run} files={files} /> : placeholder)}
 
-        {view === 'report' && (run ? <Report run={run} /> : placeholder)}
+        {view === 'report' && (run ? <Report run={run} files={files} trend={trend} /> : placeholder)}
       </ErrorBoundary>
     </div>
   )
