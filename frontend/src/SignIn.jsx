@@ -1,4 +1,5 @@
 import { PERSONAS } from './sim.js'
+import Logo from './Logo.jsx'
 
 function GoogleG() {
   return (
@@ -21,7 +22,7 @@ export default function SignIn({ onSignedIn }) {
   return (
     <div className="signin">
       <div className="signin-card wide">
-        <span className="logo big"><span className="word">mova</span><span className="io"><span>io</span></span></span>
+        <Logo big />
         <p className="signin-sub">Accessibility Compliance</p>
 
         <div className="ssorow">

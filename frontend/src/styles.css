@@ -21,10 +21,11 @@ body {
 
 header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
 .brand { display: flex; align-items: center; gap: 12px; }
-.logo { display: inline-flex; align-items: center; gap: 6px; }
-.word { color: var(--plum); font-weight: 600; font-size: 26px; letter-spacing: -0.6px; }
-.io { background: linear-gradient(125deg, #F0524A, #F7901E, #F5B400, #F48FB1); padding: 3px; border-radius: 8px; display: inline-flex; }
-.io > span { background: var(--bg); border-radius: 5px; padding: 0 8px; color: var(--amber); font-weight: 600; font-size: 21px; }
+.logo { display: inline-flex; align-items: center; gap: 7px; font-family: 'Baloo 2', 'Trebuchet MS', system-ui, sans-serif; }
+.word { color: var(--plum); font-weight: 800; font-size: 27px; letter-spacing: -0.5px; line-height: 1; }
+.io { background: linear-gradient(125deg, #F0524A, #F7901E, #F5B400, #F48FB1); padding: 3.5px; border-radius: 10px; display: inline-flex; }
+.io > span { background: var(--bg); border-radius: 7px; padding: 1px 9px 0; color: var(--amber); font-weight: 800; font-size: 21px; line-height: 1.2; }
+.tm { align-self: flex-start; font-size: 10px; color: var(--plum); font-weight: 700; margin-top: 1px; }
 .sub { color: var(--muted); font-size: 14px; border-left: 1px solid var(--line); padding-left: 12px; }
 .chip { font-size: 12px; color: var(--muted); background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; }
 
@@ -78,6 +79,7 @@ td { padding: 10px 0; border-top: 1px solid var(--line); }
 .logo.big .word { font-size: 38px; }
 .logo.big .io > span { font-size: 30px; padding: 0 11px; }
 .logo.big .io { padding: 4px; border-radius: 12px; }
+.logo.big .tm { font-size: 13px; }
 .signin-sub { color: var(--muted); margin: 12px 0 26px; font-size: 15px; }
 .signin-foot { margin-top: 18px; font-size: 12px; }
 .gbtn { display: inline-flex; align-items: center; gap: 10px; background: #fff; color: #3c4043; border: 1px solid #dadce0; border-radius: 9px; padding: 11px 20px; font-size: 14px; font-weight: 500; }

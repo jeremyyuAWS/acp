@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { getMe, getSources, getRubric, listScans, getScan, startScan, getJob } from './api'
 import { setPersona } from './sim.js'
+import Logo from './Logo.jsx'
 import KnowledgeGraph from './KnowledgeGraph.jsx'
 import SignIn from './SignIn.jsx'
 import Rubric from './Rubric.jsx'
@@ -36,15 +37,6 @@ function progressText(p) {
   let s = m[p.phase] ?? p.phase
   if (p.current && (p.phase === 'reading' || p.phase === 'analysing')) s += ` · ${p.current}`
   return s
-}
-
-function Logo() {
-  return (
-    <span className="logo">
-      <span className="word">mova</span>
-      <span className="io"><span>io</span></span>
-    </span>
-  )
 }
 
 export default function App() {
