@@ -24,8 +24,8 @@ const TABS = [
   ['discover', 'Discover', 'steps 1–3'],
   ['assess', 'Assess', 'steps 4–5'],
   ['remediate', 'Remediate', 'steps 6–8'],
-  ['report', 'Report', 'step 9'],
-  ['monitor', 'Monitor', 'step 10 · live'],
+  ['report', 'Report', 'publish & prove'],
+  ['monitor', 'Monitor', 'monitor · live'],
   ['upload', 'Upload', 'try it live'],
 ]
 

@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { Donut, Bars, statusSegments } from './charts.jsx'
 import { Sparkline } from './ScoreRing.jsx'
-import { critLabel } from './FileDrawer.jsx'
-import { IDENTITY } from './sim.js'
+import { critLabel, REC_STYLE } from './FileDrawer.jsx'
+import { IDENTITY, recommendationSummary } from './sim.js'
+import { WCAG } from './wcagCatalog.js'
 import Logo from './Logo.jsx'
 import { prefersReducedMotion } from './a11y.js'
+
+const hrsFmt = (m) => m >= 90 ? `${(m / 60).toFixed(1)} hrs` : `${Math.round(m)} min`
 
 const JOURNEY = [
   { label: 'discovered', s: 'done' }, { label: 'classified', s: 'done' },
@@ -50,6 +53,11 @@ export default function Report({ run, files = [], trend = [], trendDates = [], c
   const cm = {}
   files.forEach((f) => (f.issues || []).forEach((i) => { cm[i.wcag] = (cm[i.wcag] || 0) + 1 }))
   const topCrit = Object.entries(cm).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([w, n]) => ({ label: critLabel(w), value: n, color: n >= 5 ? '#E24B4A' : '#F5B400' }))
+
+  // remediation plan + WCAG coverage snapshot (for the exported report)
+  const plan = files.length ? recommendationSummary(files) : null
+  const planBars = plan ? plan.buckets.map((b) => ({ label: REC_STYLE[b.action][0], value: b.n, color: REC_STYLE[b.action][2] })) : []
+  const cov = { live: WCAG.filter((r) => r.source === 'Shipped (demo)').length, partner: WCAG.filter((r) => r.source === 'Partner baseline').length, roadmap: WCAG.filter((r) => r.source === 'MDK net-new').length }
 
   const doExport = async () => {
     if (!ref.current) return
@@ -101,6 +109,25 @@ export default function Report({ run, files = [], trend = [], trendDates = [], c
           </section>
           <section className="panel"><h2>Top failing WCAG criteria</h2>
             {topCrit.length ? <Bars items={topCrit} cols="120px 1fr 30px" /> : <p className="muted">No open findings.</p>}
+          </section>
+        </div>
+
+        <div className="chartrow">
+          <section className="panel"><h2>Remediation plan</h2>
+            {plan ? <>
+              <div className="muted" style={{ marginBottom: 8 }}>≈ {hrsFmt(plan.remediateMin)} across {plan.remediableDocs} documents · {plan.autoPct}% fully automatic · saves ≈ {hrsFmt(plan.savedMin)} vs. manual</div>
+              <Bars items={planBars} cols="132px 1fr 30px" />
+              {ratified?.total > 0 && <p className="muted" style={{ marginTop: 8 }}>{ratified.total} recommendation{ratified.total === 1 ? '' : 's'} ratified by a reviewer.</p>}
+            </> : <p className="muted">No plan available.</p>}
+          </section>
+          <section className="panel"><h2>WCAG 2.1 Level AA coverage</h2>
+            <div className="metrics" style={{ marginBottom: 8 }}>
+              <div className="metric"><span>live now</span><b style={{ color: '#3B6D11' }}>{cov.live}</b></div>
+              <div className="metric"><span>partner</span><b style={{ color: '#3C3489' }}>{cov.partner}</b></div>
+              <div className="metric"><span>roadmap</span><b style={{ color: '#854F0B' }}>{cov.roadmap}</b></div>
+              <div className="metric"><span>criteria</span><b>87</b></div>
+            </div>
+            <p className="muted">Reporting target is <b>WCAG 2.1 Level AA</b> — the industry &amp; legal benchmark. Full Required A/AA conformance is ~3 weeks out (Claude-paced build).</p>
           </section>
         </div>
 

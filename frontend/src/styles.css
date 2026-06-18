@@ -194,7 +194,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .herostat span { font-size: 12px; color: var(--muted); }
 .herotrend { margin-top: 16px; }
 .herotrend .muted { display: block; margin-bottom: 2px; font-size: 12px; }
-.spark { display: block; }
+.spark { display: block; max-width: 100%; height: auto; }
 
 .scanprog { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; margin: 14px 0; }
 .scanprogline { display: flex; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 10px; }
@@ -525,6 +525,26 @@ input:focus-visible, [role="tab"]:focus-visible {
 .prioritygrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
 .ppanel h3 { font-size: 13px; margin: 0 0 10px; color: var(--ink); }
 .ppfoot { font-size: 11px; margin-top: 8px; line-height: 1.4; }
+
+/* --- responsive pass --- */
+@media (max-width: 900px) {
+  .app { padding: 22px 18px 56px; }
+  .tabs { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: thin; -webkit-overflow-scrolling: touch; padding-bottom: 6px; }
+  .tab { flex: 0 0 auto; }
+}
+@media (max-width: 640px) {
+  .app { padding: 14px 12px 48px; }
+  .userbox { flex-wrap: wrap; gap: 6px; row-gap: 4px; }
+  .userbox .user { font-size: 12px; }
+  .estatebar { flex-direction: column; align-items: flex-start; }
+  .estatebar > button { align-self: stretch; }
+  .planhead { flex-direction: column; }
+  .plandec { align-items: flex-start; }
+  .reccell { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+  .reccell .decctl { margin-left: 0; }
+  .dashtoolbar { flex-wrap: wrap; }
+}
+.tablewrap { overflow-x: auto; }
 
 /* --- rotating fix carousel (Remediate) --- */
 .fixhd { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }

@@ -83,7 +83,7 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
       )}
       <section className="panel">
         <h2>File inventory · <span style={{ fontWeight: 400 }}>click a row for details</span></h2>
-        <table>
+        <div className="tablewrap"><table>
           <thead><tr><th>file</th><th>status</th><th>score</th><th>findings</th></tr></thead>
           <tbody>
             {files.map((f) => {
@@ -108,7 +108,7 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
               )
             })}
           </tbody>
-        </table>
+        </table></div>
       </section>
       {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
       {sel && <FileDrawer file={sel} onClose={() => setSel(null)} />}
