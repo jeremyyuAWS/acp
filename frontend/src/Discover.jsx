@@ -20,10 +20,9 @@ const ACTION_DESC = {
   manual: 'Unreadable source — a human must re-author or re-export the file before it can be assessed.',
 }
 
-export default function Discover({ sources, files, busy, onScan }) {
+export default function Discover({ sources, files, busy, onScan, decisions = {}, setDecisions }) {
   const [sel, setSel] = useState(null)
   const [open, setOpen] = useState(() => new Set())
-  const [decisions, setDecisions] = useState({})
   const [editing, setEditing] = useState(null)
   const toggle = (d) => setOpen((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n })
   const decide = (file, d) => { setDecisions((s) => ({ ...s, [file]: d })); setEditing(null) }

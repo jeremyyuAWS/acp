@@ -510,6 +510,14 @@ input:focus-visible, [role="tab"]:focus-visible {
 .selfstatus { margin-top: 6px; font-size: 12.5px; display: flex; align-items: center; gap: 7px; }
 .okline { color: #3B6D11; font-weight: 600; }
 
+/* --- action-plan decisions flowing into Remediate --- */
+.ratifiedband { border-left: 3px solid #7a5c8e; }
+.ratgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 10px; }
+.ratcard { background: var(--bg); border: 1px solid var(--line); border-radius: 11px; padding: 11px 13px; display: flex; flex-direction: column; gap: 2px; }
+.ratcard b { font-size: 22px; font-weight: 700; line-height: 1.1; }
+.ratcard .muted { font-size: 11px; }
+.linklike { background: none; border: none; padding: 0; color: var(--plum); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
+
 /* --- rotating fix carousel (Remediate) --- */
 .fixhd { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
 .fixcard { animation: fadein 0.4s ease; }

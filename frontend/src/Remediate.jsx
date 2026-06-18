@@ -65,7 +65,7 @@ function FixCarousel() {
   )
 }
 
-export default function Remediate({ run, files }) {
+export default function Remediate({ run, files, ratified, onGoDiscover }) {
   const needFix = run ? Math.max(0, run.files - run.certifiable) : 0
   const autoFixed = FIX_TYPES.reduce((a, f) => a + f.value, 0)
   const [queue, setQueue] = useState(QUEUE0)
@@ -94,6 +94,23 @@ export default function Remediate({ run, files }) {
         <div className="metric"><span>self-remediated</span><b style={{ color: '#185FA5' }}>{self.length}</b></div>
         <div className="metric"><span>re-verified</span><b style={{ color: '#3B6D11' }}>{verified}</b></div>
       </div>
+
+      {ratified && ratified.total > 0 && (
+        <section className="panel ratifiedband">
+          <h2>From your action plan <span className="muted">· {ratified.total} recommendation{ratified.total === 1 ? '' : 's'} ratified in Discover</span></h2>
+          <div className="ratgrid">
+            <div className="ratcard"><b style={{ color: '#3B6D11' }}>{ratified.auto}</b><span className="muted">queued for auto-fix</span></div>
+            <div className="ratcard"><b style={{ color: '#854F0B' }}>{ratified.assisted + ratified.review}</b><span className="muted">added to review queue</span></div>
+            <div className="ratcard"><b style={{ color: '#3C3489' }}>{ratified.archive}</b><span className="muted">scheduled to archive</span></div>
+            <div className="ratcard"><b>{ratified.keep}</b><span className="muted">kept · monitored</span></div>
+            <div className="ratcard"><b style={{ color: '#A32D2D' }}>{ratified.manual}</b><span className="muted">manual rebuild</span></div>
+          </div>
+          <p className="muted" style={{ marginTop: 10 }}>Decisions you accept or modify on the Discover action plan flow straight into remediation here.</p>
+        </section>
+      )}
+      {(!ratified || ratified.total === 0) && (
+        <p className="muted" style={{ margin: '0 0 14px' }}>Tip: accept or modify recommendations on the <button className="linklike" onClick={onGoDiscover}>Discover action plan</button> and they’ll flow into this queue.</p>
+      )}
 
       <div className="chartrow">
         <section className="panel"><h2>Automated fixes applied · by type</h2><Bars items={FIX_TYPES} cols="140px 1fr 30px" /></section>

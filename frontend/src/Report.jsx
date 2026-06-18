@@ -23,7 +23,7 @@ const AUDIT = [
 const ACTOR = { 'auto-fix': 'mova engine', review: 'A. Chen', publish: 'mova engine', 're-scan': 'mova engine', archive: 'mova engine' }
 const ACOLOR = { 'auto-fix': '#1D9E75', review: '#854F0B', publish: '#185FA5', 're-scan': '#3B6D11', archive: '#5F5E5A' }
 
-export default function Report({ run, files = [], trend = [], trendDates = [], certified = [] }) {
+export default function Report({ run, files = [], trend = [], trendDates = [], certified = [], ratified }) {
   const ref = useRef(null)
   const [on, setOn] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -128,6 +128,13 @@ export default function Report({ run, files = [], trend = [], trendDates = [], c
         <section className="panel">
           <h2>Audit trail · live <span className="livedot" aria-hidden="true" /></h2>
           <div className="auditfeed" role="log" aria-live="polite" aria-label="Audit trail">
+            {ratified && ratified.total > 0 && (
+              <div className="auditrow pinned">
+                <span className="auditkind" style={{ background: '#EEEDFE', color: '#3C3489' }}>action plan</span>
+                <span className="auditwhat">{ratified.total} recommendation{ratified.total === 1 ? '' : 's'} ratified · {ratified.auto} auto-fix, {ratified.assisted + ratified.review} to review, {ratified.archive} archive</span>
+                <span className="muted auditactor">you · just now</span>
+              </div>
+            )}
             {certified.map((c) => (
               <div className="auditrow pinned" key={'cert' + c.id}>
                 <span className="auditkind" style={{ background: '#E7F0DC', color: '#3B6D11' }}>certified</span>

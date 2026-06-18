@@ -52,6 +52,7 @@ export default function App() {
   const [err, setErr] = useState(null)
   const [view, setView] = useState('overview')
   const [assess, setAssess] = useState('results')
+  const [decisions, setDecisions] = useState({})
   const [scanList, setScanList] = useState([])
   const [delta, setDelta] = useState(null)
   const [deltaKey, setDeltaKey] = useState(0)
@@ -99,6 +100,15 @@ export default function App() {
     .map((s) => ({ score: s.avg_score, label: s.completed_at ? new Date(s.completed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '' }))
   const trend = trendData.map((d) => d.score)
   const trendDates = trendData.map((d) => d.label)
+  // Decisions ratified on the Discover action plan, rolled up by effective action
+  // so they can flow into Remediate (queue) and Report (evidence).
+  const ratified = files.reduce((acc, f) => {
+    const d = decisions[f.file]; if (!d || d.state === 'rejected') return acc
+    const action = d.state === 'override' ? d.action : f.rec?.action
+    if (!action) return acc
+    acc[action] = (acc[action] || 0) + 1; acc.total += 1
+    return acc
+  }, { auto: 0, assisted: 0, review: 0, archive: 0, keep: 0, manual: 0, total: 0 })
   const placeholder = loaded ? <EmptyState onScan={doScan} busy={busy} /> : <Loading />
 
   return (
@@ -136,7 +146,7 @@ export default function App() {
 
         {view === 'integrations' && <Integrations sources={sources} files={files} onScan={doScan} busy={busy} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} />}
+        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} decisions={decisions} setDecisions={setDecisions} />}
 
         {view === 'assess' && (
           <>
@@ -153,9 +163,9 @@ export default function App() {
           </>
         )}
 
-        {view === 'remediate' && (run ? <Remediate run={run} files={files} /> : placeholder)}
+        {view === 'remediate' && (run ? <Remediate run={run} files={files} ratified={ratified} onGoDiscover={() => setView('discover')} /> : placeholder)}
 
-        {view === 'report' && (run ? <Report run={run} files={files} trend={trend} trendDates={trendDates} certified={certifiedDocs} /> : placeholder)}
+        {view === 'report' && (run ? <Report run={run} files={files} trend={trend} trendDates={trendDates} certified={certifiedDocs} ratified={ratified} /> : placeholder)}
 
         {view === 'monitor' && (run ? <Monitor sources={sources} files={files} /> : placeholder)}
 
