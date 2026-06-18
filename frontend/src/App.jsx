@@ -5,8 +5,7 @@ import Logo from './Logo.jsx'
 import ChatWidget from './ChatWidget.jsx'
 import KnowledgeGraph from './KnowledgeGraph.jsx'
 import SignIn from './SignIn.jsx'
-import Rubric from './Rubric.jsx'
-import WcagCoverage from './WcagCoverage.jsx'
+import Settings from './Settings.jsx'
 import Monitor from './Monitor.jsx'
 import Overview from './Overview.jsx'
 import Integrations from './Integrations.jsx'
@@ -53,6 +52,7 @@ export default function App() {
   const [view, setView] = useState('overview')
   const [assess, setAssess] = useState('results')
   const [decisions, setDecisions] = useState({})
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [scanList, setScanList] = useState([])
   const [delta, setDelta] = useState(null)
   const [deltaKey, setDeltaKey] = useState(0)
@@ -70,7 +70,7 @@ export default function App() {
       .finally(() => setLoaded(true))
   }, [me])
 
-  const signIn = (p) => { setPersona(p); setScan(null); setScanList([]); setLoaded(false); setDecisions({}); setCertifiedDocs([]); setView('overview'); setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label }) }
+  const signIn = (p) => { setPersona(p); setScan(null); setScanList([]); setLoaded(false); setDecisions({}); setCertifiedDocs([]); setSettingsOpen(false); setView((p.allow || ['overview'])[0]); setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label, allow: p.allow || [] }) }
   if (!me) return <SignIn onSignedIn={signIn} />
 
   const doScan = async (source) => {
@@ -117,15 +117,16 @@ export default function App() {
         <div className="brand"><Logo /><span className="sub">Accessibility Compliance</span></div>
         <div className="userbox">
           {me.role && <span className="chip" title={me.scope}>{me.role}</span>}
-          {rubric && <span className="chip">{rubric.target} · rubric {rubric.hash.slice(0, 8)}</span>}
+          {rubric && me.allow?.includes('settings') && <span className="chip">{rubric.target} · rubric {rubric.hash.slice(0, 8)}</span>}
           <span className="user">{me.email}</span>
+          {me.allow?.includes('settings') && <button className="cogbtn" aria-label="Platform settings" title="Platform settings" onClick={() => setSettingsOpen(true)}>⚙</button>}
           <button className="ghost small" onClick={() => setMe(null)}>sign out</button>
         </div>
       </header>
       {me.scope && <div className="scopebar"><i className="scopedot" />access scope · <b>{me.scope}</b></div>}
 
       <div className="tabs" role="tablist" aria-label="Compliance workflow">
-        {TABS.map(([k, label, rg]) => (
+        {TABS.filter(([k]) => !me.allow || me.allow.includes(k)).map(([k, label, rg]) => (
           <button key={k} role="tab" aria-selected={view === k} className={view === k ? 'tab on' : 'tab'} onClick={() => setView(k)}>
             {label}<span className="rg">{rg}</span>
           </button>
@@ -153,13 +154,9 @@ export default function App() {
             <div className="subtabs" role="tablist" aria-label="Assessment views">
               <button role="tab" aria-selected={assess === 'results'} className={assess === 'results' ? 'fchip on' : 'fchip'} onClick={() => setAssess('results')}>Results</button>
               <button role="tab" aria-selected={assess === 'graph'} className={assess === 'graph' ? 'fchip on' : 'fchip'} onClick={() => setAssess('graph')}>Knowledge graph</button>
-              <button role="tab" aria-selected={assess === 'rubric'} className={assess === 'rubric' ? 'fchip on' : 'fchip'} onClick={() => setAssess('rubric')}>Rubric</button>
-              <button role="tab" aria-selected={assess === 'coverage'} className={assess === 'coverage' ? 'fchip on' : 'fchip'} onClick={() => setAssess('coverage')}>WCAG coverage</button>
             </div>
             {assess === 'results' && (run ? <Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} /> : placeholder)}
-            {assess === 'graph' && (run ? <KnowledgeGraph files={files} /> : placeholder)}
-            {assess === 'rubric' && <Rubric onSaved={() => getRubric().then(setRubric)} />}
-            {assess === 'coverage' && <WcagCoverage />}
+            {(assess === 'graph' || assess === 'rubric' || assess === 'coverage') && (run ? <KnowledgeGraph files={files} /> : placeholder)}
           </>
         )}
 
@@ -173,6 +170,7 @@ export default function App() {
       </ErrorBoundary>
 
       <ChatWidget files={files} run={run} trend={trend} trendDates={trendDates} />
+      {settingsOpen && me.allow?.includes('settings') && <Settings onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} />}
     </div>
   )
 }

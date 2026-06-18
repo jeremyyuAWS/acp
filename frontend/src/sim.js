@@ -28,18 +28,39 @@ export const DEPARTMENTS = [
   'Human Resources', 'Legal & Compliance', 'Research Administration', 'Finance', 'Communications',
 ]
 
-// Demo personas — each authenticates via a different SSO method and is scoped to a
-// different set of departments, so the app "assumes their role" (RBAC).
+// Demo personas — each authenticates via a different SSO method, is scoped to a
+// subset of the estate (departments or just their own files), and is granted a
+// different set of capabilities (RBAC `allow` = which tabs + settings they see).
 export const PERSONAS = [
-  { id: 'compliance', name: 'Alex Rivera', role: 'Compliance Officer', email: 'alex.rivera@utsouthwestern.edu', sso: 'Okta', scope: { label: 'Full estate · all 10 departments', departments: 'all' } },
-  { id: 'depthead', name: 'Marcus Chen', role: 'Department Head — Finance', email: 'marcus.chen@utsouthwestern.edu', sso: 'Microsoft', scope: { label: 'Finance, Legal, HR, Research & Comms — incl. confidential', departments: ['Finance', 'Legal & Compliance', 'Human Resources', 'Research Administration', 'Communications'] } },
-  { id: 'agent', name: 'Priya Nair', role: 'Support Agent', email: 'priya.nair@utsouthwestern.edu', sso: 'Google', scope: { label: 'Public-facing folders only', departments: ['Patient Education', 'Communications'] } },
+  { id: 'admin', name: 'Sam Devlin', role: 'Platform Admin', email: 'sam.devlin@utsouthwestern.edu', sso: 'Okta',
+    scope: { label: 'Platform configuration · all sources', departments: 'all' },
+    allow: ['overview', 'integrations', 'monitor', 'settings'] },
+  { id: 'compliance', name: 'Alex Rivera', role: 'Compliance Officer', email: 'alex.rivera@utsouthwestern.edu', sso: 'Okta',
+    scope: { label: 'Full estate · all 10 departments', departments: 'all' },
+    allow: ['overview', 'discover', 'assess', 'remediate', 'report', 'monitor', 'upload'] },
+  { id: 'depthead', name: 'Marcus Chen', role: 'Department Head — Finance', email: 'marcus.chen@utsouthwestern.edu', sso: 'Microsoft',
+    scope: { label: 'Finance, Legal, HR, Research & Comms — incl. confidential', departments: ['Finance', 'Legal & Compliance', 'Human Resources', 'Research Administration', 'Communications'] },
+    allow: ['overview', 'assess', 'report', 'monitor'] },
+  { id: 'enduser', name: 'Jordan Romero', role: 'End User — Patient Education', email: 'jordan.romero@utsouthwestern.edu', sso: 'Google',
+    scope: { label: 'My documents only', owner: 'J. Romero' },
+    allow: ['overview', 'monitor', 'upload'] },
 ]
-let activeId = PERSONAS[0]
+let activeId = PERSONAS[1]
 let activeDepts = null
-export function setPersona(p) { activeId = p || PERSONAS[0]; activeDepts = (p && p.scope && p.scope.departments !== 'all') ? new Set(p.scope.departments) : null }
-export const simIdentity = () => ({ email: activeId.email, name: activeId.name, role: activeId.role, scope: activeId.scope.label })
-const scoped = () => (activeDepts ? CORPUS.filter((f) => activeDepts.has(f.department)) : CORPUS)
+let activeOwner = null
+export function setPersona(p) {
+  activeId = p || PERSONAS[1]
+  const sc = activeId.scope || {}
+  activeDepts = (sc.departments && sc.departments !== 'all') ? new Set(sc.departments) : null
+  activeOwner = sc.owner || null
+}
+export const simIdentity = () => ({ email: activeId.email, name: activeId.name, role: activeId.role, scope: activeId.scope.label, allow: activeId.allow || [] })
+const scoped = () => {
+  let c = CORPUS
+  if (activeDepts) c = c.filter((f) => activeDepts.has(f.department))
+  if (activeOwner) c = c.filter((f) => f.owner === activeOwner)
+  return c
+}
 export const simGetSources = () => {
   const present = new Set(scoped().map((f) => f.source))
   return SOURCES.filter((s) => present.has(s.id)).map((s) => ({ type: s.kind, name: s.name, id: s.id, files: s.files, access: s.access, dept: s.dept, agent: s.agent }))

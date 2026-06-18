@@ -18,7 +18,7 @@ const SSO = [{ name: 'Google', icon: <GoogleG /> }, { name: 'Microsoft', icon: <
 const initials = (n) => n.split(' ').map((x) => x[0]).join('').slice(0, 2)
 
 export default function SignIn({ onSignedIn }) {
-  const def = PERSONAS[0]
+  const def = PERSONAS.find((p) => p.id === 'compliance') || PERSONAS[0]
   return (
     <div className="signin">
       <div className="signin-card wide">
