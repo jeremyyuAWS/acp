@@ -23,7 +23,7 @@ export default function SignIn({ onSignedIn }) {
     <div className="signin">
       <div className="signin-card wide">
         <Logo big />
-        <p className="signin-sub">Accessibility Compliance</p>
+        <p className="signin-sub"><b style={{ color: 'var(--ink)', fontWeight: 600 }}>Aria</b> · accessibility compliance</p>
 
         <div className="ssorow">
           {SSO.map((s) => (

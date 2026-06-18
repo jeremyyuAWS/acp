@@ -97,7 +97,7 @@ export default function App() {
   return (
     <div className="app">
       <header>
-        <div className="brand"><Logo /><span className="sub">Accessibility Compliance</span></div>
+        <div className="brand"><Logo /><span className="sub">Aria · accessibility compliance</span></div>
         <div className="userbox">
           {me.role && <span className="chip" title={me.scope}>{me.role}</span>}
           {rubric && <span className="chip">{rubric.target} · rubric {rubric.hash.slice(0, 8)}</span>}

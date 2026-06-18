@@ -83,15 +83,7 @@ export default function Overview({ run, files, trend, onGo }) {
         <section className="panel"><h2>Compliance trend · {trend.length} scans</h2><Sparkline points={trend} width={560} height={72} /></section>
       )}
 
-      <div className="muted" style={{ marginTop: 18, marginBottom: 8 }}>Outcomes you can prove</div>
-      <div className="outcomes">
-        <div className="outcome"><span className="oc">⚖</span><span className="ol">Legal risk (ADA / EAA)</span><span className="ov good">↓ 34%</span></div>
-        <div className="outcome"><span className="oc">◷</span><span className="ol">Time to comply</span><span className="ov good">6× faster</span></div>
-        <div className="outcome"><span className="oc">✓</span><span className="ol">Audit-ready evidence</span><span className="ov">{auditReady}%</span></div>
-        <div className="outcome"><span className="oc">⛁</span><span className="ol">Remediation cost</span><span className="ov good">↓ 41%</span></div>
-      </div>
-
-      {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={setSelFile} />}
+      {seg &&<SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={setSelFile} />}
       {selFile && <FileDrawer file={selFile} onClose={() => setSelFile(null)} />}
     </>
   )
