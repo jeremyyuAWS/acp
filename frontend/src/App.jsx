@@ -12,7 +12,6 @@ import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
 import Dashboard from './Dashboard.jsx'
 import Remediate from './Remediate.jsx'
-import Report from './Report.jsx'
 import Upload from './Upload.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
@@ -23,7 +22,6 @@ const TABS = [
   ['discover', 'Discover', 'steps 1–3'],
   ['assess', 'Assess', 'steps 4–5'],
   ['remediate', 'Remediate', 'steps 6–8'],
-  ['report', 'Report', 'publish & prove'],
   ['monitor', 'Monitor', 'monitor · live'],
   ['upload', 'Upload', 'try it live'],
 ]
@@ -143,11 +141,11 @@ export default function App() {
       )}
 
       <ErrorBoundary key={view}>
-        {view === 'overview' && (run ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} /> : placeholder)}
+        {view === 'overview' && (run ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} ratified={ratified} /> : placeholder)}
 
         {view === 'integrations' && <Integrations sources={sources} files={files} onScan={doScan} busy={busy} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} decisions={decisions} setDecisions={setDecisions} />}
+        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} />}
 
         {view === 'assess' && (
           <>
@@ -160,9 +158,7 @@ export default function App() {
           </>
         )}
 
-        {view === 'remediate' && (run ? <Remediate run={run} files={files} ratified={ratified} onGoDiscover={() => setView('discover')} /> : placeholder)}
-
-        {view === 'report' && (run ? <Report run={run} files={files} trend={trend} trendDates={trendDates} certified={certifiedDocs} ratified={ratified} /> : placeholder)}
+        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} /> : placeholder)}
 
         {view === 'monitor' && (run ? <Monitor sources={sources} files={files} /> : placeholder)}
 

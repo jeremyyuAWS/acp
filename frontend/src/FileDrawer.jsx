@@ -38,6 +38,15 @@ export const STATUS_BADGE = {
   uncertain: ['#FAECE7', '#993C1D'], unanalysable: ['#EEEDEA', '#5F5E5A'],
 }
 
+// Retention/lifecycle recommendation (step 3 · Retain / Archive / Delete) — based
+// purely on metadata + risk flags, NOT on accessibility findings (that's Assess).
+export function retentionOf(f) {
+  if ((f.tags || []).includes('legal-hold')) return { label: 'Retain · legal hold', bg: '#FAEEDA', fg: '#854F0B', why: 'Under legal hold — must be retained regardless of age or usage.' }
+  if (f.superseded) return { label: 'Archive', bg: '#EEEDFE', fg: '#3C3489', why: 'A newer version exists — archive to shrink the audited estate.' }
+  if (f.ageDays >= 540 && f.views90d < 60) return { label: 'Archive candidate', bg: '#EEEDFE', fg: '#3C3489', why: `Last edited ${f.modifiedAge} with ${f.views90d} views/90d — low value to keep live.` }
+  return { label: 'Keep', bg: '#E7F0DC', fg: '#3B6D11', why: 'Active and in use — keep in the live estate.' }
+}
+
 const STEPS = ['Discover', 'Classify', 'Retain', 'Assess', 'Risk score', 'Remediate', 'Human review', 'Re-validate', 'Publish', 'Monitor']
 function journeyStates(st) {
   if (st === 'unanalysable') return ['done', 'done', 'done', 'blocked', 'blocked', 'blocked', 'blocked', 'blocked', 'blocked', 'blocked']
@@ -52,7 +61,7 @@ const STATE = {
 }
 const STATE_NOTE = { proj: 'projected', skip: 'not needed', blocked: 'blocked', current: 'in progress' }
 
-export default function FileDrawer({ file, onClose }) {
+export default function FileDrawer({ file, onClose, context = 'full' }) {
   if (!file) return null
   const st = statusOf(file)
   const [sbg, sfg] = STATUS_BADGE[st]
@@ -60,6 +69,46 @@ export default function FileDrawer({ file, onClose }) {
   const byCrit = {}
   issues.forEach((i) => { byCrit[i.wcag] = (byCrit[i.wcag] || 0) + 1 })
   const states = journeyStates(st)
+
+  const metaBlock = (
+    <>
+      <h4 className="drawerh">Document metadata</h4>
+      <div className="metagrid">
+        <div><span className="muted">Last modified</span><b>{file.modifiedAge || '—'}</b></div>
+        <div><span className="muted">Last accessed</span><b>{file.lastAccessed || '—'}</b></div>
+        <div><span className="muted">Views · 90d</span><b>{file.views90d != null ? file.views90d.toLocaleString() : '—'}</b></div>
+        <div><span className="muted">Size</span><b>{file.sizeKB ? (file.sizeKB >= 1024 ? `${(file.sizeKB / 1024).toFixed(1)} MB` : `${file.sizeKB} KB`) : '—'}</b></div>
+        <div><span className="muted">{file.duration ? 'Duration' : file.sheets ? 'Sheets' : 'Pages'}</span><b>{file.duration || file.pages || file.sheets || '—'}</b></div>
+        <div><span className="muted">Owner</span><b>{file.owner || '—'}</b></div>
+      </div>
+    </>
+  )
+  const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
+  const shownTags = context === 'discover' ? (file.tags || []).filter((t) => !STATUS_TAGS.has(t)) : (file.tags || [])
+  const tagBlock = shownTags.length > 0 && (
+    <>
+      <h4 className="drawerh">{context === 'discover' ? 'Classification · auto-assigned by agent' : 'Tags · auto-assigned by agent'}</h4>
+      <div className="taglist">{shownTags.map((t) => <Tag key={t} t={t} />)}</div>
+    </>
+  )
+
+  // Discover (steps 1–3): inventory · classify · retain — NO accessibility assessment.
+  if (context === 'discover') {
+    const ret = retentionOf(file)
+    return (
+      <Drawer title={file.file} subtitle={`${file.sourceName ? `${file.sourceName} · ${file.dept} · ` : ''}${(file.type || '').toUpperCase()}`} onClose={onClose}>
+        {tagBlock}
+        {metaBlock}
+        {file.superseded && <p className="muted" style={{ marginTop: 8 }}>⚠ A newer version of this document exists — flagged as superseded.</p>}
+        <h4 className="drawerh">Retention recommendation</h4>
+        <div className="reccard" style={{ borderColor: ret.fg + '55' }}>
+          <span className="recbadge" style={{ background: ret.bg, color: ret.fg }}>{ret.label}</span>
+          <p className="recwhy" style={{ marginBottom: 0, marginTop: 9 }}>{ret.why}</p>
+        </div>
+        <p className="muted" style={{ marginTop: 14, fontSize: 12 }}>Accessibility findings &amp; score are evaluated in the Assess step.</p>
+      </Drawer>
+    )
+  }
 
   return (
     <Drawer title={file.file} subtitle={`${file.sourceName ? `${file.sourceName} · ${file.dept} · ` : ''}${file.engine}`} onClose={onClose}>
@@ -87,23 +136,10 @@ export default function FileDrawer({ file, onClose }) {
         )
       })()}
 
-      <h4 className="drawerh">Document metadata</h4>
-      <div className="metagrid">
-        <div><span className="muted">Last modified</span><b>{file.modifiedAge || '—'}</b></div>
-        <div><span className="muted">Last accessed</span><b>{file.lastAccessed || '—'}</b></div>
-        <div><span className="muted">Views · 90d</span><b>{file.views90d != null ? file.views90d.toLocaleString() : '—'}</b></div>
-        <div><span className="muted">Size</span><b>{file.sizeKB ? (file.sizeKB >= 1024 ? `${(file.sizeKB / 1024).toFixed(1)} MB` : `${file.sizeKB} KB`) : '—'}</b></div>
-        <div><span className="muted">{file.duration ? 'Duration' : file.sheets ? 'Sheets' : 'Pages'}</span><b>{file.duration || file.pages || file.sheets || '—'}</b></div>
-        <div><span className="muted">Owner</span><b>{file.owner || '—'}</b></div>
-      </div>
+      {metaBlock}
       {file.superseded && <p className="muted" style={{ marginTop: 6 }}>⚠ A newer version of this document exists — flagged as superseded.</p>}
 
-      {(file.tags || []).length > 0 && (
-        <>
-          <h4 className="drawerh">Tags · auto-assigned by agent</h4>
-          <div className="taglist">{file.tags.map((t) => <Tag key={t} t={t} />)}</div>
-        </>
-      )}
+      {tagBlock}
 
       <h4 className="drawerh">Findings {issues.length > 0 && <span className="muted">({issues.length})</span>}</h4>
       {issues.length === 0 ? (

@@ -1,10 +1,29 @@
 import { useState, useEffect } from 'react'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
+import FileDrawer, { REC_STYLE, fmtEffort } from './FileDrawer.jsx'
+import SegmentDrawer from './SegmentDrawer.jsx'
+import { recommendationSummary, SENIORITY_ORDER } from './sim.js'
 import { prefersReducedMotion } from './a11y.js'
 
-// Steps 6-8: Automated Remediation + HITL + Re-validate. Preview — engines aren't built
-// yet; this simulates the workflow (the review queue is interactive) on your live findings.
+// Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
+// (what to fix, prioritized, accept/reject/modify), the HITL queue, and self-remediation.
+const REM_ACTIONS = ['auto', 'assisted', 'review', 'manual']
+const ACTIONS = ['auto', 'assisted', 'review', 'archive', 'keep', 'manual']
+const ETA_OVERRIDE = { archive: 2, keep: 0, manual: 35, review: 10 }
+const hrs = (m) => m >= 90 ? `${(m / 60).toFixed(1)} hrs` : `${Math.round(m)} min`
+const ACTION_DESC = {
+  auto: 'The agent fixes these mechanically — alt text, headings, language, titles — then re-validates. No human needed.',
+  assisted: 'AI proposes the fix; a human approves before publish. For critical, sensitive, contrast/link, or media (captions) findings.',
+  review: 'A rule couldn’t be auto-evaluated. A reviewer confirms before the document can be certified.',
+  manual: 'Unreadable source — a human must re-author or re-export the file before it can be assessed.',
+}
+const SR_COLOR = { Executive: '#A32D2D', Director: '#D85A30', Manager: '#F5B400', Staff: '#9a948f' }
+const exposureOf = (f) => (f.tags || []).includes('public-facing') ? 'public-facing' : (f.tags || []).includes('high-traffic') ? 'high-traffic' : 'internal'
+const EXP_COLOR = { 'public-facing': '#A32D2D', 'high-traffic': '#D85A30', internal: '#9a948f' }
+const SR_W = { Executive: 3, Director: 2, Manager: 1, Staff: 0 }
+const priority = (f) => (f.tags || []).filter((t) => t === 'public-facing' || t === 'high-traffic').length * 2 + (SR_W[f.seniority] || 0) + (f.issues || []).filter((i) => i.severity === 'CRITICAL').length * 2
+
 const FIX_TYPES = [
   { label: 'alt-text generated', value: 38, color: '#639922' },
   { label: 'reading order fixed', value: 21, color: '#1D9E75' },
@@ -12,8 +31,6 @@ const FIX_TYPES = [
   { label: 'language set', value: 9, color: '#7F77DD' },
   { label: 'table headers', value: 6, color: '#BA7517' },
 ]
-// Rotating gallery of real fix examples across formats — replaces the old static
-// before/after so it visibly changes and shows the agent working on each type.
 const FIX_EXAMPLES = [
   { fmt: 'PDF', wcag: 'WCAG 1.1.1 · alt text', auto: true, before: 'figure 3 — no alt text', after: 'alt: “Q3 benefits enrollment by region — West 38%, NE 24%, South 22%, Midwest 16%”' },
   { fmt: 'Video', wcag: 'WCAG 1.2.2 · captions', auto: false, before: '4:12 video — no caption track', after: 'Synchronized captions drafted (speech-to-text) — pending human review' },
@@ -22,16 +39,11 @@ const FIX_EXAMPLES = [
   { fmt: 'Audio', wcag: 'WCAG 1.2.1 · transcript', auto: false, before: 'podcast episode — no transcript', after: 'transcript drafted from speech-to-text — pending human review' },
 ]
 const QUEUE0 = [
-  { id: 1, icon: '▦', title: 'chart on slide 7 — alt-text', meta: 'suggested alt-text', conf: 61, file: 'open-enrollment-deck.pptx', rule: 'WCAG 1.1.1 — non-text content',
-    before: '<pic alt="">', after: '<pic alt="Q3 revenue by region — West 38%, NE 24%, South 22%, Midwest 16%">' },
-  { id: 2, icon: '⊞', title: 'merged cells — table headers', meta: 'needs a human structure call', conf: 48, file: 'budget-model.xlsx', rule: 'WCAG 1.3.1 — info & relationships',
-    before: '<table> — merged A1:C1, no header row', after: '<table> — unmerged, <th scope="col"> on row 1' },
-  { id: 3, icon: '¶', title: 'reading order — multi-column page', meta: 'two plausible orders', conf: 55, file: 'annual-report-2025.pdf', rule: 'WCAG 1.3.2 — meaningful sequence',
-    before: 'tab order: right column before left', after: 'tab order: left column → right (natural)' },
-  { id: 4, icon: '◫', title: 'scanned page — needs OCR + tags', meta: 'low text confidence', conf: 42, file: 'vendor-contract-acme.pdf', rule: 'WCAG 1.3.1 — info & relationships',
-    note: 'Image-only PDF — the agent recommends OCR + manual tagging before this can be certified; no auto-fix proposed.' },
-  { id: 5, icon: '🎬', title: 'video captions — AI draft ready', meta: 'ASR captions need review', conf: 58, file: 'patient-explainer.mp4', rule: 'WCAG 1.2.2 — captions',
-    before: '4:12 video — no caption track', after: 'Synchronized captions drafted (speech-to-text) — review timing & accuracy' },
+  { id: 1, icon: '▦', title: 'chart on slide 7 — alt-text', meta: 'suggested alt-text', conf: 61, file: 'open-enrollment-deck.pptx', rule: 'WCAG 1.1.1 — non-text content', before: '<pic alt="">', after: '<pic alt="Q3 revenue by region — West 38%, NE 24%, South 22%, Midwest 16%">' },
+  { id: 2, icon: '⊞', title: 'merged cells — table headers', meta: 'needs a human structure call', conf: 48, file: 'budget-model.xlsx', rule: 'WCAG 1.3.1 — info & relationships', before: '<table> — merged A1:C1, no header row', after: '<table> — unmerged, <th scope="col"> on row 1' },
+  { id: 3, icon: '¶', title: 'reading order — multi-column page', meta: 'two plausible orders', conf: 55, file: 'annual-report-2025.pdf', rule: 'WCAG 1.3.2 — meaningful sequence', before: 'tab order: right column before left', after: 'tab order: left column → right (natural)' },
+  { id: 4, icon: '◫', title: 'scanned page — needs OCR + tags', meta: 'low text confidence', conf: 42, file: 'vendor-contract-acme.pdf', rule: 'WCAG 1.3.1 — info & relationships', note: 'Image-only PDF — the agent recommends OCR + manual tagging before this can be certified; no auto-fix proposed.' },
+  { id: 5, icon: '🎬', title: 'video captions — AI draft ready', meta: 'ASR captions need review', conf: 58, file: 'patient-explainer.mp4', rule: 'WCAG 1.2.2 — captions', before: '4:12 video — no caption track', after: 'Synchronized captions drafted (speech-to-text) — review timing & accuracy' },
 ]
 
 function FixCarousel() {
@@ -65,13 +77,16 @@ function FixCarousel() {
   )
 }
 
-export default function Remediate({ run, files, ratified, onGoDiscover }) {
-  const needFix = run ? Math.max(0, run.files - run.certifiable) : 0
+export default function Remediate({ run, files = [], decisions = {}, setDecisions }) {
   const autoFixed = FIX_TYPES.reduce((a, f) => a + f.value, 0)
   const [queue, setQueue] = useState(QUEUE0)
   const [acted, setActed] = useState({ approved: 0, rejected: 0 })
   const [selItem, setSelItem] = useState(null)
   const [self, setSelf] = useState([])
+  const [sel, setSel] = useState(null)
+  const [seg, setSeg] = useState(null)
+  const [editing, setEditing] = useState(null)
+
   const act = (id, kind) => {
     const item = queue.find((x) => x.id === id)
     setQueue((q) => q.filter((x) => x.id !== id))
@@ -85,6 +100,29 @@ export default function Remediate({ run, files, ratified, onGoDiscover }) {
   }
   const verified = self.filter((x) => x.status === 'verified').length
 
+  // --- remediation plan + decisions (moved from Discover) ---
+  const plan = files.length ? recommendationSummary(files) : null
+  const planCards = plan ? plan.buckets.filter((b) => REM_ACTIONS.includes(b.action)) : []
+  const remediable = files.filter((f) => f.rec && REM_ACTIONS.includes(f.rec.action)).sort((a, b) => priority(b) - priority(a))
+  const decide = (file, d) => { setDecisions?.((s) => ({ ...s, [file]: d })); setEditing(null) }
+  const undo = (file) => setDecisions?.((s) => { const n = { ...s }; delete n[file]; return n })
+  const acceptAll = () => setDecisions?.((s) => { const n = { ...s }; remediable.forEach((f) => { if (!n[f.file]) n[f.file] = { state: 'accepted' } }); return n })
+  const dcount = (st) => remediable.filter((f) => decisions[f.file]?.state === st).length
+  const pending = remediable.length - dcount('accepted') - dcount('override') - dcount('rejected')
+
+  // business priority (findings-based)
+  const flagged = files.filter((f) => (f.issues || []).length)
+  const findingsBy = (keyFn, order) => {
+    const m = {}; flagged.forEach((f) => { const k = keyFn(f); if (k != null) m[k] = (m[k] || 0) + f.issues.length })
+    return (order ? order.filter((k) => m[k]).map((k) => [k, m[k]]) : Object.entries(m).sort((a, b) => b[1] - a[1]))
+  }
+  const deptData = findingsBy((f) => f.department).slice(0, 8).map(([label, value]) => ({ label, value, color: '#7a5c8e' }))
+  const senData = findingsBy((f) => f.seniority, SENIORITY_ORDER).map(([label, value]) => ({ label, value, color: SR_COLOR[label] }))
+  const expData = findingsBy(exposureOf, ['public-facing', 'high-traffic', 'internal']).map(([label, value]) => ({ label, value, color: EXP_COLOR[label] }))
+  const pubCrit = flagged.filter((f) => (f.tags || []).includes('public-facing') && (f.issues || []).some((i) => i.severity === 'CRITICAL')).length
+  const execFlagged = flagged.filter((f) => f.seniority === 'Executive').length
+  const drill = (title, sub, pred) => setSeg({ title, subtitle: sub, files: flagged.filter(pred) })
+
   return (
     <>
       <div className="metrics">
@@ -95,21 +133,86 @@ export default function Remediate({ run, files, ratified, onGoDiscover }) {
         <div className="metric"><span>re-verified</span><b style={{ color: '#3B6D11' }}>{verified}</b></div>
       </div>
 
-      {ratified && ratified.total > 0 && (
-        <section className="panel ratifiedband">
-          <h2>From your action plan <span className="muted">· {ratified.total} recommendation{ratified.total === 1 ? '' : 's'} ratified in Discover</span></h2>
-          <div className="ratgrid">
-            <div className="ratcard"><b style={{ color: '#3B6D11' }}>{ratified.auto}</b><span className="muted">queued for auto-fix</span></div>
-            <div className="ratcard"><b style={{ color: '#854F0B' }}>{ratified.assisted + ratified.review}</b><span className="muted">added to review queue</span></div>
-            <div className="ratcard"><b style={{ color: '#3C3489' }}>{ratified.archive}</b><span className="muted">scheduled to archive</span></div>
-            <div className="ratcard"><b>{ratified.keep}</b><span className="muted">kept · monitored</span></div>
-            <div className="ratcard"><b style={{ color: '#A32D2D' }}>{ratified.manual}</b><span className="muted">manual rebuild</span></div>
+      {plan && (
+        <div className="planband">
+          <div className="planhead">
+            <div>
+              <b>Remediation plan</b>
+              <div className="muted" style={{ marginTop: 2 }}>
+                ≈ <b style={{ color: 'var(--ink)' }}>{hrs(plan.remediateMin)}</b> across {plan.remediableDocs} documents · <b style={{ color: '#3B6D11' }}>{plan.autoPct}% fully automatic</b> · saves ≈ <b style={{ color: '#3B6D11' }}>{hrs(plan.savedMin)}</b> vs. manual
+              </div>
+            </div>
+            <div className="plandec">
+              <span className="muted">{dcount('accepted')} accepted · {dcount('override')} modified · {dcount('rejected')} rejected · {pending} pending</span>
+              <button disabled={!pending} onClick={acceptAll}>✓ Accept all</button>
+            </div>
           </div>
-          <p className="muted" style={{ marginTop: 10 }}>Decisions you accept or modify on the Discover action plan flow straight into remediation here.</p>
-        </section>
+          <div className="plancards">
+            {planCards.map((b) => {
+              const [label, bg, fg, icon] = REC_STYLE[b.action] || REC_STYLE.review
+              return (
+                <div className="plancard" key={b.action} style={{ background: bg }} tabIndex={0} aria-label={`${label}: ${ACTION_DESC[b.action]}`}>
+                  <div className="plancardtop" style={{ color: fg }}><span>{icon}</span><b>{b.n}</b></div>
+                  <div className="plancardlbl" style={{ color: fg }}>{label}</div>
+                  <div className="muted plancardeta">{b.action === 'manual' ? `~${hrs(b.min)} manual` : `~${hrs(b.min)}`}</div>
+                  <div className="plantip" role="tooltip"><b style={{ color: fg }}>{icon} {label}</b>{ACTION_DESC[b.action]}</div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
       )}
-      {(!ratified || ratified.total === 0) && (
-        <p className="muted" style={{ margin: '0 0 14px' }}>Tip: accept or modify recommendations on the <button className="linklike" onClick={onGoDiscover}>Discover action plan</button> and they’ll flow into this queue.</p>
+
+      {flagged.length > 0 && (
+        <div className="prioritypanel">
+          <div className="priorityhd"><b>Business priority</b> <span className="muted">· what to fix first — weighted by exposure, severity &amp; ownership</span></div>
+          <div className="prioritynote">⚑ {pubCrit} public-facing document{pubCrit === 1 ? '' : 's'} ha{pubCrit === 1 ? 's' : 've'} critical findings and {execFlagged} are executive-owned — the highest business risk under ADA / EAA. Start here.</div>
+          <div className="prioritygrid">
+            <section className="ppanel"><h3>Open findings by department</h3><Bars items={deptData} cols="118px 1fr 28px" onPick={(it) => drill(`${it.label} · open findings`, `${it.value} findings`, (f) => f.department === it.label)} /></section>
+            <section className="ppanel"><h3>By owner seniority</h3><Bars items={senData} cols="92px 1fr 28px" onPick={(it) => drill(`${it.label}-owned · open findings`, `${it.value} findings`, (f) => f.seniority === it.label)} /><div className="muted ppfoot">executive / director-owned content carries more reputational weight</div></section>
+            <section className="ppanel"><h3>By exposure</h3><Bars items={expData} cols="98px 1fr 28px" onPick={(it) => drill(`${it.label} · open findings`, `${it.value} findings`, (f) => exposureOf(f) === it.label)} /><div className="muted ppfoot">public-facing pages are the top legal-exposure set</div></section>
+          </div>
+        </div>
+      )}
+
+      {remediable.length > 0 && (
+        <section className="panel">
+          <h2>Documents to remediate <span className="muted">· {remediable.length}, highest priority first — accept / reject / modify the agent’s plan</span></h2>
+          <div className="remlist">
+            {remediable.map((f) => {
+              const rec = f.rec; const dec = decisions[f.file]
+              const effAction = dec?.state === 'override' ? dec.action : rec.action
+              const [label, rbg, rfg, icon] = REC_STYLE[effAction] || REC_STYLE.review
+              const effEta = dec?.state === 'override' ? (ETA_OVERRIDE[dec.action] ?? rec.etaMin) : rec.etaMin
+              return (
+                <div className={`remrow${dec?.state === 'rejected' ? ' rowrej' : ''}`} key={f.file}>
+                  <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span></button>
+                  <span className="reccell">
+                    <span className="badge" style={{ background: rbg, color: rfg }}>{icon} {label}</span>
+                    {dec?.state === 'accepted' && <span className="dectag ok">✓ accepted</span>}
+                    {dec?.state === 'override' && <span className="dectag ov">modified</span>}
+                    {dec?.state === 'rejected' && <span className="dectag rj">rejected</span>}
+                    {editing === f.file ? (
+                      <span className="modchips">
+                        {ACTIONS.map((a) => { const [l, , fg, ic] = REC_STYLE[a]; return <button key={a} className="modchip" style={{ color: fg }} onClick={() => decide(f.file, a === rec.action ? { state: 'accepted' } : { state: 'override', action: a })}>{ic} {l}</button> })}
+                        <button className="modchip cancel" onClick={() => setEditing(null)}>cancel</button>
+                      </span>
+                    ) : (
+                      <span className="decctl">
+                        {!dec ? (<>
+                          <button className="decbtn ok" title="Accept" onClick={() => decide(f.file, { state: 'accepted' })}>✓</button>
+                          <button className="decbtn rj" title="Reject" onClick={() => decide(f.file, { state: 'rejected' })}>✕</button>
+                          <button className="decbtn ed" title="Modify action" onClick={() => setEditing(f.file)}>✎</button>
+                        </>) : <button className="decbtn undo" title="Undo" onClick={() => undo(f.file)}>↺</button>}
+                      </span>
+                    )}
+                  </span>
+                  <span className="etacell">{fmtEffort(effEta)}</span>
+                </div>
+              )
+            })}
+          </div>
+        </section>
       )}
 
       <div className="chartrow">
@@ -171,6 +274,8 @@ export default function Remediate({ run, files, ratified, onGoDiscover }) {
           <p className="muted" style={{ marginTop: 12 }}>When you remediate a document yourself, the agent re-runs every engine to independently confirm the fix before it’s certified — no manual sign-off taken on trust.</p>
         </section>
       )}
+      {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
+      {sel && <FileDrawer file={sel} onClose={() => setSel(null)} />}
       {selItem && <ReviewDrawer item={selItem} onClose={() => setSelItem(null)} onAct={act} />}
     </>
   )

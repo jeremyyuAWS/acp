@@ -518,6 +518,17 @@ input:focus-visible, [role="tab"]:focus-visible {
 .ratcard .muted { font-size: 11px; }
 .linklike { background: none; border: none; padding: 0; color: var(--plum); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
 
+/* --- documents-to-remediate list (Remediate) --- */
+.remlist { display: flex; flex-direction: column; max-height: 420px; overflow-y: auto; }
+.remrow { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; padding: 9px 4px; border-bottom: 1px solid var(--line); }
+.remrow:last-child { border-bottom: none; }
+.remname { background: none; border: none; padding: 0; text-align: left; cursor: pointer; font-size: 13px; color: var(--ink); font-weight: 500; min-width: 0; }
+.remname:hover { color: var(--plum); }
+.remname .muted { font-weight: 400; }
+.remrow .reccell { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.remrow.rowrej { opacity: 0.5; }
+.remrow.rowrej .remname { text-decoration: line-through; }
+
 /* --- Discover business-priority charts --- */
 .prioritypanel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 18px; margin: 0 0 16px; }
 .priorityhd { font-size: 14px; }

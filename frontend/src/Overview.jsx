@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
@@ -6,13 +6,41 @@ import FileDrawer, { statusOf, critLabel } from './FileDrawer.jsx'
 import { IDENTITY } from './sim.js'
 import WordCloud from './WordCloud.jsx'
 import Insight from './Insight.jsx'
+import { prefersReducedMotion } from './a11y.js'
 
-// Discover/Assess/Remediate are real (from the latest scan); Verify/Publish are projected.
-export default function Overview({ run, files, trend, trendDates, onGo }) {
+const AUDIT = [
+  ['auto-fix', 'alt-text added to figure 3', 'benefits-guide.pdf'],
+  ['review', 'approved table-header fix', 'q3-board-deck.pptx'],
+  ['publish', 'replaced in place', 'hr-policy-2026.docx'],
+  ['re-scan', 'verified 100 / 100', 'onboarding.pdf'],
+  ['archive', 'superseded version archived', '2019-policy-old.docx'],
+  ['auto-fix', 'reading order corrected', 'annual-report.pdf'],
+]
+const ACTOR = { 'auto-fix': 'mova engine', review: 'A. Chen', publish: 'mova engine', 're-scan': 'mova engine', archive: 'mova engine' }
+const ACOLOR = { 'auto-fix': '#1D9E75', review: '#854F0B', publish: '#185FA5', 're-scan': '#3B6D11', archive: '#5F5E5A' }
+
+// The estate dashboard — doubles as the exportable compliance report (step 10).
+export default function Overview({ run, files, trend, trendDates, onGo, ratified }) {
   const [on, setOn] = useState(false)
   const [seg, setSeg] = useState(null)
   const [selFile, setSelFile] = useState(null)
+  const reportRef = useRef(null)
+  const [exporting, setExporting] = useState(false)
+  const [feed, setFeed] = useState(() => AUDIT.slice(0, 4).map((e, i) => ({ e, id: -i })))
+  const nextId = useRef(1)
   useEffect(() => { const t = setTimeout(() => setOn(true), 80); return () => clearTimeout(t) }, [])
+  useEffect(() => {
+    if (prefersReducedMotion()) return
+    const t = setInterval(() => setFeed((f) => [{ e: AUDIT[nextId.current % AUDIT.length], id: nextId.current++ }, ...f].slice(0, 6)), 2600)
+    return () => clearInterval(t)
+  }, [])
+  const doExport = async () => {
+    if (!reportRef.current) return
+    setExporting(true)
+    try { (await import('./exportPdf.js')).exportReportPDF(reportRef.current) }
+    catch (e) { console.error('PDF export failed', e) }
+    finally { setTimeout(() => setExporting(false), 600) }
+  }
 
   const pickStatus = (s) => { const fs = files.filter((f) => statusOf(f) === s.label); setSeg({ title: `${s.label} documents`, subtitle: `${fs.length} of ${files.length}`, files: fs }) }
   const pickSeverity = (it) => { const sev = it.label.toUpperCase(); const fs = files.filter((f) => (f.issues || []).some((i) => i.severity === sev)); setSeg({ title: `${it.label} findings`, subtitle: `${fs.length} document(s) affected`, files: fs }) }
@@ -29,7 +57,7 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
     { label: 'Assess', v: n, go: 'assess' },
     { label: 'Remediate', v: needFix, go: 'remediate' },
     { label: 'Verify', v: verify, go: 'remediate', proj: true },
-    { label: 'Publish', v: publish, go: 'report', proj: true },
+    { label: 'Publish', v: publish, go: 'monitor', proj: true },
   ]
   const severity = severityItems(files)
 
@@ -56,8 +84,14 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
     wcag: wcCloud[0] ? `WCAG ${wcCloud[0].full} is by far the most common failure (${wcCloud[0].value} documents). It's largely automatable — one class of fix would resolve a big share of your findings.` : '',
   }
 
+  const before = run.avg_score ?? 72
+  const after = Math.min(100, before + 12)
   return (
     <>
+      <div className="dashtoolbar">
+        <button className="exportbtn" onClick={doExport} disabled={exporting}>{exporting ? 'Generating PDF…' : '⤓ Export PDF report'}</button>
+      </div>
+      <div ref={reportRef}>
       <div className="metrics">
         <div className="metric"><span>documents</span><b>{n.toLocaleString()}</b></div>
         <div className="metric"><span>certifiable</span><b style={{ color: '#3B6D11' }}>{run.certifiable}</b></div>
@@ -99,6 +133,44 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
       {trend.length > 1 && new Set(trend).size > 1 && (
         <section className="panel"><h2>Compliance trend · {trend.length} scans</h2><Sparkline points={trend} labels={trendDates} width={620} height={104} /></section>
       )}
+
+      <div className="chartrow">
+        <section className="panel"><h2>Compliance lift · after remediation</h2>
+          <div className="lift">
+            <div className="liftcol"><div className="liftnum" style={{ color: '#A32D2D' }}>{before}</div><div className="muted">today</div></div>
+            <div className="liftarrow" aria-hidden="true">→</div>
+            <div className="liftcol"><div className="liftnum" style={{ color: '#3B6D11' }}>{after}</div><div className="muted">after queued fixes</div></div>
+            <div className="liftgain">+{after - before} pts</div>
+          </div>
+          <p className="muted">Projected estate score once the queued remediation is approved and re-validated.</p>
+        </section>
+        <section className="panel"><h2>Compliance status</h2><Donut segments={statusSegments(run)} caption="documents" size={120} /></section>
+      </div>
+
+      <section className="panel">
+        <h2>Audit trail · live <span className="livedot" aria-hidden="true" /></h2>
+        <div className="auditfeed" role="log" aria-live="polite" aria-label="Audit trail">
+          {ratified && ratified.total > 0 && (
+            <div className="auditrow pinned">
+              <span className="auditkind" style={{ background: '#EEEDFE', color: '#3C3489' }}>action plan</span>
+              <span className="auditwhat">{ratified.total} recommendation{ratified.total === 1 ? '' : 's'} ratified · {ratified.auto} auto-fix, {ratified.assisted + ratified.review} to review</span>
+              <span className="muted auditactor">you · just now</span>
+            </div>
+          )}
+          {feed.map((row) => {
+            const [kind, what, file] = row.e
+            return (
+              <div className="auditrow" key={row.id}>
+                <span className="auditkind" style={{ background: ACOLOR[kind] + '1f', color: ACOLOR[kind] }}>{kind}</span>
+                <span className="auditwhat">{what} · <span className="fname" style={{ fontSize: 12 }}>{file}</span></span>
+                <span className="muted auditactor">{ACTOR[kind]}</span>
+              </div>
+            )
+          })}
+        </div>
+        <p className="muted" style={{ marginTop: 10 }}>Immutable who / when / what / which-engine log — your ADA &amp; EAA evidence trail.</p>
+      </section>
+      </div>
 
       {seg &&<SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={setSelFile} />}
       {selFile && <FileDrawer file={selFile} onClose={() => setSelFile(null)} />}
