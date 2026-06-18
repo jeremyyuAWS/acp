@@ -42,17 +42,17 @@ export function Donut({ segments, size = 138, thickness = 18, caption, onPick })
 }
 
 // horizontal bars that fill from 0 on mount
-export function Bars({ items, cols = '108px 1fr 30px', onPick }) {
+export function Bars({ items, cols = '108px 1fr 30px', onPick, max, suffix }) {
   const [on, setOn] = useState(false)
   useEffect(() => { const t = setTimeout(() => setOn(true), 80); return () => clearTimeout(t) }, [])
-  const max = Math.max(1, ...items.map((i) => i.value))
+  const mx = max || Math.max(1, ...items.map((i) => i.value))
   return (
     <div>
       {items.map((it, i) => {
         const inner = (<>
           <span className="critlabel" style={{ fontSize: 13, textAlign: 'left' }}>{it.label}</span>
-          <span className="track"><i style={{ width: on ? `${(it.value / max) * 100}%` : '0%', background: it.color, transition: 'width 0.9s ease' }} /></span>
-          <span className="critn">{it.value}</span>
+          <span className="track"><i style={{ width: on ? `${(it.value / mx) * 100}%` : '0%', background: it.color, transition: 'width 0.9s ease' }} /></span>
+          <span className="critn">{it.value}{suffix || ''}</span>
         </>)
         return onPick
           ? <button key={i} className="critrow pickrow" style={{ gridTemplateColumns: cols, width: '100%' }} onClick={() => onPick(it)}>{inner}</button>

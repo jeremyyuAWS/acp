@@ -70,6 +70,24 @@ export default function Overview({ run, files, trend, trendDates, onGo, ratified
   const wm = {}; files.forEach((f) => (f.issues || []).forEach((i) => { wm[i.wcag] = (wm[i.wcag] || 0) + 1 }))
   const wcCloud = Object.entries(wm).sort((a, b) => b[1] - a[1]).map(([w, n]) => ({ text: critLabel(w).replace(/^[\d.]+\s*/, ''), value: n, full: critLabel(w) }))
 
+  // --- analysis by dimension (score / severity / WCAG level) — not just counts ---
+  const scoreColor = (s) => s >= 90 ? '#639922' : s >= 50 ? '#F5B400' : '#F0524A'
+  const avgScore = (fs) => { const sc = fs.filter((f) => f.score != null).map((f) => f.score); return sc.length ? Math.round(sc.reduce((a, b) => a + b, 0) / sc.length) : 0 }
+  const groupBy = (fn) => files.reduce((m, f) => { const k = fn(f); if (k != null) (m[k] = m[k] || []).push(f); return m }, {})
+  const scoreByDept = Object.entries(groupBy((f) => f.department)).map(([label, fs]) => ({ label, value: avgScore(fs), color: scoreColor(avgScore(fs)) })).sort((a, b) => a.value - b.value)
+  const SR_ORDER = ['Executive', 'Director', 'Manager', 'Staff']
+  const senGroups = groupBy((f) => f.seniority)
+  const scoreBySeniority = SR_ORDER.filter((s) => senGroups[s]).map((label) => ({ label, value: avgScore(senGroups[label]), color: scoreColor(avgScore(senGroups[label])) }))
+  const levelC = { A: 0, AA: 0, AAA: 0 }; files.forEach((f) => (f.issues || []).forEach((i) => { if (levelC[i.level] != null) levelC[i.level] += 1 }))
+  const byLevel = [['A', '#A32D2D', 'Level A · must-have'], ['AA', '#D85A30', 'Level AA · legal target'], ['AAA', '#9a948f', 'Level AAA · optional']].filter(([k]) => levelC[k]).map(([k, color, label]) => ({ label, value: levelC[k], color, lvl: k }))
+  const band = (lo, hi) => files.filter((f) => f.score != null && f.score >= lo && f.score <= hi).length
+  const scoreBands = [
+    { label: '90–100 · certifiable', value: band(90, 100), color: '#639922' },
+    { label: '50–89 · needs work', value: band(50, 89), color: '#F5B400' },
+    { label: 'below 50 · at risk', value: band(0, 49), color: '#F0524A' },
+    { label: 'n/a · unreadable', value: files.filter((f) => f.score == null).length, color: '#9a948f' },
+  ].filter((d) => d.value)
+
   // on-demand AI insights (computed from the data; norm-aware, actionable)
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0)
   const sevTotal = severity.reduce((a, s) => a + s.value, 0)
@@ -110,6 +128,16 @@ export default function Overview({ run, files, trend, trendDates, onGo, ratified
       <div className="chartrow">
         <section className="panel"><h2>Top WCAG violations</h2><WordCloud items={wcCloud} /><Insight text={INS.wcag} /></section>
         <section className="panel"><h2>By department · {IDENTITY.org}</h2><Bars items={byDept} cols="150px 1fr 28px" /><Insight text={INS.dept} /></section>
+      </div>
+
+      <div className="muted" style={{ margin: '20px 0 2px' }}>Compliance by dimension · scores, severity &amp; WCAG level <span style={{ fontWeight: 400 }}>· click a bar to drill in</span></div>
+      <div className="chartrow">
+        <section className="panel"><h2>Average score by department <span className="muted" style={{ fontWeight: 400 }}>· /100</span></h2><Bars items={scoreByDept} max={100} cols="150px 1fr 34px" onPick={(it) => { const fs = files.filter((f) => f.department === it.label); setSeg({ title: `${it.label} · avg ${it.value} / 100`, subtitle: `${fs.length} documents`, files: fs }) }} /></section>
+        <section className="panel"><h2>Average score by owner seniority <span className="muted" style={{ fontWeight: 400 }}>· /100</span></h2><Bars items={scoreBySeniority} max={100} cols="100px 1fr 34px" onPick={(it) => { const fs = files.filter((f) => f.seniority === it.label); setSeg({ title: `${it.label}-owned · avg ${it.value} / 100`, subtitle: `${fs.length} documents`, files: fs }) }} /></section>
+      </div>
+      <div className="chartrow">
+        <section className="panel"><h2>Findings by WCAG level</h2>{byLevel.length ? <Bars items={byLevel} cols="150px 1fr 30px" onPick={(it) => { const fs = files.filter((f) => (f.issues || []).some((i) => i.level === it.lvl)); setSeg({ title: `Level ${it.lvl} findings`, subtitle: `${fs.length} document(s)`, files: fs }) }} /> : <p className="muted">No open findings.</p>}</section>
+        <section className="panel"><h2>Documents by score band</h2><Bars items={scoreBands} cols="150px 1fr 30px" /></section>
       </div>
 
       <div className="muted" style={{ margin: '20px 0 2px' }}>Inventory distribution</div>
