@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { getMe, getSources, getRubric, listScans, getScan, startScan, getJob } from './api'
 import { setPersona } from './sim.js'
 import Logo from './Logo.jsx'
+import ChatWidget from './ChatWidget.jsx'
 import KnowledgeGraph from './KnowledgeGraph.jsx'
 import SignIn from './SignIn.jsx'
 import Rubric from './Rubric.jsx'
@@ -150,6 +151,8 @@ export default function App() {
 
         {view === 'upload' && <Upload onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
       </ErrorBoundary>
+
+      <ChatWidget files={files} run={run} />
     </div>
   )
 }

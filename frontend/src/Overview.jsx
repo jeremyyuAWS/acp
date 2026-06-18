@@ -4,6 +4,7 @@ import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer, { statusOf, critLabel } from './FileDrawer.jsx'
 import { IDENTITY } from './sim.js'
+import WordCloud from './WordCloud.jsx'
 
 // Discover/Assess/Remediate are real (from the latest scan); Verify/Publish are projected.
 export default function Overview({ run, files, trend, onGo }) {
@@ -38,7 +39,7 @@ export default function Overview({ run, files, trend, onGo }) {
   const byType = countBy((f) => (f.type || '').toUpperCase()).map(([label, value]) => ({ label, value, color: PLUM }))
   const byDept = countBy((f) => f.department).map(([label, value]) => ({ label, value, color: PLUM }))
   const wm = {}; files.forEach((f) => (f.issues || []).forEach((i) => { wm[i.wcag] = (wm[i.wcag] || 0) + 1 }))
-  const topWcag = Object.entries(wm).sort((a, b) => b[1] - a[1]).slice(0, 7).map(([w, n]) => ({ label: critLabel(w), value: n, color: n >= 8 ? '#E24B4A' : '#F5B400' }))
+  const wcCloud = Object.entries(wm).sort((a, b) => b[1] - a[1]).map(([w, n]) => ({ text: critLabel(w).replace(/^[\d.]+\s*/, ''), value: n, full: critLabel(w) }))
 
   return (
     <>
@@ -63,7 +64,7 @@ export default function Overview({ run, files, trend, onGo }) {
       </div>
       <div className="chartrow">
         <section className="panel"><h2>By department · {IDENTITY.org}</h2><Bars items={byDept} cols="150px 1fr 28px" /></section>
-        <section className="panel"><h2>Top WCAG violations</h2>{topWcag.length ? <Bars items={topWcag} cols="128px 1fr 28px" /> : <p className="muted">No findings.</p>}</section>
+        <section className="panel"><h2>Top WCAG violations</h2><WordCloud items={wcCloud} /></section>
       </div>
 
       <section className="panel">
