@@ -8,7 +8,6 @@ import SignIn from './SignIn.jsx'
 import Rubric from './Rubric.jsx'
 import WcagCoverage from './WcagCoverage.jsx'
 import Monitor from './Monitor.jsx'
-import Walkthrough from './Walkthrough.jsx'
 import Overview from './Overview.jsx'
 import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
@@ -53,7 +52,6 @@ export default function App() {
   const [err, setErr] = useState(null)
   const [view, setView] = useState('overview')
   const [assess, setAssess] = useState('results')
-  const [tour, setTour] = useState(false)
   const [scanList, setScanList] = useState([])
   const [delta, setDelta] = useState(null)
   const [deltaKey, setDeltaKey] = useState(0)
@@ -123,10 +121,7 @@ export default function App() {
           </button>
         ))}
       </div>
-      <div className="runrow">
-        {run ? <span className="muted runinfo">last run {run.completed_at?.slice(0, 19).replace('T', ' ')}</span> : <span />}
-        <button className="tourbtn" onClick={() => setTour(true)}>▶ Watch it run · guided tour</button>
-      </div>
+      {run && <div className="muted runinfo">last run {run.completed_at?.slice(0, 19).replace('T', ' ')}</div>}
 
       {err && <div className="err" role="alert">{err}</div>}
       {busy && progress && (
@@ -168,7 +163,6 @@ export default function App() {
       </ErrorBoundary>
 
       <ChatWidget files={files} run={run} trend={trend} trendDates={trendDates} />
-      {tour && <Walkthrough onClose={() => setTour(false)} />}
     </div>
   )
 }
