@@ -4,6 +4,7 @@ import { IDENTITY } from './sim.js'
 import Logo from './Logo.jsx'
 import BeforeAfter from './BeforeAfter.jsx'
 import ScreenReaderDemo from './ScreenReaderDemo.jsx'
+import { auditHtml } from './htmlAudit.js'
 
 const isHtml = (name) => /\.html?$/i.test(name || '')
 const isPdf = (name) => /\.pdf$/i.test(name || '')
@@ -33,13 +34,21 @@ export default function Upload({ onCertified }) {
   const [drag, setDrag] = useState(false)
   const [srcText, setSrcText] = useState(null)
   const [pdfUrl, setPdfUrl] = useState(null)
+  const [realEngine, setRealEngine] = useState(false)
   const blobUrl = useRef(null)
 
   const start = (f, { text = null, url = null } = {}) => {
-    setFile(f); setSrcText(text); setPdfUrl(url); setScanning(true); setStep(0)
-    const phases = ['Connecting…', 'Reading document…', 'mova Agent classifying & tagging…', 'Analysing against WCAG 2.1 AA…', 'Scoring…']
+    setFile(f); setSrcText(text); setPdfUrl(url); setRealEngine(false); setScanning(true); setStep(0)
+    const html = text && isHtml(f.name)
+    const phases = ['Connecting…', 'Reading document…', 'mova Agent classifying & tagging…',
+      html ? 'Analysing with axe-core (real WCAG engine)…' : 'Analysing against WCAG 2.1 AA…', 'Scoring…']
     let i = 0
-    const tick = () => { if (i < phases.length) { setPhase(phases[i++]); setTimeout(tick, 640) } else { setScanning(false); setIssues(issuesFor(f.name)); setStep(1) } }
+    const finish = async () => {
+      let found = issuesFor(f.name)
+      if (html) { try { found = await auditHtml(text); setRealEngine(true) } catch { /* fall back to simulated */ } }
+      setScanning(false); setIssues(found); setStep(1)
+    }
+    const tick = () => { if (i < phases.length) { setPhase(phases[i++]); setTimeout(tick, 640) } else { finish() } }
     setTimeout(tick, 300)
   }
   const handleFile = (f) => {
@@ -59,7 +68,7 @@ export default function Upload({ onCertified }) {
     }
     catch { start({ name, size: 100 * 1024 }) }
   }
-  const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null) }
+  const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setRealEngine(false) }
   const certify = () => { if (file) onCertified?.({ file: file.name }); setStep(4) }
 
   const score = Math.max(0, 100 - issues.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0))
@@ -97,6 +106,7 @@ export default function Upload({ onCertified }) {
           <div style={{ fontSize: 15 }}>Drag a document here, or <label htmlFor="upfile" className="dzlink">browse</label></div>
           <input id="upfile" type="file" style={{ display: 'none' }} accept=".pdf,.docx,.pptx,.xlsx,.html,.htm" onChange={onInput} />
           <div className="muted" style={{ marginTop: 4 }}>PDF · Word · PowerPoint · Excel · HTML — scanned in your browser, nothing is uploaded anywhere</div>
+          <div className="muted" style={{ marginTop: 2, fontSize: 12 }}>⚡ HTML is analysed for real with the axe-core WCAG engine</div>
           <div className="dzsamples">
             <span className="muted">or try a real multi-page sample:</span>
             <button className="ghost small" onClick={() => sample('patient-discharge-instructions.pdf')}>PDF</button>
@@ -117,7 +127,8 @@ export default function Upload({ onCertified }) {
 
       {step === 1 && (
         <section className="panel">
-          <div className="rubrichdr"><h2 style={{ margin: 0 }}>Assessment · <span className="fname" style={{ fontSize: 14 }}>{file?.name}</span></h2>
+          <div className="rubrichdr"><h2 style={{ margin: 0 }}>Assessment · <span className="fname" style={{ fontSize: 14 }}>{file?.name}</span>
+            {realEngine && <span className="realbadge" title="Findings detected live by the axe-core WCAG engine running in your browser">⚡ real axe-core analysis</span>}</h2>
             <span className="badge" style={{ background: '#FAEEDA', color: '#854F0B' }}>{issues.length} findings</span></div>
           <div className="lift" style={{ margin: '12px 0 16px' }}>
             <div className="liftcol"><div className="liftnum" style={{ color: score >= 90 ? '#3B6D11' : score >= 50 ? '#854F0B' : '#A32D2D' }}>{score}</div><div className="muted">score / 100</div></div>
