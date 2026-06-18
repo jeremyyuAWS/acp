@@ -4,6 +4,7 @@ import { Sparkline } from './ScoreRing.jsx'
 import { critLabel } from './FileDrawer.jsx'
 import { IDENTITY } from './sim.js'
 import Monitoring from './Monitoring.jsx'
+import Logo from './Logo.jsx'
 
 const JOURNEY = [
   { label: 'discovered', s: 'done' }, { label: 'classified', s: 'done' },
@@ -67,7 +68,7 @@ export default function Report({ run, files = [], trend = [], trendDates = [], c
 
       <div ref={ref} className="reportdoc">
         <div className="reporthead">
-          <span className="logo"><span className="word">mova</span><span className="io"><span>io</span></span></span>
+          <Logo />
           <div>
             <div style={{ fontWeight: 600, fontSize: 15 }}>Accessibility compliance report</div>
             <div className="muted">{IDENTITY.org} · WCAG 2.1 AA · {(run?.completed_at || '').slice(0, 10) || 'estate-wide'}</div>

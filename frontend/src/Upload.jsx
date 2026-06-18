@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react'
 import { Bars } from './charts.jsx'
 import { IDENTITY } from './sim.js'
+import Logo from './Logo.jsx'
 
 // Single-document walkthrough: upload → scan → assess → remediate → human review →
 // certified. Self-contained demo (no backend); findings are keyed off the file type so
@@ -168,7 +169,7 @@ export default function Upload({ onCertified }) {
           </div>
           <div ref={reportRef} className="reportdoc">
             <div className="reporthead">
-              <span className="logo"><span className="word">mova</span><span className="io"><span>io</span></span></span>
+              <Logo />
               <div>
                 <div style={{ fontWeight: 600, fontSize: 15 }}>Accessibility compliance certificate</div>
                 <div className="muted">{IDENTITY.org} · WCAG 2.1 AA · {today}</div>
