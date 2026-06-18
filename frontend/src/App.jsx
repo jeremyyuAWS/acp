@@ -137,7 +137,10 @@ export default function App() {
       {err && <div className="err" role="alert">{err}</div>}
       {busy && progress && (
         <div className="scanprog" role="status" aria-live="polite">
-          <div className="scanprogline"><span className="spinner" />{progressText(progress)}{progress.files_found ? <span className="muted"> · {progress.files_found} files found</span> : null}</div>
+          <div className="scanprogline"><span className="spinner" />{progressText(progress)}
+            {progress.files_found ? <span className="scancount"> · {progress.files_found.toLocaleString()} files</span> : null}
+            {progress.blocked ? <span className="lockwarn"> · 🔒 {progress.blocked} password-protected / couldn’t open</span> : null}
+          </div>
           <div className="track"><i style={{ width: `${progress.files_found ? Math.round((progress.files_done / progress.files_found) * 100) : 6}%`, background: '#F5B400', transition: 'width .3s' }} /></div>
         </div>
       )}

@@ -41,6 +41,7 @@ export const STATUS_BADGE = {
 // Retention/lifecycle recommendation (step 3 · Retain / Archive / Delete) — based
 // purely on metadata + risk flags, NOT on accessibility findings (that's Assess).
 export function retentionOf(f) {
+  if (f.locked) return { label: 'Could not open', bg: '#EEEDEA', fg: '#5F5E5A', why: `${f.openIssue || 'could not open'} — provide credentials or an accessible export so this document can be classified and assessed.` }
   if ((f.tags || []).includes('legal-hold')) return { label: 'Retain · legal hold', bg: '#FAEEDA', fg: '#854F0B', why: 'Under legal hold — must be retained regardless of age or usage.' }
   if (f.superseded) return { label: 'Archive', bg: '#EEEDFE', fg: '#3C3489', why: 'A newer version exists — archive to shrink the audited estate.' }
   if (f.ageDays >= 540 && f.views90d < 60) return { label: 'Archive candidate', bg: '#EEEDFE', fg: '#3C3489', why: `Last edited ${f.modifiedAge} with ${f.views90d} views/90d — low value to keep live.` }
@@ -97,6 +98,7 @@ export default function FileDrawer({ file, onClose, context = 'full' }) {
     const ret = retentionOf(file)
     return (
       <Drawer title={file.file} subtitle={`${file.sourceName ? `${file.sourceName} · ${file.dept} · ` : ''}${(file.type || '').toUpperCase()}`} onClose={onClose}>
+        {file.locked && <div className="lockbanner">🔒 Could not open — <b>{file.openIssue}</b>. Discovered from its metadata, but the content couldn’t be read.</div>}
         {tagBlock}
         {metaBlock}
         {file.superseded && <p className="muted" style={{ marginTop: 8 }}>⚠ A newer version of this document exists — flagged as superseded.</p>}

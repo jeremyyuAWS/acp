@@ -8,10 +8,10 @@ import { DEPARTMENTS } from './sim.js'
 // · 3 Retain / Archive / Delete. Pure lifecycle — no accessibility assessment.
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
-const RET_BUCKET = (f) => { const l = retentionOf(f).label; return l.startsWith('Retain') ? 'retain' : l.startsWith('Archive') ? 'archive' : 'keep' }
-const RET_COLOR = { keep: '#639922', archive: '#7a5c8e', retain: '#D85A30' }
-const RET_ORDER = ['keep', 'archive', 'retain']
-const RET_BADGE = { keep: ['Keep', '#E7F0DC', '#3B6D11'], archive: ['Archive', '#EEEDFE', '#3C3489'], retain: ['Retain · legal hold', '#FAEEDA', '#854F0B'] }
+const RET_BUCKET = (f) => { if (f.locked) return 'locked'; const l = retentionOf(f).label; return l.startsWith('Retain') ? 'retain' : l.startsWith('Archive') ? 'archive' : 'keep' }
+const RET_COLOR = { keep: '#639922', archive: '#7a5c8e', retain: '#D85A30', locked: '#9a948f' }
+const RET_ORDER = ['keep', 'archive', 'retain', 'locked']
+const RET_BADGE = { keep: ['Keep', '#E7F0DC', '#3B6D11'], archive: ['Archive', '#EEEDFE', '#3C3489'], retain: ['Retain · legal hold', '#FAEEDA', '#854F0B'], locked: ['🔒 Could not open', '#EEEDEA', '#5F5E5A'] }
 const exposureOf = (f) => (f.tags || []).includes('public-facing') ? 'public-facing' : (f.tags || []).includes('high-traffic') ? 'high-traffic' : 'internal'
 const SUBS = [['inventory', '1 · Inventory'], ['classify', '2 · Classify'], ['retain', '3 · Retain']]
 
@@ -24,7 +24,8 @@ export default function Discover({ sources, files, busy, onScan }) {
   const groups = {}
   files.forEach((f) => { const d = f.department || 'Unassigned'; (groups[d] = groups[d] || []).push(f) })
   const deptOrder = [...DEPARTMENTS.filter((d) => groups[d]), ...Object.keys(groups).filter((d) => !DEPARTMENTS.includes(d))]
-  const lifecycleFlagged = files.filter((f) => RET_BUCKET(f) !== 'keep').length
+  const lifecycleFlagged = files.filter((f) => RET_BUCKET(f) !== 'keep' && !f.locked).length
+  const lockedCount = files.filter((f) => f.locked).length
 
   const countTag = (t) => files.filter((f) => (f.tags || []).includes(t)).length
   const PLUM = '#7a5c8e'
@@ -64,7 +65,9 @@ export default function Discover({ sources, files, busy, onScan }) {
                     <td className="fname">{f.file}
                       <div className="filemeta">
                         <span className="srcpill">{f.sourceName}</span>
-                        <span className="muted">{f.modifiedAge} · {f.views90d?.toLocaleString()} views/90d{f.superseded ? ' · superseded' : ''}</span>
+                        {f.locked
+                          ? <span className="lockflag">🔒 {f.openIssue}</span>
+                          : <span className="muted">{f.modifiedAge} · {f.views90d?.toLocaleString()} views/90d{f.superseded ? ' · superseded' : ''}</span>}
                         {classTags(f).slice(0, 3).map((t) => <Tag key={t} t={t} />)}
                       </div>
                     </td>
@@ -84,7 +87,7 @@ export default function Discover({ sources, files, busy, onScan }) {
       <div className="estatebar">
         <div>
           <b>{files.length} documents</b> discovered &amp; classified across {sources.length} sources · {Object.keys(groups).length} departments
-          <div className="muted" style={{ marginTop: 2 }}>the agent crawls metadata, classifies by content &amp; risk, and flags lifecycle — {lifecycleFlagged} are archive or legal-hold candidates</div>
+          <div className="muted" style={{ marginTop: 2 }}>the agent crawls metadata, classifies by content &amp; risk, and flags lifecycle — {lifecycleFlagged} archive/legal-hold candidates{lockedCount ? <> · <span className="lockwarn">🔒 {lockedCount} could not be opened (password-protected / unsupported)</span></> : null}</div>
         </div>
         <button disabled={busy} onClick={() => onScan('all')}>{busy ? 'scanning…' : 'Re-scan all sources'}</button>
       </div>

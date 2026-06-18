@@ -539,6 +539,12 @@ input:focus-visible, [role="tab"]:focus-visible {
 .pubrow:last-child { border-bottom: none; }
 .pubrow.pubdone { opacity: 0.7; }
 
+/* --- password-protected / could-not-open --- */
+.lockwarn { color: #854F0B; font-weight: 600; }
+.lockflag { font-size: 11px; color: #5F5E5A; background: #efeae6; border: 1px solid #e0d9d2; border-radius: 6px; padding: 1px 7px; white-space: nowrap; }
+.scancount { font-weight: 600; color: var(--ink); }
+.lockbanner { background: #f3efea; border: 1px solid #e2dad0; border-radius: 10px; padding: 10px 12px; font-size: 13px; line-height: 1.45; margin: 4px 0 12px; color: var(--ink); }
+
 /* --- Discover business-priority charts --- */
 .prioritypanel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 18px; margin: 0 0 16px; }
 .priorityhd { font-size: 14px; }

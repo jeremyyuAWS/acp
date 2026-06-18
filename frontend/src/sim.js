@@ -201,7 +201,10 @@ function genCorpus() {
       let file = `${base}.${ext}`; let k = 2
       while (seen.has(file)) { file = `${base}-${k++}.${ext}` }
       seen.add(file)
-      const status = STATUS_CYCLE[i % STATUS_CYCLE.length]
+      // a handful of files can't be opened at discovery time (password-protected / unsupported)
+      const locked = i % 21 === 5
+      const openIssue = locked ? (i % 2 ? 'password-protected' : 'unsupported / corrupt — could not open') : null
+      const status = locked ? 'error' : STATUS_CYCLE[i % STATUS_CYCLE.length]
       const score = status === 'certifiable' ? 100 : status === 'error' ? null : status === 'uncertain' ? 88 + (i % 5) : 48 + ((i * 13) % 38)
       const pool = ISS_POOL[type]
       const issues = status === 'issues' ? iss(pool.slice(0, 2 + (i % 2) + (i % 3 === 0 ? 1 : 0))) : status === 'uncertain' ? iss(pool.slice(0, 1)) : []
@@ -225,7 +228,7 @@ function genCorpus() {
         status, score, compliant: status === 'certifiable', skipped_rules: status === 'uncertain' ? 2 : 0,
         engine: ENG[type], tags, issues,
         ageDays, modified: dateStr(ageDays), modifiedAge: fmtAge(ageDays), lastAccessed: dateStr(Math.max(1, Math.round(ageDays / 2.5))),
-        views90d, pages, sheets, duration, sizeKB, superseded,
+        views90d, pages, sheets, duration, sizeKB, superseded, locked, openIssue,
       }
       f.rec = recommendFor(f)
       out.push(f)
@@ -329,10 +332,11 @@ export function simStartScan(sourceId) {
   const base = scoped()
   const files = sourceId === 'all' || sourceId === 'local' ? base : base.filter((f) => f.source === sourceId)
   const n = files.length
+  const blocked = files.filter((f) => f.locked).length
   const sid = 'scan-' + jid
-  const set = (p) => { JOBS[jid] = { phase: 'queued', files_found: 0, files_done: 0, current: null, done: false, scan_id: null, ...JOBS[jid], ...p } }
+  const set = (p) => { JOBS[jid] = { phase: 'queued', files_found: 0, files_done: 0, blocked: 0, current: null, done: false, scan_id: null, ...JOBS[jid], ...p } }
   set({})
-  const steps = [() => set({ phase: 'connecting' }), () => set({ phase: 'discovering', files_found: n })]
+  const steps = [() => set({ phase: 'connecting' }), () => set({ phase: 'discovering', files_found: n, blocked })]
   for (let i = 0; i < n; i += 3) steps.push(() => set({ phase: 'reading', files_found: n, files_done: Math.min(i + 3, n), current: files[Math.min(i + 1, n - 1)].file }))
   steps.push(() => set({ phase: 'tagging', files_done: n, current: null }))
   steps.push(() => set({ phase: 'analysing', files_done: n, current: null }))

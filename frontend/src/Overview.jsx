@@ -107,14 +107,15 @@ export default function Overview({ run, files, trend, trendDates, onGo, ratified
         </section>
       </div>
 
+      <div className="chartrow">
+        <section className="panel"><h2>Top WCAG violations</h2><WordCloud items={wcCloud} /><Insight text={INS.wcag} /></section>
+        <section className="panel"><h2>By department · {IDENTITY.org}</h2><Bars items={byDept} cols="150px 1fr 28px" /><Insight text={INS.dept} /></section>
+      </div>
+
       <div className="muted" style={{ margin: '20px 0 2px' }}>Inventory distribution</div>
       <div className="chartrow">
         <section className="panel"><h2>By source system</h2><Bars items={bySource} cols="118px 1fr 28px" /><Insight text={INS.source} /></section>
         <section className="panel"><h2>By document type</h2><Bars items={byType} cols="62px 1fr 28px" /><Insight text={INS.type} /></section>
-      </div>
-      <div className="chartrow">
-        <section className="panel"><h2>By department · {IDENTITY.org}</h2><Bars items={byDept} cols="150px 1fr 28px" /><Insight text={INS.dept} /></section>
-        <section className="panel"><h2>Top WCAG violations</h2><WordCloud items={wcCloud} /><Insight text={INS.wcag} /></section>
       </div>
 
       <section className="panel">
