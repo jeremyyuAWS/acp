@@ -21,6 +21,8 @@ body {
 
 header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
 .brand { display: flex; align-items: center; gap: 12px; }
+.logoimg { height: 28px; width: auto; display: block; }
+.logoimg.big { height: 48px; }
 .logo { display: inline-flex; align-items: center; gap: 7px; font-family: 'Baloo 2', 'Trebuchet MS', system-ui, sans-serif; }
 .word { color: var(--plum); font-weight: 800; font-size: 27px; letter-spacing: -0.5px; line-height: 1; }
 .io { background: linear-gradient(125deg, #F0524A, #F7901E, #F5B400, #F48FB1); padding: 3.5px; border-radius: 10px; display: inline-flex; }
