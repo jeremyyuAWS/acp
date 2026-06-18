@@ -22,6 +22,21 @@ const LEVELS = [
 ]
 const LEVEL_MEANING = { A: 'must-have baseline', AA: 'should-have · the legal target', AAA: 'nice-to-have enhancement' }
 
+// Delivery roadmap — Claude-paced (AI-built), not human dev-weeks. These compress
+// the LOE because Claude writes the checks, evals and review scaffolds directly.
+const ROADMAP_PHASES = [
+  { id: 'P0', label: 'Foundation', when: 'Days 1–2', match: null, desc: 'Coverage audit vs. partner · lock the check contract · stand up the golden-corpus eval harness.' },
+  { id: 'P1', label: 'Agentic AI checks', when: 'Days 3–5', match: (p) => p.startsWith('Phase 1'), desc: 'Semantic LLM evaluators — sensory characteristics, headings & labels. Claude authors prompt + evals.' },
+  { id: 'P2', label: 'Human-in-the-loop', when: 'Weeks 2–3', match: (p) => p.startsWith('Phase 2'), milestone: 'Level AA conformance', desc: 'Pre-screen detectors + reviewer workflow for the manual Required criteria (captions, focus order, errors…).' },
+  { id: 'P3', label: 'AAA / optional', when: 'Weeks 4–6', match: (p) => p.startsWith('Phase 3'), desc: 'Everything not legally required — pursued selectively.' },
+]
+const PHASE_SHORT = {
+  'Phase 1 · Agentic (Req. A/AA)': ['Phase 1', '#3C3489', '#EEEDFE'],
+  'Phase 2 · HITL (Req. A/AA)': ['Phase 2', '#854F0B', '#FAEEDA'],
+  'Phase 3 · Optional / AAA': ['Phase 3', '#5F5E5A', '#EFEDEA'],
+}
+const PHASE_FILTER = { P1: 'Phase 1', P2: 'Phase 2', P3: 'Phase 3' }
+
 const mid = (r) => (r.lo + r.hi) / 2
 const wks = (d) => `${(d / 5).toFixed(0)}–${Math.round(d / 5)}`
 
@@ -32,14 +47,13 @@ export default function WcagCoverage() {
   const match = (r) => filter === 'all' ? true
     : filter === '2.2' ? r.added === '2.2'
     : filter === 'A' || filter === 'AA' ? r.level === filter
+    : PHASE_FILTER[filter] ? r.phase.startsWith(PHASE_FILTER[filter])
     : r.source === filter
 
   const shown = WCAG.filter(match)
   const tally = (src) => WCAG.filter((r) => r.source === src).length
+  const phaseCount = (ph) => ph.match ? WCAG.filter((r) => ph.match(r.phase)).length : null
   const net = WCAG.filter((r) => r.source === 'MDK net-new')
-  const req = net.filter((r) => r.phase.startsWith('Phase 1') || r.phase.startsWith('Phase 2'))
-  const reqLo = req.reduce((a, r) => a + r.lo, 0) + 20
-  const reqHi = req.reduce((a, r) => a + r.hi, 0) + 33
 
   return (
     <>
@@ -59,7 +73,7 @@ export default function WcagCoverage() {
         <div className="covstatcard"><b>{tally('Shipped (demo)')}</b><span className="muted">checks live in this demo</span></div>
         <div className="covstatcard"><b>{tally('Partner baseline')}</b><span className="muted">automated A/AA from partner</span></div>
         <div className="covstatcard"><b>{net.length}</b><span className="muted">net-new beyond partner</span></div>
-        <div className="covstatcard"><b>{Math.round(reqLo / 5)}–{Math.round(reqHi / 5)} wks</b><span className="muted">to full Required A/AA conformance</span></div>
+        <div className="covstatcard"><b>~3 wks</b><span className="muted">to Level AA · Claude-paced build</span></div>
       </div>
 
       <div className="levelramp">
@@ -74,6 +88,32 @@ export default function WcagCoverage() {
             {i < LEVELS.length - 1 && <span className="levelarrow" aria-hidden="true">→</span>}
           </div>
         ))}
+      </div>
+
+      <div className="roadmap">
+        <div className="roadmaphd">
+          <b>Delivery roadmap</b> <span className="muted">· Claude-paced — AI builds the checks, evals &amp; review scaffolds directly</span>
+          <span className="roadmapnote">≈ 5× faster than a human dev team</span>
+        </div>
+        <div className="rmtrack">
+          {ROADMAP_PHASES.map((ph, i) => {
+            const cnt = phaseCount(ph)
+            const fkey = ph.id === 'P0' ? null : ph.id
+            const active = fkey && filter === fkey
+            return (
+              <div className="rmstep" key={ph.id}>
+                <button className={`rmseg${active ? ' on' : ''}${fkey ? '' : ' static'}`} onClick={() => fkey && setFilter(active ? 'all' : fkey)} disabled={!fkey} title={ph.desc}>
+                  <div className="rmtop"><span className="rmid">{ph.id}</span><span className="rmwhen">{ph.when}</span></div>
+                  <div className="rmlabel">{ph.label}</div>
+                  <div className="muted rmcnt">{cnt != null ? `${cnt} criteria` : 'one-time'}</div>
+                </button>
+                {ph.milestone && <span className="rmmilestone" title="Legal target reached">★ {ph.milestone}</span>}
+                {i < ROADMAP_PHASES.length - 1 && <span className="rmarrow" aria-hidden="true">→</span>}
+              </div>
+            )
+          })}
+        </div>
+        <div className="muted rmfoot">Click a phase to filter the criteria below. These are AI-accelerated estimates — the human-team equivalent (~10–19 weeks) is in the LOE report.</div>
       </div>
 
       <div className="chiprow" style={{ margin: '4px 0 14px' }}>
@@ -91,9 +131,10 @@ export default function WcagCoverage() {
             <div className="covgrid">
               {items.map((r) => {
                 const [, fg, bg] = SRC[r.source]
+                const ph = PHASE_SHORT[r.phase]
                 return (
                   <button key={r.sc} className="covcell" style={{ background: bg, borderColor: fg + '55' }} onClick={() => setSel(r)}>
-                    <div className="covsc"><b>{r.sc}</b><span className="covlvl">{r.level}</span></div>
+                    <div className="covsc"><b>{r.sc}</b><span className="covlvl">{r.level}</span>{ph && <span className="covphase" style={{ color: ph[1], background: ph[2] }}>{ph[0]}</span>}</div>
                     <div className="covname">{r.name}</div>
                     <div className="covtag" style={{ color: fg }}>{SRC[r.source][0]}</div>
                   </button>
@@ -116,7 +157,8 @@ export default function WcagCoverage() {
               <div><span className="muted">Coverage today</span><b style={{ color: SRC[sel.source][1] }}>{SRC[sel.source][0]}</b></div>
               <div><span className="muted">Build tier</span><b>{sel.tier}</b></div>
               <div><span className="muted">Roadmap phase</span><b>{sel.phase}</b></div>
-              {sel.source === 'MDK net-new' && <div><span className="muted">Estimated effort</span><b>{sel.lo}–{sel.hi} dev-days</b></div>}
+              {sel.source === 'MDK net-new' && (() => { const ph = ROADMAP_PHASES.find((x) => x.match && x.match(sel.phase)); return ph ? <div><span className="muted">Timeline · Claude-paced</span><b>{ph.when}</b></div> : null })()}
+              {sel.source === 'MDK net-new' && <div><span className="muted">Effort (human team)</span><b>{sel.lo}–{sel.hi} dev-days</b></div>}
             </div>
             {sel.source !== 'MDK net-new' && <p className="muted" style={{ marginTop: 12 }}>{sel.source === 'Shipped (demo)' ? 'Already validated by the platform in this demo.' : 'Covered by the partner’s automated engine for web; net-new only for PDF/Office formats.'}</p>}
           </div>

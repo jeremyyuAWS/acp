@@ -11,6 +11,14 @@ const SEGORDER = ['certifiable', 'issues', 'uncertain', 'unanalysable']
 const hrs = (m) => m >= 90 ? `${(m / 60).toFixed(1)} hrs` : `${Math.round(m)} min`
 const ACTIONS = ['auto', 'assisted', 'review', 'archive', 'keep', 'manual']
 const ETA_OVERRIDE = { archive: 2, keep: 0, manual: 35, review: 10 }
+const ACTION_DESC = {
+  auto: 'The agent fixes these mechanically — alt text, headings, language, titles — then re-validates. No human needed.',
+  assisted: 'AI proposes the fix; a human approves before publish. For critical, sensitive, contrast/link, or media (captions) findings.',
+  review: 'A rule couldn’t be auto-evaluated. A reviewer confirms before the document can be certified.',
+  archive: 'Compliant-but-stale, superseded, or low-traffic — archived to shrink the audited estate instead of spending effort.',
+  keep: 'Already certifiable. Kept published and under continuous monitoring for drift.',
+  manual: 'Unreadable source — a human must re-author or re-export the file before it can be assessed.',
+}
 
 export default function Discover({ sources, files, busy, onScan }) {
   const [sel, setSel] = useState(null)
@@ -58,10 +66,11 @@ export default function Discover({ sources, files, busy, onScan }) {
             {plan.buckets.map((b) => {
               const [label, bg, fg, icon] = REC_STYLE[b.action] || REC_STYLE.review
               return (
-                <div className="plancard" key={b.action} style={{ background: bg }}>
+                <div className="plancard" key={b.action} style={{ background: bg }} tabIndex={0} aria-label={`${label}: ${ACTION_DESC[b.action]}`}>
                   <div className="plancardtop" style={{ color: fg }}><span>{icon}</span><b>{b.n}</b></div>
                   <div className="plancardlbl" style={{ color: fg }}>{label}</div>
                   <div className="muted plancardeta">{b.action === 'keep' ? 'no work' : b.action === 'manual' ? `~${hrs(b.min)} manual` : `~${hrs(b.min)}`}</div>
+                  <div className="plantip" role="tooltip"><b style={{ color: fg }}>{icon} {label}</b>{ACTION_DESC[b.action]}</div>
                 </div>
               )
             })}
