@@ -3,6 +3,7 @@ import { Bars } from './charts.jsx'
 import { IDENTITY } from './sim.js'
 import Logo from './Logo.jsx'
 import BeforeAfter from './BeforeAfter.jsx'
+import ScreenReaderDemo from './ScreenReaderDemo.jsx'
 
 const isHtml = (name) => /\.html?$/i.test(name || '')
 const isPdf = (name) => /\.pdf$/i.test(name || '')
@@ -149,6 +150,7 @@ export default function Upload({ onCertified }) {
             ))}
           </div>
           <BeforeAfter file={file} issues={issues} srcText={srcText} pdfUrl={pdfUrl} />
+          <ScreenReaderDemo issues={issues} />
           <p className="muted" style={{ marginTop: 12 }}>{autoFixed.length} issue(s) auto-fixed · <b>{review.length}</b> routed to human review (low confidence).</p>
           <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 4 }}><button onClick={() => setStep(3)}>Human review →</button></div>
         </section>

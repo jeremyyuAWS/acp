@@ -561,6 +561,21 @@ input:focus-visible, [role="tab"]:focus-visible {
 .pdfpages { display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .pdfpage { max-width: 100%; height: auto; box-shadow: 0 2px 10px rgba(40, 30, 48, 0.14); border-radius: 3px; background: #fff; }
 .bapdffallback { padding: 30px; text-align: center; }
+
+/* --- screen-reader before/after demo --- */
+.srdemo { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.srlist { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+.srrow { display: grid; grid-template-columns: 1fr auto 1.2fr; gap: 12px; align-items: center; padding: 7px 11px; border-radius: 9px; font-size: 13px; transition: background 0.15s ease; }
+.srbefore { color: #9a5a52; font-style: italic; }
+.srafter { color: #2f5e16; font-weight: 600; }
+.srarrow { color: #b7afbd; }
+.srrow.cur-before { background: #fcebeb; box-shadow: inset 3px 0 0 #A32D2D; }
+.srrow.cur-after { background: #e7f0dc; box-shadow: inset 3px 0 0 #3B6D11; }
+.srctl { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.srplay-good { background: #3B6D11; color: #fff; border: none; border-radius: 9px; padding: 7px 15px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.srplay-good:hover { filter: brightness(1.08); }
+.srsound { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
+@media (max-width: 720px) { .srrow { grid-template-columns: 1fr; gap: 3px; } .srarrow { display: none; } }
 .bachanges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; }
 .bachip { font-size: 11.5px; font-weight: 600; color: #3B6D11; background: #E7F0DC; border-radius: 999px; padding: 3px 10px; }
 .bacards { display: flex; flex-direction: column; gap: 9px; }
