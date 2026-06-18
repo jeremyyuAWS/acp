@@ -70,7 +70,7 @@ export default function App() {
       .finally(() => setLoaded(true))
   }, [me])
 
-  const signIn = (p) => { setPersona(p); setScan(null); setScanList([]); setLoaded(false); setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label }) }
+  const signIn = (p) => { setPersona(p); setScan(null); setScanList([]); setLoaded(false); setDecisions({}); setCertifiedDocs([]); setView('overview'); setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label }) }
   if (!me) return <SignIn onSignedIn={signIn} />
 
   const doScan = async (source) => {
