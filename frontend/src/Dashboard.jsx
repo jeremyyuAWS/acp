@@ -4,6 +4,7 @@ import { ScoreRing, Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import FileDrawer from './FileDrawer.jsx'
 import Tag from './Tag.jsx'
+import Insight from './Insight.jsx'
 
 const CRIT = {
   SC_1_1_1: '1.1.1 non-text', SC_1_3_1: '1.3.1 structure', SC_2_4_2: '2.4.2 page titled',
@@ -21,6 +22,17 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
   const critFails = {}
   files.forEach((f) => new Set(f.issues.map((i) => i.wcag)).forEach((c) => { critFails[c] = (critFails[c] || 0) + 1 }))
   const maxFail = Math.max(1, ...Object.values(critFails))
+
+  const pctOf = (a, b) => (b ? Math.round((a / b) * 100) : 0)
+  const sevList = severityItems(files)
+  const sevTotal = sevList.reduce((a, s) => a + s.value, 0)
+  const sevHigh = sevList.filter((s) => s.label === 'critical' || s.label === 'serious').reduce((a, s) => a + s.value, 0)
+  const topCrit = Object.entries(critFails).sort((a, b) => b[1] - a[1])[0]
+  const INS = {
+    status: `${pctOf(run.certifiable, run.files)}% of documents are certifiable. The ${run.uncertain} 'uncertain' docs had a rule that couldn't be evaluated — re-scanning with full access usually clears most; the rest are largely auto-fixable.`,
+    severity: sevTotal ? `Critical & serious make up ${pctOf(sevHigh, sevTotal)}% of findings — ${pctOf(sevHigh, sevTotal) > 40 ? 'above' : 'near'} the ~40% norm. Front-load alt-text and tagging fixes for the biggest risk reduction.` : 'No open findings.',
+    wcag: topCrit ? `${CRIT[topCrit[0]] ?? topCrit[0]} fails in the most files (${topCrit[1]}). It's a single, largely automatable fix class — a strong first remediation target.` : '',
+  }
 
   return (
     <>
@@ -45,9 +57,10 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
         </div>
       </section>
       <div className="chartrow">
-        <section className="panel"><h2>Compliance status</h2><Donut segments={statusSegments(run)} caption="documents" /></section>
+        <section className="panel"><h2>Compliance status</h2><Donut segments={statusSegments(run)} caption="documents" /><Insight text={INS.status} /></section>
         <section className="panel"><h2>Findings by severity</h2>
           {severityItems(files).length ? <Bars items={severityItems(files)} /> : <p className="muted">No open findings.</p>}
+          <Insight text={INS.severity} />
         </section>
       </div>
       {Object.keys(critFails).length > 0 && (
@@ -60,6 +73,7 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
               <span className="critn">{n}</span>
             </div>
           ))}
+          <Insight text={INS.wcag} />
         </section>
       )}
       <section className="panel">
