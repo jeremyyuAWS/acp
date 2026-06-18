@@ -41,7 +41,6 @@ export default function Remediate({ run, files }) {
 
   return (
     <>
-      <div className="previewbar"><b>Preview</b> · simulated remediation on your live findings — approve/reject items below to walk the loop.</div>
       <div className="metrics">
         <div className="metric"><span>auto-fixed issues</span><b style={{ color: '#3B6D11' }}>{autoFixed}</b></div>
         <div className="metric"><span>in review queue</span><b style={{ color: '#854F0B' }}>{queue.length}</b></div>

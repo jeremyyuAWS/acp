@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Donut, Bars, statusSegments } from './charts.jsx'
 import { Sparkline } from './ScoreRing.jsx'
 import { critLabel } from './FileDrawer.jsx'
+import { IDENTITY } from './sim.js'
 
 const JOURNEY = [
   { label: 'discovered', s: 'done' }, { label: 'classified', s: 'done' },
@@ -56,7 +57,6 @@ export default function Report({ run, files = [], trend = [] }) {
 
   return (
     <>
-      <div className="previewbar"><b>Preview</b> · simulated publish, monitoring &amp; audit trail — assessment is live; this shows the full lifecycle.</div>
       <div className="dashtoolbar">
         <button className="exportbtn" onClick={doExport} disabled={exporting}>{exporting ? 'Generating PDF…' : '⤓ Export PDF report'}</button>
       </div>
@@ -66,7 +66,7 @@ export default function Report({ run, files = [], trend = [] }) {
           <span className="logo"><span className="word">mova</span><span className="io"><span>io</span></span></span>
           <div>
             <div style={{ fontWeight: 600, fontSize: 15 }}>Accessibility compliance report</div>
-            <div className="muted">Northwind Group · WCAG 2.1 AA · {(run?.completed_at || '').slice(0, 10) || 'estate-wide'}</div>
+            <div className="muted">{IDENTITY.org} · WCAG 2.1 AA · {(run?.completed_at || '').slice(0, 10) || 'estate-wide'}</div>
           </div>
         </div>
 

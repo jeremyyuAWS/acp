@@ -9,6 +9,7 @@ import Discover from './Discover.jsx'
 import Dashboard from './Dashboard.jsx'
 import Remediate from './Remediate.jsx'
 import Report from './Report.jsx'
+import Upload from './Upload.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
 
@@ -19,6 +20,7 @@ const TABS = [
   ['assess', 'Assess', 'steps 4–5'],
   ['remediate', 'Remediate', 'steps 6–8'],
   ['report', 'Report', 'steps 9–10'],
+  ['upload', 'Upload', 'try it live'],
 ]
 
 function progressText(p) {
@@ -148,6 +150,8 @@ export default function App() {
         {view === 'remediate' && (run ? <Remediate run={run} files={files} /> : placeholder)}
 
         {view === 'report' && (run ? <Report run={run} files={files} trend={trend} /> : placeholder)}
+
+        {view === 'upload' && <Upload />}
       </ErrorBoundary>
     </div>
   )

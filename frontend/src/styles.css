@@ -280,6 +280,32 @@ input:focus-visible, [role="tab"]:focus-visible {
   background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; cursor: pointer; color: inherit; font: inherit; }
 .filelistrow:hover { border-color: var(--plum); background: var(--bg); }
 
+/* upload — single-document walkthrough */
+.upsteps { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 18px; }
+.upstep { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); padding: 6px 13px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); }
+.upstep .upnum { width: 20px; height: 20px; border-radius: 50%; background: #ece7ec; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex: 0 0 auto; }
+.upstep.on { color: var(--ink); border-color: var(--plum); }
+.upstep.on .upnum { background: var(--plum); color: #fff; }
+.upstep.done { color: #3B6D11; }
+.upstep.done .upnum { background: #639922; color: #fff; }
+.dropzone { border: 2px dashed #d8cfdd; border-radius: 16px; padding: 44px 24px; text-align: center; background: var(--card); transition: 0.15s; }
+.dropzone.over { border-color: var(--plum); background: #faf6fc; }
+.dzicon { font-size: 32px; color: var(--plum); line-height: 1; margin-bottom: 10px; }
+.dzlink { color: var(--plum); cursor: pointer; text-decoration: underline; }
+.dzsamples { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+
+/* discover — department sections */
+.deptcard { border: 1px solid var(--line); border-radius: 12px; margin: 8px 0; overflow: hidden; background: var(--card); }
+.deptheader { display: flex; align-items: center; gap: 12px; width: 100%; background: var(--bg); border: none; padding: 12px 16px; cursor: pointer; text-align: left; font: inherit; }
+.deptheader:hover { background: #f3eef6; }
+.deptchev { color: var(--muted); width: 12px; font-size: 11px; flex: 0 0 auto; }
+.deptname { font-weight: 500; font-size: 14px; }
+.deptcount { font-size: 13px; }
+.deptbar { margin-left: auto; width: 170px; height: 8px; border-radius: 999px; overflow: hidden; display: flex; background: #ece7ec; flex: 0 0 auto; }
+.deptbar > i { display: block; height: 100%; }
+.depttable { width: 100%; border-collapse: collapse; }
+.depttable td { padding: 10px 16px; }
+
 /* agent-assigned tags + source pills */
 .tag { font-size: 11px; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
 .srcpill { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: #ece7ec; color: #5f5660; white-space: nowrap; }

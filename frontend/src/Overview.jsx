@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
-import FileDrawer, { statusOf } from './FileDrawer.jsx'
+import FileDrawer, { statusOf, critLabel } from './FileDrawer.jsx'
+import { IDENTITY } from './sim.js'
 
 // Discover/Assess/Remediate are real (from the latest scan); Verify/Publish are projected.
 export default function Overview({ run, files, trend, onGo }) {
@@ -30,6 +31,15 @@ export default function Overview({ run, files, trend, onGo }) {
   ]
   const severity = severityItems(files)
 
+  // inventory distributions
+  const countBy = (fn) => Object.entries(files.reduce((m, f) => { const k = fn(f); if (k != null) m[k] = (m[k] || 0) + 1; return m }, {})).sort((a, b) => b[1] - a[1])
+  const PLUM = '#7a5c8e'
+  const bySource = countBy((f) => f.sourceName).map(([label, value]) => ({ label, value, color: PLUM }))
+  const byType = countBy((f) => (f.type || '').toUpperCase()).map(([label, value]) => ({ label, value, color: PLUM }))
+  const byDept = countBy((f) => f.department).map(([label, value]) => ({ label, value, color: PLUM }))
+  const wm = {}; files.forEach((f) => (f.issues || []).forEach((i) => { wm[i.wcag] = (wm[i.wcag] || 0) + 1 }))
+  const topWcag = Object.entries(wm).sort((a, b) => b[1] - a[1]).slice(0, 7).map(([w, n]) => ({ label: critLabel(w), value: n, color: n >= 8 ? '#E24B4A' : '#F5B400' }))
+
   return (
     <>
       <div className="metrics">
@@ -44,6 +54,16 @@ export default function Overview({ run, files, trend, onGo }) {
         <section className="panel"><h2>Findings by severity</h2>
           {severity.length ? <Bars items={severity} onPick={pickSeverity} /> : <p className="muted">No open findings.</p>}
         </section>
+      </div>
+
+      <div className="muted" style={{ margin: '20px 0 2px' }}>Inventory distribution</div>
+      <div className="chartrow">
+        <section className="panel"><h2>By source system</h2><Bars items={bySource} cols="118px 1fr 28px" /></section>
+        <section className="panel"><h2>By document type</h2><Bars items={byType} cols="62px 1fr 28px" /></section>
+      </div>
+      <div className="chartrow">
+        <section className="panel"><h2>By department · {IDENTITY.org}</h2><Bars items={byDept} cols="150px 1fr 28px" /></section>
+        <section className="panel"><h2>Top WCAG violations</h2>{topWcag.length ? <Bars items={topWcag} cols="128px 1fr 28px" /> : <p className="muted">No findings.</p>}</section>
       </div>
 
       <section className="panel">
