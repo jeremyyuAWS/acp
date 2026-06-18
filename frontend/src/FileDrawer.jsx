@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import Drawer from './Drawer.jsx'
 import Tag from './Tag.jsx'
 
 const CRIT = {
@@ -7,13 +7,13 @@ const CRIT = {
   SC_2_4_2: '2.4.2 page titled', SC_2_4_4: '2.4.4 link purpose',
   SC_3_1_1: '3.1.1 language of page', SC_1_4_3: '1.4.3 contrast',
 }
-const critLabel = (w) => CRIT[w] ?? (w || '').replace(/^SC_/, '').replace(/_/g, '.')
+export const critLabel = (w) => CRIT[w] ?? (w || '').replace(/^SC_/, '').replace(/_/g, '.')
 const SEV = {
   CRITICAL: ['#FCEBEB', '#A32D2D'], SERIOUS: ['#FAECE7', '#993C1D'],
   MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'],
 }
-const statusOf = (f) => (f.status === 'error' ? 'unanalysable' : f.status === 'uncertain' ? 'uncertain' : f.compliant ? 'certifiable' : 'issues')
-const STATUS_BADGE = {
+export const statusOf = (f) => (f.status === 'error' ? 'unanalysable' : f.status === 'uncertain' ? 'uncertain' : f.compliant ? 'certifiable' : 'issues')
+export const STATUS_BADGE = {
   certifiable: ['#E7F0DC', '#3B6D11'], issues: ['#FAEEDA', '#854F0B'],
   uncertain: ['#FAECE7', '#993C1D'], unanalysable: ['#EEEDEA', '#5F5E5A'],
 }
@@ -33,13 +33,7 @@ const STATE = {
 const STATE_NOTE = { proj: 'projected', skip: 'not needed', blocked: 'blocked', current: 'in progress' }
 
 export default function FileDrawer({ file, onClose }) {
-  useEffect(() => {
-    const k = (e) => e.key === 'Escape' && onClose()
-    window.addEventListener('keydown', k)
-    return () => window.removeEventListener('keydown', k)
-  }, [onClose])
   if (!file) return null
-
   const st = statusOf(file)
   const [sbg, sfg] = STATUS_BADGE[st]
   const issues = file.issues || []
@@ -48,75 +42,65 @@ export default function FileDrawer({ file, onClose }) {
   const states = journeyStates(st)
 
   return (
-    <div className="drawer-overlay" onClick={onClose}>
-      <aside className="drawer" role="dialog" aria-modal="true" aria-label={`Details for ${file.file}`} onClick={(e) => e.stopPropagation()}>
-        <div className="drawerhead">
-          <div>
-            <div className="fname" style={{ fontSize: 15 }}>{file.file}</div>
-            <div className="muted" style={{ marginTop: 4 }}>{file.sourceName ? `${file.sourceName} · ${file.dept} · ` : ''}{file.engine}</div>
-          </div>
-          <button className="ghost small" aria-label="Close" onClick={onClose}>✕</button>
-        </div>
+    <Drawer title={file.file} subtitle={`${file.sourceName ? `${file.sourceName} · ${file.dept} · ` : ''}${file.engine}`} onClose={onClose}>
+      <div className="drawerstats">
+        <span className="badge" style={{ background: sbg, color: sfg }}>{st}</span>
+        <span className="drawerscore">{file.score === null ? 'n/a' : `${st === 'uncertain' ? '≤' : ''}${file.score}`}<span className="muted"> / 100</span></span>
+        {st === 'uncertain' && <span className="muted">{file.skipped_rules} rule(s) skipped — score is an upper bound</span>}
+      </div>
 
-        <div className="drawerstats">
-          <span className="badge" style={{ background: sbg, color: sfg }}>{st}</span>
-          <span className="drawerscore">{file.score === null ? 'n/a' : `${st === 'uncertain' ? '≤' : ''}${file.score}`}<span className="muted"> / 100</span></span>
-          {st === 'uncertain' && <span className="muted">{file.skipped_rules} rule(s) skipped — score is an upper bound</span>}
-        </div>
+      {(file.tags || []).length > 0 && (
+        <>
+          <h4 className="drawerh">Tags · auto-assigned by agent</h4>
+          <div className="taglist">{file.tags.map((t) => <Tag key={t} t={t} />)}</div>
+        </>
+      )}
 
-        {(file.tags || []).length > 0 && (
-          <>
-            <h4 className="drawerh">Tags · auto-assigned by agent</h4>
-            <div className="taglist">{file.tags.map((t) => <Tag key={t} t={t} />)}</div>
-          </>
-        )}
-
-        <h4 className="drawerh">Findings {issues.length > 0 && <span className="muted">({issues.length})</span>}</h4>
-        {issues.length === 0 ? (
-          <p className="muted">{st === 'unanalysable' ? 'Could not analyse — file unreadable.' : 'No findings — clean.'}</p>
-        ) : (
-          <div className="findings">
-            {issues.map((i, n) => {
-              const [bg, fg] = SEV[i.severity] || SEV.MINOR
-              return (
-                <div className="finding" key={n}>
-                  <span className="badge" style={{ background: bg, color: fg }}>{(i.severity || '').toLowerCase()}</span>
-                  <div className="findingmain">
-                    <div>{critLabel(i.wcag)}</div>
-                    <div className="muted fname" style={{ fontSize: 12 }}>{i.rule_id ?? i.ruleId}</div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-
-        {Object.keys(byCrit).length > 0 && (
-          <>
-            <h4 className="drawerh">WCAG criteria failing</h4>
-            <div className="critlist">
-              {Object.entries(byCrit).sort((a, b) => b[1] - a[1]).map(([w, n]) => (
-                <div className="critlistrow" key={w}><span>{critLabel(w)}</span><b>{n}</b></div>
-              ))}
-            </div>
-          </>
-        )}
-
-        <h4 className="drawerh">Document journey</h4>
-        <ol className="journeyline">
-          {STEPS.map((label, i) => {
-            const [glyph, color, bg] = STATE[states[i]]
-            const note = STATE_NOTE[states[i]]
+      <h4 className="drawerh">Findings {issues.length > 0 && <span className="muted">({issues.length})</span>}</h4>
+      {issues.length === 0 ? (
+        <p className="muted">{st === 'unanalysable' ? 'Could not analyse — file unreadable.' : 'No findings — clean.'}</p>
+      ) : (
+        <div className="findings">
+          {issues.map((i, n) => {
+            const [bg, fg] = SEV[i.severity] || SEV.MINOR
             return (
-              <li className="jrow" key={label}>
-                <span className="jdot" style={{ color, background: bg }} aria-hidden="true">{glyph}</span>
-                <span className="jlabel">{label}{i === 3 && file.score !== null ? ` · ${st === 'uncertain' ? '≤' : ''}${file.score}` : ''}</span>
-                {note && <span className="muted jnote">{note}</span>}
-              </li>
+              <div className="finding" key={n}>
+                <span className="badge" style={{ background: bg, color: fg }}>{(i.severity || '').toLowerCase()}</span>
+                <div className="findingmain">
+                  <div>{critLabel(i.wcag)}</div>
+                  <div className="muted fname" style={{ fontSize: 12 }}>{i.rule_id ?? i.ruleId}</div>
+                </div>
+              </div>
             )
           })}
-        </ol>
-      </aside>
-    </div>
+        </div>
+      )}
+
+      {Object.keys(byCrit).length > 0 && (
+        <>
+          <h4 className="drawerh">WCAG criteria failing</h4>
+          <div className="critlist">
+            {Object.entries(byCrit).sort((a, b) => b[1] - a[1]).map(([w, n]) => (
+              <div className="critlistrow" key={w}><span>{critLabel(w)}</span><b>{n}</b></div>
+            ))}
+          </div>
+        </>
+      )}
+
+      <h4 className="drawerh">Document journey</h4>
+      <ol className="journeyline">
+        {STEPS.map((label, i) => {
+          const [glyph, color, bg] = STATE[states[i]]
+          const note = STATE_NOTE[states[i]]
+          return (
+            <li className="jrow" key={label}>
+              <span className="jdot" style={{ color, background: bg }} aria-hidden="true">{glyph}</span>
+              <span className="jlabel">{label}{i === 3 && file.score !== null ? ` · ${st === 'uncertain' ? '≤' : ''}${file.score}` : ''}</span>
+              {note && <span className="muted jnote">{note}</span>}
+            </li>
+          )
+        })}
+      </ol>
+    </Drawer>
   )
 }

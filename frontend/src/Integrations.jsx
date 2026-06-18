@@ -1,3 +1,7 @@
+import { useState } from 'react'
+import SourceDrawer from './SourceDrawer.jsx'
+import FileDrawer from './FileDrawer.jsx'
+
 // Unified compliance across sources. The simulated estate connects several content
 // stores; the mova Agent monitors each continuously. (Demo data — no real connections.)
 
@@ -29,7 +33,9 @@ const FUTURE = [
   { name: 'Git Repos', logo: <Tile bg="#F05133">{G('M6 3v12a3 3 0 0 0 3 3h6M6 6a2 2 0 1 0 0-.01M18 15a2 2 0 1 0 0 .01M9 18a2 2 0 1 0 0 .01')}</Tile> },
 ]
 
-export default function Integrations({ sources, onScan, busy }) {
+export default function Integrations({ sources, files = [], onScan, busy }) {
+  const [selSrc, setSelSrc] = useState(null)
+  const [selFile, setSelFile] = useState(null)
   const total = sources.reduce((a, s) => a + (s.files || 0), 0)
   return (
     <>
@@ -42,12 +48,14 @@ export default function Integrations({ sources, onScan, busy }) {
       </div>
       <div className="intgrid">
         {sources.map((s) => (
-          <div className="intcard" key={s.id}>
+          <div className="intcard clickable" key={s.id} role="button" tabIndex={0}
+            onClick={() => setSelSrc(s)}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelSrc(s) } }}>
             <div className="intlogo">{LOGO[s.type] || LOGO.web}</div>
             <div className="intname">{s.name}</div>
             <div className="muted" style={{ fontSize: 12 }}>{s.dept} · {(s.files || 0).toLocaleString()} docs</div>
             <span className="intstatus live"><span className="livedot" />agent · {s.agent}</span>
-            <button className="intbtn" disabled={busy} onClick={() => onScan(s.id)}>{busy ? 'scanning…' : 'Run scan'}</button>
+            <button className="intbtn" disabled={busy} onClick={(e) => { e.stopPropagation(); onScan(s.id) }}>{busy ? 'scanning…' : 'Run scan'}</button>
           </div>
         ))}
         {FUTURE.map((s) => (
@@ -59,6 +67,8 @@ export default function Integrations({ sources, onScan, busy }) {
           </div>
         ))}
       </div>
+      {selSrc && <SourceDrawer source={selSrc} files={files.filter((f) => f.source === selSrc.id)} onClose={() => setSelSrc(null)} onPickFile={setSelFile} />}
+      {selFile && <FileDrawer file={selFile} onClose={() => setSelFile(null)} />}
     </>
   )
 }

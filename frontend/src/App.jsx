@@ -128,7 +128,7 @@ export default function App() {
       <ErrorBoundary key={view}>
         {view === 'overview' && (run ? <Overview run={run} files={files} trend={trend} onGo={setView} /> : placeholder)}
 
-        {view === 'integrations' && <Integrations sources={sources} onScan={doScan} busy={busy} />}
+        {view === 'integrations' && <Integrations sources={sources} files={files} onScan={doScan} busy={busy} />}
 
         {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} />}
 

@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import Tag from './Tag.jsx'
+import FileDrawer from './FileDrawer.jsx'
 
 // Steps 1-3: Discover & Inventory + Classify & Prioritize + Retain/Archive/Delete.
 // The agent auto-tags and classifies every document as it's discovered across sources.
@@ -16,6 +18,7 @@ function retention(name, tags) {
 }
 
 export default function Discover({ sources, files, busy, onScan }) {
+  const [sel, setSel] = useState(null)
   const tagged = files.filter((f) => (f.tags || []).length).length
   return (
     <>
@@ -38,7 +41,9 @@ export default function Discover({ sources, files, busy, onScan }) {
               {files.map((f) => {
                 const [p, pbg, pfg] = classify(f); const [r, rbg, rfg] = retention(f.file, f.tags)
                 return (
-                  <tr key={f.file}>
+                  <tr key={f.file} className="filerow" role="button" tabIndex={0}
+                    onClick={() => setSel(f)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSel(f) } }}>
                     <td className="fname">{f.file}
                       <div className="filemeta">
                         {f.sourceName && <span className="srcpill">{f.sourceName}</span>}
@@ -55,6 +60,7 @@ export default function Discover({ sources, files, busy, onScan }) {
           <p className="muted" style={{ marginTop: 12 }}>Tags, priority &amp; retention are assigned by the agent — duplicates, superseded, and legal-hold are flagged before assessment.</p>
         </section>
       )}
+      {sel && <FileDrawer file={sel} onClose={() => setSel(null)} />}
     </>
   )
 }

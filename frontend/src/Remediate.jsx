@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Bars } from './charts.jsx'
+import ReviewDrawer from './ReviewDrawer.jsx'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Preview — engines aren't built
 // yet; this simulates the workflow (the review queue is interactive) on your live findings.
@@ -16,10 +17,14 @@ const DIFF = {
   after: '<img src="chart.png" alt="Q3 benefits enrollment by region — West 38%, Northeast 24%, South 22%, Midwest 16%">',
 }
 const QUEUE0 = [
-  { id: 1, icon: '▦', title: 'chart on slide 7 — alt-text', meta: 'suggested: “Q3 revenue by region”', conf: 61 },
-  { id: 2, icon: '⊞', title: 'merged cells — table headers', meta: 'needs a human structure call', conf: 48 },
-  { id: 3, icon: '¶', title: 'reading order — multi-column page', meta: 'two plausible orders', conf: 55 },
-  { id: 4, icon: '◫', title: 'scanned page — needs OCR + tags', meta: 'low text confidence', conf: 42 },
+  { id: 1, icon: '▦', title: 'chart on slide 7 — alt-text', meta: 'suggested alt-text', conf: 61, file: 'open-enrollment-deck.pptx', rule: 'WCAG 1.1.1 — non-text content',
+    before: '<pic alt="">', after: '<pic alt="Q3 revenue by region — West 38%, NE 24%, South 22%, Midwest 16%">' },
+  { id: 2, icon: '⊞', title: 'merged cells — table headers', meta: 'needs a human structure call', conf: 48, file: 'budget-model.xlsx', rule: 'WCAG 1.3.1 — info & relationships',
+    before: '<table> — merged A1:C1, no header row', after: '<table> — unmerged, <th scope="col"> on row 1' },
+  { id: 3, icon: '¶', title: 'reading order — multi-column page', meta: 'two plausible orders', conf: 55, file: 'annual-report-2025.pdf', rule: 'WCAG 1.3.2 — meaningful sequence',
+    before: 'tab order: right column before left', after: 'tab order: left column → right (natural)' },
+  { id: 4, icon: '◫', title: 'scanned page — needs OCR + tags', meta: 'low text confidence', conf: 42, file: 'vendor-contract-acme.pdf', rule: 'WCAG 1.3.1 — info & relationships',
+    note: 'Image-only PDF — the agent recommends OCR + manual tagging before this can be certified; no auto-fix proposed.' },
 ]
 
 export default function Remediate({ run, files }) {
@@ -27,9 +32,11 @@ export default function Remediate({ run, files }) {
   const autoFixed = FIX_TYPES.reduce((a, f) => a + f.value, 0)
   const [queue, setQueue] = useState(QUEUE0)
   const [acted, setActed] = useState({ approved: 0, rejected: 0 })
+  const [selItem, setSelItem] = useState(null)
   const act = (id, kind) => {
     setQueue((q) => q.filter((x) => x.id !== id))
     setActed((a) => ({ ...a, [kind]: a[kind] + 1 }))
+    setSelItem(null)
   }
 
   return (
@@ -59,24 +66,27 @@ export default function Remediate({ run, files }) {
         ) : (
           <div className="queue">
             {queue.map((q) => (
-              <div className="qrow" key={q.id}>
+              <div className="qrow clickable" key={q.id} role="button" tabIndex={0}
+                onClick={() => setSelItem(q)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelItem(q) } }}>
                 <span className="qico" aria-hidden="true">{q.icon}</span>
                 <div className="qmain">
-                  <div className="qtitle">{q.title}</div>
+                  <div className="qtitle">{q.title} <span className="muted" style={{ fontSize: 12 }}>· {q.file}</span></div>
                   <div className="qmeta">{q.meta}</div>
                   <div className="conf">
                     <span className="conftrack"><i style={{ width: `${q.conf}%`, background: q.conf >= 55 ? '#F5B400' : '#F0524A' }} /></span>
                     <span className="muted">{q.conf}% confidence</span>
                   </div>
                 </div>
-                <button className="qbtn approve" onClick={() => act(q.id, 'approved')}>✓ approve</button>
-                <button className="qbtn reject" onClick={() => act(q.id, 'rejected')}>✕ reject</button>
+                <button className="qbtn approve" onClick={(e) => { e.stopPropagation(); act(q.id, 'approved') }}>✓ approve</button>
+                <button className="qbtn reject" onClick={(e) => { e.stopPropagation(); act(q.id, 'rejected') }}>✕ reject</button>
               </div>
             ))}
           </div>
         )}
         <p className="muted" style={{ marginTop: 12 }}>↻ Re-validated against all engines after each approved fix — only re-passing files advance to publish.</p>
       </section>
+      {selItem && <ReviewDrawer item={selItem} onClose={() => setSelItem(null)} onAct={act} />}
     </>
   )
 }

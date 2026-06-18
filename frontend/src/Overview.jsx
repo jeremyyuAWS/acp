@@ -1,11 +1,18 @@
 import { useEffect, useState } from 'react'
 import { Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
+import SegmentDrawer from './SegmentDrawer.jsx'
+import FileDrawer, { statusOf } from './FileDrawer.jsx'
 
 // Discover/Assess/Remediate are real (from the latest scan); Verify/Publish are projected.
 export default function Overview({ run, files, trend, onGo }) {
   const [on, setOn] = useState(false)
+  const [seg, setSeg] = useState(null)
+  const [selFile, setSelFile] = useState(null)
   useEffect(() => { const t = setTimeout(() => setOn(true), 80); return () => clearTimeout(t) }, [])
+
+  const pickStatus = (s) => { const fs = files.filter((f) => statusOf(f) === s.label); setSeg({ title: `${s.label} documents`, subtitle: `${fs.length} of ${files.length}`, files: fs }) }
+  const pickSeverity = (it) => { const sev = it.label.toUpperCase(); const fs = files.filter((f) => (f.issues || []).some((i) => i.severity === sev)); setSeg({ title: `${it.label} findings`, subtitle: `${fs.length} document(s) affected`, files: fs }) }
 
   const n = run.files || 0
   const needFix = Math.max(0, n - run.certifiable)
@@ -33,9 +40,9 @@ export default function Overview({ run, files, trend, onGo }) {
       </div>
 
       <div className="chartrow">
-        <section className="panel"><h2>Compliance status</h2><Donut segments={statusSegments(run)} caption="documents" /></section>
+        <section className="panel"><h2>Compliance status <span className="muted" style={{ fontWeight: 400 }}>· click to drill in</span></h2><Donut segments={statusSegments(run)} caption="documents" onPick={pickStatus} /></section>
         <section className="panel"><h2>Findings by severity</h2>
-          {severity.length ? <Bars items={severity} /> : <p className="muted">No open findings.</p>}
+          {severity.length ? <Bars items={severity} onPick={pickSeverity} /> : <p className="muted">No open findings.</p>}
         </section>
       </div>
 
@@ -63,6 +70,9 @@ export default function Overview({ run, files, trend, onGo }) {
         <div className="outcome"><span className="oc">✓</span><span className="ol">Audit-ready evidence</span><span className="ov">{auditReady}%</span></div>
         <div className="outcome"><span className="oc">⛁</span><span className="ol">Remediation cost</span><span className="ov good">↓ 41%</span></div>
       </div>
+
+      {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={setSelFile} />}
+      {selFile && <FileDrawer file={selFile} onClose={() => setSelFile(null)} />}
     </>
   )
 }

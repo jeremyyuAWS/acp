@@ -263,6 +263,19 @@ input:focus-visible, [role="tab"]:focus-visible {
 .emptyactions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 .loadingbox { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); font-size: 14px; padding: 60px 0; }
 
+/* clickable chart rows (donut legend / severity bars) */
+.pickrow { background: none; border: none; cursor: pointer; color: inherit; font: inherit; border-radius: 6px; padding: 3px 6px; text-align: left; }
+.pickrow:hover { background: var(--bg); }
+.intcard.clickable { cursor: pointer; }
+.intcard.clickable:hover { border-color: var(--plum); }
+.qrow.clickable { cursor: pointer; }
+.qrow.clickable:hover { background: var(--bg); }
+
+/* clickable file rows inside drawers (source / segment list) */
+.filelistrow { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; cursor: pointer; color: inherit; font: inherit; }
+.filelistrow:hover { border-color: var(--plum); background: var(--bg); }
+
 /* agent-assigned tags + source pills */
 .tag { font-size: 11px; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
 .srcpill { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: #ece7ec; color: #5f5660; white-space: nowrap; }

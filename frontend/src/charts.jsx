@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 // arcs grow from 0 on mount → reads as "live"
-export function Donut({ segments, size = 138, thickness = 18, caption }) {
+export function Donut({ segments, size = 138, thickness = 18, caption, onPick }) {
   const [on, setOn] = useState(false)
   useEffect(() => { const t = setTimeout(() => setOn(true), 80); return () => clearTimeout(t) }, [])
   const total = segments.reduce((a, s) => a + s.value, 0) || 1
@@ -25,32 +25,39 @@ export function Donut({ segments, size = 138, thickness = 18, caption }) {
         <text x="50%" y="61%" textAnchor="middle" style={{ fontSize: 11, fill: 'var(--muted)' }}>{caption}</text>
       </svg>
       <div style={{ flex: 1, minWidth: 0 }}>
-        {segments.map((s, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0', fontSize: 13 }}>
+        {segments.map((s, i) => {
+          const sx = { display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0', fontSize: 13, width: '100%' }
+          const inner = (<>
             <span style={{ width: 10, height: 10, borderRadius: 3, background: s.color, display: 'inline-block', flex: '0 0 auto' }} />
-            <span style={{ flex: 1, color: 'var(--ink)' }}>{s.label}</span>
+            <span style={{ flex: 1, color: 'var(--ink)', textAlign: 'left' }}>{s.label}</span>
             <b style={{ fontVariantNumeric: 'tabular-nums' }}>{s.value}</b>
-          </div>
-        ))}
+          </>)
+          return onPick
+            ? <button key={i} className="pickrow" style={sx} onClick={() => onPick(s)}>{inner}</button>
+            : <div key={i} style={sx}>{inner}</div>
+        })}
       </div>
     </div>
   )
 }
 
 // horizontal bars that fill from 0 on mount
-export function Bars({ items, cols = '108px 1fr 30px' }) {
+export function Bars({ items, cols = '108px 1fr 30px', onPick }) {
   const [on, setOn] = useState(false)
   useEffect(() => { const t = setTimeout(() => setOn(true), 80); return () => clearTimeout(t) }, [])
   const max = Math.max(1, ...items.map((i) => i.value))
   return (
     <div>
-      {items.map((it, i) => (
-        <div key={i} className="critrow" style={{ gridTemplateColumns: cols }}>
-          <span className="critlabel" style={{ fontSize: 13 }}>{it.label}</span>
+      {items.map((it, i) => {
+        const inner = (<>
+          <span className="critlabel" style={{ fontSize: 13, textAlign: 'left' }}>{it.label}</span>
           <span className="track"><i style={{ width: on ? `${(it.value / max) * 100}%` : '0%', background: it.color, transition: 'width 0.9s ease' }} /></span>
           <span className="critn">{it.value}</span>
-        </div>
-      ))}
+        </>)
+        return onPick
+          ? <button key={i} className="critrow pickrow" style={{ gridTemplateColumns: cols, width: '100%' }} onClick={() => onPick(it)}>{inner}</button>
+          : <div key={i} className="critrow" style={{ gridTemplateColumns: cols }}>{inner}</div>
+      })}
     </div>
   )
 }
