@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
+import { Bars } from './charts.jsx'
+import { IDENTITY } from './sim.js'
 
 // Single-document walkthrough: upload → scan → assess → remediate → human review →
 // certified. Self-contained demo (no backend); findings are keyed off the file type so
@@ -35,13 +37,30 @@ export default function Upload({ onCertified }) {
   }
   const onInput = (e) => { const f = e.target.files?.[0]; if (f) start({ name: f.name, size: f.size }) }
   const onDrop = (e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f) start({ name: f.name, size: f.size }) }
-  const sample = (name, kb) => start({ name, size: kb * 1024 })
+  const sample = async (name) => {
+    try { const r = await fetch(`${import.meta.env.BASE_URL}samples/${name}`); const b = await r.blob(); start({ name, size: b.size }) }
+    catch { start({ name, size: 100 * 1024 }) }
+  }
   const reset = () => { setStep(0); setFile(null); setIssues([]); setScanning(false) }
   const certify = () => { if (file) onCertified?.({ file: file.name }); setStep(4) }
 
   const score = Math.max(0, 100 - issues.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0))
   const review = issues.slice(-1)
   const autoFixed = issues.slice(0, -1)
+
+  const reportRef = useRef(null)
+  const [exporting, setExporting] = useState(false)
+  const doExport = async () => {
+    if (!reportRef.current) return
+    setExporting(true)
+    try { (await import('./exportPdf.js')).exportReportPDF(reportRef.current, `mova-${(file?.name || 'document').replace(/\.[^.]+$/, '')}-report.pdf`) }
+    catch (e) { console.error('PDF export failed', e) }
+    finally { setTimeout(() => setExporting(false), 600) }
+  }
+  const sevCount = {}; issues.forEach((i) => { sevCount[i.sev] = (sevCount[i.sev] || 0) + 1 })
+  const SEVCLR = { CRITICAL: '#A32D2D', SERIOUS: '#E24B4A', MODERATE: '#F5B400', MINOR: '#888780' }
+  const sevItems = ['CRITICAL', 'SERIOUS', 'MODERATE', 'MINOR'].filter((s) => sevCount[s]).map((s) => ({ label: s.toLowerCase(), value: sevCount[s], color: SEVCLR[s] }))
+  const today = new Date().toISOString().slice(0, 10)
 
   return (
     <>
@@ -61,11 +80,12 @@ export default function Upload({ onCertified }) {
           <input id="upfile" type="file" style={{ display: 'none' }} accept=".pdf,.docx,.pptx,.xlsx,.html,.htm" onChange={onInput} />
           <div className="muted" style={{ marginTop: 4 }}>PDF · Word · PowerPoint · Excel · HTML — scanned in your browser, nothing is uploaded anywhere</div>
           <div className="dzsamples">
-            <span className="muted">or try a sample:</span>
-            <button className="ghost small" onClick={() => sample('patient-discharge-instructions.pdf', 86)}>PDF</button>
-            <button className="ghost small" onClick={() => sample('benefits-policy.docx', 142)}>Word</button>
-            <button className="ghost small" onClick={() => sample('quarterly-town-hall.pptx', 210)}>PowerPoint</button>
-            <button className="ghost small" onClick={() => sample('careers-landing.html', 24)}>HTML</button>
+            <span className="muted">or try a real multi-page sample:</span>
+            <button className="ghost small" onClick={() => sample('patient-discharge-instructions.pdf')}>PDF</button>
+            <button className="ghost small" onClick={() => sample('benefits-policy.docx')}>Word</button>
+            <button className="ghost small" onClick={() => sample('quarterly-town-hall.pptx')}>PowerPoint</button>
+            <button className="ghost small" onClick={() => sample('finance-metrics.xlsx')}>Excel</button>
+            <button className="ghost small" onClick={() => sample('careers-landing.html')}>HTML</button>
           </div>
         </div>
       )}
@@ -141,15 +161,65 @@ export default function Upload({ onCertified }) {
       )}
 
       {step === 4 && (
-        <section className="panel" style={{ textAlign: 'center', padding: '36px 24px' }}>
-          <div style={{ fontSize: 38, color: '#3B6D11' }}>✓</div>
-          <h2 style={{ justifyContent: 'center' }}>Certified · 100 / 100</h2>
-          <p className="muted" style={{ maxWidth: 460, margin: '0 auto 18px' }}><span className="fname">{file?.name}</span> passed WCAG 2.1 AA after remediation and re-validation. Every step is captured in the audit trail.</p>
-          <div className="emptyactions">
-            <button onClick={reset}>Try another document</button>
-            <button className="ghost" onClick={() => window.print()}>Download report</button>
+        <>
+          <div className="dashtoolbar" style={{ gap: 10 }}>
+            <button className="ghost" onClick={reset}>↺ Try another</button>
+            <button className="exportbtn" onClick={doExport} disabled={exporting}>{exporting ? 'Generating PDF…' : '⤓ Download PDF report'}</button>
           </div>
-        </section>
+          <div ref={reportRef} className="reportdoc">
+            <div className="reporthead">
+              <span className="logo"><span className="word">mova</span><span className="io"><span>io</span></span></span>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 15 }}>Accessibility compliance certificate</div>
+                <div className="muted">{IDENTITY.org} · WCAG 2.1 AA · {today}</div>
+              </div>
+            </div>
+
+            <section className="certbanner">
+              <div className="certmark" aria-hidden="true">✓</div>
+              <div>
+                <div className="certtitle">Certified · 100 / 100</div>
+                <div className="muted"><span className="fname">{file?.name}</span> passed WCAG 2.1 AA after remediation &amp; re-validation.</div>
+              </div>
+              <div className="liftgain" style={{ marginLeft: 'auto' }}>{score} → 100</div>
+            </section>
+
+            <div className="chartrow">
+              <section className="panel"><h2>Compliance lift</h2>
+                <div className="lift">
+                  <div className="liftcol"><div className="liftnum" style={{ color: '#A32D2D' }}>{score}</div><div className="muted">as received</div></div>
+                  <div className="liftarrow" aria-hidden="true">→</div>
+                  <div className="liftcol"><div className="liftnum" style={{ color: '#3B6D11' }}>100</div><div className="muted">certified</div></div>
+                </div>
+                <p className="muted">{issues.length} finding(s) resolved across {sevItems.length} severity level(s).</p>
+              </section>
+              <section className="panel"><h2>Findings resolved · by severity</h2>
+                {sevItems.length ? <Bars items={sevItems} cols="84px 1fr 28px" /> : <p className="muted">None.</p>}
+              </section>
+            </div>
+
+            <section className="panel">
+              <h2>Issues remediated</h2>
+              <div className="findings">
+                {issues.map((i, n) => { const [bg, fg] = SEV_BADGE[i.sev] || SEV_BADGE.MINOR; return (
+                  <div className="finding" key={n}>
+                    <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11' }}>fixed</span>
+                    <div className="findingmain"><div>{i.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{i.detail}</div></div>
+                    <span className="badge" style={{ background: bg, color: fg }}>{i.sev.toLowerCase()}</span>
+                  </div>
+                ) })}
+              </div>
+            </section>
+
+            <section className="panel">
+              <h2>Document journey</h2>
+              <div className="journey">
+                {['discovered', `assessed ${score}`, 'auto-fixed', 'reviewed', 'certified 100'].map((l, n) => <span className="jstep" key={n}>✓ {l}</span>)}
+              </div>
+              <p className="muted" style={{ marginTop: 10 }}>Validated against WCAG 2.1 AA · every step captured in the audit trail.</p>
+            </section>
+          </div>
+        </>
       )}
     </>
   )

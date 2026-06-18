@@ -51,7 +51,7 @@ const DEPT_TAGS = {
   'Research Administration': ['PII', 'policy'], 'Cardiology': ['PII'], 'Radiology': ['PII'], 'Oncology': ['PII'], 'Neurology': ['PII'],
 }
 const STATUS_CYCLE = ['issues', 'certifiable', 'issues', 'uncertain', 'issues', 'certifiable', 'issues', 'certifiable', 'issues', 'error']
-const DEPT_COUNTS = [6, 5, 4, 7, 5, 4, 6, 4, 5, 4]
+const DEPT_COUNTS = [19, 17, 15, 22, 18, 16, 20, 15, 17, 16]
 const slug = (d) => d.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 const iss = (rows) => rows.map(([ruleId, wcag, severity]) => ({ ruleId, rule_id: ruleId, wcag, severity }))
 
@@ -129,9 +129,9 @@ export const simListScans = () => {
   const cur = SCANS['scan-cur'].run
   return [
     { id: 'scan-cur', completed_at: cur.completed_at, source: 'all', avg_score: cur.avg_score, files: cur.files, certifiable: cur.certifiable, uncertain: cur.uncertain, error: cur.error },
-    { id: 'h3', completed_at: '2026-06-10T09:00:00', avg_score: 74, files: 48 },
-    { id: 'h2', completed_at: '2026-06-03T09:00:00', avg_score: 68, files: 46 },
-    { id: 'h1', completed_at: '2026-05-27T09:00:00', avg_score: 61, files: 44 },
+    { id: 'h3', completed_at: '2026-06-10T09:00:00', avg_score: 74, files: 168 },
+    { id: 'h2', completed_at: '2026-06-03T09:00:00', avg_score: 68, files: 159 },
+    { id: 'h1', completed_at: '2026-05-27T09:00:00', avg_score: 61, files: 147 },
   ]
 }
 
