@@ -2,6 +2,9 @@ import { useState, useRef } from 'react'
 import { Bars } from './charts.jsx'
 import { IDENTITY } from './sim.js'
 import Logo from './Logo.jsx'
+import BeforeAfter from './BeforeAfter.jsx'
+
+const isHtml = (name) => /\.html?$/i.test(name || '')
 
 // Single-document walkthrough: upload → scan → assess → remediate → human review →
 // certified. Self-contained demo (no backend); findings are keyed off the file type so
@@ -16,8 +19,6 @@ const EXT_ISSUES = {
 }
 const SEV_PEN = { CRITICAL: 16, SERIOUS: 11, MODERATE: 5, MINOR: 2 }
 const SEV_BADGE = { CRITICAL: ['#FCEBEB', '#A32D2D'], SERIOUS: ['#FAECE7', '#993C1D'], MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'] }
-const FIX = { 'pdf.alt-text': ['<Figure>', '<Figure alt="bar chart: enrollment by quarter, Q3 highest">'], 'DOCX-ALT-001': ['<img>', '<img alt="org chart — 4 divisions reporting to the CMO">'], 'PPTX-ALT-001': ['<pic alt="">', '<pic alt="revenue by region — West leads at 38%">'], 'WEB-ALT-001': ['<img src="hero.jpg">', '<img src="hero.jpg" alt="clinicians reviewing a scan">'], 'XLSX-ALT-001': ['<chart>', '<chart alt="monthly admissions trend, rising">'] }
-
 const extOf = (name) => { const m = /\.([a-z0-9]+)$/i.exec(name || ''); return (m ? m[1] : 'pdf').toLowerCase() }
 const issuesFor = (name) => (EXT_ISSUES[extOf(name)] || EXT_ISSUES.pdf).map(([rule, wcag, sev, detail]) => ({ rule, wcag, sev, detail }))
 
@@ -28,21 +29,23 @@ export default function Upload({ onCertified }) {
   const [phase, setPhase] = useState('')
   const [issues, setIssues] = useState([])
   const [drag, setDrag] = useState(false)
+  const [srcText, setSrcText] = useState(null)
 
-  const start = (f) => {
-    setFile(f); setScanning(true); setStep(0)
+  const start = (f, text = null) => {
+    setFile(f); setSrcText(text); setScanning(true); setStep(0)
     const phases = ['Connecting…', 'Reading document…', 'mova Agent classifying & tagging…', 'Analysing against WCAG 2.1 AA…', 'Scoring…']
     let i = 0
     const tick = () => { if (i < phases.length) { setPhase(phases[i++]); setTimeout(tick, 640) } else { setScanning(false); setIssues(issuesFor(f.name)); setStep(1) } }
     setTimeout(tick, 300)
   }
-  const onInput = (e) => { const f = e.target.files?.[0]; if (f) start({ name: f.name, size: f.size }) }
-  const onDrop = (e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f) start({ name: f.name, size: f.size }) }
+  const handleFile = (f) => { const meta = { name: f.name, size: f.size }; if (isHtml(f.name)) f.text().then((t) => start(meta, t)).catch(() => start(meta)); else start(meta) }
+  const onInput = (e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }
+  const onDrop = (e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f) handleFile(f) }
   const sample = async (name) => {
-    try { const r = await fetch(`${import.meta.env.BASE_URL}samples/${name}`); const b = await r.blob(); start({ name, size: b.size }) }
+    try { const r = await fetch(`${import.meta.env.BASE_URL}samples/${name}`); if (isHtml(name)) { const t = await r.text(); start({ name, size: t.length }, t) } else { const b = await r.blob(); start({ name, size: b.size }) } }
     catch { start({ name, size: 100 * 1024 }) }
   }
-  const reset = () => { setStep(0); setFile(null); setIssues([]); setScanning(false) }
+  const reset = () => { setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null) }
   const certify = () => { if (file) onCertified?.({ file: file.name }); setStep(4) }
 
   const score = Math.max(0, 100 - issues.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0))
@@ -132,13 +135,7 @@ export default function Upload({ onCertified }) {
               </div>
             ))}
           </div>
-          {autoFixed[0] && FIX[autoFixed[0].rule] && (
-            <>
-              <div className="muted" style={{ marginBottom: 6 }}>example fix · {autoFixed[0].wcag}</div>
-              <div className="diffbox before"><span className="difftag">before</span><code>{FIX[autoFixed[0].rule][0]}</code></div>
-              <div className="diffbox after"><span className="difftag">after</span><code>{FIX[autoFixed[0].rule][1]}</code></div>
-            </>
-          )}
+          <BeforeAfter issues={issues} srcText={srcText} />
           <p className="muted" style={{ marginTop: 12 }}>{autoFixed.length} issue(s) auto-fixed · <b>{review.length}</b> routed to human review (low confidence).</p>
           <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 4 }}><button onClick={() => setStep(3)}>Human review →</button></div>
         </section>
