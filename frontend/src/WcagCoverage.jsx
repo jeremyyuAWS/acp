@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { WCAG } from './wcagCatalog.js'
 
 // WCAG 2.1 + 2.2 coverage matrix — all 87 success criteria, colour-coded by what
@@ -43,6 +43,12 @@ const wks = (d) => `${(d / 5).toFixed(0)}–${Math.round(d / 5)}`
 export default function WcagCoverage() {
   const [filter, setFilter] = useState('all')
   const [sel, setSel] = useState(null)
+  useEffect(() => {
+    if (!sel) return
+    const k = (e) => { if (e.key === 'Escape') setSel(null) }
+    window.addEventListener('keydown', k)
+    return () => window.removeEventListener('keydown', k)
+  }, [sel])
 
   const match = (r) => filter === 'all' ? true
     : filter === '2.2' ? r.added === '2.2'

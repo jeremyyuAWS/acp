@@ -4,6 +4,7 @@ import { Sparkline } from './ScoreRing.jsx'
 import { critLabel } from './FileDrawer.jsx'
 import { IDENTITY } from './sim.js'
 import Logo from './Logo.jsx'
+import { prefersReducedMotion } from './a11y.js'
 
 const JOURNEY = [
   { label: 'discovered', s: 'done' }, { label: 'classified', s: 'done' },
@@ -30,6 +31,7 @@ export default function Report({ run, files = [], trend = [], trendDates = [], c
   const next = useRef(1)
   useEffect(() => { const t = setTimeout(() => setOn(true), 80); return () => clearTimeout(t) }, [])
   useEffect(() => {
+    if (prefersReducedMotion()) return
     const t = setInterval(() => setFeed((f) => [{ e: AUDIT[next.current % AUDIT.length], id: next.current++ }, ...f].slice(0, 6)), 2600)
     return () => clearInterval(t)
   }, [])
@@ -125,7 +127,7 @@ export default function Report({ run, files = [], trend = [], trendDates = [], c
 
         <section className="panel">
           <h2>Audit trail · live <span className="livedot" aria-hidden="true" /></h2>
-          <div className="auditfeed">
+          <div className="auditfeed" role="log" aria-live="polite" aria-label="Audit trail">
             {certified.map((c) => (
               <div className="auditrow pinned" key={'cert' + c.id}>
                 <span className="auditkind" style={{ background: '#E7F0DC', color: '#3B6D11' }}>certified</span>

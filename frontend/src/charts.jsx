@@ -10,7 +10,7 @@ export function Donut({ segments, size = 138, thickness = 18, caption, onPick })
   let acc = 0
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flex: '0 0 auto' }} role="img" aria-label={caption}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flex: '0 0 auto' }} role="img" aria-label={`${caption || 'breakdown'}: ${segments.map((s) => `${s.value} ${s.label}`).join(', ')}`}>
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#f0edf2" strokeWidth={thickness} />
         {segments.map((s, i) => {
           const len = on ? (s.value / total) * C : 0

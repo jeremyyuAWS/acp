@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
+import { prefersReducedMotion } from './a11y.js'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Preview — engines aren't built
 // yet; this simulates the workflow (the review queue is interactive) on your live findings.
@@ -37,7 +38,7 @@ function FixCarousel() {
   const [idx, setIdx] = useState(0)
   const [paused, setPaused] = useState(false)
   useEffect(() => {
-    if (paused) return
+    if (paused || prefersReducedMotion()) return
     const t = setInterval(() => setIdx((i) => (i + 1) % FIX_EXAMPLES.length), 3800)
     return () => clearInterval(t)
   }, [paused])

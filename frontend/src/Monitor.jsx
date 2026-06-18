@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { monitoringState, sourceWatch } from './sim.js'
+import { prefersReducedMotion } from './a11y.js'
 
 // Step 10 · Monitor — the always-on surface. Shows every connected source being
 // continuously watched for new files and changes, a live event stream (with demo
@@ -51,7 +52,7 @@ export default function Monitor({ sources = [], files = [] }) {
   const push = (e) => setEvents((cur) => [{ ...e, id: next.current++, when: 'just now' }, ...cur].slice(0, 9))
 
   useEffect(() => {
-    if (paused) return
+    if (paused || prefersReducedMotion()) return
     const t = setInterval(() => push(POOL[next.current % POOL.length]), 4200)
     return () => clearInterval(t)
   }, [paused]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -138,7 +139,7 @@ export default function Monitor({ sources = [], files = [] }) {
               <button className="ghost small" onClick={() => push(POOL[2])}>✎ Simulate an edit</button>
             </div>
           </div>
-          <div className="monfeed" style={{ marginTop: 10 }}>
+          <div className="monfeed" style={{ marginTop: 10 }} role="log" aria-live="polite" aria-label="Live monitoring feed">
             {events.map((e) => {
               const [glyph, fg, bg, label] = KIND[e.kind] || KIND.clean
               return (

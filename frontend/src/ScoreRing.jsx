@@ -61,7 +61,7 @@ export function Sparkline({ points, width = 200, height = 46, labels }) {
   const line = xs.map((x, i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${ys[i].toFixed(1)}`).join(' ')
   const area = `${line} L${xs[xs.length - 1].toFixed(1)},${h - botPad} L${xs[0].toFixed(1)},${h - botPad} Z`
   return (
-    <svg width={w} height={h} className="spark">
+    <svg width={w} height={h} className="spark" role="img" aria-label={`Compliance trend: ${points[0]} to ${points[points.length - 1]} over ${points.length} scans`}>
       {axis && <line x1={padX} y1={h - botPad} x2={w - padX} y2={h - botPad} stroke="#ece8ee" strokeWidth="1" />}
       <path d={area} fill="#7a5c8e" opacity="0.12" />
       <path d={line} fill="none" stroke="#7a5c8e" strokeWidth="2" />

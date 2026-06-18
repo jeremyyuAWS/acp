@@ -135,6 +135,12 @@ export default function ChatWidget({ files = [], run, trend = [], trendDates = [
   const [thinking, setThinking] = useState(false)
   const endRef = useRef(null)
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs, open, thinking])
+  useEffect(() => {
+    if (!open) return
+    const k = (e) => { if (e.key === 'Escape') setOpen(false) }
+    window.addEventListener('keydown', k)
+    return () => window.removeEventListener('keydown', k)
+  }, [open])
 
   const send = async (text) => {
     const q = (text ?? input).trim()
@@ -169,7 +175,7 @@ export default function ChatWidget({ files = [], run, trend = [], trendDates = [
                 : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>}
             </button>
           </div>
-          <div className="chatmsgs">
+          <div className="chatmsgs" role="log" aria-live="polite">
             {msgs.map((m, i) => <div key={i} className={`chatmsg ${m.role}${m.chart ? ' haschart' : ''}`}>{m.text}{m.chart && <ChatChart chart={m.chart} />}</div>)}
             {thinking && <div className="chatmsg bot thinking"><span className="typing"><i /><i /><i /></span><span className="muted" style={{ fontSize: 12 }}>analyzing your scan…</span></div>}
             <div ref={endRef} />

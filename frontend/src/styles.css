@@ -8,6 +8,23 @@
   --card: #ffffff;
 }
 * { box-sizing: border-box; }
+
+/* Keyboard focus ring — visible focus is WCAG 2.4.7; this tool should practice it.
+   Only shows for keyboard users (:focus-visible), never on mouse click. */
+:focus-visible { outline: 2px solid #7a5c8e; outline-offset: 2px; border-radius: 4px; }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
+textarea:focus-visible, [tabindex]:focus-visible, [role="button"]:focus-visible,
+[role="tab"]:focus-visible { outline: 2px solid #7a5c8e; outline-offset: 2px; }
+
+/* Respect reduced-motion (WCAG 2.3.3 / 2.2.2) — calm every animation & transition. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
