@@ -57,7 +57,7 @@ export default function SignIn({ onSignedIn }) {
           <span className="word">mova</span>
           <span className="io"><span>io</span></span>
         </span>
-        <p className="signin-sub">accessibility compliance</p>
+        <p className="signin-sub">Accessibility Compliance</p>
         <button className="gbtn" disabled={busy} onClick={clientId ? gisSignIn : demoSignIn}>
           <GoogleG /> {busy ? 'signing in…' : 'Sign in with Google'}
         </button>

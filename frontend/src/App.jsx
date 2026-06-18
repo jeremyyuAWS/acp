@@ -102,7 +102,7 @@ export default function App() {
   return (
     <div className="app">
       <header>
-        <div className="brand"><Logo /><span className="sub">accessibility compliance</span></div>
+        <div className="brand"><Logo /><span className="sub">Accessibility Compliance</span></div>
         <div className="userbox">
           {rubric && <span className="chip">{rubric.target} · rubric {rubric.hash.slice(0, 8)}</span>}
           <span className="user">{me.email}</span>
