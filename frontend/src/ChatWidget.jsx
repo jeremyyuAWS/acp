@@ -1,5 +1,65 @@
 import { useState, useRef, useEffect } from 'react'
 import { critLabel } from './FileDrawer.jsx'
+import { statusSegments, severityItems } from './charts.jsx'
+import ChatChart from './ChatChart.jsx'
+
+const PLUM = '#7a5c8e'
+
+// Chart-aware router: detects the dimension being asked about, computes it from the
+// real scan, and returns { text, chart } so the answer can draw a bar/line/donut/heatmap.
+// Returns null when nothing matches (caller then tries the LLM / synthetic fallback).
+function chartAnswer(q, files, run, trend, trendDates) {
+  if (!files.length || !run) return null
+  const t = (q || '').toLowerCase()
+  const flagged = files.filter((f) => (f.issues || []).length)
+  const grpBar = (keyFn, color = PLUM, top = 8) => Object.entries(files.reduce((m, f) => { const k = keyFn(f); if (k != null) m[k] = (m[k] || 0) + 1; return m }, {}))
+    .sort((a, b) => b[1] - a[1]).slice(0, top).map(([label, value]) => ({ label, value, color }))
+  const findingsByDept = Object.entries(flagged.reduce((m, f) => { m[f.department] = (m[f.department] || 0) + f.issues.length; return m }, {})).sort((a, b) => b[1] - a[1])
+
+  // trend over time → line
+  if (/trend|over time|over the|history|progress|improv|trajectory|month/.test(t) && trend && trend.length > 1)
+    return { text: `Compliance has climbed from ${trend[0]} to ${trend[trend.length - 1]} over ${trend.length} scans — a steady upward trend.`, chart: { type: 'line', points: trend, labels: trendDates } }
+
+  // department × severity → heatmap
+  if (/heat ?map|matrix|cross|department.*sever|sever.*depart|by department and|grid/.test(t)) {
+    const sevs = ['CRITICAL', 'SERIOUS', 'MODERATE', 'MINOR']
+    const dm = {}; files.forEach((f) => (f.issues || []).forEach((i) => { (dm[f.department] = dm[f.department] || {})[i.severity] = (dm[f.department]?.[i.severity] || 0) + 1 }))
+    const topD = Object.entries(dm).map(([d, sv]) => [d, sevs.reduce((a, s) => a + (sv[s] || 0), 0)]).sort((a, b) => b[1] - a[1]).slice(0, 6).map((x) => x[0])
+    if (!topD.length) return null
+    return { text: 'Findings by department × severity (your highest-finding departments):', chart: { type: 'heatmap', rows: topD, cols: ['crit', 'serious', 'mod', 'minor'], matrix: topD.map((d) => sevs.map((s) => dm[d][s] || 0)) } }
+  }
+
+  // by department → bar (findings)
+  if (/department|dept|team|unit|division/.test(t)) {
+    if (!findingsByDept.length) return null
+    return { text: `${findingsByDept[0][0]} has the most findings (${findingsByDept[0][1]}). Findings by department:`, chart: { type: 'bar', data: findingsByDept.slice(0, 8).map(([label, value]) => ({ label, value, color: PLUM })) } }
+  }
+  // by source → bar
+  if (/source|drive|sharepoint|box|confluence|where.*from|repositor/.test(t))
+    return { text: 'Documents by source:', chart: { type: 'bar', data: grpBar((f) => f.sourceName) } }
+  // by type / format → bar
+  if (/type|format|file kind|pdf|docx|pptx|xlsx/.test(t))
+    return { text: 'Documents by type:', chart: { type: 'bar', data: grpBar((f) => (f.type || '').toUpperCase()) } }
+  // severity → bar
+  if (/sever|critical|serious|moderate|minor/.test(t)) {
+    const data = severityItems(files); if (!data.length) return null
+    return { text: 'Open findings by severity:', chart: { type: 'bar', data } }
+  }
+  // status / compliance breakdown → donut
+  if (/status|breakdown|certifiable|pie|donut|distribution|how many.*(certif|pass|fail)/.test(t))
+    return { text: 'Compliance status across the estate:', chart: { type: 'donut', data: statusSegments(run), caption: 'docs' } }
+  // top WCAG → bar
+  if (/wcag|violation|criteri|guideline|rule|fail/.test(t)) {
+    const wm = {}; files.forEach((f) => (f.issues || []).forEach((i) => { wm[i.wcag] = (wm[i.wcag] || 0) + 1 }))
+    const data = Object.entries(wm).sort((a, b) => b[1] - a[1]).slice(0, 7).map(([w, n]) => ({ label: critLabel(w).replace(/^WCAG\s*/, ''), value: n, color: n >= 8 ? '#E24B4A' : '#F5B400' }))
+    if (!data.length) return null
+    return { text: 'Top WCAG violations across your documents:', chart: { type: 'bar', data, gridCols: '150px 1fr 26px' } }
+  }
+  // generic ask to visualise → default to findings by department
+  if (/chart|graph|plot|visuali|diagram|^show|bar|map of/.test(t) && findingsByDept.length)
+    return { text: "Here's your findings by department:", chart: { type: 'bar', data: findingsByDept.slice(0, 8).map(([label, value]) => ({ label, value, color: PLUM })) } }
+  return null
+}
 
 // Optional real-LLM endpoint for free-form questions. Defaults to the bundled Netlify
 // function when deployed on *.netlify.app; set VITE_ASK_ENDPOINT for other hosts. When
@@ -50,7 +110,7 @@ function dataSummary(files, run) {
 
 function synthAnswer(files, run) {
   const flagged = files.filter((f) => (f.issues || []).length).length
-  return `Across your ${run.files}-document scan (average ${run.avg_score}/100, ${flagged} with open findings), I don't have an exact metric for that. I can pull precise numbers on your compliance score, top WCAG violations, departments, sources, PII/legal exposure, document types, or remediation — try one of those.`
+  return `Across your ${run.files}-document scan (average ${run.avg_score}/100, ${flagged} with open findings), I don't have an exact metric for that. Try asking me to chart something — "findings by department", "compliance trend over time", "severity heatmap" — or about your score, top WCAG violations, sources, or PII/legal exposure.`
 }
 
 async function askCustom(q, files, run) {
@@ -65,9 +125,9 @@ async function askCustom(q, files, run) {
   return synthAnswer(files, run)
 }
 
-const SUGGEST = ["What's my compliance score?", 'Which department has the most issues?', 'Top WCAG violations?', 'How many PII documents?']
+const SUGGEST = ["What's my compliance score?", 'Findings by department', 'Compliance trend over time', 'Severity heatmap', 'Top WCAG violations']
 
-export default function ChatWidget({ files = [], run }) {
+export default function ChatWidget({ files = [], run, trend = [], trendDates = [] }) {
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [msgs, setMsgs] = useState([{ role: 'bot', text: 'Hi — ask me anything about your scanned documents.' }])
@@ -82,11 +142,13 @@ export default function ChatWidget({ files = [], run }) {
     setInput('')
     setMsgs((m) => [...m, { role: 'user', text: q }])
     setThinking(true)
-    const matched = matchAnswer(q, files, run)
+    const charted = chartAnswer(q, files, run, trend, trendDates)
+    const matched = charted ? null : matchAnswer(q, files, run)
     let reply
-    if (matched) { await delay(750 + Math.floor(Math.random() * 600)); reply = matched }
-    else { await delay(450); reply = await askCustom(q, files, run) }
-    setMsgs((m) => [...m, { role: 'bot', text: reply }])
+    if (charted) { await delay(800 + Math.floor(Math.random() * 700)); reply = charted }
+    else if (matched) { await delay(750 + Math.floor(Math.random() * 600)); reply = { text: matched } }
+    else { await delay(450); reply = { text: await askCustom(q, files, run) } }
+    setMsgs((m) => [...m, { role: 'bot', ...reply }])
     setThinking(false)
   }
 
@@ -108,7 +170,7 @@ export default function ChatWidget({ files = [], run }) {
             </button>
           </div>
           <div className="chatmsgs">
-            {msgs.map((m, i) => <div key={i} className={`chatmsg ${m.role}`}>{m.text}</div>)}
+            {msgs.map((m, i) => <div key={i} className={`chatmsg ${m.role}${m.chart ? ' haschart' : ''}`}>{m.text}{m.chart && <ChatChart chart={m.chart} />}</div>)}
             {thinking && <div className="chatmsg bot thinking"><span className="typing"><i /><i /><i /></span><span className="muted" style={{ fontSize: 12 }}>analyzing your scan…</span></div>}
             <div ref={endRef} />
           </div>

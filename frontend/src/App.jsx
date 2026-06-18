@@ -155,7 +155,7 @@ export default function App() {
         {view === 'upload' && <Upload onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
       </ErrorBoundary>
 
-      <ChatWidget files={files} run={run} />
+      <ChatWidget files={files} run={run} trend={trend} trendDates={trendDates} />
     </div>
   )
 }
