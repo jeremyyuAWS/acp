@@ -21,7 +21,7 @@ const AUDIT = [
 const ACTOR = { 'auto-fix': 'mova engine', review: 'A. Chen', publish: 'mova engine', 're-scan': 'mova engine', archive: 'mova engine' }
 const ACOLOR = { 'auto-fix': '#1D9E75', review: '#854F0B', publish: '#185FA5', 're-scan': '#3B6D11', archive: '#5F5E5A' }
 
-export default function Report({ run, files = [], trend = [], certified = [] }) {
+export default function Report({ run, files = [], trend = [], trendDates = [], certified = [] }) {
   const ref = useRef(null)
   const [on, setOn] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -80,7 +80,7 @@ export default function Report({ run, files = [], trend = [], certified = [] }) 
 
         <div className="chartrow">
           <section className="panel"><h2>Estate compliance trend · {trend.length} scans</h2>
-            {trend.length > 1 ? <Sparkline points={trend} width={320} height={74} /> : <p className="muted">Not enough history yet.</p>}
+            {trend.length > 1 ? <Sparkline points={trend} labels={trendDates} width={360} height={100} /> : <p className="muted">Not enough history yet.</p>}
             <div className="muted" style={{ marginTop: 6 }}>{trend.length > 1 ? `${trend[0]} → ${trend[trend.length - 1]} over ${trend.length} scans` : ''}</div>
           </section>
           <section className="panel"><h2>Compliance status</h2>{run ? <Donut segments={statusSegments(run)} caption="documents" size={120} /> : null}</section>

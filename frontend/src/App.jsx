@@ -92,7 +92,10 @@ export default function App() {
 
   const run = scan?.run
   const files = scan?.files ?? []
-  const trend = [...scanList].reverse().map((s) => s.avg_score).filter((x) => x != null)
+  const trendData = [...scanList].reverse().filter((s) => s.avg_score != null)
+    .map((s) => ({ score: s.avg_score, label: s.completed_at ? new Date(s.completed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '' }))
+  const trend = trendData.map((d) => d.score)
+  const trendDates = trendData.map((d) => d.label)
   const placeholder = loaded ? <EmptyState onScan={doScan} busy={busy} /> : <Loading />
 
   return (
@@ -126,7 +129,7 @@ export default function App() {
       )}
 
       <ErrorBoundary key={view}>
-        {view === 'overview' && (run ? <Overview run={run} files={files} trend={trend} onGo={setView} /> : placeholder)}
+        {view === 'overview' && (run ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} /> : placeholder)}
 
         {view === 'integrations' && <Integrations sources={sources} files={files} onScan={doScan} busy={busy} />}
 
@@ -147,7 +150,7 @@ export default function App() {
 
         {view === 'remediate' && (run ? <Remediate run={run} files={files} /> : placeholder)}
 
-        {view === 'report' && (run ? <Report run={run} files={files} trend={trend} certified={certifiedDocs} /> : placeholder)}
+        {view === 'report' && (run ? <Report run={run} files={files} trend={trend} trendDates={trendDates} certified={certifiedDocs} /> : placeholder)}
 
         {view === 'upload' && <Upload onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
       </ErrorBoundary>

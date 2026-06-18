@@ -8,7 +8,7 @@ import WordCloud from './WordCloud.jsx'
 import Insight from './Insight.jsx'
 
 // Discover/Assess/Remediate are real (from the latest scan); Verify/Publish are projected.
-export default function Overview({ run, files, trend, onGo }) {
+export default function Overview({ run, files, trend, trendDates, onGo }) {
   const [on, setOn] = useState(false)
   const [seg, setSeg] = useState(null)
   const [selFile, setSelFile] = useState(null)
@@ -97,7 +97,7 @@ export default function Overview({ run, files, trend, onGo }) {
       </section>
 
       {trend.length > 1 && new Set(trend).size > 1 && (
-        <section className="panel"><h2>Compliance trend · {trend.length} scans</h2><Sparkline points={trend} width={560} height={72} /></section>
+        <section className="panel"><h2>Compliance trend · {trend.length} scans</h2><Sparkline points={trend} labels={trendDates} width={620} height={104} /></section>
       )}
 
       {seg &&<SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={setSelFile} />}

@@ -46,22 +46,32 @@ export function ScoreRing({ score, delta, deltaKey }) {
   )
 }
 
-export function Sparkline({ points, width = 200, height = 46 }) {
+export function Sparkline({ points, width = 200, height = 46, labels }) {
   if (!points || points.length < 2) return null
-  const w = width, h = height, pad = 8
-  // scale to the data's own range (not 0-100) so small movements read; pad so it isn't pinned to the edges
+  const axis = !!labels
+  const w = width, h = height, padX = axis ? 14 : 8
+  const topPad = axis ? 16 : 8 // room for the value above each point
+  const botPad = axis ? 20 : 8 // room for the date below each point
+  // scale to the data's own range (not 0-100) so small movements read
   const lo = Math.min(...points), hi = Math.max(...points)
   const range = Math.max(hi - lo, 4)
-  const min = lo - range * 0.4, max = hi + range * 0.4
-  const xs = points.map((_, i) => pad + (i * (w - 2 * pad)) / (points.length - 1))
-  const ys = points.map((p) => h - pad - ((p - min) / (max - min)) * (h - 2 * pad))
+  const min = lo - range * 0.3, max = hi + range * 0.3
+  const xs = points.map((_, i) => padX + (i * (w - 2 * padX)) / (points.length - 1))
+  const ys = points.map((p) => (h - botPad) - ((p - min) / (max - min)) * (h - topPad - botPad))
   const line = xs.map((x, i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${ys[i].toFixed(1)}`).join(' ')
-  const area = `${line} L${xs[xs.length - 1].toFixed(1)},${h} L${xs[0].toFixed(1)},${h} Z`
+  const area = `${line} L${xs[xs.length - 1].toFixed(1)},${h - botPad} L${xs[0].toFixed(1)},${h - botPad} Z`
   return (
     <svg width={w} height={h} className="spark">
+      {axis && <line x1={padX} y1={h - botPad} x2={w - padX} y2={h - botPad} stroke="#ece8ee" strokeWidth="1" />}
       <path d={area} fill="#7a5c8e" opacity="0.12" />
       <path d={line} fill="none" stroke="#7a5c8e" strokeWidth="2" />
-      {xs.map((x, i) => <circle key={i} cx={x} cy={ys[i]} r={i === xs.length - 1 ? 3.5 : 2} fill={i === xs.length - 1 ? ringColor(points[i]) : '#7a5c8e'} />)}
+      {xs.map((x, i) => (
+        <g key={i}>
+          <circle cx={x} cy={ys[i]} r={i === xs.length - 1 ? 3.8 : 2.6} fill={i === xs.length - 1 ? ringColor(points[i]) : '#7a5c8e'} />
+          {axis && <text x={x} y={ys[i] - 7} textAnchor="middle" fontSize="10.5" fontWeight="600" fill="#6c6470">{points[i]}</text>}
+          {axis && <text x={x} y={h - 5} textAnchor="middle" fontSize="10.5" fill="#9a948f">{labels[i]}</text>}
+        </g>
+      ))}
     </svg>
   )
 }
