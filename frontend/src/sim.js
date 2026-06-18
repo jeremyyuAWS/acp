@@ -105,7 +105,14 @@ const findingDetail = (is, seed) => (FIND[is.wcag] ? FIND[is.wcag](seed) : {})
 // next-best-action with an effort estimate and rationale.
 const REF_DAY = Date.parse('2026-06-18T00:00:00Z')
 const AGE_DAYS = [4, 9, 16, 27, 41, 73, 119, 188, 274, 401, 612, 900, 1340, 2010]
-const OWNERS = ['A. Chen', 'M. Okafor', 'S. Patel', 'J. Romero', 'L. Nguyen', 'D. Weiss', 'R. Haddad', 'K. Brooks']
+// Owners carry a seniority so remediation can be prioritized by business
+// importance (executive-owned + public-facing documents matter most).
+const OWNERS = [
+  { n: 'A. Chen', sr: 'Executive' }, { n: 'M. Okafor', sr: 'Director' }, { n: 'L. Nguyen', sr: 'Director' },
+  { n: 'S. Patel', sr: 'Manager' }, { n: 'D. Weiss', sr: 'Manager' },
+  { n: 'J. Romero', sr: 'Staff' }, { n: 'R. Haddad', sr: 'Staff' }, { n: 'K. Brooks', sr: 'Staff' },
+]
+export const SENIORITY_ORDER = ['Executive', 'Director', 'Manager', 'Staff']
 const ASSIST_MIN = { CRITICAL: 12, SERIOUS: 8, MODERATE: 5, MINOR: 3 }
 const dateStr = (days) => new Date(REF_DAY - days * 86400000).toISOString().slice(0, 10)
 const fmtAge = (days) => days < 45 ? `${days}d ago` : days < 600 ? `${Math.round(days / 30)} mo ago` : `${(days / 365).toFixed(1)} yr ago`
@@ -191,8 +198,9 @@ function genCorpus() {
       const sizeKB = type === 'video' ? 24000 + durMin * 9500 : type === 'audio' ? 1400 + durMin * 950
         : type === 'pdf' ? 120 + pages * 38 : type === 'pptx' ? 800 + pages * 140 : type === 'xlsx' ? 24 + sheets * 60 : type === 'html' ? 18 + ((i * 9) % 90) : 30 + pages * 16
       const superseded = ageDays >= 600 && i % 3 === 0 && status !== 'error'
+      const ownerObj = OWNERS[(i + di) % OWNERS.length]
       const f = {
-        file, source, sourceName: SRC[source].name, department: dept, dept, type, owner: OWNERS[(i + di) % OWNERS.length],
+        file, source, sourceName: SRC[source].name, department: dept, dept, type, owner: ownerObj.n, seniority: ownerObj.sr,
         status, score, compliant: status === 'certifiable', skipped_rules: status === 'uncertain' ? 2 : 0,
         engine: ENG[type], tags, issues,
         ageDays, modified: dateStr(ageDays), modifiedAge: fmtAge(ageDays), lastAccessed: dateStr(Math.max(1, Math.round(ageDays / 2.5))),

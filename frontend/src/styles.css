@@ -518,6 +518,14 @@ input:focus-visible, [role="tab"]:focus-visible {
 .ratcard .muted { font-size: 11px; }
 .linklike { background: none; border: none; padding: 0; color: var(--plum); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
 
+/* --- Discover business-priority charts --- */
+.prioritypanel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 18px; margin: 0 0 16px; }
+.priorityhd { font-size: 14px; }
+.prioritynote { font-size: 13px; line-height: 1.45; color: #8a3b2f; background: #fcf1ee; border: 1px solid #f3d9d2; border-radius: 10px; padding: 9px 12px; margin: 11px 0 13px; }
+.prioritygrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
+.ppanel h3 { font-size: 13px; margin: 0 0 10px; color: var(--ink); }
+.ppfoot { font-size: 11px; margin-top: 8px; line-height: 1.4; }
+
 /* --- rotating fix carousel (Remediate) --- */
 .fixhd { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
 .fixcard { animation: fadein 0.4s ease; }

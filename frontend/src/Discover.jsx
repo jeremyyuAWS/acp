@@ -1,7 +1,13 @@
 import { useState } from 'react'
 import Tag from './Tag.jsx'
 import FileDrawer, { statusOf, REC_STYLE, fmtEffort } from './FileDrawer.jsx'
-import { DEPARTMENTS, recommendationSummary } from './sim.js'
+import SegmentDrawer from './SegmentDrawer.jsx'
+import { Bars } from './charts.jsx'
+import { DEPARTMENTS, recommendationSummary, SENIORITY_ORDER } from './sim.js'
+
+const SR_COLOR = { Executive: '#A32D2D', Director: '#D85A30', Manager: '#F5B400', Staff: '#9a948f' }
+const exposureOf = (f) => (f.tags || []).includes('public-facing') ? 'public-facing' : (f.tags || []).includes('high-traffic') ? 'high-traffic' : 'internal'
+const EXP_COLOR = { 'public-facing': '#A32D2D', 'high-traffic': '#D85A30', internal: '#9a948f' }
 
 // Steps 1-3: Discover & Inventory + Classify & Prioritize + Retain/Archive/Delete.
 // The agent's crawl metadata + findings resolve to a single prescriptive action
@@ -22,6 +28,7 @@ const ACTION_DESC = {
 
 export default function Discover({ sources, files, busy, onScan, decisions = {}, setDecisions }) {
   const [sel, setSel] = useState(null)
+  const [seg, setSeg] = useState(null)
   const [open, setOpen] = useState(() => new Set())
   const [editing, setEditing] = useState(null)
   const toggle = (d) => setOpen((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n })
@@ -76,6 +83,35 @@ export default function Discover({ sources, files, busy, onScan, decisions = {},
           </div>
         </div>
       )}
+
+      {(() => {
+        const flagged = files.filter((f) => (f.issues || []).length)
+        if (!flagged.length) return null
+        const findingsBy = (keyFn, order) => {
+          const m = {}; flagged.forEach((f) => { const k = keyFn(f); if (k != null) m[k] = (m[k] || 0) + f.issues.length })
+          const entries = order ? order.filter((k) => m[k]).map((k) => [k, m[k]]) : Object.entries(m).sort((a, b) => b[1] - a[1])
+          return entries
+        }
+        const deptData = findingsBy((f) => f.department).slice(0, 8).map(([label, value]) => ({ label, value, color: '#7a5c8e' }))
+        const senData = findingsBy((f) => f.seniority, SENIORITY_ORDER).map(([label, value]) => ({ label, value, color: SR_COLOR[label] }))
+        const expData = findingsBy(exposureOf, ['public-facing', 'high-traffic', 'internal']).map(([label, value]) => ({ label, value, color: EXP_COLOR[label] }))
+        const pubCrit = flagged.filter((f) => (f.tags || []).includes('public-facing') && (f.issues || []).some((i) => i.severity === 'CRITICAL')).length
+        const execFlagged = flagged.filter((f) => f.seniority === 'Executive').length
+        const drill = (title, sub, pred) => setSeg({ title, subtitle: sub, files: flagged.filter(pred) })
+        return (
+          <div className="prioritypanel">
+            <div className="priorityhd">
+              <b>Business priority</b> <span className="muted">· where to remediate first — weighted by exposure, severity &amp; ownership</span>
+            </div>
+            <div className="prioritynote">⚑ {pubCrit} public-facing document{pubCrit === 1 ? '' : 's'} ha{pubCrit === 1 ? 's' : 've'} critical findings and {execFlagged} are executive-owned — the highest business risk under ADA / EAA. Start here.</div>
+            <div className="prioritygrid">
+              <section className="ppanel"><h3>Open findings by department</h3><Bars items={deptData} cols="118px 1fr 28px" onPick={(it) => drill(`${it.label} · open findings`, `${it.value} findings`, (f) => f.department === it.label)} /></section>
+              <section className="ppanel"><h3>By owner seniority</h3><Bars items={senData} cols="92px 1fr 28px" onPick={(it) => drill(`${it.label}-owned · open findings`, `${it.value} findings`, (f) => f.seniority === it.label)} /><div className="muted ppfoot">executive / director-owned content carries more reputational weight</div></section>
+              <section className="ppanel"><h3>By exposure</h3><Bars items={expData} cols="98px 1fr 28px" onPick={(it) => drill(`${it.label} · open findings`, `${it.value} findings`, (f) => exposureOf(f) === it.label)} /><div className="muted ppfoot">public-facing pages are the top legal-exposure set</div></section>
+            </div>
+          </div>
+        )
+      })()}
 
       {files.length === 0 ? <p className="muted">No documents yet — run a scan from Integrations.</p> : (
         <>
@@ -146,6 +182,7 @@ export default function Discover({ sources, files, busy, onScan, decisions = {},
           })}
         </>
       )}
+      {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
       {sel && <FileDrawer file={sel} onClose={() => setSel(null)} />}
     </>
   )

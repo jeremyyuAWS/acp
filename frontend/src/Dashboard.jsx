@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { reportUrl } from './api'
 import { ScoreRing, Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
-import FileDrawer from './FileDrawer.jsx'
+import FileDrawer, { critLabel } from './FileDrawer.jsx'
+import SegmentDrawer from './SegmentDrawer.jsx'
 import Tag from './Tag.jsx'
 import Insight from './Insight.jsx'
 
@@ -19,6 +20,10 @@ const BADGE = {
 
 export default function Dashboard({ run, files, trend, delta, deltaKey }) {
   const [sel, setSel] = useState(null)
+  const [seg, setSeg] = useState(null)
+  const pickStatus = (s) => { const fs = files.filter((f) => statusOf(f) === s.label); setSeg({ title: `${s.label} documents`, subtitle: `${fs.length} of ${files.length}`, files: fs }) }
+  const pickSeverity = (it) => { const sev = it.label.toUpperCase(); const fs = files.filter((f) => (f.issues || []).some((i) => i.severity === sev)); setSeg({ title: `${it.label} findings`, subtitle: `${fs.length} document(s) affected`, files: fs }) }
+  const pickCrit = (c) => { const fs = files.filter((f) => (f.issues || []).some((i) => i.wcag === c)); setSeg({ title: `${critLabel(c)}`, subtitle: `${fs.length} document(s) failing this criterion`, files: fs }) }
   const critFails = {}
   files.forEach((f) => new Set(f.issues.map((i) => i.wcag)).forEach((c) => { critFails[c] = (critFails[c] || 0) + 1 }))
   const maxFail = Math.max(1, ...Object.values(critFails))
@@ -57,21 +62,21 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
         </div>
       </section>
       <div className="chartrow">
-        <section className="panel"><h2>Compliance status</h2><Donut segments={statusSegments(run)} caption="documents" /><Insight text={INS.status} /></section>
-        <section className="panel"><h2>Findings by severity</h2>
-          {severityItems(files).length ? <Bars items={severityItems(files)} /> : <p className="muted">No open findings.</p>}
+        <section className="panel"><h2>Compliance status <span className="muted" style={{ fontWeight: 400 }}>· click to drill in</span></h2><Donut segments={statusSegments(run)} caption="documents" onPick={pickStatus} /><Insight text={INS.status} /></section>
+        <section className="panel"><h2>Findings by severity <span className="muted" style={{ fontWeight: 400 }}>· click to drill in</span></h2>
+          {severityItems(files).length ? <Bars items={severityItems(files)} onPick={pickSeverity} /> : <p className="muted">No open findings.</p>}
           <Insight text={INS.severity} />
         </section>
       </div>
       {Object.keys(critFails).length > 0 && (
         <section className="panel">
-          <h2>WCAG 2.1 criteria failing, by file count</h2>
+          <h2>WCAG 2.1 criteria failing, by file count <span className="muted" style={{ fontWeight: 400 }}>· click to drill in</span></h2>
           {Object.entries(critFails).sort((a, b) => b[1] - a[1]).map(([c, n]) => (
-            <div className="critrow" key={c}>
-              <span className="critlabel">{CRIT[c] ?? c}</span>
+            <button className="critrow pickrow" key={c} style={{ width: '100%' }} onClick={() => pickCrit(c)}>
+              <span className="critlabel" style={{ textAlign: 'left' }}>{CRIT[c] ?? critLabel(c)}</span>
               <span className="track"><i style={{ width: `${(n / maxFail) * 100}%`, background: n >= maxFail ? '#F0524A' : '#F5B400' }} /></span>
               <span className="critn">{n}</span>
-            </div>
+            </button>
           ))}
           <Insight text={INS.wcag} />
         </section>
@@ -105,6 +110,7 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
           </tbody>
         </table>
       </section>
+      {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
       {sel && <FileDrawer file={sel} onClose={() => setSel(null)} />}
     </>
   )
