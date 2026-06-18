@@ -14,7 +14,10 @@ body {
   background: var(--bg);
   color: var(--ink);
 }
-.app { max-width: 920px; margin: 0 auto; padding: 28px 24px 64px; }
+.app { max-width: 1320px; margin: 0 auto; padding: 28px 32px 64px; }
+.scopebar { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin: 8px 0 -4px; }
+.scopebar b { color: var(--ink); font-weight: 500; }
+.scopedot { width: 7px; height: 7px; border-radius: 50%; background: #639922; display: inline-block; }
 
 header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
 .brand { display: flex; align-items: center; gap: 12px; }
@@ -79,6 +82,24 @@ td { padding: 10px 0; border-top: 1px solid var(--line); }
 .signin-foot { margin-top: 18px; font-size: 12px; }
 .gbtn { display: inline-flex; align-items: center; gap: 10px; background: #fff; color: #3c4043; border: 1px solid #dadce0; border-radius: 9px; padding: 11px 20px; font-size: 14px; font-weight: 500; }
 .gbtn:hover { background: #f8f9fa; }
+
+/* sign-in: SSO methods + role personas */
+.signin-card.wide { max-width: 440px; }
+.ssorow { display: flex; flex-direction: column; gap: 8px; margin: 22px 0 6px; }
+.ssobtn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; background: #fff; color: #3c4043; border: 1px solid #dadce0; border-radius: 9px; padding: 10px 16px; font-size: 14px; font-weight: 500; width: 100%; }
+.ssobtn:hover { background: #f8f9fa; }
+.signin-or { display: flex; align-items: center; text-align: center; color: var(--muted); font-size: 12px; margin: 16px 0 12px; }
+.signin-or::before, .signin-or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.signin-or span { padding: 0 12px; }
+.personas { display: flex; flex-direction: column; gap: 8px; }
+.personacard { display: flex; align-items: center; gap: 12px; text-align: left; background: #fff; border: 1px solid var(--line); border-radius: 11px; padding: 11px 14px; cursor: pointer; width: 100%; font: inherit; }
+.personacard:hover { border-color: var(--plum); background: var(--bg); }
+.pavatar { width: 36px; height: 36px; border-radius: 50%; background: #f3eef6; color: var(--plum); display: inline-flex; align-items: center; justify-content: center; font-weight: 600; font-size: 13px; flex: 0 0 auto; }
+.pmain { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pname { font-size: 14px; font-weight: 500; color: var(--ink); }
+.prole { font-weight: 400; }
+.pscope { font-size: 12px; }
+.psso { font-size: 12px; flex: 0 0 auto; }
 
 .userbox { display: flex; align-items: center; gap: 10px; }
 .user { font-size: 13px; color: var(--ink); }

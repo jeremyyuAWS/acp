@@ -1,9 +1,8 @@
-import { useEffect, useState } from 'react'
-import { getMe, getConfig, setDriveToken } from './api'
+import { PERSONAS } from './sim.js'
 
 function GoogleG() {
   return (
-    <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+    <svg width="17" height="17" viewBox="0 0 48 48" aria-hidden="true">
       <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.9 2.6 30.4 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.8 6.1C12.3 13.2 17.6 9.5 24 9.5z" />
       <path fill="#4285F4" d="M46.1 24.6c0-1.6-.1-3.1-.4-4.6H24v9.1h12.4c-.5 2.9-2.1 5.3-4.6 7l7.1 5.5c4.2-3.9 6.2-9.6 6.2-17z" />
       <path fill="#FBBC05" d="M10.4 28.3a14.5 14.5 0 0 1 0-8.6l-7.8-6.1a24 24 0 0 0 0 20.8l7.8-6.1z" />
@@ -11,58 +10,42 @@ function GoogleG() {
     </svg>
   )
 }
+const MsLogo = () => <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="9.2" height="9.2" fill="#F25022" /><rect x="12.8" y="2" width="9.2" height="9.2" fill="#7FBA00" /><rect x="2" y="12.8" width="9.2" height="9.2" fill="#00A4EF" /><rect x="12.8" y="12.8" width="9.2" height="9.2" fill="#FFB900" /></svg>
+const OktaLogo = () => <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="#007DC1" strokeWidth="5.5" /></svg>
+
+const SSO = [{ name: 'Google', icon: <GoogleG /> }, { name: 'Microsoft', icon: <MsLogo /> }, { name: 'Okta', icon: <OktaLogo /> }]
+const initials = (n) => n.split(' ').map((x) => x[0]).join('').slice(0, 2)
 
 export default function SignIn({ onSignedIn }) {
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState(null)
-  const [clientId, setClientId] = useState(null)  // set => real GIS; null => demo identity
-
-  useEffect(() => { getConfig().then((c) => setClientId(c.google_client_id || null)).catch(() => {}) }, [])
-
-  const finish = async () => onSignedIn(await getMe())
-
-  // Demo mode: the server is already connected to a Google account (baked ADC).
-  const demoSignIn = async () => {
-    setBusy(true); setErr(null)
-    try { await finish() }
-    catch (e) { setErr(`sign-in failed — connect a Google account first (${e})`) }
-    finally { setBusy(false) }
-  }
-
-  // GIS mode: pop the Google consent, get a drive.readonly access token, then resolve
-  // identity server-side via that token.
-  const gisSignIn = () => {
-    setErr(null)
-    const oauth2 = window.google?.accounts?.oauth2
-    if (!oauth2) { setErr('Google sign-in is still loading — try again in a moment'); return }
-    setBusy(true)
-    oauth2.initTokenClient({
-      client_id: clientId,
-      scope: 'https://www.googleapis.com/auth/drive.readonly',
-      callback: async (resp) => {
-        try {
-          if (resp.error || !resp.access_token) throw new Error(resp.error || 'no access token')
-          setDriveToken(resp.access_token)
-          await finish()
-        } catch (e) { setErr(`sign-in failed (${e})`) }
-        finally { setBusy(false) }
-      },
-    }).requestAccessToken()
-  }
-
+  const def = PERSONAS[0]
   return (
     <div className="signin">
-      <div className="signin-card">
-        <span className="logo big">
-          <span className="word">mova</span>
-          <span className="io"><span>io</span></span>
-        </span>
+      <div className="signin-card wide">
+        <span className="logo big"><span className="word">mova</span><span className="io"><span>io</span></span></span>
         <p className="signin-sub">Accessibility Compliance</p>
-        <button className="gbtn" disabled={busy} onClick={clientId ? gisSignIn : demoSignIn}>
-          <GoogleG /> {busy ? 'signing in…' : 'Sign in with Google'}
-        </button>
-        {err && <div className="err">{err}</div>}
-        <p className="muted signin-foot">Scans run read-only · your documents are never retained</p>
+
+        <div className="ssorow">
+          {SSO.map((s) => (
+            <button key={s.name} className="ssobtn" onClick={() => onSignedIn(def)}>{s.icon} Sign in with {s.name}</button>
+          ))}
+        </div>
+
+        <div className="signin-or"><span>or explore a role — demo</span></div>
+
+        <div className="personas">
+          {PERSONAS.map((p) => (
+            <button key={p.id} className="personacard" onClick={() => onSignedIn(p)}>
+              <span className="pavatar">{initials(p.name)}</span>
+              <span className="pmain">
+                <span className="pname">{p.name} <span className="muted prole">· {p.role}</span></span>
+                <span className="pscope muted">{p.scope.label}</span>
+              </span>
+              <span className="psso muted">via {p.sso}</span>
+            </button>
+          ))}
+        </div>
+
+        <p className="muted signin-foot">SSO &amp; role-based access · scans run read-only · documents never retained</p>
       </div>
     </div>
   )

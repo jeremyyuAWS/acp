@@ -1,4 +1,4 @@
-import { SIM, IDENTITY, SOURCES, simStartScan, simGetJob, simGetScan, simListScans, simRules } from './sim.js'
+import { SIM, simIdentity, simGetSources, simStartScan, simGetJob, simGetScan, simListScans, simRules } from './sim.js'
 
 const BASE = import.meta.env.VITE_API ?? 'http://localhost:8077'
 
@@ -11,10 +11,8 @@ const j = (r) => { if (!r.ok) throw new Error(`${r.status} ${r.statusText}`); re
 const sim = (value, ms = 220) => new Promise((res) => setTimeout(() => res(value), ms))
 
 export const getConfig = () => (SIM ? sim({ google_client_id: null, auth: 'demo', sim: true }) : fetch(`${BASE}/config`).then(j))
-export const getMe = () => (SIM ? sim({ email: IDENTITY.email, name: IDENTITY.name }) : fetch(`${BASE}/me`, { headers: headers() }).then(j))
-export const getSources = () => (SIM
-  ? sim(SOURCES.map((s) => ({ type: s.kind, name: s.name, id: s.id, files: s.files, access: s.access, dept: s.dept, agent: s.agent })))
-  : fetch(`${BASE}/sources`, { headers: headers() }).then(j))
+export const getMe = () => (SIM ? sim(simIdentity()) : fetch(`${BASE}/me`, { headers: headers() }).then(j))
+export const getSources = () => (SIM ? sim(simGetSources()) : fetch(`${BASE}/sources`, { headers: headers() }).then(j))
 export const getRubric = () => (SIM
   ? sim({ name: 'WCAG 2.1 AA', version: '1', hash: 'e85fcf7e14f9040c', target: 'WCAG 2.1 AA', threshold: 90, criteria: {} })
   : fetch(`${BASE}/rubric`, { headers: headers() }).then(j))

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getMe, getSources, getRubric, listScans, getScan, startScan, getJob } from './api'
+import { setPersona } from './sim.js'
 import KnowledgeGraph from './KnowledgeGraph.jsx'
 import SignIn from './SignIn.jsx'
 import Rubric from './Rubric.jsx'
@@ -72,7 +73,8 @@ export default function App() {
       .finally(() => setLoaded(true))
   }, [me])
 
-  if (!me) return <SignIn onSignedIn={setMe} />
+  const signIn = (p) => { setPersona(p); setScan(null); setScanList([]); setLoaded(false); setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label }) }
+  if (!me) return <SignIn onSignedIn={signIn} />
 
   const doScan = async (source) => {
     setBusy(true); setErr(null); setProgress({ phase: 'queued' })
@@ -105,11 +107,13 @@ export default function App() {
       <header>
         <div className="brand"><Logo /><span className="sub">Accessibility Compliance</span></div>
         <div className="userbox">
+          {me.role && <span className="chip" title={me.scope}>{me.role}</span>}
           {rubric && <span className="chip">{rubric.target} · rubric {rubric.hash.slice(0, 8)}</span>}
           <span className="user">{me.email}</span>
           <button className="ghost small" onClick={() => setMe(null)}>sign out</button>
         </div>
       </header>
+      {me.scope && <div className="scopebar"><i className="scopedot" />access scope · <b>{me.scope}</b></div>}
 
       <div className="tabs" role="tablist" aria-label="Compliance workflow">
         {TABS.map(([k, label, rg]) => (

@@ -28,6 +28,23 @@ export const DEPARTMENTS = [
   'Human Resources', 'Legal & Compliance', 'Research Administration', 'Finance', 'Communications',
 ]
 
+// Demo personas — each authenticates via a different SSO method and is scoped to a
+// different set of departments, so the app "assumes their role" (RBAC).
+export const PERSONAS = [
+  { id: 'compliance', name: 'Alex Rivera', role: 'Compliance Officer', email: 'alex.rivera@utsouthwestern.edu', sso: 'Okta', scope: { label: 'Full estate · all 10 departments', departments: 'all' } },
+  { id: 'depthead', name: 'Marcus Chen', role: 'Department Head — Finance', email: 'marcus.chen@utsouthwestern.edu', sso: 'Microsoft', scope: { label: 'Finance, Legal, HR, Research & Comms — incl. confidential', departments: ['Finance', 'Legal & Compliance', 'Human Resources', 'Research Administration', 'Communications'] } },
+  { id: 'agent', name: 'Priya Nair', role: 'Support Agent', email: 'priya.nair@utsouthwestern.edu', sso: 'Google', scope: { label: 'Public-facing folders only', departments: ['Patient Education', 'Communications'] } },
+]
+let activeId = PERSONAS[0]
+let activeDepts = null
+export function setPersona(p) { activeId = p || PERSONAS[0]; activeDepts = (p && p.scope && p.scope.departments !== 'all') ? new Set(p.scope.departments) : null }
+export const simIdentity = () => ({ email: activeId.email, name: activeId.name, role: activeId.role, scope: activeId.scope.label })
+const scoped = () => (activeDepts ? CORPUS.filter((f) => activeDepts.has(f.department)) : CORPUS)
+export const simGetSources = () => {
+  const present = new Set(scoped().map((f) => f.source))
+  return SOURCES.filter((s) => present.has(s.id)).map((s) => ({ type: s.kind, name: s.name, id: s.id, files: s.files, access: s.access, dept: s.dept, agent: s.agent }))
+}
+
 const TYPES = ['pdf', 'docx', 'pptx', 'xlsx', 'html']
 const ENG = { docx: '.net/office', pptx: '.net/office', xlsx: '.net/office', pdf: 'python/pdf', html: 'axe/web' }
 const NAMES = {
@@ -101,13 +118,14 @@ function buildScan(sourceId, files) {
   }
 }
 
-const SCANS = { 'scan-cur': buildScan('all', CORPUS) }
+const SCANS = {}
 const JOBS = {}
 let seq = 0
 
 export function simStartScan(sourceId) {
   const jid = 'simjob' + (++seq)
-  const files = sourceId === 'all' || sourceId === 'local' ? CORPUS : CORPUS.filter((f) => f.source === sourceId)
+  const base = scoped()
+  const files = sourceId === 'all' || sourceId === 'local' ? base : base.filter((f) => f.source === sourceId)
   const n = files.length
   const sid = 'scan-' + jid
   const set = (p) => { JOBS[jid] = { phase: 'queued', files_found: 0, files_done: 0, current: null, done: false, scan_id: null, ...JOBS[jid], ...p } }
@@ -124,14 +142,16 @@ export function simStartScan(sourceId) {
   return { job_id: jid }
 }
 export const simGetJob = (jid) => JOBS[jid]
-export const simGetScan = (sid) => SCANS[sid] || SCANS['scan-cur']
+export const simGetScan = (sid) => SCANS[sid] || buildScan('all', scoped())
 export const simListScans = () => {
-  const cur = SCANS['scan-cur'].run
+  const cur = buildScan('all', scoped()).run
+  const n = scoped().length
+  const r = (frac) => Math.max(1, Math.round(n * frac))
   return [
     { id: 'scan-cur', completed_at: cur.completed_at, source: 'all', avg_score: cur.avg_score, files: cur.files, certifiable: cur.certifiable, uncertain: cur.uncertain, error: cur.error },
-    { id: 'h3', completed_at: '2026-06-10T09:00:00', avg_score: 74, files: 168 },
-    { id: 'h2', completed_at: '2026-06-03T09:00:00', avg_score: 68, files: 159 },
-    { id: 'h1', completed_at: '2026-05-27T09:00:00', avg_score: 61, files: 147 },
+    { id: 'h3', completed_at: '2026-06-10T09:00:00', avg_score: 74, files: r(0.96) },
+    { id: 'h2', completed_at: '2026-06-03T09:00:00', avg_score: 68, files: r(0.91) },
+    { id: 'h1', completed_at: '2026-05-27T09:00:00', avg_score: 61, files: r(0.84) },
   ]
 }
 
@@ -171,7 +191,7 @@ const RULE_DEFS = {
 const AA = new Set(['SC_1_4_3'])
 export function simRules() {
   const findings = {}
-  CORPUS.forEach((f) => f.issues.forEach((i) => { findings[i.ruleId] = (findings[i.ruleId] || 0) + 1 }))
+  scoped().forEach((f) => f.issues.forEach((i) => { findings[i.ruleId] = (findings[i.ruleId] || 0) + 1 }))
   const out = {}
   for (const [fmt, defs] of Object.entries(RULE_DEFS)) {
     out[fmt] = defs.map(([id, title, wcag, severity]) => ({ id, title, wcag, severity, level: AA.has(wcag) ? 'AA' : 'A', enabled: true, findings: findings[id] || 0 }))
