@@ -31,8 +31,11 @@ export default function KnowledgeGraph({ files }) {
     files.forEach((f) => [...new Set(f.issues.map((i) => i.wcag))].forEach((c) => { links.push({ source: f.file, target: c }); tie(f.file, c) }))
 
     const W = 860, H = 470
-    const crad = (d) => 12 + d.n * 2.6
-    const frad = (d) => (d.status === 'error' ? 6 : 8)
+    // criterion radius: sqrt-scaled (area ∝ count) and bounded, so big counts can't balloon
+    const maxN = d3.max(nodes, (n) => (n.t === 'crit' ? n.n : 0)) || 1
+    const rscale = d3.scaleSqrt().domain([1, maxN]).range([11, 30])
+    const crad = (d) => rscale(d.n)
+    const frad = (d) => (d.status === 'error' ? 5 : 7)
 
     const svg = d3.select(ref.current)
     svg.selectAll('*').remove()
