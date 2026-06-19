@@ -216,7 +216,12 @@ function genCorpus() {
       const tags = [...new Set([...(DEPT_TAGS[dept] || []), ...stTag])].slice(0, 4)
       const ageDays = AGE_DAYS[(i * 5 + j) % AGE_DAYS.length]
       const hiTraffic = tags.includes('high-traffic') || tags.includes('public-facing')
-      const views90d = hiTraffic ? 380 + ((i * 137) % 8200) : 3 + ((i * 53) % 240)
+      // "Superseded" = an older copy a newer version replaced. Such a document is, by
+      // definition, no longer in active use, and a public/high-traffic page is never
+      // archived as superseded (Deva: don't archive a doc with 237 views). So a
+      // superseded doc is always quiet — we give it low views, never a high count.
+      const superseded = ageDays >= 600 && i % 3 === 0 && !hiTraffic && status !== 'error'
+      const views90d = superseded ? 6 + ((i * 17) % 45) : hiTraffic ? 380 + ((i * 137) % 8200) : 3 + ((i * 53) % 240)
       const isMedia = type === 'video' || type === 'audio'
       const pages = type === 'pdf' ? 6 + ((i * 11) % 52) : type === 'docx' ? 2 + ((i * 7) % 32) : type === 'pptx' ? 9 + ((i * 5) % 40) : null
       const sheets = type === 'xlsx' ? 1 + (i % 6) : null
@@ -224,7 +229,6 @@ function genCorpus() {
       const duration = isMedia ? `${durMin}:${String((i * 7) % 60).padStart(2, '0')}` : null
       const sizeKB = type === 'video' ? 24000 + durMin * 9500 : type === 'audio' ? 1400 + durMin * 950
         : type === 'pdf' ? 120 + pages * 38 : type === 'pptx' ? 800 + pages * 140 : type === 'xlsx' ? 24 + sheets * 60 : type === 'html' ? 18 + ((i * 9) % 90) : 30 + pages * 16
-      const superseded = ageDays >= 600 && i % 3 === 0 && status !== 'error'
       const ownerObj = OWNERS[(i + di) % OWNERS.length]
       const f = {
         file, source, sourceName: SRC[source].name, department: dept, dept, type, owner: ownerObj.n, seniority: ownerObj.sr,

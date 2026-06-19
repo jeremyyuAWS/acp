@@ -72,6 +72,7 @@ button.ghost { background: #fff; color: var(--plum); border: 1px solid var(--lin
 .aibadge.off { background: #8c8694; }
 .chatmsg .aibadge { display: block; width: fit-content; margin-top: 7px; letter-spacing: .02em; }
 .chatlive { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; font-size: 10px; font-weight: 700; color: var(--plum); background: #f3eef6; border: 1px solid #e6dcec; padding: 2px 7px; border-radius: 999px; vertical-align: middle; }
+.expchev { display: inline-block; width: 14px; color: var(--muted); font-size: 11px; }
 .panel h2 { margin: 0 0 14px; font-size: 14px; font-weight: 600; color: var(--muted); }
 
 .critrow { display: grid; grid-template-columns: 150px 1fr 28px; align-items: center; gap: 12px; margin: 9px 0; font-size: 14px; }

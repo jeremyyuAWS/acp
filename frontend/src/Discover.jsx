@@ -12,8 +12,32 @@ const RET_BUCKET = (f) => { if (f.locked) return 'locked'; const l = retentionOf
 const RET_COLOR = { keep: '#639922', archive: '#7a5c8e', retain: '#D85A30', locked: '#9a948f' }
 const RET_ORDER = ['keep', 'archive', 'retain', 'locked']
 const RET_BADGE = { keep: ['Keep', '#E7F0DC', '#3B6D11'], archive: ['Archive', '#EEEDFE', '#3C3489'], retain: ['Retain · legal hold', '#FAEEDA', '#854F0B'], locked: ['🔒 Could not open', '#EEEDEA', '#5F5E5A'] }
-const exposureOf = (f) => (f.tags || []).includes('public-facing') ? 'public-facing' : (f.tags || []).includes('high-traffic') ? 'high-traffic' : 'internal'
 const SUBS = [['inventory', '1 · Inventory'], ['classify', '2 · Classify'], ['retain', '3 · Actions']]
+const RISK_COLOR = { PII: '#A32D2D', 'legal-hold': '#854F0B', 'high-traffic': '#BA7517' }
+
+// Combined exposure + risk chart: top-level exposure (public-facing vs internal),
+// with "internal" expandable to reveal the sensitive-content flags it carries.
+function ExposureRisk({ pub, internal, internalRisk, onPick }) {
+  const [open, setOpen] = useState(false)
+  const mx = Math.max(1, pub.value, internal.value)
+  const row = (label, value, color, mxx, { indent = false, chev = null, onClick } = {}) => {
+    const inner = (<>
+      <span className="critlabel" style={{ fontSize: 13, textAlign: 'left', paddingLeft: indent ? 18 : 0 }}>{chev && <span className="expchev" aria-hidden="true">{chev}</span>}{label}</span>
+      <span className="track"><i style={{ width: `${(value / mxx) * 100}%`, background: color, transition: 'width .9s ease' }} /></span>
+      <span className="critn">{value}</span>
+    </>)
+    return onClick
+      ? <button className="critrow pickrow" style={{ gridTemplateColumns: '150px 1fr 34px', width: '100%' }} onClick={onClick} aria-expanded={chev ? open : undefined}>{inner}</button>
+      : <div className="critrow" style={{ gridTemplateColumns: '150px 1fr 34px' }}>{inner}</div>
+  }
+  return (
+    <div>
+      {row(pub.label, pub.value, pub.color, mx, { onClick: () => onPick?.('public-facing') })}
+      {row(internal.label, internal.value, internal.color, mx, { chev: open ? '▾' : '▸', onClick: () => setOpen((o) => !o) })}
+      {open && internalRisk.map((r) => <div key={r.label}>{row(r.label, r.value, r.color, internal.value, { indent: true, onClick: () => onPick?.(r.label) })}</div>)}
+    </div>
+  )
+}
 
 export default function Discover({ sources, files, busy, onScan }) {
   const [sub, setSub] = useState('inventory')
@@ -27,16 +51,14 @@ export default function Discover({ sources, files, busy, onScan }) {
   const lifecycleFlagged = files.filter((f) => RET_BUCKET(f) !== 'keep' && !f.locked).length
   const lockedCount = files.filter((f) => f.locked).length
 
-  const countTag = (t) => files.filter((f) => (f.tags || []).includes(t)).length
   const PLUM = '#7a5c8e'
-  const riskData = [
-    { label: 'PII', value: countTag('PII'), color: '#A32D2D' },
-    { label: 'legal-hold', value: countTag('legal-hold'), color: '#854F0B' },
-    { label: 'public-facing', value: countTag('public-facing'), color: '#D85A30' },
-    { label: 'high-traffic', value: countTag('high-traffic'), color: '#BA7517' },
-  ].filter((d) => d.value)
   const byType = Object.entries(files.reduce((m, f) => { const k = (f.type || '').toUpperCase(); m[k] = (m[k] || 0) + 1; return m }, {})).sort((a, b) => b[1] - a[1]).map(([label, value]) => ({ label, value, color: PLUM }))
-  const expData = ['public-facing', 'high-traffic', 'internal'].map((k) => ({ label: k, value: files.filter((f) => exposureOf(f) === k).length, color: { 'public-facing': '#A32D2D', 'high-traffic': '#D85A30', internal: '#9a948f' }[k] })).filter((d) => d.value)
+  // Combined exposure + risk: public-facing (also the high-traffic set here) vs internal,
+  // with internal expandable to the sensitive-content flags it actually carries.
+  const internalDocs = files.filter((f) => !(f.tags || []).includes('public-facing'))
+  const exposurePub = { label: 'public-facing · high-traffic', value: files.length - internalDocs.length, color: '#D85A30' }
+  const exposureInternal = { label: 'internal', value: internalDocs.length, color: '#9a948f' }
+  const internalRisk = ['PII', 'legal-hold', 'high-traffic'].map((t) => ({ label: t, value: internalDocs.filter((f) => (f.tags || []).includes(t)).length, color: RISK_COLOR[t] })).filter((d) => d.value)
 
   const deptList = (showRetain) => deptOrder.map((d) => {
     const fs = groups[d]
@@ -100,10 +122,12 @@ export default function Discover({ sources, files, busy, onScan }) {
         <>
           <div className="muted" style={{ margin: '4px 0 10px' }}>Step 2 · how the agent classifies &amp; prioritizes the estate by content and risk</div>
           <div className="chartrow">
-            <section className="panel"><h2>By risk flag</h2><Bars items={riskData} cols="118px 1fr 30px" /><p className="muted ppfoot">PII &amp; legal-hold content carries the highest exposure if mishandled.</p></section>
-            <section className="panel"><h2>By exposure</h2><Bars items={expData} cols="110px 1fr 30px" /><p className="muted ppfoot">public-facing pages are the top legal-exposure surface under ADA / EAA.</p></section>
+            <section className="panel"><h2>By exposure &amp; risk <span className="muted" style={{ fontWeight: 400 }}>· expand internal to see its risk flags</span></h2>
+              <ExposureRisk pub={exposurePub} internal={exposureInternal} internalRisk={internalRisk} />
+              <p className="muted ppfoot">Public-facing pages (also your high-traffic content) are the top legal-exposure surface under ADA / EAA. The {exposureInternal.value} internal documents carry the PII &amp; legal-hold content that matters most if mishandled.</p>
+            </section>
+            <section className="panel"><h2>By document type</h2><Bars items={byType} cols="70px 1fr 30px" /></section>
           </div>
-          <section className="panel"><h2>By document type</h2><Bars items={byType} cols="70px 1fr 30px" /></section>
         </>
       ) : (
         <>
