@@ -6,7 +6,7 @@
 
 **Prepared by:** Movate · mova.io platform team
 **Audience:** DevSeal GTM evaluation
-**Date:** 2026-06-18
+**Date:** 2026-06-19
 **Standard in scope:** WCAG 2.1 + 2.2 (Level A / AA target; AAA noted as optional)
 **Companion artifact:** [`WCAG_Coverage_LOE_Analysis.xlsx`](./WCAG_Coverage_LOE_Analysis.xlsx) — the full 87-criterion matrix this report summarizes.
 
@@ -33,11 +33,11 @@ mova.io implements the full conformance lifecycle. The partner scanner contribut
 | 1 | **Discover & Inventory** | Connectors crawl all sources; capture file type, owner, size, age, traffic, version lineage | Demonstrated |
 | 2 | **Classify & Prioritize** | Auto-tag by content, risk (PII, legal-hold), and public exposure | Demonstrated |
 | 3 | **Retain / Archive / Delete** | Recommend keep / archive / delete from metadata (superseded, stale, low-traffic) | Demonstrated |
-| 4 | **Assess Accessibility** | Multi-engine WCAG assessment across PDF / Office / web | Demonstrated (simulated engines) |
+| 4 | **Assess Accessibility** | Multi-engine WCAG assessment across PDF / Office / web | Demonstrated — **real in-browser** for HTML (axe-core) & Office (OOXML); other formats simulated |
 | 5 | **Risk Scoring & Findings** | Unified 0–100 score + finding detail (counts, impact, level), risk-weighted | Demonstrated |
-| 6 | **Automated Remediation** | Auto-fix mechanical findings (alt text, headings, language, titles), then re-validate | Designed |
+| 6 | **Automated Remediation** | Auto-fix mechanical findings (alt text, headings, language, titles), then re-validate | **Demonstrated (real, client-side)** for HTML & Office; other formats designed |
 | 7 | **Human-in-the-Loop (HITL)** | Route low-confidence / sensitive fixes to a reviewer queue with approve / edit / reject | Demonstrated (workflow) |
-| 8 | **Re-validate & Verify** | Re-run all engines, confirm score lift before publish | Designed |
+| 8 | **Re-validate & Verify** | Re-run all engines, confirm score lift before publish | Demonstrated (Upload re-audits post-fix); full multi-engine designed |
 | 9 | **Publish / Replace / Archive** | Replace in place or publish a new compliant version; notify owners | Designed |
 | 10 | **Monitor & Report** | Continuous re-scan, drift/regression alerts, SLA coverage, audit-grade evidence trail | Demonstrated |
 
@@ -54,6 +54,18 @@ For every document the platform now resolves metadata + findings into a **single
 - **Manual rebuild** — unreadable source.
 
 These roll up into an **estate action plan** ("≈ 22.6 hrs of remediation across 98 documents · 46% fully automatic · saves ≈ 128 hrs vs. manual"), and feed the monitoring tab's remediation backlog.
+
+### Real, in-browser processing — not just simulation
+
+To prove the pipeline is more than mock data, the **Upload** path performs **genuine WCAG processing entirely in the browser, with no backend and no document retention** ("scanned in your browser, nothing is uploaded anywhere"):
+
+- **HTML** — real detection via **axe-core** (WCAG 2.0/2.1 A/AA rule set), plus real remediation (alt text, document language, page title, form-field labels, ambiguous links, low-contrast text) rendered live as a before → after.
+- **Office (OOXML)** — real detection by inspecting the actual DOCX/PPTX/XLSX XML (missing image alt text, untitled documents, undeclared language, tables without a header row) and **real remediation** that edits the XML and re-zips a genuinely-fixed file — alt text, document title, **and table header rows** written back into the OOXML. A **re-audit confirms** the fixes resolve.
+- **PDF** — rendered in-browser (pdf.js) with a structural before → after; tag-tree (PDF/UA) remediation remains backend-bound.
+
+Two further proof points: the **assistant** answers free-form questions with a **live Claude model** (key kept server-side in a Netlify function, with a clear *live AI* vs *offline* indicator so the data-grounded fallback is never mistaken for the model), and the platform's **own UI is keyboard-accessible** — including full keyboard navigation and search of the knowledge graph — i.e. the product passes the bar it sells.
+
+This keeps the prototype honest about what is real **today** versus **roadmap**: HTML and Office detection **and** remediation are real and client-side now; **PDF tagging, AI-generated alt text, media captions, and a multi-user persistence backend remain net-new work** (§5).
 
 ---
 
@@ -101,6 +113,8 @@ Two structural facts drive everything below:
 | 🟢 **Shipped (prototype)** | 8 | Validated by the platform today (1.1.1, 1.3.1, 1.3.2, 1.4.3, 2.1.1, 2.4.2, 2.4.4, 3.1.1) |
 | 🟣 **Partner baseline** | 19 | Automated Level A/AA provided by DevSeal (assumption) |
 | 🟠 **mova.io net-new** | 60 | Beyond the partner — the build scope |
+
+> Of the 8 shipped criteria, detection **and** mechanical remediation run **for real, client-side**, today for **HTML** (axe-core) and **Office/OOXML** — covering 1.1.1 (alt text), 1.3.1 (table headers), 2.4.2 (title) and 3.1.1 (language) on those formats (see §2, *Real, in-browser processing*). For PDF and media the same criteria are simulated in the prototype and remain net-new (§5).
 
 ---
 
