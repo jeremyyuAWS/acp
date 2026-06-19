@@ -16,6 +16,26 @@ export const REC_STYLE = {
 export const fmtEffort = (m) => m == null ? '—' : m === 0 ? 'no work' : m >= 90 ? `~${(m / 60).toFixed(1)} hrs` : `~${Math.round(m)} min`
 const MODE_LABEL = { auto: 'fully automatic', assisted: 'AI + human review', manual: 'manual', monitor: 'monitor only' }
 
+// Where the document actually lives — so a reviewer can open it to remediate manually,
+// or open a superseded doc to compare/replace. In the demo the link opens the source
+// system; in production it deep-links straight to the file.
+export const SOURCE_URL = {
+  'SharePoint': 'https://www.office.com/launch/sharepoint', 'Google Drive': 'https://drive.google.com/drive/my-drive',
+  'Box': 'https://app.box.com/folder/0', 'Confluence': 'https://www.atlassian.com/wiki', 'Website / CMS': null,
+}
+export function FileLocation({ file }) {
+  const url = SOURCE_URL[file.sourceName]
+  return (
+    <div className="floc">
+      <div className="flocpath"><span className="muted">location · </span>{file.sourceName || 'Source'} <span className="muted">›</span> {file.dept || 'Unfiled'} <span className="muted">›</span> <b>{file.file}</b></div>
+      {url
+        ? <a className="ghost small flocbtn" href={url} target="_blank" rel="noopener noreferrer">↗ Open in {file.sourceName}</a>
+        : <span className="flocbtn muted" style={{ fontSize: 12 }}>public web page · open in your CMS</span>}
+      {file.superseded && <div className="flocsuper">⚠ A <b>newer version</b> of this document exists — open the source to compare or replace the superseded copy.</div>}
+    </div>
+  )
+}
+
 const CRIT = {
   SC_1_1_1: '1.1.1 non-text content', SC_1_3_1: '1.3.1 info & relationships',
   SC_1_3_2: '1.3.2 meaningful sequence', SC_2_1_1: '2.1.1 keyboard',
@@ -104,7 +124,7 @@ export default function FileDrawer({ file, onClose, context = 'full' }) {
         {file.locked && <div className="lockbanner">🔒 Could not open — <b>{file.openIssue}</b>. Discovered from its metadata, but the content couldn’t be read.</div>}
         {tagBlock}
         {metaBlock}
-        {file.superseded && <p className="muted" style={{ marginTop: 8 }}>⚠ A newer version of this document exists — flagged as superseded.</p>}
+        <FileLocation file={file} />
         <h4 className="drawerh">Retention recommendation</h4>
         <div className="reccard" style={{ borderColor: ret.fg + '55' }}>
           <span className="recbadge" style={{ background: ret.bg, color: ret.fg }}>{ret.label}</span>
@@ -142,7 +162,7 @@ export default function FileDrawer({ file, onClose, context = 'full' }) {
       })()}
 
       {metaBlock}
-      {file.superseded && <p className="muted" style={{ marginTop: 6 }}>⚠ A newer version of this document exists — flagged as superseded.</p>}
+      <FileLocation file={file} />
 
       {tagBlock}
 

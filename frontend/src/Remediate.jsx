@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
-import FileDrawer, { REC_STYLE, fmtEffort } from './FileDrawer.jsx'
+import FileDrawer, { REC_STYLE, fmtEffort, SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { prefersReducedMotion } from './a11y.js'
@@ -40,11 +40,11 @@ const FIX_EXAMPLES = [
   { fmt: 'Audio', wcag: 'WCAG 1.2.1 · transcript', auto: false, before: 'podcast episode — no transcript', after: 'transcript drafted from speech-to-text — pending human review' },
 ]
 const QUEUE0 = [
-  { id: 1, icon: '▦', title: 'chart on slide 7 — alt-text', meta: 'suggested alt-text', conf: 61, file: 'open-enrollment-deck.pptx', rule: 'WCAG 1.1.1 — non-text content', before: '<pic alt="">', after: '<pic alt="Q3 revenue by region — West 38%, NE 24%, South 22%, Midwest 16%">' },
-  { id: 2, icon: '⊞', title: 'merged cells — table headers', meta: 'needs a human structure call', conf: 48, file: 'budget-model.xlsx', rule: 'WCAG 1.3.1 — info & relationships', before: '<table> — merged A1:C1, no header row', after: '<table> — unmerged, <th scope="col"> on row 1' },
-  { id: 3, icon: '¶', title: 'reading order — multi-column page', meta: 'two plausible orders', conf: 55, file: 'annual-report-2025.pdf', rule: 'WCAG 1.3.2 — meaningful sequence', before: 'tab order: right column before left', after: 'tab order: left column → right (natural)' },
-  { id: 4, icon: '◫', title: 'scanned page — needs OCR + tags', meta: 'low text confidence', conf: 42, file: 'vendor-contract-acme.pdf', rule: 'WCAG 1.3.1 — info & relationships', note: 'Image-only PDF — the agent recommends OCR + manual tagging before this can be certified; no auto-fix proposed.' },
-  { id: 5, icon: '🎬', title: 'video captions — AI draft ready', meta: 'ASR captions need review', conf: 58, file: 'patient-explainer.mp4', rule: 'WCAG 1.2.2 — captions', before: '4:12 video — no caption track', after: 'Synchronized captions drafted (speech-to-text) — review timing & accuracy' },
+  { id: 1, icon: '▦', title: 'chart on slide 7 — alt-text', meta: 'suggested alt-text', conf: 61, file: 'open-enrollment-deck.pptx', source: 'SharePoint', rule: 'WCAG 1.1.1 — non-text content', before: '<pic alt="">', after: '<pic alt="Q3 revenue by region — West 38%, NE 24%, South 22%, Midwest 16%">' },
+  { id: 2, icon: '⊞', title: 'merged cells — table headers', meta: 'needs a human structure call', conf: 48, file: 'budget-model.xlsx', source: 'Box', rule: 'WCAG 1.3.1 — info & relationships', before: '<table> — merged A1:C1, no header row', after: '<table> — unmerged, <th scope="col"> on row 1' },
+  { id: 3, icon: '¶', title: 'reading order — multi-column page', meta: 'two plausible orders', conf: 55, file: 'annual-report-2025.pdf', source: 'Google Drive', rule: 'WCAG 1.3.2 — meaningful sequence', before: 'tab order: right column before left', after: 'tab order: left column → right (natural)' },
+  { id: 4, icon: '◫', title: 'scanned page — needs OCR + tags', meta: 'low text confidence', conf: 42, file: 'vendor-contract-acme.pdf', source: 'Box', rule: 'WCAG 1.3.1 — info & relationships', note: 'Image-only PDF — the agent recommends OCR + manual tagging before this can be certified; no auto-fix proposed.' },
+  { id: 5, icon: '🎬', title: 'video captions — AI draft ready', meta: 'ASR captions need review', conf: 58, file: 'patient-explainer.mp4', source: 'Google Drive', rule: 'WCAG 1.2.2 — captions', before: '4:12 video — no caption track', after: 'Synchronized captions drafted (speech-to-text) — review timing & accuracy' },
 ]
 
 function FixCarousel() {
@@ -270,7 +270,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   <div className="qtitle">{it.title} <span className="muted" style={{ fontSize: 12 }}>· {it.file}</span></div>
                   <div className="qmeta">{it.rule}</div>
                   <div className="selfstatus">
-                    {it.status === 'awaiting' && <span className="muted">awaiting your fix — apply it in the source, then confirm</span>}
+                    {it.status === 'awaiting' && <>
+                      <span className="muted">awaiting your fix — open the file, apply it in the source, then confirm</span>
+                      {SOURCE_URL[it.source] && <a className="ghost small" style={{ marginLeft: 8 }} href={SOURCE_URL[it.source]} target="_blank" rel="noopener noreferrer">↗ Open the file</a>}
+                    </>}
                     {it.status === 'scanning' && <span className="muted"><span className="spinner" /> re-scanning across all engines…</span>}
                     {it.status === 'verified' && <span className="okline">✓ verified — finding cleared, now passing 100 / 100</span>}
                   </div>
