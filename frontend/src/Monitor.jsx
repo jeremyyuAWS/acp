@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { monitoringState, sourceWatch } from './sim.js'
+import { monitoringState, sourceWatch, IDENTITY } from './sim.js'
 import { prefersReducedMotion } from './a11y.js'
 
 // Step 10 · Monitor — the always-on surface. Shows every connected source being
@@ -59,10 +59,23 @@ export default function Monitor({ sources = [], files = [], ratified }) {
   const evidenceRef = useRef(null)
   const [exporting, setExporting] = useState(false)
   const exportEvidence = async () => {
-    if (!evidenceRef.current || exporting) return
+    if (exporting) return
     setExporting(true)
-    try { (await import('./exportPdf.js')).exportReportPDF(evidenceRef.current, 'mova-evidence-package.pdf') }
-    catch (e) { console.error('evidence export failed', e) }
+    try {
+      const { exportEvidenceReport } = await import('./pdfReport.js')
+      await exportEvidenceReport({
+        org: IDENTITY.org,
+        date: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+        summary: `Watching ${m.watchedSources} sources and ${m.watchedDocs.toLocaleString()} documents. Re-scans ${m.cadence}; last ${m.lastRescan}, next ${m.nextRescan}. ${m.coveragePct}% re-scan coverage over 7 days, ${m.slaPct}% within SLA.`,
+        metrics: [
+          { label: 'Documents watched', value: m.watchedDocs.toLocaleString() },
+          { label: 'Sources', value: m.watchedSources },
+          { label: 'Re-scan coverage · 7d', value: m.coveragePct + '%', color: '#3B6D11' },
+          { label: 'Open alerts', value: m.alerts.length, color: '#1F5FA8' },
+        ],
+        events: AUDIT.map(([action, change, document]) => ({ action, actor: ACTOR[action] || 'mova engine', change, document })),
+      })
+    } catch (e) { console.error('evidence export failed', e) }
     finally { setTimeout(() => setExporting(false), 600) }
   }
   const [triggers, setTriggers] = useState({ newFile: true, onEdit: true, autoRemediate: true, alertRegression: true })

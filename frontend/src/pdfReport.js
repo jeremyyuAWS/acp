@@ -155,3 +155,22 @@ export async function exportDocumentReport(d) {
   p.text(`Certified by the mova.io Accessibility Platform on ${d.date}. This report documents the conformance assessment and remediation actions for audit and evidence.`, { size: 8.5, color: MUTED, lh: 12 })
   p.save(d.filename || `mova-${(d.file || 'document').replace(/\.[^.]+$/, '')}-report.pdf`)
 }
+
+// Immutable evidence package (Monitor) — the who/when/what/which-engine audit trail.
+export async function exportEvidenceReport(d) {
+  const p = await makeDoc()
+  p.cover({
+    title: 'Accessibility Evidence Package',
+    subtitle: `${d.org} · immutable audit trail`,
+    meta: [`Generated ${d.date}`, 'Standards: WCAG 2.1 AA · ADA Title II · EN 301 549 (EAA)'],
+  })
+  p.heading('Continuous monitoring')
+  p.text(d.summary)
+  if (d.metrics && d.metrics.length) p.metricGrid(d.metrics)
+  p.heading('Audit trail')
+  p.text('Every remediation, review, publish and re-scan is logged with the actor, the change, the document and the engine — append-only for audit.', { size: 9, color: MUTED, gapAfter: 11 })
+  p.table(['Action', 'Actor', 'Change', 'Document'], d.events.map((e) => [e.action, e.actor, e.change, e.document]), [78, 92, p.CW - 78 - 92 - 150, 150])
+  p.gap(2)
+  p.text(`This evidence package was generated on ${d.date} from the continuous-monitoring log. Entries are immutable and timestamped for ADA / EAA audit and investigation.`, { size: 8.5, color: MUTED, lh: 12 })
+  p.save(d.filename || 'mova-evidence-package.pdf')
+}
