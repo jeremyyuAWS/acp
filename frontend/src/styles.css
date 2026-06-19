@@ -795,6 +795,14 @@ input:focus-visible, [role="tab"]:focus-visible {
 .covphase { font-size: 10px; font-weight: 700; border-radius: 5px; padding: 0 5px; margin-left: auto; }
 .covrem { font-size: 11px; font-weight: 700; border-radius: 5px; padding: 0 4px; margin-left: 5px; line-height: 1.5; }
 .remnote { margin: 8px 0 0; padding: 8px 11px; border-radius: 9px; font-size: 12px; line-height: 1.45; }
+.autobox { margin: 8px 0 0; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: #faf8fb; }
+.autorow { display: flex; flex-wrap: wrap; gap: 7px; }
+.autotag { font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 20px; }
+.autotag b { font-weight: 700; }
+.autoverdict { font-size: 12px; color: var(--ink); line-height: 1.45; margin-top: 7px; }
+.autolegend { display: flex; flex-wrap: wrap; align-items: center; gap: 11px; font-size: 12px; margin: 2px 0 13px; }
+.autokey { display: inline-flex; align-items: center; gap: 5px; color: var(--ink); }
+.autokey i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
 
 /* ---- Business ontology & taxonomy manager ---- */
 .ontwrap { display: flex; flex-direction: column; gap: 12px; }

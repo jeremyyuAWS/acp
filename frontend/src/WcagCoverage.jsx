@@ -70,6 +70,34 @@ const REM_META = {
 }
 const remTier = (r) => REMEDIATION[r.sc] || (r.docApplies ? 'assisted' : 'detect')
 
+// Automatability under "no UI automation" (Devanathan's analysis): VALIDATE — confirm a
+// pass — and REMEDIATE — apply the fix — are separate axes. Levels: green = static + LLM,
+// real pass/fail; amber = LLM/vision-assisted, a human confirms; human = needs runtime /
+// interaction. (The source rubric's red → blue here, per the no-threatening-red palette.)
+const AUTOMATION = {
+  '3.1.2': { v: 'green', r: 'green', note: 'Fully automatable — the best case. The LLM detects the foreign passage and a script writes the lang attribute. No UI ever needed.' },
+  '1.3.3': { v: 'amber', r: 'amber', note: 'The LLM reads the text, flags shape/colour/position-only instructions, and drafts a fix. Pure content analysis — no UI.' },
+  '1.4.5': { v: 'amber', r: 'amber', note: 'OCR/vision on the statically-extracted image; the LLM re-creates real text. No UI.' },
+  '1.4.1': { v: 'amber', r: 'amber', note: 'Static parse for colour-only coding + vision on images; the LLM adds the second cue. No UI.' },
+  '1.4.11': { v: 'amber', r: 'amber', note: 'Colours read from source/SVG and the maths is deterministic (green for declared colours); vision samples raster graphics. Only hover/focus states need runtime — drop those.' },
+  '2.4.3': { v: 'amber', r: 'amber', note: 'Tab order + tabindex are read from markup and the LLM judges sequence. Falls to human only when JS/CSS reorders visually. Interactive content only.' },
+  '4.1.2': { v: 'amber', r: 'amber', note: 'Static parse finds name/role and the LLM drafts ARIA names (presence). True computed-name + behaviour still needs human/AT. Interactive only.' },
+  '2.1.1': { v: 'human', r: 'amber', note: 'Static analysis flags the risk (click handler with no key handler, div-as-button); confirming operability needs a real keyboard — human.' },
+  '1.4.4': { v: 'human', r: 'amber', note: 'Validation genuinely needs rendering at 200% — the UI automation we exclude. Static can only flag user-scalable=no / fixed units.' },
+  '1.4.10': { v: 'human', r: 'amber', note: 'Needs a render at 320px / 400%. No non-UI way to confirm a pass — only flag the risk.' },
+  '1.4.12': { v: 'human', r: 'amber', note: 'Needs applying the spacing override and checking for clipping — inherently rendered.' },
+  '2.1.2': { v: 'human', r: 'amber', note: 'Detecting a trap is inherently interactive — no static proxy. The fix itself is AI-draftable.' },
+}
+const LV = {
+  green: ['●', 'Automatable', '#3B6D11', '#E7F0DC'],
+  amber: ['●', 'AI-assisted · human confirms', '#854F0B', '#FAEEDA'],
+  human: ['●', 'Needs runtime — human', '#1F5FA8', '#E2EDFB'],
+  detect: ['●', 'Detect & route', '#5F5E5A', '#EFEDEA'],
+}
+const TIER2LV = { auto: 'green', assisted: 'amber', manual: 'human', detect: 'detect' }
+const valLevel = (r) => AUTOMATION[r.sc]?.v || (r.source === 'Shipped (demo)' || /Automated/.test(r.approach || '') ? 'green' : 'amber')
+const remLevel = (r) => AUTOMATION[r.sc]?.r || TIER2LV[remTier(r)] || 'amber'
+
 const mid = (r) => (r.lo + r.hi) / 2
 const wks = (d) => `${(d / 5).toFixed(0)}–${Math.round(d / 5)}`
 
@@ -85,12 +113,22 @@ function ScDetail({ sel, onClose }) {
         <div className="muted" style={{ margin: '4px 0 8px' }}>Level {sel.level} · {sel.principle} · added in WCAG {sel.added}</div>
         {sel.req && <p className="covreq">{sel.req}</p>}
         <div className="levelnote">Level {sel.level} — {LEVEL_MEANING[sel.level]}</div>
-        {(() => { const rm = REM_META[remTier(sel)]; return <div className="remnote" style={{ background: rm[3], color: rm[2] }}><b>{rm[0]} {rm[1]}</b> · {REM_NOTE[sel.sc] || rm[4]}</div> })()}
+        {(() => {
+          const vv = LV[valLevel(sel)], rv = LV[remLevel(sel)]
+          const note = AUTOMATION[sel.sc]?.note || REM_NOTE[sel.sc] || REM_META[remTier(sel)][4]
+          return (
+            <div className="autobox">
+              <div className="autorow">
+                <span className="autotag" style={{ color: vv[2], background: vv[3] }}><b>Validate</b> · {vv[1]}</span>
+                <span className="autotag" style={{ color: rv[2], background: rv[3] }}><b>Remediate</b> · {rv[1]}</span>
+              </div>
+              <div className="autoverdict">{note}</div>
+            </div>
+          )
+        })()}
         <div className="covrows">
           <div><span className="muted">US legal requirement</span><b style={{ color: sel.legal === 'Required' ? '#1F5FA8' : 'var(--ink)' }}>{sel.legal}</b></div>
           <div><span className="muted">Document applicability</span><b style={{ color: sel.docApplies ? '#3B6D11' : 'var(--muted)' }}>{sel.docApplies ? 'Applies to documents' : 'Web / interaction — N/A to static docs'}</b></div>
-          <div><span className="muted">Validation approach</span><b>{sel.approach}</b></div>
-          {(() => { const rm = REM_META[remTier(sel)]; return <div><span className="muted">Remediation</span><b style={{ color: rm[2] }}>{rm[0]} {rm[1]}</b></div> })()}
           <div><span className="muted">Coverage today</span><b style={{ color: SRC[sel.source][1] }}>{SRC[sel.source][0]}</b></div>
           <div><span className="muted">Build tier</span><b>{sel.tier}</b></div>
           <div><span className="muted">Roadmap phase</span><b>{sel.phase}</b></div>
@@ -188,6 +226,11 @@ export default function WcagCoverage() {
         ))}
       </div>
 
+      <div className="autolegend">
+        <b>Automatability</b> <span className="muted">· under no-UI automation — <b>Validate</b> (confirm a pass) vs <b>Remediate</b> (apply the fix). The dot on each tile is its remediate level:</span>
+        {['green', 'amber', 'human'].map((k) => <span key={k} className="autokey"><i style={{ background: LV[k][2] }} />{LV[k][1]}</span>)}
+      </div>
+
       {PRINCIPLES.map((p) => {
         const items = shown.filter((r) => r.principle === p)
         if (!items.length) return null
@@ -200,7 +243,7 @@ export default function WcagCoverage() {
                 const ph = PHASE_SHORT[r.phase]
                 return (
                   <button key={r.sc} className="covcell" style={{ background: bg, borderColor: fg + '55' }} onClick={() => setSel(r)} title={`${r.sc} ${r.name} — ${r.req}`}>
-                    <div className="covsc"><b>{r.sc}</b><span className="covlvl">{r.level}</span>{r.legal === 'Required' && <span className="covreq-flag" title="Required under US law">REQ</span>}{ph && <span className="covphase" style={{ color: ph[1], background: ph[2] }}>{ph[0]}</span>}{(() => { const rm = REM_META[remTier(r)]; return <span className="covrem" style={{ color: rm[2], background: rm[3] }} title={`Remediation: ${rm[1]} — ${rm[4]}`}>{rm[0]}</span> })()}</div>
+                    <div className="covsc"><b>{r.sc}</b><span className="covlvl">{r.level}</span>{r.legal === 'Required' && <span className="covreq-flag" title="Required under US law">REQ</span>}{ph && <span className="covphase" style={{ color: ph[1], background: ph[2] }}>{ph[0]}</span>}{(() => { const lv = LV[remLevel(r)], vv = LV[valLevel(r)]; return <span className="covrem" style={{ color: lv[2], background: lv[3] }} title={`Validate: ${vv[1]} · Remediate: ${lv[1]}`}>{lv[0]}</span> })()}</div>
                     <div className="covname">{r.name}</div>
                     <div className="covtag" style={{ color: fg }}>{SRC[r.source][0]}{!r.docApplies && <span className="muted" style={{ fontWeight: 400 }}> · N/A docs</span>}</div>
                   </button>
