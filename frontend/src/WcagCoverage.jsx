@@ -14,6 +14,7 @@ const PRINCIPLES = ['Perceivable', 'Operable', 'Understandable', 'Robust']
 const FILTERS = [
   ['all', 'All 87'], ['A', 'Level A'], ['AA', 'Level AA'], ['2.2', 'New in 2.2'],
   ['Required', 'US Required'], ['docs', 'Applies to documents'],
+  ['rem:auto', '⚡ Auto-remediated'], ['rem:assisted', '✎ AI-assisted'], ['rem:manual', '✋ Human-verified'],
   ['Shipped (demo)', 'Live now'], ['MDK net-new', 'Roadmap'],
 ]
 // Plain-language meaning of the three conformance levels, for users new to WCAG.
@@ -39,6 +40,36 @@ const PHASE_SHORT = {
 }
 const PHASE_FILTER = { P1: 'Phase 1', P2: 'Phase 2', P3: 'Phase 3' }
 
+// How each criterion is remediated once detected. 'auto' = deterministic engine fix;
+// 'assisted' = AI drafts, human approves; 'manual' = a person must re-author; 'detect'
+// = flagged for review, no automated fix. Explicit for what the engine handles today;
+// a conservative default covers the rest.
+const REMEDIATION = {
+  '1.4.3': 'auto', '1.3.1': 'auto', '2.4.1': 'auto', '2.4.2': 'auto', '3.1.1': 'auto', '2.4.3': 'auto',
+  '2.1.1': 'auto', '1.4.1': 'auto', '1.4.4': 'auto', '1.4.10': 'auto', '4.1.2': 'auto',
+  '1.1.1': 'assisted', '1.3.3': 'assisted', '1.4.5': 'assisted', '2.4.4': 'assisted', '1.4.11': 'assisted',
+  '1.4.12': 'assisted', '3.1.2': 'assisted', '1.3.2': 'assisted', '1.2.1': 'assisted', '1.2.2': 'assisted',
+  '1.2.3': 'assisted', '1.2.5': 'assisted', '3.3.1': 'assisted', '3.3.2': 'assisted', '3.3.3': 'assisted',
+  '2.1.2': 'manual',
+}
+// Per-criterion remediation method — overrides the generic tier blurb where AI does
+// something specific, so the "why" is explicit (esp. the AI-assisted cases).
+const REM_NOTE = {
+  '1.4.5': 'Vision OCR reads the text out of the image; the agent re-creates it as real, styled text. A human approves fidelity and the logo / essential-image exceptions.',
+  '1.3.3': 'An LLM rewrites instructions that rely on shape, size or position so they name the control instead. A human approves the wording.',
+  '3.1.2': 'Language detection finds passages in another language; the agent tags them with the right lang. A human spot-checks.',
+  '1.1.1': 'A vision model drafts the alt text from the image; a human approves before publish.',
+  '1.4.11': 'The agent proposes compliant colours for borders / icons; a designer signs off.',
+  '2.1.2': 'The agent proposes the focus fix (Escape + focus loop), but “no trap” is confirmed by interactive keyboard testing — human-verified.',
+}
+const REM_META = {
+  auto: ['⚡', 'Auto-remediated', '#3B6D11', '#E7F0DC', 'Deterministic fix applied by the engine, then re-validated — no human needed.'],
+  assisted: ['✎', 'AI-assisted', '#854F0B', '#FAEEDA', 'AI drafts the fix; a human approves before publish.'],
+  manual: ['✋', 'Human-verified', '#1F5FA8', '#E2EDFB', 'AI can propose the change, but it must be verified by a person (e.g. interactive testing).'],
+  detect: ['◷', 'Detect & route', '#5F5E5A', '#EFEDEA', 'Flagged for a reviewer — no automated fix exists yet.'],
+}
+const remTier = (r) => REMEDIATION[r.sc] || (r.docApplies ? 'assisted' : 'detect')
+
 const mid = (r) => (r.lo + r.hi) / 2
 const wks = (d) => `${(d / 5).toFixed(0)}–${Math.round(d / 5)}`
 
@@ -54,10 +85,12 @@ function ScDetail({ sel, onClose }) {
         <div className="muted" style={{ margin: '4px 0 8px' }}>Level {sel.level} · {sel.principle} · added in WCAG {sel.added}</div>
         {sel.req && <p className="covreq">{sel.req}</p>}
         <div className="levelnote">Level {sel.level} — {LEVEL_MEANING[sel.level]}</div>
+        {(() => { const rm = REM_META[remTier(sel)]; return <div className="remnote" style={{ background: rm[3], color: rm[2] }}><b>{rm[0]} {rm[1]}</b> · {REM_NOTE[sel.sc] || rm[4]}</div> })()}
         <div className="covrows">
           <div><span className="muted">US legal requirement</span><b style={{ color: sel.legal === 'Required' ? '#1F5FA8' : 'var(--ink)' }}>{sel.legal}</b></div>
           <div><span className="muted">Document applicability</span><b style={{ color: sel.docApplies ? '#3B6D11' : 'var(--muted)' }}>{sel.docApplies ? 'Applies to documents' : 'Web / interaction — N/A to static docs'}</b></div>
           <div><span className="muted">Validation approach</span><b>{sel.approach}</b></div>
+          {(() => { const rm = REM_META[remTier(sel)]; return <div><span className="muted">Remediation</span><b style={{ color: rm[2] }}>{rm[0]} {rm[1]}</b></div> })()}
           <div><span className="muted">Coverage today</span><b style={{ color: SRC[sel.source][1] }}>{SRC[sel.source][0]}</b></div>
           <div><span className="muted">Build tier</span><b>{sel.tier}</b></div>
           <div><span className="muted">Roadmap phase</span><b>{sel.phase}</b></div>
@@ -79,6 +112,7 @@ export default function WcagCoverage() {
     : filter === 'A' || filter === 'AA' ? r.level === filter
     : filter === 'Required' ? r.legal === 'Required'
     : filter === 'docs' ? r.docApplies
+    : filter.startsWith('rem:') ? remTier(r) === filter.slice(4)
     : PHASE_FILTER[filter] ? r.phase.startsWith(PHASE_FILTER[filter])
     : r.source === filter
 
@@ -166,7 +200,7 @@ export default function WcagCoverage() {
                 const ph = PHASE_SHORT[r.phase]
                 return (
                   <button key={r.sc} className="covcell" style={{ background: bg, borderColor: fg + '55' }} onClick={() => setSel(r)} title={`${r.sc} ${r.name} — ${r.req}`}>
-                    <div className="covsc"><b>{r.sc}</b><span className="covlvl">{r.level}</span>{r.legal === 'Required' && <span className="covreq-flag" title="Required under US law">REQ</span>}{ph && <span className="covphase" style={{ color: ph[1], background: ph[2] }}>{ph[0]}</span>}</div>
+                    <div className="covsc"><b>{r.sc}</b><span className="covlvl">{r.level}</span>{r.legal === 'Required' && <span className="covreq-flag" title="Required under US law">REQ</span>}{ph && <span className="covphase" style={{ color: ph[1], background: ph[2] }}>{ph[0]}</span>}{(() => { const rm = REM_META[remTier(r)]; return <span className="covrem" style={{ color: rm[2], background: rm[3] }} title={`Remediation: ${rm[1]} — ${rm[4]}`}>{rm[0]}</span> })()}</div>
                     <div className="covname">{r.name}</div>
                     <div className="covtag" style={{ color: fg }}>{SRC[r.source][0]}{!r.docApplies && <span className="muted" style={{ fontWeight: 400 }}> · N/A docs</span>}</div>
                   </button>
