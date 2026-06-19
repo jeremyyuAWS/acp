@@ -129,7 +129,22 @@ function ScDetail({ sel, onClose }) {
         <div className="covrows">
           <div><span className="muted">US legal requirement</span><b style={{ color: sel.legal === 'Required' ? '#1F5FA8' : 'var(--ink)' }}>{sel.legal}</b></div>
           <div><span className="muted">Document applicability</span><b style={{ color: sel.docApplies ? '#3B6D11' : 'var(--muted)' }}>{sel.docApplies ? 'Applies to documents' : 'Web / interaction — N/A to static docs'}</b></div>
-          <div><span className="muted">Coverage today</span><b style={{ color: SRC[sel.source][1] }}>{SRC[sel.source][0]}</b></div>
+          {(() => {
+            // Coverage splits along Devanathan's two axes: do we apply the fix today
+            // (remediation), and do we confirm a pass today (validation)? Criteria that
+            // need a render/interaction can be remediated + statically flagged, but a true
+            // pass is only partial without UI automation.
+            const vlv = valLevel(sel)
+            const valCov = vlv === 'human'
+              ? ['Partial · static flag', '#854F0B', 'Detected/flagged statically; a true pass needs rendering or interaction.']
+              : sel.source === 'Shipped (demo)' ? ['Live now', '#3B6D11', 'Validated by the engine in this demo.']
+              : sel.source === 'Partner baseline' ? ['Partner scanner', '#3C3489', 'Validated by the partner’s automated engine.']
+              : ['Roadmap', '#854F0B', 'Validation is on the roadmap.']
+            return <>
+              <div><span className="muted">Validation coverage</span><b style={{ color: valCov[1] }} title={valCov[2]}>{valCov[0]}</b></div>
+              <div><span className="muted">Remediation coverage</span><b style={{ color: SRC[sel.source][1] }} title="Whether the platform applies the fix today.">{SRC[sel.source][0]}</b></div>
+            </>
+          })()}
           <div><span className="muted">Build tier</span><b>{sel.tier}</b></div>
           <div><span className="muted">Roadmap phase</span><b>{sel.phase}</b></div>
           {sel.source === 'MDK net-new' && (() => { const ph = ROADMAP_PHASES.find((x) => x.match && x.match(sel.phase)); return ph ? <div><span className="muted">Timeline · Claude-paced</span><b>{ph.when}</b></div> : null })()}
