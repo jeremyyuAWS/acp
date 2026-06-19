@@ -13,6 +13,7 @@ const SRC = {
 const PRINCIPLES = ['Perceivable', 'Operable', 'Understandable', 'Robust']
 const FILTERS = [
   ['all', 'All 87'], ['A', 'Level A'], ['AA', 'Level AA'], ['2.2', 'New in 2.2'],
+  ['Required', 'US Required'], ['docs', 'Applies to documents'],
   ['Shipped (demo)', 'Live now'], ['MDK net-new', 'Roadmap'],
 ]
 // Plain-language meaning of the three conformance levels, for users new to WCAG.
@@ -50,9 +51,12 @@ function ScDetail({ sel, onClose }) {
       <div className="covpanel" ref={ref} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <button className="covclose" aria-label="Close" onClick={onClose}>✕</button>
         <div className="covsc" style={{ fontSize: 18 }}><b>{sel.sc}</b> {sel.name}</div>
-        <div className="muted" style={{ margin: '4px 0 6px' }}>Level {sel.level} · {sel.principle} · added in WCAG {sel.added} · {sel.legal}</div>
+        <div className="muted" style={{ margin: '4px 0 8px' }}>Level {sel.level} · {sel.principle} · added in WCAG {sel.added}</div>
+        {sel.req && <p className="covreq">{sel.req}</p>}
         <div className="levelnote">Level {sel.level} — {LEVEL_MEANING[sel.level]}</div>
         <div className="covrows">
+          <div><span className="muted">US legal requirement</span><b style={{ color: sel.legal === 'Required' ? '#A32D2D' : 'var(--ink)' }}>{sel.legal}</b></div>
+          <div><span className="muted">Document applicability</span><b style={{ color: sel.docApplies ? '#3B6D11' : 'var(--muted)' }}>{sel.docApplies ? 'Applies to documents' : 'Web / interaction — N/A to static docs'}</b></div>
           <div><span className="muted">Validation approach</span><b>{sel.approach}</b></div>
           <div><span className="muted">Coverage today</span><b style={{ color: SRC[sel.source][1] }}>{SRC[sel.source][0]}</b></div>
           <div><span className="muted">Build tier</span><b>{sel.tier}</b></div>
@@ -73,6 +77,8 @@ export default function WcagCoverage() {
   const match = (r) => filter === 'all' ? true
     : filter === '2.2' ? r.added === '2.2'
     : filter === 'A' || filter === 'AA' ? r.level === filter
+    : filter === 'Required' ? r.legal === 'Required'
+    : filter === 'docs' ? r.docApplies
     : PHASE_FILTER[filter] ? r.phase.startsWith(PHASE_FILTER[filter])
     : r.source === filter
 
@@ -85,8 +91,8 @@ export default function WcagCoverage() {
     <>
       <div className="estatebar" style={{ marginTop: 6 }}>
         <div>
-          <b>WCAG 2.1 + 2.2 coverage</b> · all 87 success criteria
-          <div className="muted" style={{ marginTop: 2 }}>what the platform validates today vs. the roadmap beyond the partner’s automated checks</div>
+          <b>WCAG 2.1 + 2.2 conformance · US market</b> · all 87 success criteria
+          <div className="muted" style={{ marginTop: 2 }}>each criterion with its level, US legal requirement, document applicability, plain-language requirement, and coverage today vs. the roadmap — click any cell for the full detail</div>
         </div>
         <div className="covlegend">
           {Object.entries(SRC).map(([k, [label, fg, bg]]) => (
@@ -159,10 +165,10 @@ export default function WcagCoverage() {
                 const [, fg, bg] = SRC[r.source]
                 const ph = PHASE_SHORT[r.phase]
                 return (
-                  <button key={r.sc} className="covcell" style={{ background: bg, borderColor: fg + '55' }} onClick={() => setSel(r)}>
-                    <div className="covsc"><b>{r.sc}</b><span className="covlvl">{r.level}</span>{ph && <span className="covphase" style={{ color: ph[1], background: ph[2] }}>{ph[0]}</span>}</div>
+                  <button key={r.sc} className="covcell" style={{ background: bg, borderColor: fg + '55' }} onClick={() => setSel(r)} title={`${r.sc} ${r.name} — ${r.req}`}>
+                    <div className="covsc"><b>{r.sc}</b><span className="covlvl">{r.level}</span>{r.legal === 'Required' && <span className="covreq-flag" title="Required under US law">REQ</span>}{ph && <span className="covphase" style={{ color: ph[1], background: ph[2] }}>{ph[0]}</span>}</div>
                     <div className="covname">{r.name}</div>
-                    <div className="covtag" style={{ color: fg }}>{SRC[r.source][0]}</div>
+                    <div className="covtag" style={{ color: fg }}>{SRC[r.source][0]}{!r.docApplies && <span className="muted" style={{ fontWeight: 400 }}> · N/A docs</span>}</div>
                   </button>
                 )
               })}
