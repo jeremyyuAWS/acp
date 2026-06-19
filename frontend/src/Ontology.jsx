@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { LS_KEY, FIELDS, deriveOptions, evalRule, riskFactors, riskScore, parseNL, PRI_COLOR, PRIORITY_W, condText, worstSev, exposureOf, taxonomyPaths, DEFAULT_LABELS, DEFAULT_RULES, DEFAULT_TAXONOMY, DEFAULT_PUBLISHED } from './ontology.js'
 
 // Custom Ontology & Business Taxonomy Manager (Admin). An admin teaches the platform
@@ -49,7 +49,29 @@ export default function Ontology({ files = [], onPublished }) {
   const [nlRule, setNlRule] = useState(null)
   const [draft, setDraft] = useState(() => ({ name: '', match: 'all', conditions: [{ field: 'department', op: 'is', value: '' }], actions: { priority: 'High', slaDays: null, label: '', category: '' } }))
   const [editId, setEditId] = useState(null)
+  const [importErr, setImportErr] = useState(null)
+  const fileRef = useRef(null)
   const blankDraft = () => ({ name: '', match: 'all', conditions: [{ field: 'department', op: 'is', value: '' }], actions: { priority: 'High', slaDays: null, label: '', category: '' } })
+  // Portability — export the ontology as JSON to version-control / share; import to load
+  // another org's model as a reviewable draft.
+  const exportOntology = () => {
+    const data = { schema: 'mova-ontology@1', version: st.version, labels: st.labels, taxonomy: st.taxonomy, rules: st.rules }
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }))
+    const a = document.createElement('a'); a.href = url; a.download = 'mova-ontology.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+  const onImport = (e) => {
+    const file = e.target.files?.[0]; e.target.value = ''; if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result)
+        if (!Array.isArray(data.rules) || !Array.isArray(data.labels)) throw new Error('not a valid ontology file (missing rules or labels)')
+        setSt((s) => ({ ...s, labels: data.labels, taxonomy: data.taxonomy || s.taxonomy, rules: data.rules, status: 'draft', dirty: true }))
+        setImportErr(null); setEditId(null); setDraft(blankDraft()); setTab('rules')
+      } catch (err) { setImportErr('Could not import: ' + err.message) }
+    }
+    reader.readAsText(file)
+  }
   const opts = useMemo(() => deriveOptions(files), [files])
   useEffect(() => { try { localStorage.setItem(LS_KEY, JSON.stringify(st)) } catch { /* ignore */ } }, [st])
   const dirty = st.status === 'draft' || st.dirty
@@ -270,6 +292,16 @@ export default function Ontology({ files = [], onPublished }) {
             {(st.history || []).length ? st.history.map((h, i) => (
               <div className="ontver" key={i}><span className="ontvertag">v{h.v}</span><span className="ontverwhen">{h.at} · by {h.by}</span><span className="muted">{h.rules} rules · {h.labels} labels</span>{i > 0 && h.snap && <button className="ghost small" style={{ marginLeft: 'auto' }} onClick={() => rollback(h)} title="Restore this version's rules &amp; labels as a draft">↩ Roll back</button>}</div>
             )) : <p className="muted">No published versions yet — publish to create v{st.version}.</p>}
+          </section>
+          <section className="panel">
+            <div className="ontsechd"><h3 style={{ margin: 0 }}>Portability</h3></div>
+            <p className="muted" style={{ fontSize: 12 }}>Export the ontology as JSON to version-control or share across environments; import another org's model to load it as a reviewable draft, then publish.</p>
+            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+              <button className="ghost small" onClick={exportOntology}>⤓ Export JSON</button>
+              <button className="ghost small" onClick={() => fileRef.current?.click()}>⤒ Import JSON</button>
+              <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: 'none' }} onChange={onImport} aria-label="Import ontology JSON file" />
+            </div>
+            {importErr && <div className="ontvalwarn" style={{ marginTop: 9, marginBottom: 0 }}>⚠ {importErr}</div>}
           </section>
           <section className="panel">
             <div className="ontsechd"><h3 style={{ margin: 0 }}>AI-assisted classification</h3><span className="ontprevtag">preview</span></div>
