@@ -1,20 +1,18 @@
-import { useState, useEffect } from 'react'
+import { useState, useRef } from 'react'
 import Rubric from './Rubric.jsx'
 import WcagCoverage from './WcagCoverage.jsx'
+import { useDialog } from './a11y.js'
 
 // Platform settings, behind the header cog — gated to the Platform Admin. Holds
 // the scoring rules (Rubric) and the validation coverage (WCAG 2.1 + 2.2 matrix),
 // i.e. the configuration an admin owns, kept out of the day-to-day workflow tabs.
 export default function Settings({ onClose, onRubricSaved }) {
   const [tab, setTab] = useState('rules')
-  useEffect(() => {
-    const k = (e) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', k)
-    return () => window.removeEventListener('keydown', k)
-  }, [onClose])
+  const panelRef = useRef(null)
+  useDialog(panelRef, onClose)
   return (
-    <div className="setoverlay" role="dialog" aria-label="Platform settings" onClick={onClose}>
-      <div className="setpanel" onClick={(e) => e.stopPropagation()}>
+    <div className="setoverlay" role="dialog" aria-modal="true" aria-label="Platform settings" onClick={onClose}>
+      <div className="setpanel" ref={panelRef} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <div className="sethead">
           <div><b>⚙ Platform settings</b><span className="muted"> · admin · rules &amp; validation</span></div>
           <button className="ghost small" aria-label="Close settings" onClick={onClose}>✕</button>

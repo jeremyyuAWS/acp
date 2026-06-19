@@ -8,6 +8,7 @@ import ScreenReaderDemo from './ScreenReaderDemo.jsx'
 import PdfPreview from './PdfPreview.jsx'
 import { auditHtml } from './htmlAudit.js'
 import { auditOffice } from './officeAudit.js'
+import { useDialog } from './a11y.js'
 
 const isOffice = (name) => /\.(docx|pptx|xlsx)$/i.test(name || '')
 const HKEY = 'mova_upload_history'
@@ -44,6 +45,29 @@ const SEV_PEN = { CRITICAL: 16, SERIOUS: 11, MODERATE: 5, MINOR: 2 }
 const SEV_BADGE = { CRITICAL: ['#FCEBEB', '#A32D2D'], SERIOUS: ['#FAECE7', '#993C1D'], MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'] }
 const extOf = (name) => { const m = /\.([a-z0-9]+)$/i.exec(name || ''); return (m ? m[1] : 'pdf').toLowerCase() }
 const issuesFor = (name) => (EXT_ISSUES[extOf(name)] || EXT_ISSUES.pdf).map(([rule, wcag, sev, detail]) => ({ rule, wcag, sev, detail }))
+
+// Past-upload detail dialog — its own component so focus management runs on open.
+function HistoryDetail({ viewing, onClose }) {
+  const ref = useRef(null)
+  useDialog(ref, onClose)
+  return (
+    <div className="covdrawer" role="dialog" aria-modal="true" aria-label={`${viewing.name} result`} onClick={onClose}>
+      <div className="covpanel" ref={ref} tabIndex={-1} onClick={(e) => e.stopPropagation()} style={{ maxWidth: 540 }}>
+        <button className="covclose" aria-label="Close" onClick={onClose}>✕</button>
+        <div className="fname" style={{ fontSize: 16 }}>{viewing.name}</div>
+        <div className="muted" style={{ margin: '4px 0 12px' }}>{fmtDate(viewing.date)} · scored {viewing.score} / 100{viewing.real ? ' · real axe-core analysis' : ''}</div>
+        <h4 className="drawerh">Findings ({viewing.findings.length})</h4>
+        <div className="findings">
+          {viewing.findings.length === 0 ? <p className="muted">No findings.</p> : viewing.findings.map((i, n) => {
+            const [bg, fg] = SEV_BADGE2[i.sev] || SEV_BADGE2.MINOR
+            return <div className="finding" key={n}><span className="badge" style={{ background: bg, color: fg }}>{(i.sev || '').toLowerCase()}</span><div className="findingmain"><div>{i.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{i.detail}</div></div></div>
+          })}
+        </div>
+        <p className="muted" style={{ marginTop: 12, fontSize: 12 }}>Result kept locally on this device — documents are never retained.</p>
+      </div>
+    </div>
+  )
+}
 
 export default function Upload({ onCertified }) {
   const [step, setStep] = useState(0)
@@ -191,23 +215,7 @@ export default function Upload({ onCertified }) {
         </section>
       )}
 
-      {viewing && (
-        <div className="covdrawer" role="dialog" aria-label={`${viewing.name} result`} onClick={() => setViewing(null)}>
-          <div className="covpanel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 540 }}>
-            <button className="covclose" aria-label="Close" onClick={() => setViewing(null)}>✕</button>
-            <div className="fname" style={{ fontSize: 16 }}>{viewing.name}</div>
-            <div className="muted" style={{ margin: '4px 0 12px' }}>{fmtDate(viewing.date)} · scored {viewing.score} / 100{viewing.real ? ' · real axe-core analysis' : ''}</div>
-            <h4 className="drawerh">Findings ({viewing.findings.length})</h4>
-            <div className="findings">
-              {viewing.findings.length === 0 ? <p className="muted">No findings.</p> : viewing.findings.map((i, n) => {
-                const [bg, fg] = SEV_BADGE2[i.sev] || SEV_BADGE2.MINOR
-                return <div className="finding" key={n}><span className="badge" style={{ background: bg, color: fg }}>{(i.sev || '').toLowerCase()}</span><div className="findingmain"><div>{i.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{i.detail}</div></div></div>
-              })}
-            </div>
-            <p className="muted" style={{ marginTop: 12, fontSize: 12 }}>Result kept locally on this device — documents are never retained.</p>
-          </div>
-        </div>
-      )}
+      {viewing && <HistoryDetail viewing={viewing} onClose={() => setViewing(null)} />}
 
       {step === 1 && (
         <section className="panel">

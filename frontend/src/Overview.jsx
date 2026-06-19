@@ -131,11 +131,11 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
         <h2>Compliance funnel · click a stage · <span style={{ color: '#854F0B', fontWeight: 400 }}>verify &amp; publish projected</span></h2>
         <div className="vfunnel">
           {stages.map((s) => (
-            <div className="vfrow" key={s.label} onClick={() => onGo(s.go)}>
+            <button className="vfrow" key={s.label} onClick={() => onGo(s.go)} aria-label={`${s.label}${s.proj ? ' projected' : ''}: ${s.v.toLocaleString()} documents — open`}>
               <span className="vflabel">{s.label} {s.proj && <em>· proj</em>}</span>
               <span className="vfbar"><i style={{ width: on ? `${(s.v / maxN) * 100}%` : '0%', background: s.proj ? '#c4aecb' : '#7a5c8e' }} /></span>
               <span className="vfn">{s.v.toLocaleString()}</span>
-            </div>
+            </button>
           ))}
         </div>
       </section>

@@ -72,7 +72,7 @@ export default function Rubric({ onSaved }) {
           ))}
         </div>
         <div className="rubricfilters">
-          <input className="rsearch" placeholder="search rules…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className="rsearch" type="search" placeholder="search rules…" aria-label="Search rules" value={q} onChange={(e) => setQ(e.target.value)} />
           {[['all', 'All'], ['findings', 'With findings'], ['high', 'Critical & serious']].map(([k, l]) => (
             <button key={k} className={filter === k ? 'fchip on' : 'fchip'} onClick={() => setFilter(k)}>{l}</button>
           ))}
@@ -97,7 +97,7 @@ export default function Rubric({ onSaved }) {
               const [bg, fg] = SEV[r.severity] ?? SEV.MINOR
               return (
                 <div className={r.enabled ? 'rulerow' : 'rulerow off'} key={r.id}>
-                  <label className="switch"><input type="checkbox" checked={r.enabled} onChange={() => toggle(fmt, r.id)} /><span className="slider" /></label>
+                  <label className="switch"><input type="checkbox" checked={r.enabled} onChange={() => toggle(fmt, r.id)} aria-label={`${r.enabled ? 'Disable' : 'Enable'} rule: ${r.title}`} /><span className="slider" /></label>
                   <span className="ruletitle">{r.title}</span>
                   <span className="rulewcag"><span className="lvl">{r.level}</span> {wcag(r.wcag)}</span>
                   <span className="badge" style={{ background: bg, color: fg }}>{r.severity.toLowerCase()}</span>

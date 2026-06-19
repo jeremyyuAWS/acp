@@ -153,7 +153,7 @@ export default function KnowledgeGraph({ files }) {
           <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search documents, owners, sources…" aria-label="Search the knowledge graph" />
           {query && <button type="button" className="kgsearchx" aria-label="Clear search" onClick={() => setQuery('')}>✕</button>}
         </div>
-        <select value={dept} onChange={(e) => { setDept(e.target.value); setFocusCrit(null) }}>
+        <select value={dept} onChange={(e) => { setDept(e.target.value); setFocusCrit(null) }} aria-label="Filter the graph by department">
           <option value="">All departments</option>
           {depts.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>

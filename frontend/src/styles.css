@@ -46,6 +46,10 @@ header { display: flex; align-items: center; justify-content: space-between; fle
 .io > span { background: var(--bg); border-radius: 7px; padding: 1px 9px 0; color: var(--amber); font-weight: 800; font-size: 21px; line-height: 1.2; }
 .tm { align-self: flex-start; font-size: 10px; color: var(--plum); font-weight: 700; margin-top: 1px; }
 .sub { color: var(--muted); font-size: 14px; border-left: 1px solid var(--line); padding-left: 12px; }
+h1.sub { margin: 0; font-weight: 400; }
+.skiplink { position: absolute; left: 8px; top: -48px; z-index: 200; background: var(--plum); color: #fff; padding: 8px 14px; border-radius: 8px; font-size: 14px; font-weight: 600; text-decoration: none; transition: top .15s ease; }
+.skiplink:focus { top: 8px; }
+#main-content:focus { outline: none; }
 .chip { font-size: 12px; color: var(--muted); background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; }
 
 .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 22px 0 8px; }
@@ -794,6 +798,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 /* visual funnel (decreasing animated bars) */
 .vfunnel { margin: 8px 0 18px; }
 .vfrow { display: grid; grid-template-columns: 120px 1fr 34px; align-items: center; gap: 12px; padding: 5px 0; cursor: pointer; }
+button.vfrow { background: none; border: none; font: inherit; color: inherit; width: 100%; text-align: left; }
 .vfrow:hover .vflabel { color: var(--plum); }
 .vflabel { font-size: 13px; color: var(--ink); }
 .vflabel em { font-style: normal; color: var(--muted); font-size: 11px; }

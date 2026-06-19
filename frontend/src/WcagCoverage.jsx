@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useRef } from 'react'
 import { WCAG } from './wcagCatalog.js'
+import { useDialog } from './a11y.js'
 
 // WCAG 2.1 + 2.2 coverage matrix — all 87 success criteria, colour-coded by what
 // the platform checks today vs. what's on the roadmap beyond the partner. Backs
@@ -40,15 +41,34 @@ const PHASE_FILTER = { P1: 'Phase 1', P2: 'Phase 2', P3: 'Phase 3' }
 const mid = (r) => (r.lo + r.hi) / 2
 const wks = (d) => `${(d / 5).toFixed(0)}–${Math.round(d / 5)}`
 
+// Success-criterion detail dialog — its own component so focus management runs on open.
+function ScDetail({ sel, onClose }) {
+  const ref = useRef(null)
+  useDialog(ref, onClose)
+  return (
+    <div className="covdrawer" role="dialog" aria-modal="true" aria-label={`${sel.sc} detail`} onClick={onClose}>
+      <div className="covpanel" ref={ref} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
+        <button className="covclose" aria-label="Close" onClick={onClose}>✕</button>
+        <div className="covsc" style={{ fontSize: 18 }}><b>{sel.sc}</b> {sel.name}</div>
+        <div className="muted" style={{ margin: '4px 0 6px' }}>Level {sel.level} · {sel.principle} · added in WCAG {sel.added} · {sel.legal}</div>
+        <div className="levelnote">Level {sel.level} — {LEVEL_MEANING[sel.level]}</div>
+        <div className="covrows">
+          <div><span className="muted">Validation approach</span><b>{sel.approach}</b></div>
+          <div><span className="muted">Coverage today</span><b style={{ color: SRC[sel.source][1] }}>{SRC[sel.source][0]}</b></div>
+          <div><span className="muted">Build tier</span><b>{sel.tier}</b></div>
+          <div><span className="muted">Roadmap phase</span><b>{sel.phase}</b></div>
+          {sel.source === 'MDK net-new' && (() => { const ph = ROADMAP_PHASES.find((x) => x.match && x.match(sel.phase)); return ph ? <div><span className="muted">Timeline · Claude-paced</span><b>{ph.when}</b></div> : null })()}
+          {sel.source === 'MDK net-new' && <div><span className="muted">Effort (human team)</span><b>{sel.lo}–{sel.hi} dev-days</b></div>}
+        </div>
+        {sel.source !== 'MDK net-new' && <p className="muted" style={{ marginTop: 12 }}>{sel.source === 'Shipped (demo)' ? 'Already validated by the platform in this demo.' : 'Covered by the partner’s automated engine for web; net-new only for PDF/Office formats.'}</p>}
+      </div>
+    </div>
+  )
+}
+
 export default function WcagCoverage() {
   const [filter, setFilter] = useState('all')
   const [sel, setSel] = useState(null)
-  useEffect(() => {
-    if (!sel) return
-    const k = (e) => { if (e.key === 'Escape') setSel(null) }
-    window.addEventListener('keydown', k)
-    return () => window.removeEventListener('keydown', k)
-  }, [sel])
 
   const match = (r) => filter === 'all' ? true
     : filter === '2.2' ? r.added === '2.2'
@@ -151,25 +171,7 @@ export default function WcagCoverage() {
         )
       })}
 
-      {sel && (
-        <div className="covdrawer" role="dialog" aria-label={`${sel.sc} detail`} onClick={() => setSel(null)}>
-          <div className="covpanel" onClick={(e) => e.stopPropagation()}>
-            <button className="covclose" aria-label="Close" onClick={() => setSel(null)}>✕</button>
-            <div className="covsc" style={{ fontSize: 18 }}><b>{sel.sc}</b> {sel.name}</div>
-            <div className="muted" style={{ margin: '4px 0 6px' }}>Level {sel.level} · {sel.principle} · added in WCAG {sel.added} · {sel.legal}</div>
-            <div className="levelnote">Level {sel.level} — {LEVEL_MEANING[sel.level]}</div>
-            <div className="covrows">
-              <div><span className="muted">Validation approach</span><b>{sel.approach}</b></div>
-              <div><span className="muted">Coverage today</span><b style={{ color: SRC[sel.source][1] }}>{SRC[sel.source][0]}</b></div>
-              <div><span className="muted">Build tier</span><b>{sel.tier}</b></div>
-              <div><span className="muted">Roadmap phase</span><b>{sel.phase}</b></div>
-              {sel.source === 'MDK net-new' && (() => { const ph = ROADMAP_PHASES.find((x) => x.match && x.match(sel.phase)); return ph ? <div><span className="muted">Timeline · Claude-paced</span><b>{ph.when}</b></div> : null })()}
-              {sel.source === 'MDK net-new' && <div><span className="muted">Effort (human team)</span><b>{sel.lo}–{sel.hi} dev-days</b></div>}
-            </div>
-            {sel.source !== 'MDK net-new' && <p className="muted" style={{ marginTop: 12 }}>{sel.source === 'Shipped (demo)' ? 'Already validated by the platform in this demo.' : 'Covered by the partner’s automated engine for web; net-new only for PDF/Office formats.'}</p>}
-          </div>
-        </div>
-      )}
+      {sel && <ScDetail sel={sel} onClose={() => setSel(null)} />}
     </>
   )
 }

@@ -127,8 +127,9 @@ export default function App() {
 
   return (
     <div className="app">
+      <a className="skiplink" href="#main-content">Skip to main content</a>
       <header>
-        <div className="brand"><Logo /><span className="sub">Accessibility Compliance</span></div>
+        <div className="brand"><Logo /><h1 className="sub">Accessibility Compliance</h1></div>
         <div className="userbox">
           {me.role && <span className="chip" title={me.scope}>{me.role}</span>}
           {rubric && me.allow?.includes('settings') && <span className="chip">{rubric.target} · rubric {rubric.hash.slice(0, 8)}</span>}
@@ -159,6 +160,7 @@ export default function App() {
         </div>
       )}
 
+      <main id="main-content" tabIndex={-1}>
       <ErrorBoundary key={view}>
         {view === 'overview' && (run ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} /> : placeholder)}
 
@@ -185,6 +187,7 @@ export default function App() {
 
         {view === 'upload' && <Upload onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
       </ErrorBoundary>
+      </main>
 
       <ChatWidget files={files} run={run} trend={trend} trendDates={trendDates} />
       {settingsOpen && me.allow?.includes('settings') && <Settings onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} />}
