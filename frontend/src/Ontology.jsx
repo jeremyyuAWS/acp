@@ -8,10 +8,12 @@ import { LS_KEY, FIELDS, deriveOptions, evalRule, riskFactors, riskScore, parseN
 // classifies from the same source of truth. NL authoring is a real deterministic parser;
 // AI example-learning, relationships and rollback are clearly-labelled previews.
 
+const REL_TYPES = ['supports', 'belongs to', 'supersedes', 'translates']
 const DEFAULT_STATE = {
   labels: DEFAULT_LABELS.map((l) => ({ ...l })),
   taxonomy: JSON.parse(JSON.stringify(DEFAULT_TAXONOMY)),
   rules: DEFAULT_RULES.map((r) => ({ ...r })),
+  relationships: [{ id: 'rel1', from: 'l1', type: 'belongs to', to: 'l2' }],
   version: 1, status: 'published', publishedAt: 'seeded', published: DEFAULT_PUBLISHED,
   history: [{ v: 1, at: 'seeded', by: 'system', rules: DEFAULT_RULES.length, labels: DEFAULT_LABELS.length, snap: { rules: DEFAULT_RULES, labels: DEFAULT_LABELS } }],
 }
@@ -50,12 +52,15 @@ export default function Ontology({ files = [], onPublished }) {
   const [draft, setDraft] = useState(() => ({ name: '', match: 'all', conditions: [{ field: 'department', op: 'is', value: '' }], actions: { priority: 'High', slaDays: null, label: '', category: '' } }))
   const [editId, setEditId] = useState(null)
   const [importErr, setImportErr] = useState(null)
+  const [rel, setRel] = useState({ from: '', type: 'supports', to: '' })
   const fileRef = useRef(null)
+  const addRel = () => { if (rel.from && rel.to && rel.from !== rel.to) { set({ relationships: [...(st.relationships || []), { id: nid('rel'), ...rel }] }); setRel({ from: '', type: 'supports', to: '' }) } }
+  const delRel = (id) => set({ relationships: (st.relationships || []).filter((r) => r.id !== id) })
   const blankDraft = () => ({ name: '', match: 'all', conditions: [{ field: 'department', op: 'is', value: '' }], actions: { priority: 'High', slaDays: null, label: '', category: '' } })
   // Portability — export the ontology as JSON to version-control / share; import to load
   // another org's model as a reviewable draft.
   const exportOntology = () => {
-    const data = { schema: 'mova-ontology@1', version: st.version, labels: st.labels, taxonomy: st.taxonomy, rules: st.rules }
+    const data = { schema: 'mova-ontology@1', version: st.version, labels: st.labels, taxonomy: st.taxonomy, rules: st.rules, relationships: st.relationships || [] }
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }))
     const a = document.createElement('a'); a.href = url; a.download = 'mova-ontology.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
@@ -66,7 +71,7 @@ export default function Ontology({ files = [], onPublished }) {
       try {
         const data = JSON.parse(reader.result)
         if (!Array.isArray(data.rules) || !Array.isArray(data.labels)) throw new Error('not a valid ontology file (missing rules or labels)')
-        setSt((s) => ({ ...s, labels: data.labels, taxonomy: data.taxonomy || s.taxonomy, rules: data.rules, status: 'draft', dirty: true }))
+        setSt((s) => ({ ...s, labels: data.labels, taxonomy: data.taxonomy || s.taxonomy, rules: data.rules, relationships: data.relationships || [], status: 'draft', dirty: true }))
         setImportErr(null); setEditId(null); setDraft(blankDraft()); setTab('rules')
       } catch (err) { setImportErr('Could not import: ' + err.message) }
     }
@@ -309,10 +314,16 @@ export default function Ontology({ files = [], onPublished }) {
             <div className="ontexrow"><span className="ontchip">＋ add example docs</span><span className="muted">confidence ≥</span><input aria-label="Confidence threshold" type="range" min="50" max="99" defaultValue="80" disabled /><span className="muted">80%</span></div>
           </section>
           <section className="panel">
-            <div className="ontsechd"><h3 style={{ margin: 0 }}>Ontology relationships</h3><span className="ontprevtag">preview</span></div>
-            <p className="muted" style={{ fontSize: 12 }}>Model dependencies for dependency-aware remediation &amp; reporting.</p>
+            <div className="ontsechd"><h3 style={{ margin: 0 }}>Ontology relationships</h3></div>
+            <p className="muted" style={{ fontSize: 12 }}>Model dependencies between your document types — they travel with the ontology and set up dependency-aware remediation &amp; reporting.</p>
+            <div className="ontrelbuild">
+              <select aria-label="Relationship source label" value={rel.from} onChange={(e) => setRel((r) => ({ ...r, from: e.target.value }))}><option value="">label…</option>{st.labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select>
+              <select aria-label="Relationship type" value={rel.type} onChange={(e) => setRel((r) => ({ ...r, type: e.target.value }))}>{REL_TYPES.map((t) => <option key={t}>{t}</option>)}</select>
+              <select aria-label="Relationship target label" value={rel.to} onChange={(e) => setRel((r) => ({ ...r, to: e.target.value }))}><option value="">label…</option>{st.labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select>
+              <button className="ghost small" onClick={addRel} disabled={!rel.from || !rel.to || rel.from === rel.to}>＋ Add</button>
+            </div>
             <div className="ontrels">
-              {['Procedure supports Policy', 'Translation belongs to Original', 'Attachment belongs to Contract', 'Training Guide supersedes Legacy Manual'].map((r) => <span key={r} className="ontrel">{r}</span>)}
+              {(st.relationships || []).length ? (st.relationships || []).map((r) => <span key={r.id} className="ontrel">{labelName(r.from) || '?'} <em>{r.type}</em> {labelName(r.to) || '?'}<button className="ontrelx" onClick={() => delRel(r.id)} aria-label="Remove relationship">✕</button></span>) : <span className="muted">No relationships yet — add one above.</span>}
             </div>
           </section>
         </>

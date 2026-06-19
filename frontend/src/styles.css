@@ -859,7 +859,12 @@ input:focus-visible, [role="tab"]:focus-visible {
 .ontprevtag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #854F0B; background: #FAEEDA; border-radius: 5px; padding: 1px 6px; }
 .ontexrow { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .ontrels { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
-.ontrel { font-size: 12px; background: #f3eef6; border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; }
+.ontrel { font-size: 12px; background: #f3eef6; border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; display: inline-flex; align-items: center; }
+.ontrel em { font-style: normal; font-weight: 700; color: #854F0B; margin: 0 4px; }
+.ontrelx { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 12px; padding: 0 0 0 7px; }
+.ontrelx:hover { color: var(--ink); }
+.ontrelbuild { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; margin: 9px 0 4px; }
+.ontrelbuild select { padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; font: inherit; font-size: 13px; background: #fff; }
 .ontbanner { background: #eef3fb; border: 1px solid #cfe0f5; color: #1F5FA8; border-radius: 9px; padding: 7px 11px; font-size: 12.5px; margin: 0 0 11px; }
 .ontwarn { color: #854F0B; font-size: 11.5px; font-weight: 600; margin-left: 6px; }
 .ontvalwarn { background: #FAEEDA; border: 1px solid #ecd8ad; color: #854F0B; border-radius: 9px; padding: 8px 12px; font-size: 12.5px; margin-bottom: 12px; }
