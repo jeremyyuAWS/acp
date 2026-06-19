@@ -56,6 +56,15 @@ export default function Monitor({ sources = [], files = [], ratified }) {
   const seed = [3, 2, 1, 0].map((k, i) => ({ ...POOL[k], id: -i, when: ['just now', '4m ago', '9m ago', '15m ago'][i] }))
   const [events, setEvents] = useState(seed)
   const [paused, setPaused] = useState(false)
+  const evidenceRef = useRef(null)
+  const [exporting, setExporting] = useState(false)
+  const exportEvidence = async () => {
+    if (!evidenceRef.current || exporting) return
+    setExporting(true)
+    try { (await import('./exportPdf.js')).exportReportPDF(evidenceRef.current, 'mova-evidence-package.pdf') }
+    catch (e) { console.error('evidence export failed', e) }
+    finally { setTimeout(() => setExporting(false), 600) }
+  }
   const [triggers, setTriggers] = useState({ newFile: true, onEdit: true, autoRemediate: true, alertRegression: true })
   const [cad, setCad] = useState(() => Object.fromEntries(watch.map((w) => [w.id, w.cadence])))
   const setAllCad = (v) => setCad(Object.fromEntries(watch.map((w) => [w.id, v])))
@@ -192,9 +201,12 @@ export default function Monitor({ sources = [], files = [], ratified }) {
         </div>
       </div>
 
-      <section className="panel" style={{ marginTop: 14 }}>
-        <h2>Audit trail · live <span className="livedot" aria-hidden="true" /></h2>
-        <div className="auditfeed" role="log" aria-live="polite" aria-label="Audit trail">
+      <section className="panel" style={{ marginTop: 14 }} ref={evidenceRef}>
+        <div className="monfeedhd">
+          <h2 style={{ margin: 0 }}>Audit trail · live <span className="livedot" aria-hidden="true" /></h2>
+          <button className="exportbtn" onClick={exportEvidence} disabled={exporting}>{exporting ? 'Generating…' : '⤓ Export evidence package'}</button>
+        </div>
+        <div className="auditfeed" style={{ marginTop: 10 }} role="log" aria-live="polite" aria-label="Audit trail">
           {ratified && ratified.total > 0 && (
             <div className="auditrow pinned">
               <span className="auditkind" style={{ background: '#EEEDFE', color: '#3C3489' }}>action plan</span>

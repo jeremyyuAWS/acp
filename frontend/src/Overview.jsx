@@ -6,6 +6,7 @@ import FileDrawer, { statusOf, critLabel } from './FileDrawer.jsx'
 import { IDENTITY, remediableCount } from './sim.js'
 import WordCloud from './WordCloud.jsx'
 import Insight from './Insight.jsx'
+import Logo from './Logo.jsx'
 
 // The estate dashboard — doubles as the exportable compliance report.
 export default function Overview({ run, files, trend, trendDates, onGo }) {
@@ -88,9 +89,17 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
   return (
     <>
       <div className="dashtoolbar">
-        <button className="exportbtn" onClick={doExport} disabled={exporting}>{exporting ? 'Generating PDF…' : '⤓ Export PDF report'}</button>
+        <button className="exportbtn" onClick={doExport} disabled={exporting}>{exporting ? 'Generating PDF…' : '⤓ Quarterly governance report'}</button>
       </div>
       <div ref={reportRef}>
+      <div className="govcover">
+        <Logo />
+        <div>
+          <div className="govtitle">Quarterly Accessibility Governance Report</div>
+          <div className="muted">{IDENTITY.org} · {(() => { const d = new Date(); return `Q${Math.floor(d.getMonth() / 3) + 1} ${d.getFullYear()}` })()} · WCAG 2.1 AA · for leadership</div>
+          <p className="govsummary">Estate accessibility score <b>{run.avg_score ?? '—'}/100</b> · <b>{auditReady}%</b> audit-ready · <b>{needFix}</b> documents in the remediation backlog · <b>{n.toLocaleString()}</b> documents under continuous monitoring across {(trend && trend.length) || 4} scans.</p>
+        </div>
+      </div>
       <div className="metrics">
         <div className="metric"><span>documents</span><b>{n.toLocaleString()}</b></div>
         <div className="metric"><span>certifiable</span><b style={{ color: '#3B6D11' }}>{run.certifiable}</b></div>

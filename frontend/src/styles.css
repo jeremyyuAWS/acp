@@ -195,6 +195,9 @@ input:focus-visible, [role="tab"]:focus-visible {
 .impact { background: #FAEEDA; color: #854F0B; padding: 2px 9px; border-radius: 999px; font-size: 12px; }
 
 .dashtoolbar { display: flex; justify-content: flex-end; margin: 16px 0 -6px; }
+.govcover { display: flex; align-items: flex-start; gap: 16px; padding: 16px 18px; background: #fff; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 14px; }
+.govtitle { font-size: 17px; font-weight: 700; color: var(--ink); }
+.govsummary { margin: 8px 0 0; font-size: 13px; color: var(--ink); line-height: 1.5; }
 .exportbtn { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; background: #fff; color: var(--plum); border: 1px solid var(--line); border-radius: 9px; padding: 8px 14px; font-size: 14px; }
 .exportbtn:hover { background: var(--bg); }
 
