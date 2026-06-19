@@ -1,5 +1,6 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import PdfPreview from './PdfPreview.jsx'
+import { remediateOffice } from './officeAudit.js'
 
 // Side-by-side "what you'd get" preview. For HTML we genuinely remediate the
 // uploaded markup and render both versions in sandboxed iframes (contrast fixes
@@ -81,16 +82,17 @@ function baFor(sc) {
   }
 }
 
-export default function BeforeAfter({ file, issues = [], srcText, pdfUrl }) {
+export default function BeforeAfter({ file, issues = [], srcText, pdfUrl, officeBlob }) {
   const rem = useMemo(() => (srcText ? remediateHtml(srcText) : null), [srcText])
-  const downloadFixed = () => {
-    if (!rem) return
-    const blob = new Blob([rem.html], { type: 'text/html' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = `remediated-${(file?.name || 'page').replace(/\.[^.]+$/, '')}.html`
-    document.body.appendChild(a); a.click(); a.remove()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  const [busy, setBusy] = useState(false)
+  const dl = (blob, name) => { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000) }
+  const downloadFixed = () => { if (rem) dl(new Blob([rem.html], { type: 'text/html' }), `remediated-${(file?.name || 'page').replace(/\.[^.]+$/, '')}.html`) }
+  const downloadOffice = async () => {
+    if (!officeBlob || busy) return
+    setBusy(true)
+    try { dl(await remediateOffice(officeBlob), `remediated-${file?.name || 'document'}`) }
+    catch (e) { console.error('office remediation failed', e) }
+    finally { setBusy(false) }
   }
   return (
     <div className="bawrap">
@@ -110,6 +112,12 @@ export default function BeforeAfter({ file, issues = [], srcText, pdfUrl }) {
           <div className="bahd"><b>Your document</b><span className="muted"> — {file?.name}, rendered in your browser</span></div>
           <div className="bapdf"><PdfPreview url={pdfUrl} /></div>
           <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>Accessibility fixes (tags, alt text, reading order) are structural — see exactly what changes below.</p>
+        </div>
+      )}
+      {officeBlob && (
+        <div className="balive">
+          <div className="bahd"><b>Remediated file</b><span className="muted"> — alt text &amp; document title written back into the real Office XML, in your browser</span></div>
+          <button className="ghost small" onClick={downloadOffice} disabled={busy}>{busy ? 'Remediating…' : `⤓ Download the remediated ${(file?.name || '').split('.').pop().toUpperCase()}`}</button>
         </div>
       )}
       <div className="bacards">

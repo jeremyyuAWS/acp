@@ -6,7 +6,9 @@ import BeforeAfter from './BeforeAfter.jsx'
 import ScreenReaderDemo from './ScreenReaderDemo.jsx'
 import PdfPreview from './PdfPreview.jsx'
 import { auditHtml } from './htmlAudit.js'
+import { auditOffice } from './officeAudit.js'
 
+const isOffice = (name) => /\.(docx|pptx|xlsx)$/i.test(name || '')
 const HKEY = 'mova_upload_history'
 const loadHistory = () => { try { return JSON.parse(localStorage.getItem(HKEY) || '[]') } catch { return [] } }
 const SEV_BADGE2 = { CRITICAL: ['#FCEBEB', '#A32D2D'], SERIOUS: ['#FAECE7', '#993C1D'], MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'] }
@@ -51,21 +53,23 @@ export default function Upload({ onCertified }) {
   const [drag, setDrag] = useState(false)
   const [srcText, setSrcText] = useState(null)
   const [pdfUrl, setPdfUrl] = useState(null)
-  const [realEngine, setRealEngine] = useState(false)
+  const [officeBlob, setOfficeBlob] = useState(null)
+  const [realEngine, setRealEngine] = useState(null)
   const [history, setHistory] = useState(loadHistory)
   const [viewing, setViewing] = useState(null)
   const [reviewOutcome, setReviewOutcome] = useState(null)
   const blobUrl = useRef(null)
 
-  const start = (f, { text = null, url = null } = {}) => {
-    setFile(f); setSrcText(text); setPdfUrl(url); setRealEngine(false); setScanning(true); setStep(0)
+  const start = (f, { text = null, url = null, office = null } = {}) => {
+    setFile(f); setSrcText(text); setPdfUrl(url); setOfficeBlob(office); setRealEngine(null); setScanning(true); setStep(0)
     const html = text && isHtml(f.name)
-    const phases = ['Connecting…', 'Reading document…', 'mova Agent classifying & tagging…',
-      html ? 'Analysing with axe-core (real WCAG engine)…' : 'Analysing against WCAG 2.1 AA…', 'Scoring…']
+    const realLabel = html ? 'Analysing with axe-core (real WCAG engine)…' : office ? 'Parsing the document (real OOXML analysis)…' : 'Analysing against WCAG 2.1 AA…'
+    const phases = ['Connecting…', 'Reading document…', 'mova Agent classifying & tagging…', realLabel, 'Scoring…']
     let i = 0
     const finish = async () => {
       let found = issuesFor(f.name)
-      if (html) { try { found = await auditHtml(text); setRealEngine(true) } catch { /* fall back to simulated */ } }
+      if (html) { try { found = await auditHtml(text); setRealEngine('axe-core') } catch { /* fall back */ } }
+      else if (office) { try { found = await auditOffice(office); setRealEngine('OOXML') } catch { /* fall back */ } }
       setScanning(false); setIssues(found); setStep(1)
     }
     const tick = () => { if (i < phases.length) { setPhase(phases[i++]); setTimeout(tick, 640) } else { finish() } }
@@ -75,6 +79,7 @@ export default function Upload({ onCertified }) {
     const meta = { name: f.name, size: f.size }
     if (isHtml(f.name)) f.text().then((t) => start(meta, { text: t })).catch(() => start(meta))
     else if (isPdf(f.name)) { const url = URL.createObjectURL(f); blobUrl.current = url; start(meta, { url }) }
+    else if (isOffice(f.name)) start(meta, { office: f })
     else start(meta)
   }
   const onInput = (e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }
@@ -84,11 +89,12 @@ export default function Upload({ onCertified }) {
       const url = `${import.meta.env.BASE_URL}samples/${name}`
       if (isHtml(name)) { const t = await (await fetch(url)).text(); start({ name, size: t.length }, { text: t }) }
       else if (isPdf(name)) { const b = await (await fetch(url)).blob(); start({ name, size: b.size }, { url }) }
+      else if (isOffice(name)) { const b = await (await fetch(url)).blob(); start({ name, size: b.size }, { office: b }) }
       else { const b = await (await fetch(url)).blob(); start({ name, size: b.size }) }
     }
     catch { start({ name, size: 100 * 1024 }) }
   }
-  const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setRealEngine(false); setReviewOutcome(null) }
+  const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setOfficeBlob(null); setRealEngine(null); setReviewOutcome(null) }
   const score = Math.max(0, 100 - issues.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0))
   const review = issues.slice(-1)
   const reviewItem = review[0]
@@ -178,7 +184,7 @@ export default function Upload({ onCertified }) {
           <div className="scaninfo">
             <div className="scanprogline"><span className="spinner" />{phase}</div>
             <div className="muted fname" style={{ marginTop: 8, fontSize: 13 }}>{file?.name}</div>
-            {realEngine && <div className="realbadge" style={{ marginLeft: 0, marginTop: 8, display: 'inline-block' }}>⚡ real axe-core analysis</div>}
+            {realEngine && <div className="realbadge" style={{ marginLeft: 0, marginTop: 8, display: 'inline-block' }}>⚡ real {realEngine} analysis</div>}
             <div className="track" style={{ marginTop: 12 }}><i style={{ width: '66%', background: '#F5B400', transition: 'width .4s' }} /></div>
           </div>
         </section>
@@ -205,7 +211,7 @@ export default function Upload({ onCertified }) {
       {step === 1 && (
         <section className="panel">
           <div className="rubrichdr"><h2 style={{ margin: 0 }}>Assessment · <span className="fname" style={{ fontSize: 14 }}>{file?.name}</span>
-            {realEngine && <span className="realbadge" title="Findings detected live by the axe-core WCAG engine running in your browser">⚡ real axe-core analysis</span>}</h2>
+            {realEngine && <span className="realbadge" title={`Findings detected live by the ${realEngine} engine running in your browser`}>⚡ real {realEngine} analysis</span>}</h2>
             <span className="badge" style={{ background: '#FAEEDA', color: '#854F0B' }}>{issues.length} findings</span></div>
           <div className="lift" style={{ margin: '12px 0 16px' }}>
             <div className="liftcol"><div className="liftnum" style={{ color: score >= 90 ? '#3B6D11' : score >= 50 ? '#854F0B' : '#A32D2D' }}>{score}</div><div className="muted">score / 100</div></div>
@@ -237,7 +243,7 @@ export default function Upload({ onCertified }) {
               </div>
             ))}
           </div>
-          <BeforeAfter file={file} issues={issues} srcText={srcText} pdfUrl={pdfUrl} />
+          <BeforeAfter file={file} issues={issues} srcText={srcText} pdfUrl={pdfUrl} officeBlob={officeBlob} />
           <ScreenReaderDemo issues={issues} />
           <p className="muted" style={{ marginTop: 12 }}>{autoFixed.length} issue(s) auto-fixed · <b>{review.length}</b> routed to human review (low confidence).</p>
           <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 4 }}><button onClick={() => setStep(3)}>Human review →</button></div>
