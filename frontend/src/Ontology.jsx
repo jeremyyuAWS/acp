@@ -90,13 +90,13 @@ export default function Ontology({ files = [], onPublished }) {
     const fd = FIELDS[c.field]
     return (
       <div className="ontcond" key={i}>
-        <select value={c.field} onChange={(e) => setCond(i, { field: e.target.value, op: FIELDS[e.target.value].ops[0], value: '' })}>
+        <select aria-label="Condition field" value={c.field} onChange={(e) => setCond(i, { field: e.target.value, op: FIELDS[e.target.value].ops[0], value: '' })}>
           {Object.entries(FIELDS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
         </select>
-        <select value={c.op} onChange={(e) => setCond(i, { op: e.target.value })}>{fd.ops.map((o) => <option key={o}>{o}</option>)}</select>
+        <select aria-label="Condition operator" value={c.op} onChange={(e) => setCond(i, { op: e.target.value })}>{fd.ops.map((o) => <option key={o}>{o}</option>)}</select>
         {fd.type === 'enum' || fd.type === 'sev'
-          ? <select value={c.value} onChange={(e) => setCond(i, { value: e.target.value })}><option value="">choose…</option>{(opts[c.field] || []).map((o) => <option key={o}>{o}</option>)}</select>
-          : <input value={c.value} placeholder={fd.unit || 'value'} onChange={(e) => setCond(i, { value: e.target.value })} />}
+          ? <select aria-label="Condition value" value={c.value} onChange={(e) => setCond(i, { value: e.target.value })}><option value="">choose…</option>{(opts[c.field] || []).map((o) => <option key={o}>{o}</option>)}</select>
+          : <input aria-label="Condition value" value={c.value} placeholder={fd.unit || 'value'} onChange={(e) => setCond(i, { value: e.target.value })} />}
         {draft.conditions.length > 1 && <button className="ghost small" onClick={() => rmCond(i)} aria-label="Remove condition">✕</button>}
       </div>
     )
@@ -146,7 +146,7 @@ export default function Ontology({ files = [], onPublished }) {
               {st.labels.map((l) => (
                 <div className="ontlabel" key={l.id}>
                   <input type="color" value={l.color} onChange={(e) => editLabel(l.id, { color: e.target.value })} aria-label="Label colour" />
-                  <input className="ontlabelname" value={l.name} onChange={(e) => editLabel(l.id, { name: e.target.value })} />
+                  <input aria-label="Label name" className="ontlabelname" value={l.name} onChange={(e) => editLabel(l.id, { name: e.target.value })} />
                   <span className="ontlabelpill" style={{ color: l.color, background: l.color + '22' }}>{l.name}</span>
                   <button className="ghost small" onClick={() => delLabel(l.id)} aria-label="Delete label">✕</button>
                 </div>
@@ -166,7 +166,7 @@ export default function Ontology({ files = [], onPublished }) {
           <section className="panel">
             <div className="ontsechd"><h3 style={{ margin: 0 }}>Natural-language rule</h3><span className="muted" style={{ fontSize: 12 }}>type a rule — we convert it to a deterministic, previewable rule</span></div>
             <div className="ontnl">
-              <input value={nl} placeholder="e.g. Prioritize all externally published policy documents owned by HR and Legal" onChange={(e) => setNl(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') setNlRule(parseNL(nl, opts)) }} />
+              <input aria-label="Natural-language rule" value={nl} placeholder="e.g. Prioritize all externally published policy documents owned by HR and Legal" onChange={(e) => setNl(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') setNlRule(parseNL(nl, opts)) }} />
               <button onClick={() => setNlRule(parseNL(nl, opts))} disabled={!nl.trim()}>Interpret</button>
             </div>
             {nlRule && (
@@ -180,17 +180,17 @@ export default function Ontology({ files = [], onPublished }) {
 
           <section className="panel">
             <div className="ontsechd"><h3 style={{ margin: 0 }}>Rule builder</h3><span className="muted" style={{ fontSize: 12 }}>match
-              <select value={draft.match} onChange={(e) => setDraft((d) => ({ ...d, match: e.target.value }))} style={{ margin: '0 4px' }}><option value="all">ALL</option><option value="any">ANY</option></select>
+              <select aria-label="Match all or any conditions" value={draft.match} onChange={(e) => setDraft((d) => ({ ...d, match: e.target.value }))} style={{ margin: '0 4px' }}><option value="all">ALL</option><option value="any">ANY</option></select>
               of:</span></div>
             {draft.conditions.map((c, i) => condCtl(c, i))}
             <button className="ghost small" onClick={addCond} style={{ marginTop: 4 }}>＋ Add condition</button>
             <div className="ontaction">
               <span className="muted">then set priority</span>
-              <select value={draft.actions.priority} onChange={(e) => setDraft((d) => ({ ...d, actions: { ...d.actions, priority: e.target.value } }))}>{Object.keys(PRIORITY_W).map((p) => <option key={p}>{p}</option>)}</select>
+              <select aria-label="Priority" value={draft.actions.priority} onChange={(e) => setDraft((d) => ({ ...d, actions: { ...d.actions, priority: e.target.value } }))}>{Object.keys(PRIORITY_W).map((p) => <option key={p}>{p}</option>)}</select>
               <span className="muted">label</span>
-              <select value={draft.actions.label} onChange={(e) => setDraft((d) => ({ ...d, actions: { ...d.actions, label: e.target.value } }))}><option value="">none</option>{st.labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select>
+              <select aria-label="Assign label" value={draft.actions.label} onChange={(e) => setDraft((d) => ({ ...d, actions: { ...d.actions, label: e.target.value } }))}><option value="">none</option>{st.labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select>
               <span className="muted">SLA</span>
-              <input style={{ width: 56 }} placeholder="days" value={draft.actions.slaDays || ''} onChange={(e) => setDraft((d) => ({ ...d, actions: { ...d.actions, slaDays: e.target.value ? +e.target.value : null } }))} />
+              <input aria-label="SLA days" style={{ width: 56 }} placeholder="days" value={draft.actions.slaDays || ''} onChange={(e) => setDraft((d) => ({ ...d, actions: { ...d.actions, slaDays: e.target.value ? +e.target.value : null } }))} />
               <span className="ontmatch" style={{ marginLeft: 'auto' }}>preview: <b>{files.filter((f) => evalRule(f, draft)).length.toLocaleString()}</b> match</span>
               <button onClick={commitDraft}>Add rule</button>
             </div>
@@ -241,7 +241,7 @@ export default function Ontology({ files = [], onPublished }) {
           <section className="panel">
             <div className="ontsechd"><h3 style={{ margin: 0 }}>AI-assisted classification</h3><span className="ontprevtag">preview</span></div>
             <p className="muted" style={{ fontSize: 12 }}>Give the agent a few example documents per label; it learns to classify similar ones, with a confidence threshold and manual override. Requires the vision/LLM model — wired in the cloud build, mocked here.</p>
-            <div className="ontexrow"><span className="ontchip">＋ add example docs</span><span className="muted">confidence ≥</span><input type="range" min="50" max="99" defaultValue="80" disabled /><span className="muted">80%</span></div>
+            <div className="ontexrow"><span className="ontchip">＋ add example docs</span><span className="muted">confidence ≥</span><input aria-label="Confidence threshold" type="range" min="50" max="99" defaultValue="80" disabled /><span className="muted">80%</span></div>
           </section>
           <section className="panel">
             <div className="ontsechd"><h3 style={{ margin: 0 }}>Ontology relationships</h3><span className="ontprevtag">preview</span></div>
