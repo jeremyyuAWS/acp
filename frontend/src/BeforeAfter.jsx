@@ -42,6 +42,40 @@ export function remediateHtml(text) {
       const s = el.getAttribute('style'); const m = /(^|[^-])color:\s*(#[0-9a-fA-F]{3,6})/.exec(s)
       if (m && isLight(m[2])) { el.setAttribute('style', s.replace(m[2], '#333333')); changes.add('Darkened low-contrast text to meet 4.5:1 · 1.4.3') }
     })
+    // 1.4.4 Resize Text / 1.4.10 Reflow — the viewport must allow zoom and adapt to width.
+    let vp = doc.querySelector('meta[name="viewport"]')
+    if (vp) {
+      const c = vp.getAttribute('content') || ''
+      if (/user-scalable\s*=\s*(no|0)|maximum-scale\s*=\s*(0|1)(\.0+)?\b/i.test(c)) {
+        const fixed = c.replace(/,?\s*user-scalable\s*=\s*[^,]+/ig, '').replace(/,?\s*maximum-scale\s*=\s*[^,]+/ig, '').replace(/^\s*,|,\s*$/g, '').trim()
+        vp.setAttribute('content', fixed || 'width=device-width, initial-scale=1')
+        changes.add('Re-enabled pinch-zoom & text resize · 1.4.4')
+      }
+    } else if (doc.querySelector('meta, link, style')) {
+      vp = doc.createElement('meta'); vp.setAttribute('name', 'viewport'); vp.setAttribute('content', 'width=device-width, initial-scale=1')
+      ;(doc.head || doc.documentElement).insertBefore(vp, doc.head?.firstChild || null)
+      changes.add('Added a responsive viewport for reflow · 1.4.10')
+    }
+    // 2.4.3 Focus Order — positive tabindex jumps the natural reading order.
+    doc.querySelectorAll('[tabindex]').forEach((el) => { if (parseInt(el.getAttribute('tabindex'), 10) > 0) { el.setAttribute('tabindex', '0'); changes.add('Reset positive tabindex to keep focus order · 2.4.3') } })
+    // 2.1.1 Keyboard — click-only elements need to be focusable and operable.
+    doc.querySelectorAll('[onclick]').forEach((el) => {
+      if (/^(a|button|input|select|textarea|summary)$/i.test(el.tagName)) return
+      if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '0')
+      if (!el.getAttribute('role')) el.setAttribute('role', 'button')
+      changes.add('Made click-only controls keyboard-operable · 2.1.1')
+    })
+    // 1.4.1 Use of Color — in-text links must be distinguishable by more than colour.
+    doc.querySelectorAll('p a, li a, td a').forEach((a) => {
+      const s = a.getAttribute('style') || ''
+      if (/text-decoration[^;]*none/i.test(s) || !/text-decoration/i.test(s)) { a.setAttribute('style', (s ? s.replace(/;?\s*$/, '; ') : '') + 'text-decoration:underline'); changes.add('Underlined in-text links (not colour alone) · 1.4.1') }
+    })
+    // 4.1.2 Name, Role, Value — every control needs an accessible name.
+    doc.querySelectorAll('button, [role="button"], a').forEach((el) => {
+      if ((el.textContent || '').trim() || el.getAttribute('aria-label') || el.getAttribute('title')) return
+      const hint = el.querySelector('img[alt]')?.getAttribute('alt')?.trim() || el.getAttribute('name') || (el.tagName === 'A' ? 'link' : 'button')
+      el.setAttribute('aria-label', hint); changes.add('Named unlabeled controls (icon-only) · 4.1.2')
+    })
     return { html: '<!doctype html>' + doc.documentElement.outerHTML, changes: [...changes] }
   } catch { return null }
 }
@@ -74,6 +108,54 @@ function baFor(sc) {
     case '2.4.4': return {
       before: <div><a className="balink">click here</a><span className="bawarn">meaningless out of context</span></div>,
       after: <div><a className="balink">view the 2026 benefits guide</a><span className="baok">clear &amp; descriptive</span></div>,
+    }
+    case '1.4.1': return {
+      before: <div><span style={{ color: '#2E72C9' }}>Apply online</span><span className="bawarn">a link by colour alone</span></div>,
+      after: <div><span style={{ color: '#2E72C9', textDecoration: 'underline' }}>Apply online</span><span className="baok">underlined — not colour alone</span></div>,
+    }
+    case '1.4.4': return {
+      before: <div><code className="bacode">user-scalable=no</code><span className="bawarn">pinch-zoom blocked</span></div>,
+      after: <div><code className="bacode">width=device-width</code><span className="baok">zooms to 200%+</span></div>,
+    }
+    case '1.4.10': return {
+      before: <div><span className="batab">no viewport meta</span><span className="bawarn">2-D scroll at 320px</span></div>,
+      after: <div><span className="batab">responsive viewport</span><span className="baok">reflows, one column</span></div>,
+    }
+    case '1.4.11': return {
+      before: <div><span className="bacontrast" style={{ border: '1px solid #d9d9d9', padding: '1px 6px', color: '#37323b' }}>Search</span><span className="bawarn">border 1.4:1 · fails</span></div>,
+      after: <div><span className="bacontrast" style={{ border: '1px solid #6b6b6b', padding: '1px 6px', color: '#37323b' }}>Search</span><span className="baok">3.6:1 · passes</span></div>,
+    }
+    case '1.4.12': return {
+      before: <div><code className="bacode">line-height:1.1 !important</code><span className="bawarn">clips on spacing override</span></div>,
+      after: <div><code className="bacode">line-height:1.5</code><span className="baok">adapts, no clipping</span></div>,
+    }
+    case '2.1.1': return {
+      before: <div><code className="bacode">&lt;div onclick&gt;</code><span className="bawarn">mouse only — no focus</span></div>,
+      after: <div><code className="bacode">role="button" tabindex="0"</code><span className="baok">keyboard-operable</span></div>,
+    }
+    case '2.4.3': return {
+      before: <div><code className="bacode">tabindex="5"</code><span className="bawarn">jumps the reading order</span></div>,
+      after: <div><code className="bacode">tabindex="0"</code><span className="baok">natural focus order</span></div>,
+    }
+    case '4.1.2': return {
+      before: <div><span className="batab">⭿ icon button</span><span className="bawarn">no name — “button” in AT</span></div>,
+      after: <div><span className="batab">⭿ aria-label="Search"</span><span className="baok">name, role &amp; state exposed</span></div>,
+    }
+    case '3.1.2': return {
+      before: <div><code className="bacode">&lt;span&gt;Bienvenido&lt;/span&gt;</code><span className="bawarn">read in English</span></div>,
+      after: <div><code className="bacode">&lt;span lang="es"&gt;</code><span className="baok">announced in Spanish</span></div>,
+    }
+    case '1.3.3': return {
+      before: <div><span>“click the round button”</span><span className="bawarn">shape/position only</span></div>,
+      after: <div><span>“click Submit (round, lower-right)”</span><span className="baok">named, not shape alone</span></div>,
+    }
+    case '1.4.5': return {
+      before: <div className="baimg"><span aria-hidden="true">🖼</span><span className="bawarn">heading is an image of text</span></div>,
+      after: <div><span className="batab">&lt;h1&gt;2026 Benefits&lt;/h1&gt;</span><span className="baok">real, resizable text</span></div>,
+    }
+    case '2.1.2': return {
+      before: <div><span>modal traps Tab</span><span className="bawarn">focus can’t escape</span></div>,
+      after: <div><span>Esc + focus-trap loop</span><span className="baok">focus returns to trigger</span></div>,
     }
     default: return {
       before: <div><span className="bawarn">finding present</span></div>,
