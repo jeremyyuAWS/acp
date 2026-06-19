@@ -30,16 +30,21 @@ export default function KnowledgeGraph({ files }) {
   const [focusCrit, setFocusCrit] = useState(null)
   const [selFile, setSelFile] = useState(null)
   const [showAll, setShowAll] = useState(false)
+  const [query, setQuery] = useState('')
+  const [dq, setDq] = useState('') // debounced, lower-cased — drives filtering without rebuilding the sim every keystroke
+  useEffect(() => { const t = setTimeout(() => setDq(query.trim().toLowerCase()), 180); return () => clearTimeout(t) }, [query])
 
   const depts = useMemo(() => [...new Set(files.map((f) => f.department).filter(Boolean))], [files])
   const { graphFiles, total } = useMemo(() => {
     let s = dept ? files.filter((f) => f.department === dept) : files
     if (!showClean) s = s.filter((f) => (f.issues || []).length) // only failing files are linked
     if (focusCrit) s = s.filter((f) => (f.issues || []).some((i) => i.wcag === focusCrit))
+    if (dq) s = s.filter((f) => [f.file, f.owner, f.department, f.sourceName, f.type].some((v) => (v || '').toLowerCase().includes(dq)))
     const t = s.length
-    if (!showAll && !focusCrit && t > LIMIT) s = [...s].sort((a, b) => priority(b) - priority(a)).slice(0, LIMIT)
+    // a search bypasses the priority cap, so a matching doc is never hidden by it
+    if (!showAll && !focusCrit && !dq && t > LIMIT) s = [...s].sort((a, b) => priority(b) - priority(a)).slice(0, LIMIT)
     return { graphFiles: s, total: t }
-  }, [files, dept, showClean, focusCrit, showAll])
+  }, [files, dept, showClean, focusCrit, showAll, dq])
   const capped = graphFiles.length < total
 
   useEffect(() => {
@@ -121,15 +126,20 @@ export default function KnowledgeGraph({ files }) {
   return (
     <div className="panel">
       <div className="kgcontrols">
+        <div className="kgsearch">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+          <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search documents, owners, sources…" aria-label="Search the knowledge graph" />
+          {query && <button type="button" className="kgsearchx" aria-label="Clear search" onClick={() => setQuery('')}>✕</button>}
+        </div>
         <select value={dept} onChange={(e) => { setDept(e.target.value); setFocusCrit(null) }}>
           <option value="">All departments</option>
           {depts.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
         <button className={showClean ? 'fchip on' : 'fchip'} onClick={() => setShowClean((s) => !s)}>show compliant</button>
-        {capped && <button className="fchip" onClick={() => setShowAll(true)}>show all {total}</button>}
+        {capped && !dq && <button className="fchip" onClick={() => setShowAll(true)}>show all {total}</button>}
         {showAll && !focusCrit && <button className="fchip on" onClick={() => setShowAll(false)}>top priority only ✕</button>}
         {focusCrit && <button className="fchip on" onClick={() => { setFocusCrit(null); setDetail(null) }}>focused: WCAG {CRIT[focusCrit]?.[0] ?? focusCrit} ✕</button>}
-        <span className="muted" style={{ marginLeft: 'auto' }}>{capped ? `top ${graphFiles.length} of ${total} by priority` : `${graphFiles.length} document(s)`} · click a criterion to focus</span>
+        <span className="muted" style={{ marginLeft: 'auto' }}>{dq ? `${graphFiles.length} match${graphFiles.length === 1 ? '' : 'es'} for “${query.trim()}”` : capped ? `top ${graphFiles.length} of ${total} by priority` : `${graphFiles.length} document(s)`} · click a criterion to focus</span>
       </div>
       <div className="kglegend">
         <span><i style={{ background: '#EF9F27' }} />has issues</span>
@@ -139,7 +149,7 @@ export default function KnowledgeGraph({ files }) {
         <span className="muted">hover to isolate · drag · click a node</span>
       </div>
       {graphFiles.length === 0
-        ? <p className="muted" style={{ padding: '40px 0', textAlign: 'center' }}>No documents match — try a different department or enable “show compliant”.</p>
+        ? <p className="muted" style={{ padding: '40px 0', textAlign: 'center' }}>No documents match{dq ? ` “${query.trim()}”` : ''} — {dq ? 'try a different search, ' : 'try a different '}department{dq ? '' : ''} or enable “show compliant”.</p>
         : <svg ref={ref} role="img" aria-label="Force-directed graph of documents linked to the WCAG criteria they fail" />}
       <div className="kgdetail">
         {!detail && <span className="muted">Click a criterion to focus the graph on its documents, or a document to open its details.</span>}
