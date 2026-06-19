@@ -6,6 +6,7 @@ import BeforeAfter from './BeforeAfter.jsx'
 import ResultPreview from './ResultPreview.jsx'
 import ScreenReaderDemo from './ScreenReaderDemo.jsx'
 import PdfPreview from './PdfPreview.jsx'
+import OfficePreview from './OfficePreview.jsx'
 import { auditHtml } from './htmlAudit.js'
 import { auditOffice } from './officeAudit.js'
 import { useDialog } from './a11y.js'
@@ -203,7 +204,8 @@ export default function Upload({ onCertified }) {
           <div className="scandoc">
             {pdfUrl ? <PdfPreview url={pdfUrl} pages={1} />
               : srcText ? <iframe className="scaniframe" sandbox="" srcDoc={srcText} title="document preview" />
-                : <div className="scanplaceholder"><span style={{ fontSize: 46 }} aria-hidden="true">📄</span><div className="muted">{file?.name}</div></div>}
+                : officeBlob ? <OfficePreview blob={officeBlob} name={file?.name} className="scanoffice" />
+                  : <div className="scanplaceholder"><span style={{ fontSize: 46 }} aria-hidden="true">📄</span><div className="muted">{file?.name}</div></div>}
             <div className="scanline" aria-hidden="true" />
           </div>
           <div className="scaninfo">

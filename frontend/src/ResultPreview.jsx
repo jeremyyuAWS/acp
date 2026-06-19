@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import PdfPreview from './PdfPreview.jsx'
+import OfficePreview from './OfficePreview.jsx'
 import { remediateHtml } from './BeforeAfter.jsx'
 import { remediateOffice } from './officeAudit.js'
 
@@ -35,7 +36,8 @@ export default function ResultPreview({ file, srcText, pdfUrl, officeBlob, issue
           <figcaption className="bafcap before">as received</figcaption>
           {isHtml(name) && srcText ? <iframe sandbox="" title="as received" srcDoc={srcText} />
             : isPdf(name) && pdfUrl ? <div className="rppdf"><PdfPreview url={pdfUrl} pages={1} /></div>
-              : docCard()}
+              : officeBlob ? <div className="rppdf"><OfficePreview blob={officeBlob} name={name} /></div>
+                : docCard()}
         </figure>
         <figure>
           <figcaption className="bafcap after">remediated</figcaption>
