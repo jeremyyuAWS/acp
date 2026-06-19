@@ -101,6 +101,8 @@ td { padding: 10px 0; border-top: 1px solid var(--line); }
 .kgsearch input::-webkit-search-cancel-button { display: none; }
 .kgsearchx { border: none; background: none; color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1; padding: 4px; border-radius: 4px; }
 .kgsearchx:hover { color: var(--plum); background: var(--bg); }
+.kgnode { outline: none; }
+.kgnode:focus-visible circle { stroke: var(--plum); stroke-width: 3.5px; }
 .kglegend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 .kglegend span { display: flex; align-items: center; gap: 6px; }
 .kglegend i { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }

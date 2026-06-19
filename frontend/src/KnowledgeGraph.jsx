@@ -90,17 +90,39 @@ export default function KnowledgeGraph({ files }) {
       .text((d) => d.label).attr('text-anchor', 'middle').attr('dy', (d) => -crad(d) - 5)
       .attr('font-size', '11px').attr('font-weight', 600).attr('fill', '#993C1D')
 
-    node.on('mouseover', (e, d) => {
+    const isolate = (d) => {
       const near = adj[d.id] ?? new Set([d.id])
       node.style('opacity', (n) => (near.has(n.id) ? 1 : 0.12))
       link.style('stroke-opacity', (l) => (l.source.id === d.id || l.target.id === d.id ? 0.95 : 0.05))
-    }).on('mouseout', () => { node.style('opacity', 1); link.style('stroke-opacity', 1) })
-
-    node.on('click', (e, d) => {
+    }
+    const restore = () => { node.style('opacity', 1); link.style('stroke-opacity', 1) }
+    const activate = (d) => {
       if (d.t === 'file') { setSelFile(d.f) } else {
         setFocusCrit((prev) => (prev === d.id ? null : d.id))
         setDetail({ kind: 'crit', title: `WCAG ${d.label} — ${d.name}`, count: d.n, fns: graphFiles.filter((f) => f.issues.some((i) => i.wcag === d.id)).map((f) => f.file).slice(0, 30) })
       }
+    }
+
+    // Keyboard a11y: each node is a focusable button with a roving tabindex (only the
+    // active node is in the tab order). Arrow keys move between nodes, Enter/Space opens,
+    // Escape clears the isolate. Focus mirrors the hover-isolate so keyboard users get the
+    // same "what connects to this" highlight that mouse users get.
+    node.attr('class', 'kgnode').attr('role', 'button').attr('tabindex', (d, i) => (i === 0 ? 0 : -1))
+      .attr('aria-label', (d) => (d.t === 'crit'
+        ? `WCAG ${d.label}, ${d.name}. ${d.n} document${d.n === 1 ? '' : 's'} fail this criterion. Press Enter to focus the graph on them.`
+        : `${d.id}. ${d.compliant ? 'Certifiable document' : d.status === 'error' ? 'Unanalysable document' : 'Document with open findings'}. Press Enter for details.`))
+    const els = node.nodes()
+    const focusAt = (i) => { const j = ((i % els.length) + els.length) % els.length; els.forEach((el, k) => el.setAttribute('tabindex', k === j ? '0' : '-1')); els[j].focus() }
+
+    node.on('mouseover', (e, d) => isolate(d)).on('mouseout', restore)
+    node.on('focus', (e, d) => isolate(d)).on('blur', restore)
+    node.on('click', (e, d) => activate(d))
+    node.on('keydown', (e, d) => {
+      const i = els.indexOf(e.currentTarget)
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(d) }
+      else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); focusAt(i + 1) }
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); focusAt(i - 1) }
+      else if (e.key === 'Escape') { e.preventDefault(); e.currentTarget.blur(); restore() }
     })
 
     const sim = d3.forceSimulation(nodes)
@@ -146,11 +168,11 @@ export default function KnowledgeGraph({ files }) {
         {showClean && <span><i style={{ background: '#639922' }} />certifiable</span>}
         {showClean && <span><i style={{ background: '#888780' }} />unanalysable</span>}
         <span><i style={{ background: '#F0524A' }} />WCAG criterion failed</span>
-        <span className="muted">hover to isolate · drag · click a node</span>
+        <span className="muted">hover or focus to isolate · arrow keys to navigate · enter to open</span>
       </div>
       {graphFiles.length === 0
         ? <p className="muted" style={{ padding: '40px 0', textAlign: 'center' }}>No documents match{dq ? ` “${query.trim()}”` : ''} — {dq ? 'try a different search, ' : 'try a different '}department{dq ? '' : ''} or enable “show compliant”.</p>
-        : <svg ref={ref} role="img" aria-label="Force-directed graph of documents linked to the WCAG criteria they fail" />}
+        : <svg ref={ref} role="group" aria-label="Force-directed graph of documents linked to the WCAG criteria they fail. Tab into the graph, use the arrow keys to move between nodes, and press Enter to open a node." />}
       <div className="kgdetail">
         {!detail && <span className="muted">Click a criterion to focus the graph on its documents, or a document to open its details.</span>}
         {detail?.kind === 'crit' && (
