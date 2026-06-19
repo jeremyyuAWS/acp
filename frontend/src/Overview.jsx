@@ -163,18 +163,15 @@ export default function Overview({ run, files, trend, trendDates, onGo, ratified
         <section className="panel"><h2>Compliance trend · {trend.length} scans</h2><Sparkline points={trend} labels={trendDates} width={620} height={104} /></section>
       )}
 
-      <div className="chartrow">
-        <section className="panel"><h2>Compliance lift · after remediation</h2>
-          <div className="lift">
-            <div className="liftcol"><div className="liftnum" style={{ color: '#A32D2D' }}>{before}</div><div className="muted">today</div></div>
-            <div className="liftarrow" aria-hidden="true">→</div>
-            <div className="liftcol"><div className="liftnum" style={{ color: '#3B6D11' }}>{after}</div><div className="muted">after queued fixes</div></div>
-            <div className="liftgain">+{after - before} pts</div>
-          </div>
-          <p className="muted">Projected estate score once the queued remediation is approved and re-validated.</p>
-        </section>
-        <section className="panel"><h2>Compliance status</h2><Donut segments={statusSegments(run)} caption="documents" size={120} /></section>
-      </div>
+      <section className="panel"><h2>Compliance lift · after remediation</h2>
+        <div className="lift">
+          <div className="liftcol"><div className="liftnum" style={{ color: '#A32D2D' }}>{before}</div><div className="muted">today</div></div>
+          <div className="liftarrow" aria-hidden="true">→</div>
+          <div className="liftcol"><div className="liftnum" style={{ color: '#3B6D11' }}>{after}</div><div className="muted">after queued fixes</div></div>
+          <div className="liftgain">+{after - before} pts</div>
+        </div>
+        <p className="muted">Projected estate score once the queued remediation is approved and re-validated.</p>
+      </section>
 
       <section className="panel">
         <h2>Audit trail · live <span className="livedot" aria-hidden="true" /></h2>

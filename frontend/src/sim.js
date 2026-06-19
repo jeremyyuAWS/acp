@@ -205,7 +205,10 @@ function genCorpus() {
       const locked = i % 21 === 5
       const openIssue = locked ? (i % 2 ? 'password-protected' : 'unsupported / corrupt — could not open') : null
       const status = locked ? 'error' : STATUS_CYCLE[i % STATUS_CYCLE.length]
-      const score = status === 'certifiable' ? 100 : status === 'error' ? null : status === 'uncertain' ? 88 + (i % 5) : 48 + ((i * 13) % 38)
+      // Keep scores consistent with status so every chart agrees: only 'certifiable'
+      // docs reach the 90–100 band (status 'certifiable' ⟺ score ≥ 90), 'error' ⟺ no
+      // score (unreadable), and 'uncertain'/'issues' stay in the 50–89 / below-50 bands.
+      const score = status === 'certifiable' ? 100 : status === 'error' ? null : status === 'uncertain' ? 82 + (i % 6) : 48 + ((i * 13) % 38)
       const pool = ISS_POOL[type]
       const issues = status === 'issues' ? iss(pool.slice(0, 2 + (i % 2) + (i % 3 === 0 ? 1 : 0))) : status === 'uncertain' ? iss(pool.slice(0, 1)) : []
       issues.forEach((is, idx) => Object.assign(is, findingDetail(is, i * 7 + idx * 3)))

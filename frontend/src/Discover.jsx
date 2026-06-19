@@ -13,7 +13,7 @@ const RET_COLOR = { keep: '#639922', archive: '#7a5c8e', retain: '#D85A30', lock
 const RET_ORDER = ['keep', 'archive', 'retain', 'locked']
 const RET_BADGE = { keep: ['Keep', '#E7F0DC', '#3B6D11'], archive: ['Archive', '#EEEDFE', '#3C3489'], retain: ['Retain · legal hold', '#FAEEDA', '#854F0B'], locked: ['🔒 Could not open', '#EEEDEA', '#5F5E5A'] }
 const exposureOf = (f) => (f.tags || []).includes('public-facing') ? 'public-facing' : (f.tags || []).includes('high-traffic') ? 'high-traffic' : 'internal'
-const SUBS = [['inventory', '1 · Inventory'], ['classify', '2 · Classify'], ['retain', '3 · Retain']]
+const SUBS = [['inventory', '1 · Inventory'], ['classify', '2 · Classify'], ['retain', '3 · Actions']]
 
 export default function Discover({ sources, files, busy, onScan }) {
   const [sub, setSub] = useState('inventory')
@@ -107,7 +107,7 @@ export default function Discover({ sources, files, busy, onScan }) {
         </>
       ) : (
         <>
-          <div className="muted" style={{ margin: '4px 0 8px' }}>{sub === 'retain' ? 'Step 3 · keep / archive / retain recommendation per document' : 'Step 1 · inventory by department · click a department to expand'}</div>
+          <div className="muted" style={{ margin: '4px 0 8px' }}>{sub === 'retain' ? 'Step 3 · Actions · the lifecycle action recommended per document — keep, archive, or retain (legal hold) — built from the inventory & classification above' : 'Step 1 · inventory by department · click a department to expand'}</div>
           {deptList(sub === 'retain')}
         </>
       )}
