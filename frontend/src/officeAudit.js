@@ -26,7 +26,10 @@ export async function auditOffice(blob) {
   if (noAlt) findings.push({ rule: 'office-image-alt', wcag: '1.1.1 non-text content', sev: 'CRITICAL', detail: `${noAlt} of ${blips} image(s) missing alternative text` })
   if (tables && tblHeaders < tables) findings.push({ rule: 'office-table-header', wcag: '1.3.1 info & relationships', sev: 'SERIOUS', detail: `${tables - tblHeaders} table(s) missing a header row` })
   if (!title || !title.trim()) findings.push({ rule: 'office-title', wcag: '2.4.2 page titled', sev: 'SERIOUS', detail: 'document has no title' })
-  if (!langSeen) findings.push({ rule: 'office-lang', wcag: '3.1.1 language of page', sev: 'MODERATE', detail: 'document language is not declared' })
+  // Language is declared either as a Word run language (w:lang) OR the universal
+  // document-level core property (dc:language) — the latter covers pptx/xlsx too.
+  const dcLang = /<dc:language>\s*[a-zA-Z-]+\s*<\/dc:language>/.test(core)
+  if (!langSeen && !dcLang) findings.push({ rule: 'office-lang', wcag: '3.1.1 language of page', sev: 'MODERATE', detail: 'document language is not declared' })
   return findings
 }
 
@@ -64,6 +67,9 @@ export async function remediateOffice(blob) {
     let core = await zip.file('docProps/core.xml').async('string')
     if (/<dc:title\s*\/>|<dc:title>\s*<\/dc:title>/.test(core)) core = core.replace(/<dc:title\s*\/>|<dc:title>\s*<\/dc:title>/, '<dc:title>Remediated — mova.io</dc:title>')
     else if (!/<dc:title>/.test(core)) core = core.replace(/(<cp:coreProperties[^>]*>)/, '$1<dc:title>Remediated — mova.io</dc:title>')
+    // Set the document language (3.1.1) — dc:language is the universal core property,
+    // so this fix lands for docx, pptx and xlsx alike.
+    if (!/<dc:language>/.test(core)) core = core.replace(/(<cp:coreProperties[^>]*>)/, '$1<dc:language>en-US</dc:language>')
     zip.file('docProps/core.xml', core)
   }
   return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } })

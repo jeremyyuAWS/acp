@@ -25,6 +25,17 @@ async function coreTitle(zip) {
   const core = zip.file('docProps/core.xml') ? await zip.file('docProps/core.xml').async('string') : ''
   return ((core.match(/<dc:title>([\s\S]*?)<\/dc:title>/) || [])[1] || '').trim()
 }
+// Document language — the universal dc:language core property, or a Word w:lang run attr.
+async function coreLang(zip) {
+  const core = zip.file('docProps/core.xml') ? await zip.file('docProps/core.xml').async('string') : ''
+  const dc = (core.match(/<dc:language>\s*([a-zA-Z-]+)\s*<\/dc:language>/) || [])[1]
+  if (dc) return dc
+  for (const n of Object.keys(zip.files).filter((p) => /^(word|ppt|xl)\/.*\.xml$/.test(p) && !p.includes('_rels'))) {
+    const m = (await zip.file(n).async('string')).match(/<w:lang\b[^>]*w:val="([a-zA-Z-]+)"/)
+    if (m) return m[1]
+  }
+  return ''
+}
 
 // `highlight` annotates exactly what remediateOffice fixes (alt text, table header rows,
 // document title) so the before/after panes read as a real diff: ⚠ missing → ✓ added.
@@ -47,6 +58,7 @@ async function docx(zip, highlight) {
     const core = zip.file('docProps/core.xml') ? await zip.file('docProps/core.xml').async('string') : ''
     const title = (core.match(/<dc:title>([\s\S]*?)<\/dc:title>/) || [])[1] || ''
     banner = title.trim() ? cap(true, `document title: ${esc(title)}`) : cap(false, 'no document title')
+    const lang = await coreLang(zip); banner += lang ? cap(true, `language: ${lang}`) : cap(false, 'no document language')
   }
   const body = (doc.match(/<w:body>([\s\S]*)<\/w:body>/) || [])[1] || doc
   const blocks = body.match(/<w:p\b[\s\S]*?<\/w:p>|<w:tbl>[\s\S]*?<\/w:tbl>/g) || []
@@ -85,7 +97,7 @@ async function docx(zip, highlight) {
 async function pptx(zip, highlight) {
   const slides = Object.keys(zip.files).filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
     .sort((a, b) => (+a.match(/\d+/)) - (+b.match(/\d+/)))
-  const banner = highlight ? (async () => { const t = await coreTitle(zip); return t ? cap(true, `presentation title: ${esc(t)}`) : cap(false, 'no presentation title') })() : ''
+  const banner = highlight ? (async () => { const t = await coreTitle(zip); const l = await coreLang(zip); return (t ? cap(true, `presentation title: ${esc(t)}`) : cap(false, 'no presentation title')) + (l ? cap(true, `language: ${l}`) : cap(false, 'no document language')) })() : ''
   const out = []
   let i = 0
   for (const sn of slides.slice(0, 14)) {
@@ -127,6 +139,7 @@ async function xlsx(zip, highlight) {
   if (highlight) {
     const t = await coreTitle(zip)
     banner = t ? cap(true, `workbook title: ${esc(t)}`) : cap(false, 'no workbook title')
+    const l = await coreLang(zip); banner += l ? cap(true, `language: ${l}`) : cap(false, 'no document language')
     let blips = 0, described = 0
     for (const n of Object.keys(zip.files).filter((p) => /^xl\/.*\.xml$/.test(p) && !p.includes('_rels'))) {
       const x = await zip.file(n).async('string')
