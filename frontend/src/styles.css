@@ -236,7 +236,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .fstage:hover { border-color: var(--plum); }
 .fstage .fl { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
 .fstage .fn { display: block; font-size: 22px; font-weight: 600; color: var(--ink); }
-.funnel .farr { color: #c8c2cd; flex: 0 0 auto; }
+.funnel .farr { color: #8C8493; flex: 0 0 auto; }
 .outcomes { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
 .outcome { display: flex; align-items: center; gap: 12px; border: 1px solid var(--line); border-radius: 11px; padding: 11px 14px; }
 .outcome .oc { width: 30px; height: 30px; border-radius: 8px; background: #f3eef6; color: var(--plum); display: inline-flex; align-items: center; justify-content: center; font-size: 16px; }
@@ -285,7 +285,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .lift { display: flex; align-items: center; gap: 18px; margin: 10px 0 6px; }
 .liftcol { text-align: center; }
 .liftnum { font-size: 36px; font-weight: 600; line-height: 1; }
-.liftarrow { font-size: 22px; color: #c8c2cd; }
+.liftarrow { font-size: 22px; color: #8C8493; }
 .liftgain { background: #EAF3DE; color: #3B6D11; border-radius: 999px; padding: 6px 13px; font-size: 13px; font-weight: 600; }
 .auditfeed { display: flex; flex-direction: column; }
 .auditrow { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); opacity: 1; animation: auditslide 0.4s ease; }

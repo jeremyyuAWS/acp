@@ -41,7 +41,7 @@ const priWhy = (f) => {
 
 const FIX_TYPES = [
   { label: 'alt-text generated', value: 38, color: '#639922' },
-  { label: 'reading order fixed', value: 21, color: '#1D9E75' },
+  { label: 'reading order fixed', value: 21, color: '#157A56' },
   { label: 'headings tagged', value: 14, color: '#378ADD' },
   { label: 'language set', value: 9, color: '#7F77DD' },
   { label: 'table headers', value: 6, color: '#BA7517' },

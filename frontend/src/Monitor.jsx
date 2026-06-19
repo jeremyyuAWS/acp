@@ -26,7 +26,7 @@ const AUDIT = [
   ['auto-fix', 'reading order corrected', 'annual-report.pdf'],
 ]
 const ACTOR = { 'auto-fix': 'mova engine', review: 'A. Chen', publish: 'mova engine', 're-scan': 'mova engine', archive: 'mova engine' }
-const ACOLOR = { 'auto-fix': '#1D9E75', review: '#854F0B', publish: '#185FA5', 're-scan': '#3B6D11', archive: '#5F5E5A' }
+const ACOLOR = { 'auto-fix': '#157A56', review: '#854F0B', publish: '#185FA5', 're-scan': '#3B6D11', archive: '#5F5E5A' }
 
 function Toggle({ label, hint, on, set }) {
   return (
