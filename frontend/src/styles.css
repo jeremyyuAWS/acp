@@ -438,7 +438,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .covgroup { margin-bottom: 16px; }
 .covgrouphd { font-size: 13px; font-weight: 700; color: var(--ink); margin: 0 0 8px; text-transform: uppercase; letter-spacing: 0.03em; }
 .covgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 8px; }
-.covcell { text-align: left; border: 1px solid; border-radius: 10px; padding: 9px 11px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; transition: transform 0.08s ease, box-shadow 0.08s ease; }
+.covcell { text-align: left; border: 1px solid; border-radius: 10px; padding: 9px 11px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; color: var(--ink); transition: transform 0.08s ease, box-shadow 0.08s ease; }
 .covcell:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(40, 30, 48, 0.1); }
 .covsc { display: flex; align-items: baseline; gap: 7px; font-size: 13px; }
 .covsc b { font-variant-numeric: tabular-nums; }
