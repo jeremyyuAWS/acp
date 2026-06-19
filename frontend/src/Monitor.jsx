@@ -16,6 +16,18 @@ const KIND = {
 const SRC_ICON = { sharepoint: '▤', gdrive: '▣', box: '◰', confluence: '❖', cms: '🌐', s3: '☁', onedrive: '☁' }
 const hrs = (m) => m >= 90 ? `${(m / 60).toFixed(1)} hrs` : `${Math.round(m)} min`
 
+// Immutable evidence trail — the ADA/EAA who/when/what/which-engine log (step 10 · Report).
+const AUDIT = [
+  ['auto-fix', 'alt-text added to figure 3', 'benefits-guide.pdf'],
+  ['review', 'approved table-header fix', 'q3-board-deck.pptx'],
+  ['publish', 'replaced in place', 'hr-policy-2026.docx'],
+  ['re-scan', 'verified 100 / 100', 'onboarding.pdf'],
+  ['archive', 'superseded version archived', '2019-policy-old.docx'],
+  ['auto-fix', 'reading order corrected', 'annual-report.pdf'],
+]
+const ACTOR = { 'auto-fix': 'mova engine', review: 'A. Chen', publish: 'mova engine', 're-scan': 'mova engine', archive: 'mova engine' }
+const ACOLOR = { 'auto-fix': '#1D9E75', review: '#854F0B', publish: '#185FA5', 're-scan': '#3B6D11', archive: '#5F5E5A' }
+
 function Toggle({ label, hint, on, set }) {
   return (
     <button className="togrow" role="switch" aria-checked={on} onClick={() => set(!on)}>
@@ -25,7 +37,7 @@ function Toggle({ label, hint, on, set }) {
   )
 }
 
-export default function Monitor({ sources = [], files = [] }) {
+export default function Monitor({ sources = [], files = [], ratified }) {
   const m = monitoringState(files)
   const watch = sourceWatch(sources, files)
 
@@ -50,11 +62,14 @@ export default function Monitor({ sources = [], files = [] }) {
   const cadCount = (v) => Object.values(cad).filter((c) => c === v).length
   const next = useRef(1)
   const push = (e) => setEvents((cur) => [{ ...e, id: next.current++, when: 'just now' }, ...cur].slice(0, 9))
+  const [audit, setAudit] = useState(() => AUDIT.slice(0, 4).map((e, i) => ({ e, id: -i })))
+  const auditNext = useRef(1)
 
   useEffect(() => {
     if (paused || prefersReducedMotion()) return
     const t = setInterval(() => push(POOL[next.current % POOL.length]), 4200)
-    return () => clearInterval(t)
+    const a = setInterval(() => setAudit((f) => [{ e: AUDIT[auditNext.current % AUDIT.length], id: auditNext.current++ }, ...f].slice(0, 6)), 2600)
+    return () => { clearInterval(t); clearInterval(a) }
   }, [paused]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
@@ -176,6 +191,30 @@ export default function Monitor({ sources = [], files = [] }) {
           </section>
         </div>
       </div>
+
+      <section className="panel" style={{ marginTop: 14 }}>
+        <h2>Audit trail · live <span className="livedot" aria-hidden="true" /></h2>
+        <div className="auditfeed" role="log" aria-live="polite" aria-label="Audit trail">
+          {ratified && ratified.total > 0 && (
+            <div className="auditrow pinned">
+              <span className="auditkind" style={{ background: '#EEEDFE', color: '#3C3489' }}>action plan</span>
+              <span className="auditwhat">{ratified.total} recommendation{ratified.total === 1 ? '' : 's'} ratified · {ratified.auto} auto-fix, {ratified.assisted + ratified.review} to review</span>
+              <span className="muted auditactor">you · just now</span>
+            </div>
+          )}
+          {audit.map((row) => {
+            const [kind, what, file] = row.e
+            return (
+              <div className="auditrow" key={row.id}>
+                <span className="auditkind" style={{ background: ACOLOR[kind] + '1f', color: ACOLOR[kind] }}>{kind}</span>
+                <span className="auditwhat">{what} · <span className="fname" style={{ fontSize: 12 }}>{file}</span></span>
+                <span className="muted auditactor">{ACTOR[kind]}</span>
+              </div>
+            )
+          })}
+        </div>
+        <p className="muted" style={{ marginTop: 10 }}>Immutable who / when / what / which-engine log — your ADA &amp; EAA evidence trail.</p>
+      </section>
     </>
   )
 }

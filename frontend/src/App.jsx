@@ -160,7 +160,7 @@ export default function App() {
       )}
 
       <ErrorBoundary key={view}>
-        {view === 'overview' && (run ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} ratified={ratified} /> : placeholder)}
+        {view === 'overview' && (run ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} /> : placeholder)}
 
         {view === 'integrations' && <Integrations sources={sources} files={files} onScan={doScan} busy={busy} />}
 
@@ -181,7 +181,7 @@ export default function App() {
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} /> : placeholder)}
 
-        {view === 'monitor' && (run ? <Monitor sources={sources} files={files} /> : placeholder)}
+        {view === 'monitor' && (run ? <Monitor sources={sources} files={files} ratified={ratified} /> : placeholder)}
 
         {view === 'upload' && <Upload onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
       </ErrorBoundary>

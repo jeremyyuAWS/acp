@@ -6,34 +6,15 @@ import FileDrawer, { statusOf, critLabel } from './FileDrawer.jsx'
 import { IDENTITY } from './sim.js'
 import WordCloud from './WordCloud.jsx'
 import Insight from './Insight.jsx'
-import { prefersReducedMotion } from './a11y.js'
 
-const AUDIT = [
-  ['auto-fix', 'alt-text added to figure 3', 'benefits-guide.pdf'],
-  ['review', 'approved table-header fix', 'q3-board-deck.pptx'],
-  ['publish', 'replaced in place', 'hr-policy-2026.docx'],
-  ['re-scan', 'verified 100 / 100', 'onboarding.pdf'],
-  ['archive', 'superseded version archived', '2019-policy-old.docx'],
-  ['auto-fix', 'reading order corrected', 'annual-report.pdf'],
-]
-const ACTOR = { 'auto-fix': 'mova engine', review: 'A. Chen', publish: 'mova engine', 're-scan': 'mova engine', archive: 'mova engine' }
-const ACOLOR = { 'auto-fix': '#1D9E75', review: '#854F0B', publish: '#185FA5', 're-scan': '#3B6D11', archive: '#5F5E5A' }
-
-// The estate dashboard — doubles as the exportable compliance report (step 10).
-export default function Overview({ run, files, trend, trendDates, onGo, ratified }) {
+// The estate dashboard — doubles as the exportable compliance report.
+export default function Overview({ run, files, trend, trendDates, onGo }) {
   const [on, setOn] = useState(false)
   const [seg, setSeg] = useState(null)
   const [selFile, setSelFile] = useState(null)
   const reportRef = useRef(null)
   const [exporting, setExporting] = useState(false)
-  const [feed, setFeed] = useState(() => AUDIT.slice(0, 4).map((e, i) => ({ e, id: -i })))
-  const nextId = useRef(1)
   useEffect(() => { const t = setTimeout(() => setOn(true), 80); return () => clearTimeout(t) }, [])
-  useEffect(() => {
-    if (prefersReducedMotion()) return
-    const t = setInterval(() => setFeed((f) => [{ e: AUDIT[nextId.current % AUDIT.length], id: nextId.current++ }, ...f].slice(0, 6)), 2600)
-    return () => clearInterval(t)
-  }, [])
   const doExport = async () => {
     if (!reportRef.current) return
     setExporting(true)
@@ -171,30 +152,6 @@ export default function Overview({ run, files, trend, trendDates, onGo, ratified
           <div className="liftgain">+{after - before} pts</div>
         </div>
         <p className="muted">Projected estate score once the queued remediation is approved and re-validated.</p>
-      </section>
-
-      <section className="panel">
-        <h2>Audit trail · live <span className="livedot" aria-hidden="true" /></h2>
-        <div className="auditfeed" role="log" aria-live="polite" aria-label="Audit trail">
-          {ratified && ratified.total > 0 && (
-            <div className="auditrow pinned">
-              <span className="auditkind" style={{ background: '#EEEDFE', color: '#3C3489' }}>action plan</span>
-              <span className="auditwhat">{ratified.total} recommendation{ratified.total === 1 ? '' : 's'} ratified · {ratified.auto} auto-fix, {ratified.assisted + ratified.review} to review</span>
-              <span className="muted auditactor">you · just now</span>
-            </div>
-          )}
-          {feed.map((row) => {
-            const [kind, what, file] = row.e
-            return (
-              <div className="auditrow" key={row.id}>
-                <span className="auditkind" style={{ background: ACOLOR[kind] + '1f', color: ACOLOR[kind] }}>{kind}</span>
-                <span className="auditwhat">{what} · <span className="fname" style={{ fontSize: 12 }}>{file}</span></span>
-                <span className="muted auditactor">{ACTOR[kind]}</span>
-              </div>
-            )
-          })}
-        </div>
-        <p className="muted" style={{ marginTop: 10 }}>Immutable who / when / what / which-engine log — your ADA &amp; EAA evidence trail.</p>
       </section>
       </div>
 
