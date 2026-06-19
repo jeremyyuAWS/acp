@@ -4,6 +4,7 @@ import ReviewDrawer from './ReviewDrawer.jsx'
 import FileDrawer, { REC_STYLE, fmtEffort, SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
+import { PRI_COLOR, PRI_RANK } from './ontology.js'
 import { prefersReducedMotion } from './a11y.js'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
@@ -120,7 +121,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // --- remediation plan + decisions (moved from Discover) ---
   const plan = files.length ? recommendationSummary(files) : null
   const planCards = plan ? plan.buckets.filter((b) => REM_ACTIONS.includes(b.action)) : []
-  const remediable = files.filter((f) => f.rec && REM_ACTIONS.includes(f.rec.action)).sort((a, b) => priority(b) - priority(a))
+  // Published business ontology takes precedence in the queue order (Critical → Low),
+  // then the AI risk triage breaks ties.
+  const ontRank = (f) => f.ont?.priority ? PRI_RANK[f.ont.priority] : 9
+  const remediable = files.filter((f) => f.rec && REM_ACTIONS.includes(f.rec.action)).sort((a, b) => (ontRank(a) - ontRank(b)) || (priority(b) - priority(a)))
+  const ontCount = remediable.filter((f) => f.ont).length
   const decide = (file, d) => { setDecisions?.((s) => ({ ...s, [file]: d })); setEditing(null) }
   const undo = (file) => setDecisions?.((s) => { const n = { ...s }; delete n[file]; return n })
   const acceptAll = () => setDecisions?.((s) => { const n = { ...s }; remediable.forEach((f) => { if (!n[f.file]) n[f.file] = { state: 'accepted' } }); return n })
@@ -200,6 +205,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       {remediable.length > 0 && (
         <section className="panel">
           <h2>Documents to remediate <span className="muted">· {remediable.length} · <b style={{ color: 'var(--ink)', fontWeight: 500 }}>AI-triaged</b> by business risk — exposure × severity × ownership — accept / reject / modify</span></h2>
+          {ontCount > 0 && <div className="ontbanner">⬆ Ordered by your <b>business ontology</b> — {ontCount} document{ontCount === 1 ? '' : 's'} elevated by published rules (Settings → Business ontology)</div>}
           <div className="remlist">
             {remediable.map((f) => {
               const rec = f.rec; const dec = decisions[f.file]
@@ -211,7 +217,15 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 <div className={`remrow${dec?.state === 'rejected' ? ' rowrej' : ''}`} key={f.file} style={{ borderLeft: `3px solid ${rfg}`, paddingLeft: 10 }}>
                   <div className="remmaincol">
                     <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span></button>
-                    <div className="rempri"><span className="pritag" style={{ background: priBg, color: priFg }}>{priLabel}</span><span className="muted">why: {priWhy(f)}</span></div>
+                    {f.ont ? (
+                      <div className="rempri">
+                        <span className="pritag" style={{ background: PRI_COLOR[f.ont.priority][1], color: PRI_COLOR[f.ont.priority][0] }}>{f.ont.priority}</span>
+                        {f.ont.label && <span className="ontlabelpill" style={{ color: f.ont.label.color, background: f.ont.label.color + '22' }}>{f.ont.label.name}</span>}
+                        <span className="muted">business rule: {f.ont.rule.name}{f.ont.sla ? ` · ${f.ont.sla}d SLA` : ''}</span>
+                      </div>
+                    ) : (
+                      <div className="rempri"><span className="pritag" style={{ background: priBg, color: priFg }}>{priLabel}</span><span className="muted">why: {priWhy(f)}</span></div>
+                    )}
                   </div>
                   <span className="reccell">
                     <span className="badge" style={{ background: rbg, color: rfg }}>{icon} {label}</span>

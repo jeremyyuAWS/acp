@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { getSources, getRubric, listScans, getScan, startScan, getJob } from './api'
 import { setPersona } from './sim.js'
+import { annotate, loadPublished } from './ontology.js'
 import Logo from './Logo.jsx'
 import ChatWidget from './ChatWidget.jsx'
 import KnowledgeGraph from './KnowledgeGraph.jsx'
@@ -77,6 +78,7 @@ export default function App() {
   const [progress, setProgress] = useState(null)
   const [loaded, setLoaded] = useState(false)
   const [certifiedDocs, setCertifiedDocs] = useState([])
+  const [ontology, setOntology] = useState(loadPublished)
 
   useEffect(() => {
     if (!me) return
@@ -87,6 +89,11 @@ export default function App() {
       .catch(() => {})
       .finally(() => setLoaded(true))
   }, [me])
+
+  // Annotate the corpus with the published business ontology (adds `.ont`: label,
+  // priority, matched rule, weighted score) so the live workflow is ontology-aware.
+  // Kept above the early return below to satisfy the rules of hooks.
+  const files = useMemo(() => annotate(scan?.files ?? [], ontology), [scan, ontology])
 
   const signIn = (p) => { setPersona(p); setScan(null); setScanList([]); setLoaded(false); setDecisions({}); setCertifiedDocs([]); setSettingsOpen(false); setView((p.allow || ['overview'])[0]); setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label, allow: p.allow || [] }) }
   if (!me) return <SignIn onSignedIn={signIn} />
@@ -113,7 +120,6 @@ export default function App() {
   }
 
   const run = scan?.run
-  const files = scan?.files ?? []
   const trendData = [...scanList].reverse().filter((s) => s.avg_score != null)
     .map((s) => ({ score: s.avg_score, label: s.completed_at ? new Date(s.completed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '' }))
   const trend = trendData.map((d) => d.score)
@@ -195,7 +201,7 @@ export default function App() {
 
       <ChatWidget files={files} run={run} trend={trend} trendDates={trendDates} />
       {SHOW_A11Y && <A11ySelfCheck />}
-      {settingsOpen && me.allow?.includes('settings') && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} />}
+      {settingsOpen && me.allow?.includes('settings') && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onOntologyChange={() => setOntology(loadPublished())} />}
     </div>
   )
 }

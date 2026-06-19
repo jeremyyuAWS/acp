@@ -860,6 +860,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .ontexrow { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .ontrels { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
 .ontrel { font-size: 12px; background: #f3eef6; border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; }
+.ontbanner { background: #eef3fb; border: 1px solid #cfe0f5; color: #1F5FA8; border-radius: 9px; padding: 7px 11px; font-size: 12.5px; margin: 0 0 11px; }
 @media (max-width: 820px) { .ontcols { grid-template-columns: 1fr; } }
 @media (max-width: 820px) { .rmstep { flex-direction: column; min-width: 100%; } .rmarrow { transform: rotate(90deg); padding: 3px 0; } .rmmilestone { margin: 4px 0; } }
 @media (max-width: 760px) { .levelarrow { transform: rotate(90deg); padding: 4px 0; } .levelstep { flex-direction: column; min-width: 100%; } }

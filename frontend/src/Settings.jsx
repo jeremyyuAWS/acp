@@ -8,7 +8,7 @@ import { useDialog } from './a11y.js'
 // the scoring rules (Rubric), the validation coverage (WCAG 2.1 + 2.2 matrix), and
 // the business ontology/taxonomy — i.e. the configuration an admin owns, kept out
 // of the day-to-day workflow tabs.
-export default function Settings({ onClose, onRubricSaved, files = [] }) {
+export default function Settings({ onClose, onRubricSaved, files = [], onOntologyChange }) {
   const [tab, setTab] = useState('rules')
   const panelRef = useRef(null)
   useDialog(panelRef, onClose)
@@ -27,7 +27,7 @@ export default function Settings({ onClose, onRubricSaved, files = [] }) {
         <div className="setbody">
           {tab === 'rules' && <Rubric onSaved={onRubricSaved} />}
           {tab === 'validation' && <WcagCoverage />}
-          {tab === 'ontology' && <Ontology files={files} />}
+          {tab === 'ontology' && <Ontology files={files} onPublished={onOntologyChange} />}
         </div>
       </div>
     </div>

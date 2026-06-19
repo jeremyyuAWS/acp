@@ -1,126 +1,27 @@
 import { useState, useMemo, useEffect } from 'react'
+import { LS_KEY, FIELDS, deriveOptions, evalRule, riskFactors, riskScore, parseNL, PRI_COLOR, PRIORITY_W, condText, worstSev, exposureOf, DEFAULT_LABELS, DEFAULT_RULES, DEFAULT_TAXONOMY, DEFAULT_PUBLISHED } from './ontology.js'
 
-// Custom Ontology & Business Taxonomy Manager (Admin). Lets an admin teach the
-// platform their org's own understanding of documents — custom labels, a
-// hierarchical taxonomy, and a metadata rules engine that PRIORITISES/CATEGORISES
-// the real corpus. Rules are evaluated against the actual loaded files (no mock),
-// with a weighted risk score and a live impact preview, then drafted & published
-// with version history. AI-assisted classification, NL authoring and ontology
-// relationships are layered on top (NL authoring is a real deterministic parser;
-// example-learning is a clearly-labelled preview).
-const LS_KEY = 'mova_ontology_v1'
-
-// ---- Field registry: what the rules engine can test, mapped to real corpus fields ----
-const exposureOf = (f) => (f.tags || []).includes('public-facing') ? 'public-facing' : (f.tags || []).includes('high-traffic') ? 'high-traffic' : 'internal'
-const sensitivityOf = (f) => (f.tags || []).includes('PII') ? 'PII' : (f.tags || []).includes('legal-hold') ? 'legal-hold' : 'none'
-const SEV_ORDER = ['none', 'MINOR', 'MODERATE', 'SERIOUS', 'CRITICAL']
-const worstSev = (f) => { const idx = (f.issues || []).map((i) => SEV_ORDER.indexOf(i.severity)).filter((x) => x >= 0); return idx.length ? SEV_ORDER[Math.max(...idx)] : 'none' }
-
-const FIELDS = {
-  department: { label: 'Department', type: 'enum', get: (f) => f.department, ops: ['is', 'is not'] },
-  repository: { label: 'Repository / source', type: 'enum', get: (f) => f.sourceName, ops: ['is', 'is not'] },
-  type: { label: 'File type', type: 'enum', get: (f) => f.type, ops: ['is', 'is not'] },
-  filename: { label: 'Filename', type: 'text', get: (f) => f.file, ops: ['contains', 'starts with', 'matches regex'] },
-  tag: { label: 'Tag', type: 'enum', get: (f) => f.tags || [], ops: ['has', 'does not have'] },
-  seniority: { label: 'Owner seniority', type: 'enum', get: (f) => f.seniority, ops: ['is', 'is not'] },
-  exposure: { label: 'External exposure', type: 'enum', get: exposureOf, ops: ['is', 'is not'] },
-  sensitivity: { label: 'Sensitivity', type: 'enum', get: sensitivityOf, ops: ['is', 'is not'] },
-  ageDays: { label: 'Age · days since modified', type: 'number', get: (f) => f.ageDays, ops: ['older than', 'newer than'], unit: 'days' },
-  views90d: { label: 'Usage · views / 90d', type: 'number', get: (f) => f.views90d, ops: ['greater than', 'less than'], unit: 'views' },
-  sizeKB: { label: 'Size · KB', type: 'number', get: (f) => f.sizeKB, ops: ['greater than', 'less than'], unit: 'KB' },
-  severity: { label: 'Worst WCAG finding', type: 'sev', get: worstSev, ops: ['is at least'] },
-}
-const uniq = (a) => [...new Set(a)].filter(Boolean).sort()
-const deriveOptions = (files) => ({
-  department: uniq(files.map((f) => f.department)),
-  repository: uniq(files.map((f) => f.sourceName)),
-  type: uniq(files.map((f) => f.type)),
-  tag: uniq(files.flatMap((f) => f.tags || [])),
-  seniority: uniq(files.map((f) => f.seniority)),
-  exposure: ['public-facing', 'high-traffic', 'internal'],
-  sensitivity: ['PII', 'legal-hold', 'none'],
-  severity: ['MINOR', 'MODERATE', 'SERIOUS', 'CRITICAL'],
-})
-
-function evalCond(f, c) {
-  const fd = FIELDS[c.field]; if (!fd) return false
-  const v = fd.get(f); const val = c.value
-  const s = (x) => String(x).toLowerCase()
-  switch (c.op) {
-    case 'is': return s(v) === s(val)
-    case 'is not': return s(v) !== s(val)
-    case 'contains': return s(v).includes(s(val))
-    case 'starts with': return s(v).startsWith(s(val))
-    case 'matches regex': try { return new RegExp(val, 'i').test(String(v)) } catch { return false }
-    case 'has': return Array.isArray(v) && v.map(s).includes(s(val))
-    case 'does not have': return Array.isArray(v) && !v.map(s).includes(s(val))
-    case 'older than': return Number(v) > Number(val)
-    case 'newer than': return Number(v) < Number(val)
-    case 'greater than': return Number(v) > Number(val)
-    case 'less than': return Number(v) < Number(val)
-    case 'is at least': return SEV_ORDER.indexOf(v) >= SEV_ORDER.indexOf(val)
-    default: return false
-  }
-}
-const evalRule = (f, rule) => { const cs = rule.conditions || []; return cs.length ? (rule.match === 'any' ? cs.some((c) => evalCond(f, c)) : cs.every((c) => evalCond(f, c))) : false }
-
-// Weighted risk = WCAG severity × business criticality × exposure × regulatory × usage.
-const PRIORITY_W = { Critical: 4, High: 3, Medium: 2, Low: 1 }
-const SEV_W = { none: 0.5, MINOR: 1, MODERATE: 2, SERIOUS: 3, CRITICAL: 4 }
-function riskFactors(f, priority) {
-  return {
-    severity: SEV_W[worstSev(f)] || 0.5,
-    criticality: PRIORITY_W[priority] || 2,
-    exposure: { 'public-facing': 3, 'high-traffic': 2, internal: 1 }[exposureOf(f)],
-    regulatory: sensitivityOf(f) === 'none' ? 1 : 3,
-    usage: Math.max(1, Math.min(3, +(Math.log10((f.views90d || 1) + 1)).toFixed(2))),
-  }
-}
-const riskScore = (f, priority) => { const r = riskFactors(f, priority); return r.severity * r.criticality * r.exposure * r.regulatory * r.usage }
-
-// ---- Natural-language → structured rule (deterministic; previews before activation) ----
-function parseNL(text, opts) {
-  const t = ' ' + text.toLowerCase() + ' '
-  const conditions = []
-  opts.department.forEach((d) => { const key = d.toLowerCase().split(/[ &]/)[0]; if (key.length > 2 && t.includes(key)) conditions.push({ field: 'department', op: 'is', value: d }) })
-  if (/\bexternal|public|customer-facing|customer facing|externally published|published\b/.test(t)) conditions.push({ field: 'exposure', op: 'is', value: 'public-facing' })
-  ;['pdf', 'docx', 'pptx', 'xlsx', 'html'].forEach((ty) => { if (new RegExp(`\\b${ty}s?\\b`).test(t)) conditions.push({ field: 'type', op: 'is', value: ty }) })
-  if (/\bpii|patient|phi|sensitive\b/.test(t)) conditions.push({ field: 'sensitivity', op: 'is', value: 'PII' })
-  if (/\blegal hold|litigation\b/.test(t)) conditions.push({ field: 'sensitivity', op: 'is', value: 'legal-hold' })
-  if (/\bexecutive|leadership|c-suite\b/.test(t)) conditions.push({ field: 'seniority', op: 'is', value: 'Executive' })
-  const mm = t.match(/last (\d+) months?/); if (mm) conditions.push({ field: 'ageDays', op: 'newer than', value: String(+mm[1] * 30) })
-  const my = t.match(/last (\d+) years?/); if (my) conditions.push({ field: 'ageDays', op: 'newer than', value: String(+my[1] * 365) })
-  if (/\barchived|legacy|old\b/.test(t)) conditions.push({ field: 'ageDays', op: 'older than', value: '540' })
-  const kw = t.match(/(?:titled|named|contain(?:ing|s)?|with) ["“]?([a-z0-9 _-]{3,})["”]?/); if (kw) conditions.push({ field: 'filename', op: 'contains', value: kw[1].trim().split(' ')[0] })
-  const priority = /critical/.test(t) ? 'Critical' : /\bhigh\b/.test(t) ? 'High' : /\blow\b/.test(t) ? 'Low' : /\bmedium\b/.test(t) ? 'Medium' : (/prioriti|wcag first|first/.test(t) ? 'High' : null)
-  const sla = (t.match(/within (\d+) days?/) || [])[1] || (/within a month|monthly|within 30 days/.test(t) ? '30' : null)
-  const match = /\bor\b/.test(t) && !/\band\b/.test(t) ? 'any' : 'all'
-  return { conditions, match, actions: { priority: priority || 'High', slaDays: sla ? +sla : null } }
-}
-
-const PRI_COLOR = { Critical: ['#1F5FA8', '#E2EDFB'], High: ['#854F0B', '#FAEEDA'], Medium: ['#3C3489', '#EEEDFE'], Low: ['#5F5E5A', '#EFEDEA'] }
-const condText = (c) => `${FIELDS[c.field]?.label || c.field} ${c.op} “${c.value}”`
+// Custom Ontology & Business Taxonomy Manager (Admin). An admin teaches the platform
+// their org's own document model — custom labels, a hierarchical taxonomy, and a
+// metadata rules engine that PRIORITISES/CATEGORISES the real corpus. The shared engine
+// lives in ./ontology.js, so the live workflow (Remediate queue, Overview, file drawer)
+// classifies from the same source of truth. NL authoring is a real deterministic parser;
+// AI example-learning, relationships and rollback are clearly-labelled previews.
 
 const DEFAULT_STATE = {
-  labels: [
-    { id: 'l1', name: 'Patient Consent Forms', color: '#1F5FA8' },
-    { id: 'l2', name: 'High-Risk Legal Contracts', color: '#854F0B' },
-    { id: 'l3', name: 'Board Minutes', color: '#3C3489' },
-    { id: 'l4', name: 'Legacy HR Policies', color: '#5F5E5A' },
-  ],
-  taxonomy: { name: 'Corporate Documents', children: [
-    { name: 'Legal', children: [{ name: 'Contracts' }, { name: 'Litigation' }, { name: 'Compliance' }] },
-    { name: 'Human Resources', children: [{ name: 'Benefits' }, { name: 'Recruiting' }, { name: 'Payroll' }] },
-    { name: 'Product', children: [{ name: 'Specifications' }, { name: 'Manuals' }, { name: 'Release Notes' }] },
-  ] },
-  rules: [
-    { id: 'r1', name: 'Customer-facing PDFs → Critical', match: 'all', conditions: [{ field: 'exposure', op: 'is', value: 'public-facing' }, { field: 'type', op: 'is', value: 'pdf' }], actions: { priority: 'Critical', slaDays: 30, label: 'l1' } },
-    { id: 'r2', name: 'Anything owned by Legal → High', match: 'all', conditions: [{ field: 'department', op: 'is', value: 'Legal & Compliance' }], actions: { priority: 'High', slaDays: null, label: 'l2' } },
-    { id: 'r3', name: 'Archived marketing → Low', match: 'all', conditions: [{ field: 'department', op: 'is', value: 'Communications' }, { field: 'ageDays', op: 'older than', value: '540' }], actions: { priority: 'Low', slaDays: null } },
-  ],
-  version: 1, status: 'draft', publishedAt: null, history: [],
+  labels: DEFAULT_LABELS.map((l) => ({ ...l })),
+  taxonomy: JSON.parse(JSON.stringify(DEFAULT_TAXONOMY)),
+  rules: DEFAULT_RULES.map((r) => ({ ...r })),
+  version: 1, status: 'published', publishedAt: 'seeded', published: DEFAULT_PUBLISHED,
+  history: [{ v: 1, at: 'seeded', by: 'system', rules: DEFAULT_RULES.length, labels: DEFAULT_LABELS.length }],
 }
-const load = () => { try { const s = JSON.parse(localStorage.getItem(LS_KEY)); return s && s.labels ? s : DEFAULT_STATE } catch { return DEFAULT_STATE } }
+const load = () => {
+  try {
+    const s = JSON.parse(localStorage.getItem(LS_KEY))
+    if (s && s.labels) { if (!s.published) s.published = { version: s.version || 1, at: s.publishedAt || 'seeded', by: 'admin', rules: s.rules, labels: s.labels }; return s }
+    return DEFAULT_STATE
+  } catch { return DEFAULT_STATE }
+}
 let _id = 100
 const nid = (p) => `${p}${_id++}`
 
@@ -139,7 +40,7 @@ function Tree({ node, depth = 0, onAdd, onRemove }) {
   )
 }
 
-export default function Ontology({ files = [] }) {
+export default function Ontology({ files = [], onPublished }) {
   const [st, setSt] = useState(load)
   const [tab, setTab] = useState('taxonomy')
   const [nl, setNl] = useState('')
@@ -174,7 +75,16 @@ export default function Ontology({ files = [] }) {
   const setCond = (i, patch) => setDraft((d) => ({ ...d, conditions: d.conditions.map((c, n) => n === i ? { ...c, ...patch } : c) }))
   const rmCond = (i) => setDraft((d) => ({ ...d, conditions: d.conditions.filter((_, n) => n !== i) }))
   const commitDraft = () => { if (!draft.conditions.length) return; addRule({ ...draft, name: draft.name || draft.conditions.map(condText).join(draft.match === 'any' ? ' OR ' : ' AND ').slice(0, 60) }); setDraft({ name: '', match: 'all', conditions: [{ field: 'department', op: 'is', value: '' }], actions: { priority: 'High', slaDays: null, label: '' } }) }
-  const publish = () => setSt((s) => ({ ...s, status: 'published', dirty: false, version: s.version + (s.status === 'draft' ? 1 : 0), publishedAt: new Date().toLocaleString(), history: [{ v: s.version + (s.status === 'draft' ? 1 : 0), at: new Date().toLocaleString(), by: 'admin', rules: s.rules.length, labels: s.labels.length }, ...(s.history || [])].slice(0, 12) }))
+  const publish = () => {
+    const now = new Date().toLocaleString()
+    const v = st.version + (st.status === 'draft' ? 1 : 0)
+    const next = { ...st, status: 'published', dirty: false, version: v, publishedAt: now,
+      published: { version: v, at: now, by: 'admin', rules: st.rules, labels: st.labels },
+      history: [{ v, at: now, by: 'admin', rules: st.rules.length, labels: st.labels.length }, ...(st.history || [])].slice(0, 12) }
+    try { localStorage.setItem(LS_KEY, JSON.stringify(next)) } catch { /* ignore */ }
+    setSt(next)
+    onPublished?.()
+  }
 
   const condCtl = (c, i) => {
     const fd = FIELDS[c.field]
@@ -216,7 +126,7 @@ export default function Ontology({ files = [] }) {
           <div className="muted" style={{ marginTop: 2 }}>Teach the platform your org's document model — labels, taxonomy &amp; prioritisation rules that classify the real estate. {files.length.toLocaleString()} documents in scope.</div>
         </div>
         <div className="ontpublish">
-          <span className={dirty ? 'ontstatus draft' : 'ontstatus live'}>{dirty ? '● Draft — unpublished changes' : `✓ Published v${st.version}`}</span>
+          <span className={dirty ? 'ontstatus draft' : 'ontstatus live'}>{dirty ? '● Draft — unpublished changes' : `✓ Published v${st.version} · live in the queue`}</span>
           <button onClick={publish} disabled={!dirty}>Publish ontology</button>
         </div>
       </div>
