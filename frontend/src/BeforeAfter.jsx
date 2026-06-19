@@ -116,7 +116,7 @@ export default function BeforeAfter({ file, issues = [], srcText, pdfUrl, office
       )}
       {officeBlob && (
         <div className="balive">
-          <div className="bahd"><b>Remediated file</b><span className="muted"> — alt text &amp; document title written back into the real Office XML, in your browser</span></div>
+          <div className="bahd"><b>Remediated file</b><span className="muted"> — alt text, table header rows &amp; document title written back into the real Office XML, in your browser</span></div>
           <button className="ghost small" onClick={downloadOffice} disabled={busy}>{busy ? 'Remediating…' : `⤓ Download the remediated ${(file?.name || '').split('.').pop().toUpperCase()}`}</button>
         </div>
       )}

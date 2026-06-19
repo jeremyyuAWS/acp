@@ -30,8 +30,26 @@ export async function auditOffice(blob) {
   return findings
 }
 
-// Apply the safe, mechanical fixes (alt text + document title) and return a
-// genuinely remediated file blob.
+// Tag the first row of each Word table as a repeating header row by inserting
+// <w:tblHeader/> into the first <w:tr>'s row properties. This is the WordprocessingML
+// way to designate a header row (WCAG 1.3.1 info & relationships) and survives re-audit.
+function addTableHeaders(xml) {
+  return xml.replace(/<w:tbl>([\s\S]*?)<\/w:tbl>/g, (full, inner) => {
+    if (/<w:tblHeader\b/.test(inner)) return full // already has a header row
+    const tr = /<w:tr\b[^>]*>/.exec(inner)
+    if (!tr) return full
+    const head = inner.slice(0, tr.index + tr[0].length)
+    const rest = inner.slice(tr.index + tr[0].length)
+    let fixed
+    if (/^\s*<w:trPr>/.test(rest)) fixed = head + rest.replace(/^(\s*<w:trPr>)/, '$1<w:tblHeader/>')
+    else if (/^\s*<w:trPr\/>/.test(rest)) fixed = head + rest.replace(/^(\s*)<w:trPr\/>/, '$1<w:trPr><w:tblHeader/></w:trPr>')
+    else fixed = head + '<w:trPr><w:tblHeader/></w:trPr>' + rest
+    return '<w:tbl>' + fixed + '</w:tbl>'
+  })
+}
+
+// Apply the safe, mechanical fixes (alt text + table header rows + document title)
+// and return a genuinely remediated file blob.
 export async function remediateOffice(blob) {
   const JSZip = (await import('jszip')).default
   const zip = await JSZip.loadAsync(blob)
@@ -39,6 +57,7 @@ export async function remediateOffice(blob) {
   for (const n of names) {
     let xml = await zip.file(n).async('string')
     xml = xml.replace(CNVPR, (m, tag, attrs, slash) => hasDescr(attrs) ? m : `<${tag}${attrs} descr="Image — described by mova.io"${slash}>`)
+    if (n.startsWith('word/')) xml = addTableHeaders(xml)
     zip.file(n, xml)
   }
   if (zip.file('docProps/core.xml')) {

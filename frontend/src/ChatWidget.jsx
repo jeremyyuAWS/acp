@@ -113,16 +113,18 @@ function synthAnswer(files, run) {
   return `Across your ${run.files}-document scan (average ${run.avg_score}/100, ${flagged} with open findings), I don't have an exact metric for that. Try asking me to chart something — "findings by department", "compliance trend over time", "severity heatmap" — or about your score, top WCAG violations, sources, or PII/legal exposure.`
 }
 
+// Returns { text, ai } so the UI can show whether Claude answered (ai:true) or the
+// data-grounded synthetic fallback did (ai:false).
 async function askCustom(q, files, run) {
   if (LLM_ENDPOINT) {
     try {
       const ctrl = new AbortController(); const tm = setTimeout(() => ctrl.abort(), 12000)
       const res = await fetch(LLM_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: q, context: dataSummary(files, run) }), signal: ctrl.signal })
       clearTimeout(tm)
-      if (res.ok) { const d = await res.json(); if (d && d.answer) return d.answer }
+      if (res.ok) { const d = await res.json(); if (d && d.answer) return { text: d.answer, ai: true } }
     } catch { /* fall through to synthetic */ }
   }
-  return synthAnswer(files, run)
+  return { text: synthAnswer(files, run), ai: false }
 }
 
 const SUGGEST = ["What's my compliance score?", 'Findings by department', 'Compliance trend over time', 'Severity heatmap', 'Top WCAG violations']
@@ -153,7 +155,7 @@ export default function ChatWidget({ files = [], run, trend = [], trendDates = [
     let reply
     if (charted) { await delay(800 + Math.floor(Math.random() * 700)); reply = charted }
     else if (matched) { await delay(750 + Math.floor(Math.random() * 600)); reply = { text: matched } }
-    else { await delay(450); reply = { text: await askCustom(q, files, run) } }
+    else { await delay(450); reply = await askCustom(q, files, run) }
     setMsgs((m) => [...m, { role: 'bot', ...reply }])
     setThinking(false)
   }
@@ -168,7 +170,7 @@ export default function ChatWidget({ files = [], run, trend = [], trendDates = [
       {open && (
         <aside className={expanded ? 'chatpanel expanded' : 'chatpanel'} role="dialog" aria-label="Compliance assistant">
           <div className="chathead">
-            <div><b>Compliance assistant</b><span className="muted"> · about your scan</span></div>
+            <div><b>Compliance assistant</b><span className="muted"> · about your scan</span>{LLM_ENDPOINT && <span className="chatlive" title="Live AI answers are enabled for free-form questions">✦ live AI</span>}</div>
             <button className="chatexpand" aria-label={expanded ? 'Collapse chat' : 'Expand chat'} title={expanded ? 'Collapse' : 'Expand'} onClick={() => setExpanded((e) => !e)}>
               {expanded
                 ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 9H4M9 9V4M9 9 4 4M15 9h5M15 9V4m0 5 5-5M9 15H4m5 0v5m0-5-5 5m11-5h5m-5 0v5m0-5 5 5" /></svg>
@@ -176,7 +178,7 @@ export default function ChatWidget({ files = [], run, trend = [], trendDates = [
             </button>
           </div>
           <div className="chatmsgs" role="log" aria-live="polite">
-            {msgs.map((m, i) => <div key={i} className={`chatmsg ${m.role}${m.chart ? ' haschart' : ''}`}>{m.text}{m.chart && <ChatChart chart={m.chart} />}</div>)}
+            {msgs.map((m, i) => <div key={i} className={`chatmsg ${m.role}${m.chart ? ' haschart' : ''}`}>{m.text}{m.chart && <ChatChart chart={m.chart} />}{m.role === 'bot' && m.ai !== undefined && <span className={`aibadge ${m.ai ? 'on' : 'off'}`} title={m.ai ? 'Answered by Claude (live AI)' : 'Answered offline from your scan data — no live AI'}>{m.ai ? '✦ Claude' : '◴ offline'}</span>}</div>)}
             {thinking && <div className="chatmsg bot thinking"><span className="typing"><i /><i /><i /></span><span className="muted" style={{ fontSize: 12 }}>analyzing your scan…</span></div>}
             <div ref={endRef} />
           </div>
