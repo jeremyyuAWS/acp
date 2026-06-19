@@ -126,7 +126,7 @@ export const DEFAULT_LABELS = [
 ]
 export const DEFAULT_RULES = [
   { id: 'r1', name: 'Customer-facing PDFs → Critical', match: 'all', conditions: [{ field: 'exposure', op: 'is', value: 'public-facing' }, { field: 'type', op: 'is', value: 'pdf' }], actions: { priority: 'Critical', slaDays: 30, label: 'l1' } },
-  { id: 'r2', name: 'Anything owned by Legal → High', match: 'all', conditions: [{ field: 'department', op: 'is', value: 'Legal & Compliance' }], actions: { priority: 'High', slaDays: null, label: 'l2' } },
+  { id: 'r2', name: 'Anything owned by Legal → High', match: 'all', conditions: [{ field: 'department', op: 'is', value: 'Legal & Compliance' }], actions: { priority: 'High', slaDays: 45, label: 'l2' } },
   { id: 'r3', name: 'Archived marketing → Low', match: 'all', conditions: [{ field: 'department', op: 'is', value: 'Communications' }, { field: 'ageDays', op: 'older than', value: '540' }], actions: { priority: 'Low', slaDays: null } },
 ]
 export const DEFAULT_TAXONOMY = { name: 'Corporate Documents', children: [

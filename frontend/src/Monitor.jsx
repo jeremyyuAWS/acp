@@ -41,6 +41,19 @@ export default function Monitor({ sources = [], files = [], ratified }) {
   const m = monitoringState(files)
   const watch = sourceWatch(sources, files)
 
+  // SLA enforcement — the published ontology sets remediation deadlines (e.g. 30-day
+  // SLA on Critical). We watch every classified document still needing remediation and
+  // flag breaches / at-risk. Days-in-queue is a deterministic per-doc demo value (no real
+  // detection timestamp in the sim), but the breach/at-risk/on-track logic is real.
+  const daysInQueue = (f) => { let h = 0; for (const c of (f.file || '')) h = (h * 31 + c.charCodeAt(0)) % 100000; return h % 52 }
+  const slaItems = files
+    .filter((f) => f.ont?.sla && f.status !== 'certifiable' && f.status !== 'error')
+    .map((f) => { const elapsed = daysInQueue(f); const remaining = f.ont.sla - elapsed; return { f, sla: f.ont.sla, remaining, status: remaining < 0 ? 'breached' : remaining <= Math.max(3, f.ont.sla * 0.25) ? 'at-risk' : 'on-track' } })
+    .sort((a, b) => a.remaining - b.remaining)
+  const slaBreached = slaItems.filter((s) => s.status === 'breached')
+  const slaAtRisk = slaItems.filter((s) => s.status === 'at-risk')
+  const slaOnTrack = slaItems.filter((s) => s.status === 'on-track')
+
   // event pool grounded in real corpus docs
   const pub = files.find((f) => (f.tags || []).includes('public-facing'))?.file || 'public-page.html'
   const cert = files.find((f) => f.status === 'certifiable')?.file || 'onboarding.pdf'
@@ -111,6 +124,31 @@ export default function Monitor({ sources = [], files = [], ratified }) {
         <div className="moncard"><span className="muted">Remediation backlog</span><b>{hrs(m.backlogMin)}</b><span className="muted">{m.autoPct}% automatic</span></div>
         <div className="moncard"><span className="muted">Open alerts · 7d</span><b style={{ color: '#1F5FA8' }}>{m.alerts.length}</b><span className="muted">drift &amp; regressions</span></div>
       </div>
+
+      {slaItems.length > 0 && (
+        <section className="panel" style={{ marginBottom: 14 }}>
+          <div className="slahd">
+            <h2 style={{ margin: 0 }}>SLA tracking <span className="muted">· remediation deadlines from your business ontology</span></h2>
+            {slaBreached.length > 0 && <span className="slachip breached">⚠ {slaBreached.length} breached</span>}
+          </div>
+          <div className="slastats">
+            <div className="slastat"><b style={{ color: '#1F5FA8' }}>{slaItems.length}</b><span className="muted">under SLA</span></div>
+            <div className="slastat"><b style={{ color: slaBreached.length ? '#854F0B' : '#5F5E5A' }}>{slaBreached.length}</b><span className="muted">breached</span></div>
+            <div className="slastat"><b style={{ color: '#B5830A' }}>{slaAtRisk.length}</b><span className="muted">at risk</span></div>
+            <div className="slastat"><b style={{ color: '#3B6D11' }}>{slaOnTrack.length}</b><span className="muted">on track</span></div>
+          </div>
+          <div className="slalist">
+            {slaItems.slice(0, 8).map((s, i) => (
+              <div className="slarow" key={i}>
+                <span className={`slatag ${s.status}`}>{s.status === 'breached' ? `${-s.remaining}d over` : `${s.remaining}d left`}</span>
+                <div className="slamain"><div className="slafile">{s.f.file}</div><div className="muted" style={{ fontSize: 11 }}>{s.f.ont.priority} · {s.sla}-day SLA · rule: {s.f.ont.rule.name}</div></div>
+                <span className="muted slasrc">{s.f.sourceName}</span>
+              </div>
+            ))}
+          </div>
+          <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>Breaches notify the document owner and surface on the executive dashboard — the agent escalates before the deadline, not after.</p>
+        </section>
+      )}
 
       <section className="panel" style={{ marginBottom: 14 }}>
         <h2>Scan triggers &amp; schedule <span className="muted">· how the agent decides when to scan</span></h2>
