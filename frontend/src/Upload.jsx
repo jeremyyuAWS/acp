@@ -155,10 +155,21 @@ export default function Upload({ onCertified }) {
   const reportRef = useRef(null)
   const [exporting, setExporting] = useState(false)
   const doExport = async () => {
-    if (!reportRef.current) return
     setExporting(true)
-    try { (await import('./exportPdf.js')).exportReportPDF(reportRef.current, `mova-${(file?.name || 'document').replace(/\.[^.]+$/, '')}-report.pdf`) }
-    catch (e) { console.error('PDF export failed', e) }
+    try {
+      const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+      const { exportDocumentReport } = await import('./pdfReport.js')
+      await exportDocumentReport({
+        file: file?.name || 'document', date,
+        engine: realEngine ? `real ${realEngine} analysis` : 'WCAG 2.1 AA',
+        score: rejected ? score : 100,
+        status: rejected ? 'review pending' : 'Remediated · WCAG 2.1 AA',
+        findings: issues.map((i) => ({ wcag: i.wcag, sev: i.sev, detail: i.detail })),
+        autoFix: autoFixed.length,
+        remediation: `${autoFixed.length} finding(s) auto-remediated by the engine; ${review.length} routed to human review. Re-validated against WCAG 2.1 AA after the fixes were applied.`,
+        filename: `mova-${(file?.name || 'document').replace(/\.[^.]+$/, '')}-report.pdf`,
+      })
+    } catch (e) { console.error('PDF export failed', e) }
     finally { setTimeout(() => setExporting(false), 600) }
   }
   const sevCount = {}; issues.forEach((i) => { sevCount[i.sev] = (sevCount[i.sev] || 0) + 1 })

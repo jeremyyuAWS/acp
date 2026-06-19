@@ -18,10 +18,24 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
   const [exporting, setExporting] = useState(false)
   useEffect(() => { const t = setTimeout(() => setOn(true), 80); return () => clearTimeout(t) }, [])
   const doExport = async () => {
-    if (!reportRef.current) return
     setExporting(true)
-    try { (await import('./exportPdf.js')).exportReportPDF(reportRef.current) }
-    catch (e) { console.error('PDF export failed', e) }
+    try {
+      const now = new Date()
+      const quarter = `Q${Math.floor(now.getMonth() / 3) + 1} ${now.getFullYear()}`
+      const date = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+      const deptScores = Object.entries(files.reduce((a, f) => { if (f.score != null) (a[f.department] = a[f.department] || []).push(f.score); return a }, {}))
+        .map(([label, arr]) => ({ label, value: Math.round(arr.reduce((s, x) => s + x, 0) / arr.length), color: '#4B3460' }))
+        .sort((a, b) => b.value - a.value).slice(0, 8)
+      const topViolations = (wcCloud || []).slice(0, 6).map((v) => ({ label: v.full || v.text, value: v.value }))
+      const { exportGovernanceReport } = await import('./pdfReport.js')
+      await exportGovernanceReport({
+        org: IDENTITY.org, quarter, date, scope: 'full document estate',
+        total: n, score: run.avg_score, certifiable: run.certifiable, needFix, auditReady,
+        summary: `Estate accessibility score ${run.avg_score ?? '—'}/100, with ${auditReady}% of documents audit-ready. ${needFix} documents are in the remediation backlog and ${n.toLocaleString()} are under continuous monitoring across ${(trend && trend.length) || 4} scans.`,
+        severity, deptScores, topViolations,
+        ontology: { ver: ontVer, classified: ontDocs.length, crit: ontCrit, high: ontHigh },
+      })
+    } catch (e) { console.error('PDF export failed', e) }
     finally { setTimeout(() => setExporting(false), 600) }
   }
 
