@@ -4,6 +4,7 @@ import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer, { statusOf, critLabel } from './FileDrawer.jsx'
 import { IDENTITY, remediableCount } from './sim.js'
+import { loadPublished } from './ontology.js'
 import WordCloud from './WordCloud.jsx'
 import Insight from './Insight.jsx'
 import Logo from './Logo.jsx'
@@ -29,6 +30,11 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
 
   const n = run.files || 0
   const needFix = remediableCount(files) // docs with a remediation action — matches the Remediate tab exactly
+  // Published business ontology — surfaced for leadership so the org-aware prioritisation is visible here too.
+  const ontDocs = files.filter((f) => f.ont)
+  const ontCrit = ontDocs.filter((f) => f.ont.priority === 'Critical').length
+  const ontHigh = ontDocs.filter((f) => f.ont.priority === 'High').length
+  const ontVer = loadPublished()?.version
   const verify = Math.round(needFix * 0.7)
   const publish = run.certifiable + Math.round(needFix * 0.5)
   const auditReady = n ? Math.round((run.certifiable / n) * 100) : 0
@@ -106,6 +112,13 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
         <div className="metric" title="Documents with a remediation action — auto-fix, review, or manual rebuild (matches the Remediate tab)"><span>need remediation</span><b style={{ color: '#854F0B' }}>{needFix}</b></div>
         <div className="metric" title="Share of documents that are certifiable today (certifiable ÷ total)"><span>audit-ready</span><b>{auditReady}%</b></div>
       </div>
+
+      {ontDocs.length > 0 && (
+        <div className="ontovbar">
+          <span className="ontovtag">⬆ Business ontology{ontVer ? ` v${ontVer}` : ''} active</span>
+          <span className="ontovtext"><b>{ontDocs.length}</b> of {n.toLocaleString()} documents classified by your rules — <b style={{ color: '#1F5FA8' }}>{ontCrit} Critical</b> · <b style={{ color: '#854F0B' }}>{ontHigh} High</b> elevated in the remediation queue</span>
+        </div>
+      )}
 
       <div className="chartrow">
         <section className="panel"><h2>Compliance status <span className="muted" style={{ fontWeight: 400 }}>· click to drill in</span></h2><Donut segments={statusSegments(run)} caption="documents" onPick={pickStatus} /><Insight text={INS.status} /></section>

@@ -84,7 +84,7 @@ button.ghost { background: #fff; color: var(--plum); border: 1px solid var(--lin
 .critn { text-align: right; font-variant-numeric: tabular-nums; }
 .track { height: 8px; background: #f0edf2; border-radius: 999px; overflow: hidden; display: block; }
 .track.sm { width: 70px; }
-.track > i { display: block; height: 100%; }
+.track > i { display: block; height: 100%; box-shadow: inset 0 0 0 1px rgba(20, 14, 26, 0.34); }
 
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 0 0 8px; }
@@ -861,6 +861,11 @@ input:focus-visible, [role="tab"]:focus-visible {
 .ontrels { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
 .ontrel { font-size: 12px; background: #f3eef6; border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; }
 .ontbanner { background: #eef3fb; border: 1px solid #cfe0f5; color: #1F5FA8; border-radius: 9px; padding: 7px 11px; font-size: 12.5px; margin: 0 0 11px; }
+.ontovbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; background: #eef3fb; border: 1px solid #cfe0f5; border-radius: 11px; padding: 9px 13px; margin-bottom: 14px; }
+.ontovtag { font-size: 12px; font-weight: 700; color: #1F5FA8; background: #dfeafc; border-radius: 7px; padding: 3px 9px; flex: 0 0 auto; }
+.ontovtext { font-size: 13px; color: var(--ink); }
+.ontdrawer { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; background: #faf8fb; border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; }
+.ontdrawerwhy { width: 100%; font-size: 12px; margin-top: 3px; }
 @media (max-width: 820px) { .ontcols { grid-template-columns: 1fr; } }
 @media (max-width: 820px) { .rmstep { flex-direction: column; min-width: 100%; } .rmarrow { transform: rotate(90deg); padding: 3px 0; } .rmmilestone { margin: 4px 0; } }
 @media (max-width: 760px) { .levelarrow { transform: rotate(90deg); padding: 4px 0; } .levelstep { flex-direction: column; min-width: 100%; } }

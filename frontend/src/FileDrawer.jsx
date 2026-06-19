@@ -1,5 +1,6 @@
 import Drawer from './Drawer.jsx'
 import Tag from './Tag.jsx'
+import { PRI_COLOR } from './ontology.js'
 
 // Prescriptive-action styling, shared with the Discover inventory.
 // Distinct hue per action so a long list scans at a glance. The human-touch
@@ -107,6 +108,17 @@ export default function FileDrawer({ file, onClose, context = 'full' }) {
       </div>
     </>
   )
+  const ontBlock = file.ont && (
+    <>
+      <h4 className="drawerh">Business classification · your ontology</h4>
+      <div className="ontdrawer">
+        <span className="pritag" style={{ background: PRI_COLOR[file.ont.priority][1], color: PRI_COLOR[file.ont.priority][0] }}>{file.ont.priority}</span>
+        {file.ont.label && <span className="ontlabelpill" style={{ color: file.ont.label.color, background: file.ont.label.color + '22' }}>{file.ont.label.name}</span>}
+        {file.ont.sla && <span className="muted">{file.ont.sla}-day SLA</span>}
+        <div className="muted ontdrawerwhy">Matched rule: {file.ont.rule.name} · weighted business risk {Math.round(file.ont.score)}</div>
+      </div>
+    </>
+  )
   const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
   const shownTags = context === 'discover' ? (file.tags || []).filter((t) => !STATUS_TAGS.has(t)) : (file.tags || [])
   const tagBlock = shownTags.length > 0 && (
@@ -123,6 +135,7 @@ export default function FileDrawer({ file, onClose, context = 'full' }) {
       <Drawer title={file.file} subtitle={`${file.sourceName ? `${file.sourceName} · ${file.dept} · ` : ''}${(file.type || '').toUpperCase()}`} onClose={onClose}>
         {file.locked && <div className="lockbanner">🔒 Could not open — <b>{file.openIssue}</b>. Discovered from its metadata, but the content couldn’t be read.</div>}
         {tagBlock}
+        {ontBlock}
         {metaBlock}
         <FileLocation file={file} />
         <h4 className="drawerh">Retention recommendation</h4>
@@ -142,6 +155,8 @@ export default function FileDrawer({ file, onClose, context = 'full' }) {
         <span className="drawerscore">{file.score === null ? 'n/a' : `${st === 'uncertain' ? '≤' : ''}${file.score}`}<span className="muted"> / 100</span></span>
         {st === 'uncertain' && <span className="muted">{file.skipped_rules} rule(s) skipped — score is an upper bound</span>}
       </div>
+
+      {ontBlock}
 
       {file.rec && (() => {
         const r = file.rec; const [label, bg, fg, icon] = REC_STYLE[r.action] || REC_STYLE.review
