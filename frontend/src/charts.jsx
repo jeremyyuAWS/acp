@@ -73,7 +73,7 @@ export function statusSegments(run) {
   ].filter((s) => s.value > 0)
 }
 
-const SEV = { CRITICAL: '#A32D2D', SERIOUS: '#E24B4A', MODERATE: '#F5B400', MINOR: '#888780' }
+const SEV = { CRITICAL: '#1F5FA8', SERIOUS: '#4A8FE0', MODERATE: '#F5B400', MINOR: '#888780' }
 export function severityItems(files) {
   const c = {}
   files.forEach((f) => (f.issues || []).forEach((i) => { c[i.severity] = (c[i.severity] || 0) + 1 }))

@@ -29,7 +29,7 @@ const LOGO = {
 const FUTURE = [
   { name: 'OneDrive', logo: <Tile bg="#0364B8">{G('M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.5A3.5 3.5 0 0 1 19 18z')}</Tile> },
   { name: 'File Shares', logo: <Tile bg="#E8A400">{G('M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z')}</Tile> },
-  { name: 'S3 / Blob', logo: <Tile bg="#E25444"><b style={{ fontSize: 12 }}>S3</b></Tile> },
+  { name: 'S3 / Blob', logo: <Tile bg="#2E72C9"><b style={{ fontSize: 12 }}>S3</b></Tile> },
   { name: 'Git Repos', logo: <Tile bg="#F05133">{G('M6 3v12a3 3 0 0 0 3 3h6M6 6a2 2 0 1 0 0-.01M18 15a2 2 0 1 0 0 .01M9 18a2 2 0 1 0 0 .01')}</Tile> },
 ]
 

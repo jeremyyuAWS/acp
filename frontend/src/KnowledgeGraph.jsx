@@ -76,19 +76,19 @@ export default function KnowledgeGraph({ files }) {
     const big = nodes.filter((n) => n.t === 'crit').sort((a, b) => b.n - a.n)[0]
     if (big && !focusCrit) {
       const halo = node.filter((d) => d === big).insert('circle', ':first-child')
-        .attr('r', crad(big)).attr('fill', 'none').attr('stroke', '#F0524A').attr('stroke-width', 2).attr('opacity', 0.55)
+        .attr('r', crad(big)).attr('fill', 'none').attr('stroke', '#2E72C9').attr('stroke-width', 2).attr('opacity', 0.55)
       const mk = (attr, vals) => { const a = document.createElementNS('http://www.w3.org/2000/svg', 'animate'); a.setAttribute('attributeName', attr); a.setAttribute('values', vals); a.setAttribute('dur', '2.2s'); a.setAttribute('repeatCount', 'indefinite'); return a }
       halo.node().append(mk('r', `${crad(big)};${crad(big) + 13};${crad(big)}`), mk('opacity', '0.55;0;0.55'))
     }
 
     node.append('circle')
       .attr('r', (d) => (d.t === 'crit' ? crad(d) : frad(d)))
-      .attr('fill', (d) => (d.t === 'crit' ? '#F0524A' : fileColor(d)))
+      .attr('fill', (d) => (d.t === 'crit' ? '#2E72C9' : fileColor(d)))
       .attr('stroke', '#fff').attr('stroke-width', 1.5)
     node.append('title').text((d) => (d.t === 'crit' ? `WCAG ${d.label} — ${d.name} · ${d.n} files · click to focus` : `${d.id} · click for details`))
     node.filter((d) => d.t === 'crit').append('text')
       .text((d) => d.label).attr('text-anchor', 'middle').attr('dy', (d) => -crad(d) - 5)
-      .attr('font-size', '11px').attr('font-weight', 600).attr('fill', '#993C1D')
+      .attr('font-size', '11px').attr('font-weight', 600).attr('fill', '#2A5E9E')
 
     const isolate = (d) => {
       const near = adj[d.id] ?? new Set([d.id])
@@ -167,7 +167,7 @@ export default function KnowledgeGraph({ files }) {
         <span><i style={{ background: '#EF9F27' }} />has issues</span>
         {showClean && <span><i style={{ background: '#639922' }} />certifiable</span>}
         {showClean && <span><i style={{ background: '#888780' }} />unanalysable</span>}
-        <span><i style={{ background: '#F0524A' }} />WCAG criterion failed</span>
+        <span><i style={{ background: '#2E72C9' }} />WCAG criterion failed</span>
         <span className="muted">hover or focus to isolate · arrow keys to navigate · enter to open</span>
       </div>
       {graphFiles.length === 0
@@ -176,7 +176,7 @@ export default function KnowledgeGraph({ files }) {
       <div className="kgdetail">
         {!detail && <span className="muted">Click a criterion to focus the graph on its documents, or a document to open its details.</span>}
         {detail?.kind === 'crit' && (
-          <span><b style={{ color: '#993C1D' }}>{detail.title}</b> · {detail.count} document(s)<br />
+          <span><b style={{ color: '#2A5E9E' }}>{detail.title}</b> · {detail.count} document(s)<br />
             <span className="muted">{detail.fns.join(', ')}{detail.count > 30 ? ' …' : ''}</span></span>
         )}
       </div>

@@ -53,7 +53,7 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
   const wcCloud = Object.entries(wm).sort((a, b) => b[1] - a[1]).map(([w, n]) => ({ text: critLabel(w).replace(/^[\d.]+\s*/, ''), value: n, full: critLabel(w) }))
 
   // --- analysis by dimension (score / severity / WCAG level) — not just counts ---
-  const scoreColor = (s) => s >= 90 ? '#639922' : s >= 50 ? '#F5B400' : '#F0524A'
+  const scoreColor = (s) => s >= 90 ? '#639922' : s >= 50 ? '#F5B400' : '#2E72C9'
   const avgScore = (fs) => { const sc = fs.filter((f) => f.score != null).map((f) => f.score); return sc.length ? Math.round(sc.reduce((a, b) => a + b, 0) / sc.length) : 0 }
   const groupBy = (fn) => files.reduce((m, f) => { const k = fn(f); if (k != null) (m[k] = m[k] || []).push(f); return m }, {})
   const scoreByDept = Object.entries(groupBy((f) => f.department)).map(([label, fs]) => ({ label, value: avgScore(fs), color: scoreColor(avgScore(fs)) })).sort((a, b) => a.value - b.value)
@@ -61,12 +61,12 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
   const senGroups = groupBy((f) => f.seniority)
   const scoreBySeniority = SR_ORDER.filter((s) => senGroups[s]).map((label) => ({ label, value: avgScore(senGroups[label]), color: scoreColor(avgScore(senGroups[label])) }))
   const levelC = { A: 0, AA: 0, AAA: 0 }; files.forEach((f) => (f.issues || []).forEach((i) => { if (levelC[i.level] != null) levelC[i.level] += 1 }))
-  const byLevel = [['A', '#A32D2D', 'Level A · must-have'], ['AA', '#D85A30', 'Level AA · legal target'], ['AAA', '#9a948f', 'Level AAA · optional']].filter(([k]) => levelC[k]).map(([k, color, label]) => ({ label, value: levelC[k], color, lvl: k }))
+  const byLevel = [['A', '#1F5FA8', 'Level A · must-have'], ['AA', '#D85A30', 'Level AA · legal target'], ['AAA', '#9a948f', 'Level AAA · optional']].filter(([k]) => levelC[k]).map(([k, color, label]) => ({ label, value: levelC[k], color, lvl: k }))
   const band = (lo, hi) => files.filter((f) => f.score != null && f.score >= lo && f.score <= hi).length
   const scoreBands = [
     { label: '90–100 · certifiable', value: band(90, 100), color: '#639922' },
     { label: '50–89 · needs work', value: band(50, 89), color: '#F5B400' },
-    { label: 'below 50 · at risk', value: band(0, 49), color: '#F0524A' },
+    { label: 'below 50 · at risk', value: band(0, 49), color: '#2E72C9' },
     { label: 'n/a · unreadable', value: files.filter((f) => f.score == null).length, color: '#9a948f' },
   ].filter((d) => d.value)
 
@@ -155,7 +155,7 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
 
       <section className="panel"><h2>Compliance lift · after remediation</h2>
         <div className="lift">
-          <div className="liftcol"><div className="liftnum" style={{ color: '#A32D2D' }}>{before}</div><div className="muted">today</div></div>
+          <div className="liftcol"><div className="liftnum" style={{ color: '#1F5FA8' }}>{before}</div><div className="muted">today</div></div>
           <div className="liftarrow" aria-hidden="true">→</div>
           <div className="liftcol"><div className="liftnum" style={{ color: '#3B6D11' }}>{after}</div><div className="muted">after queued fixes</div></div>
           <div className="liftgain">+{after - before} pts</div>

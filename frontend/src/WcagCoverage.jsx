@@ -55,7 +55,7 @@ function ScDetail({ sel, onClose }) {
         {sel.req && <p className="covreq">{sel.req}</p>}
         <div className="levelnote">Level {sel.level} — {LEVEL_MEANING[sel.level]}</div>
         <div className="covrows">
-          <div><span className="muted">US legal requirement</span><b style={{ color: sel.legal === 'Required' ? '#A32D2D' : 'var(--ink)' }}>{sel.legal}</b></div>
+          <div><span className="muted">US legal requirement</span><b style={{ color: sel.legal === 'Required' ? '#1F5FA8' : 'var(--ink)' }}>{sel.legal}</b></div>
           <div><span className="muted">Document applicability</span><b style={{ color: sel.docApplies ? '#3B6D11' : 'var(--muted)' }}>{sel.docApplies ? 'Applies to documents' : 'Web / interaction — N/A to static docs'}</b></div>
           <div><span className="muted">Validation approach</span><b>{sel.approach}</b></div>
           <div><span className="muted">Coverage today</span><b style={{ color: SRC[sel.source][1] }}>{SRC[sel.source][0]}</b></div>

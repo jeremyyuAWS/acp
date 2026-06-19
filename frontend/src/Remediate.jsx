@@ -19,14 +19,14 @@ const ACTION_DESC = {
   review: 'A rule couldn’t be auto-evaluated. A reviewer confirms before the document can be certified.',
   manual: 'Unreadable source — a human must re-author or re-export the file before it can be assessed.',
 }
-const SR_COLOR = { Executive: '#A32D2D', Director: '#D85A30', Manager: '#F5B400', Staff: '#9a948f' }
+const SR_COLOR = { Executive: '#1F5FA8', Director: '#D85A30', Manager: '#F5B400', Staff: '#9a948f' }
 const exposureOf = (f) => (f.tags || []).includes('public-facing') ? 'public-facing' : (f.tags || []).includes('high-traffic') ? 'high-traffic' : 'internal'
-const EXP_COLOR = { 'public-facing': '#A32D2D', 'high-traffic': '#D85A30', internal: '#9a948f' }
+const EXP_COLOR = { 'public-facing': '#1F5FA8', 'high-traffic': '#D85A30', internal: '#9a948f' }
 const SR_W = { Executive: 3, Director: 2, Manager: 1, Staff: 0 }
 const priority = (f) => (f.tags || []).filter((t) => t === 'public-facing' || t === 'high-traffic').length * 2 + (SR_W[f.seniority] || 0) + (f.issues || []).filter((i) => i.severity === 'CRITICAL').length * 2
 
 // AI triage: the same risk signals, surfaced as a priority tier + a plain-language reason.
-const PRI = { high: ['P1 · high', '#A32D2D', '#FCEBEB'], med: ['P2 · medium', '#854F0B', '#FAEEDA'], low: ['P3 · low', '#5F5E5A', '#EFEDEA'] }
+const PRI = { high: ['P1 · high', '#1F5FA8', '#E2EDFB'], med: ['P2 · medium', '#854F0B', '#FAEEDA'], low: ['P3 · low', '#5F5E5A', '#EFEDEA'] }
 const priTier = (f) => { const s = priority(f); return s >= 6 ? 'high' : s >= 3 ? 'med' : 'low' }
 const priWhy = (f) => {
   const r = []
@@ -263,7 +263,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   <div className="qtitle">{q.title} <span className="muted" style={{ fontSize: 12 }}>· {q.file}</span></div>
                   <div className="qmeta">{q.meta}</div>
                   <div className="conf">
-                    <span className="conftrack"><i style={{ width: `${q.conf}%`, background: q.conf >= 55 ? '#F5B400' : '#F0524A' }} /></span>
+                    <span className="conftrack"><i style={{ width: `${q.conf}%`, background: q.conf >= 55 ? '#F5B400' : '#2E72C9' }} /></span>
                     <span className="muted">{q.conf}% confidence</span>
                   </div>
                 </div>
@@ -311,7 +311,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         <>
           <section className="panel"><h2>Re-validate &amp; verify</h2>
             <div className="lift" style={{ margin: '8px 0 12px' }}>
-              <div className="liftcol"><div className="liftnum" style={{ color: '#A32D2D' }}>{run?.avg_score ?? 72}</div><div className="muted">before</div></div>
+              <div className="liftcol"><div className="liftnum" style={{ color: '#1F5FA8' }}>{run?.avg_score ?? 72}</div><div className="muted">before</div></div>
               <div className="liftarrow" aria-hidden="true">→</div>
               <div className="liftcol"><div className="liftnum" style={{ color: '#3B6D11' }}>{Math.min(100, (run?.avg_score ?? 72) + 12)}</div><div className="muted">after re-validation</div></div>
               <div className="liftgain">+{Math.min(100, (run?.avg_score ?? 72) + 12) - (run?.avg_score ?? 72)} pts</div>

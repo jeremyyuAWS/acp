@@ -11,11 +11,11 @@ const CRIT = {
   SC_1_1_1: '1.1.1 non-text', SC_1_3_1: '1.3.1 structure', SC_2_4_2: '2.4.2 page titled',
   SC_2_4_4: '2.4.4 link purpose', SC_3_1_1: '3.1.1 language',
 }
-const scoreColor = (s) => (s >= 90 ? '#639922' : s >= 50 ? '#F5B400' : '#F0524A')
+const scoreColor = (s) => (s >= 90 ? '#639922' : s >= 50 ? '#F5B400' : '#2E72C9')
 const statusOf = (f) => (f.status === 'error' ? 'unanalysable' : f.status === 'uncertain' ? 'uncertain' : f.compliant ? 'certifiable' : 'issues')
 const BADGE = {
   certifiable: ['#E7F0DC', '#3B6D11'], issues: ['#FAEEDA', '#854F0B'],
-  uncertain: ['#FAECE7', '#993C1D'], unanalysable: ['#EEEDEA', '#5F5E5A'],
+  uncertain: ['#E6EFFB', '#2A5E9E'], unanalysable: ['#EEEDEA', '#5F5E5A'],
 }
 
 export default function Dashboard({ run, files, trend, delta, deltaKey }) {
@@ -50,7 +50,7 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
           <div className="herostats">
             <div className="herostat"><b style={{ color: '#3B6D11' }}>{run.certifiable}</b><span>certifiable</span></div>
             <div className="herostat"><b style={{ color: '#854F0B' }}>{run.uncertain}</b><span>uncertain</span></div>
-            <div className="herostat"><b style={{ color: '#A32D2D' }}>{run.error}</b><span>unanalysable</span></div>
+            <div className="herostat"><b style={{ color: '#1F5FA8' }}>{run.error}</b><span>unanalysable</span></div>
             <div className="herostat"><b>{run.files}</b><span>files</span></div>
           </div>
           {trend.length > 1 && new Set(trend).size > 1 && (
@@ -74,7 +74,7 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
           {Object.entries(critFails).sort((a, b) => b[1] - a[1]).map(([c, n]) => (
             <button className="critrow pickrow" key={c} style={{ width: '100%' }} onClick={() => pickCrit(c)}>
               <span className="critlabel" style={{ textAlign: 'left' }}>{CRIT[c] ?? critLabel(c)}</span>
-              <span className="track"><i style={{ width: `${(n / maxFail) * 100}%`, background: n >= maxFail ? '#F0524A' : '#F5B400' }} /></span>
+              <span className="track"><i style={{ width: `${(n / maxFail) * 100}%`, background: n >= maxFail ? '#2E72C9' : '#F5B400' }} /></span>
               <span className="critn">{n}</span>
             </button>
           ))}

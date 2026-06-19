@@ -14,7 +14,7 @@ import { useDialog } from './a11y.js'
 const isOffice = (name) => /\.(docx|pptx|xlsx)$/i.test(name || '')
 const HKEY = 'mova_upload_history'
 const loadHistory = () => { try { return JSON.parse(localStorage.getItem(HKEY) || '[]') } catch { return [] } }
-const SEV_BADGE2 = { CRITICAL: ['#FCEBEB', '#A32D2D'], SERIOUS: ['#FAECE7', '#993C1D'], MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'] }
+const SEV_BADGE2 = { CRITICAL: ['#E2EDFB', '#1F5FA8'], SERIOUS: ['#E6EFFB', '#2A5E9E'], MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'] }
 const fmtDate = (iso) => { try { return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) } catch { return '' } }
 const FIX_PROPOSAL = {
   '1.1.1': ['<img> with no alt text', 'alt: “bar chart — enrollment by region, West highest at 38%” (AI-drafted)'],
@@ -43,7 +43,7 @@ const EXT_ISSUES = {
   html: [['WEB-CONTRAST-001', '1.4.3 contrast (AA)', 'SERIOUS', '3 elements below 4.5:1 contrast'], ['WEB-ALT-001', '1.1.1 non-text content', 'CRITICAL', '2 images missing alt'], ['WEB-LABEL-001', '1.3.1 info & relationships', 'MODERATE', 'a form input has no label']],
 }
 const SEV_PEN = { CRITICAL: 16, SERIOUS: 11, MODERATE: 5, MINOR: 2 }
-const SEV_BADGE = { CRITICAL: ['#FCEBEB', '#A32D2D'], SERIOUS: ['#FAECE7', '#993C1D'], MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'] }
+const SEV_BADGE = { CRITICAL: ['#E2EDFB', '#1F5FA8'], SERIOUS: ['#E6EFFB', '#2A5E9E'], MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'] }
 const extOf = (name) => { const m = /\.([a-z0-9]+)$/i.exec(name || ''); return (m ? m[1] : 'pdf').toLowerCase() }
 const issuesFor = (name) => (EXT_ISSUES[extOf(name)] || EXT_ISSUES.pdf).map(([rule, wcag, sev, detail]) => ({ rule, wcag, sev, detail }))
 
@@ -151,7 +151,7 @@ export default function Upload({ onCertified }) {
     finally { setTimeout(() => setExporting(false), 600) }
   }
   const sevCount = {}; issues.forEach((i) => { sevCount[i.sev] = (sevCount[i.sev] || 0) + 1 })
-  const SEVCLR = { CRITICAL: '#A32D2D', SERIOUS: '#E24B4A', MODERATE: '#F5B400', MINOR: '#888780' }
+  const SEVCLR = { CRITICAL: '#1F5FA8', SERIOUS: '#4A8FE0', MODERATE: '#F5B400', MINOR: '#888780' }
   const sevItems = ['CRITICAL', 'SERIOUS', 'MODERATE', 'MINOR'].filter((s) => sevCount[s]).map((s) => ({ label: s.toLowerCase(), value: sevCount[s], color: SEVCLR[s] }))
   const today = new Date().toISOString().slice(0, 10)
 
@@ -192,7 +192,7 @@ export default function Upload({ onCertified }) {
               <button className="uphrow" key={h.id} onClick={() => setViewing(h)}>
                 <span className="uphname">{h.name}<span className="muted"> · {fmtDate(h.date)}{h.real ? ' · axe-core' : ''}</span></span>
                 <span className="muted">{h.findings.length} finding{h.findings.length === 1 ? '' : 's'}</span>
-                <span className="badge" style={{ background: h.score >= 90 ? '#E7F0DC' : h.score >= 50 ? '#FAEEDA' : '#FCEBEB', color: h.score >= 90 ? '#3B6D11' : h.score >= 50 ? '#854F0B' : '#A32D2D' }}>{h.score} / 100</span>
+                <span className="badge" style={{ background: h.score >= 90 ? '#E7F0DC' : h.score >= 50 ? '#FAEEDA' : '#E2EDFB', color: h.score >= 90 ? '#3B6D11' : h.score >= 50 ? '#854F0B' : '#1F5FA8' }}>{h.score} / 100</span>
               </button>
             ))}
           </div>
@@ -225,7 +225,7 @@ export default function Upload({ onCertified }) {
             {realEngine && <span className="realbadge" title={`Findings detected live by the ${realEngine} engine running in your browser`}>⚡ real {realEngine} analysis</span>}</h2>
             <span className="badge" style={{ background: '#FAEEDA', color: '#854F0B' }}>{issues.length} findings</span></div>
           <div className="lift" style={{ margin: '12px 0 16px' }}>
-            <div className="liftcol"><div className="liftnum" style={{ color: score >= 90 ? '#3B6D11' : score >= 50 ? '#854F0B' : '#A32D2D' }}>{score}</div><div className="muted">score / 100</div></div>
+            <div className="liftcol"><div className="liftnum" style={{ color: score >= 90 ? '#3B6D11' : score >= 50 ? '#854F0B' : '#1F5FA8' }}>{score}</div><div className="muted">score / 100</div></div>
             <div className="muted" style={{ flex: 1 }}>Scored against WCAG 2.1 AA. {score < 90 ? 'Below the certifiable threshold — remediation needed.' : 'Meets the bar.'}</div>
           </div>
           <div className="findings">
@@ -309,7 +309,7 @@ export default function Upload({ onCertified }) {
             <div className="chartrow">
               <section className="panel"><h2>Compliance lift</h2>
                 <div className="lift">
-                  <div className="liftcol"><div className="liftnum" style={{ color: '#A32D2D' }}>{score}</div><div className="muted">as received</div></div>
+                  <div className="liftcol"><div className="liftnum" style={{ color: '#1F5FA8' }}>{score}</div><div className="muted">as received</div></div>
                   <div className="liftarrow" aria-hidden="true">→</div>
                   <div className="liftcol"><div className="liftnum" style={{ color: rejected ? '#854F0B' : '#3B6D11' }}>{finalScore}</div><div className="muted">{rejected ? 'conditional' : 'certified'}</div></div>
                 </div>

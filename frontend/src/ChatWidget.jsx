@@ -52,7 +52,7 @@ function chartAnswer(q, files, run, trend, trendDates) {
   // top WCAG → bar
   if (/wcag|violation|criteri|guideline|rule|fail/.test(t)) {
     const wm = {}; files.forEach((f) => (f.issues || []).forEach((i) => { wm[i.wcag] = (wm[i.wcag] || 0) + 1 }))
-    const data = Object.entries(wm).sort((a, b) => b[1] - a[1]).slice(0, 7).map(([w, n]) => ({ label: critLabel(w).replace(/^WCAG\s*/, ''), value: n, color: n >= 8 ? '#E24B4A' : '#F5B400' }))
+    const data = Object.entries(wm).sort((a, b) => b[1] - a[1]).slice(0, 7).map(([w, n]) => ({ label: critLabel(w).replace(/^WCAG\s*/, ''), value: n, color: n >= 8 ? '#4A8FE0' : '#F5B400' }))
     if (!data.length) return null
     return { text: 'Top WCAG violations across your documents:', chart: { type: 'bar', data, gridCols: '150px 1fr 26px' } }
   }

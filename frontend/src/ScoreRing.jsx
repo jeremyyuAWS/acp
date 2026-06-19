@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-const ringColor = (s) => (s >= 90 ? '#639922' : s >= 50 ? '#F5B400' : '#F0524A')
+const ringColor = (s) => (s >= 90 ? '#639922' : s >= 50 ? '#F5B400' : '#2E72C9')
 
 function useCountUp(target, ms = 850) {
   const [v, setV] = useState(0)

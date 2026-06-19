@@ -9,7 +9,7 @@ const KIND = {
   new: ['＋', '#185FA5', '#E7F0FB', 'new file'],
   changed: ['✎', '#854F0B', '#FAEEDA', 'changed'],
   scanned: ['◷', '#3C3489', '#EEEDFE', 'scanned'],
-  regressed: ['▼', '#A32D2D', '#FCEBEB', 'regression'],
+  regressed: ['▼', '#1F5FA8', '#E2EDFB', 'regression'],
   recertified: ['✓', '#3B6D11', '#E7F0DC', 're-certified'],
   clean: ['✓', '#5F5E5A', '#EFEDEA', 'no change'],
 }
@@ -96,7 +96,7 @@ export default function Monitor({ sources = [], files = [], ratified }) {
         <div className="moncard"><span className="muted">Re-scan coverage · 7d</span><b style={{ color: '#3B6D11' }}>{m.coveragePct}%</b><span className="muted">{m.slaPct}% within SLA</span></div>
         <div className="moncard"><span className="muted">New / changed · 7d</span><b>{watch.reduce((a, w) => a + w.newFiles, 0)} / {watch.reduce((a, w) => a + w.changed, 0)}</b><span className="muted">detected &amp; re-assessed</span></div>
         <div className="moncard"><span className="muted">Remediation backlog</span><b>{hrs(m.backlogMin)}</b><span className="muted">{m.autoPct}% automatic</span></div>
-        <div className="moncard"><span className="muted">Open alerts · 7d</span><b style={{ color: '#A32D2D' }}>{m.alerts.length}</b><span className="muted">drift &amp; regressions</span></div>
+        <div className="moncard"><span className="muted">Open alerts · 7d</span><b style={{ color: '#1F5FA8' }}>{m.alerts.length}</b><span className="muted">drift &amp; regressions</span></div>
       </div>
 
       <section className="panel" style={{ marginBottom: 14 }}>

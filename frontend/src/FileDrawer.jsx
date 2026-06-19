@@ -11,7 +11,7 @@ export const REC_STYLE = {
   review: ['Human review', '#FBEBCB', '#8A5A00', '◐'],
   archive: ['Archive', '#ECEEF1', '#475569', '📦'],
   keep: ['Keep · monitor', '#D8F0EA', '#176B5B', '✓'],
-  manual: ['Manual rebuild', '#FBE3E3', '#B0271F', '⚠'],
+  manual: ['Manual rebuild', '#E2EDFB', '#1F5FA8', '⚠'],
 }
 export const fmtEffort = (m) => m == null ? '—' : m === 0 ? 'no work' : m >= 90 ? `~${(m / 60).toFixed(1)} hrs` : `~${Math.round(m)} min`
 const MODE_LABEL = { auto: 'fully automatic', assisted: 'AI + human review', manual: 'manual', monitor: 'monitor only' }
@@ -46,19 +46,19 @@ const CRIT = {
 }
 export const critLabel = (w) => CRIT[w] ?? (w || '').replace(/^SC_/, '').replace(/_/g, '.')
 const SEV = {
-  CRITICAL: ['#FCEBEB', '#A32D2D'], SERIOUS: ['#FAECE7', '#993C1D'],
+  CRITICAL: ['#E2EDFB', '#1F5FA8'], SERIOUS: ['#E6EFFB', '#2A5E9E'],
   MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'],
 }
 const SEV_LEGEND = [
-  ['critical', '#A32D2D', '#FCEBEB', 'Completely blocks a group of users — e.g. an unlabelled image or a keyboard trap. Almost always WCAG Level A.'],
-  ['serious', '#993C1D', '#FAECE7', 'A major barrier that’s hard to work around — e.g. missing table headers or an empty document title.'],
+  ['critical', '#1F5FA8', '#E2EDFB', 'Completely blocks a group of users — e.g. an unlabelled image or a keyboard trap. Almost always WCAG Level A.'],
+  ['serious', '#2A5E9E', '#E6EFFB', 'A major barrier that’s hard to work around — e.g. missing table headers or an empty document title.'],
   ['moderate', '#854F0B', '#FAEEDA', 'Noticeable difficulty, but the content is still reachable — e.g. wrong reading order or undeclared language.'],
   ['minor', '#5F5E5A', '#F1EFE8', 'A minor annoyance or best-practice gap — e.g. unclear worksheet names.'],
 ]
 export const statusOf = (f) => (f.status === 'error' ? 'unanalysable' : f.status === 'uncertain' ? 'uncertain' : f.compliant ? 'certifiable' : 'issues')
 export const STATUS_BADGE = {
   certifiable: ['#E7F0DC', '#3B6D11'], issues: ['#FAEEDA', '#854F0B'],
-  uncertain: ['#FAECE7', '#993C1D'], unanalysable: ['#EEEDEA', '#5F5E5A'],
+  uncertain: ['#E6EFFB', '#2A5E9E'], unanalysable: ['#EEEDEA', '#5F5E5A'],
 }
 
 // Retention/lifecycle recommendation (step 3 · Retain / Archive / Delete) — based
@@ -80,7 +80,7 @@ function journeyStates(st) {
 }
 const STATE = {
   done: ['✓', '#3B6D11', '#E7F0DC'], current: ['●', '#854F0B', '#FAEEDA'],
-  proj: ['◯', '#8a8390', '#f1eff4'], blocked: ['✕', '#A32D2D', '#FCEBEB'],
+  proj: ['◯', '#8a8390', '#f1eff4'], blocked: ['✕', '#1F5FA8', '#E2EDFB'],
   skip: ['–', '#8a8390', '#f1eff4'],
 }
 const STATE_NOTE = { proj: 'projected', skip: 'not needed', blocked: 'blocked', current: 'in progress' }
