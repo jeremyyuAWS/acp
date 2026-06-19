@@ -515,6 +515,12 @@ input:focus-visible, [role="tab"]:focus-visible {
 .oploading { display: flex; align-items: center; gap: 8px; justify-content: center; height: 100%; }
 .scanoffice { height: 420px; }
 .rppdf .opwrap { height: 230px; }
+.opfig { margin: 8px 0; }
+.opfig .opimg { margin: 0 0 4px; }
+.optbl { margin: 8px 0; }
+.opcap { font-size: 11px; font-weight: 600; border-radius: 6px; padding: 3px 8px; margin: 3px 0 6px; display: inline-block; }
+.opcap.ok { background: #E7F0DC; color: #3B6D11; }
+.opcap.warn { background: #FCEBEB; color: #A32D2D; }
 .hitlbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 9px 14px; margin: 4px 0 12px; font-size: 13px; }
 
 /* axe-core self-check overlay (dev / ?a11y) */
@@ -668,7 +674,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .cogbtn { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); cursor: pointer; font-size: 15px; line-height: 1; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; }
 .cogbtn:hover { background: var(--bg); color: var(--ink); }
 .setoverlay { position: fixed; inset: 0; background: rgba(40, 30, 48, 0.38); backdrop-filter: blur(2px); z-index: 80; display: flex; align-items: flex-start; justify-content: center; padding: 36px 20px; overflow-y: auto; }
-.setpanel { background: var(--bg); border-radius: 16px; width: min(1120px, 96vw); box-shadow: 0 24px 64px rgba(30, 22, 34, 0.4); overflow: hidden; }
+.setpanel { background: var(--bg); border-radius: 16px; width: min(1360px, 97vw); box-shadow: 0 24px 64px rgba(30, 22, 34, 0.4); overflow: hidden; }
 .sethead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 22px; background: var(--card); border-bottom: 1px solid var(--line); font-size: 15px; position: sticky; top: 0; }
 .setpanel .subtabs { padding: 12px 22px 0; }
 .setbody { padding: 14px 22px 24px; max-height: 78vh; overflow-y: auto; }

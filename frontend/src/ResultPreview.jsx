@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import PdfPreview from './PdfPreview.jsx'
 import OfficePreview from './OfficePreview.jsx'
 import { remediateHtml } from './BeforeAfter.jsx'
@@ -17,6 +17,13 @@ export default function ResultPreview({ file, srcText, pdfUrl, officeBlob, issue
   const name = file?.name || ''
   const rem = useMemo(() => (srcText && isHtml(name) ? remediateHtml(srcText) : null), [srcText, name])
   const [busy, setBusy] = useState(false)
+  // genuinely produce the remediated Office file so we can render it side-by-side
+  const [remBlob, setRemBlob] = useState(null)
+  useEffect(() => {
+    let live = true; setRemBlob(null)
+    if (officeBlob) remediateOffice(officeBlob).then((b) => { if (live) setRemBlob(b) }).catch(() => { /* falls back to card */ })
+    return () => { live = false }
+  }, [officeBlob])
   const fixes = issues.map((i) => (i.wcag || '').replace(/^(\d+\.\d+\.\d+)\s*·?\s*/, '$1 · ')).slice(0, 6)
   const ext = (name.split('.').pop() || '').toUpperCase()
 
@@ -36,14 +43,15 @@ export default function ResultPreview({ file, srcText, pdfUrl, officeBlob, issue
           <figcaption className="bafcap before">as received</figcaption>
           {isHtml(name) && srcText ? <iframe sandbox="" title="as received" srcDoc={srcText} />
             : isPdf(name) && pdfUrl ? <div className="rppdf"><PdfPreview url={pdfUrl} pages={1} /></div>
-              : officeBlob ? <div className="rppdf"><OfficePreview blob={officeBlob} name={name} /></div>
+              : officeBlob ? <div className="rppdf"><OfficePreview blob={officeBlob} name={name} highlight /></div>
                 : docCard()}
         </figure>
         <figure>
           <figcaption className="bafcap after">remediated</figcaption>
           {isHtml(name) && rem ? <iframe sandbox="" title="remediated" srcDoc={rem.html} />
             : isPdf(name) && pdfUrl ? <div className="rppdf rpafter"><PdfPreview url={pdfUrl} pages={1} /><span className="rpbadge">✓ tags · alt · reading order embedded</span></div>
-              : docCard(<span className="rpbadge">✓ accessible</span>)}
+              : officeBlob ? <div className="rppdf rpafter">{remBlob ? <OfficePreview blob={remBlob} name={name} highlight /> : <div className="oploading"><span className="spinner" /> <span className="muted">applying fixes…</span></div>}<span className="rpbadge">✓ remediated</span></div>
+                : docCard(<span className="rpbadge">✓ accessible</span>)}
         </figure>
       </div>
       {!isHtml(name) && (
