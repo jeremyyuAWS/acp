@@ -94,8 +94,8 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
       <div className="metrics">
         <div className="metric"><span>documents</span><b>{n.toLocaleString()}</b></div>
         <div className="metric"><span>certifiable</span><b style={{ color: '#3B6D11' }}>{run.certifiable}</b></div>
-        <div className="metric"><span>need remediation</span><b style={{ color: '#854F0B' }}>{needFix}</b></div>
-        <div className="metric"><span>audit-ready</span><b>{auditReady}%</b></div>
+        <div className="metric" title="Documents with a remediation action — auto-fix, review, or manual rebuild (matches the Remediate tab)"><span>need remediation</span><b style={{ color: '#854F0B' }}>{needFix}</b></div>
+        <div className="metric" title="Share of documents that are certifiable today (certifiable ÷ total)"><span>audit-ready</span><b>{auditReady}%</b></div>
       </div>
 
       <div className="chartrow">
@@ -108,7 +108,7 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
 
       <div className="chartrow">
         <section className="panel"><h2>Top WCAG violations</h2><WordCloud items={wcCloud} /><Insight text={INS.wcag} /></section>
-        <section className="panel"><h2>By department · {IDENTITY.org}</h2><Bars items={byDept} cols="150px 1fr 28px" /><Insight text={INS.dept} /></section>
+        <section className="panel"><h2>Documents by department <span className="muted" style={{ fontWeight: 400 }}>· {IDENTITY.org}</span></h2><Bars items={byDept} cols="150px 1fr 28px" /><Insight text={INS.dept} /></section>
       </div>
 
       <div className="muted" style={{ margin: '20px 0 2px' }}>Compliance by dimension · scores, severity &amp; WCAG level <span style={{ fontWeight: 400 }}>· click a bar to drill in</span></div>
