@@ -4,7 +4,13 @@ import { IDENTITY } from './sim.js'
 import Logo from './Logo.jsx'
 import BeforeAfter from './BeforeAfter.jsx'
 import ScreenReaderDemo from './ScreenReaderDemo.jsx'
+import PdfPreview from './PdfPreview.jsx'
 import { auditHtml } from './htmlAudit.js'
+
+const HKEY = 'mova_upload_history'
+const loadHistory = () => { try { return JSON.parse(localStorage.getItem(HKEY) || '[]') } catch { return [] } }
+const SEV_BADGE2 = { CRITICAL: ['#FCEBEB', '#A32D2D'], SERIOUS: ['#FAECE7', '#993C1D'], MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'] }
+const fmtDate = (iso) => { try { return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) } catch { return '' } }
 
 const isHtml = (name) => /\.html?$/i.test(name || '')
 const isPdf = (name) => /\.pdf$/i.test(name || '')
@@ -35,6 +41,8 @@ export default function Upload({ onCertified }) {
   const [srcText, setSrcText] = useState(null)
   const [pdfUrl, setPdfUrl] = useState(null)
   const [realEngine, setRealEngine] = useState(false)
+  const [history, setHistory] = useState(loadHistory)
+  const [viewing, setViewing] = useState(null)
   const blobUrl = useRef(null)
 
   const start = (f, { text = null, url = null } = {}) => {
@@ -69,9 +77,16 @@ export default function Upload({ onCertified }) {
     catch { start({ name, size: 100 * 1024 }) }
   }
   const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setRealEngine(false) }
-  const certify = () => { if (file) onCertified?.({ file: file.name }); setStep(4) }
-
   const score = Math.max(0, 100 - issues.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0))
+  const certify = () => {
+    if (file) {
+      onCertified?.({ file: file.name })
+      const rec = { id: `${file.name}-${Date.now()}`, name: file.name, ext: extOf(file.name), date: new Date().toISOString(), score, real: realEngine, findings: issues }
+      const next = [rec, ...history.filter((h) => h.name !== file.name)].slice(0, 12)
+      setHistory(next); try { localStorage.setItem(HKEY, JSON.stringify(next)) } catch { /* ignore quota */ }
+    }
+    setStep(4)
+  }
   const review = issues.slice(-1)
   const autoFixed = issues.slice(0, -1)
 
@@ -118,10 +133,53 @@ export default function Upload({ onCertified }) {
         </div>
       )}
 
+      {step === 0 && !scanning && history.length > 0 && (
+        <section className="panel" style={{ marginTop: 14 }}>
+          <h2>Recent uploads <span className="muted">· kept on this device</span></h2>
+          <div className="uphistory">
+            {history.map((h) => (
+              <button className="uphrow" key={h.id} onClick={() => setViewing(h)}>
+                <span className="uphname">{h.name}<span className="muted"> · {fmtDate(h.date)}{h.real ? ' · axe-core' : ''}</span></span>
+                <span className="muted">{h.findings.length} finding{h.findings.length === 1 ? '' : 's'}</span>
+                <span className="badge" style={{ background: h.score >= 90 ? '#E7F0DC' : h.score >= 50 ? '#FAEEDA' : '#FCEBEB', color: h.score >= 90 ? '#3B6D11' : h.score >= 50 ? '#854F0B' : '#A32D2D' }}>{h.score} / 100</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
       {scanning && (
-        <div className="scanprog" role="status" aria-live="polite">
-          <div className="scanprogline"><span className="spinner" />{phase}<span className="muted"> · {file?.name}</span></div>
-          <div className="track"><i style={{ width: '64%', background: '#F5B400', transition: 'width .4s' }} /></div>
+        <section className="panel scanstage" role="status" aria-live="polite">
+          <div className="scandoc">
+            {pdfUrl ? <PdfPreview url={pdfUrl} pages={1} />
+              : srcText ? <iframe className="scaniframe" sandbox="" srcDoc={srcText} title="document preview" />
+                : <div className="scanplaceholder"><span style={{ fontSize: 46 }} aria-hidden="true">📄</span><div className="muted">{file?.name}</div></div>}
+            <div className="scanline" aria-hidden="true" />
+          </div>
+          <div className="scaninfo">
+            <div className="scanprogline"><span className="spinner" />{phase}</div>
+            <div className="muted fname" style={{ marginTop: 8, fontSize: 13 }}>{file?.name}</div>
+            {realEngine && <div className="realbadge" style={{ marginLeft: 0, marginTop: 8, display: 'inline-block' }}>⚡ real axe-core analysis</div>}
+            <div className="track" style={{ marginTop: 12 }}><i style={{ width: '66%', background: '#F5B400', transition: 'width .4s' }} /></div>
+          </div>
+        </section>
+      )}
+
+      {viewing && (
+        <div className="covdrawer" role="dialog" aria-label={`${viewing.name} result`} onClick={() => setViewing(null)}>
+          <div className="covpanel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 540 }}>
+            <button className="covclose" aria-label="Close" onClick={() => setViewing(null)}>✕</button>
+            <div className="fname" style={{ fontSize: 16 }}>{viewing.name}</div>
+            <div className="muted" style={{ margin: '4px 0 12px' }}>{fmtDate(viewing.date)} · scored {viewing.score} / 100{viewing.real ? ' · real axe-core analysis' : ''}</div>
+            <h4 className="drawerh">Findings ({viewing.findings.length})</h4>
+            <div className="findings">
+              {viewing.findings.length === 0 ? <p className="muted">No findings.</p> : viewing.findings.map((i, n) => {
+                const [bg, fg] = SEV_BADGE2[i.sev] || SEV_BADGE2.MINOR
+                return <div className="finding" key={n}><span className="badge" style={{ background: bg, color: fg }}>{(i.sev || '').toLowerCase()}</span><div className="findingmain"><div>{i.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{i.detail}</div></div></div>
+              })}
+            </div>
+            <p className="muted" style={{ marginTop: 12, fontSize: 12 }}>Result kept locally on this device — documents are never retained.</p>
+          </div>
         </div>
       )}
 

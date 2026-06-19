@@ -546,6 +546,23 @@ input:focus-visible, [role="tab"]:focus-visible {
 .lockbanner { background: #f3efea; border: 1px solid #e2dad0; border-radius: 10px; padding: 10px 12px; font-size: 13px; line-height: 1.45; margin: 4px 0 12px; color: var(--ink); }
 .realbadge { font-size: 11px; font-weight: 600; color: #185FA5; background: #E7F0FB; border: 1px solid #cfe0f5; border-radius: 999px; padding: 2px 9px; margin-left: 10px; white-space: nowrap; }
 
+/* --- Upload scan stage (document + scan-line) + history --- */
+.scanstage { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+.scandoc { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: #f4f1f5; max-height: 420px; }
+.scaniframe { width: 100%; height: 420px; border: 0; background: #fff; display: block; }
+.scanplaceholder { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; height: 280px; }
+.scanline { position: absolute; left: 0; right: 0; height: 90px; top: -90px; pointer-events: none; background: linear-gradient(to bottom, rgba(99,153,34,0) 0%, rgba(99,153,34,0.28) 70%, rgba(99,153,34,0.7) 100%); border-bottom: 2px solid rgba(99,153,34,0.9); animation: scansweep 1.9s ease-in-out infinite; }
+@keyframes scansweep { 0% { top: -90px; } 100% { top: 100%; } }
+.scaninfo { padding-top: 8px; }
+.uphistory { display: flex; flex-direction: column; }
+.uphrow { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; padding: 9px 4px; border-bottom: 1px solid var(--line); background: none; border-left: 0; border-right: 0; border-top: 0; cursor: pointer; text-align: left; font: inherit; }
+.uphrow:last-child { border-bottom: none; }
+.uphrow:hover { background: var(--bg); }
+.uphname { font-size: 13px; font-weight: 500; color: var(--ink); min-width: 0; }
+.uphname .muted { font-weight: 400; }
+@media (prefers-reduced-motion: reduce) { .scanline { animation: none; opacity: 0.5; top: 40%; } }
+@media (max-width: 720px) { .scanstage { grid-template-columns: 1fr; } .scaniframe { height: 300px; } }
+
 /* --- Discover business-priority charts --- */
 .prioritypanel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 18px; margin: 0 0 16px; }
 .priorityhd { font-size: 14px; }
