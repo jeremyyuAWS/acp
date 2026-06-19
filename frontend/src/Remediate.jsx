@@ -3,12 +3,12 @@ import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
 import FileDrawer, { REC_STYLE, fmtEffort } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
-import { recommendationSummary, SENIORITY_ORDER } from './sim.js'
+import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { prefersReducedMotion } from './a11y.js'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
 // (what to fix, prioritized, accept/reject/modify), the HITL queue, and self-remediation.
-const REM_ACTIONS = ['auto', 'assisted', 'review', 'manual']
+const REM_ACTIONS = REMEDIATION_ACTIONS
 const SUBS = [['auto', '6 · Auto-remediate'], ['review', '7 · Human review'], ['revalidate', '8 · Re-validate']]
 const ACTIONS = ['auto', 'assisted', 'review', 'archive', 'keep', 'manual']
 const ETA_OVERRIDE = { archive: 2, keep: 0, manual: 35, review: 10 }

@@ -157,8 +157,10 @@ function recommendFor(f) {
   const manualMin = n ? n * 35 + 20 : 40
   const sav = (eta) => Math.max(0, Math.round((1 - eta / manualMin) * 100))
 
-  if (f.status === 'error')
-    return { action: 'manual', mode: 'manual', confidence: null, etaMin: f.type === 'pdf' ? 45 : 30, rationale: 'File is unreadable — the engine can’t parse it. A human must re-author or re-export the source before it can be assessed.' }
+  if (f.status === 'error') {
+    const eta = f.type === 'pdf' ? 45 : 30
+    return { action: 'manual', mode: 'manual', confidence: null, etaMin: eta, manualMin: eta, rationale: 'File is unreadable — the engine can’t parse it. A human must re-author or re-export the source before it can be assessed.' }
+  }
 
   if (f.status === 'certifiable') {
     if (f.superseded || (stale && lowTraffic))
@@ -201,10 +203,13 @@ function genCorpus() {
       let file = `${base}.${ext}`; let k = 2
       while (seen.has(file)) { file = `${base}-${k++}.${ext}` }
       seen.add(file)
-      // a handful of files can't be opened at discovery time (password-protected / unsupported)
-      const locked = i % 21 === 5
+      // "Unanalysable" ⟺ "could not open": every document the engine can't score is one
+      // it couldn't read, so the could-not-open count always equals the unanalysable
+      // bucket (Deva: no 9-vs-25 mismatch between the estate bar and the status donut).
+      const cycle = STATUS_CYCLE[i % STATUS_CYCLE.length]
+      const status = (i % 21 === 5 || cycle === 'error') ? 'error' : cycle
+      const locked = status === 'error'
       const openIssue = locked ? (i % 2 ? 'password-protected' : 'unsupported / corrupt — could not open') : null
-      const status = locked ? 'error' : STATUS_CYCLE[i % STATUS_CYCLE.length]
       // Keep scores consistent with status so every chart agrees: only 'certifiable'
       // docs reach the 90–100 band (status 'certifiable' ⟺ score ≥ 90), 'error' ⟺ no
       // score (unreadable), and 'uncertain'/'issues' stay in the 50–89 / below-50 bands.
@@ -249,7 +254,12 @@ export { recommendFor, fmtAge }
 
 // Roll the per-file recommendations up into an estate-level action plan with
 // total effort, automation rate, and effort saved vs. fully-manual remediation.
-const REMEDIATE_ACTIONS = ['auto', 'assisted', 'review']
+// The single source of truth for "documents that need a remediation action" — used by
+// the plan summary, the Remediate list, the Overview "need remediation" stat & funnel,
+// and the chat. Includes manual rebuild (a human re-authors it) so every surface agrees.
+export const REMEDIATION_ACTIONS = ['auto', 'assisted', 'review', 'manual']
+export const remediableCount = (files) => files.filter((f) => f.rec && REMEDIATION_ACTIONS.includes(f.rec.action)).length
+const REMEDIATE_ACTIONS = REMEDIATION_ACTIONS
 export function recommendationSummary(files) {
   const by = {}
   let remediateMin = 0, manualMin = 0

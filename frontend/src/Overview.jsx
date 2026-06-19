@@ -3,7 +3,7 @@ import { Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer, { statusOf, critLabel } from './FileDrawer.jsx'
-import { IDENTITY } from './sim.js'
+import { IDENTITY, remediableCount } from './sim.js'
 import WordCloud from './WordCloud.jsx'
 import Insight from './Insight.jsx'
 
@@ -27,7 +27,7 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
   const pickSeverity = (it) => { const sev = it.label.toUpperCase(); const fs = files.filter((f) => (f.issues || []).some((i) => i.severity === sev)); setSeg({ title: `${it.label} findings`, subtitle: `${fs.length} document(s) affected`, files: fs }) }
 
   const n = run.files || 0
-  const needFix = Math.max(0, n - run.certifiable)
+  const needFix = remediableCount(files) // docs with a remediation action — matches the Remediate tab exactly
   const verify = Math.round(needFix * 0.7)
   const publish = run.certifiable + Math.round(needFix * 0.5)
   const auditReady = n ? Math.round((run.certifiable / n) * 100) : 0

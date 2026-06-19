@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { critLabel } from './FileDrawer.jsx'
 import { statusSegments, severityItems } from './charts.jsx'
+import { remediableCount } from './sim.js'
 import ChatChart from './ChatChart.jsx'
 
 const PLUM = '#7a5c8e'
@@ -88,7 +89,7 @@ function matchAnswer(q, files, run) {
   if (/pii|sensitive|confidential|legal|hold/.test(t)) return `${tagCount('PII')} documents are tagged PII and ${tagCount('legal-hold')} are under legal hold. Those carry the highest risk if exposed.`
   if (/public|high.?traffic|facing|exposure|risk/.test(t)) return `${tagCount('public-facing')} documents are public-facing and ${tagCount('high-traffic')} are high-traffic — the top legal-exposure set under ADA/EAA.`
   if (/certif|pass|compliant|clean|ready/.test(t)) return `${run.certifiable} documents are certifiable. ${run.uncertain} are uncertain (a rule couldn't be evaluated) and ${run.error} couldn't be analysed.`
-  if (/remediat|fix|auto|resolve/.test(t)) return `${flagged.length} documents need remediation. Common findings (alt text, headings, language) auto-fix; low-confidence fixes escalate to human review.`
+  if (/remediat|fix|auto|resolve/.test(t)) return `${remediableCount(files)} documents need a remediation action. Mechanical findings (alt text, headings, language) auto-fix; low-confidence fixes escalate to human review, and unreadable files need a manual rebuild.`
   if (/type|format|pdf|docx|pptx/.test(t)) { const ty = grp((f) => (f.type || '').toUpperCase()); return `By type: ${ty.slice(0, 4).map(([k, n]) => `${k} ${n}`).join(', ')}.` }
   if (/^(hi|hey|hello|help|what can|who)/.test(t)) return `Ask me about your ${run.files}-document scan — score, top WCAG violations, departments, sources, PII/legal exposure, or remediation.`
   return null
