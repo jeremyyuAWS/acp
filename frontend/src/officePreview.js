@@ -12,12 +12,19 @@ export async function extractOfficePreview(blob, name, opts = {}) {
   const zip = await JSZip.loadAsync(blob)
   const ext = (name.split('.').pop() || '').toLowerCase()
   if (ext === 'docx') return docx(zip, opts.highlight)
-  if (ext === 'pptx') return pptx(zip)
-  if (ext === 'xlsx') return xlsx(zip)
+  if (ext === 'pptx') return pptx(zip, opts.highlight)
+  if (ext === 'xlsx') return xlsx(zip, opts.highlight)
   return ''
 }
 
 const cap = (ok, text) => `<div class="opcap ${ok ? 'ok' : 'warn'}">${ok ? '✓ ' : '⚠ '}${text}</div>`
+const DESCR = /<(?:pic:cNvPr|wp:docPr|xdr:cNvPr|p:cNvPr)\b([^>]*?)\/?>/g
+const hasAlt = (attrs) => /\bdescr="[^"]*[^\s"][^"]*"/.test(attrs)
+// Document title (the OOXML core property remediateOffice writes back).
+async function coreTitle(zip) {
+  const core = zip.file('docProps/core.xml') ? await zip.file('docProps/core.xml').async('string') : ''
+  return ((core.match(/<dc:title>([\s\S]*?)<\/dc:title>/) || [])[1] || '').trim()
+}
 
 // `highlight` annotates exactly what remediateOffice fixes (alt text, table header rows,
 // document title) so the before/after panes read as a real diff: ⚠ missing → ✓ added.
@@ -75,9 +82,10 @@ async function docx(zip, highlight) {
   return `<div class="oppage">${banner}${out.join('') || '<p class="opmuted">No readable text content.</p>'}</div>`
 }
 
-async function pptx(zip) {
+async function pptx(zip, highlight) {
   const slides = Object.keys(zip.files).filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
     .sort((a, b) => (+a.match(/\d+/)) - (+b.match(/\d+/)))
+  const banner = highlight ? (async () => { const t = await coreTitle(zip); return t ? cap(true, `presentation title: ${esc(t)}`) : cap(false, 'no presentation title') })() : ''
   const out = []
   let i = 0
   for (const sn of slides.slice(0, 14)) {
@@ -85,12 +93,18 @@ async function pptx(zip) {
     const xml = await zip.file(sn).async('string')
     const texts = [...xml.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g)].map((m) => decode(m[1].replace(/<[^>]+>/g, ''))).filter((t) => t.trim())
     const title = texts[0] || `Slide ${i}`
-    out.push(`<div class="opslide"><div class="opslidenum">Slide ${i}</div><h4>${esc(title)}</h4>${texts.slice(1).map((t) => `<p>${esc(t)}</p>`).join('')}</div>`)
+    let note = ''
+    if (highlight) {
+      const blips = (xml.match(/<a:blip\b/g) || []).length
+      const described = [...xml.matchAll(DESCR)].filter((m) => hasAlt(m[1])).length
+      if (blips) note = described >= blips ? cap(true, `image alt text: present`) : cap(false, `${blips} image${blips > 1 ? 's' : ''} — no alt text`)
+    }
+    out.push(`<div class="opslide"><div class="opslidenum">Slide ${i}</div><h4>${esc(title)}</h4>${texts.slice(1).map((t) => `<p>${esc(t)}</p>`).join('')}${note}</div>`)
   }
-  return `<div class="oppage ppt">${out.join('') || '<p class="opmuted">No slide text.</p>'}</div>`
+  return `<div class="oppage ppt">${highlight ? await banner : ''}${out.join('') || '<p class="opmuted">No slide text.</p>'}</div>`
 }
 
-async function xlsx(zip) {
+async function xlsx(zip, highlight) {
   let shared = []
   if (zip.file('xl/sharedStrings.xml')) {
     const ss = await zip.file('xl/sharedStrings.xml').async('string')
@@ -109,5 +123,17 @@ async function xlsx(zip) {
       return `<${tag}>${esc(txt)}</${tag}>`
     }).join('') + '</tr>'
   }).join('')
-  return `<div class="oppage xls"><table class="opt">${body || ''}</table></div>`
+  let banner = ''
+  if (highlight) {
+    const t = await coreTitle(zip)
+    banner = t ? cap(true, `workbook title: ${esc(t)}`) : cap(false, 'no workbook title')
+    let blips = 0, described = 0
+    for (const n of Object.keys(zip.files).filter((p) => /^xl\/.*\.xml$/.test(p) && !p.includes('_rels'))) {
+      const x = await zip.file(n).async('string')
+      blips += (x.match(/<a:blip\b/g) || []).length
+      described += [...x.matchAll(DESCR)].filter((m) => hasAlt(m[1])).length
+    }
+    if (blips) banner += described >= blips ? cap(true, 'chart alt text: present') : cap(false, `${blips} chart / image — no alt text`)
+  }
+  return `<div class="oppage xls">${banner}<table class="opt">${body || ''}</table></div>`
 }
