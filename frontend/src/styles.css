@@ -487,6 +487,21 @@ input:focus-visible, [role="tab"]:focus-visible {
 .classchip:hover { background: var(--bg); }
 .classchip.on { border-width: 1px; }
 .hitlbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 9px 14px; margin: 4px 0 12px; font-size: 13px; }
+
+/* axe-core self-check overlay (dev / ?a11y) */
+.a11yfab { position: fixed; left: 20px; bottom: 20px; z-index: 60; width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--line); background: #fff; color: var(--plum); font-size: 22px; line-height: 1; cursor: pointer; box-shadow: 0 4px 16px rgba(40, 30, 48, 0.16); }
+.a11yfab:hover { background: var(--bg); }
+.a11ypanel { position: fixed; left: 20px; bottom: 76px; z-index: 60; width: 360px; max-height: 70vh; display: flex; flex-direction: column; background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 10px 40px rgba(40, 30, 48, 0.22); overflow: hidden; }
+.a11yhd { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); font-size: 14px; }
+.a11ybody { padding: 10px 14px; overflow-y: auto; }
+.a11ypass { background: #E7F0DC; color: #3B6D11; font-weight: 600; padding: 12px; border-radius: 10px; text-align: center; }
+.a11ysummary { font-weight: 600; margin-bottom: 8px; color: #A32D2D; }
+.a11yrow { display: flex; gap: 9px; padding: 8px 0; border-top: 1px solid var(--line); }
+.a11yrow:first-of-type { border-top: none; }
+.a11yimpact { flex: 0 0 auto; height: fit-content; font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; }
+.a11ymain { min-width: 0; font-size: 13px; }
+.a11yid { font-size: 11px; margin-top: 2px; }
+.a11yft { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); }
 .rowrej { opacity: 0.5; }
 .rowrej .fname { text-decoration: line-through; }
 

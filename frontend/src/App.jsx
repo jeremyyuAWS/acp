@@ -16,6 +16,10 @@ import Remediate from './Remediate.jsx'
 import Upload from './Upload.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
+import A11ySelfCheck from './A11ySelfCheck.jsx'
+
+// Self-scan overlay: on in dev, or on the deployed demo via ?a11y
+const SHOW_A11Y = import.meta.env.DEV || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('a11y'))
 
 const TABS = [
   ['overview', 'Overview', 'at a glance'],
@@ -190,6 +194,7 @@ export default function App() {
       </main>
 
       <ChatWidget files={files} run={run} trend={trend} trendDates={trendDates} />
+      {SHOW_A11Y && <A11ySelfCheck />}
       {settingsOpen && me.allow?.includes('settings') && <Settings onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} />}
     </div>
   )

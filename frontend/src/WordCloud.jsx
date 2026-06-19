@@ -8,9 +8,11 @@ export default function WordCloud({ items }) {
     const t = max === min ? 1 : (Math.sqrt(v) - Math.sqrt(min)) / (Math.sqrt(max) - Math.sqrt(min))
     return Math.round(15 + t * 24)
   }
+  // Heat scale darkened so the words clear WCAG 1.4.3 (4.5:1) as text — these are
+  // colored *text*, not chart fills, so the lighter severity palette would fail.
   const color = (v) => {
     const t = max === min ? 1 : (v - min) / (max - min)
-    return t > 0.66 ? '#A32D2D' : t > 0.33 ? '#E24B4A' : '#EF9F27'
+    return t > 0.66 ? '#A32D2D' : t > 0.33 ? '#C0392B' : '#8A5A00'
   }
   // big terms toward the middle, smaller toward the edges
   const ordered = [...items].sort((a, b) => b.value - a.value)
