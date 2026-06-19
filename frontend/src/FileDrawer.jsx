@@ -2,13 +2,16 @@ import Drawer from './Drawer.jsx'
 import Tag from './Tag.jsx'
 
 // Prescriptive-action styling, shared with the Discover inventory.
+// Distinct hue per action so a long list scans at a glance. The human-touch
+// actions form an intuitive escalation — blue (light approve) → amber (evaluate)
+// → red (rebuild) — while no-human actions sit in the green/teal/slate family.
 export const REC_STYLE = {
-  auto: ['Auto-remediate', '#E7F0DC', '#3B6D11', '⚡'],
-  assisted: ['Remediate + review', '#FAEEDA', '#854F0B', '✎'],
-  review: ['Human review', '#FAECE7', '#993C1D', '◐'],
-  archive: ['Archive', '#EEEDFE', '#3C3489', '📦'],
-  keep: ['Keep · monitor', '#E7F0DC', '#3B6D11', '✓'],
-  manual: ['Manual rebuild', '#FCEBEB', '#A32D2D', '⚠'],
+  auto: ['Auto-remediate', '#E3F1D8', '#2E6B0E', '⚡'],
+  assisted: ['Remediate + review', '#E2EDFB', '#1F5FA8', '✎'],
+  review: ['Human review', '#FBEBCB', '#8A5A00', '◐'],
+  archive: ['Archive', '#ECEEF1', '#475569', '📦'],
+  keep: ['Keep · monitor', '#D8F0EA', '#176B5B', '✓'],
+  manual: ['Manual rebuild', '#FBE3E3', '#B0271F', '⚠'],
 }
 export const fmtEffort = (m) => m == null ? '—' : m === 0 ? 'no work' : m >= 90 ? `~${(m / 60).toFixed(1)} hrs` : `~${Math.round(m)} min`
 const MODE_LABEL = { auto: 'fully automatic', assisted: 'AI + human review', manual: 'manual', monitor: 'monitor only' }

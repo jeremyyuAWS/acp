@@ -193,7 +193,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               const [label, rbg, rfg, icon] = REC_STYLE[effAction] || REC_STYLE.review
               const effEta = dec?.state === 'override' ? (ETA_OVERRIDE[dec.action] ?? rec.etaMin) : rec.etaMin
               return (
-                <div className={`remrow${dec?.state === 'rejected' ? ' rowrej' : ''}`} key={f.file}>
+                <div className={`remrow${dec?.state === 'rejected' ? ' rowrej' : ''}`} key={f.file} style={{ borderLeft: `3px solid ${rfg}`, paddingLeft: 10 }}>
                   <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span></button>
                   <span className="reccell">
                     <span className="badge" style={{ background: rbg, color: rfg }}>{icon} {label}</span>
