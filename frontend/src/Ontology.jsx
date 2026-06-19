@@ -13,7 +13,7 @@ const DEFAULT_STATE = {
   taxonomy: JSON.parse(JSON.stringify(DEFAULT_TAXONOMY)),
   rules: DEFAULT_RULES.map((r) => ({ ...r })),
   version: 1, status: 'published', publishedAt: 'seeded', published: DEFAULT_PUBLISHED,
-  history: [{ v: 1, at: 'seeded', by: 'system', rules: DEFAULT_RULES.length, labels: DEFAULT_LABELS.length }],
+  history: [{ v: 1, at: 'seeded', by: 'system', rules: DEFAULT_RULES.length, labels: DEFAULT_LABELS.length, snap: { rules: DEFAULT_RULES, labels: DEFAULT_LABELS } }],
 }
 const load = () => {
   try {
@@ -46,6 +46,8 @@ export default function Ontology({ files = [], onPublished }) {
   const [nl, setNl] = useState('')
   const [nlRule, setNlRule] = useState(null)
   const [draft, setDraft] = useState(() => ({ name: '', match: 'all', conditions: [{ field: 'department', op: 'is', value: '' }], actions: { priority: 'High', slaDays: null, label: '' } }))
+  const [editId, setEditId] = useState(null)
+  const blankDraft = () => ({ name: '', match: 'all', conditions: [{ field: 'department', op: 'is', value: '' }], actions: { priority: 'High', slaDays: null, label: '' } })
   const opts = useMemo(() => deriveOptions(files), [files])
   useEffect(() => { try { localStorage.setItem(LS_KEY, JSON.stringify(st)) } catch { /* ignore */ } }, [st])
   const dirty = st.status === 'draft' || st.dirty
@@ -74,17 +76,26 @@ export default function Ontology({ files = [], onPublished }) {
   const addCond = () => setDraft((d) => ({ ...d, conditions: [...d.conditions, { field: 'department', op: 'is', value: '' }] }))
   const setCond = (i, patch) => setDraft((d) => ({ ...d, conditions: d.conditions.map((c, n) => n === i ? { ...c, ...patch } : c) }))
   const rmCond = (i) => setDraft((d) => ({ ...d, conditions: d.conditions.filter((_, n) => n !== i) }))
-  const commitDraft = () => { if (!draft.conditions.length) return; addRule({ ...draft, name: draft.name || draft.conditions.map(condText).join(draft.match === 'any' ? ' OR ' : ' AND ').slice(0, 60) }); setDraft({ name: '', match: 'all', conditions: [{ field: 'department', op: 'is', value: '' }], actions: { priority: 'High', slaDays: null, label: '' } }) }
+  const startEdit = (r) => { setDraft({ name: r.name, match: r.match, conditions: r.conditions.map((c) => ({ ...c })), actions: { priority: 'High', slaDays: null, label: '', ...r.actions } }); setEditId(r.id) }
+  const commitDraft = () => {
+    if (!draft.conditions.length) return
+    const name = draft.name || draft.conditions.map(condText).join(draft.match === 'any' ? ' OR ' : ' AND ').slice(0, 60)
+    if (editId) { set({ rules: st.rules.map((r) => r.id === editId ? { ...draft, name, id: editId } : r) }); setEditId(null) }
+    else addRule({ ...draft, name })
+    setDraft(blankDraft())
+  }
   const publish = () => {
     const now = new Date().toLocaleString()
     const v = st.version + (st.status === 'draft' ? 1 : 0)
     const next = { ...st, status: 'published', dirty: false, version: v, publishedAt: now,
       published: { version: v, at: now, by: 'admin', rules: st.rules, labels: st.labels },
-      history: [{ v, at: now, by: 'admin', rules: st.rules.length, labels: st.labels.length }, ...(st.history || [])].slice(0, 12) }
+      history: [{ v, at: now, by: 'admin', rules: st.rules.length, labels: st.labels.length, snap: { rules: st.rules, labels: st.labels } }, ...(st.history || [])].slice(0, 12) }
     try { localStorage.setItem(LS_KEY, JSON.stringify(next)) } catch { /* ignore */ }
     setSt(next)
     onPublished?.()
   }
+  // Restore a published version's rules + labels as an editable draft (review, then re-publish).
+  const rollback = (h) => { if (!h.snap) return; setEditId(null); setDraft(blankDraft()); setSt((s) => ({ ...s, rules: h.snap.rules.map((r) => ({ ...r })), labels: h.snap.labels.map((l) => ({ ...l })), status: 'draft', dirty: true })); setTab('rules') }
 
   const condCtl = (c, i) => {
     const fd = FIELDS[c.field]
@@ -110,7 +121,8 @@ export default function Ontology({ files = [], onPublished }) {
         <div className="ontruletop">
           <b>{r.name}</b>
           <span className="ontpri" style={{ color: fg, background: bg }}>{r.actions?.priority}{r.actions?.slaDays ? ` · ${r.actions.slaDays}d SLA` : ''}</span>
-          <button className="ghost small" onClick={() => delRule(r.id)} aria-label="Delete rule" style={{ marginLeft: 'auto' }}>✕</button>
+          <button className="ghost small" onClick={() => startEdit(r)} aria-label="Edit rule" style={{ marginLeft: 'auto' }}>✎ Edit</button>
+          <button className="ghost small" onClick={() => delRule(r.id)} aria-label="Delete rule">✕</button>
         </div>
         <div className="ontrulecond">{(r.conditions || []).map((c, i) => <span key={i} className="ontchip">{condText(c)}{i < r.conditions.length - 1 && <em className="ontjoin"> {r.match === 'any' ? 'OR' : 'AND'} </em>}</span>)}</div>
         <div className="ontrulefoot"><span className="ontmatch">⟶ matches <b>{n.toLocaleString()}</b> of {files.length.toLocaleString()} documents</span>{r.actions?.label && labelName(r.actions.label) && <span className="muted"> · labels as “{labelName(r.actions.label)}”</span>}</div>
@@ -179,9 +191,10 @@ export default function Ontology({ files = [], onPublished }) {
           </section>
 
           <section className="panel">
-            <div className="ontsechd"><h3 style={{ margin: 0 }}>Rule builder</h3><span className="muted" style={{ fontSize: 12 }}>match
+            <div className="ontsechd"><h3 style={{ margin: 0 }}>{editId ? 'Edit rule' : 'Rule builder'}</h3>{editId && <span className="ontprevtag" style={{ background: '#E2EDFB', color: '#1F5FA8' }}>editing</span>}<span className="muted" style={{ fontSize: 12 }}>match
               <select aria-label="Match all or any conditions" value={draft.match} onChange={(e) => setDraft((d) => ({ ...d, match: e.target.value }))} style={{ margin: '0 4px' }}><option value="all">ALL</option><option value="any">ANY</option></select>
               of:</span></div>
+            {editId && <input aria-label="Rule name" className="ontlabelname" style={{ width: '100%', marginBottom: 8 }} value={draft.name} placeholder="Rule name" onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} />}
             {draft.conditions.map((c, i) => condCtl(c, i))}
             <button className="ghost small" onClick={addCond} style={{ marginTop: 4 }}>＋ Add condition</button>
             <div className="ontaction">
@@ -192,7 +205,8 @@ export default function Ontology({ files = [], onPublished }) {
               <span className="muted">SLA</span>
               <input aria-label="SLA days" style={{ width: 56 }} placeholder="days" value={draft.actions.slaDays || ''} onChange={(e) => setDraft((d) => ({ ...d, actions: { ...d.actions, slaDays: e.target.value ? +e.target.value : null } }))} />
               <span className="ontmatch" style={{ marginLeft: 'auto' }}>preview: <b>{files.filter((f) => evalRule(f, draft)).length.toLocaleString()}</b> match</span>
-              <button onClick={commitDraft}>Add rule</button>
+              <button onClick={commitDraft}>{editId ? 'Save changes' : 'Add rule'}</button>
+              {editId && <button className="ghost small" onClick={() => { setEditId(null); setDraft(blankDraft()) }}>Cancel</button>}
             </div>
           </section>
 
@@ -235,7 +249,7 @@ export default function Ontology({ files = [], onPublished }) {
             <div className="ontsechd"><h3 style={{ margin: 0 }}>Version history &amp; audit</h3></div>
             <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>Draft &amp; publish ontology changes; every publish is snapshotted with who &amp; when. Roll back restores that version's rules.</div>
             {(st.history || []).length ? st.history.map((h, i) => (
-              <div className="ontver" key={i}><span className="ontvertag">v{h.v}</span><span className="ontverwhen">{h.at} · by {h.by}</span><span className="muted">{h.rules} rules · {h.labels} labels</span>{i > 0 && <button className="ghost small" style={{ marginLeft: 'auto' }} disabled title="Snapshot rollback — restores this version's rules">↩ Roll back</button>}</div>
+              <div className="ontver" key={i}><span className="ontvertag">v{h.v}</span><span className="ontverwhen">{h.at} · by {h.by}</span><span className="muted">{h.rules} rules · {h.labels} labels</span>{i > 0 && h.snap && <button className="ghost small" style={{ marginLeft: 'auto' }} onClick={() => rollback(h)} title="Restore this version's rules &amp; labels as a draft">↩ Roll back</button>}</div>
             )) : <p className="muted">No published versions yet — publish to create v{st.version}.</p>}
           </section>
           <section className="panel">
