@@ -133,7 +133,7 @@ export default function App() {
     <div className="app">
       <a className="skiplink" href="#main-content">Skip to main content</a>
       <header>
-        <div className="brand"><Logo /><h1 className="sub">Accessibility Compliance</h1></div>
+        <div className="brand"><Logo /><h1 className="sub">Accessibility Platform</h1></div>
         <div className="userbox">
           {me.role && <span className="chip" title={me.scope}>{me.role}</span>}
           {rubric && me.allow?.includes('settings') && <span className="chip">{rubric.target} · rubric {rubric.hash.slice(0, 8)}</span>}
