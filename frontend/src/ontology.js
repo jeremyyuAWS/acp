@@ -102,7 +102,13 @@ export function classifyFile(f, pub) {
   const rule = pub.rules.find((r) => evalRule(f, r))
   if (!rule) return null
   const label = (pub.labels || []).find((l) => l.id === rule.actions?.label) || null
-  return { rule: { id: rule.id, name: rule.name }, priority: rule.actions?.priority || null, sla: rule.actions?.slaDays || null, label, score: riskScore(f, rule.actions?.priority) }
+  return { rule: { id: rule.id, name: rule.name }, priority: rule.actions?.priority || null, sla: rule.actions?.slaDays || null, label, category: rule.actions?.category || null, score: riskScore(f, rule.actions?.priority) }
+}
+// Flatten a taxonomy tree to "Parent / Child / Leaf" path strings (for rule targets + counts).
+export function taxonomyPaths(node, prefix = '') {
+  if (!node) return []
+  const path = prefix ? `${prefix} / ${node.name}` : node.name
+  return [path, ...(node.children || []).flatMap((c) => taxonomyPaths(c, path))]
 }
 // Annotate a corpus with the published ontology (adds `.ont`). Identity-safe: returns the
 // same array untouched when nothing is published, so views degrade gracefully.

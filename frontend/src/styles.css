@@ -861,6 +861,10 @@ input:focus-visible, [role="tab"]:focus-visible {
 .ontrels { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
 .ontrel { font-size: 12px; background: #f3eef6; border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; }
 .ontbanner { background: #eef3fb; border: 1px solid #cfe0f5; color: #1F5FA8; border-radius: 9px; padding: 7px 11px; font-size: 12.5px; margin: 0 0 11px; }
+.ontwarn { color: #854F0B; font-size: 11.5px; font-weight: 600; margin-left: 6px; }
+.ontvalwarn { background: #FAEEDA; border: 1px solid #ecd8ad; color: #854F0B; border-radius: 9px; padding: 8px 12px; font-size: 12.5px; margin-bottom: 12px; }
+.ontsample { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 9px; font-size: 12px; }
+.ontcount { font-size: 11px; margin-left: 5px; white-space: nowrap; }
 .ontovbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; background: #eef3fb; border: 1px solid #cfe0f5; border-radius: 11px; padding: 9px 13px; margin-bottom: 14px; }
 .ontovtag { font-size: 12px; font-weight: 700; color: #1F5FA8; background: #dfeafc; border-radius: 7px; padding: 3px 9px; flex: 0 0 auto; }
 .ontovtext { font-size: 13px; color: var(--ink); }
