@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import FileDrawer, { retentionOf } from './FileDrawer.jsx'
+import SegmentDrawer from './SegmentDrawer.jsx'
 import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
 
@@ -50,6 +51,7 @@ export default function Discover({ sources, files, busy, onScan }) {
   const [decisions, setDecisions] = useState({}) // Actions HITL: file -> { state:'accepted'|'override', action? }
   const [classState, setClassState] = useState({}) // Classify HITL: file -> { tags:[...], confirmed:bool }
   const [editAct, setEditAct] = useState(null) // file currently choosing an override action
+  const [seg, setSeg] = useState(null) // category drill-down drawer (by document type)
 
   const groups = {}
   files.forEach((f) => { const d = f.department || 'Unassigned'; (groups[d] = groups[d] || []).push(f) })
@@ -126,6 +128,13 @@ export default function Discover({ sources, files, busy, onScan }) {
                   <div className="dmain">
                     <button className="remname" onClick={() => setSel(f)}>{f.file}</button>
                     {meta}
+                    {mode === 'retain' && !f.locked && (
+                      <div className="drowtags">
+                        {tagsOf(f).length === 0 ? <span className="muted" style={{ fontSize: 12 }}>internal · no risk flags</span>
+                          : tagsOf(f).map((t) => <span key={t} className="classchip on" style={{ background: CLASS_COLOR[t] + '22', color: CLASS_COLOR[t], borderColor: CLASS_COLOR[t] + '55', cursor: 'default' }}>{t}</span>)}
+                        {f.superseded && <span className="classchip on" style={{ background: '#EEEDFE', color: '#3C3489', borderColor: '#cdc9f0', cursor: 'default' }}>superseded</span>}
+                      </div>
+                    )}
                   </div>
                   {mode === 'classify' && !f.locked && (
                     <div className="classctl">
@@ -144,7 +153,7 @@ export default function Discover({ sources, files, busy, onScan }) {
                     const a = effAction(f); const [l, bg, fg] = RET_BADGE[a]; const dec = decisions[f.file]
                     return (
                       <div className="actctl">
-                        <span className="badge" style={{ background: bg, color: fg, borderLeft: `3px solid ${RET_COLOR[a]}` }}>{l}</span>
+                        <span className="badge" style={{ background: bg, color: fg, borderLeft: `3px solid ${RET_COLOR[a]}` }} title={f.rec?.rationale || ''}>{l}</span>
                         {dec?.state === 'accepted' && <span className="dectag ok">✓ accepted</span>}
                         {dec?.state === 'override' && <span className="dectag ov">changed</span>}
                         {editAct === f.file ? (
@@ -208,10 +217,21 @@ export default function Discover({ sources, files, busy, onScan }) {
               <button disabled={!pendingActions} onClick={acceptAll}>✓ Accept all recommendations</button>
             </div>
           )}
-          <div className="muted" style={{ margin: '4px 0 8px' }}>{sub === 'retain' ? 'Step 3 · Actions · the lifecycle action the agent recommends per document — accept it or change it to keep / archive / retain / delete' : 'Step 1 · inventory by department · click a department to expand · the bar shows its document-type mix'}</div>
+          <div className="muted" style={{ margin: '4px 0 8px' }}>{sub === 'retain' ? 'Step 3 · Actions · the lifecycle action the agent recommends per document — the pills show the classification it’s based on; accept it or change it to keep / archive / retain / delete' : 'Step 1 · inventory by department · click a department to expand · the bar shows its document-type mix'}</div>
+          {sub !== 'retain' && (
+            <div className="typelegend">
+              <span className="muted" style={{ fontSize: 12, marginRight: 2 }}>document types · click to view:</span>
+              {byType.map((t) => (
+                <button key={t.label} className="typekey" onClick={() => setSeg({ title: `${t.label} documents`, subtitle: `${t.value} of ${files.length} · across all departments`, files: files.filter((f) => (f.type || '').toUpperCase() === t.label) })}>
+                  <i style={{ background: t.color }} aria-hidden="true" />{t.label}<span className="muted"> · {t.value}</span>
+                </button>
+              ))}
+            </div>
+          )}
           {deptList(sub === 'retain' ? 'retain' : 'inventory')}
         </>
       )}
+      {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
       {sel && <FileDrawer file={sel} context="discover" onClose={() => setSel(null)} />}
     </>
   )
