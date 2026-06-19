@@ -245,7 +245,7 @@ export default function Upload({ onCertified }) {
           </div>
           <BeforeAfter file={file} issues={issues} srcText={srcText} pdfUrl={pdfUrl} officeBlob={officeBlob} />
           <ScreenReaderDemo issues={issues} />
-          <p className="muted" style={{ marginTop: 12 }}>{autoFixed.length} issue(s) auto-fixed · <b>{review.length}</b> routed to human review (low confidence).</p>
+          <p className="muted" style={{ marginTop: 12 }}>{autoFixed.length} finding(s) auto-fixed · <b>{review.length}</b> routed to human review (low confidence).</p>
           <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 4 }}><button onClick={() => setStep(3)}>Human review →</button></div>
         </section>
       )}
@@ -310,7 +310,7 @@ export default function Upload({ onCertified }) {
             </div>
 
             <section className="panel">
-              <h2>Issues remediated</h2>
+              <h2>Findings remediated</h2>
               <div className="findings">
                 {issues.map((i, n) => { const [bg, fg] = SEV_BADGE[i.sev] || SEV_BADGE.MINOR; return (
                   <div className="finding" key={n}>

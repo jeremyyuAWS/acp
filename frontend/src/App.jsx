@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getMe, getSources, getRubric, listScans, getScan, startScan, getJob } from './api'
+import { getSources, getRubric, listScans, getScan, startScan, getJob } from './api'
 import { setPersona } from './sim.js'
 import Logo from './Logo.jsx'
 import ChatWidget from './ChatWidget.jsx'
@@ -40,6 +40,20 @@ function progressText(p) {
   let s = m[p.phase] ?? p.phase
   if (p.current && (p.phase === 'reading' || p.phase === 'analysing')) s += ` · ${p.current}`
   return s
+}
+
+// Overall scan progress (0–100) across every phase, so the bar only reaches 100%
+// when the scan is actually done — not when the read phase finishes (tagging,
+// analysing and scoring still follow). The read phase spans 12→84%, scaled by the
+// real per-file count; the post-read phases fill the remainder.
+const PHASE_PCT = { queued: 2, connecting: 5, discovering: 9, reading: 12, tagging: 88, analysing: 92, scoring: 97, done: 100, error: 100 }
+function progressPct(p) {
+  if (!p) return 0
+  if (p.phase === 'reading' && p.files_found) {
+    const frac = Math.min(1, (p.files_done || 0) / p.files_found)
+    return Math.round(12 + frac * (84 - 12))
+  }
+  return PHASE_PCT[p.phase] ?? 6
 }
 
 export default function App() {
@@ -141,7 +155,7 @@ export default function App() {
             {progress.files_found ? <span className="scancount"> · {progress.files_found.toLocaleString()} files</span> : null}
             {progress.blocked ? <span className="lockwarn"> · 🔒 {progress.blocked} password-protected / couldn’t open</span> : null}
           </div>
-          <div className="track"><i style={{ width: `${progress.files_found ? Math.round((progress.files_done / progress.files_found) * 100) : 6}%`, background: '#F5B400', transition: 'width .3s' }} /></div>
+          <div className="track"><i style={{ width: `${progressPct(progress)}%`, background: '#F5B400', transition: 'width .3s' }} /></div>
         </div>
       )}
 
