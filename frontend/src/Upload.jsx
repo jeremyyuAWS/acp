@@ -11,6 +11,17 @@ const HKEY = 'mova_upload_history'
 const loadHistory = () => { try { return JSON.parse(localStorage.getItem(HKEY) || '[]') } catch { return [] } }
 const SEV_BADGE2 = { CRITICAL: ['#FCEBEB', '#A32D2D'], SERIOUS: ['#FAECE7', '#993C1D'], MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'] }
 const fmtDate = (iso) => { try { return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) } catch { return '' } }
+const FIX_PROPOSAL = {
+  '1.1.1': ['<img> with no alt text', 'alt: “bar chart — enrollment by region, West highest at 38%” (AI-drafted)'],
+  '1.3.1': ['table / control without programmatic structure', 'header cells tagged · form fields labelled'],
+  '1.3.2': ['reading order differs from the visual layout', 're-tagged to follow the visual flow'],
+  '1.4.3': ['text below the 4.5:1 contrast minimum', 'recoloured to 4.8:1 — passes AA'],
+  '2.4.2': ['document has no title', 'descriptive title set'],
+  '2.4.4': ['ambiguous “click here” link', 'rewritten to “view the 2026 benefits guide”'],
+  '3.1.1': ['document language not declared', 'lang set to “en”'],
+  '4.1.2': ['control has no accessible name', 'aria-label / <label> added'],
+}
+const proposeFix = (f) => { const sc = (f?.wcag || '').match(/^\d+\.\d+\.\d+/)?.[0]; return FIX_PROPOSAL[sc] || [f?.detail || 'finding present', 'remediated &amp; re-validated'] }
 
 const isHtml = (name) => /\.html?$/i.test(name || '')
 const isPdf = (name) => /\.pdf$/i.test(name || '')
@@ -43,6 +54,7 @@ export default function Upload({ onCertified }) {
   const [realEngine, setRealEngine] = useState(false)
   const [history, setHistory] = useState(loadHistory)
   const [viewing, setViewing] = useState(null)
+  const [reviewOutcome, setReviewOutcome] = useState(null)
   const blobUrl = useRef(null)
 
   const start = (f, { text = null, url = null } = {}) => {
@@ -76,18 +88,25 @@ export default function Upload({ onCertified }) {
     }
     catch { start({ name, size: 100 * 1024 }) }
   }
-  const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setRealEngine(false) }
+  const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setRealEngine(false); setReviewOutcome(null) }
   const score = Math.max(0, 100 - issues.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0))
-  const certify = () => {
+  const review = issues.slice(-1)
+  const reviewItem = review[0]
+  // Approve → the escalated fix is applied → 100. Reject → it's deferred to manual
+  // remediation → the document is conditional, not fully certifiable.
+  const rejected = reviewOutcome === 'rejected'
+  const finalScore = rejected ? Math.max(0, 100 - (SEV_PEN[reviewItem?.sev] || 5)) : 100
+  const certify = (decision = 'approved') => {
+    setReviewOutcome(decision)
+    const fs = decision === 'rejected' ? Math.max(0, 100 - (SEV_PEN[reviewItem?.sev] || 5)) : 100
     if (file) {
       onCertified?.({ file: file.name })
-      const rec = { id: `${file.name}-${Date.now()}`, name: file.name, ext: extOf(file.name), date: new Date().toISOString(), score, real: realEngine, findings: issues }
+      const rec = { id: `${file.name}-${Date.now()}`, name: file.name, ext: extOf(file.name), date: new Date().toISOString(), score: fs, outcome: decision, real: realEngine, findings: issues }
       const next = [rec, ...history.filter((h) => h.name !== file.name)].slice(0, 12)
       setHistory(next); try { localStorage.setItem(HKEY, JSON.stringify(next)) } catch { /* ignore quota */ }
     }
     setStep(4)
   }
-  const review = issues.slice(-1)
   const autoFixed = issues.slice(0, -1)
 
   const reportRef = useRef(null)
@@ -225,22 +244,26 @@ export default function Upload({ onCertified }) {
         </section>
       )}
 
-      {step === 3 && (
-        <section className="panel">
-          <h2>Human-in-the-loop review · {file?.name}</h2>
-          <div className="queue">
-            {review.map((i, n) => (
-              <div className="qrow" key={n}>
-                <span className="qico" aria-hidden="true">⚑</span>
-                <div className="qmain"><div className="qtitle">{i.wcag}</div><div className="qmeta">{i.detail} · agent confidence 52%</div></div>
-                <button className="qbtn approve" onClick={certify}>✓ approve</button>
-                <button className="qbtn reject" onClick={certify}>✕ reject</button>
-              </div>
-            ))}
-          </div>
-          <p className="muted" style={{ marginTop: 12 }}>The agent proposes the fix; a reviewer confirms because confidence is below the auto-apply threshold.</p>
-        </section>
-      )}
+      {step === 3 && reviewItem && (() => {
+        const [before, after] = proposeFix(reviewItem)
+        return (
+          <section className="panel">
+            <h2>Human-in-the-loop review · {file?.name}</h2>
+            <div className="qrow" style={{ borderRadius: 10, border: '1px solid var(--line)', padding: '11px 13px', marginBottom: 12 }}>
+              <span className="qico" aria-hidden="true">⚑</span>
+              <div className="qmain"><div className="qtitle">{reviewItem.wcag}</div><div className="qmeta">{reviewItem.detail} · agent confidence 52% — below the auto-apply threshold</div></div>
+            </div>
+            <div className="muted" style={{ marginBottom: 6 }}>Proposed fix · {reviewItem.wcag}</div>
+            <div className="diffbox before"><span className="difftag">before</span>{before}</div>
+            <div className="diffbox after"><span className="difftag">after</span><span dangerouslySetInnerHTML={{ __html: after }} /></div>
+            <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 16, flexWrap: 'wrap' }}>
+              <button onClick={() => certify('approved')}>✓ Approve fix &amp; certify</button>
+              <button className="ghost" onClick={() => certify('rejected')}>✕ Reject — defer to manual</button>
+            </div>
+            <p className="muted" style={{ marginTop: 12, fontSize: 12 }}>Approve to apply the fix and re-validate to 100. Reject to leave this finding for manual remediation — the document is then conditionally certified, not fully compliant.</p>
+          </section>
+        )
+      })()}
 
       {step === 4 && (
         <>
@@ -257,13 +280,13 @@ export default function Upload({ onCertified }) {
               </div>
             </div>
 
-            <section className="certbanner">
-              <div className="certmark" aria-hidden="true">✓</div>
+            <section className="certbanner" style={rejected ? { background: '#FAEEDA', borderColor: '#e8d2a8' } : undefined}>
+              <div className="certmark" aria-hidden="true" style={rejected ? { background: '#854F0B' } : undefined}>{rejected ? '!' : '✓'}</div>
               <div>
-                <div className="certtitle">Certified · 100 / 100</div>
-                <div className="muted"><span className="fname">{file?.name}</span> passed WCAG 2.1 AA after remediation &amp; re-validation.</div>
+                <div className="certtitle">{rejected ? `Conditional · ${finalScore} / 100` : 'Certified · 100 / 100'}</div>
+                <div className="muted"><span className="fname">{file?.name}</span> {rejected ? 'remediated except 1 finding deferred to manual review — not yet fully WCAG 2.1 AA compliant.' : 'passed WCAG 2.1 AA after remediation & re-validation.'}</div>
               </div>
-              <div className="liftgain" style={{ marginLeft: 'auto' }}>{score} → 100</div>
+              <div className="liftgain" style={{ marginLeft: 'auto' }}>{score} → {finalScore}</div>
             </section>
 
             <div className="chartrow">
@@ -271,9 +294,9 @@ export default function Upload({ onCertified }) {
                 <div className="lift">
                   <div className="liftcol"><div className="liftnum" style={{ color: '#A32D2D' }}>{score}</div><div className="muted">as received</div></div>
                   <div className="liftarrow" aria-hidden="true">→</div>
-                  <div className="liftcol"><div className="liftnum" style={{ color: '#3B6D11' }}>100</div><div className="muted">certified</div></div>
+                  <div className="liftcol"><div className="liftnum" style={{ color: rejected ? '#854F0B' : '#3B6D11' }}>{finalScore}</div><div className="muted">{rejected ? 'conditional' : 'certified'}</div></div>
                 </div>
-                <p className="muted">{issues.length} finding(s) resolved across {sevItems.length} severity level(s).</p>
+                <p className="muted">{rejected ? `${issues.length - 1} of ${issues.length} finding(s) resolved · 1 deferred to manual remediation.` : `${issues.length} finding(s) resolved across ${sevItems.length} severity level(s).`}</p>
               </section>
               <section className="panel"><h2>Findings resolved · by severity</h2>
                 {sevItems.length ? <Bars items={sevItems} cols="84px 1fr 28px" /> : <p className="muted">None.</p>}
@@ -296,7 +319,7 @@ export default function Upload({ onCertified }) {
             <section className="panel">
               <h2>Document journey</h2>
               <div className="journey">
-                {['discovered', `assessed ${score}`, 'auto-fixed', 'reviewed', 'certified 100'].map((l, n) => <span className="jstep" key={n}>✓ {l}</span>)}
+                {['discovered', `assessed ${score}`, 'auto-fixed', 'reviewed', rejected ? `conditional ${finalScore}` : 'certified 100'].map((l, n) => <span className="jstep" key={n}>✓ {l}</span>)}
               </div>
               <p className="muted" style={{ marginTop: 10 }}>Validated against WCAG 2.1 AA · every step captured in the audit trail.</p>
             </section>
