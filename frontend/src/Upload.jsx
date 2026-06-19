@@ -3,6 +3,7 @@ import { Bars } from './charts.jsx'
 import { IDENTITY } from './sim.js'
 import Logo from './Logo.jsx'
 import BeforeAfter from './BeforeAfter.jsx'
+import ResultPreview from './ResultPreview.jsx'
 import ScreenReaderDemo from './ScreenReaderDemo.jsx'
 import PdfPreview from './PdfPreview.jsx'
 import { auditHtml } from './htmlAudit.js'
@@ -330,6 +331,7 @@ export default function Upload({ onCertified }) {
               <p className="muted" style={{ marginTop: 10 }}>Validated against WCAG 2.1 AA · every step captured in the audit trail.</p>
             </section>
           </div>
+          <ResultPreview file={file} srcText={srcText} pdfUrl={pdfUrl} officeBlob={officeBlob} issues={issues} />
         </>
       )}
     </>

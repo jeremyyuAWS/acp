@@ -20,7 +20,7 @@ const altFromSrc = (src) => {
 }
 
 // Real, best-effort HTML remediation. Returns the fixed markup + a list of changes.
-function remediateHtml(text) {
+export function remediateHtml(text) {
   try {
     const doc = new DOMParser().parseFromString(text, 'text/html')
     const changes = new Set()

@@ -626,6 +626,16 @@ input:focus-visible, [role="tab"]:focus-visible {
 .pdfpages { display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .pdfpage { max-width: 100%; height: auto; box-shadow: 0 2px 10px rgba(40, 30, 48, 0.14); border-radius: 3px; background: #fff; }
 .bapdffallback { padding: 30px; text-align: center; }
+/* ResultPreview — before → after document preview on the certificate page */
+.rppanel .baframes figure { min-width: 0; }
+.rppdf { height: 230px; overflow: hidden; border: 1px solid var(--line); border-radius: 0 10px 10px 10px; background: #f4f1f5; position: relative; }
+.rppdf .pdfpreview { padding: 8px; }
+.rpbadge { position: absolute; left: 8px; bottom: 8px; background: rgba(59, 109, 17, 0.94); color: #fff; font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; }
+.rpdoc { height: 230px; border: 1px solid var(--line); border-radius: 0 10px 10px 10px; background: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; padding: 16px; text-align: center; }
+.rpdocicon { font-size: 46px; line-height: 1; }
+.rpdoc .rpbadge { position: static; background: #E7F0DC; color: #3B6D11; }
+.rpnote { margin-top: 12px; }
+.rpactions { margin-top: 11px; display: flex; gap: 10px; flex-wrap: wrap; }
 
 /* --- screen-reader before/after demo --- */
 .srdemo { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
