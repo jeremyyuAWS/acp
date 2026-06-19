@@ -25,6 +25,20 @@ const EXP_COLOR = { 'public-facing': '#A32D2D', 'high-traffic': '#D85A30', inter
 const SR_W = { Executive: 3, Director: 2, Manager: 1, Staff: 0 }
 const priority = (f) => (f.tags || []).filter((t) => t === 'public-facing' || t === 'high-traffic').length * 2 + (SR_W[f.seniority] || 0) + (f.issues || []).filter((i) => i.severity === 'CRITICAL').length * 2
 
+// AI triage: the same risk signals, surfaced as a priority tier + a plain-language reason.
+const PRI = { high: ['P1 · high', '#A32D2D', '#FCEBEB'], med: ['P2 · medium', '#854F0B', '#FAEEDA'], low: ['P3 · low', '#5F5E5A', '#EFEDEA'] }
+const priTier = (f) => { const s = priority(f); return s >= 6 ? 'high' : s >= 3 ? 'med' : 'low' }
+const priWhy = (f) => {
+  const r = []
+  if ((f.tags || []).includes('public-facing')) r.push('public-facing')
+  else if ((f.tags || []).includes('high-traffic')) r.push('high-traffic')
+  if (f.seniority === 'Executive' || f.seniority === 'Director') r.push(`${f.seniority.toLowerCase()}-owned`)
+  const crit = (f.issues || []).filter((i) => i.severity === 'CRITICAL').length
+  if (crit) r.push(`${crit} critical finding${crit === 1 ? '' : 's'}`)
+  if (!r.length) { const ser = (f.issues || []).filter((i) => i.severity === 'SERIOUS').length; r.push(ser ? `${ser} serious finding${ser === 1 ? '' : 's'}` : 'low exposure, no critical findings') }
+  return r.slice(0, 2).join(' · ')
+}
+
 const FIX_TYPES = [
   { label: 'alt-text generated', value: 38, color: '#639922' },
   { label: 'reading order fixed', value: 21, color: '#1D9E75' },
@@ -185,16 +199,20 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
       {remediable.length > 0 && (
         <section className="panel">
-          <h2>Documents to remediate <span className="muted">· {remediable.length}, highest priority first — accept / reject / modify the agent’s plan</span></h2>
+          <h2>Documents to remediate <span className="muted">· {remediable.length} · <b style={{ color: 'var(--ink)', fontWeight: 500 }}>AI-triaged</b> by business risk — exposure × severity × ownership — accept / reject / modify</span></h2>
           <div className="remlist">
             {remediable.map((f) => {
               const rec = f.rec; const dec = decisions[f.file]
               const effAction = dec?.state === 'override' ? dec.action : rec.action
               const [label, rbg, rfg, icon] = REC_STYLE[effAction] || REC_STYLE.review
               const effEta = dec?.state === 'override' ? (ETA_OVERRIDE[dec.action] ?? rec.etaMin) : rec.etaMin
+              const [priLabel, priFg, priBg] = PRI[priTier(f)]
               return (
                 <div className={`remrow${dec?.state === 'rejected' ? ' rowrej' : ''}`} key={f.file} style={{ borderLeft: `3px solid ${rfg}`, paddingLeft: 10 }}>
-                  <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span></button>
+                  <div className="remmaincol">
+                    <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span></button>
+                    <div className="rempri"><span className="pritag" style={{ background: priBg, color: priFg }}>{priLabel}</span><span className="muted">why: {priWhy(f)}</span></div>
+                  </div>
                   <span className="reccell">
                     <span className="badge" style={{ background: rbg, color: rfg }}>{icon} {label}</span>
                     {dec?.state === 'accepted' && <span className="dectag ok">✓ accepted</span>}
