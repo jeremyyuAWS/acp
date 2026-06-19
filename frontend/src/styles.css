@@ -474,6 +474,19 @@ input:focus-visible, [role="tab"]:focus-visible {
 .modchip { font-size: 11px; font-weight: 600; border: 1px solid var(--line); background: #fff; border-radius: 7px; padding: 3px 8px; cursor: pointer; }
 .modchip:hover { background: var(--bg); }
 .modchip.cancel { color: var(--muted); font-weight: 500; }
+.decbtn.undo:hover { color: var(--plum); border-color: #d6d2f3; }
+
+/* Discover — three-mode department list (inventory / classify HITL / actions HITL) */
+.depttable { display: flex; flex-direction: column; }
+.drow { display: flex; align-items: center; gap: 12px; padding: 9px 16px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.drow:first-child { border-top: none; }
+.dmain { min-width: 0; flex: 1 1 220px; }
+.classctl, .actctl { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.classchips { display: inline-flex; gap: 5px; flex-wrap: wrap; }
+.classchip { font-size: 11px; font-weight: 600; border: 1px solid var(--line); background: #fff; color: var(--muted); border-radius: 999px; padding: 3px 9px; cursor: pointer; line-height: 1.4; }
+.classchip:hover { background: var(--bg); }
+.classchip.on { border-width: 1px; }
+.hitlbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 9px 14px; margin: 4px 0 12px; font-size: 13px; }
 .rowrej { opacity: 0.5; }
 .rowrej .fname { text-decoration: line-through; }
 
