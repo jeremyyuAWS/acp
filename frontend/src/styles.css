@@ -795,6 +795,64 @@ input:focus-visible, [role="tab"]:focus-visible {
 .covphase { font-size: 10px; font-weight: 700; border-radius: 5px; padding: 0 5px; margin-left: auto; }
 .covrem { font-size: 11px; font-weight: 700; border-radius: 5px; padding: 0 4px; margin-left: 5px; line-height: 1.5; }
 .remnote { margin: 8px 0 0; padding: 8px 11px; border-radius: 9px; font-size: 12px; line-height: 1.45; }
+
+/* ---- Business ontology & taxonomy manager ---- */
+.ontwrap { display: flex; flex-direction: column; gap: 12px; }
+.ontbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px; }
+.ontpublish { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.ontstatus { font-size: 12px; font-weight: 600; }
+.ontstatus.draft { color: #854F0B; }
+.ontstatus.live { color: #3B6D11; }
+.ontcols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.ontsechd { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.ontsechd h3 { font-size: 14px; }
+.ontlabels { display: flex; flex-direction: column; gap: 7px; }
+.ontlabel { display: flex; align-items: center; gap: 8px; }
+.ontlabel input[type="color"] { width: 26px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; flex: 0 0 auto; }
+.ontlabelname { flex: 1; min-width: 80px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; font: inherit; font-size: 13px; }
+.ontlabelpill { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
+.onttree { font-size: 13px; }
+.onttreerow { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+.onttreename { color: var(--ink); }
+.onttreeglyph { color: var(--muted); }
+.onttreeacts { display: inline-flex; gap: 4px; opacity: 0; transition: opacity .12s; }
+.onttreerow:hover .onttreeacts { opacity: 1; }
+.ontnl { display: flex; gap: 8px; }
+.ontnl input { flex: 1; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 13px; }
+.ontnlout { margin-top: 10px; padding: 10px 12px; background: #f7f5fb; border: 1px solid var(--line); border-radius: 9px; }
+.ontnlfoot, .ontnlout .ontrulefoot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.ontcond { display: flex; gap: 7px; margin-bottom: 6px; flex-wrap: wrap; }
+.ontcond select, .ontcond input, .ontaction select, .ontaction input, .ontnl + * select { padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; font: inherit; font-size: 13px; background: #fff; }
+.ontcond select { max-width: 200px; }
+.ontaction { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.ontrule { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+.ontruletop { display: flex; align-items: center; gap: 10px; }
+.ontrulecond { display: flex; flex-wrap: wrap; gap: 4px; margin: 7px 0; align-items: center; }
+.ontchip { font-size: 11px; background: #eee9f2; color: #463040; border-radius: 6px; padding: 2px 7px; }
+.ontjoin { color: var(--muted); font-style: normal; font-weight: 700; font-size: 10px; }
+.ontpri { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 20px; white-space: nowrap; }
+.ontrulefoot { font-size: 12px; }
+.ontmatch { font-size: 12px; color: var(--ink); }
+.ontformula { background: #1f1830; color: #e9e4f2; border-radius: 9px; padding: 11px 13px; font-size: 12.5px; overflow-x: auto; }
+.ontformula code { white-space: nowrap; }
+.ontstats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 9px; margin-top: 11px; }
+.ontstat { border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; display: flex; flex-direction: column; }
+.ontstat b { font-size: 21px; }
+.ontranklist { display: flex; flex-direction: column; }
+.ontrankrow { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--line); }
+.ontrankrow:last-child { border-bottom: 0; }
+.ontrankn { width: 22px; text-align: center; font-weight: 700; color: var(--muted); flex: 0 0 auto; }
+.ontrankmain { flex: 1; min-width: 0; }
+.ontrankfile { font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ontscore { font-weight: 700; font-size: 15px; color: var(--ink); min-width: 34px; text-align: right; flex: 0 0 auto; }
+.ontver { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.ontvertag { font-weight: 700; background: #eee9f2; border-radius: 6px; padding: 1px 8px; }
+.ontverwhen { color: var(--ink); }
+.ontprevtag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #854F0B; background: #FAEEDA; border-radius: 5px; padding: 1px 6px; }
+.ontexrow { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.ontrels { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.ontrel { font-size: 12px; background: #f3eef6; border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; }
+@media (max-width: 820px) { .ontcols { grid-template-columns: 1fr; } }
 @media (max-width: 820px) { .rmstep { flex-direction: column; min-width: 100%; } .rmarrow { transform: rotate(90deg); padding: 3px 0; } .rmmilestone { margin: 4px 0; } }
 @media (max-width: 760px) { .levelarrow { transform: rotate(90deg); padding: 4px 0; } .levelstep { flex-direction: column; min-width: 100%; } }
 .plancards { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 10px; margin-top: 12px; }

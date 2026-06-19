@@ -195,7 +195,7 @@ export default function App() {
 
       <ChatWidget files={files} run={run} trend={trend} trendDates={trendDates} />
       {SHOW_A11Y && <A11ySelfCheck />}
-      {settingsOpen && me.allow?.includes('settings') && <Settings onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} />}
+      {settingsOpen && me.allow?.includes('settings') && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} />}
     </div>
   )
 }
