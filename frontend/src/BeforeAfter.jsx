@@ -40,7 +40,7 @@ export function remediateHtml(text) {
     doc.querySelectorAll('a').forEach((a) => { if (/^(click here|read more|learn more|here|more)\.?$/i.test((a.textContent || '').trim())) { a.setAttribute('aria-label', `${a.textContent.trim()} — ${doc.title || 'link'}`); changes.add('Clarified ambiguous links · 2.4.4') } })
     doc.querySelectorAll('[style*="color"]').forEach((el) => {
       const s = el.getAttribute('style'); const m = /(^|[^-])color:\s*(#[0-9a-fA-F]{3,6})/.exec(s)
-      if (m && isLight(m[2])) { el.setAttribute('style', s.replace(m[2], '#333333')); changes.add('Darkened low-contrast text to meet 4.5:1 · 1.4.3') }
+      if (m && isLight(m[2])) { el.setAttribute('style', s.replace(m[2], '#333333')); changes.add('Darkened low-contrast text to meet 4.5:1 · 1.4.3'); changes.add('Recolour also meets the enhanced 7:1 ratio · 1.4.6') }
     })
     // 1.4.4 Resize Text / 1.4.10 Reflow — the viewport must allow zoom and adapt to width.
     let vp = doc.querySelector('meta[name="viewport"]')
@@ -107,6 +107,27 @@ export function remediateHtml(text) {
     if (suppressed && doc.querySelector('a, button, input, select, textarea')) {
       const st = doc.createElement('style'); st.textContent = ':focus-visible{outline:2px solid #1F5FA8;outline-offset:2px}'
       ;(doc.head || doc.documentElement).appendChild(st); changes.add('Ensured a visible keyboard focus indicator · 2.4.7')
+    }
+    // 3.1.4 Abbreviations (AAA) — wrap known abbreviations in <abbr title> so AT can expand them.
+    const ABBR = { WCAG: 'Web Content Accessibility Guidelines', ADA: 'Americans with Disabilities Act', PDF: 'Portable Document Format', PPO: 'Preferred Provider Organization', HDHP: 'High-Deductible Health Plan', FSA: 'Flexible Spending Account', HSA: 'Health Savings Account', FAQ: 'Frequently Asked Questions', PII: 'Personally Identifiable Information', UTSW: 'UT Southwestern', HR: 'Human Resources' }
+    const keys = Object.keys(ABBR)
+    if (doc.body && keys.length) {
+      const re = new RegExp('\\b(' + keys.join('|') + ')\\b')
+      const walker = doc.createTreeWalker(doc.body, 4 /* SHOW_TEXT */)
+      const nodes = []; while (walker.nextNode()) nodes.push(walker.currentNode)
+      nodes.forEach((node) => {
+        if (node.parentElement?.closest('abbr, script, style, title')) return
+        let text = node.textContent
+        if (!re.test(text)) return
+        const frag = doc.createDocumentFragment(); let m
+        while ((m = re.exec(text))) {
+          if (m.index) frag.appendChild(doc.createTextNode(text.slice(0, m.index)))
+          const ab = doc.createElement('abbr'); ab.setAttribute('title', ABBR[m[1]]); ab.textContent = m[1]
+          frag.appendChild(ab); text = text.slice(m.index + m[1].length); changes.add('Expanded abbreviations with <abbr> · 3.1.4')
+        }
+        if (text) frag.appendChild(doc.createTextNode(text))
+        node.replaceWith(frag)
+      })
     }
     return { html: '<!doctype html>' + doc.documentElement.outerHTML, changes: [...changes] }
   } catch { return null }

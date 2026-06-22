@@ -49,7 +49,7 @@ const PHASE_FILTER = { P1: 'Phase 1', P2: 'Phase 2', P3: 'Phase 3' }
 const REMEDIATION = {
   '1.4.3': 'auto', '1.3.1': 'auto', '2.4.1': 'auto', '2.4.2': 'auto', '3.1.1': 'auto', '2.4.3': 'auto',
   '2.1.1': 'auto', '1.4.1': 'auto', '1.4.4': 'auto', '1.4.10': 'auto', '4.1.2': 'auto',
-  '2.4.6': 'auto', '2.4.7': 'auto',
+  '2.4.6': 'auto', '2.4.7': 'auto', '1.4.6': 'auto', '3.1.4': 'auto', '1.4.9': 'assisted', '2.4.9': 'assisted',
   '1.1.1': 'assisted', '1.3.3': 'assisted', '1.4.5': 'assisted', '2.4.4': 'assisted', '1.4.11': 'assisted',
   '1.4.12': 'assisted', '3.1.2': 'assisted', '1.3.2': 'assisted', '1.2.1': 'assisted', '1.2.2': 'assisted',
   '1.2.3': 'assisted', '1.2.5': 'assisted', '3.3.1': 'assisted', '3.3.2': 'assisted', '3.3.3': 'assisted',
@@ -177,7 +177,6 @@ export default function WcagCoverage() {
 
   const shown = WCAG.filter(match)
   const tally = (src) => WCAG.filter((r) => r.source === src).length
-  const phaseCount = (ph) => ph.match ? WCAG.filter((r) => ph.match(r.phase)).length : null
 
   return (
     <>
@@ -221,11 +220,13 @@ export default function WcagCoverage() {
         </div>
         <div className="rmtrack">
           {ROADMAP_PHASES.map((ph, i) => {
-            const cnt = phaseCount(ph)
-            // P0/P1 are delivered with no useful filter; P2 (now covered) + P3 stay clickable
+            // delivered = built (Live / Partner / HITL); remaining = still on the roadmap
+            const delivered = ph.match ? WCAG.filter((r) => ph.match(r.phase) && r.source !== 'MDK net-new').length : null
+            const remaining = ph.match ? WCAG.filter((r) => ph.match(r.phase) && r.source === 'MDK net-new').length : 0
+            // P0/P1 are delivered with no useful filter; P2 (covered) + P3 stay clickable
             const fkey = (ph.id === 'P0' || ph.id === 'P1') ? null : ph.id
             const active = fkey && filter === fkey
-            const cntText = ph.done ? (cnt ? `✓ ${cnt} delivered` : '✓ delivered') : cnt != null ? `${cnt} criteria` : 'one-time'
+            const cntText = ph.done ? (delivered ? `✓ ${delivered} delivered` : '✓ delivered') : remaining ? `✓ ${delivered} · ${remaining} optional left` : `${delivered || 0} criteria`
             return (
               <div className="rmstep" key={ph.id}>
                 <button className={`rmseg${active ? ' on' : ''}${fkey ? '' : ' static'}${ph.done ? ' done' : ''}`} onClick={() => fkey && setFilter(active ? 'all' : fkey)} disabled={!fkey} title={ph.desc}>
