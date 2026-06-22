@@ -18,6 +18,7 @@ const STATUS = {
   '1.4.1': 'Live · auto', '1.4.3': 'Live · auto', '1.4.4': 'Live · auto', '1.4.5': 'Live · AI OCR',
   '1.4.10': 'Live · auto', '1.4.11': 'Live · auto', '1.4.12': 'Live · auto',
   '2.1.1': 'Live · auto', '2.1.2': 'Live · AI + human', '2.4.1': 'Roadmap', '2.4.2': 'Live · auto', '2.4.4': 'Live · AI',
+  '2.4.6': 'Live · auto', '2.4.7': 'Live · auto',
   '3.1.1': 'Live · auto', '3.1.2': 'Live · AI', '3.3.2': 'Live · auto', 'PDF/UA': 'Roadmap',
 }
 export function statusFor(sc, source = '', phase = '') {

@@ -48,6 +48,7 @@ const PHASE_FILTER = { P1: 'Phase 1', P2: 'Phase 2', P3: 'Phase 3' }
 const REMEDIATION = {
   '1.4.3': 'auto', '1.3.1': 'auto', '2.4.1': 'auto', '2.4.2': 'auto', '3.1.1': 'auto', '2.4.3': 'auto',
   '2.1.1': 'auto', '1.4.1': 'auto', '1.4.4': 'auto', '1.4.10': 'auto', '4.1.2': 'auto',
+  '2.4.6': 'auto', '2.4.7': 'auto',
   '1.1.1': 'assisted', '1.3.3': 'assisted', '1.4.5': 'assisted', '2.4.4': 'assisted', '1.4.11': 'assisted',
   '1.4.12': 'assisted', '3.1.2': 'assisted', '1.3.2': 'assisted', '1.2.1': 'assisted', '1.2.2': 'assisted',
   '1.2.3': 'assisted', '1.2.5': 'assisted', '3.3.1': 'assisted', '3.3.2': 'assisted', '3.3.3': 'assisted',

@@ -87,6 +87,27 @@ export function remediateHtml(text) {
       const s = el.getAttribute('style')
       if (/line-height:\s*\d+px/i.test(s)) { el.setAttribute('style', s.replace(/line-height:\s*\d+px/i, 'line-height:1.5')); changes.add('Unblocked text-spacing overrides · 1.4.12') }
     })
+    // 2.4.6 Headings and Labels — promote visually-styled pseudo-headings (large, bold, short
+    // leaf text) to real headings so screen-reader users can navigate the document by heading.
+    doc.querySelectorAll('p, div').forEach((el) => {
+      if (el.children.length) return
+      const txt = (el.textContent || '').trim()
+      if (!txt || txt.length > 50 || /[.?!]$/.test(txt)) return
+      const s = el.getAttribute('style') || ''
+      const fs = parseInt((/font-size:\s*(\d+)px/i.exec(s) || [])[1] || 0, 10)
+      if (fs >= 18 && /font-weight:\s*(bold|[6-9]00)/i.test(s)) {
+        const h = doc.createElement('h2'); h.textContent = txt; if (s) h.setAttribute('style', s)
+        el.replaceWith(h); changes.add('Promoted styled text to real headings · 2.4.6')
+      }
+    })
+    // 2.4.7 Focus Visible — when the page suppresses focus outlines, inject a focus-visible
+    // rule so keyboard users can always see where they are.
+    const css = [...doc.querySelectorAll('style')].map((s) => s.textContent || '').join('\n')
+    const suppressed = /outline:\s*(none|0)\b/i.test(css) || [...doc.querySelectorAll('[style*="outline"]')].some((el) => /outline:\s*(none|0)\b/i.test(el.getAttribute('style') || ''))
+    if (suppressed && doc.querySelector('a, button, input, select, textarea')) {
+      const st = doc.createElement('style'); st.textContent = ':focus-visible{outline:2px solid #1F5FA8;outline-offset:2px}'
+      ;(doc.head || doc.documentElement).appendChild(st); changes.add('Ensured a visible keyboard focus indicator · 2.4.7')
+    }
     return { html: '<!doctype html>' + doc.documentElement.outerHTML, changes: [...changes] }
   } catch { return null }
 }
