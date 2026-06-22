@@ -3,6 +3,7 @@ import PdfPreview from './PdfPreview.jsx'
 import OfficePreview from './OfficePreview.jsx'
 import { remediateHtml } from './BeforeAfter.jsx'
 import { remediateOffice } from './officeAudit.js'
+import { remediatePdf } from './pdfAudit.js'
 import { generateAltText, firstOfficeImage, aiTextFix } from './aiRemediate.js'
 
 const isHtml = (n) => /\.html?$/i.test(n || '')
@@ -14,12 +15,20 @@ const isPdf = (n) => /\.pdf$/i.test(n || '')
 // alt text, titles, headers and language are non-visual by nature, so we show what
 // changed under the hood honestly rather than fake a different-looking render. For
 // Office the remediated file is genuinely produced and downloadable.
-export default function ResultPreview({ file, srcText, pdfUrl, officeBlob, issues = [] }) {
+export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBlob, issues = [] }) {
   const name = file?.name || ''
   const rem = useMemo(() => (srcText && isHtml(name) ? remediateHtml(srcText) : null), [srcText, name])
   const [busy, setBusy] = useState(false)
   // genuinely produce the remediated Office file so we can render it side-by-side
   const [remBlob, setRemBlob] = useState(null)
+  // genuinely remediate the PDF (title + language) via pdf-lib
+  const [remPdf, setRemPdf] = useState(null)
+  useEffect(() => {
+    let live = true; setRemPdf(null)
+    if (!pdfBlob) return () => { live = false }
+    remediatePdf(pdfBlob, { title: name.replace(/\.[^.]+$/, '') }).then((r) => { if (live) setRemPdf(r) }).catch(() => { /* fall back */ })
+    return () => { live = false }
+  }, [pdfBlob])
   const [aiAlt, setAiAlt] = useState(null) // real Claude-vision alt text for the embedded image
   useEffect(() => {
     let live = true; setRemBlob(null); setAiAlt(null)
@@ -79,7 +88,7 @@ export default function ResultPreview({ file, srcText, pdfUrl, officeBlob, issue
         <figure>
           <figcaption className="bafcap after">remediated</figcaption>
           {isHtml(name) && rem ? <iframe sandbox="" title="remediated" srcDoc={rem.html} />
-            : isPdf(name) && pdfUrl ? <div className="rppdf rpafter"><PdfPreview url={pdfUrl} pages={1} /><span className="rpbadge">✓ tags · alt · reading order embedded</span></div>
+            : isPdf(name) && pdfUrl ? <div className="rppdf rpafter"><PdfPreview url={pdfUrl} pages={1} /><span className="rpbadge">{remPdf ? '✓ title + language set' : 'parsing…'}</span></div>
               : officeBlob ? <div className="rppdf rpafter">{remBlob ? <OfficePreview blob={remBlob} name={name} highlight /> : <div className="oploading"><span className="spinner" /> <span className="muted">applying fixes…</span></div>}<span className="rpbadge">✓ remediated</span></div>
                 : docCard(<span className="rpbadge">✓ accessible</span>)}
         </figure>
@@ -101,13 +110,16 @@ export default function ResultPreview({ file, srcText, pdfUrl, officeBlob, issue
           ))}
         </div>
       )}
-      {!isHtml(name) && (
-        <p className="muted rpnote">Accessibility fixes for {isPdf(name) ? 'PDF' : `${ext} (Office)`} files are <b>structural</b> — alt text, document title, table header rows and language are written into the file, so it looks identical but is now machine-readable by assistive technology.{fixes.length > 0 && <> Embedded: {fixes.join(' · ')}.</>}</p>
+      {isPdf(name) ? (
+        <p className="muted rpnote">The document <b>title</b> and <b>language</b> are written into the PDF for real via pdf-lib{remPdf?.changes?.length ? <> — {remPdf.changes.join(' · ')}</> : ''}.{remPdf && !remPdf.tagged && <> Full <b>tagging &amp; reading order</b> need structural re-authoring (a heavier engine) — detected and flagged honestly, not faked.</>}</p>
+      ) : !isHtml(name) && (
+        <p className="muted rpnote">Accessibility fixes for {ext} (Office) files are <b>structural</b> — alt text, document title, table header rows and language are written into the file, so it looks identical but is now machine-readable by assistive technology.{fixes.length > 0 && <> Embedded: {fixes.join(' · ')}.</>}</p>
       )}
-      {(rem || officeBlob) && (
+      {(rem || officeBlob || remPdf) && (
         <div className="rpactions">
           {isHtml(name) && rem && <button className="ghost small" onClick={downloadHtml}>⤓ Download the remediated HTML</button>}
           {officeBlob && <button className="ghost small" onClick={downloadOffice} disabled={busy}>{busy ? 'Remediating…' : `⤓ Download the remediated ${ext}`}</button>}
+          {remPdf && <button className="ghost small" onClick={() => dl(remPdf.blob, `remediated-${name}`)}>⤓ Download the remediated PDF</button>}
         </div>
       )}
     </section>

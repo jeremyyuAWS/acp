@@ -10,6 +10,7 @@ import PdfPreview from './PdfPreview.jsx'
 import OfficePreview from './OfficePreview.jsx'
 import { auditHtml } from './htmlAudit.js'
 import { auditOffice } from './officeAudit.js'
+import { auditPdf } from './pdfAudit.js'
 import { useDialog } from './a11y.js'
 
 const isOffice = (name) => /\.(docx|pptx|xlsx)$/i.test(name || '')
@@ -119,6 +120,7 @@ export default function Upload({ onCertified }) {
   const [reviewOutcome, setReviewOutcome] = useState(null)
   const [audioBlob, setAudioBlob] = useState(null)
   const [captions, setCaptions] = useState(null)
+  const [pdfBlob, setPdfBlob] = useState(null)
   const blobUrl = useRef(null)
 
   // Real captions (1.2.2/1.2.3) via the Whisper-backed function when an audio file is uploaded.
@@ -129,16 +131,17 @@ export default function Upload({ onCertified }) {
     return () => { live = false }
   }, [audioBlob])
 
-  const start = (f, { text = null, url = null, office = null, audio = null } = {}) => {
-    setFile(f); setSrcText(text); setPdfUrl(url); setOfficeBlob(office); setAudioBlob(audio); setCaptions(null); setRealEngine(null); setScanning(true); setStep(0)
+  const start = (f, { text = null, url = null, office = null, audio = null, pdf = null } = {}) => {
+    setFile(f); setSrcText(text); setPdfUrl(url); setPdfBlob(pdf); setOfficeBlob(office); setAudioBlob(audio); setCaptions(null); setRealEngine(null); setScanning(true); setStep(0)
     const html = text && isHtml(f.name)
-    const realLabel = html ? 'Analysing with axe-core (real WCAG engine)…' : office ? 'Parsing the document (real OOXML analysis)…' : audio ? 'Transcribing the audio with Whisper…' : 'Analysing against WCAG 2.1 AA…'
+    const realLabel = html ? 'Analysing with axe-core (real WCAG engine)…' : office ? 'Parsing the document (real OOXML analysis)…' : pdf ? 'Parsing the PDF structure (pdf-lib)…' : audio ? 'Transcribing the audio with Whisper…' : 'Analysing against WCAG 2.1 AA…'
     const phases = ['Connecting…', 'Reading document…', 'mova Agent classifying & tagging…', realLabel, 'Scoring…']
     let i = 0
     const finish = async () => {
       let found = issuesFor(f.name)
       if (html) { try { found = await auditHtml(text); setRealEngine('axe-core') } catch { /* fall back */ } }
       else if (office) { try { found = await auditOffice(office); setRealEngine('OOXML') } catch { /* fall back */ } }
+      else if (pdf) { try { found = await auditPdf(pdf); setRealEngine('pdf-lib') } catch { /* fall back */ } }
       setScanning(false); setIssues(found); setStep(1)
     }
     const tick = () => { if (i < phases.length) { setPhase(phases[i++]); setTimeout(tick, 640) } else { finish() } }
@@ -147,7 +150,7 @@ export default function Upload({ onCertified }) {
   const handleFile = (f) => {
     const meta = { name: f.name, size: f.size }
     if (isHtml(f.name)) f.text().then((t) => start(meta, { text: t })).catch(() => start(meta))
-    else if (isPdf(f.name)) { const url = URL.createObjectURL(f); blobUrl.current = url; start(meta, { url }) }
+    else if (isPdf(f.name)) { const url = URL.createObjectURL(f); blobUrl.current = url; start(meta, { url, pdf: f }) }
     else if (isOffice(f.name)) start(meta, { office: f })
     else if (isAudio(f.name)) start(meta, { audio: f })
     else start(meta)
@@ -158,14 +161,14 @@ export default function Upload({ onCertified }) {
     try {
       const url = `${import.meta.env.BASE_URL}samples/${name}`
       if (isHtml(name)) { const t = await (await fetch(url)).text(); start({ name, size: t.length }, { text: t }) }
-      else if (isPdf(name)) { const b = await (await fetch(url)).blob(); start({ name, size: b.size }, { url }) }
+      else if (isPdf(name)) { const b = await (await fetch(url)).blob(); start({ name, size: b.size }, { url, pdf: b }) }
       else if (isOffice(name)) { const b = await (await fetch(url)).blob(); start({ name, size: b.size }, { office: b }) }
       else if (isAudio(name)) { const b = await (await fetch(url)).blob(); start({ name, size: b.size }, { audio: b }) }
       else { const b = await (await fetch(url)).blob(); start({ name, size: b.size }) }
     }
     catch { start({ name, size: 100 * 1024 }) }
   }
-  const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setOfficeBlob(null); setAudioBlob(null); setCaptions(null); setRealEngine(null); setReviewOutcome(null) }
+  const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setOfficeBlob(null); setAudioBlob(null); setCaptions(null); setPdfBlob(null); setRealEngine(null); setReviewOutcome(null) }
   const score = Math.max(0, 100 - issues.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0))
   const review = issues.slice(-1)
   const reviewItem = review[0]
@@ -398,7 +401,7 @@ export default function Upload({ onCertified }) {
               <p className="muted" style={{ marginTop: 10 }}>Validated against WCAG 2.1 AA · every step captured in the audit trail.</p>
             </section>
           </div>
-          {isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <ResultPreview file={file} srcText={srcText} pdfUrl={pdfUrl} officeBlob={officeBlob} issues={issues} />}
+          {isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <ResultPreview file={file} srcText={srcText} pdfUrl={pdfUrl} pdfBlob={pdfBlob} officeBlob={officeBlob} issues={issues} />}
         </>
       )}
     </>
