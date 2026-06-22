@@ -18,7 +18,7 @@ const STATUS = {
   '1.4.1': 'Live · auto', '1.4.3': 'Live · auto', '1.4.4': 'Live · auto', '1.4.5': 'Live · AI OCR',
   '1.4.10': 'Live · auto', '1.4.11': 'Live · auto', '1.4.12': 'Live · auto',
   '2.1.1': 'Live · auto', '2.1.2': 'Live · AI + human', '2.4.1': 'Roadmap', '2.4.2': 'Live · auto', '2.4.4': 'Live · AI',
-  '2.4.6': 'Live · auto', '2.4.7': 'Live · auto',
+  '2.4.3': 'Live · auto', '2.4.6': 'Live · auto', '2.4.7': 'Live · auto', '4.1.2': 'Live · auto',
   '3.1.1': 'Live · auto', '3.1.2': 'Live · AI', '3.3.2': 'Live · auto', 'PDF/UA': 'Roadmap',
 }
 export function statusFor(sc, source = '', phase = '') {
@@ -109,7 +109,9 @@ export function transformSlideXml(xml) {
       // section header row spans the table — widen the span and add one more merged cell
       newRow = row.replace(/gridSpan="(\d+)"/, (mm, s) => `gridSpan="${+s + 1}"`).replace('</a:tr>', `${mergeTpl}</a:tr>`)
     } else {
-      const sc = (row.match(/<a:t>([^<]*)<\/a:t>/) || [])[1] || ''
+      // the Code cell may carry a footnote marker (e.g. "1.4.4 *") — normalise to the bare SC
+      const raw = ((row.match(/<a:t>([^<]*)<\/a:t>/) || [])[1] || '').trim()
+      const sc = raw.match(/\d+\.\d+\.\d+/)?.[0] || raw
       newRow = row.replace('</a:tr>', `${fillCell(dataTpl, statusFor(sc), true)}</a:tr>`)
     }
     table = table.replace(row, newRow)

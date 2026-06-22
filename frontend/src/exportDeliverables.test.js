@@ -28,26 +28,32 @@ describe('export deliverables — Status column injection', () => {
     expect(row145[0]).toMatch(/<c r="P\d+"[^>]*><is><t>Live · AI OCR<\/t>/)
   })
 
-  it('PowerPoint: adds a Status column to the table on each slide', async () => {
+  it('PowerPoint: adds a Status column to every table slide (skips tableless slides)', async () => {
     const zip = await transformPptx(await load('public/exports/method-deck.pptx'))
     const out = await roundTrip(zip)
+    let tableSlides = 0
+    let row145 = null
     for (const path of Object.keys(out.files).filter((n) => /slide\d+\.xml$/.test(n))) {
       const xml = await out.file(path).async('string')
       expect(wellFormed(xml)).toBe(true)
+      if (!/<a:tbl>/.test(xml)) continue // title / no-table slide — left untouched
+      tableSlides++
       const grid = xml.match(/<a:tblGrid>[\s\S]*?<\/a:tblGrid>/)[0]
       expect((grid.match(/<a:gridCol /g) || []).length).toBe(6) // 5 + status
       expect(xml).toMatch(/<a:t>Status<\/a:t>/) // header cell
+      const r = (xml.match(/<a:tr[ >][\s\S]*?<\/a:tr>/g) || []).find((rr) => /<a:t>1\.4\.5[^<]*<\/a:t>/.test(rr))
+      if (r) row145 = r
     }
-    // slide1 specifically: the 1.4.5 row shows the OCR status
-    const s1 = await out.file('ppt/slides/slide1.xml').async('string')
-    const tbl = s1.match(/<a:tbl>[\s\S]*?<\/a:tbl>/)[0]
-    const row = (tbl.match(/<a:tr[ >][\s\S]*?<\/a:tr>/g) || []).find((r) => /<a:t>1\.4\.5<\/a:t>/.test(r))
-    expect(row).toMatch(/<a:t>Live · AI OCR<\/a:t>/)
+    expect(tableSlides).toBeGreaterThan(0)
+    // the 1.4.5 row (wherever it lives) shows the OCR status
+    expect(row145).toMatch(/<a:t>Live · AI OCR<\/a:t>/)
   })
 
   it('table width stays constant (no overflow) and section rows still span full width', async () => {
     const zip = await load('public/exports/method-deck.pptx')
-    const s1 = await zip.file('ppt/slides/slide1.xml').async('string')
+    const slidePath = Object.keys(zip.files).filter((n) => /slide\d+\.xml$/.test(n)).sort()
+    let s1
+    for (const p of slidePath) { const xml = await zip.file(p).async('string'); if (/<a:tbl>/.test(xml)) { s1 = xml; break } }
     const sum = (xml) => [...xml.match(/<a:tblGrid>[\s\S]*?<\/a:tblGrid>/)[0].matchAll(/<a:gridCol w="(\d+)">/g)].reduce((a, m) => a + +m[1], 0)
     const after = transformSlideXml(s1)
     expect(Math.abs(sum(after) - sum(s1))).toBeLessThan(10) // same total width (rounding only)
