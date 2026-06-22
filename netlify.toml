@@ -24,11 +24,9 @@
 [functions]
   directory = "netlify/functions"
 
-# keep function calls from being swallowed by the SPA catch-all below
-[[redirects]]
-  from = "/.netlify/functions/*"
-  to = "/.netlify/functions/:splat"
-  status = 200
+# Note: /.netlify/functions/* is reserved and auto-routed by Netlify BEFORE redirects,
+# so no rule is needed (and a redirect with that source is rejected). The SPA catch-all
+# below never swallows function calls.
 
 # SPA fallback so refreshes / deep links resolve to index.html
 [[redirects]]
