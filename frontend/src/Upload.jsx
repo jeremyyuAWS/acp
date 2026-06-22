@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { generateCaptions, blobToBase64 } from './aiRemediate.js'
+import { generateCaptions, blobToBase64, generateAltText } from './aiRemediate.js'
 import { Bars } from './charts.jsx'
 import { IDENTITY } from './sim.js'
 import Logo from './Logo.jsx'
@@ -44,7 +44,9 @@ const proposeFix = (f) => { const sc = (f?.wcag || '').match(/^\d+\.\d+\.\d+/)?.
 const isHtml = (name) => /\.html?$/i.test(name || '')
 const isPdf = (name) => /\.pdf$/i.test(name || '')
 const isAudio = (name) => /\.(mp3|m4a|wav|aac|ogg|webm|mp4|mov)$/i.test(name || '')
+const isImage = (name) => /\.(png|jpe?g|gif|webp)$/i.test(name || '')
 const AUDIO_ISSUES = [['MEDIA-CAPTIONS-001', '1.2.2 captions', 'CRITICAL', 'no synchronized captions for the audio'], ['MEDIA-TRANSCRIPT-001', '1.2.1 audio-only content', 'SERIOUS', 'no text transcript provided']]
+const IMAGE_ISSUES = [['IMG-ALT-001', '1.1.1 non-text content', 'CRITICAL', 'image has no alternative text']]
 
 // Single-document walkthrough: upload → scan → assess → remediate → human review →
 // certified. Self-contained demo (no backend); findings are keyed off the file type so
@@ -60,7 +62,7 @@ const EXT_ISSUES = {
 const SEV_PEN = { CRITICAL: 16, SERIOUS: 11, MODERATE: 5, MINOR: 2 }
 const SEV_BADGE = { CRITICAL: ['#E2EDFB', '#1F5FA8'], SERIOUS: ['#E6EFFB', '#2A5E9E'], MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'] }
 const extOf = (name) => { const m = /\.([a-z0-9]+)$/i.exec(name || ''); return (m ? m[1] : 'pdf').toLowerCase() }
-const issuesFor = (name) => (isAudio(name) ? AUDIO_ISSUES : (EXT_ISSUES[extOf(name)] || EXT_ISSUES.pdf)).map(([rule, wcag, sev, detail]) => ({ rule, wcag, sev, detail }))
+const issuesFor = (name) => (isAudio(name) ? AUDIO_ISSUES : isImage(name) ? IMAGE_ISSUES : (EXT_ISSUES[extOf(name)] || EXT_ISSUES.pdf)).map(([rule, wcag, sev, detail]) => ({ rule, wcag, sev, detail }))
 
 // Past-upload detail dialog — its own component so focus management runs on open.
 function HistoryDetail({ viewing, onClose }) {
@@ -104,6 +106,37 @@ function CaptionsPanel({ blob, captions }) {
   )
 }
 
+// Image result — real Claude-vision alt text (1.1.1) + image-of-text OCR (1.4.5).
+function ImagePanel({ blob, result }) {
+  const url = useMemo(() => (blob ? URL.createObjectURL(blob) : null), [blob])
+  useEffect(() => () => { if (url) URL.revokeObjectURL(url) }, [url])
+  const text = result?.text && result.text.trim()
+  return (
+    <div className="capwrap">
+      <div className="bahd"><b>Image · alt text &amp; text extraction</b>{result ? <span className="aialtbadge" style={{ marginLeft: 8 }}>⚡ Claude vision</span> : <span className="muted" style={{ marginLeft: 8 }}>· describing the image…</span>}</div>
+      {url && <img src={url} alt={result?.alt || ''} style={{ maxWidth: '100%', maxHeight: 280, borderRadius: 8, marginTop: 10, border: '1px solid var(--line)' }} />}
+      {result ? (<>
+        <div className="aialtcallout" style={{ marginTop: 10 }}>
+          <span className="aialtbadge">1.1.1 alt text</span>
+          <span>AI-generated alt text: <b>“{result.alt}”</b> — written into the document so screen-reader users can perceive the image.</span>
+        </div>
+        {text && (
+          <div className="aialtcallout">
+            <span className="aialtbadge">1.4.5 image of text · OCR</span>
+            <span>This image is rendered text. Claude extracted it as real, selectable text: <b>“{text.length > 260 ? text.slice(0, 260) + '…' : text}”</b></span>
+          </div>
+        )}
+      </>) : <p className="muted" style={{ marginTop: 9, fontSize: 12 }}>Real Claude-vision alt text + image-of-text OCR run on the deployed site; offline it falls back.</p>}
+    </div>
+  )
+}
+
+function ScanImg({ blob }) {
+  const url = useMemo(() => URL.createObjectURL(blob), [blob])
+  useEffect(() => () => URL.revokeObjectURL(url), [url])
+  return <img src={url} alt="" style={{ maxWidth: '100%', maxHeight: 220, borderRadius: 6, display: 'block', margin: '0 auto' }} />
+}
+
 export default function Upload({ onCertified }) {
   const [step, setStep] = useState(0)
   const [file, setFile] = useState(null)
@@ -121,6 +154,8 @@ export default function Upload({ onCertified }) {
   const [audioBlob, setAudioBlob] = useState(null)
   const [captions, setCaptions] = useState(null)
   const [pdfBlob, setPdfBlob] = useState(null)
+  const [imageBlob, setImageBlob] = useState(null)
+  const [imgResult, setImgResult] = useState(null)
   const blobUrl = useRef(null)
 
   // Real captions (1.2.2/1.2.3) via the Whisper-backed function when an audio file is uploaded.
@@ -131,10 +166,18 @@ export default function Upload({ onCertified }) {
     return () => { live = false }
   }, [audioBlob])
 
-  const start = (f, { text = null, url = null, office = null, audio = null, pdf = null } = {}) => {
-    setFile(f); setSrcText(text); setPdfUrl(url); setPdfBlob(pdf); setOfficeBlob(office); setAudioBlob(audio); setCaptions(null); setRealEngine(null); setScanning(true); setStep(0)
+  // Real Claude-vision alt text (1.1.1) + image-of-text OCR (1.4.5) when an image is uploaded.
+  useEffect(() => {
+    if (!imageBlob) { setImgResult(null); return }
+    let live = true
+    ;(async () => { const b64 = await blobToBase64(imageBlob); const r = await generateAltText({ data: b64, mediaType: imageBlob.type || 'image/png', hint: `Image “${file?.name || ''}”` }); if (live && r) setImgResult(r) })()
+    return () => { live = false }
+  }, [imageBlob, file])
+
+  const start = (f, { text = null, url = null, office = null, audio = null, pdf = null, image = null } = {}) => {
+    setFile(f); setSrcText(text); setPdfUrl(url); setPdfBlob(pdf); setOfficeBlob(office); setAudioBlob(audio); setImageBlob(image); setImgResult(null); setCaptions(null); setRealEngine(null); setScanning(true); setStep(0)
     const html = text && isHtml(f.name)
-    const realLabel = html ? 'Analysing with axe-core (real WCAG engine)…' : office ? 'Parsing the document (real OOXML analysis)…' : pdf ? 'Parsing the PDF structure (pdf-lib)…' : audio ? 'Transcribing the audio with Whisper…' : 'Analysing against WCAG 2.1 AA…'
+    const realLabel = html ? 'Analysing with axe-core (real WCAG engine)…' : office ? 'Parsing the document (real OOXML analysis)…' : pdf ? 'Parsing the PDF structure (pdf-lib)…' : audio ? 'Transcribing the audio with Whisper…' : image ? 'Describing the image with Claude vision…' : 'Analysing against WCAG 2.1 AA…'
     const phases = ['Connecting…', 'Reading document…', 'mova Agent classifying & tagging…', realLabel, 'Scoring…']
     let i = 0
     const finish = async () => {
@@ -142,6 +185,7 @@ export default function Upload({ onCertified }) {
       if (html) { try { found = await auditHtml(text); setRealEngine('axe-core') } catch { /* fall back */ } }
       else if (office) { try { found = await auditOffice(office); setRealEngine('OOXML') } catch { /* fall back */ } }
       else if (pdf) { try { found = await auditPdf(pdf); setRealEngine('pdf-lib') } catch { /* fall back */ } }
+      else if (image) { setRealEngine('Claude vision') }
       setScanning(false); setIssues(found); setStep(1)
     }
     const tick = () => { if (i < phases.length) { setPhase(phases[i++]); setTimeout(tick, 640) } else { finish() } }
@@ -153,6 +197,7 @@ export default function Upload({ onCertified }) {
     else if (isPdf(f.name)) { const url = URL.createObjectURL(f); blobUrl.current = url; start(meta, { url, pdf: f }) }
     else if (isOffice(f.name)) start(meta, { office: f })
     else if (isAudio(f.name)) start(meta, { audio: f })
+    else if (isImage(f.name)) start(meta, { image: f })
     else start(meta)
   }
   const onInput = (e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }
@@ -164,11 +209,12 @@ export default function Upload({ onCertified }) {
       else if (isPdf(name)) { const b = await (await fetch(url)).blob(); start({ name, size: b.size }, { url, pdf: b }) }
       else if (isOffice(name)) { const b = await (await fetch(url)).blob(); start({ name, size: b.size }, { office: b }) }
       else if (isAudio(name)) { const b = await (await fetch(url)).blob(); start({ name, size: b.size }, { audio: b }) }
+      else if (isImage(name)) { const b = await (await fetch(url)).blob(); start({ name, size: b.size }, { image: b }) }
       else { const b = await (await fetch(url)).blob(); start({ name, size: b.size }) }
     }
     catch { start({ name, size: 100 * 1024 }) }
   }
-  const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setOfficeBlob(null); setAudioBlob(null); setCaptions(null); setPdfBlob(null); setRealEngine(null); setReviewOutcome(null) }
+  const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setOfficeBlob(null); setAudioBlob(null); setCaptions(null); setPdfBlob(null); setImageBlob(null); setImgResult(null); setRealEngine(null); setReviewOutcome(null) }
   const score = Math.max(0, 100 - issues.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0))
   const review = issues.slice(-1)
   const reviewItem = review[0]
@@ -229,8 +275,8 @@ export default function Upload({ onCertified }) {
           onDragOver={(e) => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)} onDrop={onDrop}>
           <div className="dzicon" aria-hidden="true">⬍</div>
           <div style={{ fontSize: 15 }}>Drag a document here, or <label htmlFor="upfile" className="dzlink">browse</label></div>
-          <input id="upfile" type="file" style={{ display: 'none' }} accept=".pdf,.docx,.pptx,.xlsx,.html,.htm,.mp3,.m4a,.wav,.mp4,.mov" onChange={onInput} />
-          <div className="muted" style={{ marginTop: 4 }}>PDF · Word · PowerPoint · Excel · HTML · audio/video — scanned in your browser, nothing is uploaded anywhere</div>
+          <input id="upfile" type="file" style={{ display: 'none' }} accept=".pdf,.docx,.pptx,.xlsx,.html,.htm,.mp3,.m4a,.wav,.mp4,.mov,.png,.jpg,.jpeg,.gif,.webp" onChange={onInput} />
+          <div className="muted" style={{ marginTop: 4 }}>PDF · Word · PowerPoint · Excel · HTML · audio · image — scanned in your browser, nothing is uploaded anywhere</div>
           <div className="muted" style={{ marginTop: 2, fontSize: 12 }}>⚡ HTML is analysed for real with the axe-core WCAG engine</div>
           <div className="dzsamples">
             <span className="muted">or try a real multi-page sample:</span>
@@ -240,6 +286,7 @@ export default function Upload({ onCertified }) {
             <button className="ghost small" onClick={() => sample('finance-metrics.xlsx')}>Excel</button>
             <button className="ghost small" onClick={() => sample('careers-landing.html')}>HTML</button>
             <button className="ghost small" onClick={() => sample('benefits-briefing.mp3')}>Audio</button>
+            <button className="ghost small" onClick={() => sample('enrollment-notice.png')} title="An image of text — watch Claude read it back as real text (1.4.5)">Image of text</button>
           </div>
         </div>
       )}
@@ -265,7 +312,8 @@ export default function Upload({ onCertified }) {
             {pdfUrl ? <PdfPreview url={pdfUrl} pages={1} />
               : srcText ? <iframe className="scaniframe" sandbox="" srcDoc={srcText} title="document preview" />
                 : officeBlob ? <OfficePreview blob={officeBlob} name={file?.name} className="scanoffice" />
-                  : <div className="scanplaceholder"><span style={{ fontSize: 46 }} aria-hidden="true">📄</span><div className="muted">{file?.name}</div></div>}
+                  : imageBlob ? <ScanImg blob={imageBlob} />
+                    : <div className="scanplaceholder"><span style={{ fontSize: 46 }} aria-hidden="true">📄</span><div className="muted">{file?.name}</div></div>}
             <div className="scanline" aria-hidden="true" />
           </div>
           <div className="scaninfo">
@@ -314,7 +362,7 @@ export default function Upload({ onCertified }) {
               </div>
             ))}
           </div>
-          {isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <BeforeAfter file={file} issues={issues} srcText={srcText} pdfUrl={pdfUrl} officeBlob={officeBlob} />}
+          {isImage(file?.name) ? <ImagePanel blob={imageBlob} result={imgResult} /> : isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <BeforeAfter file={file} issues={issues} srcText={srcText} pdfUrl={pdfUrl} officeBlob={officeBlob} />}
           <ScreenReaderDemo issues={issues} />
           <p className="muted" style={{ marginTop: 12 }}>{autoFixed.length} finding(s) auto-fixed · <b>{review.length}</b> routed to human review (low confidence).</p>
           <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 4 }}><button onClick={() => setStep(3)}>Human review →</button></div>
@@ -401,7 +449,7 @@ export default function Upload({ onCertified }) {
               <p className="muted" style={{ marginTop: 10 }}>Validated against WCAG 2.1 AA · every step captured in the audit trail.</p>
             </section>
           </div>
-          {isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <ResultPreview file={file} srcText={srcText} pdfUrl={pdfUrl} pdfBlob={pdfBlob} officeBlob={officeBlob} issues={issues} />}
+          {isImage(file?.name) ? <ImagePanel blob={imageBlob} result={imgResult} /> : isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <ResultPreview file={file} srcText={srcText} pdfUrl={pdfUrl} pdfBlob={pdfBlob} officeBlob={officeBlob} issues={issues} />}
         </>
       )}
     </>
