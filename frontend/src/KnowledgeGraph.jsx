@@ -86,6 +86,13 @@ export default function KnowledgeGraph({ files }) {
       .attr('r', (d) => (d.t === 'crit' ? crad(d) : frad(d)))
       .attr('fill', (d) => (d.t === 'crit' ? '#2E72C9' : fileColor(d)))
       .attr('stroke', '#fff').attr('stroke-width', 1.5)
+    // WCAG 1.4.1 — file status must not be conveyed by colour alone: a white glyph
+    // (✓ certifiable · ! has findings · × unanalysable) gives a non-colour cue too.
+    node.filter((d) => d.t === 'file').append('text')
+      .text((d) => (d.status === 'error' ? '×' : d.compliant ? '✓' : '!'))
+      .attr('text-anchor', 'middle').attr('dominant-baseline', 'central')
+      .attr('font-size', (d) => `${Math.round(frad(d) * 1.7)}px`).attr('font-weight', 700)
+      .attr('fill', '#fff').attr('pointer-events', 'none')
     node.append('title').text((d) => (d.t === 'crit' ? `WCAG ${d.label} — ${d.name} · ${d.n} files · click to focus` : `${d.id} · click for details`))
     node.filter((d) => d.t === 'crit').append('text')
       .text((d) => d.label).attr('text-anchor', 'middle').attr('dy', (d) => -crad(d) - 5)
@@ -165,9 +172,9 @@ export default function KnowledgeGraph({ files }) {
         <span className="muted" style={{ marginLeft: 'auto' }}>{dq ? `${graphFiles.length} match${graphFiles.length === 1 ? '' : 'es'} for “${query.trim()}”` : capped ? `top ${graphFiles.length} of ${total} by priority` : `${graphFiles.length} document(s)`} · click a criterion to focus</span>
       </div>
       <div className="kglegend">
-        <span><i style={{ background: '#C88520' }} />has issues</span>
-        {showClean && <span><i style={{ background: '#639922' }} />certifiable</span>}
-        {showClean && <span><i style={{ background: '#888780' }} />unanalysable</span>}
+        <span><i style={{ background: '#C88520', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700 }}>!</i>has issues</span>
+        {showClean && <span><i style={{ background: '#639922', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700 }}>✓</i>certifiable</span>}
+        {showClean && <span><i style={{ background: '#888780', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700 }}>×</i>unanalysable</span>}
         <span><i style={{ background: '#2E72C9' }} />WCAG criterion failed</span>
         <span className="muted">hover or focus to isolate · arrow keys to navigate · enter to open</span>
       </div>
