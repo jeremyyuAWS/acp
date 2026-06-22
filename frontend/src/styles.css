@@ -790,6 +790,8 @@ input:focus-visible, [role="tab"]:focus-visible {
 .rmseg.static { cursor: default; }
 .rmseg:not(.static):hover { border-color: #c7b8d4; box-shadow: 0 3px 12px rgba(70, 48, 63, 0.1); }
 .rmseg.on { border-color: var(--plum); box-shadow: 0 3px 14px rgba(70, 48, 63, 0.16); background: #faf7fc; }
+.rmseg.done { border-color: #cfe0bd; background: #F4F9EE; }
+.rmmilestone.reached { color: #3B6D11; background: #E7F0DC; }
 .rmtop { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .rmid { font-size: 11px; font-weight: 700; color: #fff; background: var(--plum); border-radius: 6px; padding: 1px 7px; }
 .rmwhen { font-size: 12px; font-weight: 700; color: var(--ink); }
@@ -943,6 +945,9 @@ input:focus-visible, [role="tab"]:focus-visible {
 .hitlhd { display: flex; align-items: center; gap: 10px; }
 .hitlhd b { font-size: 14px; }
 .hitlbadge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #1F5FA8; background: #E2EDFB; border-radius: 5px; padding: 2px 7px; }
+.hitlverify { flex: 0 0 auto; font-size: 12px; font-weight: 600; color: #1F5FA8; background: #fff; border: 1px solid #B9D2F0; border-radius: 6px; padding: 4px 11px; cursor: pointer; min-width: 78px; }
+.hitlverify:hover { background: #EEF4FB; }
+.hitlverify.on { color: #3B6D11; background: #E7F0DC; border-color: #cfe0bd; }
 .aifixfrom { color: var(--muted); text-decoration: line-through; }
 .capwrap { margin-top: 4px; }
 .captranscript { margin-top: 10px; background: #faf8fb; border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px; max-height: 220px; overflow-y: auto; }

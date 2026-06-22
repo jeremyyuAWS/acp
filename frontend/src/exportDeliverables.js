@@ -14,7 +14,12 @@ const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</
 // but auto-fix is on the roadmap; Roadmap/Partner baseline = not platform-built yet.
 const STATUS = {
   '1.1.1': 'Live · AI vision', '1.2.1': 'Live · Whisper', '1.2.2': 'Live · Whisper', '1.2.3': 'Live · transcript',
-  '1.3.1': 'Live · auto', '1.3.2': 'Detected · roadmap', '1.3.3': 'Live · AI',
+  '1.3.1': 'Live · auto', '1.3.2': 'Covered · HITL', '1.3.3': 'Live · AI',
+  // Phase 2 — covered via detect-and-route to a human reviewer
+  '1.2.4': 'Covered · HITL', '1.2.5': 'Covered · HITL', '1.4.13': 'Covered · HITL', '2.1.4': 'Covered · HITL',
+  '2.2.1': 'Covered · HITL', '2.2.2': 'Covered · HITL', '2.5.1': 'Covered · HITL', '2.5.2': 'Covered · HITL',
+  '2.5.4': 'Covered · HITL', '3.2.1': 'Covered · HITL', '3.2.2': 'Covered · HITL', '3.3.1': 'Covered · HITL',
+  '3.3.3': 'Covered · HITL', '3.3.4': 'Covered · HITL', '4.1.3': 'Covered · HITL',
   '1.4.1': 'Live · auto', '1.4.3': 'Live · auto', '1.4.4': 'Live · auto', '1.4.5': 'Live · AI OCR',
   '1.4.10': 'Live · auto', '1.4.11': 'Live · auto', '1.4.12': 'Live · auto',
   '2.1.1': 'Live · auto', '2.1.2': 'Live · AI + human', '2.4.1': 'Roadmap', '2.4.2': 'Live · auto', '2.4.4': 'Live · AI',

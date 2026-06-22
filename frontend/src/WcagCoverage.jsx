@@ -8,6 +8,7 @@ import { useDialog } from './a11y.js'
 // the "we go beyond a raw scanner" story with the real catalog + LOE estimate.
 const SRC = {
   'Shipped (demo)': ['Live now', '#3B6D11', '#E7F0DC'],
+  'MDK HITL': ['Covered · HITL', '#1F5FA8', '#E2EDFB'],
   'Partner baseline': ['Partner-provided', '#3C3489', '#EEEDFE'],
   'MDK net-new': ['Roadmap', '#854F0B', '#FAEEDA'],
 }
@@ -16,7 +17,7 @@ const FILTERS = [
   ['all', 'All 87'], ['A', 'Level A'], ['AA', 'Level AA'], ['2.2', 'New in 2.2'],
   ['Required', 'US Required'], ['docs', 'Applies to documents'],
   ['rem:auto', '⚡ Auto-remediated'], ['rem:assisted', '✎ AI-assisted'], ['rem:manual', '✋ Human-verified'],
-  ['Shipped (demo)', 'Live now'], ['MDK net-new', 'Roadmap'],
+  ['Shipped (demo)', 'Live now'], ['MDK HITL', 'Covered · HITL'], ['MDK net-new', 'Roadmap'],
 ]
 // Plain-language meaning of the three conformance levels, for users new to WCAG.
 const LEVELS = [
@@ -29,9 +30,9 @@ const LEVEL_MEANING = { A: 'must-have baseline', AA: 'should-have · the legal t
 // Delivery roadmap — Claude-paced (AI-built), not human dev-weeks. These compress
 // the LOE because Claude writes the checks, evals and review scaffolds directly.
 const ROADMAP_PHASES = [
-  { id: 'P0', label: 'Foundation', when: 'Days 1–2', match: null, desc: 'Coverage audit vs. partner · lock the check contract · stand up the golden-corpus eval harness.' },
-  { id: 'P1', label: 'Agentic AI checks', when: 'Days 3–5', match: (p) => p.startsWith('Phase 1'), desc: 'Semantic LLM evaluators — sensory characteristics, headings & labels. Claude authors prompt + evals.' },
-  { id: 'P2', label: 'Human-in-the-loop', when: 'Weeks 2–3', match: (p) => p.startsWith('Phase 2'), milestone: 'Level AA conformance', desc: 'Pre-screen detectors + reviewer workflow for the manual Required criteria (captions, focus order, errors…).' },
+  { id: 'P0', label: 'Foundation', when: 'Days 1–2', match: null, done: true, desc: 'Coverage audit vs. partner · lock the check contract · stand up the golden-corpus eval harness.' },
+  { id: 'P1', label: 'Agentic AI checks', when: 'Days 3–5', match: (p) => p.startsWith('Phase 1'), done: true, desc: 'Semantic LLM evaluators — sensory characteristics, headings & labels. Claude authors prompt + evals.' },
+  { id: 'P2', label: 'Human-in-the-loop', when: 'Weeks 2–3', match: (p) => p.startsWith('Phase 2'), done: true, milestone: 'Level AA conformance', desc: 'Pre-screen detectors + reviewer workflow for the manual Required criteria (captions, focus order, errors…).' },
   { id: 'P3', label: 'AAA / optional', when: 'Weeks 4–6', match: (p) => p.startsWith('Phase 3'), desc: 'Everything not legally required — pursued selectively.' },
 ]
 const PHASE_SHORT = {
@@ -70,7 +71,7 @@ const REM_META = {
   manual: ['✋', 'Human-verified', '#1F5FA8', '#E2EDFB', 'AI can propose the change, but it must be verified by a person (e.g. interactive testing).'],
   detect: ['◷', 'Detect & route', '#5F5E5A', '#EFEDEA', 'Flagged for a reviewer — no automated fix exists yet.'],
 }
-const remTier = (r) => REMEDIATION[r.sc] || (r.docApplies ? 'assisted' : 'detect')
+const remTier = (r) => (r.source === 'MDK HITL' ? 'manual' : REMEDIATION[r.sc] || (r.docApplies ? 'assisted' : 'detect'))
 
 // Automatability under "no UI automation" (Devanathan's analysis): VALIDATE — confirm a
 // pass — and REMEDIATE — apply the fix — are separate axes. Levels: green = static + LLM,
@@ -142,6 +143,7 @@ function ScDetail({ sel, onClose }) {
             const valCov = vlv === 'human'
               ? ['Partial · static flag', '#854F0B', 'Detected/flagged statically; a true pass needs rendering or interaction.']
               : sel.source === 'Shipped (demo)' ? ['Live now', '#3B6D11', 'Validated by the engine in this demo.']
+              : sel.source === 'MDK HITL' ? ['Detect & route · HITL', '#1F5FA8', 'Flagged statically by the pre-screen; a human reviewer verifies and signs off.']
               : sel.source === 'Partner baseline' ? ['Partner scanner', '#3C3489', 'Validated by the partner’s automated engine.']
               : ['Roadmap', '#854F0B', 'Validation is on the roadmap.']
             return <>
@@ -154,7 +156,7 @@ function ScDetail({ sel, onClose }) {
           {sel.source === 'MDK net-new' && (() => { const ph = ROADMAP_PHASES.find((x) => x.match && x.match(sel.phase)); return ph ? <div><span className="muted">Timeline · Claude-paced</span><b>{ph.when}</b></div> : null })()}
           {sel.source === 'MDK net-new' && <div><span className="muted">Effort (human team)</span><b>{sel.lo}–{sel.hi} dev-days</b></div>}
         </div>
-        {sel.source !== 'MDK net-new' && <p className="muted" style={{ marginTop: 12 }}>{sel.source === 'Shipped (demo)' ? 'Already validated by the platform in this demo.' : 'Covered by the partner’s automated engine for web; net-new only for PDF/Office formats.'}</p>}
+        {sel.source !== 'MDK net-new' && <p className="muted" style={{ marginTop: 12 }}>{sel.source === 'Shipped (demo)' ? 'Already validated by the platform in this demo.' : sel.source === 'MDK HITL' ? 'Phase 2 — the pre-screen flags this risk statically and routes it to a human reviewer, who verifies and signs off.' : 'Covered by the partner’s automated engine for web; net-new only for PDF/Office formats.'}</p>}
       </div>
     </div>
   )
@@ -176,7 +178,6 @@ export default function WcagCoverage() {
   const shown = WCAG.filter(match)
   const tally = (src) => WCAG.filter((r) => r.source === src).length
   const phaseCount = (ph) => ph.match ? WCAG.filter((r) => ph.match(r.phase)).length : null
-  const net = WCAG.filter((r) => r.source === 'MDK net-new')
 
   return (
     <>
@@ -193,10 +194,10 @@ export default function WcagCoverage() {
       </div>
 
       <div className="covstat">
-        <div className="covstatcard"><b>{tally('Shipped (demo)')}</b><span className="muted">checks live in this demo</span></div>
+        <div className="covstatcard"><b>{tally('Shipped (demo)')}</b><span className="muted">auto / AI-remediated live</span></div>
+        <div className="covstatcard"><b style={{ color: '#1F5FA8' }}>{tally('MDK HITL')}</b><span className="muted">covered via human review · Phase 2</span></div>
         <div className="covstatcard"><b>{tally('Partner baseline')}</b><span className="muted">automated A/AA from partner</span></div>
-        <div className="covstatcard"><b>{net.length}</b><span className="muted">net-new beyond partner</span></div>
-        <div className="covstatcard"><b>~3 wks</b><span className="muted">to Level AA · Claude-paced build</span></div>
+        <div className="covstatcard"><b style={{ color: '#3B6D11' }}>✓ AA</b><span className="muted">every Required A/AA now covered</span></div>
       </div>
 
       <div className="levelramp">
@@ -221,16 +222,18 @@ export default function WcagCoverage() {
         <div className="rmtrack">
           {ROADMAP_PHASES.map((ph, i) => {
             const cnt = phaseCount(ph)
-            const fkey = ph.id === 'P0' ? null : ph.id
+            // P0/P1 are delivered with no useful filter; P2 (now covered) + P3 stay clickable
+            const fkey = (ph.id === 'P0' || ph.id === 'P1') ? null : ph.id
             const active = fkey && filter === fkey
+            const cntText = ph.done ? (cnt ? `✓ ${cnt} delivered` : '✓ delivered') : cnt != null ? `${cnt} criteria` : 'one-time'
             return (
               <div className="rmstep" key={ph.id}>
-                <button className={`rmseg${active ? ' on' : ''}${fkey ? '' : ' static'}`} onClick={() => fkey && setFilter(active ? 'all' : fkey)} disabled={!fkey} title={ph.desc}>
-                  <div className="rmtop"><span className="rmid">{ph.id}</span><span className="rmwhen">{ph.when}</span></div>
+                <button className={`rmseg${active ? ' on' : ''}${fkey ? '' : ' static'}${ph.done ? ' done' : ''}`} onClick={() => fkey && setFilter(active ? 'all' : fkey)} disabled={!fkey} title={ph.desc}>
+                  <div className="rmtop"><span className="rmid">{ph.id}{ph.done && ' ✓'}</span><span className="rmwhen">{ph.when}</span></div>
                   <div className="rmlabel">{ph.label}</div>
-                  <div className="muted rmcnt">{cnt != null ? `${cnt} criteria` : 'one-time'}</div>
+                  <div className="muted rmcnt">{cntText}</div>
                 </button>
-                {ph.milestone && <span className="rmmilestone" title="Legal target reached">★ {ph.milestone}</span>}
+                {ph.milestone && <span className={`rmmilestone${ph.done ? ' reached' : ''}`} title={ph.done ? 'Legal target reached' : 'Legal target'}>{ph.done ? '✓' : '★'} {ph.milestone}{ph.done ? ' reached' : ''}</span>}
                 {i < ROADMAP_PHASES.length - 1 && <span className="rmarrow" aria-hidden="true">→</span>}
               </div>
             )

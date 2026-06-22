@@ -172,6 +172,7 @@ export default function Upload({ onCertified }) {
   const [imageBlob, setImageBlob] = useState(null)
   const [imgResult, setImgResult] = useState(null)
   const [prescreen, setPrescreen] = useState([]) // Phase 2 · HITL items routed to human review
+  const [hitlVerified, setHitlVerified] = useState(() => new Set()) // reviewer sign-off
   const blobUrl = useRef(null)
 
   // Real captions (1.2.2/1.2.3) via the Whisper-backed function when an audio file is uploaded.
@@ -231,7 +232,7 @@ export default function Upload({ onCertified }) {
     }
     catch { start({ name, size: 100 * 1024 }) }
   }
-  const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setOfficeBlob(null); setAudioBlob(null); setCaptions(null); setPdfBlob(null); setImageBlob(null); setImgResult(null); setPrescreen([]); setRealEngine(null); setReviewOutcome(null) }
+  const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setOfficeBlob(null); setAudioBlob(null); setCaptions(null); setPdfBlob(null); setImageBlob(null); setImgResult(null); setPrescreen([]); setHitlVerified(new Set()); setRealEngine(null); setReviewOutcome(null) }
   // Floor the as-received score at 18 so a heavily-failing document reads as "low" rather
   // than a broken "0" — the lift to 100 still lands dramatically.
   const score = issues.length ? Math.max(18, 100 - issues.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0)) : 100
@@ -418,6 +419,24 @@ export default function Upload({ onCertified }) {
             <div className="muted" style={{ marginBottom: 6 }}>Proposed fix · {reviewItem.wcag}</div>
             <div className="diffbox before"><span className="difftag">before</span>{before}</div>
             <div className="diffbox after"><span className="difftag">after</span><span dangerouslySetInnerHTML={{ __html: after }} /></div>
+            {prescreen.length > 0 && (
+              <div className="hitlpanel" style={{ marginTop: 16 }}>
+                <div className="hitlhd"><b>⚑ Reviewer sign-off</b><span className="hitlbadge">Phase 2 · HITL</span><span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>{hitlVerified.size}/{prescreen.length} verified</span></div>
+                <p className="muted" style={{ margin: '2px 0 9px', fontSize: 12 }}>Confirm each runtime / media criterion the pre-screen flagged — a reviewer verifies and signs off.</p>
+                <div className="findings">
+                  {prescreen.map((p, i) => {
+                    const ok = hitlVerified.has(i)
+                    return (
+                      <div className="finding" key={i}>
+                        <button className={ok ? 'hitlverify on' : 'hitlverify'} aria-pressed={ok} onClick={() => setHitlVerified((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n })}>{ok ? '✓ Verified' : 'Verify'}</button>
+                        <div className="findingmain"><div>{p.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{p.detail}</div></div>
+                      </div>
+                    )
+                  })}
+                </div>
+                {hitlVerified.size < prescreen.length && <button className="ghost small" style={{ marginTop: 9 }} onClick={() => setHitlVerified(new Set(prescreen.map((_, i) => i)))}>✓ Verify all ({prescreen.length})</button>}
+              </div>
+            )}
             <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 16, flexWrap: 'wrap' }}>
               <button onClick={() => certify('approved')}>✓ Approve fix &amp; certify</button>
               <button className="ghost" onClick={() => certify('rejected')}>✕ Reject — defer to manual</button>
@@ -481,9 +500,9 @@ export default function Upload({ onCertified }) {
             <section className="panel">
               <h2>Document journey</h2>
               <div className="journey">
-                {['discovered', `assessed ${score}`, 'auto-fixed', 'reviewed', rejected ? `conditional ${finalScore}` : 'certified 100'].map((l, n) => <span className="jstep" key={n}>✓ {l}</span>)}
+                {['discovered', `assessed ${score}`, 'auto-fixed', 'reviewed', ...(prescreen.length ? [`${hitlVerified.size}/${prescreen.length} HITL verified`] : []), rejected ? `conditional ${finalScore}` : 'certified 100'].map((l, n) => <span className="jstep" key={n}>✓ {l}</span>)}
               </div>
-              <p className="muted" style={{ marginTop: 10 }}>Validated against WCAG 2.1 AA · every step captured in the audit trail.</p>
+              <p className="muted" style={{ marginTop: 10 }}>Validated against WCAG 2.1 AA · every step captured in the audit trail.{prescreen.length > 0 && ` ${hitlVerified.size} of ${prescreen.length} runtime/media criteria verified via human review (Phase 2 · HITL).`}</p>
             </section>
           </div>
           {isImage(file?.name) ? <ImagePanel blob={imageBlob} result={imgResult} /> : isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <ResultPreview file={file} srcText={srcText} pdfUrl={pdfUrl} pdfBlob={pdfBlob} officeBlob={officeBlob} issues={issues} />}
