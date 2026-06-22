@@ -3,6 +3,7 @@ import PdfPreview from './PdfPreview.jsx'
 import OfficePreview from './OfficePreview.jsx'
 import { remediateHtml } from './BeforeAfter.jsx'
 import { remediateOffice } from './officeAudit.js'
+import { generateAltText, firstOfficeImage } from './aiRemediate.js'
 
 const isHtml = (n) => /\.html?$/i.test(n || '')
 const isPdf = (n) => /\.pdf$/i.test(n || '')
@@ -19,16 +20,24 @@ export default function ResultPreview({ file, srcText, pdfUrl, officeBlob, issue
   const [busy, setBusy] = useState(false)
   // genuinely produce the remediated Office file so we can render it side-by-side
   const [remBlob, setRemBlob] = useState(null)
+  const [aiAlt, setAiAlt] = useState(null) // real Claude-vision alt text for the embedded image
   useEffect(() => {
-    let live = true; setRemBlob(null)
-    if (officeBlob) remediateOffice(officeBlob).then((b) => { if (live) setRemBlob(b) }).catch(() => { /* falls back to card */ })
+    let live = true; setRemBlob(null); setAiAlt(null)
+    if (!officeBlob) return () => { live = false }
+    ;(async () => {
+      let alt = null
+      try { const img = await firstOfficeImage(officeBlob); if (img) alt = await generateAltText({ data: img.data, mediaType: img.mediaType, hint: `Image from the document “${name}”` }) } catch { /* fall back to placeholder */ }
+      if (!live) return
+      if (alt) setAiAlt(alt)
+      try { const b = await remediateOffice(officeBlob, { alt }); if (live) setRemBlob(b) } catch { /* falls back to card */ }
+    })()
     return () => { live = false }
   }, [officeBlob])
   const fixes = issues.map((i) => (i.wcag || '').replace(/^(\d+\.\d+\.\d+)\s*·?\s*/, '$1 · ')).slice(0, 6)
   const ext = (name.split('.').pop() || '').toUpperCase()
 
   const dl = (blob, fn) => { const u = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = u; a.download = fn; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 1000) }
-  const downloadOffice = async () => { if (!officeBlob || busy) return; setBusy(true); try { dl(await remediateOffice(officeBlob), `remediated-${name}`) } catch (e) { console.error('office remediation failed', e) } finally { setBusy(false) } }
+  const downloadOffice = async () => { if (!officeBlob || busy) return; setBusy(true); try { dl(await remediateOffice(officeBlob, { alt: aiAlt }), `remediated-${name}`) } catch (e) { console.error('office remediation failed', e) } finally { setBusy(false) } }
   const downloadHtml = () => { if (rem) dl(new Blob([rem.html], { type: 'text/html' }), `remediated-${name.replace(/\.[^.]+$/, '')}.html`) }
 
   const docCard = (badge) => (
@@ -54,6 +63,12 @@ export default function ResultPreview({ file, srcText, pdfUrl, officeBlob, issue
                 : docCard(<span className="rpbadge">✓ accessible</span>)}
         </figure>
       </div>
+      {aiAlt && (
+        <div className="aialtcallout">
+          <span className="aialtbadge">⚡ Claude vision</span>
+          <span>AI-generated alt text for the embedded image: <b>“{aiAlt}”</b> — written into the remediated file.</span>
+        </div>
+      )}
       {!isHtml(name) && (
         <p className="muted rpnote">Accessibility fixes for {isPdf(name) ? 'PDF' : `${ext} (Office)`} files are <b>structural</b> — alt text, document title, table header rows and language are written into the file, so it looks identical but is now machine-readable by assistive technology.{fixes.length > 0 && <> Embedded: {fixes.join(' · ')}.</>}</p>
       )}

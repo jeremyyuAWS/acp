@@ -53,13 +53,16 @@ function addTableHeaders(xml) {
 
 // Apply the safe, mechanical fixes (alt text + table header rows + document title)
 // and return a genuinely remediated file blob.
-export async function remediateOffice(blob) {
+export async function remediateOffice(blob, opts = {}) {
   const JSZip = (await import('jszip')).default
   const zip = await JSZip.loadAsync(blob)
   const names = Object.keys(zip.files).filter((n) => CONTENT.test(n) && !n.includes('_rels'))
+  // opts.alt — real AI-generated alt text (Claude vision); falls back to a placeholder
+  // when the AI endpoint isn't available, so the file is still genuinely remediated.
+  const altText = String(opts.alt || 'Image — described by mova.io').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
   for (const n of names) {
     let xml = await zip.file(n).async('string')
-    xml = xml.replace(CNVPR, (m, tag, attrs, slash) => hasDescr(attrs) ? m : `<${tag}${attrs} descr="Image — described by mova.io"${slash}>`)
+    xml = xml.replace(CNVPR, (m, tag, attrs, slash) => hasDescr(attrs) ? m : `<${tag}${attrs} descr="${altText}"${slash}>`)
     if (n.startsWith('word/')) xml = addTableHeaders(xml)
     zip.file(n, xml)
   }
