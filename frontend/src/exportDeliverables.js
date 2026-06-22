@@ -92,7 +92,9 @@ export function transformSlideXml(xml) {
   const rows = table.match(/<a:tr[ >][\s\S]*?<\/a:tr>/g) || []
   const tcsOf = (r) => r.match(/<a:tc[ >][\s\S]*?<\/a:tc>/g) || []
   const headerTpl = tcsOf(rows[0]).slice(-1)[0]
-  const dataRow = rows.find((r) => !r.includes('gridSpan=') && tcsOf(r).length > 1) || rows[0]
+  // a real DATA row — skip the header (row 0) and any section/gridSpan rows, so status
+  // cells inherit body styling (not the bold header band).
+  const dataRow = rows.slice(1).find((r) => !r.includes('gridSpan=') && tcsOf(r).length > 1) || rows[1] || rows[0]
   const dataTpl = tcsOf(dataRow).slice(-1)[0]
   const mergeRow = rows.find((r) => r.includes('gridSpan='))
   const mergeTpl = mergeRow ? tcsOf(mergeRow).slice(-1)[0] : null
