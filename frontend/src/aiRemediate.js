@@ -50,6 +50,21 @@ export async function generateCaptions({ audio, mediaType, audioUrl } = {}) {
   } catch { return null }
 }
 
+// LLM-powered executive narrative for the per-document report. Returns
+// { headline, summary, impact, recommendation } or null offline.
+export async function generateInsights({ file, score, finalScore, engine, findings } = {}) {
+  try {
+    const res = await fetch('/.netlify/functions/insights', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ file, score, finalScore, engine, findings }),
+    })
+    if (!res.ok) return null
+    const j = await res.json()
+    return j?.insight || null
+  } catch { return null }
+}
+
 // Read a Blob/File as base64 (no data-URL prefix) for posting to a function.
 export function blobToBase64(blob) {
   return new Promise((resolve) => {

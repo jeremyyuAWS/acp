@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { generateCaptions, blobToBase64, generateAltText } from './aiRemediate.js'
+import { generateCaptions, blobToBase64, generateAltText, generateInsights } from './aiRemediate.js'
 import { Bars } from './charts.jsx'
 import { IDENTITY } from './sim.js'
 import Logo from './Logo.jsx'
@@ -241,15 +241,16 @@ export default function Upload({ onCertified }) {
     setExporting(true)
     try {
       const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+      const engine = realEngine ? `real ${realEngine}` : 'WCAG 2.1 AA'
+      const findings = issues.map((i) => { const [, fix] = proposeFix({ wcag: i.wcag, detail: i.detail }); return { wcag: i.wcag, sev: i.sev, detail: i.detail, fix: String(fix || '').replace(/<[^>]+>/g, '') } })
+      // LLM-powered executive narrative (Claude) — degrades to a deterministic summary offline.
+      const insight = await generateInsights({ file: file?.name, score, finalScore, engine, findings: findings.map((f) => ({ wcag: f.wcag, sev: f.sev, detail: f.detail })) }).catch(() => null)
       const { exportDocumentReport } = await import('./pdfReport.js')
       await exportDocumentReport({
-        file: file?.name || 'document', date,
-        engine: realEngine ? `real ${realEngine} analysis` : 'WCAG 2.1 AA',
-        score: rejected ? score : 100,
-        status: rejected ? 'review pending' : 'Remediated · WCAG 2.1 AA',
-        findings: issues.map((i) => ({ wcag: i.wcag, sev: i.sev, detail: i.detail })),
-        autoFix: autoFixed.length,
-        remediation: `${autoFixed.length} finding(s) auto-remediated by the engine; ${review.length} routed to human review. Re-validated against WCAG 2.1 AA after the fixes were applied.`,
+        file: file?.name || 'document', date, engine,
+        score, finalScore,
+        status: rejected ? 'Conditional · review pending' : 'Remediated · WCAG 2.1 AA',
+        findings, autoFix: autoFixed.length, humanReview: review.length, insight,
         filename: `mova-${(file?.name || 'document').replace(/\.[^.]+$/, '')}-report.pdf`,
       })
     } catch (e) { console.error('PDF export failed', e) }
