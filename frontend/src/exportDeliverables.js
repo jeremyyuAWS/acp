@@ -74,18 +74,27 @@ export async function transformXlsx(zip) {
 // ---------- PowerPoint: add a "Status" column to the table on each slide ----------
 const COLID_EXT = (val) => `<a:extLst><a:ext uri="{9D8B030D-6E8A-4147-A177-3AD203B41FA5}"><a16:colId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" val="${val}"/></a:ext></a:extLst>`
 
-// set the single visible run's text (and, for status cells, its colour) on a cloned <a:tc>
-function fillCell(tplTc, text, recolor) {
-  let tc = tplTc
-  if (recolor) {
-    tc = tc.replace(/ i="1"/, '') // drop italic for the status text
-    const color = /^Live/.test(text) ? '3B6D11' : /^Detected/.test(text) ? '1F5FA8' : '854F0B'
-    tc = tc.replace(/<a:srgbClr val="[0-9A-Fa-f]{6}"\/>/, `<a:srgbClr val="${color}"/>`) // first srgbClr = run text colour
+// Pull the <a:tcPr> (borders + fill) out of a template cell so the new cell matches the
+// table style. Falls back to a plain border-less tcPr.
+const tcPrOf = (tplTc) => (tplTc && (tplTc.match(/<a:tcPr[\s\S]*?<\/a:tcPr>/) || tplTc.match(/<a:tcPr\b[^>]*\/>/)) || ['<a:tcPr/>'])[0]
+
+// Build a CLEAN, minimal status cell — clone only the borders/fill from the template,
+// then write a fresh single-run text body. This renders reliably in every viewer
+// (PowerPoint, Keynote, Google Slides, Quick Look), unlike string-edits inside the
+// original cell's multi-run structure.
+function buildCell(tplTc, text, kind) {
+  const tcPr = tcPrOf(tplTc)
+  let rPr
+  if (kind === 'header') {
+    rPr = '<a:rPr lang="en-US" sz="1000" b="1" dirty="0"><a:solidFill><a:srgbClr val="26262E"/></a:solidFill><a:latin typeface="Arial" pitchFamily="34" charset="0"/></a:rPr>'
+  } else {
+    const color = /^Live/.test(text) ? '3B6D11' : /^(Detected|Covered)/.test(text) ? '1F5FA8' : '854F0B'
+    rPr = `<a:rPr lang="en-US" sz="950" dirty="0"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:latin typeface="Arial" pitchFamily="34" charset="0"/></a:rPr>`
   }
-  let first = true
-  tc = tc.replace(/<a:t>[\s\S]*?<\/a:t>/g, () => (first ? ((first = false), `<a:t>${esc(text)}</a:t>`) : '<a:t></a:t>'))
-  return tc
+  return `<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr marL="0" indent="0" algn="l"><a:buNone/></a:pPr><a:r>${rPr}<a:t>${esc(text)}</a:t></a:r></a:p></a:txBody>${tcPr}</a:tc>`
 }
+// A clean merged (continuation) cell for section-header rows that span the whole table.
+const buildMergeCell = (tplTc) => `<a:tc hMerge="1"><a:txBody><a:bodyPr/><a:lstStyle/><a:p/></a:txBody>${tcPrOf(tplTc)}</a:tc>`
 
 export function transformSlideXml(xml) {
   const tbl = xml.match(/<a:tbl>[\s\S]*?<\/a:tbl>/)
@@ -118,15 +127,15 @@ export function transformSlideXml(xml) {
   rows.forEach((row, i) => {
     let newRow
     if (i === 0) {
-      newRow = row.replace('</a:tr>', `${fillCell(headerTpl, 'Status', false)}</a:tr>`)
-    } else if (row.includes('gridSpan=') && mergeTpl) {
+      newRow = row.replace('</a:tr>', `${buildCell(headerTpl, 'Status', 'header')}</a:tr>`)
+    } else if (row.includes('gridSpan=')) {
       // section header row spans the table — widen the span and add one more merged cell
-      newRow = row.replace(/gridSpan="(\d+)"/, (mm, s) => `gridSpan="${+s + 1}"`).replace('</a:tr>', `${mergeTpl}</a:tr>`)
+      newRow = row.replace(/gridSpan="(\d+)"/, (mm, s) => `gridSpan="${+s + 1}"`).replace('</a:tr>', `${buildMergeCell(mergeTpl)}</a:tr>`)
     } else {
       // the Code cell may carry a footnote marker (e.g. "1.4.4 *") — normalise to the bare SC
       const raw = ((row.match(/<a:t>([^<]*)<\/a:t>/) || [])[1] || '').trim()
       const sc = raw.match(/\d+\.\d+\.\d+/)?.[0] || raw
-      newRow = row.replace('</a:tr>', `${fillCell(dataTpl, statusFor(sc), true)}</a:tr>`)
+      newRow = row.replace('</a:tr>', `${buildCell(dataTpl, statusFor(sc), 'data')}</a:tr>`)
     }
     table = table.replace(row, newRow)
   })
