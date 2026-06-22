@@ -34,6 +34,32 @@ export async function aiTextFix({ kind, text, context } = {}) {
   } catch { return null }
 }
 
+// Real captions/transcript (1.2.2/1.2.3) via the Whisper-backed serverless function.
+// Returns WebVTT text, or null offline. `audio` is base64 (or a data URL).
+export async function generateCaptions({ audio, mediaType, audioUrl } = {}) {
+  if (!audio && !audioUrl) return null
+  try {
+    const res = await fetch('/.netlify/functions/transcribe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ audio, mediaType, audioUrl }),
+    })
+    if (!res.ok) return null
+    const j = await res.json()
+    return j?.vtt || null
+  } catch { return null }
+}
+
+// Read a Blob/File as base64 (no data-URL prefix) for posting to a function.
+export function blobToBase64(blob) {
+  return new Promise((resolve) => {
+    const r = new FileReader()
+    r.onload = () => resolve(String(r.result).replace(/^data:[^;]+;base64,/, ''))
+    r.onerror = () => resolve(null)
+    r.readAsDataURL(blob)
+  })
+}
+
 // Pull the first embedded raster image out of an Office (OOXML) blob → { data(base64), mediaType }.
 export async function firstOfficeImage(blob) {
   try {

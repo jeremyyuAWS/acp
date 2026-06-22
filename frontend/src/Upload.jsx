@@ -1,4 +1,5 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
+import { generateCaptions, blobToBase64 } from './aiRemediate.js'
 import { Bars } from './charts.jsx'
 import { IDENTITY } from './sim.js'
 import Logo from './Logo.jsx'
@@ -41,6 +42,8 @@ const proposeFix = (f) => { const sc = (f?.wcag || '').match(/^\d+\.\d+\.\d+/)?.
 
 const isHtml = (name) => /\.html?$/i.test(name || '')
 const isPdf = (name) => /\.pdf$/i.test(name || '')
+const isAudio = (name) => /\.(mp3|m4a|wav|aac|ogg|webm|mp4|mov)$/i.test(name || '')
+const AUDIO_ISSUES = [['MEDIA-CAPTIONS-001', '1.2.2 captions', 'CRITICAL', 'no synchronized captions for the audio'], ['MEDIA-TRANSCRIPT-001', '1.2.1 audio-only content', 'SERIOUS', 'no text transcript provided']]
 
 // Single-document walkthrough: upload → scan → assess → remediate → human review →
 // certified. Self-contained demo (no backend); findings are keyed off the file type so
@@ -56,7 +59,7 @@ const EXT_ISSUES = {
 const SEV_PEN = { CRITICAL: 16, SERIOUS: 11, MODERATE: 5, MINOR: 2 }
 const SEV_BADGE = { CRITICAL: ['#E2EDFB', '#1F5FA8'], SERIOUS: ['#E6EFFB', '#2A5E9E'], MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'] }
 const extOf = (name) => { const m = /\.([a-z0-9]+)$/i.exec(name || ''); return (m ? m[1] : 'pdf').toLowerCase() }
-const issuesFor = (name) => (EXT_ISSUES[extOf(name)] || EXT_ISSUES.pdf).map(([rule, wcag, sev, detail]) => ({ rule, wcag, sev, detail }))
+const issuesFor = (name) => (isAudio(name) ? AUDIO_ISSUES : (EXT_ISSUES[extOf(name)] || EXT_ISSUES.pdf)).map(([rule, wcag, sev, detail]) => ({ rule, wcag, sev, detail }))
 
 // Past-upload detail dialog — its own component so focus management runs on open.
 function HistoryDetail({ viewing, onClose }) {
@@ -81,6 +84,25 @@ function HistoryDetail({ viewing, onClose }) {
   )
 }
 
+// Audio captions/transcript result — real WebVTT from Whisper, with a player + download.
+function CaptionsPanel({ blob, captions }) {
+  const url = useMemo(() => (blob ? URL.createObjectURL(blob) : null), [blob])
+  const vttUrl = useMemo(() => (captions ? URL.createObjectURL(new Blob([captions], { type: 'text/vtt' })) : null), [captions])
+  useEffect(() => () => { if (url) URL.revokeObjectURL(url); if (vttUrl) URL.revokeObjectURL(vttUrl) }, [url, vttUrl])
+  const lines = (captions || '').split('\n').filter((l) => l.trim() && !/^WEBVTT/.test(l) && !l.includes('-->') && !/^\d+$/.test(l.trim()))
+  const dl = () => { if (!vttUrl) return; const a = document.createElement('a'); a.href = vttUrl; a.download = 'captions.vtt'; document.body.appendChild(a); a.click(); a.remove() }
+  return (
+    <div className="capwrap">
+      <div className="bahd"><b>Captions &amp; transcript</b>{captions ? <span className="aialtbadge" style={{ marginLeft: 8 }}>⚡ Whisper</span> : <span className="muted" style={{ marginLeft: 8 }}>· transcribing…</span>}</div>
+      {url && <audio controls src={url} style={{ width: '100%', marginTop: 10 }}>{vttUrl && <track default kind="captions" srcLang="en" label="English" src={vttUrl} />}</audio>}
+      {captions ? (<>
+        <div className="captranscript">{lines.map((l, i) => <p key={i}>{l}</p>)}</div>
+        <button className="ghost small" onClick={dl} style={{ marginTop: 9 }}>⤓ Download captions (.vtt)</button>
+      </>) : <p className="muted" style={{ marginTop: 9, fontSize: 12 }}>Real speech-to-text runs on the deployed site via Whisper; offline it falls back.</p>}
+    </div>
+  )
+}
+
 export default function Upload({ onCertified }) {
   const [step, setStep] = useState(0)
   const [file, setFile] = useState(null)
@@ -95,12 +117,22 @@ export default function Upload({ onCertified }) {
   const [history, setHistory] = useState(loadHistory)
   const [viewing, setViewing] = useState(null)
   const [reviewOutcome, setReviewOutcome] = useState(null)
+  const [audioBlob, setAudioBlob] = useState(null)
+  const [captions, setCaptions] = useState(null)
   const blobUrl = useRef(null)
 
-  const start = (f, { text = null, url = null, office = null } = {}) => {
-    setFile(f); setSrcText(text); setPdfUrl(url); setOfficeBlob(office); setRealEngine(null); setScanning(true); setStep(0)
+  // Real captions (1.2.2/1.2.3) via the Whisper-backed function when an audio file is uploaded.
+  useEffect(() => {
+    if (!audioBlob) { setCaptions(null); return }
+    let live = true
+    ;(async () => { const b64 = await blobToBase64(audioBlob); const vtt = await generateCaptions({ audio: b64, mediaType: audioBlob.type || 'audio/mpeg' }); if (live) setCaptions(vtt) })()
+    return () => { live = false }
+  }, [audioBlob])
+
+  const start = (f, { text = null, url = null, office = null, audio = null } = {}) => {
+    setFile(f); setSrcText(text); setPdfUrl(url); setOfficeBlob(office); setAudioBlob(audio); setCaptions(null); setRealEngine(null); setScanning(true); setStep(0)
     const html = text && isHtml(f.name)
-    const realLabel = html ? 'Analysing with axe-core (real WCAG engine)…' : office ? 'Parsing the document (real OOXML analysis)…' : 'Analysing against WCAG 2.1 AA…'
+    const realLabel = html ? 'Analysing with axe-core (real WCAG engine)…' : office ? 'Parsing the document (real OOXML analysis)…' : audio ? 'Transcribing the audio with Whisper…' : 'Analysing against WCAG 2.1 AA…'
     const phases = ['Connecting…', 'Reading document…', 'mova Agent classifying & tagging…', realLabel, 'Scoring…']
     let i = 0
     const finish = async () => {
@@ -117,6 +149,7 @@ export default function Upload({ onCertified }) {
     if (isHtml(f.name)) f.text().then((t) => start(meta, { text: t })).catch(() => start(meta))
     else if (isPdf(f.name)) { const url = URL.createObjectURL(f); blobUrl.current = url; start(meta, { url }) }
     else if (isOffice(f.name)) start(meta, { office: f })
+    else if (isAudio(f.name)) start(meta, { audio: f })
     else start(meta)
   }
   const onInput = (e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }
@@ -127,11 +160,12 @@ export default function Upload({ onCertified }) {
       if (isHtml(name)) { const t = await (await fetch(url)).text(); start({ name, size: t.length }, { text: t }) }
       else if (isPdf(name)) { const b = await (await fetch(url)).blob(); start({ name, size: b.size }, { url }) }
       else if (isOffice(name)) { const b = await (await fetch(url)).blob(); start({ name, size: b.size }, { office: b }) }
+      else if (isAudio(name)) { const b = await (await fetch(url)).blob(); start({ name, size: b.size }, { audio: b }) }
       else { const b = await (await fetch(url)).blob(); start({ name, size: b.size }) }
     }
     catch { start({ name, size: 100 * 1024 }) }
   }
-  const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setOfficeBlob(null); setRealEngine(null); setReviewOutcome(null) }
+  const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setOfficeBlob(null); setAudioBlob(null); setCaptions(null); setRealEngine(null); setReviewOutcome(null) }
   const score = Math.max(0, 100 - issues.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0))
   const review = issues.slice(-1)
   const reviewItem = review[0]
@@ -192,8 +226,8 @@ export default function Upload({ onCertified }) {
           onDragOver={(e) => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)} onDrop={onDrop}>
           <div className="dzicon" aria-hidden="true">⬍</div>
           <div style={{ fontSize: 15 }}>Drag a document here, or <label htmlFor="upfile" className="dzlink">browse</label></div>
-          <input id="upfile" type="file" style={{ display: 'none' }} accept=".pdf,.docx,.pptx,.xlsx,.html,.htm" onChange={onInput} />
-          <div className="muted" style={{ marginTop: 4 }}>PDF · Word · PowerPoint · Excel · HTML — scanned in your browser, nothing is uploaded anywhere</div>
+          <input id="upfile" type="file" style={{ display: 'none' }} accept=".pdf,.docx,.pptx,.xlsx,.html,.htm,.mp3,.m4a,.wav,.mp4,.mov" onChange={onInput} />
+          <div className="muted" style={{ marginTop: 4 }}>PDF · Word · PowerPoint · Excel · HTML · audio/video — scanned in your browser, nothing is uploaded anywhere</div>
           <div className="muted" style={{ marginTop: 2, fontSize: 12 }}>⚡ HTML is analysed for real with the axe-core WCAG engine</div>
           <div className="dzsamples">
             <span className="muted">or try a real multi-page sample:</span>
@@ -202,6 +236,7 @@ export default function Upload({ onCertified }) {
             <button className="ghost small" onClick={() => sample('quarterly-town-hall.pptx')}>PowerPoint</button>
             <button className="ghost small" onClick={() => sample('finance-metrics.xlsx')}>Excel</button>
             <button className="ghost small" onClick={() => sample('careers-landing.html')}>HTML</button>
+            <button className="ghost small" onClick={() => sample('benefits-briefing.mp3')}>Audio</button>
           </div>
         </div>
       )}
@@ -276,7 +311,7 @@ export default function Upload({ onCertified }) {
               </div>
             ))}
           </div>
-          <BeforeAfter file={file} issues={issues} srcText={srcText} pdfUrl={pdfUrl} officeBlob={officeBlob} />
+          {isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <BeforeAfter file={file} issues={issues} srcText={srcText} pdfUrl={pdfUrl} officeBlob={officeBlob} />}
           <ScreenReaderDemo issues={issues} />
           <p className="muted" style={{ marginTop: 12 }}>{autoFixed.length} finding(s) auto-fixed · <b>{review.length}</b> routed to human review (low confidence).</p>
           <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 4 }}><button onClick={() => setStep(3)}>Human review →</button></div>
@@ -363,7 +398,7 @@ export default function Upload({ onCertified }) {
               <p className="muted" style={{ marginTop: 10 }}>Validated against WCAG 2.1 AA · every step captured in the audit trail.</p>
             </section>
           </div>
-          <ResultPreview file={file} srcText={srcText} pdfUrl={pdfUrl} officeBlob={officeBlob} issues={issues} />
+          {isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <ResultPreview file={file} srcText={srcText} pdfUrl={pdfUrl} officeBlob={officeBlob} issues={issues} />}
         </>
       )}
     </>

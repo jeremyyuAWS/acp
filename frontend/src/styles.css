@@ -874,6 +874,10 @@ input:focus-visible, [role="tab"]:focus-visible {
 .aifixsc { flex: 0 0 auto; font-size: 11px; font-weight: 700; color: #1F5FA8; min-width: 168px; }
 .aifixft { color: var(--ink); }
 .aifixfrom { color: var(--muted); text-decoration: line-through; }
+.capwrap { margin-top: 4px; }
+.captranscript { margin-top: 10px; background: #faf8fb; border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px; max-height: 220px; overflow-y: auto; }
+.captranscript p { margin: 0 0 7px; font-size: 13px; color: var(--ink); line-height: 1.5; }
+.captranscript p:last-child { margin-bottom: 0; }
 .ontwarn { color: #854F0B; font-size: 11.5px; font-weight: 600; margin-left: 6px; }
 .ontvalwarn { background: #FAEEDA; border: 1px solid #ecd8ad; color: #854F0B; border-radius: 9px; padding: 8px 12px; font-size: 12.5px; margin-bottom: 12px; }
 .ontsample { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 9px; font-size: 12px; }
