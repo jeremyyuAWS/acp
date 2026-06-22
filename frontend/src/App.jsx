@@ -10,6 +10,7 @@ import Settings from './Settings.jsx'
 import Monitor from './Monitor.jsx'
 import Publish from './Publish.jsx'
 import Overview from './Overview.jsx'
+import AssessRunner from './AssessRunner.jsx'
 import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
 import Dashboard from './Dashboard.jsx'
@@ -184,7 +185,7 @@ export default function App() {
               <button role="tab" aria-selected={assess === 'results'} className={assess === 'results' ? 'fchip on' : 'fchip'} onClick={() => setAssess('results')}>4 · Assess</button>
               <button role="tab" aria-selected={assess === 'graph'} className={assess === 'graph' ? 'fchip on' : 'fchip'} onClick={() => setAssess('graph')}>5 · Risk &amp; findings</button>
             </div>
-            {assess === 'results' && (run ? <Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} /> : placeholder)}
+            {assess === 'results' && (run ? <><AssessRunner files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} /></> : placeholder)}
             {(assess === 'graph' || assess === 'rubric' || assess === 'coverage') && (run ? <KnowledgeGraph files={files} /> : placeholder)}
           </>
         )}

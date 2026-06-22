@@ -117,6 +117,11 @@ const FIND = {
   SC_1_2_5: () => ({ detail: 'No audio-description track for the visual content', impact: 'Blind users miss information shown only on screen.', fix: 'Script + record an audio description — human produced.', auto: false, level: 'AA' }),
   SC_1_2_3: () => ({ detail: 'No audio description or full text alternative', impact: 'Blind users miss the visual-only information in the video.', fix: 'Provide an audio description or a complete text alternative.', auto: false, level: 'A' }),
   SC_1_2_1: () => ({ detail: 'No text transcript provided', impact: 'Deaf / hard-of-hearing users can’t access the audio at all.', fix: 'AI drafts a transcript from speech-to-text; a human verifies.', auto: false, level: 'A' }),
+  // AAA criteria — derived from the AA/A failures below (anything failing 4.5:1 also fails
+  // the enhanced 7:1; ambiguous link text also fails link-purpose-link-only). These give the
+  // AAA conformance target real teeth in the Assess runner.
+  SC_1_4_6: () => ({ detail: 'Text contrast is below the enhanced 7:1 (AAA) threshold', impact: 'Readers with low vision benefit from the higher 7:1 ratio.', fix: 'Raise contrast to 7:1 for AAA — needs a design review.', auto: false, level: 'AAA' }),
+  SC_2_4_9: () => ({ detail: 'Some link text is not fully self-describing on its own (link-only)', impact: 'AAA requires the link purpose from the link text alone.', fix: 'Rewrite links to be self-describing without surrounding context.', auto: false, level: 'AAA' }),
 }
 const findingDetail = (is, seed) => (FIND[is.wcag] ? FIND[is.wcag](seed) : {})
 
@@ -217,6 +222,10 @@ function genCorpus() {
       const pool = ISS_POOL[type]
       const issues = status === 'issues' ? iss(pool.slice(0, 2 + (i % 2) + (i % 3 === 0 ? 1 : 0))) : status === 'uncertain' ? iss(pool.slice(0, 1)) : []
       issues.forEach((is, idx) => Object.assign(is, findingDetail(is, i * 7 + idx * 3)))
+      // AAA findings are implied by their A/AA counterparts (fail 4.5:1 ⇒ fail 7:1; vague
+      // link text ⇒ fail link-only), so the AAA conformance target is genuinely stricter.
+      if (issues.some((x) => x.wcag === 'SC_1_4_3')) { const e = { ruleId: 'AAA-CONTRAST-7', rule_id: 'AAA-CONTRAST-7', wcag: 'SC_1_4_6', severity: 'MINOR' }; issues.push(Object.assign(e, findingDetail(e, i * 9))) }
+      if (issues.some((x) => x.wcag === 'SC_2_4_4')) { const e = { ruleId: 'AAA-LINK-ONLY', rule_id: 'AAA-LINK-ONLY', wcag: 'SC_2_4_9', severity: 'MINOR' }; issues.push(Object.assign(e, findingDetail(e, i * 11))) }
       const stTag = status === 'certifiable' ? ['certified'] : status === 'uncertain' ? ['needs-review'] : status === 'issues' ? (i % 2 ? ['auto-fixable'] : ['remediation-queued']) : ['needs-review']
       const tags = [...new Set([...(DEPT_TAGS[dept] || []), ...stTag])].slice(0, 4)
       const ageDays = AGE_DAYS[(i * 5 + j) % AGE_DAYS.length]

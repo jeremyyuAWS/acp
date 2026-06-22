@@ -873,6 +873,42 @@ input:focus-visible, [role="tab"]:focus-visible {
 .aifixrow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 6px 0; border-top: 1px solid #d9e6f7; font-size: 12.5px; }
 .aifixsc { flex: 0 0 auto; font-size: 11px; font-weight: 700; color: #1F5FA8; min-width: 168px; }
 .aifixverify { margin-left: 6px; font-size: 10px; font-weight: 600; color: #854F0B; background: #FDF4E3; border: 1px solid #E7D4A8; border-radius: 4px; padding: 1px 5px; vertical-align: middle; white-space: nowrap; }
+
+/* Assess runner — run all files against WCAG at a chosen conformance level */
+.assesspanel { margin-bottom: 16px; }
+.assesshd { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.assessbtn { background: #1F5FA8; color: #fff; border: 0; border-radius: 8px; padding: 11px 20px; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap; box-shadow: 0 1px 2px rgba(31,95,168,.25); }
+.assessbtn:hover:not(:disabled) { background: #1A5193; }
+.assessbtn:disabled { opacity: .6; cursor: default; }
+.lvlseg { display: flex; gap: 8px; margin-top: 14px; }
+.lvlchip { flex: 1 1 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 9px 13px; border: 1.5px solid #d8dde4; border-radius: 8px; background: #fff; cursor: pointer; text-align: left; transition: border-color .12s, background .12s; }
+.lvlchip b { font-size: 15px; color: #4a5159; }
+.lvlchip span { font-size: 11px; color: #8a9099; }
+.lvlchip:hover:not(:disabled) { border-color: #1F5FA8; }
+.lvlchip.on { border-color: #1F5FA8; background: #EEF4FB; }
+.lvlchip.on b { color: #1F5FA8; }
+.lvlchip.on span { color: #3a5b86; }
+.lvlchip:disabled { cursor: default; }
+.assessrun { margin-top: 16px; }
+.assessbar { height: 8px; border-radius: 5px; background: #e9edf2; overflow: hidden; }
+.assessbar i { display: block; height: 100%; background: linear-gradient(90deg, #1F5FA8, #3B82D6); border-radius: 5px; transition: width .12s linear; }
+.assessrun .muted { display: block; margin-top: 7px; font-size: 12px; }
+.assessres { margin-top: 16px; }
+.assesstiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.atile { background: #f7f9fb; border: 1px solid #e6eaef; border-radius: 9px; padding: 12px 14px; }
+.atile b { display: block; font-size: 24px; line-height: 1.1; }
+.atile span { display: block; font-size: 11px; color: #76808a; margin-top: 3px; }
+.assessnote { margin: 12px 0 0; font-size: 12.5px; }
+@media (max-width: 720px) { .assesstiles { grid-template-columns: repeat(2, 1fr); } .lvlseg { flex-wrap: wrap; } }
+
+/* Platform-settings deliverable downloads (Excel + PPT with a Status column) */
+.setexports { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; padding: 12px 16px; background: #F4F7FB; border: 1px solid #E2E9F2; border-radius: 10px; margin: 4px 0 14px; }
+.setexporthint { font-size: 12.5px; color: #5a6470; max-width: 470px; }
+.setexporthint b { color: #1F5FA8; }
+.setexportbtns { display: flex; gap: 8px; flex-wrap: wrap; }
+.dlbtn { background: #1F5FA8; color: #fff; border: 0; border-radius: 8px; padding: 9px 15px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.dlbtn:hover:not(:disabled) { background: #1A5193; }
+.dlbtn:disabled { opacity: .6; cursor: default; }
 .aifixft { color: var(--ink); }
 .aifixfrom { color: var(--muted); text-decoration: line-through; }
 .capwrap { margin-top: 4px; }
