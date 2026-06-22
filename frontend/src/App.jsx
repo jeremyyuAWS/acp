@@ -11,6 +11,7 @@ import Monitor from './Monitor.jsx'
 import Publish from './Publish.jsx'
 import Overview from './Overview.jsx'
 import AssessRunner from './AssessRunner.jsx'
+import RiskScore from './RiskScore.jsx'
 import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
 import Dashboard from './Dashboard.jsx'
@@ -167,7 +168,7 @@ export default function App() {
             {progress.files_found ? <span className="scancount"> · {progress.files_found.toLocaleString()} files</span> : null}
             {progress.blocked ? <span className="lockwarn"> · 🔒 {progress.blocked} password-protected / couldn’t open</span> : null}
           </div>
-          <div className="track"><i style={{ width: `${progressPct(progress)}%`, background: '#F5B400', transition: 'width .3s' }} /></div>
+          <div className="track"><i style={{ width: `${progressPct(progress)}%`, background: '#BF8C00', transition: 'width .3s' }} /></div>
         </div>
       )}
 
@@ -186,7 +187,7 @@ export default function App() {
               <button role="tab" aria-selected={assess === 'graph'} className={assess === 'graph' ? 'fchip on' : 'fchip'} onClick={() => setAssess('graph')}>5 · Risk &amp; findings</button>
             </div>
             {assess === 'results' && (run ? <><AssessRunner files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} /></> : placeholder)}
-            {(assess === 'graph' || assess === 'rubric' || assess === 'coverage') && (run ? <KnowledgeGraph files={files} /> : placeholder)}
+            {(assess === 'graph' || assess === 'rubric' || assess === 'coverage') && (run ? <><RiskScore run={run} files={files} /><KnowledgeGraph files={files} /></> : placeholder)}
           </>
         )}
 

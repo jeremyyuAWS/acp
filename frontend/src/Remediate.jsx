@@ -20,7 +20,7 @@ const ACTION_DESC = {
   review: 'A rule couldn’t be auto-evaluated. A reviewer confirms before the document can be certified.',
   manual: 'Unreadable source — a human must re-author or re-export the file before it can be assessed.',
 }
-const SR_COLOR = { Executive: '#1F5FA8', Director: '#D85A30', Manager: '#F5B400', Staff: '#9a948f' }
+const SR_COLOR = { Executive: '#1F5FA8', Director: '#D85A30', Manager: '#BF8C00', Staff: '#9a948f' }
 const exposureOf = (f) => (f.tags || []).includes('public-facing') ? 'public-facing' : (f.tags || []).includes('high-traffic') ? 'high-traffic' : 'internal'
 const EXP_COLOR = { 'public-facing': '#1F5FA8', 'high-traffic': '#D85A30', internal: '#9a948f' }
 const SR_W = { Executive: 3, Director: 2, Manager: 1, Staff: 0 }
@@ -44,8 +44,8 @@ const FIX_TYPES = [
   { label: 'alt-text generated', value: 38, color: '#639922' },
   { label: 'reading order fixed', value: 21, color: '#157A56' },
   { label: 'headings tagged', value: 14, color: '#378ADD' },
-  { label: 'language set', value: 9, color: '#7F77DD' },
-  { label: 'table headers', value: 6, color: '#BA7517' },
+  { label: 'language set', value: 9, color: '#726BC6' },
+  { label: 'table headers', value: 6, color: '#A56814' },
 ]
 const FIX_EXAMPLES = [
   { fmt: 'PDF', wcag: 'WCAG 1.1.1 · alt text', auto: true, before: 'figure 3 — no alt text', after: 'alt: “Q3 benefits enrollment by region — West 38%, NE 24%, South 22%, Midwest 16%”' },
@@ -277,7 +277,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   <div className="qtitle">{q.title} <span className="muted" style={{ fontSize: 12 }}>· {q.file}</span></div>
                   <div className="qmeta">{q.meta}</div>
                   <div className="conf">
-                    <span className="conftrack"><i style={{ width: `${q.conf}%`, background: q.conf >= 55 ? '#F5B400' : '#2E72C9' }} /></span>
+                    <span className="conftrack"><i style={{ width: `${q.conf}%`, background: q.conf >= 55 ? '#BF8C00' : '#2E72C9' }} /></span>
                     <span className="muted">{q.conf}% confidence</span>
                   </div>
                 </div>

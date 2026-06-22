@@ -10,8 +10,9 @@ const CRIT = {
   SC_3_1_2: ['3.1.2', 'language of parts'], SC_4_1_2: ['4.1.2', 'name, role, value'],
   SC_1_2_1: ['1.2.1', 'audio/video transcript'], SC_1_2_2: ['1.2.2', 'captions'],
   SC_1_2_3: ['1.2.3', 'audio description / alt'], SC_1_2_5: ['1.2.5', 'audio description'],
+  SC_1_4_6: ['1.4.6', 'contrast (enhanced)'], SC_2_4_9: ['2.4.9', 'link purpose (link only)'],
 }
-const fileColor = (d) => (d.status === 'error' ? '#888780' : d.compliant ? '#639922' : '#EF9F27')
+const fileColor = (d) => (d.status === 'error' ? '#888780' : d.compliant ? '#639922' : '#C88520')
 
 // Cap the graph to the highest-priority documents so it stays readable at scale.
 const LIMIT = 45
@@ -164,7 +165,7 @@ export default function KnowledgeGraph({ files }) {
         <span className="muted" style={{ marginLeft: 'auto' }}>{dq ? `${graphFiles.length} match${graphFiles.length === 1 ? '' : 'es'} for “${query.trim()}”` : capped ? `top ${graphFiles.length} of ${total} by priority` : `${graphFiles.length} document(s)`} · click a criterion to focus</span>
       </div>
       <div className="kglegend">
-        <span><i style={{ background: '#EF9F27' }} />has issues</span>
+        <span><i style={{ background: '#C88520' }} />has issues</span>
         {showClean && <span><i style={{ background: '#639922' }} />certifiable</span>}
         {showClean && <span><i style={{ background: '#888780' }} />unanalysable</span>}
         <span><i style={{ background: '#2E72C9' }} />WCAG criterion failed</span>

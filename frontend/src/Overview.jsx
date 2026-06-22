@@ -3,7 +3,7 @@ import { Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer, { statusOf, critLabel } from './FileDrawer.jsx'
-import { IDENTITY, remediableCount } from './sim.js'
+import { IDENTITY, remediableCount, recommendationSummary } from './sim.js'
 import { loadPublished } from './ontology.js'
 import WordCloud from './WordCloud.jsx'
 import Insight from './Insight.jsx'
@@ -26,16 +26,38 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
         .map(([label, arr]) => ({ label, value: Math.round(arr.reduce((s, x) => s + x, 0) / arr.length), color: '#4B3460' }))
         .sort((a, b) => b.value - a.value).slice(0, 8)
       const topViolations = (wcCloud || []).slice(0, 6).map((v) => ({ label: v.full || v.text, value: v.value }))
+      // remediation-effort engine + risk ranking + WCAG-level + per-criterion status — for the detailed report
+      const rec = recommendationSummary(files)
+      const sevW = { CRITICAL: 4, SERIOUS: 3, MODERATE: 2, MINOR: 1 }
+      const riskOf = (f) => (f.issues || []).reduce((a, i) => a + (sevW[i.severity] || 0), 0) * ((f.tags || []).some((t) => ['public-facing', 'high-traffic'].includes(t)) ? 1.6 : 1) + (100 - (f.score ?? 100)) / 15
+      const topRisk = [...files].filter((f) => (f.issues || []).length).sort((a, b) => riskOf(b) - riskOf(a)).slice(0, 10)
+        .map((f) => ({ file: f.file, dept: f.department, owner: f.owner, score: f.score == null ? 'n/a' : f.score, findings: (f.issues || []).length, action: f.rec?.action || '—', eta: f.rec?.etaMin ? `${(f.rec.etaMin / 60).toFixed(1)}h` : '—' }))
+      const publicCritical = files.filter((f) => (f.tags || []).some((t) => ['public-facing', 'high-traffic'].includes(t)) && (f.issues || []).some((i) => i.severity === 'CRITICAL')).length
+      const verdict = auditReady >= 80 ? ['ON TRACK TO COMPLIANT', '#3B6D11'] : auditReady >= 45 ? ['DEVELOPING', '#854F0B'] : ['ACTION REQUIRED', '#1F5FA8']
+      const criteria = Object.entries(wm).sort((a, b) => b[1] - a[1]).map(([w, count]) => ({ sc: w.replace(/^SC_/, '').replace(/_/g, '.'), label: critLabel(w).replace(/^[\d.]+\s*/, ''), count }))
       const { exportGovernanceReport } = await import('./pdfReport.js')
       await exportGovernanceReport({
         org: IDENTITY.org, quarter, date, scope: 'full document estate',
         total: n, score: run.avg_score, certifiable: run.certifiable, needFix, auditReady,
+        uncertain: run.uncertain, error: run.error,
         summary: `Estate accessibility score ${run.avg_score ?? '—'}/100, with ${auditReady}% of documents audit-ready. ${needFix} documents are in the remediation backlog and ${n.toLocaleString()} are under continuous monitoring across ${(trend && trend.length) || 4} scans.`,
-        severity, deptScores, topViolations,
+        severity, deptScores, topViolations, byLevel, rec, topRisk, criteria,
+        legal: { publicCritical, total: n }, lift: { before, after }, verdict,
         ontology: { ver: ontVer, classified: ontDocs.length, crit: ontCrit, high: ontHigh },
       })
     } catch (e) { console.error('PDF export failed', e) }
     finally { setTimeout(() => setExporting(false), 600) }
+  }
+
+  // Raw findings grid for analysts — every issue flattened to a row.
+  const exportCsv = () => {
+    const esc = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`
+    const head = ['Document', 'Department', 'Owner', 'Type', 'Score', 'WCAG', 'Level', 'Severity', 'Detail', 'Auto-fixable', 'Recommended action', 'Effort (min)']
+    const rows = []
+    files.forEach((f) => (f.issues || []).forEach((i) => rows.push([f.file, f.department, f.owner, (f.type || '').toUpperCase(), f.score ?? '', (i.wcag || '').replace(/^SC_/, '').replace(/_/g, '.'), i.level, i.severity, i.detail, i.auto ? 'yes' : 'no', f.rec?.action || '', f.rec?.etaMin || ''])))
+    const csv = [head, ...rows].map((r) => r.map(esc).join(',')).join('\r\n')
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' })
+    const u = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = u; a.download = 'mova-findings-export.csv'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 1000)
   }
 
   const pickStatus = (s) => { const fs = files.filter((f) => statusOf(f) === s.label); setSeg({ title: `${s.label} documents`, subtitle: `${fs.length} of ${files.length}`, files: fs }) }
@@ -72,7 +94,7 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
   const wcCloud = Object.entries(wm).sort((a, b) => b[1] - a[1]).map(([w, n]) => ({ text: critLabel(w).replace(/^[\d.]+\s*/, ''), value: n, full: critLabel(w) }))
 
   // --- analysis by dimension (score / severity / WCAG level) — not just counts ---
-  const scoreColor = (s) => s >= 90 ? '#639922' : s >= 50 ? '#F5B400' : '#2E72C9'
+  const scoreColor = (s) => s >= 90 ? '#639922' : s >= 50 ? '#BF8C00' : '#2E72C9'
   const avgScore = (fs) => { const sc = fs.filter((f) => f.score != null).map((f) => f.score); return sc.length ? Math.round(sc.reduce((a, b) => a + b, 0) / sc.length) : 0 }
   const groupBy = (fn) => files.reduce((m, f) => { const k = fn(f); if (k != null) (m[k] = m[k] || []).push(f); return m }, {})
   const scoreByDept = Object.entries(groupBy((f) => f.department)).map(([label, fs]) => ({ label, value: avgScore(fs), color: scoreColor(avgScore(fs)) })).sort((a, b) => a.value - b.value)
@@ -84,7 +106,7 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
   const band = (lo, hi) => files.filter((f) => f.score != null && f.score >= lo && f.score <= hi).length
   const scoreBands = [
     { label: '90–100 · certifiable', value: band(90, 100), color: '#639922' },
-    { label: '50–89 · needs work', value: band(50, 89), color: '#F5B400' },
+    { label: '50–89 · needs work', value: band(50, 89), color: '#BF8C00' },
     { label: 'below 50 · at risk', value: band(0, 49), color: '#2E72C9' },
     { label: 'n/a · unreadable', value: files.filter((f) => f.score == null).length, color: '#9a948f' },
   ].filter((d) => d.value)
@@ -109,6 +131,7 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
     <>
       <div className="dashtoolbar">
         <button className="exportbtn" onClick={doExport} disabled={exporting}>{exporting ? 'Generating PDF…' : '⤓ Quarterly governance report'}</button>
+        <button className="exportbtn alt" onClick={exportCsv} title="Every finding as a spreadsheet row">⤓ Findings (CSV)</button>
       </div>
       <div ref={reportRef}>
       <div className="metrics">

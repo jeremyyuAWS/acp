@@ -134,7 +134,7 @@ export default function Monitor({ sources = [], files = [], ratified }) {
           <div className="slastats">
             <div className="slastat"><b style={{ color: '#1F5FA8' }}>{slaItems.length}</b><span className="muted">under SLA</span></div>
             <div className="slastat"><b style={{ color: slaBreached.length ? '#854F0B' : '#5F5E5A' }}>{slaBreached.length}</b><span className="muted">breached</span></div>
-            <div className="slastat"><b style={{ color: '#B5830A' }}>{slaAtRisk.length}</b><span className="muted">at risk</span></div>
+            <div className="slastat"><b style={{ color: '#996F08' }}>{slaAtRisk.length}</b><span className="muted">at risk</span></div>
             <div className="slastat"><b style={{ color: '#3B6D11' }}>{slaOnTrack.length}</b><span className="muted">on track</span></div>
           </div>
           <div className="slalist">

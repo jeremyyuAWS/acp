@@ -20,7 +20,7 @@ const STATUS = {
   '2.1.1': 'Live · auto', '2.1.2': 'Live · AI + human', '2.4.1': 'Roadmap', '2.4.2': 'Live · auto', '2.4.4': 'Live · AI',
   '3.1.1': 'Live · auto', '3.1.2': 'Live · AI', '3.3.2': 'Live · auto', 'PDF/UA': 'Roadmap',
 }
-function statusFor(sc, source = '', phase = '') {
+export function statusFor(sc, source = '', phase = '') {
   const key = (sc || '').trim()
   if (STATUS[key]) return STATUS[key]
   if (/Shipped/i.test(source)) return 'Live · demo'

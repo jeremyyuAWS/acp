@@ -67,13 +67,13 @@ export function statusSegments(run) {
   const issues = Math.max(0, run.files - run.certifiable - run.uncertain - run.error)
   return [
     { label: 'certifiable', value: run.certifiable, color: '#639922' },
-    { label: 'issues', value: issues, color: '#F5B400' },
+    { label: 'issues', value: issues, color: '#BF8C00' },
     { label: 'uncertain', value: run.uncertain, color: '#D85A30' },
     { label: 'unanalysable', value: run.error, color: '#9a948f' },
   ].filter((s) => s.value > 0)
 }
 
-const SEV = { CRITICAL: '#1F5FA8', SERIOUS: '#4A8FE0', MODERATE: '#F5B400', MINOR: '#888780' }
+const SEV = { CRITICAL: '#1F5FA8', SERIOUS: '#4A8FE0', MODERATE: '#BF8C00', MINOR: '#888780' }
 export function severityItems(files) {
   const c = {}
   files.forEach((f) => (f.issues || []).forEach((i) => { c[i.severity] = (c[i.severity] || 0) + 1 }))

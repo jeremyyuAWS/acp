@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-const ringColor = (s) => (s >= 90 ? '#639922' : s >= 50 ? '#F5B400' : '#2E72C9')
+const ringColor = (s) => (s >= 90 ? '#639922' : s >= 50 ? '#BF8C00' : '#2E72C9')
 
 function useCountUp(target, ms = 850) {
   const [v, setV] = useState(0)
@@ -69,7 +69,7 @@ export function Sparkline({ points, width = 200, height = 46, labels }) {
         <g key={i}>
           <circle cx={x} cy={ys[i]} r={i === xs.length - 1 ? 3.8 : 2.6} fill={i === xs.length - 1 ? ringColor(points[i]) : '#7a5c8e'} />
           {axis && <text x={x} y={ys[i] - 7} textAnchor="middle" fontSize="10.5" fontWeight="600" fill="#6c6470">{points[i]}</text>}
-          {axis && <text x={x} y={h - 5} textAnchor="middle" fontSize="10.5" fill="#9a948f">{labels[i]}</text>}
+          {axis && <text x={x} y={h - 5} textAnchor="middle" fontSize="10.5" fill="#797470">{labels[i]}</text>}
         </g>
       ))}
     </svg>

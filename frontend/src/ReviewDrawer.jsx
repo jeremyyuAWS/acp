@@ -5,7 +5,7 @@ export default function ReviewDrawer({ item, onClose, onAct }) {
   return (
     <Drawer title={item.title} subtitle={item.file ? `${item.file}${item.rule ? ` · ${item.rule}` : ''}` : item.meta} onClose={onClose}>
       <div className="conf" style={{ margin: '10px 0 6px' }}>
-        <span className="conftrack" style={{ width: 130 }}><i style={{ width: `${item.conf}%`, background: item.conf >= 55 ? '#F5B400' : '#2E72C9' }} /></span>
+        <span className="conftrack" style={{ width: 130 }}><i style={{ width: `${item.conf}%`, background: item.conf >= 55 ? '#BF8C00' : '#2E72C9' }} /></span>
         <span className="muted">{item.conf}% agent confidence</span>
       </div>
 

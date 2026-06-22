@@ -10,7 +10,7 @@ export default function Heatmap({ rows, cols, matrix }) {
             <td className="hmrow">{r}</td>
             {cols.map((c, ci) => {
               const v = matrix[ri][ci]; const a = v / max
-              return <td key={c} className="hmcell" style={{ background: v ? `rgba(226,75,74,${(0.14 + a * 0.76).toFixed(2)})` : '#f4f1f5', color: a > 0.55 ? '#fff' : '#7a7280' }} title={`${r} · ${c}: ${v}`}>{v || ''}</td>
+              return <td key={c} className="hmcell" style={{ background: v ? `rgba(226,75,74,${(0.14 + a * 0.76).toFixed(2)})` : '#f4f1f5', color: a > 0.55 ? '#fff' : '#736C79' }} title={`${r} · ${c}: ${v}`}>{v || ''}</td>
             })}
           </tr>
         ))}

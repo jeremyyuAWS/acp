@@ -44,6 +44,7 @@ const CRIT = {
   SC_3_1_1: '3.1.1 language of page', SC_1_4_3: '1.4.3 contrast',
   SC_1_2_1: '1.2.1 audio/video transcript', SC_1_2_2: '1.2.2 captions',
   SC_1_2_3: '1.2.3 audio description / alt', SC_1_2_5: '1.2.5 audio description',
+  SC_1_4_6: '1.4.6 contrast (enhanced)', SC_2_4_9: '2.4.9 link purpose (link only)',
 }
 export const critLabel = (w) => CRIT[w] ?? (w || '').replace(/^SC_/, '').replace(/_/g, '.')
 const SEV = {
@@ -81,8 +82,8 @@ function journeyStates(st) {
 }
 const STATE = {
   done: ['✓', '#3B6D11', '#E7F0DC'], current: ['●', '#854F0B', '#FAEEDA'],
-  proj: ['◯', '#8a8390', '#f1eff4'], blocked: ['✕', '#1F5FA8', '#E2EDFB'],
-  skip: ['–', '#8a8390', '#f1eff4'],
+  proj: ['◯', '#716B76', '#f1eff4'], blocked: ['✕', '#1F5FA8', '#E2EDFB'],
+  skip: ['–', '#716B76', '#f1eff4'],
 }
 const STATE_NOTE = { proj: 'projected', skip: 'not needed', blocked: 'blocked', current: 'in progress' }
 

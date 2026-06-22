@@ -210,7 +210,7 @@ export default function Upload({ onCertified }) {
     finally { setTimeout(() => setExporting(false), 600) }
   }
   const sevCount = {}; issues.forEach((i) => { sevCount[i.sev] = (sevCount[i.sev] || 0) + 1 })
-  const SEVCLR = { CRITICAL: '#1F5FA8', SERIOUS: '#4A8FE0', MODERATE: '#F5B400', MINOR: '#888780' }
+  const SEVCLR = { CRITICAL: '#1F5FA8', SERIOUS: '#4A8FE0', MODERATE: '#BF8C00', MINOR: '#888780' }
   const sevItems = ['CRITICAL', 'SERIOUS', 'MODERATE', 'MINOR'].filter((s) => sevCount[s]).map((s) => ({ label: s.toLowerCase(), value: sevCount[s], color: SEVCLR[s] }))
   const today = new Date().toISOString().slice(0, 10)
 
@@ -272,7 +272,7 @@ export default function Upload({ onCertified }) {
             <div className="scanprogline"><span className="spinner" />{phase}</div>
             <div className="muted fname" style={{ marginTop: 8, fontSize: 13 }}>{file?.name}</div>
             {realEngine && <div className="realbadge" style={{ marginLeft: 0, marginTop: 8, display: 'inline-block' }}>⚡ real {realEngine} analysis</div>}
-            <div className="track" style={{ marginTop: 12 }}><i style={{ width: '66%', background: '#F5B400', transition: 'width .4s' }} /></div>
+            <div className="track" style={{ marginTop: 12 }}><i style={{ width: '66%', background: '#BF8C00', transition: 'width .4s' }} /></div>
           </div>
         </section>
       )}

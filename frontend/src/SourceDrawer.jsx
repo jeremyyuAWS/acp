@@ -11,7 +11,7 @@ export default function SourceDrawer({ source, files, onClose, onPickFile }) {
   const issues = Math.max(0, files.length - certifiable - uncertain - error)
   const segs = [
     { label: 'certifiable', value: certifiable, color: '#639922' },
-    { label: 'issues', value: issues, color: '#F5B400' },
+    { label: 'issues', value: issues, color: '#BF8C00' },
     { label: 'uncertain', value: uncertain, color: '#D85A30' },
     { label: 'unanalysable', value: error, color: '#9a948f' },
   ].filter((s) => s.value > 0)

@@ -3,6 +3,8 @@
 // is what makes the downloads read as governance documents instead of webpage printouts.
 // jspdf is lazy-loaded so it stays out of the main bundle.
 
+import { statusFor } from './exportDeliverables.js'
+
 const INK = '#2B2330', MUTED = '#6B6670', LINE = '#E4E0E8', PLUM = '#4B3460', GREEN = '#3B6D11', AMBER = '#854F0B'
 const rgb = (h) => { h = h.replace('#', ''); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)] }
 
@@ -97,7 +99,11 @@ async function makeDoc() {
   }
 }
 
-// Quarterly governance report (Overview).
+const ACTION_LABEL = { auto: 'Auto-fix (deterministic)', assisted: 'AI-assisted + review', review: 'Human review', manual: 'Manual rebuild', archive: 'Archive', keep: 'Keep as-is' }
+const hrs = (min) => `${Math.round((min || 0) / 60)}h`
+const personDays = (min) => `${((min || 0) / 60 / 8).toFixed(1)} person-days`
+
+// Quarterly governance report (Overview) — a detailed, board-ready document.
 export async function exportGovernanceReport(d) {
   const p = await makeDoc()
   p.cover({
@@ -105,7 +111,9 @@ export async function exportGovernanceReport(d) {
     subtitle: `${d.org} · ${d.quarter} · WCAG 2.1 AA`,
     meta: [`Prepared for leadership · ${d.date}`, `Scope: ${d.scope || 'full document estate'}`],
   })
+
   p.heading('Executive summary')
+  if (d.verdict) p.text(`Risk verdict — ${d.verdict[0]}`, { bold: true, color: d.verdict[1], size: 13, gapAfter: 7 })
   p.text(d.summary)
   p.metricGrid([
     { label: 'Documents', value: Number(d.total).toLocaleString() },
@@ -113,21 +121,62 @@ export async function exportGovernanceReport(d) {
     { label: 'Remediation backlog', value: d.needFix, color: AMBER },
     { label: 'Audit-ready', value: d.auditReady + '%' },
   ])
+
   p.heading('Compliance posture')
   p.text(`Estate accessibility score ${d.score ?? '—'} / 100. Open findings by severity:`, { gapAfter: 11 })
   p.barChart(d.severity)
+
+  if (d.byLevel && d.byLevel.length) {
+    p.heading('WCAG conformance by level')
+    p.text('Findings by conformance level. Level AA is the legal target (ADA Title II · EAA · Section 508); Level A is the floor; AAA is enhanced.', { size: 9, color: MUTED, gapAfter: 11 })
+    p.barChart(d.byLevel, { labelW: 170 })
+  }
+
+  if (d.rec && d.rec.buckets && d.rec.buckets.length) {
+    p.heading('Remediation roadmap & effort')
+    p.table(['Remediation action', 'Documents', 'Est. effort'],
+      d.rec.buckets.map((b) => [ACTION_LABEL[b.action] || b.action, String(b.n), hrs(b.min)]),
+      [p.CW - 230, 110, 120])
+    p.text(`Total remediation effort: ${hrs(d.rec.remediateMin)} (~${personDays(d.rec.remediateMin)}) across ${d.rec.remediableDocs} document(s). ${d.rec.autoPct}% is fully automated, saving ${hrs(d.rec.savedMin)} versus manual remediation.`, { size: 9.5, gapAfter: 6 })
+    if (d.lift) p.text(`Projected estate score after the queued remediation is approved and re-validated: ${d.lift.before} → ${d.lift.after} (+${d.lift.after - d.lift.before} points).`, { size: 9.5, color: GREEN })
+  }
+
+  if (d.topRisk && d.topRisk.length) {
+    p.heading('Highest-risk documents')
+    p.text('Ranked by finding severity weighted by public exposure — remediate these first to cut the most risk.', { size: 9, color: MUTED, gapAfter: 11 })
+    p.table(['Document', 'Department', 'Score', 'Findings', 'Action', 'Effort'],
+      d.topRisk.map((r) => [r.file, r.dept, String(r.score), String(r.findings), ACTION_LABEL[r.action] || r.action, r.eta]),
+      [p.CW - 110 - 46 - 60 - 110 - 52, 110, 46, 60, 110, 52])
+  }
+
+  if (d.legal) {
+    p.heading('Legal exposure & compliance deadlines')
+    p.text(`${d.legal.publicCritical} public-facing or high-traffic document(s) carry a critical Level-A barrier — the highest-exposure items under accessibility law, where remediation should begin immediately.`, { gapAfter: 8 })
+    p.text('Statutory deadlines in scope:', { bold: true, size: 9.5, gapAfter: 5 })
+    p.text('•  ADA Title II (DOJ web/mobile rule): public entities with 50,000+ population by April 24, 2026; smaller entities by April 24, 2027.\n•  European Accessibility Act / EN 301 549: in force June 28, 2025.\n•  Section 508: applies to U.S. federal agencies and recipients on an ongoing basis.', { size: 9.5, lh: 14 })
+  }
+
   if (d.deptScores && d.deptScores.length) {
     p.heading('Performance by department')
     p.barChart(d.deptScores, { labelW: 160, max: 100, suffix: ' / 100' })
   }
+
   if (d.ontology && d.ontology.classified) {
     p.heading('Business ontology')
     p.text(`Ontology v${d.ontology.ver ?? 1} is active. ${d.ontology.classified} of ${Number(d.total).toLocaleString()} documents are classified by your organization's own rules — ${d.ontology.crit} Critical and ${d.ontology.high} High elevated in the remediation queue ahead of generic severity.`)
   }
-  if (d.topViolations && d.topViolations.length) {
+
+  if (d.criteria && d.criteria.length) {
+    p.heading('WCAG criteria — findings & platform status')
+    p.text('Every success criterion with findings in the estate, and how the platform handles it today (matches the coverage matrix & method deck).', { size: 9, color: MUTED, gapAfter: 11 })
+    p.table(['Criterion', 'Findings', 'Platform status'],
+      d.criteria.slice(0, 28).map((c) => [`${c.sc}  ${c.label}`, String(c.count), statusFor(c.sc)]),
+      [p.CW - 70 - 150, 70, 150])
+  } else if (d.topViolations && d.topViolations.length) {
     p.heading('Top barriers')
     p.text(d.topViolations.map((v, i) => `${i + 1}.  ${v.label} — ${v.value} document${v.value === 1 ? '' : 's'}`).join('\n'), { lh: 15 })
   }
+
   p.save(d.filename || 'mova-quarterly-governance-report.pdf')
 }
 

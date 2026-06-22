@@ -194,7 +194,8 @@ input:focus-visible, [role="tab"]:focus-visible {
 .ruleimpact { text-align: right; font-size: 13px; }
 .impact { background: #FAEEDA; color: #854F0B; padding: 2px 9px; border-radius: 999px; font-size: 12px; }
 
-.dashtoolbar { display: flex; justify-content: flex-end; margin: 16px 0 -6px; }
+.dashtoolbar { display: flex; justify-content: flex-end; gap: 8px; margin: 16px 0 -6px; }
+.exportbtn.alt { color: #46404C; }
 .govcover { display: flex; align-items: flex-start; gap: 16px; padding: 16px 18px; background: #fff; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 14px; }
 .govtitle { font-size: 17px; font-weight: 700; color: var(--ink); }
 .govsummary { margin: 8px 0 0; font-size: 13px; color: var(--ink); line-height: 1.5; }
@@ -883,7 +884,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .lvlseg { display: flex; gap: 8px; margin-top: 14px; }
 .lvlchip { flex: 1 1 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 9px 13px; border: 1.5px solid #d8dde4; border-radius: 8px; background: #fff; cursor: pointer; text-align: left; transition: border-color .12s, background .12s; }
 .lvlchip b { font-size: 15px; color: #4a5159; }
-.lvlchip span { font-size: 11px; color: #8a9099; }
+.lvlchip span { font-size: 11px; color: #72777E; }
 .lvlchip:hover:not(:disabled) { border-color: #1F5FA8; }
 .lvlchip.on { border-color: #1F5FA8; background: #EEF4FB; }
 .lvlchip.on b { color: #1F5FA8; }
@@ -897,7 +898,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .assesstiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
 .atile { background: #f7f9fb; border: 1px solid #e6eaef; border-radius: 9px; padding: 12px 14px; }
 .atile b { display: block; font-size: 24px; line-height: 1.1; }
-.atile span { display: block; font-size: 11px; color: #76808a; margin-top: 3px; }
+.atile span { display: block; font-size: 11px; color: #6B747D; margin-top: 3px; }
 .assessnote { margin: 12px 0 0; font-size: 12.5px; }
 @media (max-width: 720px) { .assesstiles { grid-template-columns: repeat(2, 1fr); } .lvlseg { flex-wrap: wrap; } }
 
@@ -909,6 +910,20 @@ input:focus-visible, [role="tab"]:focus-visible {
 .dlbtn { background: #1F5FA8; color: #fff; border: 0; border-radius: 8px; padding: 9px 15px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .dlbtn:hover:not(:disabled) { background: #1A5193; }
 .dlbtn:disabled { opacity: .6; cursor: default; }
+
+/* Risk Scoring & Findings summary (above the criterion graph) */
+.riskscore { margin-bottom: 14px; }
+.risktiles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-top: 6px; }
+.risktile { background: #F7F9FB; border: 1px solid #E6EAEF; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; }
+.risklabel { font-size: 11px; color: #6B747D; text-transform: uppercase; letter-spacing: .03em; font-weight: 600; }
+.riskbig { font-size: 30px; font-weight: 700; line-height: 1; }
+.riskbig i { font-size: 14px; font-weight: 600; color: #6B747D; font-style: normal; }
+.risknum { font-size: 22px; font-weight: 700; line-height: 1.1; color: #2B2330; }
+.risksub { font-size: 10.5px; color: #72777E; font-style: normal; }
+.riskbreak { display: flex; flex-direction: column; gap: 3px; margin-top: 2px; }
+.riskchip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: #3a4046; }
+.riskchip i { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
+@media (max-width: 860px) { .risktiles { grid-template-columns: repeat(2, 1fr); } }
 .aifixft { color: var(--ink); }
 .aifixfrom { color: var(--muted); text-decoration: line-through; }
 .capwrap { margin-top: 4px; }
