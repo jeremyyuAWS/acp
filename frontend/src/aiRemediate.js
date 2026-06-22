@@ -18,6 +18,22 @@ export async function generateAltText({ data, mediaType, hint } = {}) {
   } catch { return null }
 }
 
+// Real AI fix for the text-based criteria (link purpose 2.4.4, sensory 1.3.3,
+// language of parts 3.1.2). Returns the drafted fix string, or null offline.
+export async function aiTextFix({ kind, text, context } = {}) {
+  if (!text) return null
+  try {
+    const res = await fetch('/.netlify/functions/ai-fix', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind, text, context }),
+    })
+    if (!res.ok) return null
+    const j = await res.json()
+    return j?.fix || null
+  } catch { return null }
+}
+
 // Pull the first embedded raster image out of an Office (OOXML) blob → { data(base64), mediaType }.
 export async function firstOfficeImage(blob) {
   try {

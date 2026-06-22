@@ -3,7 +3,7 @@ import PdfPreview from './PdfPreview.jsx'
 import OfficePreview from './OfficePreview.jsx'
 import { remediateHtml } from './BeforeAfter.jsx'
 import { remediateOffice } from './officeAudit.js'
-import { generateAltText, firstOfficeImage } from './aiRemediate.js'
+import { generateAltText, firstOfficeImage, aiTextFix } from './aiRemediate.js'
 
 const isHtml = (n) => /\.html?$/i.test(n || '')
 const isPdf = (n) => /\.pdf$/i.test(n || '')
@@ -33,6 +33,27 @@ export default function ResultPreview({ file, srcText, pdfUrl, officeBlob, issue
     })()
     return () => { live = false }
   }, [officeBlob])
+  // Real Claude text remediation for the AI-assisted criteria (link purpose 2.4.4,
+  // sensory 1.3.3, language of parts 3.1.2) on HTML uploads — drafts shown for approval.
+  const [aiFixes, setAiFixes] = useState([])
+  useEffect(() => {
+    let live = true; setAiFixes([])
+    if (!srcText || !isHtml(name)) return () => { live = false }
+    const strip = (s) => (s || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+    const h1 = strip((/<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(srcText) || [])[1])
+    const linkM = /<a\b[^>]*>\s*(click here|read more|learn more|here|more)\s*<\/a>/i.exec(srcText)
+    const sensoryM = /<p[^>]*>([^<]*\b(?:round|square|circular|button (?:below|above)|on the (?:left|right))\b[^<]*)<\/p>/i.exec(srcText)
+    const bodyText = strip((/<body[^>]*>([\s\S]*)<\/body>/i.exec(srcText) || [])[1] || srcText).slice(0, 1500)
+    ;(async () => {
+      const jobs = []
+      if (linkM) jobs.push(aiTextFix({ kind: 'link', text: linkM[1], context: h1 ? `careers page “${h1}”` : 'a careers page' }).then((f) => f && { label: '2.4.4 link purpose', from: linkM[1], to: f }))
+      if (sensoryM) jobs.push(aiTextFix({ kind: 'sensory', text: sensoryM[1].trim() }).then((f) => f && { label: '1.3.3 sensory characteristics', from: sensoryM[1].trim(), to: f }))
+      jobs.push(aiTextFix({ kind: 'language-parts', text: bodyText }).then((f) => f && f.toLowerCase() !== 'none' && { label: '3.1.2 language of parts', from: 'untagged foreign text', to: f.replace(/\n/g, ' · ') }))
+      const out = (await Promise.all(jobs)).filter(Boolean)
+      if (live) setAiFixes(out)
+    })()
+    return () => { live = false }
+  }, [srcText, name])
   const fixes = issues.map((i) => (i.wcag || '').replace(/^(\d+\.\d+\.\d+)\s*·?\s*/, '$1 · ')).slice(0, 6)
   const ext = (name.split('.').pop() || '').toUpperCase()
 
@@ -67,6 +88,17 @@ export default function ResultPreview({ file, srcText, pdfUrl, officeBlob, issue
         <div className="aialtcallout">
           <span className="aialtbadge">⚡ Claude vision</span>
           <span>AI-generated alt text for the embedded image: <b>“{aiAlt}”</b> — written into the remediated file.</span>
+        </div>
+      )}
+      {aiFixes.length > 0 && (
+        <div className="aifixpanel">
+          <div className="aifixhd"><span className="aialtbadge">⚡ Claude · live AI remediation</span><span className="muted" style={{ fontSize: 12 }}>drafted for human approval</span></div>
+          {aiFixes.map((f, i) => (
+            <div className="aifixrow" key={i}>
+              <span className="aifixsc">{f.label}</span>
+              <span className="aifixft"><span className="aifixfrom">{f.from}</span> <span aria-hidden="true">→</span> <b>{f.to}</b></span>
+            </div>
+          ))}
         </div>
       )}
       {!isHtml(name) && (

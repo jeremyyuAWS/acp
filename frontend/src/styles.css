@@ -868,6 +868,12 @@ input:focus-visible, [role="tab"]:focus-visible {
 .ontbanner { background: #eef3fb; border: 1px solid #cfe0f5; color: #1F5FA8; border-radius: 9px; padding: 7px 11px; font-size: 12.5px; margin: 0 0 11px; }
 .aialtcallout { display: flex; align-items: flex-start; gap: 10px; background: #eef3fb; border: 1px solid #cfe0f5; border-radius: 10px; padding: 9px 12px; margin-top: 12px; font-size: 12.5px; color: var(--ink); line-height: 1.5; }
 .aialtbadge { flex: 0 0 auto; font-size: 11px; font-weight: 700; color: #1F5FA8; background: #dfeafc; border-radius: 7px; padding: 3px 9px; white-space: nowrap; }
+.aifixpanel { background: #eef3fb; border: 1px solid #cfe0f5; border-radius: 10px; padding: 10px 12px; margin-top: 12px; }
+.aifixhd { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
+.aifixrow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 6px 0; border-top: 1px solid #d9e6f7; font-size: 12.5px; }
+.aifixsc { flex: 0 0 auto; font-size: 11px; font-weight: 700; color: #1F5FA8; min-width: 168px; }
+.aifixft { color: var(--ink); }
+.aifixfrom { color: var(--muted); text-decoration: line-through; }
 .ontwarn { color: #854F0B; font-size: 11.5px; font-weight: 600; margin-left: 6px; }
 .ontvalwarn { background: #FAEEDA; border: 1px solid #ecd8ad; color: #854F0B; border-radius: 9px; padding: 8px 12px; font-size: 12.5px; margin-bottom: 12px; }
 .ontsample { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 9px; font-size: 12px; }
