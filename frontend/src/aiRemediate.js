@@ -87,3 +87,18 @@ export async function firstOfficeImage(blob) {
     return { data: await zip.file(name).async('base64'), mediaType, name }
   } catch { return null }
 }
+
+// All embedded raster images in an Office (OOXML) blob → [{ data(base64), mediaType, name(basename) }].
+// Used to generate per-image alt text rather than one description for the whole document.
+export async function allOfficeImages(blob) {
+  try {
+    const JSZip = (await import('jszip')).default
+    const zip = await JSZip.loadAsync(blob)
+    const names = Object.keys(zip.files).filter((n) => /\/media\/[^/]+\.(png|jpe?g|gif|webp)$/i.test(n))
+    return Promise.all(names.map(async (n) => {
+      const ext = n.split('.').pop().toLowerCase()
+      const mediaType = /jpe?g/.test(ext) ? 'image/jpeg' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/png'
+      return { data: await zip.file(n).async('base64'), mediaType, name: n.split('/').pop() }
+    }))
+  } catch { return [] }
+}

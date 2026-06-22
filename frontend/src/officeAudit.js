@@ -57,12 +57,29 @@ export async function remediateOffice(blob, opts = {}) {
   const JSZip = (await import('jszip')).default
   const zip = await JSZip.loadAsync(blob)
   const names = Object.keys(zip.files).filter((n) => CONTENT.test(n) && !n.includes('_rels'))
-  // opts.alt — real AI-generated alt text (Claude vision); falls back to a placeholder
-  // when the AI endpoint isn't available, so the file is still genuinely remediated.
-  const altText = String(opts.alt || 'Image — described by mova.io').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+  // opts.alt — single AI alt (fallback). opts.alts — per-image map { mediaBasename: alt }
+  // (Claude vision describes each embedded image separately). Both degrade to a placeholder
+  // so the file is still genuinely remediated when the AI endpoint isn't available.
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+  const fallback = String(opts.alt || 'Image — described by mova.io')
+  const alts = opts.alts || {}
   for (const n of names) {
     let xml = await zip.file(n).async('string')
-    xml = xml.replace(CNVPR, (m, tag, attrs, slash) => hasDescr(attrs) ? m : `<${tag}${attrs} descr="${altText}"${slash}>`)
+    // map this content part's relationship ids → media filename, so a shape's image is known
+    const rid2media = {}
+    const relsPath = n.replace(/([^/]+)$/, '_rels/$1.rels')
+    if (zip.file(relsPath)) {
+      const relsXml = await zip.file(relsPath).async('string')
+      for (const r of relsXml.matchAll(/Id="([^"]+)"[^>]*Target="([^"]+)"/g)) rid2media[r[1]] = r[2].split('/').pop()
+    }
+    xml = xml.replace(CNVPR, (m, tag, attrs, slash, offset) => {
+      if (hasDescr(attrs)) return m
+      // the picture's <a:blip r:embed> follows its cNvPr/docPr — resolve to that image's alt
+      const blip = /<a:blip\b[^>]*r:embed="([^"]+)"/.exec(xml.slice(offset))
+      const media = blip ? rid2media[blip[1]] : null
+      const alt = (media && alts[media]) || fallback
+      return `<${tag}${attrs} descr="${esc(alt)}"${slash}>`
+    })
     if (n.startsWith('word/')) xml = addTableHeaders(xml)
     zip.file(n, xml)
   }

@@ -56,6 +56,18 @@ describe('officeAudit', () => {
     expect(core).toMatch(/<dc:language>[a-zA-Z-]+<\/dc:language>/) // language set
   })
 
+  it('writes per-image alt text from opts.alts — each image its own description', async () => {
+    const pic = (id, rid) => `<w:p><w:r><w:drawing><wp:inline><wp:docPr id="${id}" name="Img${id}"/><a:graphic><a:graphicData><pic:pic><pic:nvPicPr><pic:cNvPr id="${id}" name="Img${id}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${rid}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`
+    const doc2 = DOC_XML.replace(/<w:p>.*?<\/w:drawing><\/w:r><\/w:p>/s, pic('1', 'rId1') + pic('2', 'rId2'))
+    const rels = '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="x" Target="media/image1.png"/><Relationship Id="rId2" Type="x" Target="media/image2.png"/></Relationships>'
+    const z = new JSZip()
+    z.file('word/document.xml', doc2); z.file('word/_rels/document.xml.rels', rels); z.file('docProps/core.xml', CORE_XML)
+    const fixed = await remediateOffice(await z.generateAsync({ type: 'blob' }), { alts: { 'image1.png': 'A red bar chart', 'image2.png': 'A team photo' } })
+    const out = await (await JSZip.loadAsync(fixed)).file('word/document.xml').async('string')
+    expect(out).toContain('descr="A red bar chart"')
+    expect(out).toContain('descr="A team photo"')
+  })
+
   it('a clean doc (alt + header + title + language) reports nothing', async () => {
     const z = new JSZip()
     z.file('word/document.xml', DOC_XML.replace('name="Chart"', 'name="Chart" descr="A chart"').replace('<w:tr>', '<w:tr><w:trPr><w:tblHeader/></w:trPr>'))

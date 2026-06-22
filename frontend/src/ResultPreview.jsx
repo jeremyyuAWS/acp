@@ -4,7 +4,7 @@ import OfficePreview from './OfficePreview.jsx'
 import { remediateHtml } from './BeforeAfter.jsx'
 import { remediateOffice } from './officeAudit.js'
 import { remediatePdf } from './pdfAudit.js'
-import { generateAltText, firstOfficeImage, aiTextFix } from './aiRemediate.js'
+import { generateAltText, allOfficeImages, aiTextFix } from './aiRemediate.js'
 
 const isHtml = (n) => /\.html?$/i.test(n || '')
 const isPdf = (n) => /\.pdf$/i.test(n || '')
@@ -29,17 +29,24 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
     remediatePdf(pdfBlob, { title: name.replace(/\.[^.]+$/, '') }).then((r) => { if (live) setRemPdf(r) }).catch(() => { /* fall back */ })
     return () => { live = false }
   }, [pdfBlob])
-  const [aiAlt, setAiAlt] = useState(null) // real Claude-vision alt text for the embedded image
+  const [aiAlt, setAiAlt] = useState(null) // Claude-vision alt text for the embedded image(s)
+  const [aiAltCount, setAiAltCount] = useState(0) // how many images got a real per-image description
   const [imgText, setImgText] = useState(null) // 1.4.5 — verbatim text extracted from an image-of-text
   useEffect(() => {
-    let live = true; setRemBlob(null); setAiAlt(null); setImgText(null)
+    let live = true; setRemBlob(null); setAiAlt(null); setAiAltCount(0); setImgText(null)
     if (!officeBlob) return () => { live = false }
     ;(async () => {
-      let alt = null
-      try { const img = await firstOfficeImage(officeBlob); if (img) { const r = await generateAltText({ data: img.data, mediaType: img.mediaType, hint: `Image from the document “${name}”` }); alt = r?.alt; if (live && r?.text) setImgText(r.text) } } catch { /* fall back to placeholder */ }
+      const alts = {}
+      try {
+        const imgs = await allOfficeImages(officeBlob)
+        // describe each embedded image separately, in parallel
+        const results = await Promise.all(imgs.map((img) => generateAltText({ data: img.data, mediaType: img.mediaType, hint: `Image from the document “${name}”` }).then((r) => ({ img, r })).catch(() => ({ img, r: null }))))
+        results.forEach(({ img, r }) => { if (r?.alt) alts[img.name] = r.alt; if (r?.text && !imgText) setImgText(r.text) })
+      } catch { /* fall back to placeholder */ }
       if (!live) return
-      if (alt) setAiAlt(alt)
-      try { const b = await remediateOffice(officeBlob, { alt }); if (live) setRemBlob(b) } catch { /* falls back to card */ }
+      const altList = Object.values(alts)
+      if (altList.length) { setAiAlt(altList[0]); setAiAltCount(altList.length) }
+      try { const b = await remediateOffice(officeBlob, { alt: altList[0] || null, alts }); if (live) setRemBlob(b) } catch { /* falls back to card */ }
     })()
     return () => { live = false }
   }, [officeBlob])
@@ -73,7 +80,7 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
   const ext = (name.split('.').pop() || '').toUpperCase()
 
   const dl = (blob, fn) => { const u = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = u; a.download = fn; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 1000) }
-  const downloadOffice = async () => { if (!officeBlob || busy) return; setBusy(true); try { dl(await remediateOffice(officeBlob, { alt: aiAlt }), `remediated-${name}`) } catch (e) { console.error('office remediation failed', e) } finally { setBusy(false) } }
+  const downloadOffice = async () => { if (!officeBlob || busy) return; setBusy(true); try { dl(remBlob || await remediateOffice(officeBlob, { alt: aiAlt }), `remediated-${name}`) } catch (e) { console.error('office remediation failed', e) } finally { setBusy(false) } }
   const downloadHtml = () => { if (rem) dl(new Blob([rem.html], { type: 'text/html' }), `remediated-${name.replace(/\.[^.]+$/, '')}.html`) }
 
   const docCard = (badge) => (
@@ -102,7 +109,7 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
       {aiAlt && (
         <div className="aialtcallout">
           <span className="aialtbadge">⚡ Claude vision</span>
-          <span>AI-generated alt text for the embedded image: <b>“{aiAlt}”</b> — written into the remediated file.</span>
+          <span>{aiAltCount > 1 ? <>Claude described all <b>{aiAltCount} embedded images</b> separately — e.g. <b>“{aiAlt}”</b> — each written into the remediated file.</> : <>AI-generated alt text for the embedded image: <b>“{aiAlt}”</b> — written into the remediated file.</>}</span>
         </div>
       )}
       {imgText && (
