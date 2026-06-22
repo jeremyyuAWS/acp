@@ -937,6 +937,12 @@ input:focus-visible, [role="tab"]:focus-visible {
 .certpop { animation: certPop .55s cubic-bezier(.2,.8,.3,1.2) both; }
 .certreveal { animation: certReveal .5s ease both; }
 @media (prefers-reduced-motion: reduce) { .certpop, .certreveal { animation: none; } }
+
+/* Phase 2 · HITL — items the engine flags but routes to a human reviewer */
+.hitlpanel { margin-top: 14px; border: 1px solid #E2E9F2; border-radius: 10px; padding: 12px 14px; background: #F4F7FB; }
+.hitlhd { display: flex; align-items: center; gap: 10px; }
+.hitlhd b { font-size: 14px; }
+.hitlbadge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #1F5FA8; background: #E2EDFB; border-radius: 5px; padding: 2px 7px; }
 .aifixfrom { color: var(--muted); text-decoration: line-through; }
 .capwrap { margin-top: 4px; }
 .captranscript { margin-top: 10px; background: #faf8fb; border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px; max-height: 220px; overflow-y: auto; }

@@ -11,6 +11,7 @@ import OfficePreview from './OfficePreview.jsx'
 import { auditHtml } from './htmlAudit.js'
 import { auditOffice } from './officeAudit.js'
 import { auditPdf } from './pdfAudit.js'
+import { prescreenHtml } from './prescreen.js'
 import { useDialog } from './a11y.js'
 
 const isOffice = (name) => /\.(docx|pptx|xlsx)$/i.test(name || '')
@@ -170,6 +171,7 @@ export default function Upload({ onCertified }) {
   const [pdfBlob, setPdfBlob] = useState(null)
   const [imageBlob, setImageBlob] = useState(null)
   const [imgResult, setImgResult] = useState(null)
+  const [prescreen, setPrescreen] = useState([]) // Phase 2 · HITL items routed to human review
   const blobUrl = useRef(null)
 
   // Real captions (1.2.2/1.2.3) via the Whisper-backed function when an audio file is uploaded.
@@ -190,6 +192,7 @@ export default function Upload({ onCertified }) {
 
   const start = (f, { text = null, url = null, office = null, audio = null, pdf = null, image = null } = {}) => {
     setFile(f); setSrcText(text); setPdfUrl(url); setPdfBlob(pdf); setOfficeBlob(office); setAudioBlob(audio); setImageBlob(image); setImgResult(null); setCaptions(null); setRealEngine(null); setScanning(true); setStep(0)
+    setPrescreen(text && isHtml(f.name) ? prescreenHtml(text) : []) // Phase 2 HITL pre-screen (HTML)
     const html = text && isHtml(f.name)
     const realLabel = html ? 'Analysing with axe-core (real WCAG engine)…' : office ? 'Parsing the document (real OOXML analysis)…' : pdf ? 'Parsing the PDF structure (pdf-lib)…' : audio ? 'Transcribing the audio with Whisper…' : image ? 'Describing the image with Claude vision…' : 'Analysing against WCAG 2.1 AA…'
     const phases = ['Connecting…', 'Reading document…', 'mova Agent classifying & tagging…', realLabel, 'Scoring…']
@@ -228,7 +231,7 @@ export default function Upload({ onCertified }) {
     }
     catch { start({ name, size: 100 * 1024 }) }
   }
-  const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setOfficeBlob(null); setAudioBlob(null); setCaptions(null); setPdfBlob(null); setImageBlob(null); setImgResult(null); setRealEngine(null); setReviewOutcome(null) }
+  const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setOfficeBlob(null); setAudioBlob(null); setCaptions(null); setPdfBlob(null); setImageBlob(null); setImgResult(null); setPrescreen([]); setRealEngine(null); setReviewOutcome(null) }
   // Floor the as-received score at 18 so a heavily-failing document reads as "low" rather
   // than a broken "0" — the lift to 100 still lands dramatically.
   const score = issues.length ? Math.max(18, 100 - issues.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0)) : 100
@@ -381,7 +384,24 @@ export default function Upload({ onCertified }) {
           </div>
           {isImage(file?.name) ? <ImagePanel blob={imageBlob} result={imgResult} /> : isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <BeforeAfter file={file} issues={issues} srcText={srcText} pdfUrl={pdfUrl} officeBlob={officeBlob} />}
           <ScreenReaderDemo issues={issues} />
-          <p className="muted" style={{ marginTop: 12 }}>{autoFixed.length} finding(s) auto-fixed · <b>{review.length}</b> routed to human review (low confidence).</p>
+          {prescreen.length > 0 && (
+            <div className="hitlpanel">
+              <div className="hitlhd"><b>⚑ Routed to human review</b><span className="hitlbadge">Phase 2 · HITL</span></div>
+              <p className="muted" style={{ margin: '2px 0 9px', fontSize: 12 }}>Runtime, interactive &amp; media criteria the engine flags but can’t auto-confirm — a reviewer verifies each one.</p>
+              <div className="findings">
+                {prescreen.map((p, i) => {
+                  const [bg, fg] = SEV_BADGE[p.sev] || SEV_BADGE.MINOR
+                  return (
+                    <div className="finding" key={i}>
+                      <span className="badge" style={{ background: bg, color: fg }}>{p.sev.toLowerCase()}</span>
+                      <div className="findingmain"><div>{p.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{p.detail}</div></div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+          <p className="muted" style={{ marginTop: 12 }}>{autoFixed.length} finding(s) auto-fixed · <b>{review.length}</b> routed to human review{prescreen.length > 0 && <> · <b>{prescreen.length}</b> flagged for HITL review (Phase 2)</>}.</p>
           <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 4 }}><button onClick={() => setStep(3)}>Human review →</button></div>
         </section>
       )}
