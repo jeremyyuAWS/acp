@@ -3,6 +3,7 @@ import Rubric from './Rubric.jsx'
 import WcagCoverage from './WcagCoverage.jsx'
 import Ontology from './Ontology.jsx'
 import { useDialog } from './a11y.js'
+import { downloadUpdatedXlsx, downloadUpdatedPptx } from './exportDeliverables.js'
 
 // Platform settings, behind the header cog — gated to the Platform Admin. Holds
 // the scoring rules (Rubric), the validation coverage (WCAG 2.1 + 2.2 matrix), and
@@ -10,14 +11,23 @@ import { useDialog } from './a11y.js'
 // of the day-to-day workflow tabs.
 export default function Settings({ onClose, onRubricSaved, files = [], onOntologyChange }) {
   const [tab, setTab] = useState('rules')
+  const [dl, setDl] = useState(null) // 'xlsx' | 'pptx' while a deliverable is generating
   const panelRef = useRef(null)
   useDialog(panelRef, onClose)
+  const grab = async (kind, fn) => { if (dl) return; setDl(kind); try { await fn() } catch (e) { console.error('deliverable export failed', e) } finally { setDl(null) } }
   return (
     <div className="setoverlay" role="dialog" aria-modal="true" aria-label="Platform settings" onClick={onClose}>
       <div className="setpanel" ref={panelRef} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <div className="sethead">
           <div><b>⚙ Platform settings</b><span className="muted"> · admin · rules &amp; validation</span></div>
           <button className="ghost small" aria-label="Close settings" onClick={onClose}>✕</button>
+        </div>
+        <div className="setexports">
+          <span className="setexporthint">Updated deliverables — original format, with a live <b>Status</b> column reflecting what the platform ships today:</span>
+          <div className="setexportbtns">
+            <button className="dlbtn" disabled={!!dl} onClick={() => grab('xlsx', downloadUpdatedXlsx)}>{dl === 'xlsx' ? 'Preparing…' : '⤓ Coverage matrix · Excel'}</button>
+            <button className="dlbtn" disabled={!!dl} onClick={() => grab('pptx', downloadUpdatedPptx)}>{dl === 'pptx' ? 'Preparing…' : '⤓ Method deck · PPT'}</button>
+          </div>
         </div>
         <div className="subtabs" role="tablist" aria-label="Settings sections">
           <button role="tab" aria-selected={tab === 'rules'} className={tab === 'rules' ? 'fchip on' : 'fchip'} onClick={() => setTab('rules')}>Scoring rules</button>
