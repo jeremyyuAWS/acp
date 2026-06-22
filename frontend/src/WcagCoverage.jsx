@@ -78,6 +78,7 @@ const remTier = (r) => REMEDIATION[r.sc] || (r.docApplies ? 'assisted' : 'detect
 const AUTOMATION = {
   '3.1.2': { v: 'green', r: 'green', note: 'Fully automatable — the best case. The LLM detects the foreign passage and a script writes the lang attribute. No UI ever needed.' },
   '1.3.3': { v: 'amber', r: 'amber', note: 'The LLM reads the text, flags shape/colour/position-only instructions, and drafts a fix. Pure content analysis — no UI.' },
+  '1.3.2': { v: 'human', r: 'detect', note: 'Reading order is detected statically — flagged when it differs from the visual flow — but correcting it needs the PDF/Office tag tree, which is on the roadmap.' },
   '1.4.5': { v: 'amber', r: 'amber', note: 'OCR/vision on the statically-extracted image; the LLM re-creates real text. No UI.' },
   '1.4.1': { v: 'amber', r: 'amber', note: 'Static parse for colour-only coding + vision on images; the LLM adds the second cue. No UI.' },
   '1.4.11': { v: 'amber', r: 'amber', note: 'Colours read from source/SVG and the maths is deterministic (green for declared colours); vision samples raster graphics. Only hover/focus states need runtime — drop those.' },
