@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react'
 import { WCAG } from './wcagCatalog.js'
+import { WHY } from './wcagWhy.js'
 import { useDialog } from './a11y.js'
 
 // WCAG 2.1 + 2.2 coverage matrix — all 87 success criteria, colour-coded by what
@@ -112,6 +113,7 @@ function ScDetail({ sel, onClose }) {
         <div className="covsc" style={{ fontSize: 18 }}><b>{sel.sc}</b> {sel.name}</div>
         <div className="muted" style={{ margin: '4px 0 8px' }}>Level {sel.level} · {sel.principle} · added in WCAG {sel.added}</div>
         {sel.req && <p className="covreq">{sel.req}</p>}
+        {WHY[sel.sc] && <div className="covwhybox"><span className="covwhylbl">Why it matters</span> {WHY[sel.sc]}</div>}
         <div className="levelnote">Level {sel.level} — {LEVEL_MEANING[sel.level]}</div>
         {(() => {
           const vv = LV[valLevel(sel)], rv = LV[remLevel(sel)]
@@ -260,6 +262,7 @@ export default function WcagCoverage() {
                   <button key={r.sc} className="covcell" style={{ background: bg, borderColor: fg + '55' }} onClick={() => setSel(r)} title={`${r.sc} ${r.name} — ${r.req}`}>
                     <div className="covsc"><b>{r.sc}</b><span className="covlvl">{r.level}</span>{r.legal === 'Required' && <span className="covreq-flag" title="Required under US law">REQ</span>}{ph && <span className="covphase" style={{ color: ph[1], background: ph[2] }}>{ph[0]}</span>}{(() => { const lv = LV[remLevel(r)], vv = LV[valLevel(r)]; return <span className="covrem" style={{ color: lv[2], background: lv[3] }} title={`Validate: ${vv[1]} · Remediate: ${lv[1]}`}>{lv[0]}</span> })()}</div>
                     <div className="covname">{r.name}</div>
+                    {WHY[r.sc] && <div className="covwhy"><span className="covwhylbl">Why</span> {WHY[r.sc]}</div>}
                     <div className="covtag" style={{ color: fg }}>{SRC[r.source][0]}{!r.docApplies && <span className="muted" style={{ fontWeight: 400 }}> · N/A docs</span>}</div>
                   </button>
                 )
