@@ -925,6 +925,13 @@ input:focus-visible, [role="tab"]:focus-visible {
 .riskchip i { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
 @media (max-width: 860px) { .risktiles { grid-template-columns: repeat(2, 1fr); } }
 .aifixft { color: var(--ink); }
+
+/* Certificate reveal (Upload step 5) — celebratory but motion-safe */
+@keyframes certPop { 0% { transform: scale(0); } 60% { transform: scale(1.18); } 100% { transform: scale(1); } }
+@keyframes certReveal { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.certpop { animation: certPop .55s cubic-bezier(.2,.8,.3,1.2) both; }
+.certreveal { animation: certReveal .5s ease both; }
+@media (prefers-reduced-motion: reduce) { .certpop, .certreveal { animation: none; } }
 .aifixfrom { color: var(--muted); text-decoration: line-through; }
 .capwrap { margin-top: 4px; }
 .captranscript { margin-top: 10px; background: #faf8fb; border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px; max-height: 220px; overflow-y: auto; }

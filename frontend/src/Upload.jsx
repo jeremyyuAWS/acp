@@ -97,7 +97,9 @@ function CaptionsPanel({ blob, captions }) {
   return (
     <div className="capwrap">
       <div className="bahd"><b>Captions &amp; transcript</b>{captions ? <span className="aialtbadge" style={{ marginLeft: 8 }}>⚡ Whisper</span> : <span className="muted" style={{ marginLeft: 8 }}>· transcribing…</span>}</div>
-      {url && <audio controls src={url} style={{ width: '100%', marginTop: 10 }}>{vttUrl && <track default kind="captions" srcLang="en" label="English" src={vttUrl} />}</audio>}
+      {url && (/^video\//.test(blob?.type || '')
+        ? <video controls src={url} style={{ width: '100%', maxHeight: 320, marginTop: 10, borderRadius: 8, background: '#000' }}>{vttUrl && <track default kind="captions" srcLang="en" label="English" src={vttUrl} />}</video>
+        : <audio controls src={url} style={{ width: '100%', marginTop: 10 }}>{vttUrl && <track default kind="captions" srcLang="en" label="English" src={vttUrl} />}</audio>)}
       {captions ? (<>
         <div className="captranscript">{lines.map((l, i) => <p key={i}>{l}</p>)}</div>
         <button className="ghost small" onClick={dl} style={{ marginTop: 9 }}>⤓ Download captions (.vtt)</button>
@@ -129,6 +131,18 @@ function ImagePanel({ blob, result }) {
       </>) : <p className="muted" style={{ marginTop: 9, fontSize: 12 }}>Real Claude-vision alt text + image-of-text OCR run on the deployed site; offline it falls back.</p>}
     </div>
   )
+}
+
+// Animated count-up for the certified-score reveal.
+function CountUp({ from = 0, to = 100, dur = 900 }) {
+  const [v, setV] = useState(from)
+  useEffect(() => {
+    let raf, start
+    const tick = (t) => { if (!start) start = t; const p = Math.min(1, (t - start) / dur); setV(Math.round(from + (to - from) * (1 - Math.pow(1 - p, 3)))); if (p < 1) raf = requestAnimationFrame(tick) }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [from, to, dur])
+  return <>{v}</>
 }
 
 function ScanImg({ blob }) {
@@ -408,8 +422,8 @@ export default function Upload({ onCertified }) {
               </div>
             </div>
 
-            <section className="certbanner" style={rejected ? { background: '#FAEEDA', borderColor: '#e8d2a8' } : undefined}>
-              <div className="certmark" aria-hidden="true" style={rejected ? { background: '#854F0B' } : undefined}>{rejected ? '!' : '✓'}</div>
+            <section className="certbanner certreveal" style={rejected ? { background: '#FAEEDA', borderColor: '#e8d2a8' } : undefined}>
+              <div className="certmark certpop" aria-hidden="true" style={rejected ? { background: '#854F0B' } : undefined}>{rejected ? '!' : '✓'}</div>
               <div>
                 <div className="certtitle">{rejected ? `Conditional · ${finalScore} / 100` : 'Certified · 100 / 100'}</div>
                 <div className="muted"><span className="fname">{file?.name}</span> {rejected ? 'remediated except 1 finding deferred to manual review — not yet fully WCAG 2.1 AA compliant.' : 'passed WCAG 2.1 AA after remediation & re-validation.'}</div>
@@ -422,7 +436,7 @@ export default function Upload({ onCertified }) {
                 <div className="lift">
                   <div className="liftcol"><div className="liftnum" style={{ color: '#1F5FA8' }}>{score}</div><div className="muted">as received</div></div>
                   <div className="liftarrow" aria-hidden="true">→</div>
-                  <div className="liftcol"><div className="liftnum" style={{ color: rejected ? '#854F0B' : '#3B6D11' }}>{finalScore}</div><div className="muted">{rejected ? 'conditional' : 'certified'}</div></div>
+                  <div className="liftcol"><div className="liftnum" style={{ color: rejected ? '#854F0B' : '#3B6D11' }}><CountUp from={score} to={finalScore} /></div><div className="muted">{rejected ? 'conditional' : 'certified'}</div></div>
                 </div>
                 <p className="muted">{rejected ? `${issues.length - 1} of ${issues.length} finding(s) resolved · 1 deferred to manual remediation.` : `${issues.length} finding(s) resolved across ${sevItems.length} severity level(s).`}</p>
               </section>
