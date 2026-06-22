@@ -15,6 +15,10 @@ const PROMPTS = {
     system: 'You find passages within a mostly-English text that are written in another language and would need a lang attribute for correct screen-reader pronunciation (WCAG 3.1.2). Output a short plain-text list, one per line, as: <passage> → <ISO 639-1 code>. If there are none, output exactly: none',
     user: (b) => `Text:\n${String(b.text || '').slice(0, 2000)}`,
   },
+  'keyboard-trap': {
+    system: 'You are given HTML for a custom interactive widget that may trap keyboard focus (WCAG 2.1.2). Propose the minimal fix so keyboard focus can always move away — typically an Escape key handler that closes the widget and returns focus to the trigger, plus a focus loop that never blocks Tab out. Output ONE concise sentence describing the fix to apply (not code). This is a draft to be verified by a human via interactive keyboard testing.',
+    user: (b) => `Widget markup: ${String(b.text || '').slice(0, 400)}`,
+  },
 }
 
 export async function handler(event) {

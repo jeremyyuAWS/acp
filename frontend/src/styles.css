@@ -872,6 +872,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .aifixhd { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
 .aifixrow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 6px 0; border-top: 1px solid #d9e6f7; font-size: 12.5px; }
 .aifixsc { flex: 0 0 auto; font-size: 11px; font-weight: 700; color: #1F5FA8; min-width: 168px; }
+.aifixverify { margin-left: 6px; font-size: 10px; font-weight: 600; color: #854F0B; background: #FDF4E3; border: 1px solid #E7D4A8; border-radius: 4px; padding: 1px 5px; vertical-align: middle; white-space: nowrap; }
 .aifixft { color: var(--ink); }
 .aifixfrom { color: var(--muted); text-decoration: line-through; }
 .capwrap { margin-top: 4px; }

@@ -30,12 +30,13 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
     return () => { live = false }
   }, [pdfBlob])
   const [aiAlt, setAiAlt] = useState(null) // real Claude-vision alt text for the embedded image
+  const [imgText, setImgText] = useState(null) // 1.4.5 — verbatim text extracted from an image-of-text
   useEffect(() => {
-    let live = true; setRemBlob(null); setAiAlt(null)
+    let live = true; setRemBlob(null); setAiAlt(null); setImgText(null)
     if (!officeBlob) return () => { live = false }
     ;(async () => {
       let alt = null
-      try { const img = await firstOfficeImage(officeBlob); if (img) alt = await generateAltText({ data: img.data, mediaType: img.mediaType, hint: `Image from the document “${name}”` }) } catch { /* fall back to placeholder */ }
+      try { const img = await firstOfficeImage(officeBlob); if (img) { const r = await generateAltText({ data: img.data, mediaType: img.mediaType, hint: `Image from the document “${name}”` }); alt = r?.alt; if (live && r?.text) setImgText(r.text) } } catch { /* fall back to placeholder */ }
       if (!live) return
       if (alt) setAiAlt(alt)
       try { const b = await remediateOffice(officeBlob, { alt }); if (live) setRemBlob(b) } catch { /* falls back to card */ }
@@ -53,10 +54,15 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
     const linkM = /<a\b[^>]*>\s*(click here|read more|learn more|here|more)\s*<\/a>/i.exec(srcText)
     const sensoryM = /<p[^>]*>([^<]*\b(?:round|square|circular|button (?:below|above)|on the (?:left|right))\b[^<]*)<\/p>/i.exec(srcText)
     const bodyText = strip((/<body[^>]*>([\s\S]*)<\/body>/i.exec(srcText) || [])[1] || srcText).slice(0, 1500)
+    // 2.1.2 — a custom widget that manages keys/focus (role=dialog or an onkeydown handler) is a
+    // keyboard-trap *risk*. Static analysis can't confirm a trap (it's interactive), so we surface
+    // the AI-drafted focus fix and mark it human-verify, matching the two-axis model exactly.
+    const trapM = /<[a-z][^>]*\b(?:role=["']dialog["']|onkeydown=)[^>]*>/i.exec(srcText)
     ;(async () => {
       const jobs = []
       if (linkM) jobs.push(aiTextFix({ kind: 'link', text: linkM[1], context: h1 ? `careers page “${h1}”` : 'a careers page' }).then((f) => f && { label: '2.4.4 link purpose', from: linkM[1], to: f }))
       if (sensoryM) jobs.push(aiTextFix({ kind: 'sensory', text: sensoryM[1].trim() }).then((f) => f && { label: '1.3.3 sensory characteristics', from: sensoryM[1].trim(), to: f }))
+      if (trapM) jobs.push(aiTextFix({ kind: 'keyboard-trap', text: trapM[0].slice(0, 300) }).then((f) => f && { label: '2.1.2 no keyboard trap', from: 'focus-trap risk detected', to: f, verify: true }))
       jobs.push(aiTextFix({ kind: 'language-parts', text: bodyText }).then((f) => f && f.toLowerCase() !== 'none' && { label: '3.1.2 language of parts', from: 'untagged foreign text', to: f.replace(/\n/g, ' · ') }))
       const out = (await Promise.all(jobs)).filter(Boolean)
       if (live) setAiFixes(out)
@@ -99,12 +105,18 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
           <span>AI-generated alt text for the embedded image: <b>“{aiAlt}”</b> — written into the remediated file.</span>
         </div>
       )}
+      {imgText && (
+        <div className="aialtcallout">
+          <span className="aialtbadge">⚡ Claude vision · OCR</span>
+          <span><b>1.4.5 Images of Text</b> — the image is rendered text; AI extracted it as real text: <b>“{imgText}”</b></span>
+        </div>
+      )}
       {aiFixes.length > 0 && (
         <div className="aifixpanel">
           <div className="aifixhd"><span className="aialtbadge">⚡ Claude · live AI remediation</span><span className="muted" style={{ fontSize: 12 }}>drafted for human approval</span></div>
           {aiFixes.map((f, i) => (
             <div className="aifixrow" key={i}>
-              <span className="aifixsc">{f.label}</span>
+              <span className="aifixsc">{f.label}{f.verify && <span className="aifixverify" title="AI drafts the fix; a human confirms by keyboard testing">human-verify</span>}</span>
               <span className="aifixft"><span className="aifixfrom">{f.from}</span> <span aria-hidden="true">→</span> <b>{f.to}</b></span>
             </div>
           ))}

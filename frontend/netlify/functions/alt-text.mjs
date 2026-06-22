@@ -29,18 +29,21 @@ export async function handler(event) {
       headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
         model: process.env.ANTHROPIC_VISION_MODEL || 'claude-opus-4-8',
-        max_tokens: 160,
-        system: 'You write alternative text for images embedded in business documents, for screen-reader users (WCAG 1.1.1). Be specific and concise: one sentence, no more than ~140 characters, no "image of"/"picture of" preamble, present the essential information or function the image conveys. If it is a chart, state what it shows and the key figures. Output ONLY the alt text.',
+        max_tokens: 400,
+        system: 'You analyze an image embedded in a business document for accessibility. Return ONLY a compact JSON object with two string fields and nothing else: "alt" — concise alt text for screen-reader users (WCAG 1.1.1; ~140 chars, no "image of"/"picture of" preamble, the essential info/function; for a chart state what it shows and the key figures); "text" — if the image is PRIMARILY rendered text (an image of text: a banner, scanned headline, infographic of words), the verbatim text content (WCAG 1.4.5); otherwise an empty string.',
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: mediaType, data: image } },
-          { type: 'text', text: hint ? `Context: ${String(hint).slice(0, 200)}. Write the alt text.` : 'Write the alt text for this image.' },
+          { type: 'text', text: hint ? `Context: ${String(hint).slice(0, 200)}. Return the JSON.` : 'Return the JSON.' },
         ] }],
       }),
     })
     const data = await res.json()
-    let alt = data?.content?.[0]?.text?.trim() || null
-    if (alt) alt = alt.replace(/^["“]|["”]$/g, '').replace(/\s+/g, ' ').slice(0, 200)
-    return { statusCode: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ alt, model: data?.model || null }) }
+    const raw = data?.content?.[0]?.text?.trim() || ''
+    let alt = null, text = ''
+    try { const j = JSON.parse(raw.replace(/^```json\s*|\s*```$/g, '')); alt = (j.alt || '').trim() || null; text = (j.text || '').trim() }
+    catch { alt = raw.replace(/^["“]|["”]$/g, '').replace(/\s+/g, ' ').slice(0, 200) || null }
+    if (alt) alt = alt.replace(/\s+/g, ' ').slice(0, 220)
+    return { statusCode: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ alt, text: text || null, model: data?.model || null }) }
   } catch {
     return { statusCode: 200, body: JSON.stringify({ alt: null }) }
   }

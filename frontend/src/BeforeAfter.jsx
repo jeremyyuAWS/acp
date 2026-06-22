@@ -76,6 +76,17 @@ export function remediateHtml(text) {
       const hint = el.querySelector('img[alt]')?.getAttribute('alt')?.trim() || el.getAttribute('name') || (el.tagName === 'A' ? 'link' : 'button')
       el.setAttribute('aria-label', hint); changes.add('Named unlabeled controls (icon-only) · 4.1.2')
     })
+    // 1.4.11 Non-text Contrast — UI borders/icons must hit 3:1; darken light declared borders.
+    doc.querySelectorAll('[style*="border"]').forEach((el) => {
+      const s = el.getAttribute('style')
+      const m = /border(?:-[a-z]+)?:[^;]*?(#[0-9a-fA-F]{3,6})/.exec(s)
+      if (m && isLight(m[1])) { el.setAttribute('style', s.replace(m[1], '#767676')); changes.add('Darkened low-contrast UI borders to 3:1 · 1.4.11') }
+    })
+    // 1.4.12 Text Spacing — fixed px line-heights block the user's spacing override; make them adaptive.
+    doc.querySelectorAll('[style*="line-height"]').forEach((el) => {
+      const s = el.getAttribute('style')
+      if (/line-height:\s*\d+px/i.test(s)) { el.setAttribute('style', s.replace(/line-height:\s*\d+px/i, 'line-height:1.5')); changes.add('Unblocked text-spacing overrides · 1.4.12') }
+    })
     return { html: '<!doctype html>' + doc.documentElement.outerHTML, changes: [...changes] }
   } catch { return null }
 }

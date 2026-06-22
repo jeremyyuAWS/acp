@@ -14,7 +14,7 @@ export async function generateAltText({ data, mediaType, hint } = {}) {
     })
     if (!res.ok) return null
     const j = await res.json()
-    return j?.alt || null
+    return { alt: j?.alt || null, text: j?.text || null }
   } catch { return null }
 }
 

@@ -11,6 +11,7 @@ const SRC = `<!doctype html><html><head>
 <form><input type="email" placeholder="Your email"></form>
 <a href="#">click here</a>
 <button tabindex="4">Submit</button>
+<div style="border:1px solid #dddddd"><p style="line-height:12px">Tight spaced text.</p></div>
 </body></html>`
 
 describe('remediateHtml', () => {
@@ -53,6 +54,15 @@ describe('remediateHtml', () => {
     expect(html).toMatch(/text-decoration:underline/i)
     expect(changed(/keyboard/i)).toBe(true)
     expect(changed(/colour|color/i)).toBe(true)
+  })
+
+  it('darkens low-contrast borders and unblocks text spacing (1.4.11 / 1.4.12)', () => {
+    expect(html).toMatch(/border:\s*1px solid #767676/i)
+    expect(html).not.toMatch(/#dddddd/i)
+    expect(html).toMatch(/line-height:\s*1\.5/)
+    expect(html).not.toMatch(/line-height:\s*12px/)
+    expect(changed(/non-text|border/i)).toBe(true)
+    expect(changed(/spacing/i)).toBe(true)
   })
 
   it('clarifies ambiguous links (2.4.4)', () => {
