@@ -45,8 +45,10 @@ const proposeFix = (f) => { const sc = (f?.wcag || '').match(/^\d+\.\d+\.\d+/)?.
 const isHtml = (name) => /\.html?$/i.test(name || '')
 const isPdf = (name) => /\.pdf$/i.test(name || '')
 const isAudio = (name) => /\.(mp3|m4a|wav|aac|ogg|webm|mp4|mov)$/i.test(name || '')
+const isVideo = (name) => /\.(mp4|mov|webm)$/i.test(name || '')
 const isImage = (name) => /\.(png|jpe?g|gif|webp)$/i.test(name || '')
 const AUDIO_ISSUES = [['MEDIA-CAPTIONS-001', '1.2.2 captions', 'CRITICAL', 'no synchronized captions for the audio'], ['MEDIA-TRANSCRIPT-001', '1.2.1 audio-only content', 'SERIOUS', 'no text transcript provided']]
+const VIDEO_ISSUES = [['MEDIA-CAPTIONS-001', '1.2.2 captions', 'CRITICAL', 'no synchronized captions for the video'], ['MEDIA-AUDIODESC-001', '1.2.5 audio description', 'SERIOUS', 'no audio-description track for the visual content']]
 const IMAGE_ISSUES = [['IMG-ALT-001', '1.1.1 non-text content', 'CRITICAL', 'image has no alternative text']]
 
 // Single-document walkthrough: upload → scan → assess → remediate → human review →
@@ -63,7 +65,7 @@ const EXT_ISSUES = {
 const SEV_PEN = { CRITICAL: 16, SERIOUS: 11, MODERATE: 5, MINOR: 2 }
 const SEV_BADGE = { CRITICAL: ['#E2EDFB', '#1F5FA8'], SERIOUS: ['#E6EFFB', '#2A5E9E'], MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'] }
 const extOf = (name) => { const m = /\.([a-z0-9]+)$/i.exec(name || ''); return (m ? m[1] : 'pdf').toLowerCase() }
-const issuesFor = (name) => (isAudio(name) ? AUDIO_ISSUES : isImage(name) ? IMAGE_ISSUES : (EXT_ISSUES[extOf(name)] || EXT_ISSUES.pdf)).map(([rule, wcag, sev, detail]) => ({ rule, wcag, sev, detail }))
+const issuesFor = (name) => (isVideo(name) ? VIDEO_ISSUES : isAudio(name) ? AUDIO_ISSUES : isImage(name) ? IMAGE_ISSUES : (EXT_ISSUES[extOf(name)] || EXT_ISSUES.pdf)).map(([rule, wcag, sev, detail]) => ({ rule, wcag, sev, detail }))
 
 // Past-upload detail dialog — its own component so focus management runs on open.
 function HistoryDetail({ viewing, onClose }) {
@@ -195,7 +197,7 @@ export default function Upload({ onCertified }) {
     setFile(f); setSrcText(text); setPdfUrl(url); setPdfBlob(pdf); setOfficeBlob(office); setAudioBlob(audio); setImageBlob(image); setImgResult(null); setCaptions(null); setRealEngine(null); setScanning(true); setStep(0)
     setPrescreen(text && isHtml(f.name) ? prescreenHtml(text) : []) // Phase 2 HITL pre-screen (HTML)
     const html = text && isHtml(f.name)
-    const realLabel = html ? 'Analysing with axe-core (real WCAG engine)…' : office ? 'Parsing the document (real OOXML analysis)…' : pdf ? 'Parsing the PDF structure (pdf-lib)…' : audio ? 'Transcribing the audio with Whisper…' : image ? 'Describing the image with Claude vision…' : 'Analysing against WCAG 2.1 AA…'
+    const realLabel = html ? 'Analysing with axe-core (real WCAG engine)…' : office ? 'Parsing the document (real OOXML analysis)…' : pdf ? 'Parsing the PDF structure (pdf-lib)…' : audio ? (isVideo(f.name) ? 'Transcribing the video soundtrack with Whisper…' : 'Transcribing the audio with Whisper…') : image ? 'Describing the image with Claude vision…' : 'Analysing against WCAG 2.1 AA…'
     const phases = ['Connecting…', 'Reading document…', 'mova Agent classifying & tagging…', realLabel, 'Scoring…']
     let i = 0
     const finish = async () => {
@@ -296,7 +298,7 @@ export default function Upload({ onCertified }) {
           onDragOver={(e) => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)} onDrop={onDrop}>
           <div className="dzicon" aria-hidden="true">⬍</div>
           <div style={{ fontSize: 15 }}>Drag a document here, or <label htmlFor="upfile" className="dzlink">browse</label></div>
-          <input id="upfile" type="file" style={{ display: 'none' }} accept=".pdf,.docx,.pptx,.xlsx,.html,.htm,.mp3,.m4a,.wav,.mp4,.mov,.png,.jpg,.jpeg,.gif,.webp" onChange={onInput} />
+          <input id="upfile" type="file" style={{ display: 'none' }} accept=".pdf,.docx,.pptx,.xlsx,.html,.htm,.mp3,.m4a,.wav,.mp4,.mov,.webm,.png,.jpg,.jpeg,.gif,.webp" onChange={onInput} />
           <div className="muted" style={{ marginTop: 4 }}>PDF · Word · PowerPoint · Excel · HTML · audio · image — scanned in your browser, nothing is uploaded anywhere</div>
           <div className="muted" style={{ marginTop: 2, fontSize: 12 }}>⚡ HTML is analysed for real with the axe-core WCAG engine</div>
           <div className="dzsamples">
@@ -307,6 +309,7 @@ export default function Upload({ onCertified }) {
             <button className="ghost small" onClick={() => sample('finance-metrics.xlsx')}>Excel</button>
             <button className="ghost small" onClick={() => sample('careers-landing.html')}>HTML</button>
             <button className="ghost small" onClick={() => sample('benefits-briefing.mp3')}>Audio</button>
+            <button className="ghost small" onClick={() => sample('benefits-briefing.webm')} title="A narrated video — Whisper transcribes the audio track into captions (1.2.2)">Video</button>
             <button className="ghost small" onClick={() => sample('enrollment-notice.png')} title="An image of text — watch Claude read it back as real text (1.4.5)">Image of text</button>
           </div>
         </div>
