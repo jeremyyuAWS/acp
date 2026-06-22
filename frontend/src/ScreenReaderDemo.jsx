@@ -5,9 +5,10 @@ import { prefersReducedMotion } from './a11y.js'
 // announces, as-uploaded vs. remediated. Optional real speech via the Web Speech
 // API. Only AT-relevant criteria appear (contrast, e.g., is a low-vision issue,
 // not a screen-reader one — so it's intentionally excluded).
-function passFor(issues) {
+function passFor(issues, docTitle) {
   const has = (sc) => issues.some((i) => (i.wcag || '').includes(sc))
-  const lines = [{ before: 'web page', after: 'Open enrollment 2026 — UT Southwestern' }, { before: 'Open enrollment', after: 'heading level 1, Open enrollment' }]
+  const title = docTitle || 'Open enrollment 2026 — UT Southwestern'
+  const lines = [{ before: 'document, no title', after: title }, { before: title, after: `heading level 1, ${title}` }]
   if (has('1.1.1')) lines.push({ before: 'graphic', after: 'graphic — bar chart, enrollment by region, West highest at 38 percent' })
   if (has('1.3.1')) lines.push({ before: 'table, eight cells', after: 'table, Region by enrollment, 2 columns, 5 rows. Column one, Region. Column two, Enrollment' })
   if (has('1.3.2')) lines.push({ before: 'footnote 4. Continued from. The plan covers', after: 'The plan covers preventive visits. Footnote 4.' })
@@ -17,8 +18,8 @@ function passFor(issues) {
   return lines
 }
 
-export default function ScreenReaderDemo({ issues = [] }) {
-  const lines = passFor(issues)
+export default function ScreenReaderDemo({ issues = [], docTitle = null }) {
+  const lines = passFor(issues, docTitle)
   const [cursor, setCursor] = useState(-1)
   const [mode, setMode] = useState(null)
   const [sound, setSound] = useState(false)

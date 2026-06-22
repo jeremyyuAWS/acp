@@ -256,6 +256,12 @@ export default function Upload({ onCertified }) {
     setStep(4)
   }
   const autoFixed = issues.slice(0, -1)
+  // The screen-reader demo reflects THIS document: its real <h1>/<title> for HTML,
+  // otherwise a humanised file name — so the narration isn't a canned example.
+  const docTitle = (() => {
+    if (srcText) { const t = ((/<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(srcText) || /<title[^>]*>([\s\S]*?)<\/title>/i.exec(srcText) || [])[1] || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim(); if (t) return t.slice(0, 70) }
+    return file ? String(file.name).replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : null
+  })()
 
   const reportRef = useRef(null)
   const [exporting, setExporting] = useState(false)
@@ -387,7 +393,7 @@ export default function Upload({ onCertified }) {
             ))}
           </div>
           {isImage(file?.name) ? <ImagePanel blob={imageBlob} result={imgResult} /> : isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <BeforeAfter file={file} issues={issues} srcText={srcText} pdfUrl={pdfUrl} officeBlob={officeBlob} />}
-          <ScreenReaderDemo issues={issues} />
+          <ScreenReaderDemo issues={issues} docTitle={docTitle} />
           {prescreen.length > 0 && (
             <div className="hitlpanel">
               <div className="hitlhd"><b>⚑ Routed to human review</b><span className="hitlbadge">Phase 2 · HITL</span></div>
