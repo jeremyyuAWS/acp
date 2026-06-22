@@ -16,9 +16,14 @@ async function logoDataUrl() {
   } catch { return null }
 }
 
-async function makeDoc() {
+async function makeDoc({ title = 'mova.io Accessibility Report', lang = 'en-US' } = {}) {
   const { jsPDF } = await import('jspdf')
   const doc = new jsPDF('p', 'pt', 'a4')
+  // The platform must not ship inaccessible PDFs: set a document title (2.4.2), the
+  // document language (3.1.1), and ask viewers to show the title in the window bar.
+  doc.setProperties({ title, creator: 'mova.io Accessibility Platform', author: 'mova.io' })
+  doc.setLanguage(lang)
+  doc.viewerPreferences({ DisplayDocTitle: true })
   const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight()
   const M = 50, CW = W - 2 * M, FOOT = 50
   const logo = await logoDataUrl()
@@ -48,6 +53,21 @@ async function makeDoc() {
       ink(MUTED); doc.setFont('helvetica', 'normal'); doc.setFontSize(11); doc.text(subtitle, M, st.y + 10); st.y += 17
       doc.setFontSize(9.5); meta.forEach((m) => { doc.text(m, M, st.y + 8); st.y += 13 })
       st.y += 10; draw(PLUM); doc.setLineWidth(2); doc.line(M, st.y, M + CW, st.y); st.y += 22
+    },
+    // A score dial drawn at the top-right of the cover — a real ring, not just a number.
+    ring(score, color) {
+      const R = 30, cx = W - M - R - 2, cy = M + R + 2
+      const s = Math.max(0, Math.min(100, Math.round(score || 0)))
+      doc.setLineCap('round'); draw('#E9E5EE'); doc.setLineWidth(8); doc.circle(cx, cy, R, 'S')
+      if (s > 0) {
+        draw(color); doc.setLineWidth(8)
+        const start = -90, end = start + (s / 100) * 360, steps = Math.max(2, Math.round((s / 100) * 64))
+        let prev = null
+        for (let i = 0; i <= steps; i++) { const a = (start + (end - start) * (i / steps)) * Math.PI / 180, x = cx + R * Math.cos(a), y = cy + R * Math.sin(a); if (prev) doc.line(prev[0], prev[1], x, y); prev = [x, y] }
+      }
+      doc.setLineCap('butt')
+      ink(color); doc.setFont('helvetica', 'bold'); doc.setFontSize(20); doc.text(String(s), cx, cy + 3, { align: 'center' })
+      ink(MUTED); doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.text('/ 100', cx, cy + 14, { align: 'center' })
     },
     metricGrid(cards) {
       const n = cards.length, gp = 10, cw = (CW - (n - 1) * gp) / n, ch = 56
@@ -105,7 +125,8 @@ const personDays = (min) => `${((min || 0) / 60 / 8).toFixed(1)} person-days`
 
 // Quarterly governance report (Overview) — a detailed, board-ready document.
 export async function exportGovernanceReport(d) {
-  const p = await makeDoc()
+  const p = await makeDoc({ title: 'Quarterly Accessibility Governance Report' })
+  if (d.score != null) p.ring(d.score, d.score >= 90 ? GREEN : AMBER)
   p.cover({
     title: 'Quarterly Accessibility Governance Report',
     subtitle: `${d.org} · ${d.quarter} · WCAG 2.1 AA`,
@@ -187,11 +208,11 @@ const PRIN_CLR = { 1: '#1F5FA8', 2: '#3B6D11', 3: '#854F0B', 4: '#4B3460' }
 
 // Per-document conformance report (Upload) — a detailed, beautiful, LLM-narrated PDF.
 export async function exportDocumentReport(d) {
-  const p = await makeDoc()
   const before = d.score ?? 0
   const after = d.finalScore ?? (d.status && /pending/i.test(d.status) ? before : 100)
   const findings = d.findings || []
-
+  const p = await makeDoc({ title: `Accessibility Conformance Report — ${d.file}` })
+  p.ring(after, after >= 90 ? GREEN : AMBER)
   p.cover({
     title: 'Accessibility Conformance Report',
     subtitle: d.file,
@@ -258,7 +279,7 @@ export async function exportDocumentReport(d) {
 
 // Immutable evidence package (Monitor) — the who/when/what/which-engine audit trail.
 export async function exportEvidenceReport(d) {
-  const p = await makeDoc()
+  const p = await makeDoc({ title: 'Accessibility Evidence Package' })
   p.cover({
     title: 'Accessibility Evidence Package',
     subtitle: `${d.org} · immutable audit trail`,

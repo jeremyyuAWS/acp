@@ -215,7 +215,9 @@ export default function Upload({ onCertified }) {
     catch { start({ name, size: 100 * 1024 }) }
   }
   const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setOfficeBlob(null); setAudioBlob(null); setCaptions(null); setPdfBlob(null); setImageBlob(null); setImgResult(null); setRealEngine(null); setReviewOutcome(null) }
-  const score = Math.max(0, 100 - issues.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0))
+  // Floor the as-received score at 18 so a heavily-failing document reads as "low" rather
+  // than a broken "0" — the lift to 100 still lands dramatically.
+  const score = issues.length ? Math.max(18, 100 - issues.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0)) : 100
   const review = issues.slice(-1)
   const reviewItem = review[0]
   // Approve → the escalated fix is applied → 100. Reject → it's deferred to manual
