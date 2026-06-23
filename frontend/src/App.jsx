@@ -1,6 +1,8 @@
 import { useEffect, useState, useMemo } from 'react'
 import { getSources, getRubric, listScans, getScan, startScan, getJob } from './api'
 import { setPersona } from './sim.js'
+import { loadDelegations } from './OwnerDelegate.jsx'
+import { loadFileTypeConfig } from './FileTypeConfig.jsx'
 import { annotate, loadPublished } from './ontology.js'
 import Logo from './Logo.jsx'
 import ChatWidget from './ChatWidget.jsx'
@@ -80,6 +82,8 @@ export default function App() {
   const [progress, setProgress] = useState(null)
   const [loaded, setLoaded] = useState(false)
   const [certifiedDocs, setCertifiedDocs] = useState([])
+  const [delegations, setDelegations] = useState(loadDelegations)
+  const [fileTypeConfig, setFileTypeConfig] = useState(loadFileTypeConfig)
   const [ontology, setOntology] = useState(loadPublished)
 
   useEffect(() => {
@@ -180,7 +184,7 @@ export default function App() {
 
         {view === 'integrations' && <Integrations sources={sources} files={files} onScan={doScan} busy={busy} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} />}
+        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} delegations={delegations} fileTypeConfig={fileTypeConfig} />}
 
         {view === 'assess' && (
           <>
@@ -205,7 +209,7 @@ export default function App() {
 
       <ChatWidget files={files} run={run} trend={trend} trendDates={trendDates} me={me} />
       {SHOW_A11Y && <A11ySelfCheck />}
-      {settingsOpen && me.allow?.includes('settings') && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onOntologyChange={() => setOntology(loadPublished())} />}
+      {settingsOpen && me.allow?.includes('settings') && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onOntologyChange={() => setOntology(loadPublished())} onDelegationChange={setDelegations} onFileTypeChange={(cfg) => setFileTypeConfig(cfg)} />}
     </div>
   )
 }

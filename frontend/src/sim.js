@@ -136,7 +136,7 @@ const REF_DAY = Date.parse('2026-06-18T00:00:00Z')
 const AGE_DAYS = [4, 9, 16, 27, 41, 73, 119, 188, 274, 401, 612, 900, 1340, 2010]
 // Owners carry a seniority so remediation can be prioritized by business
 // importance (executive-owned + public-facing documents matter most).
-const OWNERS = [
+export const OWNERS = [
   { n: 'A. Chen', sr: 'Executive' }, { n: 'M. Okafor', sr: 'Director' }, { n: 'L. Nguyen', sr: 'Director' },
   { n: 'S. Patel', sr: 'Manager' }, { n: 'D. Weiss', sr: 'Manager' },
   { n: 'J. Romero', sr: 'Staff' }, { n: 'R. Haddad', sr: 'Staff' }, { n: 'K. Brooks', sr: 'Staff' },

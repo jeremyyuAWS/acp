@@ -94,7 +94,7 @@ const STATE_NOTE = {
   remediated: 'auto-remediated', reviewed: 'no findings — cleared',
 }
 
-export default function FileDrawer({ file, onClose, context = 'full' }) {
+export default function FileDrawer({ file, onClose, context = 'full', overrideOwner = null, delegatedFrom = null }) {
   if (!file) return null
   const st = statusOf(file)
   const [sbg, sfg] = STATUS_BADGE[st]
@@ -112,7 +112,7 @@ export default function FileDrawer({ file, onClose, context = 'full' }) {
         <div><span className="muted">Views · 90d</span><b>{file.views90d != null ? file.views90d.toLocaleString() : '—'}</b></div>
         <div><span className="muted">Size</span><b>{file.sizeKB ? (file.sizeKB >= 1024 ? `${(file.sizeKB / 1024).toFixed(1)} MB` : `${file.sizeKB} KB`) : '—'}</b></div>
         <div><span className="muted">{file.duration ? 'Duration' : file.sheets ? 'Sheets' : 'Pages'}</span><b>{file.duration || file.pages || file.sheets || '—'}</b></div>
-        <div><span className="muted">Owner</span><b>{file.owner || '—'}</b></div>
+        <div><span className="muted">Owner</span><b>{overrideOwner || file.owner || '—'}{delegatedFrom && <span className="badge" style={{ marginLeft: 6, background: '#E7F0DC', color: '#3B6D11', fontSize: 10, fontWeight: 400 }}>delegated from {delegatedFrom}</span>}</b></div>
       </div>
     </>
   )

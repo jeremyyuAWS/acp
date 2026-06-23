@@ -2,6 +2,8 @@ import { useState, useRef } from 'react'
 import Rubric from './Rubric.jsx'
 import WcagCoverage from './WcagCoverage.jsx'
 import Ontology from './Ontology.jsx'
+import OwnerDelegate from './OwnerDelegate.jsx'
+import FileTypeConfig from './FileTypeConfig.jsx'
 import { useDialog } from './a11y.js'
 import { downloadUpdatedXlsx, downloadUpdatedPptx } from './exportDeliverables.js'
 
@@ -9,7 +11,7 @@ import { downloadUpdatedXlsx, downloadUpdatedPptx } from './exportDeliverables.j
 // the scoring rules (Rubric), the validation coverage (WCAG 2.1 + 2.2 matrix), and
 // the business ontology/taxonomy — i.e. the configuration an admin owns, kept out
 // of the day-to-day workflow tabs.
-export default function Settings({ onClose, onRubricSaved, files = [], onOntologyChange }) {
+export default function Settings({ onClose, onRubricSaved, files = [], onOntologyChange, onDelegationChange, onFileTypeChange }) {
   const [tab, setTab] = useState('rules')
   const [dl, setDl] = useState(null) // 'xlsx' | 'pptx' while a deliverable is generating
   const panelRef = useRef(null)
@@ -33,11 +35,15 @@ export default function Settings({ onClose, onRubricSaved, files = [], onOntolog
           <button role="tab" aria-selected={tab === 'rules'} className={tab === 'rules' ? 'fchip on' : 'fchip'} onClick={() => setTab('rules')}>Scoring rules</button>
           <button role="tab" aria-selected={tab === 'validation'} className={tab === 'validation' ? 'fchip on' : 'fchip'} onClick={() => setTab('validation')}>Validation coverage</button>
           <button role="tab" aria-selected={tab === 'ontology'} className={tab === 'ontology' ? 'fchip on' : 'fchip'} onClick={() => setTab('ontology')}>Business ontology</button>
+          <button role="tab" aria-selected={tab === 'filetypes'} className={tab === 'filetypes' ? 'fchip on' : 'fchip'} onClick={() => setTab('filetypes')}>File types</button>
+          <button role="tab" aria-selected={tab === 'owners'} className={tab === 'owners' ? 'fchip on' : 'fchip'} onClick={() => setTab('owners')}>Owners</button>
         </div>
         <div className="setbody">
           {tab === 'rules' && <Rubric onSaved={onRubricSaved} />}
           {tab === 'validation' && <WcagCoverage />}
           {tab === 'ontology' && <Ontology files={files} onPublished={onOntologyChange} />}
+          {tab === 'filetypes' && <FileTypeConfig onChanged={(cfg, custom) => onFileTypeChange?.(cfg, custom)} />}
+          {tab === 'owners' && <OwnerDelegate files={files} onChanged={onDelegationChange} />}
         </div>
       </div>
     </div>

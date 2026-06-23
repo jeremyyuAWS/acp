@@ -43,7 +43,7 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
   )
 }
 
-export default function Discover({ sources, files, busy, onScan }) {
+export default function Discover({ sources, files, busy, onScan, delegations = {}, fileTypeConfig = {} }) {
   const [sub, setSub] = useState('inventory')
   const [sel, setSel] = useState(null)
   const [open, setOpen] = useState(() => new Set())
@@ -53,15 +53,24 @@ export default function Discover({ sources, files, busy, onScan }) {
   const [editAct, setEditAct] = useState(null) // file currently choosing an override action
   const [seg, setSeg] = useState(null) // category drill-down drawer (by document type)
 
+  // Apply file-type exclusions — disabled types are excluded from inventory/scoring
+  const visibleFiles = Object.keys(fileTypeConfig).length
+    ? files.filter((f) => fileTypeConfig[f.type] !== false)
+    : files
+  const excludedCount = files.length - visibleFiles.length
+  // Effective owner after delegation (departed owners reassigned to new person)
+  const ownerOf = (f) => delegations[f.owner] || f.owner
+  const isDelegated = (f) => !!delegations[f.owner]
+
   const groups = {}
-  files.forEach((f) => { const d = f.department || 'Unassigned'; (groups[d] = groups[d] || []).push(f) })
+  visibleFiles.forEach((f) => { const d = f.department || 'Unassigned'; (groups[d] = groups[d] || []).push(f) })
   const deptOrder = [...DEPARTMENTS.filter((d) => groups[d]), ...Object.keys(groups).filter((d) => !DEPARTMENTS.includes(d))]
-  const lockedCount = files.filter((f) => f.locked).length
+  const lockedCount = visibleFiles.filter((f) => f.locked).length
 
   const PLUM = '#7a5c8e'
-  const byType = Object.entries(files.reduce((m, f) => { const k = (f.type || '').toUpperCase(); m[k] = (m[k] || 0) + 1; return m }, {})).sort((a, b) => b[1] - a[1]).map(([label, value]) => ({ label, value, color: TYPE_COLOR[label] || PLUM }))
-  const internalDocs = files.filter((f) => !(f.tags || []).includes('public-facing'))
-  const exposurePub = { label: 'public-facing · high-traffic', value: files.length - internalDocs.length, color: '#D85A30' }
+  const byType = Object.entries(visibleFiles.reduce((m, f) => { const k = (f.type || '').toUpperCase(); m[k] = (m[k] || 0) + 1; return m }, {})).sort((a, b) => b[1] - a[1]).map(([label, value]) => ({ label, value, color: TYPE_COLOR[label] || PLUM }))
+  const internalDocs = visibleFiles.filter((f) => !(f.tags || []).includes('public-facing'))
+  const exposurePub = { label: 'public-facing · high-traffic', value: visibleFiles.length - internalDocs.length, color: '#D85A30' }
   const exposureInternal = { label: 'internal', value: internalDocs.length, color: '#9a948f' }
   const internalRisk = ['PII', 'legal-hold', 'high-traffic'].map((t) => ({ label: t, value: internalDocs.filter((f) => (f.tags || []).includes(t)).length, color: RISK_COLOR[t] })).filter((d) => d.value)
 
@@ -120,7 +129,9 @@ export default function Discover({ sources, files, busy, onScan }) {
                   <span className="srcpill">{f.sourceName}</span>
                   {f.locked
                     ? <span className="lockflag">🔒 {f.openIssue}</span>
-                    : <span className="muted">{f.modifiedAge} · {f.views90d?.toLocaleString()} views/90d{f.superseded ? ' · superseded' : ''}</span>}
+                    : <span className="muted">{f.modifiedAge} · {f.views90d?.toLocaleString()} views/90d{f.superseded ? ' · superseded' : ''}
+                        {isDelegated(f) && <span className="badge" style={{ marginLeft: 6, background: '#E7F0DC', color: '#3B6D11', fontSize: 10 }}>delegated → {ownerOf(f)}</span>}
+                      </span>}
                 </div>
               )
               return (
@@ -184,7 +195,7 @@ export default function Discover({ sources, files, busy, onScan }) {
       <div className="estatebar">
         <div>
           <b>{files.length} documents</b> discovered across {sources.length} sources · {Object.keys(groups).length} departments
-          <div className="muted" style={{ marginTop: 2 }}>the agent crawls metadata, proposes a classification &amp; a lifecycle action — you confirm or override{lockedCount ? <> · <span className="lockwarn">🔒 {lockedCount} could not be opened (password-protected / unsupported)</span></> : null}</div>
+          <div className="muted" style={{ marginTop: 2 }}>the agent crawls metadata, proposes a classification &amp; a lifecycle action — you confirm or override{lockedCount ? <> · <span className="lockwarn">🔒 {lockedCount} could not be opened (password-protected / unsupported)</span></> : null}{excludedCount > 0 ? <> · <span className="muted">{excludedCount} file{excludedCount !== 1 ? 's' : ''} excluded by file-type settings</span></> : null}</div>
         </div>
         <button disabled={busy} onClick={() => onScan('all')}>{busy ? 'scanning…' : 'Re-scan all sources'}</button>
       </div>
@@ -232,7 +243,7 @@ export default function Discover({ sources, files, busy, onScan }) {
         </>
       )}
       {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
-      {sel && <FileDrawer file={sel} context="discover" onClose={() => setSel(null)} />}
+      {sel && <FileDrawer file={sel} context="discover" onClose={() => setSel(null)} overrideOwner={ownerOf(sel)} delegatedFrom={isDelegated(sel) ? sel.owner : null} />}
     </>
   )
 }
