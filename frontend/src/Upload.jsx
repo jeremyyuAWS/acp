@@ -5,7 +5,6 @@ import { IDENTITY } from './sim.js'
 import Logo from './Logo.jsx'
 import BeforeAfter, { remediateHtml } from './BeforeAfter.jsx'
 import ResultPreview from './ResultPreview.jsx'
-import ScreenReaderDemo from './ScreenReaderDemo.jsx'
 import PdfPreview from './PdfPreview.jsx'
 import OfficePreview from './OfficePreview.jsx'
 import { auditHtml } from './htmlAudit.js'
@@ -56,7 +55,7 @@ const IMAGE_ISSUES = [['IMG-ALT-001', '1.1.1 non-text content', 'CRITICAL', 'ima
 // it reacts to whatever the user actually uploads.
 const STEPS = ['Upload', 'Assess', 'Remediate', 'Review', 'Certified']
 const EXT_ISSUES = {
-  pdf: [['pdf.alt-text', '1.1.1 non-text content', 'CRITICAL', '2 figures have no alternative text — blind users receive nothing'], ['pdf.tagged', '1.3.1 info & relationships', 'SERIOUS', 'document is untagged — reading order and structure are indeterminate'], ['pdf.title', '2.4.2 page titled', 'SERIOUS', 'no document title — screen readers announce the raw filename'], ['pdf.document-language', '3.1.1 language of page', 'MODERATE', 'document language not declared — TTS uses incorrect pronunciation rules']],
+  pdf: [['pdf.missing-alt-text', '1.1.1 non-text content', 'CRITICAL', '2 figures have no alternative text — blind users receive nothing'], ['pdf.tagged', '1.3.1 info & relationships', 'SERIOUS', 'document is untagged — reading order and structure are indeterminate'], ['pdf.document-title', '2.4.2 page titled', 'SERIOUS', 'no document title — screen readers announce the raw filename'], ['pdf.document-language', '3.1.1 language of page', 'MODERATE', 'document language not declared — TTS uses incorrect pronunciation rules']],
   docx: [['DOCX-ALT-001', '1.1.1 non-text content', 'CRITICAL', '3 images missing alt text — blind users receive nothing'], ['DOCX-TITLE-001', '2.4.2 page titled', 'SERIOUS', 'no document title — screen readers announce the filename'], ['DOCX-TABLE-001', '1.3.1 info & relationships', 'SERIOUS', '1 table missing header row — row purpose not programmatically determinable'], ['DOCX-LINK-001', '2.4.4 link purpose', 'MODERATE', '2 "click here" links — purpose is ambiguous without surrounding context'], ['DOCX-LANG-001', '3.1.1 language of page', 'MODERATE', 'document language not declared — affects TTS pronunciation']],
   pptx: [['PPTX-ALT-001', '1.1.1 non-text content', 'CRITICAL', '3 embedded charts have no alt text — blind users receive nothing'], ['PPTX-TITLE-001', '2.4.2 page titled', 'SERIOUS', 'document title is not set'], ['PPTX-SLIDE-001', '2.4.2 page titled', 'SERIOUS', '2 slides are missing titles — slides 2 and 4']],
   xlsx: [['XLSX-ALT-001', '1.1.1 non-text content', 'MODERATE', 'a chart is missing alt text'], ['XLSX-HEADER-001', '1.3.1 info & relationships', 'MODERATE', 'a table has no header row']],
@@ -648,7 +647,6 @@ export default function Upload({ onCertified }) {
                 ))}
               </div>
               {isImage(file?.name) ? <ImagePanel blob={imageBlob} result={imgResult} /> : isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <BeforeAfter file={file} issues={issues} srcText={srcText} pdfUrl={pdfUrl} officeBlob={officeBlob} />}
-              <ScreenReaderDemo issues={issues} docTitle={docTitle} />
               {prescreen.length > 0 && (
                 <div className="hitlpanel">
                   <div className="hitlhd"><b>⚑ Routed to human review</b><span className="hitlbadge">Phase 2 · HITL</span></div>

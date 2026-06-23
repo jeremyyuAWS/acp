@@ -11,10 +11,10 @@ export async function auditPdf(blob) {
   const doc = await PDFDocument.load(await blob.arrayBuffer(), { ignoreEncryption: true, updateMetadata: false })
   const findings = []
   const title = doc.getTitle()
-  if (!title || !title.trim()) findings.push({ rule: 'pdf-title', wcag: '2.4.2 page titled', sev: 'SERIOUS', detail: 'document has no title' })
-  if (!doc.catalog.get(PDFName.of('Lang'))) findings.push({ rule: 'pdf-lang', wcag: '3.1.1 language of page', sev: 'MODERATE', detail: 'document language is not declared' })
+  if (!title || !title.trim()) findings.push({ rule: 'pdf.document-title', wcag: '2.4.2 page titled', sev: 'SERIOUS', detail: 'document has no title' })
+  if (!doc.catalog.get(PDFName.of('Lang'))) findings.push({ rule: 'pdf.document-language', wcag: '3.1.1 language of page', sev: 'MODERATE', detail: 'document language is not declared' })
   const tagged = !!doc.catalog.get(PDFName.of('StructTreeRoot'))
-  if (!tagged) findings.push({ rule: 'pdf-tagged', wcag: '1.3.1 info & relationships', sev: 'CRITICAL', detail: 'PDF is not tagged — structure & reading order are not exposed to assistive tech' })
+  if (!tagged) findings.push({ rule: 'pdf.tagged', wcag: '1.3.1 info & relationships', sev: 'CRITICAL', detail: 'PDF is not tagged — structure & reading order are not exposed to assistive tech' })
   return findings
 }
 

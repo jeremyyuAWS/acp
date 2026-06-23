@@ -163,18 +163,29 @@ function ScDetail({ sel, onClose }) {
 }
 
 export default function WcagCoverage() {
-  const [filter, setFilter] = useState('all')
+  const [filters, setFilters] = useState(new Set(['all']))
   const [sel, setSel] = useState(null)
 
-  const match = (r) => filter === 'all' ? true
-    : filter === '2.2' ? r.added === '2.2'
-    : filter === 'A' || filter === 'AA' ? r.level === filter
-    : filter === 'Required' ? r.legal === 'Required'
-    : filter === 'docs' ? r.docApplies
-    : filter.startsWith('rem:') ? remTier(r) === filter.slice(4)
-    : PHASE_FILTER[filter] ? r.phase.startsWith(PHASE_FILTER[filter])
-    : r.source === filter
+  const toggle = (k) => {
+    if (k === 'all') { setFilters(new Set(['all'])); return }
+    setFilters((prev) => {
+      const next = new Set(prev)
+      next.delete('all')
+      if (next.has(k)) { next.delete(k) } else { next.add(k) }
+      return next.size ? next : new Set(['all'])
+    })
+  }
 
+  const matchOne = (r, f) => f === 'all' ? true
+    : f === '2.2' ? r.added === '2.2'
+    : f === 'A' || f === 'AA' ? r.level === f
+    : f === 'Required' ? r.legal === 'Required'
+    : f === 'docs' ? r.docApplies
+    : f.startsWith('rem:') ? remTier(r) === f.slice(4)
+    : PHASE_FILTER[f] ? r.phase.startsWith(PHASE_FILTER[f])
+    : r.source === f
+
+  const match = (r) => filters.has('all') || [...filters].some((f) => matchOne(r, f))
   const shown = WCAG.filter(match)
   const tally = (src) => WCAG.filter((r) => r.source === src).length
 
@@ -225,11 +236,11 @@ export default function WcagCoverage() {
             const remaining = ph.match ? WCAG.filter((r) => ph.match(r.phase) && r.source === 'MDK net-new').length : 0
             // P0/P1 are delivered with no useful filter; P2 (covered) + P3 stay clickable
             const fkey = (ph.id === 'P0' || ph.id === 'P1') ? null : ph.id
-            const active = fkey && filter === fkey
+            const active = fkey && filters.has(fkey)
             const cntText = ph.done ? (delivered ? `✓ ${delivered} delivered` : '✓ delivered') : remaining ? `✓ ${delivered} · ${remaining} optional left` : `${delivered || 0} criteria`
             return (
               <div className="rmstep" key={ph.id}>
-                <button className={`rmseg${active ? ' on' : ''}${fkey ? '' : ' static'}${ph.done ? ' done' : ''}`} onClick={() => fkey && setFilter(active ? 'all' : fkey)} disabled={!fkey} title={ph.desc}>
+                <button className={`rmseg${active ? ' on' : ''}${fkey ? '' : ' static'}${ph.done ? ' done' : ''}`} onClick={() => fkey && toggle(fkey)} disabled={!fkey} title={ph.desc}>
                   <div className="rmtop"><span className="rmid">{ph.id}{ph.done && ' ✓'}</span><span className="rmwhen">{ph.when}</span></div>
                   <div className="rmlabel">{ph.label}</div>
                   <div className="muted rmcnt">{cntText}</div>
@@ -245,8 +256,9 @@ export default function WcagCoverage() {
 
       <div className="chiprow" style={{ margin: '4px 0 14px' }}>
         {FILTERS.map(([k, label]) => (
-          <button key={k} className={filter === k ? 'fchip on' : 'fchip'} onClick={() => setFilter(k)}>{label}</button>
+          <button key={k} className={filters.has(k) ? 'fchip on' : 'fchip'} onClick={() => toggle(k)}>{label}</button>
         ))}
+        {!filters.has('all') && filters.size > 1 && <span className="muted" style={{ fontSize: 11, alignSelf: 'center' }}>{shown.length} shown</span>}
       </div>
 
       <div className="autolegend">
