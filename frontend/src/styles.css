@@ -462,7 +462,13 @@ input:focus-visible, [role="tab"]:focus-visible {
 .covwhylbl { font-weight: 700; text-transform: uppercase; font-size: 9px; letter-spacing: 0.04em; }
 .covwhybox { font-size: 13px; color: #854F0B; background: #FAEEDA; border: 1px solid #E8D2A8; border-radius: 8px; padding: 8px 11px; margin: 8px 0; line-height: 1.45; }
 .covwhybox .covwhylbl { display: block; margin-bottom: 2px; }
+.covbottom { display: flex; align-items: flex-end; justify-content: space-between; gap: 4px; margin-top: auto; }
 .covtag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+.covicons { display: flex; gap: 2px; flex-shrink: 0; }
+.covicon { font-size: 9px; font-weight: 700; border-radius: 3px; padding: 0 3px; line-height: 1.7; letter-spacing: 0; text-transform: none; }
+.covicon-doc { color: #3C3489; background: rgba(60,52,137,0.12); }
+.covicon-ai { color: #854F0B; background: rgba(133,79,11,0.12); }
+.covicon-human { color: #1F5FA8; background: rgba(31,95,168,0.12); }
 .covsc .covreq-flag { font-size: 9px; font-weight: 700; color: #1F5FA8; background: #E2EDFB; border-radius: 4px; padding: 1px 4px; letter-spacing: 0.03em; }
 .covreq { font-size: 13px; line-height: 1.5; color: var(--ink); background: #f3eef6; border-left: 3px solid var(--plum); border-radius: 0 8px 8px 0; padding: 9px 12px; margin: 8px 0; }
 .covdrawer { position: fixed; inset: 0; background: rgba(40, 30, 48, 0.32); z-index: 70; display: flex; align-items: center; justify-content: center; padding: 20px; }

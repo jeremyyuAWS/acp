@@ -269,7 +269,14 @@ export default function WcagCoverage() {
                     <div className="covsc"><b>{r.sc}</b><span className="covlvl">{r.level}</span>{r.legal === 'Required' && <span className="covreq-flag" title="Required under US law">REQ</span>}{ph && <span className="covphase" style={{ color: ph[1], background: ph[2] }}>{ph[0]}</span>}{(() => { const lv = LV[remLevel(r)], vv = LV[valLevel(r)]; return <span className="covrem" style={{ color: lv[2], background: lv[3] }} title={`Validate: ${vv[1]} · Remediate: ${lv[1]}`}>{lv[0]}</span> })()}</div>
                     <div className="covname">{r.name}</div>
                     {WHY[r.sc] && <div className="covwhy"><span className="covwhylbl">Why</span> {WHY[r.sc]}</div>}
-                    <div className="covtag" style={{ color: fg }}>{SRC[r.source][0]}{!r.docApplies && <span className="muted" style={{ fontWeight: 400 }}> · N/A docs</span>}</div>
+                    <div className="covbottom">
+                      <div className="covtag" style={{ color: fg }}>{SRC[r.source][0]}{!r.docApplies && <span className="muted" style={{ fontWeight: 400 }}> · N/A docs</span>}</div>
+                      <div className="covicons">
+                        {r.docApplies && <span className="covicon covicon-doc" title="Applies to document uploads (PDF · Word · PPTX)">doc</span>}
+                        {remTier(r) === 'assisted' && <span className="covicon covicon-ai" title="AI-assisted · AI drafts the fix, human approves">✎</span>}
+                        {remTier(r) === 'manual' && <span className="covicon covicon-human" title="Human-required · must be verified interactively">✋</span>}
+                      </div>
+                    </div>
                   </button>
                 )
               })}
