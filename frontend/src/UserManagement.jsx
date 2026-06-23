@@ -1,8 +1,9 @@
 import { useState } from 'react'
+import { loadAllRoles, loadCustomRoles, saveCustomRoles, BUILTIN_ROLES } from './roleRegistry.js'
 
 const AI_SOLUTIONS = ['App Engineering', 'Quality Engineering', 'Enterprise Ops', 'SDLC', 'CX', 'Target ITOps', 'SDLC Subscription', 'QE for Healthcare']
 const TEAMS        = ['Development Team', 'QA Team', 'Devops Team', 'Management Team', 'HC QC Team', 'IT Support Target', 'Salesforce Team']
-const ROLES        = ['Super Admin', 'Admin', 'Test Manager', 'HC Quality Engineer', 'IT Support Target', 'End User']
+// ROLES loaded dynamically from roleRegistry so new custom roles appear here too
 
 // Seeded demo users — matches the style from the Movate platform screenshot
 let NEXT_ID = 7
@@ -45,6 +46,77 @@ const MultiChips = ({ values }) => (
   </div>
 )
 
+// Compute union of permissions across all a user's roles using the stored privilege map.
+// If no map exists yet for a role, that role contributes no permissions.
+const computeEffective = (userRoles, allPrivileges, solution, team) => {
+  const result = {}
+  userRoles.forEach(role => {
+    const key = solution + '||' + team + '||' + role
+    const rolePerms = allPrivileges[key]
+    if (!rolePerms) return
+    Object.entries(rolePerms).forEach(([mod, pages]) => {
+      result[mod] = result[mod] || {}
+      Object.entries(pages).forEach(([page, perms]) => {
+        result[mod][page] = result[mod][page] || {}
+        Object.entries(perms).forEach(([perm, val]) => {
+          if (val) result[mod][page][perm] = true
+        })
+      })
+    })
+  })
+  return result
+}
+
+const LS_PRIVS = 'mova_role_privileges'
+const loadPrivileges = () => { try { return JSON.parse(localStorage.getItem(LS_PRIVS) || '{}') } catch { return {} } }
+
+function EffectivePermsPopover({ user, onClose }) {
+  const privs = loadPrivileges()
+  const solution = (user.solutions && user.solutions[0]) || 'App Engineering'
+  const team     = (user.teams     && user.teams[0])     || 'Development Team'
+  const effective = computeEffective(user.roles || [], privs, solution, team)
+  const hasAny = Object.keys(effective).length > 0
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onClose}>
+      <div style={{ background: '#fff', borderRadius: 10, padding: 24, maxWidth: 480, width: '90vw', maxHeight: '70vh', overflow: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <b style={{ fontSize: 14 }}>Effective permissions · {user.first} {user.last}</b>
+          <button className="ghost small" onClick={onClose}>✕</button>
+        </div>
+        <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+          Union of {user.roles.length} role{user.roles.length !== 1 ? 's' : ''}: {user.roles.join(', ')} · via {solution} / {team}
+        </div>
+        {!hasAny ? (
+          <p className="muted" style={{ fontSize: 13 }}>No permissions configured yet for these roles. Open Settings → Permissions to assign them.</p>
+        ) : (
+          Object.entries(effective).map(([mod, pages]) => (
+            <div key={mod} style={{ marginBottom: 12 }}>
+              <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--muted)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{mod}</div>
+              {Object.entries(pages).map(([page, perms]) => {
+                const granted = Object.entries(perms).filter(([,v]) => v).map(([k]) => k)
+                if (!granted.length) return null
+                return (
+                  <div key={page} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, fontSize: 12 }}>
+                    <span style={{ minWidth: 160 }}>{page}</span>
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                      {granted.map(p => (
+                        <span key={p} style={{ background: '#E7F0DC', color: '#3B6D11', borderRadius: 3, padding: '1px 5px', fontSize: 10, fontWeight: 600 }}>{p}</span>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ))
+        )}
+        <p className="muted" style={{ fontSize: 11, marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+          Effective = union of all role permissions. Each role only adds; never subtracts. Least-privilege: assign narrow roles, combine as needed.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 const MultiSelect = ({ label, options, value, onChange }) => {
   const toggle = (opt) => {
     const next = value.includes(opt) ? value.filter(v => v !== opt) : [...value, opt]
@@ -71,6 +143,7 @@ const MultiSelect = ({ label, options, value, onChange }) => {
 
 function UserDetailsTab({ users, onDelete, onToggleActive }) {
   const [search, setSearch] = useState('')
+  const [viewPerms, setViewPerms] = useState(null)
   const filtered = users.filter(u =>
     (u.first + ' ' + u.last + ' ' + u.email).toLowerCase().includes(search.toLowerCase())
   )
@@ -117,6 +190,7 @@ function UserDetailsTab({ users, onDelete, onToggleActive }) {
                 <td style={{ textAlign: 'center' }}>
                   <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
                     <button className="ghost small" title="Send email" style={{ fontSize: 13 }} onClick={() => {}}>✉</button>
+                    <button className="ghost small" title="Effective permissions" style={{ fontSize: 13 }} onClick={() => setViewPerms(u)}>⊙</button>
                     <button className="ghost small" title={u.active ? 'Deactivate' : 'Activate'} style={{ fontSize: 13 }} onClick={() => onToggleActive(u.id)}>
                       {u.active ? '⊘' : '⊕'}
                     </button>
@@ -131,6 +205,7 @@ function UserDetailsTab({ users, onDelete, onToggleActive }) {
           </tbody>
         </table>
       </div>
+      {viewPerms && <EffectivePermsPopover user={viewPerms} onClose={() => setViewPerms(null)} />}
     </div>
   )
 }
@@ -175,7 +250,7 @@ function OnboardUserTab({ onAdded }) {
       </label>
       <MultiSelect label="AI Solution" options={AI_SOLUTIONS} value={form.solutions} onChange={v => setForm(f => ({ ...f, solutions: v }))} />
       <MultiSelect label="Team" options={TEAMS} value={form.teams} onChange={v => setForm(f => ({ ...f, teams: v }))} />
-      <MultiSelect label="Role" options={ROLES} value={form.roles} onChange={v => setForm(f => ({ ...f, roles: v }))} />
+      <MultiSelect label="Role (multiple = least-privilege union)" options={loadAllRoles()} value={form.roles} onChange={v => setForm(f => ({ ...f, roles: v }))} />
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 8 }}>
         <button type="submit" className="dlbtn" disabled={!valid || sent} style={{ minWidth: 160 }}>
           {sent ? '✓ Invite sent' : 'Send Invite'}

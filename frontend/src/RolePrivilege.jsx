@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { BUILTIN_ROLES, loadCustomRoles, saveCustomRoles, loadAllRoles } from './roleRegistry.js'
 
 const LS_KEY = 'mova_role_privileges'
 
@@ -60,8 +61,25 @@ export default function RolePrivilege({ onChanged }) {
   const [privileges, setPrivileges] = useState(loadPrivileges)
   const [solution, setSolution] = useState(AI_SOLUTIONS[0])
   const [team, setTeam] = useState(TEAMS[0])
-  const [role, setRole] = useState(ROLES[2])
+  const [customRoles, setCustomRoles] = useState(loadCustomRoles)
+  const [newRoleName, setNewRoleName] = useState('')
+  const [showNewRole, setShowNewRole] = useState(false)
+  const allRoles = [...BUILTIN_ROLES, ...customRoles]
+  const [role, setRole] = useState(BUILTIN_ROLES[2])
   const [saved, setSaved] = useState(false)
+
+  const createRole = () => {
+    const name = newRoleName.trim()
+    if (!name || allRoles.includes(name)) return
+    const next = [...customRoles, name]
+    setCustomRoles(next); saveCustomRoles(next)
+    setRole(name); setNewRoleName(''); setShowNewRole(false)
+  }
+  const deleteCustomRole = (name) => {
+    const next = customRoles.filter(r => r !== name)
+    setCustomRoles(next); saveCustomRoles(next)
+    if (role === name) setRole(BUILTIN_ROLES[0])
+  }
 
   const key = makeKey(solution, team, role)
   const current = useMemo(() => privileges[key] || DEFAULT_FOR(role), [privileges, key, role])
@@ -143,9 +161,33 @@ export default function RolePrivilege({ onChanged }) {
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
           <span className="muted">Role</span>
           <select style={{ fontSize: 12 }} value={role} onChange={e => setRole(e.target.value)}>
-            {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+            <optgroup label="Built-in">
+              {BUILTIN_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+            </optgroup>
+            {customRoles.length > 0 && (
+              <optgroup label="Custom">
+                {customRoles.map(r => <option key={r} value={r}>{r}</option>)}
+              </optgroup>
+            )}
           </select>
+          {customRoles.includes(role) && (
+            <button className="ghost small" style={{ fontSize: 11, color: '#d9534f' }} title="Delete this custom role" onClick={() => deleteCustomRole(role)}>✕ delete role</button>
+          )}
+          <button className="ghost small" style={{ fontSize: 11 }} onClick={() => setShowNewRole(v => !v)}>＋ New role</button>
         </label>
+        {showNewRole && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: '#f8f8f8', border: '1px solid var(--line)', borderRadius: 6, marginTop: 2 }}>
+            <input
+              type="text" value={newRoleName} onChange={e => setNewRoleName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && createRole()}
+              placeholder="Role name (e.g. Accessibility Reviewer)"
+              style={{ fontSize: 12, padding: '4px 8px', border: '1px solid var(--line)', borderRadius: 4, width: 260 }}
+              aria-label="New role name" autoFocus
+            />
+            <button className="ghost small" onClick={createRole} disabled={!newRoleName.trim() || allRoles.includes(newRoleName.trim())}>Create</button>
+            <span className="muted" style={{ fontSize: 11 }}>Starts with no permissions (least privilege)</span>
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 14, fontSize: 13 }}>
