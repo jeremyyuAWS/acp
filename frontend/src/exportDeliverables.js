@@ -175,7 +175,8 @@ export async function downloadUpdatedXlsx() {
 }
 
 export async function downloadUpdatedPptx() {
-  const zip = await transformPptx(await loadZip('/exports/method-deck.pptx'))
-  const blob = await zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' })
-  download(blob, 'MovaiO_AccessOps_Method_Slides_with_Status.pptx')
+  // method-deck.pptx is now pre-built with slide images that include the Status column —
+  // no runtime transformation needed; serve it directly.
+  const buf = await (await fetch('/exports/method-deck.pptx')).arrayBuffer()
+  download(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }), 'MovaiO_AccessOps_Method_Slides_with_Status.pptx')
 }
