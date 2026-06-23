@@ -58,7 +58,7 @@ const STEPS = ['Upload', 'Assess', 'Remediate', 'Review', 'Certified']
 const EXT_ISSUES = {
   pdf: [['pdf.alt-text', '1.1.1 non-text content', 'CRITICAL', 'figure 2 has no alternative text'], ['pdf.tagged', '1.3.1 info & relationships', 'SERIOUS', 'document is not tagged'], ['pdf.document-language', '3.1.1 language of page', 'MODERATE', 'no document language set']],
   docx: [['DOCX-ALT-001', '1.1.1 non-text content', 'CRITICAL', '3 images missing alt text'], ['DOCX-TITLE-001', '2.4.2 page titled', 'SERIOUS', 'no document title'], ['DOCX-TABLE-001', '1.3.1 info & relationships', 'SERIOUS', 'a table is missing its header row'], ['DOCX-LINK-001', '2.4.4 link purpose', 'MODERATE', '2 ambiguous "click here" links']],
-  pptx: [['PPTX-ALT-001', '1.1.1 non-text content', 'CRITICAL', 'chart on slide 4 has no alt text'], ['PPTX-TITLE-001', '2.4.2 page titled', 'SERIOUS', '2 slides are missing titles']],
+  pptx: [['PPTX-ALT-001', '1.1.1 non-text content', 'CRITICAL', '3 embedded charts have no alt text — blind users receive nothing'], ['PPTX-TITLE-001', '2.4.2 page titled', 'SERIOUS', 'document title is not set'], ['PPTX-SLIDE-001', '2.4.2 page titled', 'SERIOUS', '2 slides are missing titles — slides 2 and 4']],
   xlsx: [['XLSX-ALT-001', '1.1.1 non-text content', 'MODERATE', 'a chart is missing alt text'], ['XLSX-HEADER-001', '1.3.1 info & relationships', 'MODERATE', 'a table has no header row']],
   html: [['WEB-CONTRAST-001', '1.4.3 contrast (AA)', 'SERIOUS', '3 elements below 4.5:1 contrast'], ['WEB-ALT-001', '1.1.1 non-text content', 'CRITICAL', '2 images missing alt'], ['WEB-LABEL-001', '1.3.1 info & relationships', 'MODERATE', 'a form input has no label']],
 }
@@ -390,6 +390,8 @@ export default function Upload({ onCertified }) {
 
   const reportRef = useRef(null)
   const [exporting, setExporting] = useState(false)
+  const [openPanels, setOpenPanels] = useState(new Set())
+  const togglePanel = (key) => setOpenPanels((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n })
   const doExport = async () => {
     setExporting(true)
     try {
@@ -546,7 +548,7 @@ export default function Upload({ onCertified }) {
                 <span className="muted">or try a real multi-page sample:</span>
                 <button className="ghost small" onClick={() => sample('patient-discharge-instructions.pdf')}>PDF</button>
                 <button className="ghost small" onClick={() => sample('benefits-policy.docx')}>Word</button>
-                <button className="ghost small" onClick={() => sample('quarterly-town-hall.pptx')}>PowerPoint</button>
+                <button className="ghost small" onClick={() => sample('quarterly-town-hall.pptx')} title="Town hall deck with 3 embedded charts — Claude Vision reads each chart and writes alt text in real time">PowerPoint ★</button>
                 <button className="ghost small" onClick={() => sample('finance-metrics.xlsx')}>Excel</button>
                 <button className="ghost small" onClick={() => sample('patient-health-portal.html')} title="Patient portal with contrast failures, unlabeled forms, and structural issues — watch the page visibly transform">HTML ★</button>
                 <button className="ghost small" onClick={() => sample('careers-landing.html')}>HTML (alt)</button>
@@ -732,25 +734,39 @@ export default function Upload({ onCertified }) {
                   </section>
                 </div>
 
-                <section className="panel">
-                  <h2>Findings remediated</h2>
-                  <div className="findings">
-                    {issues.map((i, n) => { const [bg, fg] = SEV_BADGE[i.sev] || SEV_BADGE.MINOR; return (
-                      <div className="finding" key={n}>
-                        <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11' }}>fixed</span>
-                        <div className="findingmain"><div>{i.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{i.detail}</div></div>
-                        <span className="badge" style={{ background: bg, color: fg }}>{i.sev.toLowerCase()}</span>
-                      </div>
-                    ) })}
-                  </div>
+                <section className="panel collapsepanel">
+                  <button className="collapsehd" aria-expanded={openPanels.has('findings')} onClick={() => togglePanel('findings')}>
+                    <h2 style={{ margin: 0 }}>Findings remediated</h2>
+                    <span className="collapsecount muted">{issues.length} finding{issues.length !== 1 ? 's' : ''}</span>
+                    <span className="collapsechev" aria-hidden="true">{openPanels.has('findings') ? '▲' : '▼'}</span>
+                  </button>
+                  {openPanels.has('findings') && (
+                    <div className="findings" style={{ marginTop: 10 }}>
+                      {issues.map((i, n) => { const [bg, fg] = SEV_BADGE[i.sev] || SEV_BADGE.MINOR; return (
+                        <div className="finding" key={n}>
+                          <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11' }}>fixed</span>
+                          <div className="findingmain"><div>{i.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{i.detail}</div></div>
+                          <span className="badge" style={{ background: bg, color: fg }}>{i.sev.toLowerCase()}</span>
+                        </div>
+                      ) })}
+                    </div>
+                  )}
                 </section>
 
-                <section className="panel">
-                  <h2>Document journey</h2>
-                  <div className="journey">
-                    {['discovered', `assessed ${score}`, 'auto-fixed', 'reviewed', ...(prescreen.length ? [`${hitlVerified.size}/${prescreen.length} HITL verified`] : []), rejected ? `conditional ${finalScore}` : 'certified 100'].map((l, n) => <span className="jstep" key={n}>✓ {l}</span>)}
-                  </div>
-                  <p className="muted" style={{ marginTop: 10 }}>Validated against WCAG 2.1 AA · every step captured in the audit trail.{prescreen.length > 0 && ` ${hitlVerified.size} of ${prescreen.length} runtime/media criteria verified via human review (Phase 2 · HITL).`}</p>
+                <section className="panel collapsepanel">
+                  <button className="collapsehd" aria-expanded={openPanels.has('journey')} onClick={() => togglePanel('journey')}>
+                    <h2 style={{ margin: 0 }}>Document journey</h2>
+                    <span className="collapsecount muted">{['discovered', 'assessed', 'auto-fixed', 'reviewed', ...(prescreen.length ? ['HITL verified'] : []), 'certified'].length} steps</span>
+                    <span className="collapsechev" aria-hidden="true">{openPanels.has('journey') ? '▲' : '▼'}</span>
+                  </button>
+                  {openPanels.has('journey') && (
+                    <>
+                      <div className="journey" style={{ marginTop: 10 }}>
+                        {['discovered', `assessed ${score}`, 'auto-fixed', 'reviewed', ...(prescreen.length ? [`${hitlVerified.size}/${prescreen.length} HITL verified`] : []), rejected ? `conditional ${finalScore}` : 'certified 100'].map((l, n) => <span className="jstep" key={n}>✓ {l}</span>)}
+                      </div>
+                      <p className="muted" style={{ marginTop: 10 }}>Validated against WCAG 2.1 AA · every step captured in the audit trail.{prescreen.length > 0 && ` ${hitlVerified.size} of ${prescreen.length} runtime/media criteria verified via human review (Phase 2 · HITL).`}</p>
+                    </>
+                  )}
                 </section>
               </div>
               {isImage(file?.name) ? <ImagePanel blob={imageBlob} result={imgResult} /> : isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <ResultPreview file={file} srcText={srcText} pdfUrl={pdfUrl} pdfBlob={pdfBlob} officeBlob={officeBlob} issues={issues} />}
