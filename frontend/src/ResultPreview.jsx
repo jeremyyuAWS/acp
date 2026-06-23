@@ -21,6 +21,7 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
   const [busy, setBusy] = useState(false)
   // genuinely produce the remediated Office file so we can render it side-by-side
   const [remBlob, setRemBlob] = useState(null)
+  const [remReady, setRemReady] = useState(false)
   // genuinely remediate the PDF (title + language) via pdf-lib
   const [remPdf, setRemPdf] = useState(null)
   useEffect(() => {
@@ -33,7 +34,7 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
   const [aiAltCount, setAiAltCount] = useState(0) // how many images got a real per-image description
   const [imgText, setImgText] = useState(null) // 1.4.5 — verbatim text extracted from an image-of-text
   useEffect(() => {
-    let live = true; setRemBlob(null); setAiAlt(null); setAiAltCount(0); setImgText(null)
+    let live = true; setRemBlob(null); setRemReady(false); setAiAlt(null); setAiAltCount(0); setImgText(null)
     if (!officeBlob) return () => { live = false }
     ;(async () => {
       const alts = {}
@@ -47,6 +48,7 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
       const altList = Object.values(alts)
       if (altList.length) { setAiAlt(altList[0]); setAiAltCount(altList.length) }
       try { const b = await remediateOffice(officeBlob, { alt: altList[0] || null, alts }); if (live) setRemBlob(b) } catch { /* falls back to card */ }
+      if (live) setRemReady(true)
     })()
     return () => { live = false }
   }, [officeBlob])
@@ -80,7 +82,7 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
   const ext = (name.split('.').pop() || '').toUpperCase()
 
   const dl = (blob, fn) => { const u = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = u; a.download = fn; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 1000) }
-  const downloadOffice = async () => { if (!officeBlob || busy) return; setBusy(true); try { dl(remBlob || await remediateOffice(officeBlob, { alt: aiAlt }), `remediated-${name}`) } catch (e) { console.error('office remediation failed', e) } finally { setBusy(false) } }
+  const downloadOffice = () => { if (!remBlob || busy) return; dl(remBlob, `remediated-${name}`) }
   const downloadHtml = () => { if (rem) dl(new Blob([rem.html], { type: 'text/html' }), `remediated-${name.replace(/\.[^.]+$/, '')}.html`) }
 
   const docCard = (badge) => (
@@ -218,7 +220,7 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
       {(rem || officeBlob || remPdf) && (
         <div className="rpactions">
           {isHtml(name) && rem && <button className="rpdownload" onClick={downloadHtml}>⤓ Download remediated HTML</button>}
-          {officeBlob && <button className="rpdownload" onClick={downloadOffice} disabled={busy}>{busy ? 'Remediating…' : `⤓ Download remediated ${ext}`}</button>}
+          {officeBlob && <button className="rpdownload" onClick={downloadOffice} disabled={!remReady || !remBlob}>{remReady ? `⤓ Download remediated ${ext}` : 'Preparing…'}</button>}
           {remPdf && <button className="rpdownload" onClick={() => dl(remPdf.blob, `remediated-${name}`)}>⤓ Download remediated PDF</button>}
         </div>
       )}

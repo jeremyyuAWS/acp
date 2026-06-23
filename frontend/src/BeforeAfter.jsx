@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import PdfPreview from './PdfPreview.jsx'
 import { remediateOffice } from './officeAudit.js'
 
@@ -220,14 +220,19 @@ function baFor(sc) {
 export default function BeforeAfter({ file, issues = [], srcText, pdfUrl, officeBlob }) {
   const rem = useMemo(() => (srcText ? remediateHtml(srcText) : null), [srcText])
   const [busy, setBusy] = useState(false)
+  const [preBlob, setPreBlob] = useState(null)
+  const [preReady, setPreReady] = useState(false)
+  useEffect(() => {
+    let live = true; setPreBlob(null); setPreReady(false)
+    if (!officeBlob) return () => { live = false }
+    remediateOffice(officeBlob).then((b) => { if (live) { setPreBlob(b); setPreReady(true) } }).catch(() => { if (live) setPreReady(true) })
+    return () => { live = false }
+  }, [officeBlob])
   const dl = (blob, name) => { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000) }
   const downloadFixed = () => { if (rem) dl(new Blob([rem.html], { type: 'text/html' }), `remediated-${(file?.name || 'page').replace(/\.[^.]+$/, '')}.html`) }
-  const downloadOffice = async () => {
-    if (!officeBlob || busy) return
-    setBusy(true)
-    try { dl(await remediateOffice(officeBlob), `remediated-${file?.name || 'document'}`) }
-    catch (e) { console.error('office remediation failed', e) }
-    finally { setBusy(false) }
+  const downloadOffice = () => {
+    if (!preBlob || busy) return
+    dl(preBlob, `remediated-${file?.name || 'document'}`)
   }
   return (
     <div className="bawrap">
@@ -252,7 +257,7 @@ export default function BeforeAfter({ file, issues = [], srcText, pdfUrl, office
       {officeBlob && (
         <div className="balive">
           <div className="bahd"><b>Remediated file</b><span className="muted"> — alt text, table header rows &amp; document title written back into the real Office XML, in your browser</span></div>
-          <button className="ghost small" onClick={downloadOffice} disabled={busy}>{busy ? 'Remediating…' : `⤓ Download the remediated ${(file?.name || '').split('.').pop().toUpperCase()}`}</button>
+          <button className="ghost small" onClick={downloadOffice} disabled={!preReady || busy}>{!preReady ? 'Preparing…' : `⤓ Download the remediated ${(file?.name || '').split('.').pop().toUpperCase()}`}</button>
         </div>
       )}
       <div className="bacards">
