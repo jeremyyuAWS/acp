@@ -15,7 +15,7 @@ const isPdf = (n) => /\.pdf$/i.test(n || '')
 // alt text, titles, headers and language are non-visual by nature, so we show what
 // changed under the hood honestly rather than fake a different-looking render. For
 // Office the remediated file is genuinely produced and downloadable.
-export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBlob, issues = [] }) {
+export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBlob, issues = [], wcagVersion = '2.1', assignee = null }) {
   const name = file?.name || ''
   const rem = useMemo(() => (srcText && isHtml(name) ? remediateHtml(srcText) : null), [srcText, name])
   const [busy, setBusy] = useState(false)
@@ -47,7 +47,7 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
       if (!live) return
       const altList = Object.values(alts)
       if (altList.length) { setAiAlt(altList[0]); setAiAltCount(altList.length) }
-      try { const b = await remediateOffice(officeBlob, { alt: altList[0] || null, alts }); if (live) setRemBlob(b) } catch { /* falls back to card */ }
+      try { const b = await remediateOffice(officeBlob, { alt: altList[0] || null, alts, wcagVersion, assignee }); if (live) setRemBlob(b) } catch { /* falls back to card */ }
       if (live) setRemReady(true)
     })()
     return () => { live = false }

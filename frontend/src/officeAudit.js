@@ -52,7 +52,7 @@ export async function auditOffice(blob) {
 }
 
 const TC_AUTHOR = 'Mova Accessibility Platform'
-const TC_DATE = '2026-06-23T00:00:00Z'
+const getISODate = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
 const TC_INITIALS = 'MAP'
 
 // Tag the first row of each Word table as a repeating header row.
@@ -67,7 +67,7 @@ function addTableHeaders(xml, tcId = null) {
     const rest = inner.slice(tr.index + tr[0].length)
     // <w:trPrChange> records the ORIGINAL state; it must come last inside <w:trPr>
     const tcMark = tcId
-      ? `<w:trPrChange w:id="${tcId.n++}" w:author="${TC_AUTHOR}" w:date="${TC_DATE}"><w:trPr/></w:trPrChange>`
+      ? `<w:trPrChange w:id="${tcId.n++}" w:author="${TC_AUTHOR}" w:date="${tcDate}"><w:trPr/></w:trPrChange>`
       : ''
     let fixed
     if (/^\s*<w:trPr>/.test(rest)) {
@@ -93,7 +93,7 @@ async function injectComments(zip, entries) {
 
   // Build comments.xml
   const commentEls = entries.map(({ id, text }) =>
-    `<w:comment w:id="${id}" w:author="${esc(TC_AUTHOR)}" w:date="${TC_DATE}" w:initials="${TC_INITIALS}">` +
+    `<w:comment w:id="${id}" w:author="${esc(TC_AUTHOR)}" w:date="${tcDate}" w:initials="${TC_INITIALS}">` +
     `<w:p><w:r><w:t xml:space="preserve">${esc(text)}</w:t></w:r></w:p>` +
     `</w:comment>`
   ).join('')
@@ -145,6 +145,9 @@ export async function remediateOffice(blob, opts = {}) {
   const alts = opts.alts || {}
   const tc = opts.trackedChanges
   const tcId = tc ? { n: 100 } : null  // tracked-change revision IDs start at 100
+  const tcDate = opts.remediationDate || getISODate()
+  const wcagVer = opts.wcagVersion || '2.1'
+  const certBy = opts.assignee ? opts.assignee + ' via Mova Accessibility Platform' : 'Mova Accessibility Platform'
 
   for (const n of names) {
     let xml = await zip.file(n).async('string')
@@ -195,11 +198,28 @@ export async function remediateOffice(blob, opts = {}) {
       let doc = await zip.file('word/document.xml').async('string')
       const hp =
         `<w:p><w:pPr><w:pStyle w:val="Heading1"/>` +
-        `<w:rPr><w:ins w:id="210" w:author="${esc(TC_AUTHOR)}" w:date="${TC_DATE}"/></w:rPr></w:pPr>` +
-        `<w:ins w:id="211" w:author="${esc(TC_AUTHOR)}" w:date="${TC_DATE}">` +
+        `<w:rPr><w:ins w:id="210" w:author="${esc(TC_AUTHOR)}" w:date="${tcDate}"/></w:rPr></w:pPr>` +
+        `<w:ins w:id="211" w:author="${esc(TC_AUTHOR)}" w:date="${tcDate}">` +
         `<w:r><w:t xml:space="preserve">Accessibility Review — mova.io</w:t></w:r></w:ins></w:p>`
       zip.file('word/document.xml', doc.replace(/(<w:body[^>]*>)/, `$1${hp}`))
     }
+    // Stamp remediation metadata into file properties (version, certifier, WCAG standard, modified date)
+    const cpEnd = '</cp:coreProperties>'
+    const upsert = (xml, tag, val, attr) => {
+      const open = attr ? '<' + tag + ' ' + attr + '>' : '<' + tag + '>'
+      const close = '</' + tag + '>'
+      const el = open + val + close
+      const si = xml.indexOf('<' + tag)
+      if (si >= 0) { const ei = xml.indexOf(close, si) + close.length; return xml.slice(0, si) + el + xml.slice(ei) }
+      const ci = xml.lastIndexOf(cpEnd)
+      return xml.slice(0, ci) + el + xml.slice(ci)
+    }
+    const kwVal = 'WCAG ' + wcagVer + ' AA · Certified by Mova Accessibility Platform'
+    core = upsert(core, 'cp:lastModifiedBy', esc(certBy))
+    core = upsert(core, 'cp:keywords', esc(kwVal))
+    core = upsert(core, 'cp:category', 'Accessibility Compliance')
+    core = upsert(core, 'cp:contentStatus', 'Certified WCAG ' + wcagVer + ' AA')
+    core = upsert(core, 'dcterms:modified', tcDate, 'xsi:type="dcterms:W3CDTF"')
     zip.file('docProps/core.xml', core)
   }
 

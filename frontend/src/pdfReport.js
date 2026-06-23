@@ -242,7 +242,7 @@ export async function exportDocumentReport(d) {
   p.cover({
     title: 'Accessibility Conformance Report',
     subtitle: d.file,
-    meta: [`Assessed ${d.date}${d.engine ? ` · ${d.engine}` : ''}`, `WCAG 2.1 AA · ${d.status || 'Remediated'}`],
+    meta: [`Assessed ${d.date}${d.engine ? ` · ${d.engine}` : ''}${d.assignee ? ` · Assigned to ${d.assignee}` : ''}`, `WCAG ${d.wcagVersion || '2.1'} AA · ${d.status || 'Remediated'}`],
   })
 
   // Executive summary — Claude-narrated when available, otherwise a deterministic fallback.

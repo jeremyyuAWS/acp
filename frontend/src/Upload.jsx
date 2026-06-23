@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { generateCaptions, blobToBase64, generateAltText, generateInsights } from './aiRemediate.js'
 import { Bars } from './charts.jsx'
-import { IDENTITY } from './sim.js'
+import { IDENTITY, PERSONAS } from './sim.js'
 import Logo from './Logo.jsx'
 import BeforeAfter, { remediateHtml } from './BeforeAfter.jsx'
 import ResultPreview from './ResultPreview.jsx'
@@ -407,20 +407,22 @@ export default function Upload({ onCertified }) {
   const batchFileRef = useRef(null)
   const [exporting, setExporting] = useState(false)
   const [openPanels, setOpenPanels] = useState(new Set())
+  const [wcagVersion, setWcagVersion] = useState('2.1')
+  const [assignee, setAssignee] = useState(null)
   const togglePanel = (key) => setOpenPanels((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n })
   const doExport = async () => {
     setExporting(true)
     try {
       const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
-      const engine = realEngine ? `real ${realEngine}` : 'WCAG 2.1 AA'
+      const engine = realEngine ? `real ${realEngine}` : 'WCAG ' + wcagVersion + ' AA'
       const findings = issues.map((i) => { const [, fix] = proposeFix({ wcag: i.wcag, detail: i.detail }, file); return { wcag: i.wcag, sev: i.sev, detail: i.detail, fix: String(fix || '').replace(/<[^>]+>/g, '') } })
       const insight = await generateInsights({ file: file?.name, score, finalScore, engine, findings: findings.map((f) => ({ wcag: f.wcag, sev: f.sev, detail: f.detail })) }).catch(() => null)
       const { exportDocumentReport } = await import('./pdfReport.js')
       await exportDocumentReport({
         file: file?.name || 'document', date, engine,
         score, finalScore,
-        status: rejected ? 'Conditional · review pending' : 'Remediated · WCAG 2.1 AA',
-        findings, autoFix: autoFixed.length, humanReview: review.length, insight,
+        status: rejected ? 'Conditional · review pending' : 'Remediated · WCAG ' + wcagVersion + ' AA',
+        findings, autoFix: autoFixed.length, humanReview: review.length, insight, wcagVersion, assignee,
         filename: `mova-${(file?.name || 'document').replace(/\.[^.]+$/, '')}-report.pdf`,
       })
     } catch (e) { console.error('PDF export failed', e) }
@@ -702,7 +704,14 @@ export default function Upload({ onCertified }) {
                     {hitlVerified.size < prescreen.length && <button className="ghost small" style={{ marginTop: 9 }} onClick={() => setHitlVerified(new Set(prescreen.map((_, i) => i)))}>✓ Verify all ({prescreen.length})</button>}
                   </div>
                 )}
-                <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 16, flexWrap: 'wrap' }}>
+                <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>Assign to:</span>
+                  <select style={{ fontSize: 12 }} value={assignee || ''} onChange={(e) => setAssignee(e.target.value || null)}>
+                    <option value="">— Not assigned (self)</option>
+                    {PERSONAS.map((p) => <option key={p.id} value={p.name}>{p.name} · {p.role}</option>)}
+                  </select>
+                </div>
+                <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 10, flexWrap: 'wrap' }}>
                   <button onClick={() => certify('approved')}>✓ Approve fix &amp; certify</button>
                   <button className="ghost" onClick={() => certify('rejected')}>✕ Reject — defer to manual</button>
                 </div>
@@ -715,6 +724,13 @@ export default function Upload({ onCertified }) {
             <>
               <div className="dashtoolbar" style={{ gap: 10 }}>
                 <button className="ghost" onClick={reset}>↺ Try another</button>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12 }}>
+                  <span style={{ color: 'var(--muted)' }}>WCAG</span>
+                  <select value={wcagVersion} onChange={(e) => setWcagVersion(e.target.value)} style={{ fontSize: 12 }}>
+                    <option value="2.1">2.1 AA</option>
+                    <option value="2.2">2.2 AA</option>
+                  </select>
+                </label>
                 <button className="exportbtn" onClick={doExport} disabled={exporting}>{exporting ? 'Generating PDF…' : '⤓ Download PDF report'}</button>
               </div>
               <div ref={reportRef} className="reportdoc">
@@ -722,7 +738,7 @@ export default function Upload({ onCertified }) {
                   <Logo />
                   <div>
                     <div style={{ fontWeight: 600, fontSize: 15 }}>Accessibility compliance certificate</div>
-                    <div className="muted">{IDENTITY.org} · WCAG 2.1 AA · {today}</div>
+                    <div className="muted">{IDENTITY.org} · WCAG {wcagVersion} AA{assignee ? ' · ' + assignee : ''} · {today}</div>
                   </div>
                 </div>
 
@@ -730,7 +746,7 @@ export default function Upload({ onCertified }) {
                   <div className="certmark certpop" aria-hidden="true" style={rejected ? { background: '#854F0B' } : undefined}>{rejected ? '!' : '✓'}</div>
                   <div>
                     <div className="certtitle">{rejected ? `Conditional · ${finalScore} / 100` : 'Certified · 100 / 100'}</div>
-                    <div className="muted"><span className="fname">{file?.name}</span> {rejected ? 'remediated except 1 finding deferred to manual review — not yet fully WCAG 2.1 AA compliant.' : 'passed WCAG 2.1 AA after remediation & re-validation.'}</div>
+                    <div className="muted"><span className="fname">{file?.name}</span> {rejected ? 'remediated except 1 finding deferred to manual review — not yet fully WCAG ' + wcagVersion + ' AA compliant.' : 'passed WCAG ' + wcagVersion + ' AA after remediation & re-validation.'}</div>
                   </div>
                   <div className="liftgain" style={{ marginLeft: 'auto' }}>{score} → {finalScore}</div>
                 </section>
@@ -779,12 +795,12 @@ export default function Upload({ onCertified }) {
                       <div className="journey" style={{ marginTop: 10 }}>
                         {['discovered', `assessed ${score}`, 'auto-fixed', 'reviewed', ...(prescreen.length ? [`${hitlVerified.size}/${prescreen.length} HITL verified`] : []), rejected ? `conditional ${finalScore}` : 'certified 100'].map((l, n) => <span className="jstep" key={n}>✓ {l}</span>)}
                       </div>
-                      <p className="muted" style={{ marginTop: 10 }}>Validated against WCAG 2.1 AA · every step captured in the audit trail.{prescreen.length > 0 && ` ${hitlVerified.size} of ${prescreen.length} runtime/media criteria verified via human review (Phase 2 · HITL).`}</p>
+                      <p className="muted" style={{ marginTop: 10 }}>Validated against WCAG {wcagVersion} AA · every step captured in the audit trail.{prescreen.length > 0 && ` ${hitlVerified.size} of ${prescreen.length} runtime/media criteria verified via human review (Phase 2 · HITL).`}</p>
                     </>
                   )}
                 </section>
               </div>
-              {isImage(file?.name) ? <ImagePanel blob={imageBlob} result={imgResult} /> : isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <ResultPreview file={file} srcText={srcText} pdfUrl={pdfUrl} pdfBlob={pdfBlob} officeBlob={officeBlob} issues={issues} />}
+              {isImage(file?.name) ? <ImagePanel blob={imageBlob} result={imgResult} /> : isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <ResultPreview file={file} srcText={srcText} pdfUrl={pdfUrl} pdfBlob={pdfBlob} officeBlob={officeBlob} issues={issues} wcagVersion={wcagVersion} assignee={assignee} />}
             </>
           )}
         </>
