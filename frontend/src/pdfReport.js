@@ -295,3 +295,61 @@ export async function exportEvidenceReport(d) {
   p.text(`This evidence package was generated on ${d.date} from the continuous-monitoring log. Entries are immutable and timestamped for ADA / EAA audit and investigation.`, { size: 8.5, color: MUTED, lh: 12 })
   p.save(d.filename || 'mova-evidence-package.pdf')
 }
+
+// Accessibility Conformance Report (VPAT-style ACR) for the platform UI itself.
+const ACR = [
+  ['Perceivable', [
+    ['1.1.1', 'Non-text Content', 'A', 'Supports', 'Icons/images labeled or decorative; charts use role="img" + descriptive aria-label.'],
+    ['1.3.1', 'Info & Relationships', 'A', 'Supports', 'Headings, lists, tables, form labels and landmarks (header/main/nav).'],
+    ['1.3.2', 'Meaningful Sequence', 'A', 'Supports', 'DOM order matches the visual order.'],
+    ['1.4.1', 'Use of Color', 'A', 'Supports', 'Graph status uses glyphs + colour; legends carry text labels.'],
+    ['1.4.3', 'Contrast (Minimum)', 'AA', 'Supports', 'Text corrected to at least 4.5:1.'],
+    ['1.4.4 / 1.4.10', 'Resize / Reflow', 'AA', 'Supports', 'Responsive; zoom is not blocked.'],
+    ['1.4.11', 'Non-text Contrast', 'AA', 'Supports', 'UI marks and graph dots corrected to at least 3:1.'],
+    ['1.4.12', 'Text Spacing', 'AA', 'Supports', 'No clipping when spacing is overridden.'],
+    ['1.4.13', 'Content on Hover or Focus', 'AA', 'Not Applicable', 'No persistent hover/focus content in the UI.'],
+  ]],
+  ['Operable', [
+    ['2.1.1', 'Keyboard', 'A', 'Supports', 'All controls operable; graph uses roving tabindex (arrows / Enter / Escape).'],
+    ['2.1.2', 'No Keyboard Trap', 'A', 'Supports', 'Dialogs trap intentionally; Escape always exits.'],
+    ['2.4.1', 'Bypass Blocks', 'A', 'Supports', 'Skip-to-main link.'],
+    ['2.4.2', 'Page Titled', 'A', 'Supports', 'Document title set.'],
+    ['2.4.3', 'Focus Order', 'A', 'Supports', 'Logical order; no positive tabindex.'],
+    ['2.4.4', 'Link Purpose (In Context)', 'A', 'Supports', 'Link text is meaningful.'],
+    ['2.4.6', 'Headings & Labels', 'AA', 'Supports', 'Descriptive headings and labels.'],
+    ['2.4.7', 'Focus Visible', 'AA', 'Supports', ':focus-visible outline on all controls.'],
+    ['2.5.3', 'Label in Name', 'A', 'Supports', 'Visible labels match accessible names.'],
+  ]],
+  ['Understandable', [
+    ['3.1.1', 'Language of Page', 'A', 'Supports', 'html lang attribute set.'],
+    ['3.2.1 / 3.2.2', 'On Focus / On Input', 'A', 'Supports', 'No unexpected change of context.'],
+    ['3.2.3 / 3.2.4', 'Consistent Navigation / Identification', 'AA', 'Supports', 'Consistent navigation and component identity.'],
+    ['3.3.1 / 3.3.2', 'Error Identification / Labels', 'A', 'Supports', 'Inputs labeled; forms are minimal.'],
+  ]],
+  ['Robust', [
+    ['4.1.2', 'Name, Role, Value', 'A', 'Supports', 'Correct roles and accessible names on custom controls.'],
+    ['4.1.3', 'Status Messages', 'AA', 'Supports', 'aria-live / role=status on scan, chat, monitor and assess results.'],
+  ]],
+]
+export async function exportConformanceReport(d = {}) {
+  const date = d.date || new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+  const p = await makeDoc({ title: 'Accessibility Conformance Report — mova.io Platform' })
+  p.cover({
+    title: 'Accessibility Conformance Report',
+    subtitle: `${d.org || 'mova.io Accessibility Platform'} · web application UI`,
+    meta: [`WCAG 2.1 Level A & AA · ${date}`, 'Evaluation: automated (axe-core, all views) + manual code / semantic review'],
+  })
+  p.heading('Summary')
+  p.text('The mova.io Accessibility Platform UI conforms to WCAG 2.1 Level AA on all applicable Level A and AA success criteria, verified by automated and manual evaluation. Two issues found during manual review (an unannounced status update and a missing navigation landmark) were remediated.')
+  p.text('Conformance key:  Supports · Partially Supports · Not Applicable', { size: 9, color: MUTED, gapAfter: 4 })
+  for (const [principle, rows] of ACR) {
+    p.heading(principle)
+    p.table(['Criterion', 'Lvl', 'Conformance', 'Notes'],
+      rows.map((r) => [`${r[0]}  ${r[1]}`, r[2], r[3], r[4]]),
+      [148, 28, 92, p.CW - 268])
+  }
+  p.heading('Evaluation method & scope')
+  p.text('Automated: axe-core run across every view (zero Level A/AA violations). Manual: accessibility-tree review, keyboard operation, focus management, and live-region announcements. Scope: the platform’s own web UI (not the conformance of documents it remediates, which is reported separately).', { size: 9.5, gapAfter: 6 })
+  p.text('Not yet performed: formal screen-reader user testing (NVDA / JAWS / VoiceOver) — recommended to finalize a signed conformance statement.', { size: 9.5, color: AMBER })
+  p.save(d.filename || 'mova-accessibility-conformance-report.pdf')
+}

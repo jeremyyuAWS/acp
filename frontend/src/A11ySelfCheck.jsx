@@ -59,6 +59,7 @@ export default function A11ySelfCheck() {
           </div>
           <div className="a11yft">
             <button className="ghost small" disabled={running} onClick={run}>↻ Re-scan this view</button>
+            <button className="ghost small" onClick={async () => { const { exportConformanceReport } = await import('./pdfReport.js'); exportConformanceReport() }}>⤓ Conformance report (PDF)</button>
             {result && <span className="muted" style={{ fontSize: 11 }}>scanned {result.at}</span>}
           </div>
         </aside>
