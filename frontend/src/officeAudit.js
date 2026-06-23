@@ -11,6 +11,8 @@ export async function auditOffice(blob) {
   const zip = await JSZip.loadAsync(blob)
   const names = Object.keys(zip.files).filter((n) => CONTENT.test(n) && !n.includes('_rels'))
   let blips = 0, described = 0, tables = 0, tblHeaders = 0, langSeen = false
+  const headingLevels = [], genericLinks = []
+  const GENERIC_LINK_RE = /\b(click here|click this|^here$|read more|learn more|^more$|this link|this page|^link$)\b/i
   for (const n of names) {
     const xml = await zip.file(n).async('string')
     blips += (xml.match(/<a:blip\b/g) || []).length
@@ -18,18 +20,34 @@ export async function auditOffice(blob) {
     tables += (xml.match(/<w:tbl>/g) || []).length
     tblHeaders += (xml.match(/<w:tblHeader\b/g) || []).length
     if (/<w:lang\b[^>]*w:val="[a-zA-Z-]+"/.test(xml)) langSeen = true
+    // Heading structure (DOCX-HEAD-001): collect heading levels in document order
+    if (n.includes('document') || n.includes('slide')) {
+      for (const m of xml.matchAll(/<w:pStyle w:val="Heading(\d+)"/g)) headingLevels.push(parseInt(m[1]))
+    }
+    // Link purpose (DOCX-LINK-001): find hyperlinks with generic anchor text
+    for (const hl of (xml.match(/<w:hyperlink\b[\s\S]*?<\/w:hyperlink>/g) || [])) {
+      const text = hl.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+      if (GENERIC_LINK_RE.test(text)) genericLinks.push(text)
+    }
   }
   const core = zip.file('docProps/core.xml') ? await zip.file('docProps/core.xml').async('string') : ''
   const title = (core.match(/<dc:title>([\s\S]*?)<\/dc:title>/) || [])[1]
   const noAlt = Math.max(0, blips - described)
+  // Heading structure: flag if any level jumps by more than 1 from the previous max
+  let headingSkip = false
+  let maxSeen = 0
+  for (const h of headingLevels) {
+    if (h > maxSeen + 1 && maxSeen > 0) { headingSkip = true; break }
+    if (h > maxSeen) maxSeen = h
+  }
   const findings = []
-  if (noAlt) findings.push({ rule: 'office-image-alt', wcag: '1.1.1 non-text content', sev: 'CRITICAL', detail: `${noAlt} of ${blips} image(s) missing alternative text` })
-  if (tables && tblHeaders < tables) findings.push({ rule: 'office-table-header', wcag: '1.3.1 info & relationships', sev: 'SERIOUS', detail: `${tables - tblHeaders} table(s) missing a header row` })
-  if (!title || !title.trim()) findings.push({ rule: 'office-title', wcag: '2.4.2 page titled', sev: 'SERIOUS', detail: 'document has no title' })
-  // Language is declared either as a Word run language (w:lang) OR the universal
-  // document-level core property (dc:language) — the latter covers pptx/xlsx too.
+  if (noAlt) findings.push({ rule: 'DOCX-ALT-001', wcag: '1.1.1 non-text content', sev: 'CRITICAL', detail: `${noAlt} of ${blips} image(s) missing alternative text — blind users receive nothing` })
+  if (tables && tblHeaders < tables) findings.push({ rule: 'DOCX-TABLE-001', wcag: '1.3.1 info & relationships', sev: 'SERIOUS', detail: `${tables - tblHeaders} table(s) missing a header row — row purpose not programmatically determinable` })
+  if (headingSkip) findings.push({ rule: 'DOCX-HEAD-001', wcag: '1.3.1 info & relationships', sev: 'SERIOUS', detail: 'heading levels are skipped — logical document structure is broken for assistive technology' })
+  if (!title || !title.trim()) findings.push({ rule: 'DOCX-TITLE-001', wcag: '2.4.2 page titled', sev: 'SERIOUS', detail: 'document has no title — screen readers announce the raw filename' })
+  if (genericLinks.length) findings.push({ rule: 'DOCX-LINK-001', wcag: '2.4.4 link purpose', sev: 'MODERATE', detail: `${genericLinks.length} hyperlink(s) with generic text ("${genericLinks[0]}") — purpose is ambiguous out of context` })
   const dcLang = /<dc:language>\s*[a-zA-Z-]+\s*<\/dc:language>/.test(core)
-  if (!langSeen && !dcLang) findings.push({ rule: 'office-lang', wcag: '3.1.1 language of page', sev: 'MODERATE', detail: 'document language is not declared' })
+  if (!langSeen && !dcLang) findings.push({ rule: 'DOCX-LANG-001', wcag: '3.1.1 language of page', sev: 'MODERATE', detail: 'document language not declared — TTS uses incorrect pronunciation rules' })
   return findings
 }
 

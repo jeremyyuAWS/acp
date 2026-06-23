@@ -261,7 +261,8 @@ export default function BeforeAfter({ file, issues = [], srcText, pdfUrl, office
             <div className="ba-remsum">
               {issues.filter(i => /1\.1\.1/.test(i.wcag)).length > 0 && <span className="ba-remchip">✓ Alt text added to {issues.filter(i => /1\.1\.1/.test(i.wcag)).length} image{issues.filter(i => /1\.1\.1/.test(i.wcag)).length !== 1 ? 's' : ''}</span>}
               {issues.some(i => /2\.4\.2/.test(i.wcag)) && <span className="ba-remchip">✓ Document title set</span>}
-              {issues.some(i => /1\.3\.1/.test(i.wcag)) && <span className="ba-remchip">✓ Table header row added</span>}
+              {issues.some(i => /1\.3\.1/.test(i.wcag) && /table/i.test(i.detail)) && <span className="ba-remchip">✓ Table header row added</span>}
+              {issues.some(i => /DOCX-HEAD/.test(i.rule)) && <span className="ba-remchip ba-remchip-warn">⚑ Heading structure — human review needed</span>}
               {issues.some(i => /3\.1\.1/.test(i.wcag)) && <span className="ba-remchip">✓ Language declared (en-US)</span>}
               {issues.some(i => /2\.4\.4/.test(i.wcag)) && <span className="ba-remchip">✓ Link text clarified</span>}
             </div>

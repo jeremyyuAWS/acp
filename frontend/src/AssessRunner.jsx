@@ -11,26 +11,68 @@ const LEVELS = [
   { k: 'AAA', desc: 'enhanced' },
 ]
 
+// Engine label shown per file type during scanning — mirrors what the real pipeline uses
+const engineFor = (name = '') => {
+  const n = name.toLowerCase()
+  if (/\.docx?$/.test(n) || /\.pptx?$/.test(n)) return 'partner OOXML engine'
+  if (/\.pdf$/.test(n)) return 'partner PDF engine'
+  if (/\.html?$/.test(n)) return 'axe-core'
+  if (/\.mp3$|\.webm$|\.wav$/.test(n)) return 'Whisper transcription'
+  if (/\.xlsx?$/.test(n)) return 'partner OOXML engine'
+  if (/\.png$|\.jpe?g$|\.gif$|\.webp$/.test(n)) return 'Claude vision'
+  return 'WCAG rule engine'
+}
+
+// Realistic phase messages shown as each file is scanned
+const phaseFor = (name = '') => {
+  const n = name.toLowerCase()
+  if (/\.docx?$/.test(n)) return ['Opening OOXML package…', 'Checking alt text, headings & tables…', 'Running WCAG 2.1 AA conformance checks…']
+  if (/\.pptx?$/.test(n)) return ['Unpacking presentation slides…', 'Checking slide titles & reading order…', 'Running WCAG 2.1 AA conformance checks…']
+  if (/\.pdf$/.test(n)) return ['Extracting PDF tag tree…', 'Checking alt text, title & language…', 'Running WCAG 2.1 AA conformance checks…']
+  if (/\.html?$/.test(n)) return ['Parsing DOM…', 'Running axe-core rules…', 'Scoring against WCAG 2.1 AA…']
+  if (/\.mp3$|\.webm$/.test(n)) return ['Transcribing with Whisper…', 'Checking captions & transcript…']
+  return ['Analysing…', 'Scoring…']
+}
+
 export default function AssessRunner({ files = [] }) {
   const [level, setLevel] = useState('AA')
   const [phase, setPhase] = useState('idle') // idle | running | done
   const [progress, setProgress] = useState(0)
+  const [currentFile, setCurrentFile] = useState(null)
+  const [currentPhase, setCurrentPhase] = useState('')
   const [result, setResult] = useState(null)
   const timer = useRef(null)
-  useEffect(() => () => clearInterval(timer.current), [])
+  const phaseTimer = useRef(null)
+  useEffect(() => () => { clearInterval(timer.current); clearTimeout(phaseTimer.current) }, [])
 
-  const docs = files.filter((f) => f.score != null) // readable documents we can certify
-  const reset = () => { clearInterval(timer.current); setPhase('idle'); setResult(null); setProgress(0) }
+  const docs = files.filter((f) => f.score != null)
+  const reset = () => {
+    clearInterval(timer.current); clearTimeout(phaseTimer.current)
+    setPhase('idle'); setResult(null); setProgress(0); setCurrentFile(null); setCurrentPhase('')
+  }
+
+  const runPhases = (file, onDone) => {
+    const phases = phaseFor(file?.name)
+    let pi = 0
+    const next = () => {
+      if (pi >= phases.length) { onDone(); return }
+      setCurrentPhase(phases[pi++])
+      // each phase message shows for 180–280ms
+      phaseTimer.current = setTimeout(next, 180 + Math.random() * 100)
+    }
+    next()
+  }
 
   const assess = () => {
-    clearInterval(timer.current)
-    setPhase('running'); setProgress(0); setResult(null)
+    clearInterval(timer.current); clearTimeout(phaseTimer.current)
+    setPhase('running'); setProgress(0); setResult(null); setCurrentFile(null); setCurrentPhase('')
     const total = Math.max(1, docs.length)
     let i = 0
-    timer.current = setInterval(() => {
-      i += Math.max(1, Math.round(total / 26))
+
+    const tick = () => {
       if (i >= total) {
-        clearInterval(timer.current); setProgress(total)
+        clearInterval(timer.current)
+        setProgress(total); setCurrentFile(null); setCurrentPhase('')
         const target = RANK[level]
         let conformant = 0, applicable = 0, autoFix = 0
         docs.forEach((f) => {
@@ -41,8 +83,18 @@ export default function AssessRunner({ files = [] }) {
         })
         setResult({ level, total, conformant, failing: total - conformant, applicable, autoFix, pct: Math.round((conformant / total) * 100) })
         setPhase('done')
-      } else setProgress(i)
-    }, 40)
+        return
+      }
+      const file = docs[i]
+      setCurrentFile(file)
+      setProgress(i)
+      runPhases(file, () => {})
+      i++
+    }
+
+    tick()
+    // Each file takes ~500–700ms: phases (3×~220ms) + a small gap
+    timer.current = setInterval(tick, 600)
   }
 
   const note = result && (result.level === 'A'
@@ -50,6 +102,8 @@ export default function AssessRunner({ files = [] }) {
     : result.level === 'AA'
       ? 'Level AA is the legal target for ADA Title II, the EAA and Section 508 — Level A + AA findings both count.'
       : 'Level AAA is the enhanced bar — every A, AA and AAA finding counts, so conformance is strictest here.')
+
+  const pct = phase === 'running' ? Math.round((progress / Math.max(1, docs.length)) * 100) : 0
 
   return (
     <section className="panel assesspanel">
@@ -71,12 +125,23 @@ export default function AssessRunner({ files = [] }) {
         ))}
       </div>
 
-      {/* Live region — a screen reader announces the run progress + result without a focus move */}
       <div role="status" aria-live="polite">
         {phase === 'running' && (
           <div className="assessrun">
-            <div className="assessbar"><i style={{ width: `${Math.round((progress / Math.max(1, docs.length)) * 100)}%` }} /></div>
-            <span className="muted">Checking document {Math.min(progress, docs.length).toLocaleString()} of {docs.length.toLocaleString()} against WCAG 2.1 {level}…</span>
+            <div className="assessbar">
+              <i style={{ width: `${pct}%` }} />
+            </div>
+            <div className="assessrunmeta">
+              <span className="muted">Document {Math.min(progress + 1, docs.length).toLocaleString()} of {docs.length.toLocaleString()}</span>
+              <span className="assesspct">{pct}%</span>
+            </div>
+            {currentFile && (
+              <div className="assessfile">
+                <span className="assessfname">{currentFile.name}</span>
+                <span className="assessengine">{engineFor(currentFile.name)}</span>
+                {currentPhase && <span className="assessphase muted">{currentPhase}</span>}
+              </div>
+            )}
           </div>
         )}
         {phase === 'done' && result && (
