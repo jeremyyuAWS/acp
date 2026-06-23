@@ -193,6 +193,14 @@ export default function Upload({ onCertified }) {
     return () => { live = false }
   }, [imageBlob, file])
 
+  // Move focus to each new step's heading so keyboard / screen-reader users land on the new
+  // content instead of being dropped at the top of the page (manual-audit fix, WCAG 2.4.3).
+  useEffect(() => {
+    if (step < 1) return
+    const el = document.querySelector('main .certbanner') || document.querySelector('main section.panel h2') || document.querySelector('main h2')
+    if (el) { el.setAttribute('tabindex', '-1'); el.focus() }
+  }, [step])
+
   const start = (f, { text = null, url = null, office = null, audio = null, pdf = null, image = null } = {}) => {
     setFile(f); setSrcText(text); setPdfUrl(url); setPdfBlob(pdf); setOfficeBlob(office); setAudioBlob(audio); setImageBlob(image); setImgResult(null); setCaptions(null); setRealEngine(null); setScanning(true); setStep(0)
     setPrescreen(text && isHtml(f.name) ? prescreenHtml(text) : []) // Phase 2 HITL pre-screen (HTML)
