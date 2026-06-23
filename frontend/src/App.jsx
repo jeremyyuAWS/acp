@@ -152,13 +152,15 @@ export default function App() {
       </header>
       {me.scope && <div className="scopebar"><i className="scopedot" />access scope · <b>{me.scope}</b></div>}
 
-      <div className="tabs" role="tablist" aria-label="Compliance workflow">
-        {TABS.filter(([k]) => !me.allow || me.allow.includes(k)).map(([k, label, rg]) => (
-          <button key={k} role="tab" aria-selected={view === k} className={view === k ? 'tab on' : 'tab'} onClick={() => setView(k)}>
-            {label}<span className="rg">{rg}</span>
-          </button>
-        ))}
-      </div>
+      <nav aria-label="Compliance workflow">
+        <div className="tabs" role="tablist" aria-label="Compliance workflow">
+          {TABS.filter(([k]) => !me.allow || me.allow.includes(k)).map(([k, label, rg]) => (
+            <button key={k} role="tab" aria-selected={view === k} className={view === k ? 'tab on' : 'tab'} onClick={() => setView(k)}>
+              {label}<span className="rg">{rg}</span>
+            </button>
+          ))}
+        </div>
+      </nav>
       {run && <div className="muted runinfo">last run {run.completed_at?.slice(0, 19).replace('T', ' ')}</div>}
 
       {err && <div className="err" role="alert">{err}</div>}

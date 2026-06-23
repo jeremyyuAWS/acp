@@ -71,24 +71,27 @@ export default function AssessRunner({ files = [] }) {
         ))}
       </div>
 
-      {phase === 'running' && (
-        <div className="assessrun">
-          <div className="assessbar"><i style={{ width: `${Math.round((progress / Math.max(1, docs.length)) * 100)}%` }} /></div>
-          <span className="muted">Checking document {Math.min(progress, docs.length).toLocaleString()} of {docs.length.toLocaleString()} against WCAG 2.1 {level}…</span>
-        </div>
-      )}
-
-      {phase === 'done' && result && (
-        <div className="assessres">
-          <div className="assesstiles">
-            <div className="atile"><b style={{ color: '#3B6D11' }}>{result.conformant.toLocaleString()}</b><span>conformant at {result.level}</span></div>
-            <div className="atile"><b style={{ color: '#854F0B' }}>{result.failing.toLocaleString()}</b><span>with blocking findings</span></div>
-            <div className="atile"><b style={{ color: '#1F5FA8' }}>{result.pct}%</b><span>estate conformant</span></div>
-            <div className="atile"><b>{result.applicable.toLocaleString()}</b><span>findings apply · {result.autoFix.toLocaleString()} auto-fixable</span></div>
+      {/* Live region — a screen reader announces the run progress + result without a focus move */}
+      <div role="status" aria-live="polite">
+        {phase === 'running' && (
+          <div className="assessrun">
+            <div className="assessbar"><i style={{ width: `${Math.round((progress / Math.max(1, docs.length)) * 100)}%` }} /></div>
+            <span className="muted">Checking document {Math.min(progress, docs.length).toLocaleString()} of {docs.length.toLocaleString()} against WCAG 2.1 {level}…</span>
           </div>
-          <p className="muted assessnote">{note}</p>
-        </div>
-      )}
+        )}
+        {phase === 'done' && result && (
+          <div className="assessres">
+            <p className="sronly">Assessment complete: {result.conformant} of {result.total} documents conformant at WCAG 2.1 {result.level} ({result.pct}%); {result.applicable} findings apply.</p>
+            <div className="assesstiles">
+              <div className="atile"><b style={{ color: '#3B6D11' }}>{result.conformant.toLocaleString()}</b><span>conformant at {result.level}</span></div>
+              <div className="atile"><b style={{ color: '#854F0B' }}>{result.failing.toLocaleString()}</b><span>with blocking findings</span></div>
+              <div className="atile"><b style={{ color: '#1F5FA8' }}>{result.pct}%</b><span>estate conformant</span></div>
+              <div className="atile"><b>{result.applicable.toLocaleString()}</b><span>findings apply · {result.autoFix.toLocaleString()} auto-fixable</span></div>
+            </div>
+            <p className="muted assessnote">{note}</p>
+          </div>
+        )}
+      </div>
     </section>
   )
 }
