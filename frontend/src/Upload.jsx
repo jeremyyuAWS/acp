@@ -13,6 +13,7 @@ import { auditPdf } from './pdfAudit.js'
 import { prescreenHtml } from './prescreen.js'
 import { useDialog } from './a11y.js'
 import GoogleDrive, { DriveUploadButton, saveDriveScore, uploadToDrive } from './GoogleDrive.jsx'
+import SharePoint, { SpUploadButton } from './SharePoint.jsx'
 
 const isOffice = (name) => /\.(docx|pptx|xlsx)$/i.test(name || '')
 const HKEY = 'mova_upload_history'
@@ -84,12 +85,12 @@ const issuesFor = (name) => (isVideo(name) ? VIDEO_ISSUES : isAudio(name) ? AUDI
 // Keyed first by exact rule code; WCAG_FALLBACK covers real axe-core rule IDs
 // and any unrecognised codes by looking up the leading SC number.
 const VERIFY_GUIDE = {
-  'DOCX-ALT-001':         { app: 'Word',        tipWin: 'Right-click the image → Edit Alt Text — the AI-generated description is now filled in.', tipMac: 'Right-click (or Control+click) the image → Edit Alt Text — the AI-generated description is now filled in.' },
-  'DOCX-TABLE-001':       { app: 'Word',        tip: 'Review tab → Track Changes shows header rows added. Or: click the first row of any table → Table Design tab → Header Row is checked.' },
-  'DOCX-HEAD-001':        { app: 'Word',        tip: 'View → Navigation Pane → Headings tab — the corrected heading hierarchy is now visible.' },
-  'DOCX-TITLE-001':       { app: 'Word',        tipWin: 'File → Info → Properties panel (right side) — Title now shows the document name.', tipMac: 'File → Properties → Summary tab — Title now shows the document name.' },
-  'DOCX-LINK-001':        { app: 'Word',        tipWin: 'Right-click the hyperlink → Edit Hyperlink — Display Text is now descriptive instead of “click here”.', tipMac: 'Right-click (or Control+click) the hyperlink → Edit Hyperlink — Display Text is now descriptive instead of “click here”.' },
-  'DOCX-LANG-001':        { app: 'Word',        tipWin: 'Review → Language → Set Proofing Language — English (United States) is now set on the document body.', tipMac: 'Tools → Language (or Review → Language in Word 365) — English (United States) is now set on the document body.' },
+  'DOCX-ALT-001':         { app: 'Word',        tipWin: 'Right-click any image → Edit Alt Text — the description field is now filled in (AI-generated, or “Image — described by mova.io” if offline).', tipMac: 'Right-click (or Control+click) any image → Edit Alt Text — the description field is now filled in.' },
+  'DOCX-TABLE-001':       { app: 'Word',        tipWin: 'Click the first row of any table → Table Design tab (top ribbon) → confirm “Header Row” checkbox is checked. Also visible in Review tab → Reviewing Pane → Formatting Changes.', tipMac: 'Click the first row of any table → Table Design tab → confirm “Header Row” is checked. Review → Reviewing Pane also lists the formatting change.' },
+  'DOCX-HEAD-001':        { app: 'Word',        tip: 'Open Review tab → Comments panel — a REVIEW NEEDED comment explains which heading levels skip. Fix manually via Home → Styles: apply headings in sequence (Heading 1 → Heading 2 → Heading 3, no gaps).' },
+  'DOCX-TITLE-001':       { app: 'Word',        tipWin: 'Track Changes shows a new Heading 1 “Accessibility Review — mova.io” at the top of the document (green underlined text). Also: File → Info → Properties (right panel) → Title field is now set.', tipMac: 'Track Changes shows a new Heading 1 “Accessibility Review — mova.io” at the top (green underlined). Also: File → Properties → Summary → Title field is set.' },
+  'DOCX-LINK-001':        { app: 'Word',        tip: 'Open Review tab → Comments panel — a REVIEW NEEDED comment lists the generic links. Update each link manually: right-click the link → Edit Hyperlink → change the “Text to display” to describe the destination.' },
+  'DOCX-LANG-001':        { app: 'Word',        tipWin: 'Open Review tab → Comments panel — a fix confirmation comment is shown. Also: File → Info → Properties (right panel) → Language is now set to English (United States).', tipMac: 'Open Review tab → Comments panel — a fix confirmation comment is shown. Also: File → Properties → Summary → Language is now set to English (United States).' },
   'pdf.missing-alt-text': { app: 'Acrobat',     tip: 'View → Navigation Panels → Tags → expand <Figure> — the Alt attribute now contains the AI-generated description.' },
   'pdf.tagged':           { app: 'Acrobat',     tip: 'File → Properties → Description — Tagged PDF: Yes. View → Navigation Panels → Tags shows the structure tree.' },
   'pdf.document-title':   { app: 'Acrobat',     tip: 'File → Properties → Description tab — Title is now set to the document name.' },
@@ -315,12 +316,21 @@ export default function Upload({ onCertified }) {
       remBlob: null,
       engine: null,
       driveFileId: f._driveId || null,
+      spItemId: f._spItemId || null,
+      spDriveId: f._spDriveId || null,
     }))
     setQueue((q) => [...q, ...items])
     setBatchDone(false)
   }
 
   const handleGDriveFiles = (fileObjs) => {
+    if (!fileObjs.length) return
+    if (fileObjs.length === 1 && !batchMode) { handleFile(fileObjs[0]); return }
+    setBatchMode(true)
+    addToQueue(fileObjs)
+  }
+
+  const handleSpFiles = (fileObjs) => {
     if (!fileObjs.length) return
     if (fileObjs.length === 1 && !batchMode) { handleFile(fileObjs[0]); return }
     setBatchMode(true)
@@ -380,6 +390,7 @@ export default function Upload({ onCertified }) {
         const score = found.length ? Math.max(18, 100 - found.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0)) : 100
         setQueue((q) => q.map((it) => it.id === item.id ? { ...it, status: 'done', score, issues: found, remBlob, engine } : it))
         if (item.driveFileId && score != null) saveDriveScore(item.driveFileId, score, engine)
+        if (item.spItemId && score != null) saveDriveScore(item.spItemId, score, engine)
         onCertified?.({ file: f.name })
         const rec = { id: `${f.name}-${Date.now()}`, name: f.name, ext: extOf(f.name), date: new Date().toISOString(), score, outcome: 'batch', real: engine, findings: found }
         setHistory((h) => { const next = [rec, ...h.filter((x) => x.name !== f.name)].slice(0, 12); try { localStorage.setItem(HKEY, JSON.stringify(next)) } catch {}; return next })
@@ -606,7 +617,10 @@ export default function Upload({ onCertified }) {
               onChange={onInput}
             />
             <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>PDF · Word · PowerPoint · Excel · HTML · audio · image — processed in your browser, nothing uploaded</div>
-            <GoogleDrive onFiles={handleGDriveFiles} />
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <GoogleDrive onFiles={handleGDriveFiles} />
+              <SharePoint onFiles={handleSpFiles} />
+            </div>
           </div>
 
           {/* Queue table */}
@@ -637,6 +651,9 @@ export default function Upload({ onCertified }) {
                     {item.score != null && <span className="badge" style={{ background: scoreBg, color: scoreFg, flexShrink: 0 }}>{item.score} / 100</span>}
                     {item.status === 'done' && item.remBlob && item.driveFileId && (
                       <DriveUploadButton driveFileId={item.driveFileId} blob={item.remBlob} score={item.score} engine={item.engine} />
+                    )}
+                    {item.status === 'done' && item.remBlob && item.spItemId && (
+                      <SpUploadButton itemId={item.spItemId} driveId={item.spDriveId} blob={item.remBlob} score={item.score} engine={item.engine} />
                     )}
                     {!batchRunning && item.status === 'waiting' && (
                       <button
@@ -746,7 +763,10 @@ export default function Upload({ onCertified }) {
               <div style={{ marginTop: 12 }}>
                 <button className="ghost small" onClick={() => setBatchMode(true)}>⊞ Batch mode — process multiple files at once</button>
               </div>
-              <GoogleDrive onFiles={handleGDriveFiles} />
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <GoogleDrive onFiles={handleGDriveFiles} />
+                <SharePoint onFiles={handleSpFiles} />
+              </div>
             </div>
           )}
 

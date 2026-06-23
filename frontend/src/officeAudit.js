@@ -248,12 +248,39 @@ export async function remediateOffice(blob, opts = {}) {
   // Inject comment balloons for metadata fixes (tracked changes mode only)
   if (tc && comments.length) await injectComments(zip, comments)
 
-  // Enable Track Changes mode so Word opens the file with revisions visible
-  if (tc && zip.file('word/settings.xml')) {
-    let settings = await zip.file('word/settings.xml').async('string')
-    if (!settings.includes('w:trackChanges')) {
-      settings = settings.replace(/(<w:settings\b[^>]*>)/, '$1<w:trackChanges/>')
-      zip.file('word/settings.xml', settings)
+  // Enable Track Changes mode so Word opens the file with revisions visible.
+  // Create settings.xml if the DOCX doesn't have one (many minimal templates omit it).
+  if (tc) {
+    const W_SETTINGS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    const SETTINGS_CT = 'application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml'
+    const SETTINGS_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings'
+    if (zip.file('word/settings.xml')) {
+      let settings = await zip.file('word/settings.xml').async('string')
+      if (!settings.includes('w:trackChanges')) {
+        settings = settings.replace(/(<w:settings\b[^>]*>)/, '$1<w:trackChanges/>')
+        zip.file('word/settings.xml', settings)
+      }
+    } else {
+      // Create a minimal settings.xml and wire it up
+      zip.file('word/settings.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="${W_SETTINGS}"><w:trackChanges/></w:settings>`)
+      // Register content type
+      if (zip.file('[Content_Types].xml')) {
+        let ct = await zip.file('[Content_Types].xml').async('string')
+        if (!ct.includes('settings.xml')) {
+          ct = ct.replace('</Types>', `<Override PartName="/word/settings.xml" ContentType="${SETTINGS_CT}"/></Types>`)
+          zip.file('[Content_Types].xml', ct)
+        }
+      }
+      // Register relationship
+      const relsPath = 'word/_rels/document.xml.rels'
+      if (zip.file(relsPath)) {
+        let rels = await zip.file(relsPath).async('string')
+        if (!rels.includes('/settings')) {
+          const maxId = Math.max(...[...rels.matchAll(/Id="rId(\d+)"/g)].map((m) => parseInt(m[1])), 0)
+          rels = rels.replace('</Relationships>', `<Relationship Id="rId${maxId + 1}" Type="${SETTINGS_REL}" Target="settings.xml"/></Relationships>`)
+          zip.file(relsPath, rels)
+        }
+      }
     }
   }
 
