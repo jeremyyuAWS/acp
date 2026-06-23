@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { getSources, getRubric, listScans, getScan, startScan, getJob } from './api'
 import { setPersona } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
+import { loadRolePrivileges } from './RolePrivilege.jsx'
 import { loadFileTypeConfig } from './FileTypeConfig.jsx'
 import { annotate, loadPublished } from './ontology.js'
 import Logo from './Logo.jsx'
@@ -84,6 +85,7 @@ export default function App() {
   const [certifiedDocs, setCertifiedDocs] = useState([])
   const [delegations, setDelegations] = useState(loadDelegations)
   const [fileTypeConfig, setFileTypeConfig] = useState(loadFileTypeConfig)
+  const [rolePrivileges, setRolePrivileges] = useState(loadRolePrivileges)
   const [ontology, setOntology] = useState(loadPublished)
 
   useEffect(() => {
@@ -209,7 +211,8 @@ export default function App() {
 
       <ChatWidget files={files} run={run} trend={trend} trendDates={trendDates} me={me} />
       {SHOW_A11Y && <A11ySelfCheck />}
-      {settingsOpen && me.allow?.includes('settings') && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onOntologyChange={() => setOntology(loadPublished())} onDelegationChange={setDelegations} onFileTypeChange={(cfg) => setFileTypeConfig(cfg)} />}
+      {settingsOpen && me.allow?.includes('settings') && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onOntologyChange={() => setOntology(loadPublished())} onDelegationChange={setDelegations} onFileTypeChange={(cfg) => setFileTypeConfig(cfg)}
+            onPrivilegeChange={setRolePrivileges} />}
     </div>
   )
 }

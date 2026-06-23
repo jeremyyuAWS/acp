@@ -1,0 +1,212 @@
+import { useState, useMemo } from 'react'
+
+const LS_KEY = 'mova_role_privileges'
+
+const AI_SOLUTIONS = ['Accessibility Compliance', 'App Engineering', 'Quality Engineering', 'Enterprise Ops']
+const TEAMS = ['Compliance Team', 'Development Team', 'QA Team', 'Devops Team', 'IT Support', 'Management']
+const ROLES = ['Super Admin', 'Admin', 'Compliance Officer', 'Test Manager', 'End User']
+
+const MODULES = [
+  { label: 'Discover',   pages: ['Estate Overview', 'File Detail', 'Source Integrations'] },
+  { label: 'Assess',     pages: ['Compliance Dashboard', 'Findings Report', 'Department View'] },
+  { label: 'Remediate',  pages: ['Auto-Fix Queue', 'HITL Review', 'Certification'] },
+  { label: 'Monitor',    pages: ['Workflow Status', 'Scan History'] },
+  { label: 'Admin',      pages: ['User Management', 'Role Privileges', 'Integrations', 'Settings'] },
+]
+
+const PERMS = ['view', 'edit', 'delete', 'refresh', 'execute']
+const PERM_LABELS = { view: 'View', edit: 'Insert / Edit', delete: 'Delete', refresh: 'Refresh', execute: 'Execute' }
+
+const makeKey = (sol, team, role) => sol + '||' + team + '||' + role
+
+const loadPrivileges = () => { try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}') } catch { return {} } }
+export const loadRolePrivileges = loadPrivileges
+
+const DEFAULT_FOR = (role) => {
+  const full  = Object.fromEntries(PERMS.map(p => [p, true]))
+  const view  = Object.fromEntries(PERMS.map(p => [p, p === 'view']))
+  const none  = Object.fromEntries(PERMS.map(p => [p, false]))
+  const build = (pages, permsObj) => Object.fromEntries(pages.map(pg => [pg, { ...permsObj }]))
+  if (role === 'Super Admin' || role === 'Admin') {
+    return Object.fromEntries(MODULES.map(m => [m.label, build(m.pages, full)]))
+  }
+  if (role === 'Compliance Officer') {
+    return {
+      'Discover':  build(MODULES[0].pages, full),
+      'Assess':    build(MODULES[1].pages, full),
+      'Remediate': build(MODULES[2].pages, { view: true, edit: true, delete: false, refresh: true, execute: true }),
+      'Monitor':   build(MODULES[3].pages, view),
+      'Admin':     build(MODULES[4].pages, none),
+    }
+  }
+  if (role === 'Test Manager') {
+    return {
+      'Discover':  build(MODULES[0].pages, view),
+      'Assess':    build(MODULES[1].pages, view),
+      'Remediate': build(MODULES[2].pages, { view: true, edit: false, delete: false, refresh: true, execute: false }),
+      'Monitor':   build(MODULES[3].pages, view),
+      'Admin':     build(MODULES[4].pages, none),
+    }
+  }
+  return Object.fromEntries(MODULES.map(m => [m.label, build(m.pages, view)]))
+}
+
+export default function RolePrivilege({ onChanged }) {
+  const [privileges, setPrivileges] = useState(loadPrivileges)
+  const [solution, setSolution] = useState(AI_SOLUTIONS[0])
+  const [team, setTeam] = useState(TEAMS[1])
+  const [role, setRole] = useState(ROLES[3])
+  const [saved, setSaved] = useState(false)
+
+  const key = makeKey(solution, team, role)
+  const current = useMemo(() => privileges[key] || DEFAULT_FOR(role), [privileges, key, role])
+
+  const getVal = (mod, page, perm) => !!(current[mod] && current[mod][page] && current[mod][page][perm])
+
+  const update = (nextCurrent) => setPrivileges(p => ({ ...p, [key]: nextCurrent }))
+
+  const setVal = (mod, page, perm, val) => {
+    update({
+      ...current,
+      [mod]: { ...current[mod], [page]: { ...(current[mod] || {})[page], [perm]: val } },
+    })
+  }
+
+  const toggleModuleAll = (mod, checked) => {
+    const pages = MODULES.find(m => m.label === mod)?.pages || []
+    const modMap = {}
+    pages.forEach(pg => { modMap[pg] = Object.fromEntries(PERMS.map(p => [p, checked])) })
+    update({ ...current, [mod]: modMap })
+  }
+
+  const isModuleAllChecked = (mod) =>
+    (MODULES.find(m => m.label === mod)?.pages || []).every(pg =>
+      PERMS.every(p => getVal(mod, pg, p)))
+
+  const applyAll = () => {
+    const next = {}
+    MODULES.forEach(m => {
+      next[m.label] = Object.fromEntries(m.pages.map(pg => [pg, Object.fromEntries(PERMS.map(p => [p, true]))]))
+    })
+    update(next)
+  }
+
+  const applyViewOnly = () => {
+    const next = {}
+    MODULES.forEach(m => {
+      next[m.label] = Object.fromEntries(m.pages.map(pg => [pg, Object.fromEntries(PERMS.map(p => [p, p === 'view']))]))
+    })
+    update(next)
+  }
+
+  const applyReset = () => {
+    update(DEFAULT_FOR(role))
+  }
+
+  const save = () => {
+    const next = { ...privileges, [key]: current }
+    localStorage.setItem(LS_KEY, JSON.stringify(next))
+    setPrivileges(next)
+    onChanged?.(next)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  let firstInModule = {}
+  const rows = []
+  MODULES.forEach(mod => {
+    mod.pages.forEach((page, pi) => {
+      rows.push({ mod: mod.label, page, isFirst: pi === 0, pageCount: mod.pages.length })
+    })
+  })
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+          <span className="muted" style={{ whiteSpace: 'nowrap' }}>AI Solution</span>
+          <select style={{ fontSize: 12 }} value={solution} onChange={e => setSolution(e.target.value)}>
+            {AI_SOLUTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+          <span className="muted">Team</span>
+          <select style={{ fontSize: 12 }} value={team} onChange={e => setTeam(e.target.value)}>
+            {TEAMS.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+          <span className="muted">Role</span>
+          <select style={{ fontSize: 12 }} value={role} onChange={e => setRole(e.target.value)}>
+            {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </label>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 14, fontSize: 13 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+          <input type="radio" name="rp-quick" onChange={applyViewOnly} style={{ cursor: 'pointer' }} />
+          View Only
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+          <input type="radio" name="rp-quick" onChange={applyAll} style={{ cursor: 'pointer' }} />
+          All
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+          <input type="radio" name="rp-quick" onChange={applyReset} style={{ cursor: 'pointer' }} />
+          Reset to defaults
+        </label>
+      </div>
+
+      <div style={{ overflowX: 'auto' }}>
+        <table className="ruletable" style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign: 'left', minWidth: 120 }}>Module</th>
+              <th style={{ textAlign: 'left', minWidth: 160 }}>Page</th>
+              {PERMS.map(p => (
+                <th key={p} style={{ textAlign: 'center', minWidth: 80, whiteSpace: 'nowrap', fontSize: 12 }}>{PERM_LABELS[p]}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ mod, page, isFirst, pageCount }, ri) => (
+              <tr key={mod + '|' + page} style={{ borderTop: isFirst && ri > 0 ? '2px solid var(--line)' : undefined }}>
+                {isFirst ? (
+                  <td rowSpan={pageCount} style={{ verticalAlign: 'middle', fontWeight: 500, paddingRight: 12 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={isModuleAllChecked(mod)}
+                        onChange={e => toggleModuleAll(mod, e.target.checked)}
+                        style={{ cursor: 'pointer' }}
+                      />
+                      {mod}
+                    </label>
+                  </td>
+                ) : null}
+                <td style={{ fontSize: 13, paddingLeft: 8 }}>{page}</td>
+                {PERMS.map(perm => (
+                  <td key={perm} style={{ textAlign: 'center' }}>
+                    <input
+                      type="checkbox"
+                      checked={getVal(mod, page, perm)}
+                      onChange={e => setVal(mod, page, perm, e.target.checked)}
+                      style={{ cursor: 'pointer' }}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+        <button className="dlbtn" onClick={save} style={{ minWidth: 140 }}>
+          {saved ? '✓ Saved' : 'Save Permissions'}
+        </button>
+      </div>
+    </div>
+  )
+}
