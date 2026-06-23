@@ -12,7 +12,7 @@ import { auditOffice, remediateOffice } from './officeAudit.js'
 import { auditPdf } from './pdfAudit.js'
 import { prescreenHtml } from './prescreen.js'
 import { useDialog } from './a11y.js'
-import GoogleDrive from './GoogleDrive.jsx'
+import GoogleDrive, { DriveUploadButton } from './GoogleDrive.jsx'
 
 const isOffice = (name) => /\.(docx|pptx|xlsx)$/i.test(name || '')
 const HKEY = 'mova_upload_history'
@@ -312,6 +312,7 @@ export default function Upload({ onCertified }) {
       issues: null,
       remBlob: null,
       engine: null,
+      driveFileId: f._driveId || null,
     }))
     setQueue((q) => [...q, ...items])
     setBatchDone(false)
@@ -581,6 +582,9 @@ export default function Upload({ onCertified }) {
                     {item.engine && <span className="realbadge" style={{ flexShrink: 0 }}>⚡ {item.engine}</span>}
                     {item.issues != null && <span className="muted" style={{ fontSize: 12, flexShrink: 0 }}>{item.issues.length} finding{item.issues.length !== 1 ? 's' : ''}</span>}
                     {item.score != null && <span className="badge" style={{ background: scoreBg, color: scoreFg, flexShrink: 0 }}>{item.score} / 100</span>}
+                    {item.status === 'done' && item.remBlob && item.driveFileId && (
+                      <DriveUploadButton driveFileId={item.driveFileId} blob={item.remBlob} />
+                    )}
                     {!batchRunning && item.status === 'waiting' && (
                       <button
                         className="ghost small"

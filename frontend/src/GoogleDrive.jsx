@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || ''
-const SCOPES = 'https://www.googleapis.com/auth/drive.readonly'
+const SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file'
 
 // Google Workspace native types that need server-side export to a binary format
 const GDOC_EXPORT = {
@@ -55,6 +55,35 @@ const FILE_LABEL = {
 function fmtDate(iso) {
   if (!iso) return ''
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+
+// Exported so batch queue rows can offer "Save back to Drive" after remediation.
+export function DriveUploadButton({ driveFileId, blob }) {
+  const [status, setStatus] = React.useState('idle')
+  const save = async () => {
+    const token = sessionStorage.getItem('gd_token')
+    if (!token) { setStatus('no-token'); return }
+    setStatus('saving')
+    try {
+      const r = await fetch(
+        'https://www.googleapis.com/upload/drive/v3/files/' + driveFileId + '?uploadType=media',
+        { method: 'PATCH', headers: { Authorization: 'Bearer ' + token, 'Content-Type': blob.type }, body: blob }
+      )
+      if (r.status === 401 || r.status === 403) { setStatus('no-token'); return }
+      if (!r.ok) throw new Error('HTTP ' + r.status)
+      setStatus('done')
+    } catch { setStatus('error') }
+  }
+  if (status === 'done') return React.createElement('span', { style: { color: '#3B6D11', fontSize: 12, flexShrink: 0 } }, '✓ Saved to Drive')
+  if (status === 'error') return React.createElement('span', { style: { color: '#854F0B', fontSize: 12, flexShrink: 0 } }, '✕ Upload failed')
+  if (status === 'no-token') return React.createElement('span', { style: { color: '#854F0B', fontSize: 12, flexShrink: 0 } }, 'Reconnect Drive to save')
+  return React.createElement('button', {
+    className: 'ghost small',
+    onClick: save,
+    disabled: status === 'saving',
+    style: { flexShrink: 0, fontSize: 12, padding: '2px 8px' }
+  }, status === 'saving' ? '↑ Saving…' : '↑ Drive')
 }
 
 export default function GoogleDrive({ onFiles }) {
@@ -173,7 +202,10 @@ export default function GoogleDrive({ onFiles }) {
         const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } })
         if (!r.ok) throw new Error('HTTP ' + r.status)
         const blob = await r.blob()
-        fileObjects.push(new File([blob], name, { type: exp ? exp.mime : (blob.type || f.mimeType) }))
+        const fileObj = new File([blob], name, { type: exp ? exp.mime : (blob.type || f.mimeType) })
+        fileObj._driveId = f.id
+        fileObj._driveName = f.name
+        fileObjects.push(fileObj)
       } catch (e) {
         console.error('Drive download failed:', f.name, e)
       }
