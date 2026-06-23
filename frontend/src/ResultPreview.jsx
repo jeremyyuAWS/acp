@@ -102,11 +102,19 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
           <figcaption className="bafcap before">as received</figcaption>
           {isHtml(name) && srcText ? <iframe sandbox="" title="as received" srcDoc={srcText} />
             : isPdf(name) && pdfUrl
-              ? <div className="rppdf rpbeforepdf">
+              ? <div className="rppdf rpbeforepdf" aria-label="PDF as received — accessibility issues highlighted">
+                  <div className="rpbanner bad" aria-hidden="true">
+                    <span>⚠</span><b>Not accessible</b>
+                    <span className="rpbanner-count">{issues.length} issue{issues.length !== 1 ? 's' : ''} found</span>
+                  </div>
+                  <div className="rpbeforescrim" aria-hidden="true" />
                   <PdfPreview url={pdfUrl} pages={1} />
                   <div className="rpissueoverlay" aria-hidden="true">
-                    {issues.slice(0, 3).map((iss) => (
-                      <span key={iss.rule} className="rpissuepin">⚠ {iss.detail}</span>
+                    {issues.slice(0, 3).map((iss, i) => (
+                      <div key={iss.rule} className={`rpissuepin rppinslot-${i}`}>
+                        <span className="rppinnum">{i + 1}</span>
+                        <span className="rppinlabel">{iss.detail}</span>
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -118,30 +126,41 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
           {isHtml(name) && rem ? <iframe sandbox="" title="remediated" srcDoc={rem.html} />
             : isPdf(name) && pdfUrl
               ? <div className="rppdf rpafter rpstructpanel">
-                  {pdfStructRows
-                    ? <>
-                        <div className="rpstructhd">
-                          <span className="rpstructicon" aria-hidden="true">📋</span>
-                          <b>Structural properties</b>
-                          <span className="muted">· what changed</span>
-                        </div>
-                        <div className="rpstructrows">
-                          {pdfStructRows.map((row) => (
-                            <div className="rpstructrow" key={row.label}>
-                              <span className="rpstructlabel">{row.label}</span>
-                              <span className="rpstructbefore">{row.before}</span>
-                              <span className="rpstructarrow" aria-hidden="true">→</span>
-                              <span className={`rpstructafter ${row.fixed ? 'ok' : row.warn ? 'warn' : ''}`}>{row.after}</span>
+                  <div className="rpbanner good" aria-hidden="true">
+                    <span>✓</span>
+                    <b>{remPdf ? `${remPdf.changes.length} fix${remPdf.changes.length !== 1 ? 'es' : ''} applied` : 'applying fixes…'}</b>
+                    {remPdf && !remPdf.tagged && <span className="rpbanner-count">1 flagged for structural engine</span>}
+                  </div>
+                  <div className="rpafterbody">
+                    <div className="rppdfthumbnail">
+                      <PdfPreview url={pdfUrl} pages={1} />
+                      {remPdf && <div className="rpfixedpins" aria-hidden="true">
+                        {remPdf.changes.map((c, i) => (
+                          <div key={c} className={`rpfixpin rpfixslot-${i}`}>✓</div>
+                        ))}
+                        {!remPdf.tagged && <div className="rpfixpin rpfixslot-warn">⚑</div>}
+                      </div>}
+                    </div>
+                    <div className="rpstructside">
+                      {pdfStructRows
+                        ? <div className="rpstructrows compact">
+                            {pdfStructRows.map((row) => (
+                              <div className="rpstructrow" key={row.label}>
+                                <span className="rpstructlabel">{row.label}</span>
+                                <span className="rpstructbefore">{row.before}</span>
+                                <span className="rpstructarrow" aria-hidden="true">→</span>
+                                <span className={`rpstructafter ${row.fixed ? 'ok' : row.warn ? 'warn' : ''}`}>{row.after}</span>
+                              </div>
+                            ))}
+                            <div className="rpstructs" style={{ marginTop: 6 }}>
+                              {remPdf.changes.map((c) => <span key={c} className="bachip">✓ {c}</span>)}
+                              {!remPdf.tagged && <span className="bachip warn">⚑ tagging needs structural engine</span>}
                             </div>
-                          ))}
-                        </div>
-                        <div className="rpstructs">
-                          {remPdf.changes.map((c) => <span key={c} className="bachip">✓ {c}</span>)}
-                          {!remPdf.tagged && <span className="bachip warn">⚑ full tagging needs structural engine — detected &amp; flagged</span>}
-                        </div>
-                      </>
-                    : <div className="oploading"><span className="spinner" /><span className="muted">applying structural fixes…</span></div>
-                  }
+                          </div>
+                        : <div className="oploading"><span className="spinner" /><span className="muted">applying…</span></div>
+                      }
+                    </div>
+                  </div>
                 </div>
               : officeBlob ? <div className="rppdf rpafter">{remBlob ? <OfficePreview blob={remBlob} name={name} highlight /> : <div className="oploading"><span className="spinner" /> <span className="muted">applying fixes…</span></div>}<span className="rpbadge">✓ remediated</span></div>
                 : docCard(<span className="rpbadge">✓ accessible</span>)}

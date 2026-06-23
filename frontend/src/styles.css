@@ -723,21 +723,40 @@ input:focus-visible, [role="tab"]:focus-visible {
 .rpdoc .rpbadge { position: static; background: #E7F0DC; color: #3B6D11; }
 .rpnote { margin-top: 12px; }
 .rpactions { margin-top: 11px; display: flex; gap: 10px; flex-wrap: wrap; }
-/* PDF before/after: issue overlay on the "before" side */
-.rpbeforepdf { position: relative; }
-.rpissueoverlay { position: absolute; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; gap: 3px; padding: 7px 8px; pointer-events: none; }
-.rpissuepin { display: block; font-size: 10.5px; font-weight: 600; color: #7A2B0A; background: rgba(250, 238, 218, 0.96); border-radius: 6px; padding: 3px 8px; border-left: 3px solid #D85A30; }
-/* PDF "after" structural diff panel */
-.rpstructpanel { height: 230px; display: flex; flex-direction: column; gap: 0; padding: 13px 14px; background: #f4fbf0; }
-.rpstructhd { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 10px; }
-.rpstructicon { font-size: 18px; }
-.rpstructrows { display: flex; flex-direction: column; gap: 6px; flex: 1; }
-.rpstructrow { display: grid; grid-template-columns: 6fr 3fr 14px 5fr; gap: 6px; align-items: center; background: #fff; border-radius: 8px; padding: 7px 10px; border: 1px solid var(--line); font-size: 12px; }
-.rpstructlabel { font-weight: 600; color: var(--fg); }
-.rpstructbefore { color: #9E3D12; font-style: italic; text-align: right; }
-.rpstructarrow { color: #b7afbd; text-align: center; font-size: 10px; }
-.rpstructafter { color: #5F5E5A; }
-.rpstructafter.ok { color: #3B6D11; font-weight: 600; }
+/* PDF before/after panels — banner + overlay architecture */
+.rpbanner { position: absolute; top: 0; left: 0; right: 0; z-index: 3; display: flex; align-items: center; gap: 6px; padding: 5px 10px; font-size: 11.5px; border-radius: 0 9px 0 0; }
+.rpbanner.bad { background: rgba(185, 49, 22, 0.92); color: #fff; }
+.rpbanner.good { background: rgba(41, 90, 12, 0.92); color: #fff; }
+.rpbanner-count { margin-left: auto; opacity: 0.85; font-size: 10.5px; }
+/* Before panel: subtle red scrim + positioned callout pins */
+.rpbeforescrim { position: absolute; inset: 0; z-index: 1; background: rgba(185,49,22,0.07); pointer-events: none; border-radius: inherit; }
+.rpissueoverlay { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+.rpissuepin { position: absolute; display: flex; align-items: center; gap: 5px; max-width: 58%; }
+.rppinnum { width: 18px; height: 18px; border-radius: 50%; background: #B93116; color: #fff; font-size: 10px; font-weight: 800; display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 1px 4px rgba(0,0,0,0.35); }
+.rppinlabel { font-size: 10px; font-weight: 600; color: #6B1A0A; background: rgba(255,244,238,0.97); border: 1px solid rgba(185,49,22,0.25); border-radius: 6px; padding: 2px 7px; line-height: 1.3; box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+.rppinslot-0 { top: 28%; right: 6px; }
+.rppinslot-1 { top: 55%; left: 6px; }
+.rppinslot-2 { bottom: 12%; right: 6px; }
+/* After panel: banner + two-column (thumbnail | diff) */
+.rpstructpanel { overflow: hidden; }
+.rpafterbody { position: absolute; top: 30px; left: 0; right: 0; bottom: 0; display: flex; }
+.rppdfthumbnail { width: 44%; position: relative; overflow: hidden; border-right: 1px solid var(--line); background: #f4f1f5; }
+.rppdfthumbnail .pdfpreview { transform: scale(0.62); transform-origin: top left; width: 161%; }
+.rpfixedpins { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.rpfixpin { position: absolute; width: 20px; height: 20px; border-radius: 50%; background: rgba(59,109,17,0.92); color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 4px rgba(0,0,0,0.25); }
+.rpfixslot-0 { top: 28%; right: 8px; }
+.rpfixslot-1 { top: 52%; left: 8px; }
+.rpfixslot-warn { bottom: 14%; right: 8px; background: rgba(133,79,11,0.88); }
+.rpstructside { flex: 1; padding: 8px 10px; display: flex; flex-direction: column; gap: 0; overflow: hidden; background: #f4fbf0; }
+/* Structural diff rows */
+.rpstructrows { display: flex; flex-direction: column; gap: 5px; }
+.rpstructrows.compact .rpstructrow { padding: 5px 8px; }
+.rpstructrow { display: grid; grid-template-columns: auto 2fr 12px 2fr; gap: 5px; align-items: center; background: #fff; border-radius: 7px; padding: 7px 10px; border: 1px solid var(--line); font-size: 11px; }
+.rpstructlabel { font-weight: 600; color: var(--fg); font-size: 10.5px; }
+.rpstructbefore { color: #9E3D12; font-style: italic; text-align: right; font-size: 10.5px; }
+.rpstructarrow { color: #b7afbd; text-align: center; font-size: 9px; }
+.rpstructafter { color: #5F5E5A; font-size: 10.5px; }
+.rpstructafter.ok { color: #3B6D11; font-weight: 700; }
 .rpstructafter.warn { color: #854F0B; }
 /* warning chip variant */
 .bachip.warn { color: #854F0B; background: #FAEEDA; }
