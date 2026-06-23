@@ -78,9 +78,56 @@ const extOf = (name) => { const m = /\.([a-z0-9]+)$/i.exec(name || ''); return (
 const issuesFor = (name) => (isVideo(name) ? VIDEO_ISSUES : isAudio(name) ? AUDIO_ISSUES : isImage(name) ? IMAGE_ISSUES : (EXT_ISSUES[extOf(name)] || EXT_ISSUES.pdf)).map(([rule, wcag, sev, detail]) => ({ rule, wcag, sev, detail }))
 
 // Past-upload detail dialog — its own component so focus management runs on open.
+
+// Where the user can locate each fix in the remediated document.
+// Keyed first by exact rule code; WCAG_FALLBACK covers real axe-core rule IDs
+// and any unrecognised codes by looking up the leading SC number.
+const VERIFY_GUIDE = {
+  'DOCX-ALT-001':         { app: 'Word',        tip: 'Right-click the image → Edit Alt Text — the AI-generated description is now filled in.' },
+  'DOCX-TABLE-001':       { app: 'Word',        tip: 'Review tab → Track Changes shows header rows added. Or: click the first row of any table → Table Design tab → Header Row is checked.' },
+  'DOCX-HEAD-001':        { app: 'Word',        tip: 'View → Navigation Pane → Headings tab — the corrected heading hierarchy is now visible.' },
+  'DOCX-TITLE-001':       { app: 'Word',        tip: 'File → Info → Properties panel on the right — Title now shows the document name.' },
+  'DOCX-LINK-001':        { app: 'Word',        tip: 'Right-click the hyperlink → Edit Hyperlink — Display Text is now descriptive instead of “click here”.' },
+  'DOCX-LANG-001':        { app: 'Word',        tip: 'Review → Language → Set Proofing Language — English (United States) is now set on the document body.' },
+  'pdf.missing-alt-text': { app: 'Acrobat',     tip: 'View → Navigation Panels → Tags → expand <Figure> — the Alt attribute now contains the AI-generated description.' },
+  'pdf.tagged':           { app: 'Acrobat',     tip: 'File → Properties → Description — Tagged PDF: Yes. View → Navigation Panels → Tags shows the structure tree.' },
+  'pdf.document-title':   { app: 'Acrobat',     tip: 'File → Properties → Description tab — Title is now set to the document name.' },
+  'pdf.document-language':{ app: 'Acrobat',     tip: 'File → Properties → Advanced → Reading Options — Language is now set to English.' },
+  'PPTX-ALT-001':         { app: 'PowerPoint',  tip: 'Right-click any image → Edit Alt Text — the AI-generated description is now filled in.' },
+  'PPTX-TITLE-001':       { app: 'PowerPoint',  tip: 'View → Outline View — every slide now has a title in the title placeholder.' },
+  'PPTX-SLIDE-001':       { app: 'PowerPoint',  tip: 'View → Outline View — slide titles are visible and descriptive.' },
+  'XLSX-ALT-001':         { app: 'Excel',       tip: 'Right-click the image → Edit Alt Text — the AI-generated description is now filled in.' },
+  'XLSX-HEADER-001':      { app: 'Excel',       tip: 'Click any cell in the first row → Table Design tab — Header Row checkbox is now on.' },
+  'WEB-CONTRAST-001':     { app: 'DevTools',    tip: 'Inspect the element → Computed — color/background-color now pass the 4.5:1 (AA) contrast ratio.' },
+  'WEB-ALT-001':          { app: 'DevTools',    tip: 'Inspect the <img> → Attributes — alt attribute now contains a description.' },
+  'WEB-LABEL-001':        { app: 'DevTools',    tip: 'Inspect the form control → check for a linked <label> or aria-label attribute.' },
+  'MEDIA-CAPTIONS-001':   { app: 'Media player',tip: 'A .vtt caption file is included in the remediated output — attach it as a text track in your video player or CMS.' },
+  'MEDIA-AUDIODESC-001':  { app: 'Media player',tip: 'An audio description track is included — upload it alongside the original video in your CMS.' },
+  'MEDIA-TRANSCRIPT-001': { app: 'Transcript',  tip: 'A plain-text transcript is included in the remediated output — publish it adjacent to the audio file.' },
+  'IMG-ALT-001':          { app: 'Image host',  tip: 'Copy the AI-generated alt text from this report and add it to the alt attribute wherever this image is embedded.' },
+}
+// WCAG SC-level fallback for axe-core rule IDs not explicitly listed above.
+const WCAG_FALLBACK = {
+  '1.1.1': { app: 'Document / DevTools', tip: 'Find the image in your document or page and check its alt text or description field.' },
+  '1.2.1': { app: 'Transcript',          tip: 'A transcript file is included — publish it adjacent to the audio.' },
+  '1.2.2': { app: 'Media player',        tip: 'A .vtt caption file is included — attach it as a text track in your player or CMS.' },
+  '1.2.5': { app: 'Media player',        tip: 'An audio description track is included — upload it alongside the video.' },
+  '1.3.1': { app: 'Document / DevTools', tip: 'Check heading styles, table header rows, or form label associations in the remediated file.' },
+  '1.3.2': { app: 'Document / DevTools', tip: 'Check reading order in the Tags panel (PDF) or heading/list structure (HTML/Office).' },
+  '1.4.3': { app: 'DevTools',            tip: 'Inspect the element — colour and background now meet the 4.5:1 contrast ratio.' },
+  '2.4.2': { app: 'Document properties', tip: 'Open File → Properties — the Title field is now set to the document name.' },
+  '2.4.4': { app: 'Document / DevTools', tip: 'Find the hyperlink — display text is now descriptive instead of “click here”.' },
+  '3.1.1': { app: 'Document properties', tip: 'Open File → Properties — the language is now declared as English.' },
+  '3.1.2': { app: 'DevTools',            tip: 'Inspect the flagged text element — a lang attribute now identifies the language of that passage.' },
+}
+const scOf = (wcag) => (wcag || '').match(/^(\d+\.\d+\.\d+)/)?.[1]
+const guideFor = (rule, wcag) => VERIFY_GUIDE[rule] || WCAG_FALLBACK[scOf(wcag)] || null
+
 function HistoryDetail({ viewing, onClose }) {
   const ref = useRef(null)
   useDialog(ref, onClose)
+  const [expanded, setExpanded] = useState(() => new Set())
+  const toggle = (n) => setExpanded((s) => { const x = new Set(s); x.has(n) ? x.delete(n) : x.add(n); return x })
   return (
     <div className="covdrawer" role="dialog" aria-modal="true" aria-label={`${viewing.name} result`} onClick={onClose}>
       <div className="covpanel" ref={ref} tabIndex={-1} onClick={(e) => e.stopPropagation()} style={{ maxWidth: 540 }}>
@@ -91,7 +138,31 @@ function HistoryDetail({ viewing, onClose }) {
         <div className="findings">
           {viewing.findings.length === 0 ? <p className="muted">No findings.</p> : viewing.findings.map((i, n) => {
             const [bg, fg] = SEV_BADGE2[i.sev] || SEV_BADGE2.MINOR
-            return <div className="finding" key={n}><span className="badge" style={{ background: bg, color: fg }}>{(i.sev || '').toLowerCase()}</span><div className="findingmain"><div>{i.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{i.detail}</div></div></div>
+            const guide = guideFor(i.rule, i.wcag)
+            const isOpen = expanded.has(n)
+            return (
+              <div className="finding" key={n}
+                style={{ flexDirection: 'column', alignItems: 'stretch', cursor: guide ? 'pointer' : 'default' }}
+                onClick={(e) => { e.stopPropagation(); guide && toggle(n) }}
+                role={guide ? 'button' : undefined}
+                aria-expanded={guide ? isOpen : undefined}
+              >
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                  <span className="badge" style={{ background: bg, color: fg, flexShrink: 0 }}>{(i.sev || '').toLowerCase()}</span>
+                  <div className="findingmain" style={{ flex: 1 }}>
+                    <div>{i.wcag}</div>
+                    <div className="muted" style={{ fontSize: 12 }}>{i.detail}</div>
+                  </div>
+                  {guide && <span aria-hidden="true" style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0, paddingTop: 3 }}>{isOpen ? '▲' : '▼'}</span>}
+                </div>
+                {guide && isOpen && (
+                  <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--line)', fontSize: 12, lineHeight: 1.5 }}>
+                    <span style={{ fontWeight: 600, marginRight: 4 }}>Where to verify in {guide.app}:</span>
+                    <span className="muted">{guide.tip}</span>
+                  </div>
+                )}
+              </div>
+            )
           })}
         </div>
         <p className="muted" style={{ marginTop: 12, fontSize: 12 }}>Result kept locally on this device — documents are never retained.</p>
@@ -773,13 +844,36 @@ export default function Upload({ onCertified }) {
                   </button>
                   {openPanels.has('findings') && (
                     <div className="findings" style={{ marginTop: 10 }}>
-                      {issues.map((i, n) => { const [bg, fg] = SEV_BADGE[i.sev] || SEV_BADGE.MINOR; return (
-                        <div className="finding" key={n}>
-                          <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11' }}>fixed</span>
-                          <div className="findingmain"><div>{i.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{i.detail}</div></div>
-                          <span className="badge" style={{ background: bg, color: fg }}>{i.sev.toLowerCase()}</span>
-                        </div>
-                      ) })}
+                      {(() => {
+                        const [certExp, setCertExp] = [openPanels, togglePanel]
+                        return issues.map((i, n) => {
+                          const [bg, fg] = SEV_BADGE[i.sev] || SEV_BADGE.MINOR
+                          const guide = guideFor(i.rule, i.wcag)
+                          const key = 'fix-' + n
+                          const isOpen = openPanels.has(key)
+                          return (
+                            <div className="finding" key={n}
+                              style={{ flexDirection: 'column', alignItems: 'stretch', cursor: guide ? 'pointer' : 'default' }}
+                              onClick={() => guide && togglePanel(key)}
+                              role={guide ? 'button' : undefined}
+                              aria-expanded={guide ? isOpen : undefined}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                                <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11', flexShrink: 0 }}>fixed</span>
+                                <div className="findingmain" style={{ flex: 1 }}><div>{i.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{i.detail}</div></div>
+                                <span className="badge" style={{ background: bg, color: fg, flexShrink: 0 }}>{i.sev.toLowerCase()}</span>
+                                {guide && <span aria-hidden="true" style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0, paddingTop: 3 }}>{isOpen ? '▲' : '▼'}</span>}
+                              </div>
+                              {guide && isOpen && (
+                                <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--line)', fontSize: 12, lineHeight: 1.5 }}>
+                                  <span style={{ fontWeight: 600, marginRight: 4 }}>Where to verify in {guide.app}:</span>
+                                  <span className="muted">{guide.tip}</span>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })
+                      })()}
                     </div>
                   )}
                 </section>
