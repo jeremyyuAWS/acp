@@ -118,7 +118,15 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
                     ))}
                   </div>
                 </div>
-              : officeBlob ? <div className="rppdf"><OfficePreview blob={officeBlob} name={name} highlight /></div>
+              : officeBlob
+                ? <div className="rppdf rpbeforepdf" aria-label="Office file as received — accessibility issues highlighted">
+                    <div className="rpbanner bad" aria-hidden="true">
+                      <span>⚠</span><b>Not accessible</b>
+                      <span className="rpbanner-count">{issues.length} issue{issues.length !== 1 ? 's' : ''} found</span>
+                    </div>
+                    <div className="rpbeforescrim" aria-hidden="true" />
+                    <OfficePreview blob={officeBlob} name={name} highlight />
+                  </div>
                 : docCard()}
         </figure>
         <figure>
@@ -162,7 +170,20 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
                     </div>
                   </div>
                 </div>
-              : officeBlob ? <div className="rppdf rpafter">{remBlob ? <OfficePreview blob={remBlob} name={name} highlight /> : <div className="oploading"><span className="spinner" /> <span className="muted">applying fixes…</span></div>}<span className="rpbadge">✓ remediated</span></div>
+              : officeBlob
+                ? <div className="rppdf rpafter">
+                    <div className="rpbanner good" aria-hidden="true">
+                      {remBlob
+                        ? aiAlt
+                          ? <><span>⚡</span><b>Claude Vision described {aiAltCount > 1 ? `${aiAltCount} charts` : 'the chart'}</b><span className="rpbanner-count">alt text written in</span></>
+                          : <><span>✓</span><b>{issues.length} fix{issues.length !== 1 ? 'es' : ''} applied</b><span className="rpbanner-count">⚡ Vision reading…</span></>
+                        : <><span>⟳</span><b>Applying fixes…</b></>}
+                    </div>
+                    {remBlob
+                      ? <OfficePreview blob={remBlob} name={name} highlight />
+                      : <div className="oploading"><span className="spinner" /> <span className="muted">applying fixes…</span></div>}
+                    <span className="rpbadge">✓ remediated</span>
+                  </div>
                 : docCard(<span className="rpbadge">✓ accessible</span>)}
         </figure>
       </div>
@@ -196,9 +217,9 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
       )}
       {(rem || officeBlob || remPdf) && (
         <div className="rpactions">
-          {isHtml(name) && rem && <button className="ghost small" onClick={downloadHtml}>⤓ Download the remediated HTML</button>}
-          {officeBlob && <button className="ghost small" onClick={downloadOffice} disabled={busy}>{busy ? 'Remediating…' : `⤓ Download the remediated ${ext}`}</button>}
-          {remPdf && <button className="ghost small" onClick={() => dl(remPdf.blob, `remediated-${name}`)}>⤓ Download the remediated PDF</button>}
+          {isHtml(name) && rem && <button className="rpdownload" onClick={downloadHtml}>⤓ Download remediated HTML</button>}
+          {officeBlob && <button className="rpdownload" onClick={downloadOffice} disabled={busy}>{busy ? 'Remediating…' : `⤓ Download remediated ${ext}`}</button>}
+          {remPdf && <button className="rpdownload" onClick={() => dl(remPdf.blob, `remediated-${name}`)}>⤓ Download remediated PDF</button>}
         </div>
       )}
     </section>

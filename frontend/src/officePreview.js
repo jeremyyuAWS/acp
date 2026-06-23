@@ -103,15 +103,37 @@ async function pptx(zip, highlight) {
   for (const sn of slides.slice(0, 14)) {
     i++
     const xml = await zip.file(sn).async('string')
+
+    // resolve rId → blob URL for images embedded in this slide
+    const imgUrl = {}
+    const relsPath = sn.replace('ppt/slides/', 'ppt/slides/_rels/').replace('.xml', '.xml.rels')
+    if (zip.file(relsPath)) {
+      const rels = await zip.file(relsPath).async('string')
+      for (const m of rels.matchAll(/<Relationship[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"/g)) {
+        const raw = m[2]
+        const resolved = raw.startsWith('../') ? 'ppt/' + raw.slice(3) : 'ppt/slides/' + raw
+        if (zip.file(resolved) && /\.(png|jpe?g|gif|bmp|webp)$/i.test(resolved)) {
+          try { imgUrl[m[1]] = URL.createObjectURL(await zip.file(resolved).async('blob')) } catch { /* skip */ }
+        }
+      }
+    }
+
     const texts = [...xml.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g)].map((m) => decode(m[1].replace(/<[^>]+>/g, ''))).filter((t) => t.trim())
     const title = texts[0] || `Slide ${i}`
+
+    // render embedded slide images (full-width inside the card)
+    const slideImgs = [...xml.matchAll(/<a:blip\b[^>]*r:embed="([^"]+)"/g)]
+      .map((m) => imgUrl[m[1]]).filter(Boolean)
+      .map((url) => `<img class="opsldimg" src="${url}" alt="" />`)
+      .join('')
+
     let note = ''
     if (highlight) {
       const blips = (xml.match(/<a:blip\b/g) || []).length
       const described = [...xml.matchAll(DESCR)].filter((m) => hasAlt(m[1])).length
-      if (blips) note = described >= blips ? cap(true, `image alt text: present`) : cap(false, `${blips} image${blips > 1 ? 's' : ''} — no alt text`)
+      if (blips) note = described >= blips ? cap(true, 'image alt text: present') : cap(false, `${blips} image${blips > 1 ? 's' : ''} — no alt text`)
     }
-    out.push(`<div class="opslide"><div class="opslidenum">Slide ${i}</div><h4>${esc(title)}</h4>${texts.slice(1).map((t) => `<p>${esc(t)}</p>`).join('')}${note}</div>`)
+    out.push(`<div class="opslide${slideImgs ? ' hassimg' : ''}">${slideImgs ? `<div class="opsldimgs">${slideImgs}</div>` : ''}<div class="opslidenum">Slide ${i}</div><h4>${esc(title)}</h4>${texts.slice(1).map((t) => `<p>${esc(t)}</p>`).join('')}${note}</div>`)
   }
   return `<div class="oppage ppt">${highlight ? await banner : ''}${out.join('') || '<p class="opmuted">No slide text.</p>'}</div>`
 }

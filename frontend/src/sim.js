@@ -85,10 +85,13 @@ const SRC_FOR = { pdf: ['box', 'gdrive', 'sharepoint'], docx: ['sharepoint', 'co
 const ISS_POOL = {
   pdf: [['pdf.tagged', 'SC_1_3_1', 'SERIOUS'], ['pdf.alt-text', 'SC_1_1_1', 'CRITICAL'], ['pdf.document-language', 'SC_3_1_1', 'MODERATE'], ['pdf.reading-order', 'SC_1_3_2', 'MODERATE']],
   docx: [['DOCX-ALT-001', 'SC_1_1_1', 'CRITICAL'], ['DOCX-TITLE-001', 'SC_2_4_2', 'SERIOUS'], ['DOCX-TABLE-001', 'SC_1_3_1', 'SERIOUS'], ['DOCX-LINK-001', 'SC_2_4_4', 'MODERATE']],
-  pptx: [['PPTX-ALT-001', 'SC_1_1_1', 'CRITICAL'], ['PPTX-TITLE-001', 'SC_2_4_2', 'SERIOUS'], ['PPTX-ORDER-001', 'SC_1_3_2', 'MODERATE']],
+  // uncertain PPTX files get only SC_1_4_6 (AAA) — conformant at A & AA, non-conformant at AAA
+  pptx: [['PPTX-CONTRAST-AAA', 'SC_1_4_6', 'MINOR'], ['PPTX-ALT-001', 'SC_1_1_1', 'CRITICAL'], ['PPTX-TITLE-001', 'SC_2_4_2', 'SERIOUS'], ['PPTX-ORDER-001', 'SC_1_3_2', 'MODERATE']],
   xlsx: [['XLSX-ALT-001', 'SC_1_1_1', 'MODERATE'], ['XLSX-HEADER-001', 'SC_1_3_1', 'MODERATE'], ['XLSX-SHEET-001', 'SC_2_4_2', 'MINOR']],
-  html: [['WEB-ALT-001', 'SC_1_1_1', 'CRITICAL'], ['WEB-CONTRAST-001', 'SC_1_4_3', 'SERIOUS'], ['WEB-LABEL-001', 'SC_1_3_1', 'MODERATE'], ['WEB-LANG-001', 'SC_3_1_1', 'MINOR']],
-  video: [['VIDEO-CAPTIONS-001', 'SC_1_2_2', 'CRITICAL'], ['VIDEO-AUDIODESC-001', 'SC_1_2_5', 'SERIOUS'], ['VIDEO-TRANSCRIPT-001', 'SC_1_2_3', 'MODERATE']],
+  // uncertain HTML files get only SC_1_4_3 (AA) — conformant at A, non-conformant at AA & AAA
+  html: [['WEB-CONTRAST-001', 'SC_1_4_3', 'SERIOUS'], ['WEB-ALT-001', 'SC_1_1_1', 'CRITICAL'], ['WEB-LABEL-001', 'SC_1_3_1', 'MODERATE'], ['WEB-LANG-001', 'SC_3_1_1', 'MINOR']],
+  // uncertain video files get only SC_1_2_5 (AA) — conformant at A, non-conformant at AA & AAA
+  video: [['VIDEO-AUDIODESC-001', 'SC_1_2_5', 'SERIOUS'], ['VIDEO-CAPTIONS-001', 'SC_1_2_2', 'CRITICAL'], ['VIDEO-TRANSCRIPT-001', 'SC_1_2_3', 'MODERATE']],
   audio: [['AUDIO-TRANSCRIPT-001', 'SC_1_2_1', 'CRITICAL'], ['AUDIO-CAPTION-001', 'SC_1_2_2', 'MODERATE']],
 }
 const DEPT_TAGS = {

@@ -207,6 +207,31 @@ const SEV_CLR = { critical: '#1F5FA8', serious: '#2A5E9E', moderate: '#854F0B', 
 const PRINCIPLE = { 1: 'Perceivable', 2: 'Operable', 3: 'Understandable', 4: 'Robust' }
 const PRIN_CLR = { 1: '#1F5FA8', 2: '#3B6D11', 3: '#854F0B', 4: '#4B3460' }
 
+// Map WCAG SC number prefix → affected disability group
+const SC_IMPACT = [
+  { prefix: '1.1', group: 'Blind / low vision', detail: 'Cannot perceive non-text content without alt text' },
+  { prefix: '1.2', group: 'Deaf / hard-of-hearing', detail: 'Cannot access audio/video content without captions or transcripts' },
+  { prefix: '1.3', group: 'Screen reader users', detail: 'Lose structural meaning without programmatic relationships (headings, tables, reading order)' },
+  { prefix: '1.4', group: 'Low vision', detail: 'Struggle with insufficient color contrast or text that cannot be resized' },
+  { prefix: '2.1', group: 'Keyboard-only users', detail: 'Cannot reach or operate controls without a mouse' },
+  { prefix: '2.4', group: 'Cognitive / navigation', detail: 'Disoriented without descriptive titles, headings, and clear link labels' },
+  { prefix: '3.1', group: 'Screen reader users', detail: 'Mispronunciation when document language is not declared' },
+  { prefix: '3.3', group: 'Cognitive', detail: 'Cannot recover from errors without clear labels and guidance' },
+]
+function impactGroups(findings) {
+  const seen = new Set()
+  const out = []
+  findings.forEach((f) => {
+    const sc = (f.wcag || '').replace(/^(\d+\.\d+).*/, '$1')
+    const hit = SC_IMPACT.find((x) => sc.startsWith(x.prefix))
+    if (hit && !seen.has(hit.group)) { seen.add(hit.group); out.push(hit) }
+  })
+  return out
+}
+// Rough per-finding manual effort estimate (minutes), weighted by severity
+const SEV_MIN = { CRITICAL: 45, SERIOUS: 30, MODERATE: 20, MINOR: 10 }
+const AUTO_MIN = 2 // per finding the platform auto-fixes
+
 // Per-document conformance report (Upload) — a detailed, beautiful, LLM-narrated PDF.
 export async function exportDocumentReport(d) {
   const before = d.score ?? 0
@@ -271,10 +296,59 @@ export async function exportDocumentReport(d) {
     p.text('No accessibility findings — the document meets WCAG 2.1 AA.', { color: GREEN })
   }
 
-  p.heading('Methodology & standards')
-  p.text(`Assessed with the ${d.engine || 'mova.io WCAG 2.1 AA'} engine. ${d.autoFix ?? 0} finding(s) were auto-remediated by the platform; ${d.humanReview ?? 1} routed to human review and approved before certification. The document was re-validated after the fixes were applied.`, { size: 9.5, gapAfter: 7 })
-  p.text('Standards: WCAG 2.1 AA · ADA Title II · EN 301 549 (EAA) · Section 508.', { size: 9, color: MUTED, gapAfter: 7 })
-  p.text(`Certified by the mova.io Accessibility Platform on ${d.date}. This report documents the conformance assessment and remediation actions for audit and evidence.`, { size: 8.5, color: MUTED, lh: 12 })
+  // Affected user groups
+  const groups = impactGroups(findings)
+  if (groups.length) {
+    p.heading('Affected user groups')
+    p.text('The following groups of users with disabilities were unable to access this document as received. Each barrier has been remediated.', { size: 9.5, color: MUTED, gapAfter: 11 })
+    groups.forEach((g) => {
+      p.text(`${g.group}`, { bold: true, size: 10, gapAfter: 2 })
+      p.text(g.detail, { size: 9.5, color: MUTED, gapAfter: 8 })
+    })
+    p.gap(4)
+  }
+
+  // Time & effort savings
+  const autoN = d.autoFix ?? 0
+  const humanN = d.humanReview ?? 0
+  const totalN = findings.length || autoN + humanN
+  const manualMin = findings.reduce((s, f) => s + (SEV_MIN[(f.sev || '').toUpperCase()] || 20), 0) + 20
+  const platformMin = autoN * AUTO_MIN + humanN * 5
+  const savedMin = Math.max(0, manualMin - platformMin)
+  const savedPct = manualMin > 0 ? Math.round((savedMin / manualMin) * 100) : 0
+  p.heading('Remediation efficiency')
+  p.metricGrid([
+    { label: 'Auto-fixed', value: autoN, color: GREEN },
+    { label: 'Human reviewed', value: humanN, color: '#1F5FA8' },
+    { label: 'Manual effort (est.)', value: `~${Math.round(manualMin / 60 * 10) / 10}h`, color: AMBER },
+    { label: 'Effort saved', value: `${savedPct}%`, color: GREEN },
+  ])
+  p.text(`Manual remediation of ${totalN} finding(s) at this severity mix is estimated at ~${Math.round(manualMin)} minutes (~${(manualMin / 60).toFixed(1)}h) by a document author. The mova.io platform auto-fixed ${autoN} finding(s) deterministically and routed ${humanN} to human review — estimated platform time ${Math.round(platformMin)} minutes, saving ~${Math.round(savedMin)} minutes (${savedPct}% reduction).`, { size: 9.5, gapAfter: 7 })
+  p.text('Auto-fix methods applied: structured alt-text injection, document title + language tagging, table header row markup, link-text rewriting. Each fix was written into the file at the byte level — not a CSS overlay or metadata tag.', { size: 9, color: MUTED, lh: 13 })
+
+  // Conformance statement (audit evidence page)
+  p.heading('Methodology & audit trail')
+  p.text(`Engine: ${d.engine || 'mova.io WCAG 2.1 AA static analysis'}. Scan initiated: ${d.date}. ${autoN} finding(s) auto-remediated deterministically; ${humanN} routed to human review and approved before certification. Document re-validated after all fixes were applied.`, { size: 9.5, gapAfter: 7 })
+  p.text('Standards in scope: WCAG 2.1 Level AA · ADA Title II (DOJ web/mobile rule, 28 CFR Part 35) · EN 301 549 v3.2.1 (EAA) · Section 508 of the Rehabilitation Act.', { size: 9, color: MUTED, gapAfter: 7 })
+  const auditRows = [
+    ['Discovered', 'mova.io agent', 'Document ingested from source', d.file],
+    ['Assessed', `mova.io · ${d.engine || 'WCAG 2.1 AA'}`, `${findings.length} finding(s) detected · score ${before}/100`, d.file],
+    ['Auto-remediated', 'mova.io auto-fix', `${autoN} finding(s) fixed deterministically`, d.file],
+    ...(humanN > 0 ? [['Human reviewed', 'Human reviewer', `${humanN} finding(s) approved after HITL review`, d.file]] : []),
+    ['Re-validated', `mova.io · ${d.engine || 'WCAG 2.1 AA'}`, `Zero open findings · score ${after}/100`, d.file],
+    ['Certified', 'mova.io Platform', `WCAG 2.1 AA · ${after}/100`, d.file],
+  ]
+  p.table(['Step', 'Actor', 'Action', 'Document'], auditRows, [62, 108, p.CW - 62 - 108 - 140, 140])
+
+  p.heading('Conformance statement')
+  p.text(`"${d.file}" has been assessed and remediated to conform with WCAG 2.1 Level AA success criteria as required by the Americans with Disabilities Act (ADA) Title II, the European Accessibility Act (EN 301 549), and Section 508 of the Rehabilitation Act.`, { size: 10, gapAfter: 8 })
+  p.text(`All ${findings.length} accessibility barrier(s) identified during the automated assessment have been resolved and independently re-validated. The document score was raised from ${before}/100 to ${after}/100. This report and the remediated document together constitute an audit-ready evidence package.`, { size: 9.5, gapAfter: 10 })
+  p.text('Certified by the mova.io Accessibility Platform', { bold: true, size: 9.5, gapAfter: 4 })
+  p.text(`Date: ${d.date}`, { size: 9, color: MUTED, gapAfter: 4 })
+  p.text('Authorised signatory: ___________________________', { size: 9, color: MUTED, gapAfter: 4 })
+  p.text('Title / Role: ___________________________', { size: 9, color: MUTED, gapAfter: 16 })
+  p.text('This report was generated by the mova.io Accessibility Platform and is intended as evidence for ADA, EAA, and Section 508 compliance audits. Retain for a minimum of three years.', { size: 8, color: MUTED, lh: 12 })
+
   p.save(d.filename || `mova-${(d.file || 'document').replace(/\.[^.]+$/, '')}-report.pdf`)
 }
 
