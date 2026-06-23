@@ -77,15 +77,22 @@ const STEPS = ['Discover', 'Classify', 'Retain', 'Assess', 'Risk score', 'Remedi
 function journeyStates(st) {
   if (st === 'unanalysable') return ['done', 'done', 'done', 'blocked', 'blocked', 'blocked', 'blocked', 'blocked', 'blocked', 'blocked']
   const base = ['done', 'done', 'done', 'done', 'done']
-  if (st === 'certifiable') return [...base, 'skip', 'skip', 'done', 'proj', 'proj']
+  if (st === 'certifiable') return [...base, 'remediated', 'reviewed', 'done', 'proj', 'proj']
   return [...base, 'current', 'proj', 'proj', 'proj', 'proj'] // issues / uncertain
 }
 const STATE = {
-  done: ['✓', '#3B6D11', '#E7F0DC'], current: ['●', '#854F0B', '#FAEEDA'],
-  proj: ['◯', '#716B76', '#f1eff4'], blocked: ['✕', '#1F5FA8', '#E2EDFB'],
-  skip: ['–', '#716B76', '#f1eff4'],
+  done:       ['✓', '#3B6D11', '#E7F0DC'],
+  remediated: ['✓', '#3B6D11', '#E7F0DC'],
+  reviewed:   ['✓', '#3B6D11', '#E7F0DC'],
+  current:    ['●', '#854F0B', '#FAEEDA'],
+  proj:       ['◯', '#716B76', '#f1eff4'],
+  blocked:    ['✕', '#1F5FA8', '#E2EDFB'],
+  skip:       ['–', '#716B76', '#f1eff4'],
 }
-const STATE_NOTE = { proj: 'projected', skip: 'not needed', blocked: 'blocked', current: 'in progress' }
+const STATE_NOTE = {
+  proj: 'projected', skip: 'not needed', blocked: 'blocked', current: 'in progress',
+  remediated: 'auto-remediated', reviewed: 'no findings — cleared',
+}
 
 export default function FileDrawer({ file, onClose, context = 'full' }) {
   if (!file) return null
