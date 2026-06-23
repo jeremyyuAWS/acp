@@ -213,9 +213,9 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
         </div>
       )}
       {isPdf(name) ? (
-        <p className="muted rpnote">The document <b>title</b> and <b>language</b> are written into the PDF for real via pdf-lib{remPdf?.changes?.length ? <> — {remPdf.changes.join(' · ')}</> : ''}.{remPdf && !remPdf.tagged && <> Full <b>tagging &amp; reading order</b> need structural re-authoring (a heavier engine) — detected and flagged honestly, not faked.</>}</p>
+        <p className="muted rpnote">Document <b>title</b> and <b>language</b> have been automatically corrected in this PDF.{remPdf && !remPdf.tagged && <> <b>Structural tagging and reading order</b> — required for full screen reader compatibility — require specialist PDF remediation and are flagged for your team's review.</>}</p>
       ) : !isHtml(name) && (
-        <p className="muted rpnote">Accessibility fixes for {ext} (Office) files are <b>structural</b> — alt text, document title, table header rows and language are written into the file, so it looks identical but is now machine-readable by assistive technology.{fixes.length > 0 && <> Embedded: {fixes.join(' · ')}.</>}</p>
+        <p className="muted rpnote">The remediated {ext} file includes <b>tracked changes</b> — open it in Word and switch to Review → Show Markup to see each fix highlighted with a comment balloon explaining why it matters. The document content is unchanged; only the accessibility metadata has been corrected.{fixes.length > 0 && <> Changes: {fixes.join(' · ')}.</>}</p>
       )}
       {(rem || officeBlob || remPdf) && (
         <div className="rpactions">

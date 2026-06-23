@@ -246,8 +246,7 @@ export default function Upload({ onCertified }) {
         } else if (isOffice(f.name)) {
           try { found = await auditOffice(f); engine = 'OOXML' } catch { found = issuesFor(f.name) }
           try {
-            const zip = await remediateOffice(f)
-            remBlob = await zip.generateAsync({ type: 'blob' })
+            remBlob = await remediateOffice(f, { trackedChanges: true })
           } catch { /* fall back — no remediated file */ }
         } else if (isPdf(f.name)) {
           try { found = await auditPdf(f); engine = 'pdf-lib' } catch { found = issuesFor(f.name) }
@@ -393,6 +392,8 @@ export default function Upload({ onCertified }) {
   })()
 
   const reportRef = useRef(null)
+  const singleFileRef = useRef(null)
+  const batchFileRef = useRef(null)
   const [exporting, setExporting] = useState(false)
   const [openPanels, setOpenPanels] = useState(new Set())
   const togglePanel = (key) => setOpenPanels((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n })
@@ -443,9 +444,9 @@ export default function Upload({ onCertified }) {
             onDrop={onDrop}
           >
             <div className="dzicon" aria-hidden="true">⬍</div>
-            <div style={{ fontSize: 15 }}>Drag multiple files here, or <label htmlFor="upfile" className="dzlink">browse</label></div>
+            <div style={{ fontSize: 15 }}>Drag multiple files here, or <button type="button" className="dzlink" onClick={() => batchFileRef.current?.click()}>browse</button></div>
             <input
-              id="upfile" type="file" multiple style={{ display: 'none' }}
+              ref={batchFileRef} type="file" multiple style={{ display: 'none' }}
               accept=".pdf,.docx,.pptx,.xlsx,.html,.htm,.mp3,.m4a,.wav,.mp4,.mov,.webm,.png,.jpg,.jpeg,.gif,.webp"
               onChange={onInput}
             />
@@ -544,16 +545,16 @@ export default function Upload({ onCertified }) {
             <div className={drag ? 'dropzone over' : 'dropzone'}
               onDragOver={(e) => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)} onDrop={onDrop}>
               <div className="dzicon" aria-hidden="true">⬍</div>
-              <div style={{ fontSize: 15 }}>Drag a document here, or <label htmlFor="upfile" className="dzlink">browse</label></div>
-              <input id="upfile" type="file" multiple style={{ display: 'none' }} accept=".pdf,.docx,.pptx,.xlsx,.html,.htm,.mp3,.m4a,.wav,.mp4,.mov,.webm,.png,.jpg,.jpeg,.gif,.webp" onChange={onInput} />
+              <div style={{ fontSize: 15 }}>Drag a document here, or <button type="button" className="dzlink" onClick={() => singleFileRef.current?.click()}>browse</button></div>
+              <input ref={singleFileRef} type="file" multiple style={{ display: 'none' }} accept=".pdf,.docx,.pptx,.xlsx,.html,.htm,.mp3,.m4a,.wav,.mp4,.mov,.webm,.png,.jpg,.jpeg,.gif,.webp" onChange={onInput} />
               <div className="muted" style={{ marginTop: 4 }}>PDF · Word · PowerPoint · Excel · HTML · audio · image — scanned in your browser, nothing is uploaded anywhere</div>
-              <div className="muted" style={{ marginTop: 2, fontSize: 12 }}>⚡ HTML is analysed for real with the axe-core WCAG engine · drop multiple files to switch to batch mode</div>
+              <div className="muted" style={{ marginTop: 2, fontSize: 12 }}>⚡ HTML is analysed live with the axe-core WCAG engine · drop multiple files to switch to batch mode</div>
               <div className="dzsamples">
                 <span className="muted">or try a real multi-page sample:</span>
                 <button className="ghost small" onClick={() => sample('quarterly-town-hall.pptx')} title="Town hall deck with 3 embedded charts — Claude Vision reads each chart and writes alt text in real time">PowerPoint ★</button>
                 <button className="ghost small" onClick={() => sample('patient-health-portal.html')} title="Patient portal with contrast failures, unlabeled forms, and structural issues — watch the page visibly transform">HTML ★</button>
                 <button className="ghost small" onClick={() => sample('patient-discharge-instructions.pdf')} title="Multi-page discharge instructions — checks alt text, tags, titles & reading order in real time">PDF ★</button>
-                <button className="ghost small" onClick={() => sample('benefits-policy.docx')} title="Benefits policy with real charts and tables — validates alt text, table headers, titles & language">Word ★</button>
+                <button className="ghost small" onClick={() => sample('platform-evaluation.docx')} title="AI platform evaluation with 5 tables — detects missing headers, title & language then downloads as tracked changes">Word ★</button>
                 <button className="ghost small" onClick={() => sample('finance-metrics.xlsx')}>Excel</button>
                 <button className="ghost small" onClick={() => sample('careers-landing.html')}>HTML (alt)</button>
                 <button className="ghost small" onClick={() => sample('benefits-briefing.mp3')}>Audio</button>

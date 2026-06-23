@@ -51,39 +51,103 @@ export async function auditOffice(blob) {
   return findings
 }
 
-// Tag the first row of each Word table as a repeating header row by inserting
-// <w:tblHeader/> into the first <w:tr>'s row properties. This is the WordprocessingML
-// way to designate a header row (WCAG 1.3.1 info & relationships) and survives re-audit.
-function addTableHeaders(xml) {
+const TC_AUTHOR = 'Mova Accessibility Platform'
+const TC_DATE = '2026-06-23T00:00:00Z'
+const TC_INITIALS = 'MAP'
+
+// Tag the first row of each Word table as a repeating header row.
+// When tcId is provided ({n: number}), wraps the change in <w:trPrChange> tracked-change
+// markup so the fix is visible as a formatting revision in Word's Track Changes view.
+function addTableHeaders(xml, tcId = null) {
   return xml.replace(/<w:tbl>([\s\S]*?)<\/w:tbl>/g, (full, inner) => {
-    if (/<w:tblHeader\b/.test(inner)) return full // already has a header row
+    if (/<w:tblHeader\b/.test(inner)) return full
     const tr = /<w:tr\b[^>]*>/.exec(inner)
     if (!tr) return full
     const head = inner.slice(0, tr.index + tr[0].length)
     const rest = inner.slice(tr.index + tr[0].length)
+    // <w:trPrChange> records the ORIGINAL state; it must come last inside <w:trPr>
+    const tcMark = tcId
+      ? `<w:trPrChange w:id="${tcId.n++}" w:author="${TC_AUTHOR}" w:date="${TC_DATE}"><w:trPr/></w:trPrChange>`
+      : ''
     let fixed
-    if (/^\s*<w:trPr>/.test(rest)) fixed = head + rest.replace(/^(\s*<w:trPr>)/, '$1<w:tblHeader/>')
-    else if (/^\s*<w:trPr\/>/.test(rest)) fixed = head + rest.replace(/^(\s*)<w:trPr\/>/, '$1<w:trPr><w:tblHeader/></w:trPr>')
-    else fixed = head + '<w:trPr><w:tblHeader/></w:trPr>' + rest
+    if (/^\s*<w:trPr>/.test(rest)) {
+      // Existing <w:trPr> with content: insert header + change record before closing tag
+      fixed = head + rest.replace(/(<\/w:trPr>)/, `<w:tblHeader/>${tcMark}$1`)
+    } else if (/^\s*<w:trPr\/>/.test(rest)) {
+      fixed = head + rest.replace(/^\s*<w:trPr\/>/, `<w:trPr><w:tblHeader/>${tcMark}</w:trPr>`)
+    } else {
+      fixed = head + `<w:trPr><w:tblHeader/>${tcMark}</w:trPr>` + rest
+    }
     return '<w:tbl>' + fixed + '</w:tbl>'
   })
 }
 
-// Apply the safe, mechanical fixes (alt text + table header rows + document title)
+// Inject Word comment balloons into the document for fixes that have no inline
+// tracked-change equivalent (document title, language, metadata properties).
+// Adds word/comments.xml, updates _rels and [Content_Types].xml, and inserts
+// commentRangeStart/End markers anchored to the first body paragraph.
+async function injectComments(zip, entries) {
+  if (!entries.length) return
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+
+  // Build comments.xml
+  const commentEls = entries.map(({ id, text }) =>
+    `<w:comment w:id="${id}" w:author="${esc(TC_AUTHOR)}" w:date="${TC_DATE}" w:initials="${TC_INITIALS}">` +
+    `<w:p><w:r><w:t xml:space="preserve">${esc(text)}</w:t></w:r></w:p>` +
+    `</w:comment>`
+  ).join('')
+  zip.file('word/comments.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments ${W}>${commentEls}</w:comments>`)
+
+  // Register in [Content_Types].xml
+  let ct = await zip.file('[Content_Types].xml').async('string')
+  if (!ct.includes('comments.xml')) {
+    ct = ct.replace('</Types>',
+      '<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/></Types>')
+    zip.file('[Content_Types].xml', ct)
+  }
+
+  // Register relationship in word/_rels/document.xml.rels
+  const relsPath = 'word/_rels/document.xml.rels'
+  if (zip.file(relsPath)) {
+    let rels = await zip.file(relsPath).async('string')
+    if (!rels.includes('/comments')) {
+      const maxId = Math.max(...[...rels.matchAll(/Id="rId(\d+)"/g)].map((m) => parseInt(m[1])), 0)
+      rels = rels.replace('</Relationships>',
+        `<Relationship Id="rId${maxId + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/></Relationships>`)
+      zip.file(relsPath, rels)
+    }
+  }
+
+  // Insert comment range markers anchored to the first body paragraph
+  let doc = await zip.file('word/document.xml').async('string')
+  const starts = entries.map((e) => `<w:commentRangeStart w:id="${e.id}"/>`).join('')
+  const ends = entries.map((e) =>
+    `<w:commentRangeEnd w:id="${e.id}"/>` +
+    `<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="${e.id}"/></w:r>`
+  ).join('')
+  // Wrap the first paragraph: starts before <w:p>, ends just before </w:p>
+  doc = doc.replace(/(<w:p[ >])/, `${starts}$1`)
+  doc = doc.replace(/<\/w:p>/, `${ends}</w:p>`)
+  zip.file('word/document.xml', doc)
+}
+
+// Apply the safe, mechanical fixes (alt text + table header rows + document title + language)
 // and return a genuinely remediated file blob.
+// opts.trackedChanges = true → table header fixes are wrapped in <w:trPrChange> markup and
+// metadata fixes appear as Word comment balloons, so reviewers see exactly what changed.
 export async function remediateOffice(blob, opts = {}) {
   const JSZip = (await import('jszip')).default
   const zip = await JSZip.loadAsync(blob)
   const names = Object.keys(zip.files).filter((n) => CONTENT.test(n) && !n.includes('_rels'))
-  // opts.alt — single AI alt (fallback). opts.alts — per-image map { mediaBasename: alt }
-  // (Claude vision describes each embedded image separately). Both degrade to a placeholder
-  // so the file is still genuinely remediated when the AI endpoint isn't available.
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
   const fallback = String(opts.alt || 'Image — described by mova.io')
   const alts = opts.alts || {}
+  const tc = opts.trackedChanges
+  const tcId = tc ? { n: 100 } : null  // tracked-change revision IDs start at 100
+
   for (const n of names) {
     let xml = await zip.file(n).async('string')
-    // map this content part's relationship ids → media filename, so a shape's image is known
     const rid2media = {}
     const relsPath = n.replace(/([^/]+)$/, '_rels/$1.rels')
     if (zip.file(relsPath)) {
@@ -92,23 +156,53 @@ export async function remediateOffice(blob, opts = {}) {
     }
     xml = xml.replace(CNVPR, (m, tag, attrs, slash, offset) => {
       if (hasDescr(attrs)) return m
-      // the picture's <a:blip r:embed> follows its cNvPr/docPr — resolve to that image's alt
       const blip = /<a:blip\b[^>]*r:embed="([^"]+)"/.exec(xml.slice(offset))
       const media = blip ? rid2media[blip[1]] : null
       const alt = (media && alts[media]) || fallback
       return `<${tag}${attrs} descr="${esc(alt)}"${slash}>`
     })
-    if (n.startsWith('word/')) xml = addTableHeaders(xml)
+    if (n.startsWith('word/')) xml = addTableHeaders(xml, tcId)
     zip.file(n, xml)
   }
+
+  // --- Core property fixes (title + language) ---
+  const comments = []
   if (zip.file('docProps/core.xml')) {
     let core = await zip.file('docProps/core.xml').async('string')
-    if (/<dc:title\s*\/>|<dc:title>\s*<\/dc:title>/.test(core)) core = core.replace(/<dc:title\s*\/>|<dc:title>\s*<\/dc:title>/, '<dc:title>Remediated — mova.io</dc:title>')
-    else if (!/<dc:title>/.test(core)) core = core.replace(/(<cp:coreProperties[^>]*>)/, '$1<dc:title>Remediated — mova.io</dc:title>')
-    // Set the document language (3.1.1) — dc:language is the universal core property,
-    // so this fix lands for docx, pptx and xlsx alike.
-    if (!/<dc:language>/.test(core)) core = core.replace(/(<cp:coreProperties[^>]*>)/, '$1<dc:language>en-US</dc:language>')
+    const hadTitle = /<dc:title>[^<]+<\/dc:title>/.test(core)
+    if (/<dc:title\s*\/>|<dc:title>\s*<\/dc:title>/.test(core)) {
+      core = core.replace(/<dc:title\s*\/>|<dc:title>\s*<\/dc:title>/, '<dc:title>Accessibility Review — mova.io</dc:title>')
+    } else if (!/<dc:title>/.test(core)) {
+      core = core.replace(/(<cp:coreProperties[^>]*>)/, '$1<dc:title>Accessibility Review — mova.io</dc:title>')
+    }
+    if (!hadTitle && tc) {
+      comments.push({ id: 1, text: '✓ FIXED (DOCX-TITLE-001): Document title set to "Accessibility Review — mova.io". Screen readers now announce a meaningful title when this file opens, instead of the raw filename.' })
+    }
+    const hadLang = /<dc:language>/.test(core)
+    if (!hadLang) {
+      core = core.replace(/(<cp:coreProperties[^>]*>)/, '$1<dc:language>en-US</dc:language>')
+      if (tc) {
+        comments.push({ id: 2, text: '✓ FIXED (DOCX-LANG-001): Document language set to English (en-US). Text-to-speech engines now use the correct English voice and pronunciation rules.' })
+      }
+    }
+    if (tc && tcId && tcId.n > 100) {
+      const tableCount = (await zip.file('word/document.xml')?.async('string') || '').match(/<w:tblHeader\b/g)?.length || 0
+      comments.push({ id: 3, text: `✓ FIXED (DOCX-TABLE-001): ${tableCount} table header row(s) marked (see formatting tracked changes on each table's first row). Screen readers can now announce column names as users navigate cells.` })
+    }
     zip.file('docProps/core.xml', core)
   }
+
+  // Inject comment balloons for metadata fixes (tracked changes mode only)
+  if (tc && comments.length) await injectComments(zip, comments)
+
+  // Enable Track Changes mode so Word opens the file with revisions visible
+  if (tc && zip.file('word/settings.xml')) {
+    let settings = await zip.file('word/settings.xml').async('string')
+    if (!settings.includes('w:trackChanges')) {
+      settings = settings.replace(/(<w:settings\b[^>]*>)/, '$1<w:trackChanges/>')
+      zip.file('word/settings.xml', settings)
+    }
+  }
+
   return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } })
 }

@@ -9,6 +9,29 @@ const SEVRANK = { CRITICAL: 0, SERIOUS: 1, MODERATE: 2, MINOR: 3 }
 const FMT = { docx: 'Word', pptx: 'PowerPoint', xlsx: 'Excel', pdf: 'PDF' }
 const wcag = (c) => (c?.startsWith('SC_') ? c.slice(3).replace(/_/g, '.') : c)
 
+const RULE_DESC = {
+  'DOCX-ALT-001': 'Screen readers describe images to blind users using alt text. Without it, images are completely skipped.',
+  'DOCX-TITLE-001': 'Screen readers announce the document title when opened. Without one, users hear the raw file name.',
+  'DOCX-TABLE-001': 'Data tables need a designated header row so screen readers can name columns when reading each cell.',
+  'DOCX-LANG-001': 'Text-to-speech uses the language setting to pick the correct voice. Wrong language produces garbled audio.',
+  'DOCX-HEAD-001': 'Heading levels must flow in order (H1 → H2 → H3). Jumps break keyboard navigation for screen reader users.',
+  'DOCX-LINK-001': 'Link text like "click here" is meaningless without surrounding context. Screen readers navigate links in isolation.',
+  'PPTX-ALT-001': 'Images on slides need alt text so screen reader users know what they are seeing.',
+  'PPTX-TITLE-001': 'Every slide must have a unique title so users can jump to a specific slide with assistive technology.',
+  'PPTX-READ-001': 'Slides must have a defined reading order so screen readers process content in the correct sequence.',
+  'XLSX-ALT-001': 'Charts and embedded images in spreadsheets need alt text so screen reader users understand the data.',
+  'XLSX-SHEET-001': 'Tab names like "Sheet1" give no context. Descriptive names help users navigate multi-tab workbooks.',
+  'XLSX-HEADER-001': 'Spreadsheet tables need header rows so screen readers can identify which column a cell belongs to.',
+  'pdf.missing-alt-text': 'Images in PDFs need alt text descriptions. Without them, screen readers skip the image entirely.',
+  'pdf.tagged': 'Tagged PDFs expose headings, paragraphs and lists to assistive technology. Untagged PDFs appear as one undifferentiated block of text.',
+  'pdf.document-title': 'The document title appears in the PDF viewer title bar and is announced by screen readers on open.',
+  'pdf.document-language': 'Language metadata tells text-to-speech which voice to use. Missing language causes mispronunciation.',
+  'WEB-ALT-001': 'Images on web pages need alt text. Screen readers read the alt text aloud; without it the image is invisible.',
+  'WEB-CONTRAST-001': 'Text must have sufficient colour contrast against its background. Low contrast fails users with low vision.',
+  'WEB-LABEL-001': 'Form fields need labels. Without them, screen reader users cannot tell what to enter.',
+  'WEB-LANG-001': 'Page language must be declared in the HTML. Text-to-speech uses it to select the correct pronunciation engine.',
+}
+
 export default function Rubric({ onSaved }) {
   const [rules, setRules] = useState(null)
   const [threshold, setThreshold] = useState(90)
@@ -98,7 +121,10 @@ export default function Rubric({ onSaved }) {
               return (
                 <div className={r.enabled ? 'rulerow' : 'rulerow off'} key={r.id}>
                   <label className="switch"><input type="checkbox" checked={r.enabled} onChange={() => toggle(fmt, r.id)} aria-label={`${r.enabled ? 'Disable' : 'Enable'} rule: ${r.title}`} /><span className="slider" /></label>
-                  <span className="ruletitle">{r.title}</span>
+                  <span className="ruletitle">
+                    {r.title}
+                    {RULE_DESC[r.id] && <span className="ruledesc">{RULE_DESC[r.id]}</span>}
+                  </span>
                   <span className="rulewcag"><span className="lvl">{r.level}</span> {wcag(r.wcag)}</span>
                   <span className="badge" style={{ background: bg, color: fg }}>{r.severity.toLowerCase()}</span>
                   <span className="ruleimpact">{r.findings > 0 ? <span className="impact">{r.findings} found</span> : <span className="muted">—</span>}</span>
