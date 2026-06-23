@@ -185,7 +185,25 @@ export default function WcagCoverage() {
     : PHASE_FILTER[f] ? r.phase.startsWith(PHASE_FILTER[f])
     : r.source === f
 
-  const match = (r) => filters.has('all') || [...filters].every((f) => matchOne(r, f))
+  // Filter group: within a group, filters combine as OR (union).
+  // Across groups, groups combine as AND (intersection).
+  // e.g. Level A + Level AA → all A or AA criteria.
+  //      Level AA + Applies to docs → AA criteria that also apply to docs.
+  const FILTER_GROUP = {
+    'A': 'level', 'AA': 'level',
+    'rem:auto': 'rem', 'rem:assisted': 'rem', 'rem:manual': 'rem',
+    'Shipped (demo)': 'status', 'MDK HITL': 'status', 'MDK net-new': 'status',
+    'P1': 'phase', 'P2': 'phase', 'P3': 'phase',
+  }
+  const match = (r) => {
+    if (filters.has('all')) return true
+    const groups = {}
+    for (const f of filters) {
+      const g = FILTER_GROUP[f] || f
+      ;(groups[g] = groups[g] || []).push(f)
+    }
+    return Object.values(groups).every((fs) => fs.some((f) => matchOne(r, f)))
+  }
   const shown = WCAG.filter(match)
   const tally = (src) => WCAG.filter((r) => r.source === src).length
 
