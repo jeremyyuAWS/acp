@@ -448,6 +448,9 @@ input:focus-visible, [role="tab"]:focus-visible {
 .covstatcard { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
 .covstatcard b { font-size: 24px; font-weight: 700; line-height: 1.1; }
 .covstatcard .muted { font-size: 12px; }
+.covempty { text-align: center; padding: 48px 24px; color: var(--ink); }
+.covempty-icon { font-size: 36px; color: var(--muted); margin-bottom: 10px; }
+.covempty-reset { background: none; border: none; color: #1F5FA8; font-size: 13px; font-weight: 600; cursor: pointer; text-decoration: underline; padding: 0; }
 .covgroup { margin-bottom: 16px; }
 .covgrouphd { font-size: 13px; font-weight: 700; color: var(--ink); margin: 0 0 8px; text-transform: uppercase; letter-spacing: 0.03em; }
 .covgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 8px; }

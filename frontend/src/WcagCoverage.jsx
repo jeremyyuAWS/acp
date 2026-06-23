@@ -185,7 +185,7 @@ export default function WcagCoverage() {
     : PHASE_FILTER[f] ? r.phase.startsWith(PHASE_FILTER[f])
     : r.source === f
 
-  const match = (r) => filters.has('all') || [...filters].some((f) => matchOne(r, f))
+  const match = (r) => filters.has('all') || [...filters].every((f) => matchOne(r, f))
   const shown = WCAG.filter(match)
   const tally = (src) => WCAG.filter((r) => r.source === src).length
 
@@ -265,6 +265,17 @@ export default function WcagCoverage() {
         <b>Automatability</b> <span className="muted">· under no-UI automation — <b>Validate</b> (confirm a pass) vs <b>Remediate</b> (apply the fix). The dot on each tile is its remediate level:</span>
         {['green', 'amber', 'human'].map((k) => <span key={k} className="autokey"><i style={{ background: LV[k][2] }} />{LV[k][1]}</span>)}
       </div>
+
+      {shown.length === 0 && (
+        <div className="covempty">
+          <div className="covempty-icon">∅</div>
+          <div><b>No criteria match all selected filters</b></div>
+          <div className="muted" style={{ marginTop: 4, fontSize: 13 }}>
+            These filters have no intersection — try removing one.{' '}
+            <button className="covempty-reset" onClick={() => toggle('all')}>Reset to all 87</button>
+          </div>
+        </div>
+      )}
 
       {PRINCIPLES.map((p) => {
         const items = shown.filter((r) => r.principle === p)
