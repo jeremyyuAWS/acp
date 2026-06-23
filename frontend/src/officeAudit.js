@@ -189,6 +189,17 @@ export async function remediateOffice(blob, opts = {}) {
       const tableCount = (await zip.file('word/document.xml')?.async('string') || '').match(/<w:tblHeader\b/g)?.length || 0
       comments.push({ id: 3, text: `✓ FIXED (DOCX-TABLE-001): ${tableCount} table header row(s) marked (see formatting tracked changes on each table's first row). Screen readers can now announce column names as users navigate cells.` })
     }
+    // Insert a Heading 1 as a tracked insertion so Word shows green underlined text —
+    // makes the title fix immediately visible without opening the Reviewing Pane.
+    if (!hadTitle && tc && zip.file('word/document.xml')) {
+      let doc = await zip.file('word/document.xml').async('string')
+      const hp =
+        `<w:p><w:pPr><w:pStyle w:val="Heading1"/>` +
+        `<w:rPr><w:ins w:id="210" w:author="${esc(TC_AUTHOR)}" w:date="${TC_DATE}"/></w:rPr></w:pPr>` +
+        `<w:ins w:id="211" w:author="${esc(TC_AUTHOR)}" w:date="${TC_DATE}">` +
+        `<w:r><w:t xml:space="preserve">Accessibility Review — mova.io</w:t></w:r></w:ins></w:p>`
+      zip.file('word/document.xml', doc.replace(/(<w:body[^>]*>)/, `$1${hp}`))
+    }
     zip.file('docProps/core.xml', core)
   }
 
