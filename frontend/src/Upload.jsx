@@ -12,6 +12,7 @@ import { auditOffice, remediateOffice } from './officeAudit.js'
 import { auditPdf } from './pdfAudit.js'
 import { prescreenHtml } from './prescreen.js'
 import { useDialog } from './a11y.js'
+import GoogleDrive from './GoogleDrive.jsx'
 
 const isOffice = (name) => /\.(docx|pptx|xlsx)$/i.test(name || '')
 const HKEY = 'mova_upload_history'
@@ -544,6 +545,7 @@ export default function Upload({ onCertified }) {
               onChange={onInput}
             />
             <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>PDF · Word · PowerPoint · Excel · HTML · audio · image — processed in your browser, nothing uploaded</div>
+            <GoogleDrive onFiles={handleGDriveFiles} />
           </div>
 
           {/* Queue table */}
@@ -657,6 +659,7 @@ export default function Upload({ onCertified }) {
               <div style={{ marginTop: 12 }}>
                 <button className="ghost small" onClick={() => setBatchMode(true)}>⊞ Batch mode — process multiple files at once</button>
               </div>
+              <GoogleDrive onFiles={handleGDriveFiles} />
             </div>
           )}
 
