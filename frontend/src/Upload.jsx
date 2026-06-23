@@ -3,13 +3,13 @@ import { generateCaptions, blobToBase64, generateAltText, generateInsights } fro
 import { Bars } from './charts.jsx'
 import { IDENTITY } from './sim.js'
 import Logo from './Logo.jsx'
-import BeforeAfter from './BeforeAfter.jsx'
+import BeforeAfter, { remediateHtml } from './BeforeAfter.jsx'
 import ResultPreview from './ResultPreview.jsx'
 import ScreenReaderDemo from './ScreenReaderDemo.jsx'
 import PdfPreview from './PdfPreview.jsx'
 import OfficePreview from './OfficePreview.jsx'
 import { auditHtml } from './htmlAudit.js'
-import { auditOffice } from './officeAudit.js'
+import { auditOffice, remediateOffice } from './officeAudit.js'
 import { auditPdf } from './pdfAudit.js'
 import { prescreenHtml } from './prescreen.js'
 import { useDialog } from './a11y.js'
@@ -20,10 +20,10 @@ const loadHistory = () => { try { return JSON.parse(localStorage.getItem(HKEY) |
 const SEV_BADGE2 = { CRITICAL: ['#E2EDFB', '#1F5FA8'], SERIOUS: ['#E6EFFB', '#2A5E9E'], MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'] }
 const fmtDate = (iso) => { try { return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) } catch { return '' } }
 const FIX_PROPOSAL = {
-  '1.1.1': ['<img> with no alt text', 'alt: “bar chart — enrollment by region, West highest at 38%” (AI-drafted)'],
+  '1.1.1': ['<img> with no alt text', 'alt: "bar chart — enrollment by region, West highest at 38%" (AI-drafted)'],
   '1.3.1': ['table / control without programmatic structure', 'header cells tagged · form fields labelled'],
   '1.3.2': ['reading order differs from the visual layout', 're-tagged to follow the visual flow'],
-  '1.3.3': ['instruction relies on shape/position (“the round button”)', 'LLM rewords it to name the control — AI-drafted, human-approved'],
+  '1.3.3': ['instruction relies on shape/position ("the round button")', 'LLM rewords it to name the control — AI-drafted, human-approved'],
   '1.4.1': ['in-text link distinguished by colour alone', 'underline added — no longer colour-only'],
   '1.4.3': ['text below the 4.5:1 contrast minimum', 'recoloured to 4.8:1 — passes AA'],
   '1.4.4': ['viewport blocks zoom (user-scalable=no)', 'zoom re-enabled — text resizes to 200%+'],
@@ -35,8 +35,8 @@ const FIX_PROPOSAL = {
   '2.1.2': ['focus can be trapped inside a widget', 'Escape + focus-loop added — human-verified'],
   '2.4.2': ['document has no title', 'descriptive title set'],
   '2.4.3': ['positive tabindex jumps the focus order', 'reset to tabindex="0" — natural order'],
-  '2.4.4': ['ambiguous “click here” link', 'rewritten to “view the 2026 benefits guide”'],
-  '3.1.1': ['document language not declared', 'lang set to “en”'],
+  '2.4.4': ['ambiguous "click here" link', 'rewritten to "view the 2026 benefits guide"'],
+  '3.1.1': ['document language not declared', 'lang set to "en"'],
   '3.1.2': ['foreign-language passage not marked up', 'lang added to the passage — AI-detected, reviewed'],
   '4.1.2': ['control has no accessible name', 'aria-label / <label> added'],
 }
@@ -57,7 +57,7 @@ const IMAGE_ISSUES = [['IMG-ALT-001', '1.1.1 non-text content', 'CRITICAL', 'ima
 const STEPS = ['Upload', 'Assess', 'Remediate', 'Review', 'Certified']
 const EXT_ISSUES = {
   pdf: [['pdf.alt-text', '1.1.1 non-text content', 'CRITICAL', 'figure 2 has no alternative text'], ['pdf.tagged', '1.3.1 info & relationships', 'SERIOUS', 'document is not tagged'], ['pdf.document-language', '3.1.1 language of page', 'MODERATE', 'no document language set']],
-  docx: [['DOCX-ALT-001', '1.1.1 non-text content', 'CRITICAL', '3 images missing alt text'], ['DOCX-TITLE-001', '2.4.2 page titled', 'SERIOUS', 'no document title'], ['DOCX-TABLE-001', '1.3.1 info & relationships', 'SERIOUS', 'a table is missing its header row'], ['DOCX-LINK-001', '2.4.4 link purpose', 'MODERATE', '2 ambiguous “click here” links']],
+  docx: [['DOCX-ALT-001', '1.1.1 non-text content', 'CRITICAL', '3 images missing alt text'], ['DOCX-TITLE-001', '2.4.2 page titled', 'SERIOUS', 'no document title'], ['DOCX-TABLE-001', '1.3.1 info & relationships', 'SERIOUS', 'a table is missing its header row'], ['DOCX-LINK-001', '2.4.4 link purpose', 'MODERATE', '2 ambiguous "click here" links']],
   pptx: [['PPTX-ALT-001', '1.1.1 non-text content', 'CRITICAL', 'chart on slide 4 has no alt text'], ['PPTX-TITLE-001', '2.4.2 page titled', 'SERIOUS', '2 slides are missing titles']],
   xlsx: [['XLSX-ALT-001', '1.1.1 non-text content', 'MODERATE', 'a chart is missing alt text'], ['XLSX-HEADER-001', '1.3.1 info & relationships', 'MODERATE', 'a table has no header row']],
   html: [['WEB-CONTRAST-001', '1.4.3 contrast (AA)', 'SERIOUS', '3 elements below 4.5:1 contrast'], ['WEB-ALT-001', '1.1.1 non-text content', 'CRITICAL', '2 images missing alt'], ['WEB-LABEL-001', '1.3.1 info & relationships', 'MODERATE', 'a form input has no label']],
@@ -123,12 +123,12 @@ function ImagePanel({ blob, result }) {
       {result ? (<>
         <div className="aialtcallout" style={{ marginTop: 10 }}>
           <span className="aialtbadge">1.1.1 alt text</span>
-          <span>AI-generated alt text: <b>“{result.alt}”</b> — written into the document so screen-reader users can perceive the image.</span>
+          <span>AI-generated alt text: <b>"{result.alt}"</b> — written into the document so screen-reader users can perceive the image.</span>
         </div>
         {text && (
           <div className="aialtcallout">
             <span className="aialtbadge">1.4.5 image of text · OCR</span>
-            <span>This image is rendered text. Claude extracted it as real, selectable text: <b>“{text.length > 260 ? text.slice(0, 260) + '…' : text}”</b></span>
+            <span>This image is rendered text. Claude extracted it as real, selectable text: <b>"{text.length > 260 ? text.slice(0, 260) + '…' : text}"</b></span>
           </div>
         )}
       </>) : <p className="muted" style={{ marginTop: 9, fontSize: 12 }}>Real Claude-vision alt text + image-of-text OCR run on the deployed site; offline it falls back.</p>}
@@ -155,6 +155,7 @@ function ScanImg({ blob }) {
 }
 
 export default function Upload({ onCertified }) {
+  // Single-file workflow state
   const [step, setStep] = useState(0)
   const [file, setFile] = useState(null)
   const [scanning, setScanning] = useState(false)
@@ -173,9 +174,16 @@ export default function Upload({ onCertified }) {
   const [pdfBlob, setPdfBlob] = useState(null)
   const [imageBlob, setImageBlob] = useState(null)
   const [imgResult, setImgResult] = useState(null)
-  const [prescreen, setPrescreen] = useState([]) // Phase 2 · HITL items routed to human review
-  const [hitlVerified, setHitlVerified] = useState(() => new Set()) // reviewer sign-off
+  const [prescreen, setPrescreen] = useState([])
+  const [hitlVerified, setHitlVerified] = useState(() => new Set())
   const blobUrl = useRef(null)
+
+  // Batch mode state
+  const [batchMode, setBatchMode] = useState(false)
+  const [queue, setQueue] = useState([])
+  const [batchRunning, setBatchRunning] = useState(false)
+  const [batchDone, setBatchDone] = useState(false)
+  const [batchZipping, setBatchZipping] = useState(false)
 
   // Real captions (1.2.2/1.2.3) via the Whisper-backed function when an audio file is uploaded.
   useEffect(() => {
@@ -189,7 +197,7 @@ export default function Upload({ onCertified }) {
   useEffect(() => {
     if (!imageBlob) { setImgResult(null); return }
     let live = true
-    ;(async () => { const b64 = await blobToBase64(imageBlob); const r = await generateAltText({ data: b64, mediaType: imageBlob.type || 'image/png', hint: `Image “${file?.name || ''}”` }); if (live && r) setImgResult(r) })()
+    ;(async () => { const b64 = await blobToBase64(imageBlob); const r = await generateAltText({ data: b64, mediaType: imageBlob.type || 'image/png', hint: `Image "${file?.name || ''}"` }); if (live && r) setImgResult(r) })()
     return () => { live = false }
   }, [imageBlob, file])
 
@@ -201,9 +209,104 @@ export default function Upload({ onCertified }) {
     if (el) { el.setAttribute('tabindex', '-1'); el.focus() }
   }, [step])
 
+  // ── Batch functions ──
+
+  const addToQueue = (fileList) => {
+    const ts = Date.now()
+    const items = Array.from(fileList).map((f, i) => ({
+      id: `${f.name}-${ts}-${i}`,
+      file: f,
+      status: 'waiting',
+      score: null,
+      issues: null,
+      remBlob: null,
+      engine: null,
+    }))
+    setQueue((q) => [...q, ...items])
+    setBatchDone(false)
+  }
+
+  const runBatch = async () => {
+    setBatchRunning(true)
+    setBatchDone(false)
+    // Snapshot waiting items at click time — new additions can be processed in a subsequent run.
+    const snapshot = queue.filter((it) => it.status === 'waiting')
+    for (const item of snapshot) {
+      setQueue((q) => q.map((it) => it.id === item.id ? { ...it, status: 'scanning' } : it))
+      try {
+        const f = item.file
+        let found = []
+        let engine = null
+        let remBlob = null
+
+        if (isHtml(f.name)) {
+          const text = await f.text()
+          try { found = await auditHtml(text); engine = 'axe-core' } catch { found = issuesFor(f.name) }
+          const rem = remediateHtml(text)
+          if (rem?.html) remBlob = new Blob([rem.html], { type: 'text/html' })
+        } else if (isOffice(f.name)) {
+          try { found = await auditOffice(f); engine = 'OOXML' } catch { found = issuesFor(f.name) }
+          try {
+            const zip = await remediateOffice(f)
+            remBlob = await zip.generateAsync({ type: 'blob' })
+          } catch { /* fall back — no remediated file */ }
+        } else if (isPdf(f.name)) {
+          try { found = await auditPdf(f); engine = 'pdf-lib' } catch { found = issuesFor(f.name) }
+          try {
+            const { remediatePdf } = await import('./pdfAudit.js')
+            const r = await remediatePdf(f, { title: f.name.replace(/\.[^.]+$/, '') })
+            remBlob = r.blob
+          } catch { /* fall back */ }
+        } else {
+          found = issuesFor(f.name)
+          remBlob = f  // audio / video / image — include original
+        }
+
+        const score = found.length ? Math.max(18, 100 - found.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0)) : 100
+        setQueue((q) => q.map((it) => it.id === item.id ? { ...it, status: 'done', score, issues: found, remBlob, engine } : it))
+        onCertified?.({ file: f.name })
+        const rec = { id: `${f.name}-${Date.now()}`, name: f.name, ext: extOf(f.name), date: new Date().toISOString(), score, outcome: 'batch', real: engine, findings: found }
+        setHistory((h) => { const next = [rec, ...h.filter((x) => x.name !== f.name)].slice(0, 12); try { localStorage.setItem(HKEY, JSON.stringify(next)) } catch {}; return next })
+      } catch {
+        setQueue((q) => q.map((it) => it.id === item.id ? { ...it, status: 'error' } : it))
+      }
+    }
+    setBatchRunning(false)
+    setBatchDone(true)
+  }
+
+  const downloadBatchZip = async () => {
+    setBatchZipping(true)
+    try {
+      const JSZip = (await import('jszip')).default
+      const zip = new JSZip()
+      const remFolder = zip.folder('remediated')
+      const csvLines = ['File,Score,Findings,Engine,Status']
+      for (const item of queue) {
+        if (item.status !== 'done') continue
+        const label = (item.score ?? 0) >= 90 ? 'Certified' : 'Conditional'
+        csvLines.push(`"${item.file.name}",${item.score ?? ''},${item.issues?.length ?? 0},"${item.engine ?? 'simulated'}","${label}"`)
+        if (item.remBlob) {
+          const outName = item.file.name.replace(/(\.[^.]+)$/, '-remediated$1')
+          remFolder.file(outName, item.remBlob)
+        }
+      }
+      zip.file('mova-batch-summary.csv', csvLines.join('\n'))
+      const blob = await zip.generateAsync({ type: 'blob' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = `mova-batch-${new Date().toISOString().slice(0, 10)}.zip`
+      document.body.appendChild(a); a.click(); a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) { console.error('batch ZIP failed', e) }
+    finally { setBatchZipping(false) }
+  }
+
+  // ── Single-file functions ──
+
   const start = (f, { text = null, url = null, office = null, audio = null, pdf = null, image = null } = {}) => {
     setFile(f); setSrcText(text); setPdfUrl(url); setPdfBlob(pdf); setOfficeBlob(office); setAudioBlob(audio); setImageBlob(image); setImgResult(null); setCaptions(null); setRealEngine(null); setScanning(true); setStep(0)
-    setPrescreen(text && isHtml(f.name) ? prescreenHtml(text) : []) // Phase 2 HITL pre-screen (HTML)
+    setPrescreen(text && isHtml(f.name) ? prescreenHtml(text) : [])
     const html = text && isHtml(f.name)
     const realLabel = html ? 'Analysing with axe-core (real WCAG engine)…' : office ? 'Parsing the document (real OOXML analysis)…' : pdf ? 'Parsing the PDF structure (pdf-lib)…' : audio ? (isVideo(f.name) ? 'Transcribing the video soundtrack with Whisper…' : 'Transcribing the audio with Whisper…') : image ? 'Describing the image with Claude vision…' : 'Analysing against WCAG 2.1 AA…'
     const phases = ['Connecting…', 'Reading document…', 'mova Agent classifying & tagging…', realLabel, 'Scoring…']
@@ -219,6 +322,7 @@ export default function Upload({ onCertified }) {
     const tick = () => { if (i < phases.length) { setPhase(phases[i++]); setTimeout(tick, 640) } else { finish() } }
     setTimeout(tick, 300)
   }
+
   const handleFile = (f) => {
     const meta = { name: f.name, size: f.size }
     if (isHtml(f.name)) f.text().then((t) => start(meta, { text: t })).catch(() => start(meta))
@@ -228,8 +332,25 @@ export default function Upload({ onCertified }) {
     else if (isImage(f.name)) start(meta, { image: f })
     else start(meta)
   }
-  const onInput = (e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }
-  const onDrop = (e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f) handleFile(f) }
+
+  const onInput = (e) => {
+    const files = e.target.files
+    if (!files?.length) return
+    e.target.value = ''
+    if (files.length > 1) { setBatchMode(true); addToQueue(files); return }
+    if (batchMode) { addToQueue(files); return }
+    handleFile(files[0])
+  }
+
+  const onDrop = (e) => {
+    e.preventDefault(); setDrag(false)
+    const files = e.dataTransfer.files
+    if (!files?.length) return
+    if (files.length > 1) { setBatchMode(true); addToQueue(files); return }
+    if (batchMode) { addToQueue(files); return }
+    handleFile(files[0])
+  }
+
   const sample = async (name) => {
     try {
       const url = `${import.meta.env.BASE_URL}samples/${name}`
@@ -242,14 +363,12 @@ export default function Upload({ onCertified }) {
     }
     catch { start({ name, size: 100 * 1024 }) }
   }
+
   const reset = () => { if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null } setStep(0); setFile(null); setIssues([]); setScanning(false); setSrcText(null); setPdfUrl(null); setOfficeBlob(null); setAudioBlob(null); setCaptions(null); setPdfBlob(null); setImageBlob(null); setImgResult(null); setPrescreen([]); setHitlVerified(new Set()); setRealEngine(null); setReviewOutcome(null) }
-  // Floor the as-received score at 18 so a heavily-failing document reads as "low" rather
-  // than a broken "0" — the lift to 100 still lands dramatically.
+
   const score = issues.length ? Math.max(18, 100 - issues.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0)) : 100
   const review = issues.slice(-1)
   const reviewItem = review[0]
-  // Approve → the escalated fix is applied → 100. Reject → it's deferred to manual
-  // remediation → the document is conditional, not fully certifiable.
   const rejected = reviewOutcome === 'rejected'
   const finalScore = rejected ? Math.max(0, 100 - (SEV_PEN[reviewItem?.sev] || 5)) : 100
   const certify = (decision = 'approved') => {
@@ -264,8 +383,6 @@ export default function Upload({ onCertified }) {
     setStep(4)
   }
   const autoFixed = issues.slice(0, -1)
-  // The screen-reader demo reflects THIS document: its real <h1>/<title> for HTML,
-  // otherwise a humanised file name — so the narration isn't a canned example.
   const docTitle = (() => {
     if (srcText) { const t = ((/<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(srcText) || /<title[^>]*>([\s\S]*?)<\/title>/i.exec(srcText) || [])[1] || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim(); if (t) return t.slice(0, 70) }
     return file ? String(file.name).replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : null
@@ -279,7 +396,6 @@ export default function Upload({ onCertified }) {
       const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
       const engine = realEngine ? `real ${realEngine}` : 'WCAG 2.1 AA'
       const findings = issues.map((i) => { const [, fix] = proposeFix({ wcag: i.wcag, detail: i.detail }); return { wcag: i.wcag, sev: i.sev, detail: i.detail, fix: String(fix || '').replace(/<[^>]+>/g, '') } })
-      // LLM-powered executive narrative (Claude) — degrades to a deterministic summary offline.
       const insight = await generateInsights({ file: file?.name, score, finalScore, engine, findings: findings.map((f) => ({ wcag: f.wcag, sev: f.sev, detail: f.detail })) }).catch(() => null)
       const { exportDocumentReport } = await import('./pdfReport.js')
       await exportDocumentReport({
@@ -297,232 +413,348 @@ export default function Upload({ onCertified }) {
   const sevItems = ['CRITICAL', 'SERIOUS', 'MODERATE', 'MINOR'].filter((s) => sevCount[s]).map((s) => ({ label: s.toLowerCase(), value: sevCount[s], color: SEVCLR[s] }))
   const today = new Date().toISOString().slice(0, 10)
 
+  // Batch counts for UI
+  const waitingCount = queue.filter((it) => it.status === 'waiting').length
+  const doneCount = queue.filter((it) => it.status === 'done').length
+  const errorCount = queue.filter((it) => it.status === 'error').length
+
   return (
     <>
-      <div className="upsteps">
-        {STEPS.map((s, i) => (
-          <div key={s} className={`upstep ${i < step ? 'done' : i === step ? 'on' : ''}`}>
-            <span className="upnum">{i < step ? '✓' : i + 1}</span>{s}
+      {/* ── BATCH MODE ── */}
+      {batchMode && (
+        <section className="panel">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+            <h2 style={{ margin: 0 }}>Batch processing</h2>
+            <button className="ghost small" onClick={() => { setBatchMode(false); setQueue([]); setBatchDone(false) }}>← Single file</button>
           </div>
-        ))}
-      </div>
 
-      {step === 0 && !scanning && (
-        <div className={drag ? 'dropzone over' : 'dropzone'}
-          onDragOver={(e) => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)} onDrop={onDrop}>
-          <div className="dzicon" aria-hidden="true">⬍</div>
-          <div style={{ fontSize: 15 }}>Drag a document here, or <label htmlFor="upfile" className="dzlink">browse</label></div>
-          <input id="upfile" type="file" style={{ display: 'none' }} accept=".pdf,.docx,.pptx,.xlsx,.html,.htm,.mp3,.m4a,.wav,.mp4,.mov,.webm,.png,.jpg,.jpeg,.gif,.webp" onChange={onInput} />
-          <div className="muted" style={{ marginTop: 4 }}>PDF · Word · PowerPoint · Excel · HTML · audio · image — scanned in your browser, nothing is uploaded anywhere</div>
-          <div className="muted" style={{ marginTop: 2, fontSize: 12 }}>⚡ HTML is analysed for real with the axe-core WCAG engine</div>
-          <div className="dzsamples">
-            <span className="muted">or try a real multi-page sample:</span>
-            <button className="ghost small" onClick={() => sample('patient-discharge-instructions.pdf')}>PDF</button>
-            <button className="ghost small" onClick={() => sample('benefits-policy.docx')}>Word</button>
-            <button className="ghost small" onClick={() => sample('quarterly-town-hall.pptx')}>PowerPoint</button>
-            <button className="ghost small" onClick={() => sample('finance-metrics.xlsx')}>Excel</button>
-            <button className="ghost small" onClick={() => sample('careers-landing.html')}>HTML</button>
-            <button className="ghost small" onClick={() => sample('benefits-briefing.mp3')}>Audio</button>
-            <button className="ghost small" onClick={() => sample('benefits-briefing.webm')} title="A narrated video — Whisper transcribes the audio track into captions (1.2.2)">Video</button>
-            <button className="ghost small" onClick={() => sample('enrollment-notice.png')} title="An image of text — watch Claude read it back as real text (1.4.5)">Image of text</button>
+          {/* Batch drop zone */}
+          <div
+            className={drag ? 'dropzone over' : 'dropzone'}
+            style={{ padding: '16px 24px', marginBottom: 14 }}
+            onDragOver={(e) => { e.preventDefault(); setDrag(true) }}
+            onDragLeave={() => setDrag(false)}
+            onDrop={onDrop}
+          >
+            <div className="dzicon" aria-hidden="true">⬍</div>
+            <div style={{ fontSize: 15 }}>Drag multiple files here, or <label htmlFor="upfile" className="dzlink">browse</label></div>
+            <input
+              id="upfile" type="file" multiple style={{ display: 'none' }}
+              accept=".pdf,.docx,.pptx,.xlsx,.html,.htm,.mp3,.m4a,.wav,.mp4,.mov,.webm,.png,.jpg,.jpeg,.gif,.webp"
+              onChange={onInput}
+            />
+            <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>PDF · Word · PowerPoint · Excel · HTML · audio · image — processed in your browser, nothing uploaded</div>
           </div>
-        </div>
-      )}
 
-      {step === 0 && !scanning && history.length > 0 && (
-        <section className="panel" style={{ marginTop: 14 }}>
-          <h2>Recent uploads <span className="muted">· kept on this device</span></h2>
-          <div className="uphistory">
-            {history.map((h) => (
-              <button className="uphrow" key={h.id} onClick={() => setViewing(h)}>
-                <span className="uphname">{h.name}<span className="muted"> · {fmtDate(h.date)}{h.real ? ' · axe-core' : ''}</span></span>
-                <span className="muted">{h.findings.length} finding{h.findings.length === 1 ? '' : 's'}</span>
-                <span className="badge" style={{ background: h.score >= 90 ? '#E7F0DC' : h.score >= 50 ? '#FAEEDA' : '#E2EDFB', color: h.score >= 90 ? '#3B6D11' : h.score >= 50 ? '#854F0B' : '#1F5FA8' }}>{h.score} / 100</span>
+          {/* Queue table */}
+          {queue.length > 0 && (
+            <div
+              className="batchqueue"
+              role="list"
+              aria-label="Batch queue"
+              style={{ border: '1px solid var(--line)', borderRadius: 8, overflow: 'hidden', marginBottom: 14 }}
+            >
+              {queue.map((item) => {
+                const statusIcon = item.status === 'done' ? '✓' : item.status === 'error' ? '✕' : item.status === 'scanning' ? null : '·'
+                const statusColor = item.status === 'done' ? '#3B6D11' : item.status === 'error' ? '#854F0B' : item.status === 'scanning' ? '#1F5FA8' : '#888780'
+                const scoreBg = (item.score ?? 0) >= 90 ? '#E7F0DC' : (item.score ?? 0) >= 50 ? '#FAEEDA' : '#E2EDFB'
+                const scoreFg = (item.score ?? 0) >= 90 ? '#3B6D11' : (item.score ?? 0) >= 50 ? '#854F0B' : '#1F5FA8'
+                return (
+                  <div
+                    key={item.id}
+                    role="listitem"
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderBottom: '1px solid var(--line)', background: item.status === 'scanning' ? 'var(--bg-subtle, #F8F7F5)' : undefined }}
+                  >
+                    <span aria-hidden="true" style={{ width: 18, textAlign: 'center', color: statusColor, fontWeight: 700, flexShrink: 0 }}>
+                      {item.status === 'scanning' ? <span className="spinner" /> : statusIcon}
+                    </span>
+                    <span style={{ flex: 1, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.file.name}>{item.file.name}</span>
+                    {item.engine && <span className="realbadge" style={{ flexShrink: 0 }}>⚡ {item.engine}</span>}
+                    {item.issues != null && <span className="muted" style={{ fontSize: 12, flexShrink: 0 }}>{item.issues.length} finding{item.issues.length !== 1 ? 's' : ''}</span>}
+                    {item.score != null && <span className="badge" style={{ background: scoreBg, color: scoreFg, flexShrink: 0 }}>{item.score} / 100</span>}
+                    {!batchRunning && item.status === 'waiting' && (
+                      <button
+                        className="ghost small"
+                        aria-label={`Remove ${item.file.name} from queue`}
+                        style={{ flexShrink: 0, padding: '2px 7px' }}
+                        onClick={() => setQueue((q) => q.filter((it) => it.id !== item.id))}
+                      >✕</button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Status summary while running */}
+          {batchRunning && (
+            <div role="status" aria-live="polite" style={{ marginBottom: 10 }}>
+              <p className="muted" style={{ fontSize: 13 }}>
+                <span className="spinner" style={{ marginRight: 6 }} />
+                Processing {doneCount + errorCount + 1} of {queue.length}…
+              </p>
+            </div>
+          )}
+
+          {/* Action bar */}
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            {waitingCount > 0 && !batchRunning && (
+              <button onClick={runBatch}>
+                ▶ Process {waitingCount} file{waitingCount !== 1 ? 's' : ''}
               </button>
-            ))}
+            )}
+            {batchDone && doneCount > 0 && (
+              <button className="exportbtn" onClick={downloadBatchZip} disabled={batchZipping}>
+                {batchZipping ? 'Preparing ZIP…' : `⤓ Download all (${doneCount} file${doneCount !== 1 ? 's' : ''} + CSV)`}
+              </button>
+            )}
+            {queue.length > 0 && !batchRunning && (
+              <button className="ghost" style={{ marginLeft: 'auto' }} onClick={() => { setQueue([]); setBatchDone(false) }}>✕ Clear queue</button>
+            )}
           </div>
+
+          {batchDone && (
+            <div role="status" aria-live="polite" style={{ marginTop: 12 }}>
+              <p className="muted" style={{ fontSize: 12 }}>
+                {doneCount} processed{errorCount > 0 ? ` · ${errorCount} error${errorCount !== 1 ? 's' : ''}` : ''} · ZIP includes remediated documents + a CSV summary of all scores &amp; findings.
+              </p>
+            </div>
+          )}
         </section>
       )}
 
-      {scanning && (
-        <section className="panel scanstage" role="status" aria-live="polite">
-          <div className="scandoc">
-            {pdfUrl ? <PdfPreview url={pdfUrl} pages={1} />
-              : srcText ? <iframe className="scaniframe" sandbox="" srcDoc={srcText} title="document preview" />
-                : officeBlob ? <OfficePreview blob={officeBlob} name={file?.name} className="scanoffice" />
-                  : imageBlob ? <ScanImg blob={imageBlob} />
-                    : <div className="scanplaceholder"><span style={{ fontSize: 46 }} aria-hidden="true">📄</span><div className="muted">{file?.name}</div></div>}
-            <div className="scanline" aria-hidden="true" />
-          </div>
-          <div className="scaninfo">
-            <div className="scanprogline"><span className="spinner" />{phase}</div>
-            <div className="muted fname" style={{ marginTop: 8, fontSize: 13 }}>{file?.name}</div>
-            {realEngine && <div className="realbadge" style={{ marginLeft: 0, marginTop: 8, display: 'inline-block' }}>⚡ real {realEngine} analysis</div>}
-            <div className="track" style={{ marginTop: 12 }}><i style={{ width: '66%', background: '#BF8C00', transition: 'width .4s' }} /></div>
-          </div>
-        </section>
-      )}
-
-      {viewing && <HistoryDetail viewing={viewing} onClose={() => setViewing(null)} />}
-
-      {step === 1 && (
-        <section className="panel">
-          <div className="rubrichdr"><h2 style={{ margin: 0 }}>Assessment · <span className="fname" style={{ fontSize: 14 }}>{file?.name}</span>
-            {realEngine && <span className="realbadge" title={`Findings detected live by the ${realEngine} engine running in your browser`}>⚡ real {realEngine} analysis</span>}</h2>
-            <span className="badge" style={{ background: '#FAEEDA', color: '#854F0B' }}>{issues.length} findings</span></div>
-          <div className="lift" style={{ margin: '12px 0 16px' }}>
-            <div className="liftcol"><div className="liftnum" style={{ color: score >= 90 ? '#3B6D11' : score >= 50 ? '#854F0B' : '#1F5FA8' }}>{score}</div><div className="muted">score / 100</div></div>
-            <div className="muted" style={{ flex: 1 }}>Scored against WCAG 2.1 AA. {score < 90 ? 'Below the certifiable threshold — remediation needed.' : 'Meets the bar.'}</div>
-          </div>
-          <div className="findings">
-            {issues.map((i, n) => {
-              const [bg, fg] = SEV_BADGE[i.sev] || SEV_BADGE.MINOR
-              return (
-                <div className="finding" key={n}>
-                  <span className="badge" style={{ background: bg, color: fg }}>{i.sev.toLowerCase()}</span>
-                  <div className="findingmain"><div>{i.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{i.detail}</div></div>
-                </div>
-              )
-            })}
-          </div>
-          <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 16 }}><button onClick={() => setStep(2)}>Auto-remediate →</button></div>
-        </section>
-      )}
-
-      {step === 2 && (
-        <section className="panel">
-          <h2>Automated remediation · {file?.name}</h2>
-          <div className="findings" style={{ marginBottom: 14 }}>
-            {autoFixed.map((i, n) => (
-              <div className="finding" key={n}>
-                <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11' }}>fixed</span>
-                <div className="findingmain"><div>{i.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{i.detail}</div></div>
+      {/* ── SINGLE FILE MODE ── */}
+      {!batchMode && (
+        <>
+          <div className="upsteps">
+            {STEPS.map((s, i) => (
+              <div key={s} className={`upstep ${i < step ? 'done' : i === step ? 'on' : ''}`}>
+                <span className="upnum">{i < step ? '✓' : i + 1}</span>{s}
               </div>
             ))}
           </div>
-          {isImage(file?.name) ? <ImagePanel blob={imageBlob} result={imgResult} /> : isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <BeforeAfter file={file} issues={issues} srcText={srcText} pdfUrl={pdfUrl} officeBlob={officeBlob} />}
-          <ScreenReaderDemo issues={issues} docTitle={docTitle} />
-          {prescreen.length > 0 && (
-            <div className="hitlpanel">
-              <div className="hitlhd"><b>⚑ Routed to human review</b><span className="hitlbadge">Phase 2 · HITL</span></div>
-              <p className="muted" style={{ margin: '2px 0 9px', fontSize: 12 }}>Runtime, interactive &amp; media criteria the engine flags but can’t auto-confirm — a reviewer verifies each one.</p>
+
+          {step === 0 && !scanning && (
+            <div className={drag ? 'dropzone over' : 'dropzone'}
+              onDragOver={(e) => { e.preventDefault(); setDrag(true) }} onDragLeave={() => setDrag(false)} onDrop={onDrop}>
+              <div className="dzicon" aria-hidden="true">⬍</div>
+              <div style={{ fontSize: 15 }}>Drag a document here, or <label htmlFor="upfile" className="dzlink">browse</label></div>
+              <input id="upfile" type="file" multiple style={{ display: 'none' }} accept=".pdf,.docx,.pptx,.xlsx,.html,.htm,.mp3,.m4a,.wav,.mp4,.mov,.webm,.png,.jpg,.jpeg,.gif,.webp" onChange={onInput} />
+              <div className="muted" style={{ marginTop: 4 }}>PDF · Word · PowerPoint · Excel · HTML · audio · image — scanned in your browser, nothing is uploaded anywhere</div>
+              <div className="muted" style={{ marginTop: 2, fontSize: 12 }}>⚡ HTML is analysed for real with the axe-core WCAG engine · drop multiple files to switch to batch mode</div>
+              <div className="dzsamples">
+                <span className="muted">or try a real multi-page sample:</span>
+                <button className="ghost small" onClick={() => sample('patient-discharge-instructions.pdf')}>PDF</button>
+                <button className="ghost small" onClick={() => sample('benefits-policy.docx')}>Word</button>
+                <button className="ghost small" onClick={() => sample('quarterly-town-hall.pptx')}>PowerPoint</button>
+                <button className="ghost small" onClick={() => sample('finance-metrics.xlsx')}>Excel</button>
+                <button className="ghost small" onClick={() => sample('careers-landing.html')}>HTML</button>
+                <button className="ghost small" onClick={() => sample('benefits-briefing.mp3')}>Audio</button>
+                <button className="ghost small" onClick={() => sample('benefits-briefing.webm')} title="A narrated video — Whisper transcribes the audio track into captions (1.2.2)">Video</button>
+                <button className="ghost small" onClick={() => sample('enrollment-notice.png')} title="An image of text — watch Claude read it back as real text (1.4.5)">Image of text</button>
+              </div>
+              <div style={{ marginTop: 12 }}>
+                <button className="ghost small" onClick={() => setBatchMode(true)}>⊞ Batch mode — process multiple files at once</button>
+              </div>
+            </div>
+          )}
+
+          {step === 0 && !scanning && history.length > 0 && (
+            <section className="panel" style={{ marginTop: 14 }}>
+              <h2>Recent uploads <span className="muted">· kept on this device</span></h2>
+              <div className="uphistory">
+                {history.map((h) => (
+                  <button className="uphrow" key={h.id} onClick={() => setViewing(h)}>
+                    <span className="uphname">{h.name}<span className="muted"> · {fmtDate(h.date)}{h.real ? ' · axe-core' : ''}</span></span>
+                    <span className="muted">{h.findings.length} finding{h.findings.length === 1 ? '' : 's'}</span>
+                    <span className="badge" style={{ background: h.score >= 90 ? '#E7F0DC' : h.score >= 50 ? '#FAEEDA' : '#E2EDFB', color: h.score >= 90 ? '#3B6D11' : h.score >= 50 ? '#854F0B' : '#1F5FA8' }}>{h.score} / 100</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {scanning && (
+            <section className="panel scanstage" role="status" aria-live="polite">
+              <div className="scandoc">
+                {pdfUrl ? <PdfPreview url={pdfUrl} pages={1} />
+                  : srcText ? <iframe className="scaniframe" sandbox="" srcDoc={srcText} title="document preview" />
+                    : officeBlob ? <OfficePreview blob={officeBlob} name={file?.name} className="scanoffice" />
+                      : imageBlob ? <ScanImg blob={imageBlob} />
+                        : <div className="scanplaceholder"><span style={{ fontSize: 46 }} aria-hidden="true">📄</span><div className="muted">{file?.name}</div></div>}
+                <div className="scanline" aria-hidden="true" />
+              </div>
+              <div className="scaninfo">
+                <div className="scanprogline"><span className="spinner" />{phase}</div>
+                <div className="muted fname" style={{ marginTop: 8, fontSize: 13 }}>{file?.name}</div>
+                {realEngine && <div className="realbadge" style={{ marginLeft: 0, marginTop: 8, display: 'inline-block' }}>⚡ real {realEngine} analysis</div>}
+                <div className="track" style={{ marginTop: 12 }}><i style={{ width: '66%', background: '#BF8C00', transition: 'width .4s' }} /></div>
+              </div>
+            </section>
+          )}
+
+          {viewing && <HistoryDetail viewing={viewing} onClose={() => setViewing(null)} />}
+
+          {step === 1 && (
+            <section className="panel">
+              <div className="rubrichdr"><h2 style={{ margin: 0 }}>Assessment · <span className="fname" style={{ fontSize: 14 }}>{file?.name}</span>
+                {realEngine && <span className="realbadge" title={`Findings detected live by the ${realEngine} engine running in your browser`}>⚡ real {realEngine} analysis</span>}</h2>
+                <span className="badge" style={{ background: '#FAEEDA', color: '#854F0B' }}>{issues.length} findings</span></div>
+              <div className="lift" style={{ margin: '12px 0 16px' }}>
+                <div className="liftcol"><div className="liftnum" style={{ color: score >= 90 ? '#3B6D11' : score >= 50 ? '#854F0B' : '#1F5FA8' }}>{score}</div><div className="muted">score / 100</div></div>
+                <div className="muted" style={{ flex: 1 }}>Scored against WCAG 2.1 AA. {score < 90 ? 'Below the certifiable threshold — remediation needed.' : 'Meets the bar.'}</div>
+              </div>
               <div className="findings">
-                {prescreen.map((p, i) => {
-                  const [bg, fg] = SEV_BADGE[p.sev] || SEV_BADGE.MINOR
+                {issues.map((i, n) => {
+                  const [bg, fg] = SEV_BADGE[i.sev] || SEV_BADGE.MINOR
                   return (
-                    <div className="finding" key={i}>
-                      <span className="badge" style={{ background: bg, color: fg }}>{p.sev.toLowerCase()}</span>
-                      <div className="findingmain"><div>{p.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{p.detail}</div></div>
+                    <div className="finding" key={n}>
+                      <span className="badge" style={{ background: bg, color: fg }}>{i.sev.toLowerCase()}</span>
+                      <div className="findingmain"><div>{i.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{i.detail}</div></div>
                     </div>
                   )
                 })}
               </div>
-            </div>
-          )}
-          <p className="muted" style={{ marginTop: 12 }}>{autoFixed.length} finding(s) auto-fixed · <b>{review.length}</b> routed to human review{prescreen.length > 0 && <> · <b>{prescreen.length}</b> flagged for HITL review (Phase 2)</>}.</p>
-          <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 4 }}><button onClick={() => setStep(3)}>Human review →</button></div>
-        </section>
-      )}
-
-      {step === 3 && reviewItem && (() => {
-        const [before, after] = proposeFix(reviewItem)
-        return (
-          <section className="panel">
-            <h2>Human-in-the-loop review · {file?.name}</h2>
-            <div className="qrow" style={{ borderRadius: 10, border: '1px solid var(--line)', padding: '11px 13px', marginBottom: 12 }}>
-              <span className="qico" aria-hidden="true">⚑</span>
-              <div className="qmain"><div className="qtitle">{reviewItem.wcag}</div><div className="qmeta">{reviewItem.detail} · agent confidence 52% — below the auto-apply threshold</div></div>
-            </div>
-            <div className="muted" style={{ marginBottom: 6 }}>Proposed fix · {reviewItem.wcag}</div>
-            <div className="diffbox before"><span className="difftag">before</span>{before}</div>
-            <div className="diffbox after"><span className="difftag">after</span><span dangerouslySetInnerHTML={{ __html: after }} /></div>
-            {prescreen.length > 0 && (
-              <div className="hitlpanel" style={{ marginTop: 16 }}>
-                <div className="hitlhd"><b>⚑ Reviewer sign-off</b><span className="hitlbadge">Phase 2 · HITL</span><span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>{hitlVerified.size}/{prescreen.length} verified</span></div>
-                <p className="muted" style={{ margin: '2px 0 9px', fontSize: 12 }}>Confirm each runtime / media criterion the pre-screen flagged — a reviewer verifies and signs off.</p>
-                <div className="findings">
-                  {prescreen.map((p, i) => {
-                    const ok = hitlVerified.has(i)
-                    return (
-                      <div className="finding" key={i}>
-                        <button className={ok ? 'hitlverify on' : 'hitlverify'} aria-pressed={ok} onClick={() => setHitlVerified((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n })}>{ok ? '✓ Verified' : 'Verify'}</button>
-                        <div className="findingmain"><div>{p.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{p.detail}</div></div>
-                      </div>
-                    )
-                  })}
-                </div>
-                {hitlVerified.size < prescreen.length && <button className="ghost small" style={{ marginTop: 9 }} onClick={() => setHitlVerified(new Set(prescreen.map((_, i) => i)))}>✓ Verify all ({prescreen.length})</button>}
-              </div>
-            )}
-            <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 16, flexWrap: 'wrap' }}>
-              <button onClick={() => certify('approved')}>✓ Approve fix &amp; certify</button>
-              <button className="ghost" onClick={() => certify('rejected')}>✕ Reject — defer to manual</button>
-            </div>
-            <p className="muted" style={{ marginTop: 12, fontSize: 12 }}>Approve to apply the fix and re-validate to 100. Reject to leave this finding for manual remediation — the document is then conditionally certified, not fully compliant.</p>
-          </section>
-        )
-      })()}
-
-      {step === 4 && (
-        <>
-          <div className="dashtoolbar" style={{ gap: 10 }}>
-            <button className="ghost" onClick={reset}>↺ Try another</button>
-            <button className="exportbtn" onClick={doExport} disabled={exporting}>{exporting ? 'Generating PDF…' : '⤓ Download PDF report'}</button>
-          </div>
-          <div ref={reportRef} className="reportdoc">
-            <div className="reporthead">
-              <Logo />
-              <div>
-                <div style={{ fontWeight: 600, fontSize: 15 }}>Accessibility compliance certificate</div>
-                <div className="muted">{IDENTITY.org} · WCAG 2.1 AA · {today}</div>
-              </div>
-            </div>
-
-            <section className="certbanner certreveal" style={rejected ? { background: '#FAEEDA', borderColor: '#e8d2a8' } : undefined}>
-              <div className="certmark certpop" aria-hidden="true" style={rejected ? { background: '#854F0B' } : undefined}>{rejected ? '!' : '✓'}</div>
-              <div>
-                <div className="certtitle">{rejected ? `Conditional · ${finalScore} / 100` : 'Certified · 100 / 100'}</div>
-                <div className="muted"><span className="fname">{file?.name}</span> {rejected ? 'remediated except 1 finding deferred to manual review — not yet fully WCAG 2.1 AA compliant.' : 'passed WCAG 2.1 AA after remediation & re-validation.'}</div>
-              </div>
-              <div className="liftgain" style={{ marginLeft: 'auto' }}>{score} → {finalScore}</div>
+              <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 16 }}><button onClick={() => setStep(2)}>Auto-remediate →</button></div>
             </section>
+          )}
 
-            <div className="chartrow">
-              <section className="panel"><h2>Compliance lift</h2>
-                <div className="lift">
-                  <div className="liftcol"><div className="liftnum" style={{ color: '#1F5FA8' }}>{score}</div><div className="muted">as received</div></div>
-                  <div className="liftarrow" aria-hidden="true">→</div>
-                  <div className="liftcol"><div className="liftnum" style={{ color: rejected ? '#854F0B' : '#3B6D11' }}><CountUp from={score} to={finalScore} /></div><div className="muted">{rejected ? 'conditional' : 'certified'}</div></div>
-                </div>
-                <p className="muted">{rejected ? `${issues.length - 1} of ${issues.length} finding(s) resolved · 1 deferred to manual remediation.` : `${issues.length} finding(s) resolved across ${sevItems.length} severity level(s).`}</p>
-              </section>
-              <section className="panel"><h2>Findings resolved · by severity</h2>
-                {sevItems.length ? <Bars items={sevItems} cols="84px 1fr 28px" /> : <p className="muted">None.</p>}
-              </section>
-            </div>
-
+          {step === 2 && (
             <section className="panel">
-              <h2>Findings remediated</h2>
-              <div className="findings">
-                {issues.map((i, n) => { const [bg, fg] = SEV_BADGE[i.sev] || SEV_BADGE.MINOR; return (
+              <h2>Automated remediation · {file?.name}</h2>
+              <div className="findings" style={{ marginBottom: 14 }}>
+                {autoFixed.map((i, n) => (
                   <div className="finding" key={n}>
                     <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11' }}>fixed</span>
                     <div className="findingmain"><div>{i.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{i.detail}</div></div>
-                    <span className="badge" style={{ background: bg, color: fg }}>{i.sev.toLowerCase()}</span>
                   </div>
-                ) })}
+                ))}
               </div>
+              {isImage(file?.name) ? <ImagePanel blob={imageBlob} result={imgResult} /> : isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <BeforeAfter file={file} issues={issues} srcText={srcText} pdfUrl={pdfUrl} officeBlob={officeBlob} />}
+              <ScreenReaderDemo issues={issues} docTitle={docTitle} />
+              {prescreen.length > 0 && (
+                <div className="hitlpanel">
+                  <div className="hitlhd"><b>⚑ Routed to human review</b><span className="hitlbadge">Phase 2 · HITL</span></div>
+                  <p className="muted" style={{ margin: '2px 0 9px', fontSize: 12 }}>Runtime, interactive &amp; media criteria the engine flags but can't auto-confirm — a reviewer verifies each one.</p>
+                  <div className="findings">
+                    {prescreen.map((p, i) => {
+                      const [bg, fg] = SEV_BADGE[p.sev] || SEV_BADGE.MINOR
+                      return (
+                        <div className="finding" key={i}>
+                          <span className="badge" style={{ background: bg, color: fg }}>{p.sev.toLowerCase()}</span>
+                          <div className="findingmain"><div>{p.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{p.detail}</div></div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+              <p className="muted" style={{ marginTop: 12 }}>{autoFixed.length} finding(s) auto-fixed · <b>{review.length}</b> routed to human review{prescreen.length > 0 && <> · <b>{prescreen.length}</b> flagged for HITL review (Phase 2)</>}.</p>
+              <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 4 }}><button onClick={() => setStep(3)}>Human review →</button></div>
             </section>
+          )}
 
-            <section className="panel">
-              <h2>Document journey</h2>
-              <div className="journey">
-                {['discovered', `assessed ${score}`, 'auto-fixed', 'reviewed', ...(prescreen.length ? [`${hitlVerified.size}/${prescreen.length} HITL verified`] : []), rejected ? `conditional ${finalScore}` : 'certified 100'].map((l, n) => <span className="jstep" key={n}>✓ {l}</span>)}
+          {step === 3 && reviewItem && (() => {
+            const [before, after] = proposeFix(reviewItem)
+            return (
+              <section className="panel">
+                <h2>Human-in-the-loop review · {file?.name}</h2>
+                <div className="qrow" style={{ borderRadius: 10, border: '1px solid var(--line)', padding: '11px 13px', marginBottom: 12 }}>
+                  <span className="qico" aria-hidden="true">⚑</span>
+                  <div className="qmain"><div className="qtitle">{reviewItem.wcag}</div><div className="qmeta">{reviewItem.detail} · agent confidence 52% — below the auto-apply threshold</div></div>
+                </div>
+                <div className="muted" style={{ marginBottom: 6 }}>Proposed fix · {reviewItem.wcag}</div>
+                <div className="diffbox before"><span className="difftag">before</span>{before}</div>
+                <div className="diffbox after"><span className="difftag">after</span><span dangerouslySetInnerHTML={{ __html: after }} /></div>
+                {prescreen.length > 0 && (
+                  <div className="hitlpanel" style={{ marginTop: 16 }}>
+                    <div className="hitlhd"><b>⚑ Reviewer sign-off</b><span className="hitlbadge">Phase 2 · HITL</span><span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>{hitlVerified.size}/{prescreen.length} verified</span></div>
+                    <p className="muted" style={{ margin: '2px 0 9px', fontSize: 12 }}>Confirm each runtime / media criterion the pre-screen flagged — a reviewer verifies and signs off.</p>
+                    <div className="findings">
+                      {prescreen.map((p, i) => {
+                        const ok = hitlVerified.has(i)
+                        return (
+                          <div className="finding" key={i}>
+                            <button className={ok ? 'hitlverify on' : 'hitlverify'} aria-pressed={ok} onClick={() => setHitlVerified((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n })}>{ok ? '✓ Verified' : 'Verify'}</button>
+                            <div className="findingmain"><div>{p.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{p.detail}</div></div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    {hitlVerified.size < prescreen.length && <button className="ghost small" style={{ marginTop: 9 }} onClick={() => setHitlVerified(new Set(prescreen.map((_, i) => i)))}>✓ Verify all ({prescreen.length})</button>}
+                  </div>
+                )}
+                <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 16, flexWrap: 'wrap' }}>
+                  <button onClick={() => certify('approved')}>✓ Approve fix &amp; certify</button>
+                  <button className="ghost" onClick={() => certify('rejected')}>✕ Reject — defer to manual</button>
+                </div>
+                <p className="muted" style={{ marginTop: 12, fontSize: 12 }}>Approve to apply the fix and re-validate to 100. Reject to leave this finding for manual remediation — the document is then conditionally certified, not fully compliant.</p>
+              </section>
+            )
+          })()}
+
+          {step === 4 && (
+            <>
+              <div className="dashtoolbar" style={{ gap: 10 }}>
+                <button className="ghost" onClick={reset}>↺ Try another</button>
+                <button className="exportbtn" onClick={doExport} disabled={exporting}>{exporting ? 'Generating PDF…' : '⤓ Download PDF report'}</button>
               </div>
-              <p className="muted" style={{ marginTop: 10 }}>Validated against WCAG 2.1 AA · every step captured in the audit trail.{prescreen.length > 0 && ` ${hitlVerified.size} of ${prescreen.length} runtime/media criteria verified via human review (Phase 2 · HITL).`}</p>
-            </section>
-          </div>
-          {isImage(file?.name) ? <ImagePanel blob={imageBlob} result={imgResult} /> : isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <ResultPreview file={file} srcText={srcText} pdfUrl={pdfUrl} pdfBlob={pdfBlob} officeBlob={officeBlob} issues={issues} />}
+              <div ref={reportRef} className="reportdoc">
+                <div className="reporthead">
+                  <Logo />
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 15 }}>Accessibility compliance certificate</div>
+                    <div className="muted">{IDENTITY.org} · WCAG 2.1 AA · {today}</div>
+                  </div>
+                </div>
+
+                <section className="certbanner certreveal" style={rejected ? { background: '#FAEEDA', borderColor: '#e8d2a8' } : undefined}>
+                  <div className="certmark certpop" aria-hidden="true" style={rejected ? { background: '#854F0B' } : undefined}>{rejected ? '!' : '✓'}</div>
+                  <div>
+                    <div className="certtitle">{rejected ? `Conditional · ${finalScore} / 100` : 'Certified · 100 / 100'}</div>
+                    <div className="muted"><span className="fname">{file?.name}</span> {rejected ? 'remediated except 1 finding deferred to manual review — not yet fully WCAG 2.1 AA compliant.' : 'passed WCAG 2.1 AA after remediation & re-validation.'}</div>
+                  </div>
+                  <div className="liftgain" style={{ marginLeft: 'auto' }}>{score} → {finalScore}</div>
+                </section>
+
+                <div className="chartrow">
+                  <section className="panel"><h2>Compliance lift</h2>
+                    <div className="lift">
+                      <div className="liftcol"><div className="liftnum" style={{ color: '#1F5FA8' }}>{score}</div><div className="muted">as received</div></div>
+                      <div className="liftarrow" aria-hidden="true">→</div>
+                      <div className="liftcol"><div className="liftnum" style={{ color: rejected ? '#854F0B' : '#3B6D11' }}><CountUp from={score} to={finalScore} /></div><div className="muted">{rejected ? 'conditional' : 'certified'}</div></div>
+                    </div>
+                    <p className="muted">{rejected ? `${issues.length - 1} of ${issues.length} finding(s) resolved · 1 deferred to manual remediation.` : `${issues.length} finding(s) resolved across ${sevItems.length} severity level(s).`}</p>
+                  </section>
+                  <section className="panel"><h2>Findings resolved · by severity</h2>
+                    {sevItems.length ? <Bars items={sevItems} cols="84px 1fr 28px" /> : <p className="muted">None.</p>}
+                  </section>
+                </div>
+
+                <section className="panel">
+                  <h2>Findings remediated</h2>
+                  <div className="findings">
+                    {issues.map((i, n) => { const [bg, fg] = SEV_BADGE[i.sev] || SEV_BADGE.MINOR; return (
+                      <div className="finding" key={n}>
+                        <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11' }}>fixed</span>
+                        <div className="findingmain"><div>{i.wcag}</div><div className="muted" style={{ fontSize: 12 }}>{i.detail}</div></div>
+                        <span className="badge" style={{ background: bg, color: fg }}>{i.sev.toLowerCase()}</span>
+                      </div>
+                    ) })}
+                  </div>
+                </section>
+
+                <section className="panel">
+                  <h2>Document journey</h2>
+                  <div className="journey">
+                    {['discovered', `assessed ${score}`, 'auto-fixed', 'reviewed', ...(prescreen.length ? [`${hitlVerified.size}/${prescreen.length} HITL verified`] : []), rejected ? `conditional ${finalScore}` : 'certified 100'].map((l, n) => <span className="jstep" key={n}>✓ {l}</span>)}
+                  </div>
+                  <p className="muted" style={{ marginTop: 10 }}>Validated against WCAG 2.1 AA · every step captured in the audit trail.{prescreen.length > 0 && ` ${hitlVerified.size} of ${prescreen.length} runtime/media criteria verified via human review (Phase 2 · HITL).`}</p>
+                </section>
+              </div>
+              {isImage(file?.name) ? <ImagePanel blob={imageBlob} result={imgResult} /> : isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <ResultPreview file={file} srcText={srcText} pdfUrl={pdfUrl} pdfBlob={pdfBlob} officeBlob={officeBlob} issues={issues} />}
+            </>
+          )}
         </>
       )}
     </>
