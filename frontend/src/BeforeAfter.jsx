@@ -136,7 +136,7 @@ export function remediateHtml(text) {
 const scOf = (wcag) => ((wcag || '').match(/^\d+\.\d+\.\d+/) || [''])[0]
 
 // Concrete before→after visuals per success criterion.
-function baFor(sc) {
+function baFor(sc, docTitle) {
   switch (sc) {
     case '1.1.1': return {
       before: <div className="baimg"><span aria-hidden="true">🖼</span><span className="bawarn">no alt text — screen readers skip this</span></div>,
@@ -148,7 +148,7 @@ function baFor(sc) {
     }
     case '2.4.2': return {
       before: <div><span className="batab">○ Untitled document</span><span className="bawarn">can’t identify the doc in AT</span></div>,
-      after: <div><span className="batab">○ 2026 Benefits Guide — UTSW</span><span className="baok">clearly identified</span></div>,
+      after: <div><span className="batab">○ {docTitle || "Accessibility Review — mova.io"}</span><span className="baok">clearly identified</span></div>,
     }
     case '3.1.1': return {
       before: <div><code className="bacode">&lt;html&gt;</code><span className="bawarn">no language — wrong pronunciation</span></div>,
@@ -160,7 +160,7 @@ function baFor(sc) {
     }
     case '2.4.4': return {
       before: <div><a className="balink">click here</a><span className="bawarn">meaningless out of context</span></div>,
-      after: <div><a className="balink">view the 2026 benefits guide</a><span className="baok">clear &amp; descriptive</span></div>,
+      after: <div><a className="balink">view {docTitle ? `the ${docTitle.toLowerCase()}` : 'the full document'}</a><span className="baok">clear &amp; descriptive</span></div>,
     }
     case '1.4.1': return {
       before: <div><span style={{ color: '#2E72C9' }}>Apply online</span><span className="bawarn">a link by colour alone</span></div>,
@@ -327,7 +327,8 @@ export default function BeforeAfter({ file, issues = [], srcText, pdfUrl, office
         </div>
 
         {sorted.map((it, n) => {
-          const ba = baFor(scOf(it.wcag))
+          const docTitle = file?.name ? file.name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : null
+          const ba = baFor(scOf(it.wcag), docTitle)
           const [sevFg, sevBg] = SEV_COLOR[it.sev] || SEV_COLOR.MINOR
           const mode = fixMode(it)
           const sc = scOf(it.wcag)

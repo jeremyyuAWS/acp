@@ -12,7 +12,7 @@ function passFor(issues, docTitle) {
   if (has('1.1.1')) lines.push({ before: 'graphic', after: 'graphic — bar chart, enrollment by region, West highest at 38 percent' })
   if (has('1.3.1')) lines.push({ before: 'table, eight cells', after: 'table, Region by enrollment, 2 columns, 5 rows. Column one, Region. Column two, Enrollment' })
   if (has('1.3.2')) lines.push({ before: 'footnote 4. Continued from. The plan covers', after: 'The plan covers preventive visits. Footnote 4.' })
-  if (has('2.4.4')) lines.push({ before: 'link, click here', after: 'link, view the 2026 benefits guide' })
+  if (has('2.4.4')) lines.push({ before: 'link, click here', after: 'link, view ' + (docTitle ? 'the ' + docTitle.toLowerCase() : 'the full document') })
   lines.push({ before: 'edit text, blank', after: 'Email address, required, edit text' })
   if (has('3.1.1')) lines.push({ before: '(read with the wrong pronunciation)', after: 'language, English' })
   return lines
