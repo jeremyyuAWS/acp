@@ -83,24 +83,24 @@ const issuesFor = (name) => (isVideo(name) ? VIDEO_ISSUES : isAudio(name) ? AUDI
 // Keyed first by exact rule code; WCAG_FALLBACK covers real axe-core rule IDs
 // and any unrecognised codes by looking up the leading SC number.
 const VERIFY_GUIDE = {
-  'DOCX-ALT-001':         { app: 'Word',        tip: 'Right-click the image → Edit Alt Text — the AI-generated description is now filled in.' },
+  'DOCX-ALT-001':         { app: 'Word',        tipWin: 'Right-click the image → Edit Alt Text — the AI-generated description is now filled in.', tipMac: 'Right-click (or Control+click) the image → Edit Alt Text — the AI-generated description is now filled in.' },
   'DOCX-TABLE-001':       { app: 'Word',        tip: 'Review tab → Track Changes shows header rows added. Or: click the first row of any table → Table Design tab → Header Row is checked.' },
   'DOCX-HEAD-001':        { app: 'Word',        tip: 'View → Navigation Pane → Headings tab — the corrected heading hierarchy is now visible.' },
-  'DOCX-TITLE-001':       { app: 'Word',        tip: 'File → Info → Properties panel on the right — Title now shows the document name.' },
-  'DOCX-LINK-001':        { app: 'Word',        tip: 'Right-click the hyperlink → Edit Hyperlink — Display Text is now descriptive instead of “click here”.' },
-  'DOCX-LANG-001':        { app: 'Word',        tip: 'Review → Language → Set Proofing Language — English (United States) is now set on the document body.' },
+  'DOCX-TITLE-001':       { app: 'Word',        tipWin: 'File → Info → Properties panel (right side) — Title now shows the document name.', tipMac: 'File → Properties → Summary tab — Title now shows the document name.' },
+  'DOCX-LINK-001':        { app: 'Word',        tipWin: 'Right-click the hyperlink → Edit Hyperlink — Display Text is now descriptive instead of “click here”.', tipMac: 'Right-click (or Control+click) the hyperlink → Edit Hyperlink — Display Text is now descriptive instead of “click here”.' },
+  'DOCX-LANG-001':        { app: 'Word',        tipWin: 'Review → Language → Set Proofing Language — English (United States) is now set on the document body.', tipMac: 'Tools → Language (or Review → Language in Word 365) — English (United States) is now set on the document body.' },
   'pdf.missing-alt-text': { app: 'Acrobat',     tip: 'View → Navigation Panels → Tags → expand <Figure> — the Alt attribute now contains the AI-generated description.' },
   'pdf.tagged':           { app: 'Acrobat',     tip: 'File → Properties → Description — Tagged PDF: Yes. View → Navigation Panels → Tags shows the structure tree.' },
   'pdf.document-title':   { app: 'Acrobat',     tip: 'File → Properties → Description tab — Title is now set to the document name.' },
   'pdf.document-language':{ app: 'Acrobat',     tip: 'File → Properties → Advanced → Reading Options — Language is now set to English.' },
-  'PPTX-ALT-001':         { app: 'PowerPoint',  tip: 'Right-click any image → Edit Alt Text — the AI-generated description is now filled in.' },
+  'PPTX-ALT-001':         { app: 'PowerPoint',  tipWin: 'Right-click any image → Edit Alt Text — the AI-generated description is now filled in.', tipMac: 'Right-click (or Control+click) any image → Edit Alt Text — the AI-generated description is now filled in.' },
   'PPTX-TITLE-001':       { app: 'PowerPoint',  tip: 'View → Outline View — every slide now has a title in the title placeholder.' },
   'PPTX-SLIDE-001':       { app: 'PowerPoint',  tip: 'View → Outline View — slide titles are visible and descriptive.' },
-  'XLSX-ALT-001':         { app: 'Excel',       tip: 'Right-click the image → Edit Alt Text — the AI-generated description is now filled in.' },
+  'XLSX-ALT-001':         { app: 'Excel',       tipWin: 'Right-click the image → Edit Alt Text — the AI-generated description is now filled in.', tipMac: 'Right-click (or Control+click) the image → Edit Alt Text — the AI-generated description is now filled in.' },
   'XLSX-HEADER-001':      { app: 'Excel',       tip: 'Click any cell in the first row → Table Design tab — Header Row checkbox is now on.' },
-  'WEB-CONTRAST-001':     { app: 'DevTools',    tip: 'Inspect the element → Computed — color/background-color now pass the 4.5:1 (AA) contrast ratio.' },
-  'WEB-ALT-001':          { app: 'DevTools',    tip: 'Inspect the <img> → Attributes — alt attribute now contains a description.' },
-  'WEB-LABEL-001':        { app: 'DevTools',    tip: 'Inspect the form control → check for a linked <label> or aria-label attribute.' },
+  'WEB-CONTRAST-001':     { app: 'DevTools',    tipWin: 'F12 → Inspect the element → Computed — color/background-color now pass the 4.5:1 (AA) contrast ratio.', tipMac: 'Cmd+Option+I → Inspect the element → Computed — color/background-color now pass the 4.5:1 (AA) contrast ratio.' },
+  'WEB-ALT-001':          { app: 'DevTools',    tipWin: 'F12 → Inspect the <img> → Attributes — alt attribute now contains a description.', tipMac: 'Cmd+Option+I → Inspect the <img> → Attributes — alt attribute now contains a description.' },
+  'WEB-LABEL-001':        { app: 'DevTools',    tipWin: 'F12 → Inspect the form control → check for a linked <label> or aria-label attribute.', tipMac: 'Cmd+Option+I → Inspect the form control → check for a linked <label> or aria-label attribute.' },
   'MEDIA-CAPTIONS-001':   { app: 'Media player',tip: 'A .vtt caption file is included in the remediated output — attach it as a text track in your video player or CMS.' },
   'MEDIA-AUDIODESC-001':  { app: 'Media player',tip: 'An audio description track is included — upload it alongside the original video in your CMS.' },
   'MEDIA-TRANSCRIPT-001': { app: 'Transcript',  tip: 'A plain-text transcript is included in the remediated output — publish it adjacent to the audio file.' },
@@ -114,31 +114,40 @@ const WCAG_FALLBACK = {
   '1.2.5': { app: 'Media player',        tip: 'An audio description track is included — upload it alongside the video.' },
   '1.3.1': { app: 'Document / DevTools', tip: 'Check heading styles, table header rows, or form label associations in the remediated file.' },
   '1.3.2': { app: 'Document / DevTools', tip: 'Check reading order in the Tags panel (PDF) or heading/list structure (HTML/Office).' },
-  '1.4.3': { app: 'DevTools',            tip: 'Inspect the element — colour and background now meet the 4.5:1 contrast ratio.' },
-  '2.4.2': { app: 'Document properties', tip: 'Open File → Properties — the Title field is now set to the document name.' },
+  '1.4.3': { app: 'DevTools',            tipWin: 'F12 → Inspect the element — colour and background now meet the 4.5:1 contrast ratio.', tipMac: 'Cmd+Option+I → Inspect the element — colour and background now meet the 4.5:1 contrast ratio.' },
+  '2.4.2': { app: 'Document properties', tipWin: 'File → Info → Properties — the Title field is now set to the document name.', tipMac: 'File → Properties → Summary — the Title field is now set to the document name.' },
   '2.4.4': { app: 'Document / DevTools', tip: 'Find the hyperlink — display text is now descriptive instead of “click here”.' },
-  '3.1.1': { app: 'Document properties', tip: 'Open File → Properties — the language is now declared as English.' },
+  '3.1.1': { app: 'Document properties', tipWin: 'File → Info → Properties — the Language is now declared as English.', tipMac: 'File → Properties or Tools → Language — the Language is now declared as English.' },
   '3.1.2': { app: 'DevTools',            tip: 'Inspect the flagged text element — a lang attribute now identifies the language of that passage.' },
 }
+const isMac = () => /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent)
 const scOf = (wcag) => (wcag || '').match(/^(\d+\.\d+\.\d+)/)?.[1]
-const guideFor = (rule, wcag) => VERIFY_GUIDE[rule] || WCAG_FALLBACK[scOf(wcag)] || null
+const resolveTip = (entry, os) => { if (!entry) return null; const tip = os === 'mac' ? (entry.tipMac || entry.tip || entry.tipWin) : (entry.tipWin || entry.tip || entry.tipMac); return { ...entry, tip } }
+const guideFor = (rule, wcag, os) => resolveTip(VERIFY_GUIDE[rule] || WCAG_FALLBACK[scOf(wcag)], os)
 
 function HistoryDetail({ viewing, onClose }) {
   const ref = useRef(null)
   useDialog(ref, onClose)
   const [expanded, setExpanded] = useState(() => new Set())
   const toggle = (n) => setExpanded((s) => { const x = new Set(s); x.has(n) ? x.delete(n) : x.add(n); return x })
+  const [os, setOs] = useState(() => isMac() ? 'mac' : 'win')
   return (
     <div className="covdrawer" role="dialog" aria-modal="true" aria-label={`${viewing.name} result`} onClick={onClose}>
       <div className="covpanel" ref={ref} tabIndex={-1} onClick={(e) => e.stopPropagation()} style={{ maxWidth: 540 }}>
         <button className="covclose" aria-label="Close" onClick={onClose}>✕</button>
         <div className="fname" style={{ fontSize: 16 }}>{viewing.name}</div>
         <div className="muted" style={{ margin: '4px 0 12px' }}>{fmtDate(viewing.date)} · scored {viewing.score} / 100{viewing.real ? ' · real axe-core analysis' : ''}</div>
-        <h4 className="drawerh">Findings ({viewing.findings.length})</h4>
+        <h4 className="drawerh" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>Findings ({viewing.findings.length})</span>
+                <span style={{ display: 'flex', gap: 0, fontSize: 11 }}>
+                  <button onClick={() => setOs('mac')} style={{ padding: '2px 9px', borderRadius: '4px 0 0 4px', border: '1px solid var(--line)', background: os === 'mac' ? 'var(--ink)' : '#f5f5f5', color: os === 'mac' ? '#fff' : 'var(--muted)', cursor: 'pointer', fontSize: 11, fontWeight: os === 'mac' ? 600 : 400 }}>Mac</button>
+                  <button onClick={() => setOs('win')} style={{ padding: '2px 9px', borderRadius: '0 4px 4px 0', border: '1px solid var(--line)', borderLeft: 'none', background: os === 'win' ? 'var(--ink)' : '#f5f5f5', color: os === 'win' ? '#fff' : 'var(--muted)', cursor: 'pointer', fontSize: 11, fontWeight: os === 'win' ? 600 : 400 }}>Windows</button>
+                </span>
+              </h4>
         <div className="findings">
           {viewing.findings.length === 0 ? <p className="muted">No findings.</p> : viewing.findings.map((i, n) => {
             const [bg, fg] = SEV_BADGE2[i.sev] || SEV_BADGE2.MINOR
-            const guide = guideFor(i.rule, i.wcag)
+            const guide = guideFor(i.rule, i.wcag, os)
             const isOpen = expanded.has(n)
             return (
               <div className="finding" key={n}
