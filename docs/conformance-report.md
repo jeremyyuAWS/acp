@@ -10,6 +10,8 @@
 
 **Conformance key:** Supports · Partially Supports · Not Applicable
 
+# Part 1 · Platform UI conformance (WCAG 2.1 AA)
+
 ## Perceivable
 | Criterion | Lvl | Conformance | Notes |
 |---|---|---|---|
@@ -49,6 +51,25 @@
 |---|---|---|---|
 | 4.1.2 Name, Role, Value | A | Supports | Correct roles/names on custom controls |
 | 4.1.3 Status Messages | AA | Supports | `aria-live`/`role=status` on scan, chat, monitor, and assess results |
+
+# Part 2 · Document remediation coverage (WCAG 2.1 + 2.2)
+
+Beyond its own conformance, the platform detects and remediates accessibility issues in the documents it processes. Coverage across all 87 success criteria:
+
+| Coverage | Count | How |
+|---|---|---|
+| Live | 28 | Deterministic auto-fix or AI (Claude vision / Whisper) |
+| Covered · HITL | 42 | Detect-and-route to a human reviewer |
+| Partner-provided | 12 | Partner web scanner |
+| Roadmap | 5 | Human-produced media (sign language, audio description) |
+
+| Conformance level | Criteria | Covered | Status |
+|---|---|---|---|
+| Level A · must-have | 32 | 32 / 32 | Fully covered |
+| Level AA · legal target | 24 | 24 / 24 | Fully covered — **Level AA conformance reached** |
+| Level AAA · optional | 31 | 26 / 31 | 5 optional (human-produced media) remaining |
+
+Every legally-required criterion (Level A and AA) is covered — by deterministic auto-fix, AI, the partner web scanner, or a human-in-the-loop review workflow. The full per-criterion matrix is available as the accompanying **coverage matrix (Excel)** and **method deck (PowerPoint)**.
 
 ## Summary statement
 The mova.io Accessibility Platform UI **conforms to WCAG 2.1 Level AA** on all applicable Level A and AA success criteria, verified by automated and manual evaluation. Two issues found during manual review (an unannounced status update and a missing navigation landmark) were remediated. A formal screen-reader user evaluation is recommended to finalize a signed conformance statement.

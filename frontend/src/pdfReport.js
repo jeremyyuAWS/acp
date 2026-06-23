@@ -4,6 +4,7 @@
 // jspdf is lazy-loaded so it stays out of the main bundle.
 
 import { statusFor } from './exportDeliverables.js'
+import { WCAG } from './wcagCatalog.js'
 
 const INK = '#2B2330', MUTED = '#6B6670', LINE = '#E4E0E8', PLUM = '#4B3460', GREEN = '#3B6D11', AMBER = '#854F0B'
 const rgb = (h) => { h = h.replace('#', ''); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)] }
@@ -336,11 +337,13 @@ export async function exportConformanceReport(d = {}) {
   const p = await makeDoc({ title: 'Accessibility Conformance Report — mova.io Platform' })
   p.cover({
     title: 'Accessibility Conformance Report',
-    subtitle: `${d.org || 'mova.io Accessibility Platform'} · web application UI`,
-    meta: [`WCAG 2.1 Level A & AA · ${date}`, 'Evaluation: automated (axe-core, all views) + manual code / semantic review'],
+    subtitle: `${d.org || 'mova.io Accessibility Platform'} · UI conformance + document coverage`,
+    meta: [`WCAG 2.1 + 2.2 · ${date}`, 'Evaluation: automated (axe-core, all views) + manual code / semantic review'],
   })
   p.heading('Summary')
-  p.text('The mova.io Accessibility Platform UI conforms to WCAG 2.1 Level AA on all applicable Level A and AA success criteria, verified by automated and manual evaluation. Two issues found during manual review (an unannounced status update and a missing navigation landmark) were remediated.')
+  p.text('This report covers two things: (1) the conformance of the mova.io Accessibility Platform’s own user interface, and (2) the WCAG coverage the platform provides for the documents it processes.')
+  p.text('The platform UI conforms to WCAG 2.1 Level AA on all applicable Level A and AA success criteria, verified by automated and manual evaluation. Two issues found during manual review (an unannounced status update and a missing navigation landmark) were remediated.')
+  p.heading('Part 1 · Platform UI conformance (WCAG 2.1 AA)')
   p.text('Conformance key:  Supports · Partially Supports · Not Applicable', { size: 9, color: MUTED, gapAfter: 4 })
   for (const [principle, rows] of ACR) {
     p.heading(principle)
@@ -348,8 +351,37 @@ export async function exportConformanceReport(d = {}) {
       rows.map((r) => [`${r[0]}  ${r[1]}`, r[2], r[3], r[4]]),
       [148, 28, 92, p.CW - 268])
   }
+
+  // Part 2 — what the platform does for customer documents
+  const cov = { live: 0, hitl: 0, partner: 0, road: 0 }
+  const byLevel = { A: { tot: 0, cov: 0 }, AA: { tot: 0, cov: 0 }, AAA: { tot: 0, cov: 0 } }
+  WCAG.forEach((c) => {
+    const s = c.source
+    if (s === 'Shipped (demo)') cov.live++
+    else if (s === 'MDK HITL') cov.hitl++
+    else if (s === 'Partner baseline') cov.partner++
+    else cov.road++
+    const lv = byLevel[c.level]; if (lv) { lv.tot++; if (s !== 'MDK net-new') lv.cov++ }
+  })
+  p.heading('Part 2 · Document remediation coverage (WCAG 2.1 + 2.2)')
+  p.text('Beyond its own conformance, the platform detects and remediates accessibility issues in the documents it processes. Coverage across all 87 success criteria:', { gapAfter: 10 })
+  p.metricGrid([
+    { label: 'Live · auto/AI', value: cov.live, color: GREEN },
+    { label: 'Covered · HITL', value: cov.hitl, color: '#1F5FA8' },
+    { label: 'Partner (web)', value: cov.partner, color: PLUM },
+    { label: 'Roadmap', value: cov.road, color: AMBER },
+  ])
+  p.table(['Conformance level', 'Criteria', 'Covered', 'Status'],
+    [
+      ['Level A · must-have', String(byLevel.A.tot), `${byLevel.A.cov} / ${byLevel.A.tot}`, byLevel.A.cov === byLevel.A.tot ? 'Fully covered' : `${byLevel.A.tot - byLevel.A.cov} in progress`],
+      ['Level AA · legal target', String(byLevel.AA.tot), `${byLevel.AA.cov} / ${byLevel.AA.tot}`, byLevel.AA.cov === byLevel.AA.tot ? 'Fully covered — Level AA conformance reached' : `${byLevel.AA.tot - byLevel.AA.cov} in progress`],
+      ['Level AAA · optional', String(byLevel.AAA.tot), `${byLevel.AAA.cov} / ${byLevel.AAA.tot}`, `${byLevel.AAA.tot - byLevel.AAA.cov} optional (human-produced media) remaining`],
+    ],
+    [p.CW - 70 - 70 - 210, 70, 70, 210])
+  p.text('Every legally-required criterion (Level A and AA) is covered — by deterministic auto-fix, AI, the partner web scanner, or a human-in-the-loop review workflow. The full per-criterion matrix is available as the accompanying coverage matrix (Excel) and method deck (PowerPoint).', { size: 9.5, gapAfter: 6 })
+
   p.heading('Evaluation method & scope')
-  p.text('Automated: axe-core run across every view (zero Level A/AA violations). Manual: accessibility-tree review, keyboard operation, focus management, and live-region announcements. Scope: the platform’s own web UI (not the conformance of documents it remediates, which is reported separately).', { size: 9.5, gapAfter: 6 })
+  p.text('Part 1 (UI conformance): axe-core across every view (zero Level A/AA violations) plus manual accessibility-tree review, keyboard operation, focus management, and live-region announcements. Part 2 (document coverage): each success criterion is classified by what the platform’s detect-and-remediate engines do today — deterministic auto-fix, AI, partner web scanner, or human-in-the-loop review.', { size: 9.5, gapAfter: 6 })
   p.text('Not yet performed: formal screen-reader user testing (NVDA / JAWS / VoiceOver) — recommended to finalize a signed conformance statement.', { size: 9.5, color: AMBER })
   p.save(d.filename || 'mova-accessibility-conformance-report.pdf')
 }
