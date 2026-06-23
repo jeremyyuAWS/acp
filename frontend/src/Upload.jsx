@@ -548,7 +548,8 @@ export default function Upload({ onCertified }) {
                 <button className="ghost small" onClick={() => sample('benefits-policy.docx')}>Word</button>
                 <button className="ghost small" onClick={() => sample('quarterly-town-hall.pptx')}>PowerPoint</button>
                 <button className="ghost small" onClick={() => sample('finance-metrics.xlsx')}>Excel</button>
-                <button className="ghost small" onClick={() => sample('careers-landing.html')}>HTML</button>
+                <button className="ghost small" onClick={() => sample('patient-health-portal.html')} title="Patient portal with contrast failures, unlabeled forms, and structural issues — watch the page visibly transform">HTML ★</button>
+                <button className="ghost small" onClick={() => sample('careers-landing.html')}>HTML (alt)</button>
                 <button className="ghost small" onClick={() => sample('benefits-briefing.mp3')}>Audio</button>
                 <button className="ghost small" onClick={() => sample('benefits-briefing.webm')} title="A narrated video — Whisper transcribes the audio track into captions (1.2.2)">Video</button>
                 <button className="ghost small" onClick={() => sample('enrollment-notice.png')} title="An image of text — watch Claude read it back as real text (1.4.5)">Image of text</button>
