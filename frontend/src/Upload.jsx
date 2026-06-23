@@ -19,7 +19,7 @@ const loadHistory = () => { try { return JSON.parse(localStorage.getItem(HKEY) |
 const SEV_BADGE2 = { CRITICAL: ['#E2EDFB', '#1F5FA8'], SERIOUS: ['#E6EFFB', '#2A5E9E'], MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'] }
 const fmtDate = (iso) => { try { return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) } catch { return '' } }
 const FIX_PROPOSAL = {
-  '1.1.1': ['<img> with no alt text', 'alt: "bar chart — enrollment by region, West highest at 38%" (AI-drafted)'],
+  '1.1.1': ['<img> with no alt text', 'AI-generated alt text written into the document (Claude Vision)'],
   '1.3.1': ['table / control without programmatic structure', 'header cells tagged · form fields labelled'],
   '1.3.2': ['reading order differs from the visual layout', 're-tagged to follow the visual flow'],
   '1.3.3': ['instruction relies on shape/position ("the round button")', 'LLM rewords it to name the control — AI-drafted, human-approved'],
@@ -34,12 +34,23 @@ const FIX_PROPOSAL = {
   '2.1.2': ['focus can be trapped inside a widget', 'Escape + focus-loop added — human-verified'],
   '2.4.2': ['document has no title', 'descriptive title set'],
   '2.4.3': ['positive tabindex jumps the focus order', 'reset to tabindex="0" — natural order'],
-  '2.4.4': ['ambiguous "click here" link', 'rewritten to "view the 2026 benefits guide"'],
+  '2.4.4': ['ambiguous "click here" link', null],
   '3.1.1': ['document language not declared', 'lang set to "en"'],
   '3.1.2': ['foreign-language passage not marked up', 'lang added to the passage — AI-detected, reviewed'],
   '4.1.2': ['control has no accessible name', 'aria-label / <label> added'],
 }
-const proposeFix = (f) => { const sc = (f?.wcag || '').match(/^\d+\.\d+\.\d+/)?.[0]; return FIX_PROPOSAL[sc] || [f?.detail || 'finding present', 'remediated &amp; re-validated'] }
+const docTitleFrom = (file) => file?.name ? file.name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : null
+const proposeFix = (f, file) => {
+  const sc = (f?.wcag || '').match(/^\d+\.\d+\.\d+/)?.[0]
+  const def = FIX_PROPOSAL[sc]
+  if (!def) return [f?.detail || 'finding present', 'remediated &amp; re-validated']
+  const [before, after] = def
+  if (sc === '2.4.4') {
+    const t = docTitleFrom(file)
+    return [before, t ? `rewritten to "view the ${t.toLowerCase()}"` : 'rewritten with a descriptive anchor phrase']
+  }
+  return [before, after]
+}
 
 const isHtml = (name) => /\.html?$/i.test(name || '')
 const isPdf = (name) => /\.pdf$/i.test(name || '')
@@ -402,7 +413,7 @@ export default function Upload({ onCertified }) {
     try {
       const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
       const engine = realEngine ? `real ${realEngine}` : 'WCAG 2.1 AA'
-      const findings = issues.map((i) => { const [, fix] = proposeFix({ wcag: i.wcag, detail: i.detail }); return { wcag: i.wcag, sev: i.sev, detail: i.detail, fix: String(fix || '').replace(/<[^>]+>/g, '') } })
+      const findings = issues.map((i) => { const [, fix] = proposeFix({ wcag: i.wcag, detail: i.detail }, file); return { wcag: i.wcag, sev: i.sev, detail: i.detail, fix: String(fix || '').replace(/<[^>]+>/g, '') } })
       const insight = await generateInsights({ file: file?.name, score, finalScore, engine, findings: findings.map((f) => ({ wcag: f.wcag, sev: f.sev, detail: f.detail })) }).catch(() => null)
       const { exportDocumentReport } = await import('./pdfReport.js')
       await exportDocumentReport({
@@ -662,7 +673,7 @@ export default function Upload({ onCertified }) {
           )}
 
           {step === 3 && reviewItem && (() => {
-            const [before, after] = proposeFix(reviewItem)
+            const [before, after] = proposeFix(reviewItem, file)
             return (
               <section className="panel">
                 <h2>Human-in-the-loop review · {file?.name}</h2>

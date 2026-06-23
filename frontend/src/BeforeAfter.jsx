@@ -140,7 +140,7 @@ function baFor(sc, docTitle) {
   switch (sc) {
     case '1.1.1': return {
       before: <div className="baimg"><span aria-hidden="true">🖼</span><span className="bawarn">no alt text — screen readers skip this</span></div>,
-      after: <div className="baimg"><span aria-hidden="true">🖼</span><span className="bacap">alt: “bar chart — enrollment by quarter, Q3 highest”</span></div>,
+      after: <div className="baimg"><span aria-hidden="true">🖼</span><span className="bacap">alt: {docTitle ? `"image from ${docTitle}"` : 'AI-generated description'} — Claude Vision</span></div>,
     }
     case '1.4.3': return {
       before: <div><span className="bacontrast" style={{ color: '#bcbcbc' }}>Apply by March 31</span><span className="bawarn">3.1 : 1 · fails AA</span></div>,

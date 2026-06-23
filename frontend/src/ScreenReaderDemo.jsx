@@ -7,10 +7,10 @@ import { prefersReducedMotion } from './a11y.js'
 // not a screen-reader one — so it's intentionally excluded).
 function passFor(issues, docTitle) {
   const has = (sc) => issues.some((i) => (i.wcag || '').includes(sc))
-  const title = docTitle || 'Open enrollment 2026 — UT Southwestern'
+  const title = docTitle || 'Document'
   const lines = [{ before: 'document, no title', after: title }, { before: title, after: `heading level 1, ${title}` }]
-  if (has('1.1.1')) lines.push({ before: 'graphic', after: 'graphic — bar chart, enrollment by region, West highest at 38 percent' })
-  if (has('1.3.1')) lines.push({ before: 'table, eight cells', after: 'table, Region by enrollment, 2 columns, 5 rows. Column one, Region. Column two, Enrollment' })
+  if (has('1.1.1')) lines.push({ before: 'graphic', after: 'graphic — ' + (docTitle ? docTitle.toLowerCase() + ' image, AI-described' : 'AI-described image content') })
+  if (has('1.3.1')) lines.push({ before: 'table, cells with no headers', after: 'table, ' + (docTitle ? docTitle.toLowerCase() + ' data' : 'data table') + ', header row tagged, column names announced' })
   if (has('1.3.2')) lines.push({ before: 'footnote 4. Continued from. The plan covers', after: 'The plan covers preventive visits. Footnote 4.' })
   if (has('2.4.4')) lines.push({ before: 'link, click here', after: 'link, view ' + (docTitle ? 'the ' + docTitle.toLowerCase() : 'the full document') })
   lines.push({ before: 'edit text, blank', after: 'Email address, required, edit text' })

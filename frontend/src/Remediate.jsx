@@ -48,7 +48,7 @@ const FIX_TYPES = [
   { label: 'table headers', value: 6, color: '#A56814' },
 ]
 const FIX_EXAMPLES = [
-  { fmt: 'PDF', wcag: 'WCAG 1.1.1 · alt text', auto: true, before: 'figure 3 — no alt text', after: 'alt: “Q3 benefits enrollment by region — West 38%, NE 24%, South 22%, Midwest 16%”' },
+  { fmt: 'PDF', wcag: 'WCAG 1.1.1 · alt text', auto: true, before: 'figure 3 — no alt text', after: 'alt: “Q3 revenue by region — West 38%, NE 24%, South 22%, Midwest 16%”' },
   { fmt: 'Video', wcag: 'WCAG 1.2.2 · captions', auto: false, before: '4:12 video — no caption track', after: 'Synchronized captions drafted (speech-to-text) — pending human review' },
   { fmt: 'Excel', wcag: 'WCAG 1.3.1 · table headers', auto: true, before: 'merged cells A1:C1, no header row', after: 'header row tagged <th scope="col"> so structure is announced' },
   { fmt: 'Web', wcag: 'WCAG 1.4.3 · contrast', auto: false, before: 'body text at 3.1:1 on grey', after: 'recoloured to 4.8:1 — now passes AA (design-reviewed)' },
