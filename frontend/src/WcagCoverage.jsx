@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react'
+import IntegrationRoadmap from './IntegrationRoadmap.jsx'
 import { WCAG } from './wcagCatalog.js'
 import { WHY } from './wcagWhy.js'
 import { useDialog } from './a11y.js'
@@ -327,6 +328,9 @@ export default function WcagCoverage() {
         )
       })}
 
+
+      {/* ── Google Drive + SharePoint Integration Roadmap ─────────────────── */}
+      <IntegrationRoadmap />
       {sel && <ScDetail sel={sel} onClose={() => setSel(null)} />}
     </>
   )

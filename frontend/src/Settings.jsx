@@ -5,6 +5,7 @@ import Ontology from './Ontology.jsx'
 import OwnerDelegate from './OwnerDelegate.jsx'
 import FileTypeConfig from './FileTypeConfig.jsx'
 import RolePrivilege from './RolePrivilege.jsx'
+import UserManagement from './UserManagement.jsx'
 import { useDialog } from './a11y.js'
 import { downloadUpdatedXlsx, downloadUpdatedPptx } from './exportDeliverables.js'
 
@@ -39,6 +40,7 @@ export default function Settings({ onClose, onRubricSaved, files = [], onOntolog
           <button role="tab" aria-selected={tab === 'filetypes'} className={tab === 'filetypes' ? 'fchip on' : 'fchip'} onClick={() => setTab('filetypes')}>File types</button>
           <button role="tab" aria-selected={tab === 'owners'} className={tab === 'owners' ? 'fchip on' : 'fchip'} onClick={() => setTab('owners')}>Owners</button>
           <button role="tab" aria-selected={tab === 'permissions'} className={tab === 'permissions' ? 'fchip on' : 'fchip'} onClick={() => setTab('permissions')}>Permissions</button>
+          <button role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'fchip on' : 'fchip'} onClick={() => setTab('users')}>Users</button>
         </div>
         <div className="setbody">
           {tab === 'rules' && <Rubric onSaved={onRubricSaved} />}
@@ -47,6 +49,7 @@ export default function Settings({ onClose, onRubricSaved, files = [], onOntolog
           {tab === 'filetypes' && <FileTypeConfig onChanged={(cfg, custom) => onFileTypeChange?.(cfg, custom)} />}
           {tab === 'owners' && <OwnerDelegate files={files} onChanged={onDelegationChange} />}
           {tab === 'permissions' && <RolePrivilege onChanged={onPrivilegeChange} />}
+          {tab === 'users' && <UserManagement />}
         </div>
       </div>
     </div>

@@ -2,16 +2,15 @@ import { useState, useMemo } from 'react'
 
 const LS_KEY = 'mova_role_privileges'
 
-const AI_SOLUTIONS = ['Accessibility Compliance', 'App Engineering', 'Quality Engineering', 'Enterprise Ops']
-const TEAMS = ['Compliance Team', 'Development Team', 'QA Team', 'Devops Team', 'IT Support', 'Management']
-const ROLES = ['Super Admin', 'Admin', 'Compliance Officer', 'Test Manager', 'End User']
+const AI_SOLUTIONS = ['App Engineering', 'Quality Engineering', 'Enterprise Ops', 'SDLC', 'CX', 'Target ITOps', 'SDLC Subscription', 'QE for Healthcare']
+const TEAMS = ['Development Team', 'QA Team', 'Devops Team', 'Management Team', 'HC QC Team', 'IT Support Target', 'Salesforce Team']
+const ROLES = ['Super Admin', 'Admin', 'Test Manager', 'HC Quality Engineer', 'IT Support Target', 'End User']
 
 const MODULES = [
-  { label: 'Discover',   pages: ['Estate Overview', 'File Detail', 'Source Integrations'] },
-  { label: 'Assess',     pages: ['Compliance Dashboard', 'Findings Report', 'Department View'] },
-  { label: 'Remediate',  pages: ['Auto-Fix Queue', 'HITL Review', 'Certification'] },
-  { label: 'Monitor',    pages: ['Workflow Status', 'Scan History'] },
-  { label: 'Admin',      pages: ['User Management', 'Role Privileges', 'Integrations', 'Settings'] },
+  { label: 'Command Center', pages: ['Chatbot', 'Task', 'Insights', 'Trends', 'Knowledge Graph', 'Workflow'] },
+  { label: 'Market Place',   pages: ['Agent Management', 'Agency Management', 'Workflow Management', 'Knowledge Store Management', 'Mcp Connector Management'] },
+  { label: 'Subscription',   pages: ['Subscription'] },
+  { label: 'Logs',           pages: ['Logs'] },
 ]
 
 const PERMS = ['view', 'edit', 'delete', 'refresh', 'execute']
@@ -27,25 +26,31 @@ const DEFAULT_FOR = (role) => {
   const view  = Object.fromEntries(PERMS.map(p => [p, p === 'view']))
   const none  = Object.fromEntries(PERMS.map(p => [p, false]))
   const build = (pages, permsObj) => Object.fromEntries(pages.map(pg => [pg, { ...permsObj }]))
-  if (role === 'Super Admin' || role === 'Admin') {
+  if (role === 'Super Admin') {
     return Object.fromEntries(MODULES.map(m => [m.label, build(m.pages, full)]))
   }
-  if (role === 'Compliance Officer') {
+  if (role === 'Admin') {
     return {
-      'Discover':  build(MODULES[0].pages, full),
-      'Assess':    build(MODULES[1].pages, full),
-      'Remediate': build(MODULES[2].pages, { view: true, edit: true, delete: false, refresh: true, execute: true }),
-      'Monitor':   build(MODULES[3].pages, view),
-      'Admin':     build(MODULES[4].pages, none),
+      'Command Center': build(MODULES[0].pages, full),
+      'Market Place':   build(MODULES[1].pages, full),
+      'Subscription':   build(MODULES[2].pages, view),
+      'Logs':           build(MODULES[3].pages, none),
     }
   }
   if (role === 'Test Manager') {
     return {
-      'Discover':  build(MODULES[0].pages, view),
-      'Assess':    build(MODULES[1].pages, view),
-      'Remediate': build(MODULES[2].pages, { view: true, edit: false, delete: false, refresh: true, execute: false }),
-      'Monitor':   build(MODULES[3].pages, view),
-      'Admin':     build(MODULES[4].pages, none),
+      'Command Center': build(MODULES[0].pages, { view: true, edit: false, delete: false, refresh: false, execute: true }),
+      'Market Place':   build(MODULES[1].pages, view),
+      'Subscription':   build(MODULES[2].pages, { ...view, execute: true }),
+      'Logs':           build(MODULES[3].pages, none),
+    }
+  }
+  if (role === 'HC Quality Engineer') {
+    return {
+      'Command Center': build(MODULES[0].pages, view),
+      'Market Place':   build(['Agent Management', 'Workflow Management'], view),
+      'Subscription':   build(MODULES[2].pages, view),
+      'Logs':           build(MODULES[3].pages, none),
     }
   }
   return Object.fromEntries(MODULES.map(m => [m.label, build(m.pages, view)]))
@@ -54,8 +59,8 @@ const DEFAULT_FOR = (role) => {
 export default function RolePrivilege({ onChanged }) {
   const [privileges, setPrivileges] = useState(loadPrivileges)
   const [solution, setSolution] = useState(AI_SOLUTIONS[0])
-  const [team, setTeam] = useState(TEAMS[1])
-  const [role, setRole] = useState(ROLES[3])
+  const [team, setTeam] = useState(TEAMS[0])
+  const [role, setRole] = useState(ROLES[2])
   const [saved, setSaved] = useState(false)
 
   const key = makeKey(solution, team, role)
