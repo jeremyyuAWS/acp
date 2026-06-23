@@ -12,7 +12,7 @@ import { auditOffice, remediateOffice } from './officeAudit.js'
 import { auditPdf } from './pdfAudit.js'
 import { prescreenHtml } from './prescreen.js'
 import { useDialog } from './a11y.js'
-import GoogleDrive, { DriveUploadButton } from './GoogleDrive.jsx'
+import GoogleDrive, { DriveUploadButton, saveDriveScore, uploadToDrive } from './GoogleDrive.jsx'
 
 const isOffice = (name) => /\.(docx|pptx|xlsx)$/i.test(name || '')
 const HKEY = 'mova_upload_history'
@@ -274,6 +274,8 @@ export default function Upload({ onCertified }) {
   const [queue, setQueue] = useState([])
   const [batchRunning, setBatchRunning] = useState(false)
   const [batchDone, setBatchDone] = useState(false)
+  const [bulkSaving, setBulkSaving] = useState(false)
+  const [bulkSaved, setBulkSaved] = useState(false)
   const [batchZipping, setBatchZipping] = useState(false)
 
   // Real captions (1.2.2/1.2.3) via the Whisper-backed function when an audio file is uploaded.
@@ -362,6 +364,7 @@ export default function Upload({ onCertified }) {
 
         const score = found.length ? Math.max(18, 100 - found.reduce((a, i) => a + (SEV_PEN[i.sev] || 5), 0)) : 100
         setQueue((q) => q.map((it) => it.id === item.id ? { ...it, status: 'done', score, issues: found, remBlob, engine } : it))
+        if (item.driveFileId && score != null) saveDriveScore(item.driveFileId, score, engine)
         onCertified?.({ file: f.name })
         const rec = { id: `${f.name}-${Date.now()}`, name: f.name, ext: extOf(f.name), date: new Date().toISOString(), score, outcome: 'batch', real: engine, findings: found }
         setHistory((h) => { const next = [rec, ...h.filter((x) => x.name !== f.name)].slice(0, 12); try { localStorage.setItem(HKEY, JSON.stringify(next)) } catch {}; return next })
@@ -371,6 +374,41 @@ export default function Upload({ onCertified }) {
     }
     setBatchRunning(false)
     setBatchDone(true)
+  }
+
+  const handleBulkSaveToDrive = async () => {
+    const eligible = queue.filter((i) => i.driveFileId && i.remBlob && i.status === 'done')
+    if (!eligible.length) return
+    const archive = localStorage.getItem('mova_drive_archive') === 'true'
+    const archiveNote = archive
+      ? '\n\nOriginals will be archived to _mova-originals/ first.'
+      : '\n\nDrive version history preserves the originals.'
+    if (!window.confirm('Replace ' + eligible.length + ' file' + (eligible.length !== 1 ? 's' : '') + ' in your Google Drive?' + archiveNote)) return
+    const token = sessionStorage.getItem('gd_token')
+    if (!token) return
+    setBulkSaving(true); setBulkSaved(false)
+    for (const item of eligible) {
+      try {
+        if (archive) {
+          const today = new Date().toISOString().slice(0, 10)
+          const { findOrCreateFolder: fof } = await import('./GoogleDrive.jsx')
+          if (fof) {
+            const rootId = await fof(token, '_mova-originals', 'root')
+            const dateId = await fof(token, today, rootId)
+            await fetch('https://www.googleapis.com/drive/v3/files/' + item.driveFileId + '/copy', {
+              method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ parents: [dateId] }),
+            })
+          }
+        }
+        const meta = {
+          description: 'Remediated for WCAG 2.1 AA by mova.io · ' + new Date().toISOString().slice(0, 10) + (item.score != null ? ' · Score: ' + item.score + '/100' : ''),
+          appProperties: { mova_score: item.score != null ? String(item.score) : '', mova_standard: 'WCAG 2.1 AA', mova_engine: item.engine || 'mova', mova_date: new Date().toISOString().slice(0, 10) },
+        }
+        await uploadToDrive(token, item.driveFileId, item.remBlob, meta)
+      } catch (e) { console.error('Bulk Drive save failed:', item.file?.name, e) }
+    }
+    setBulkSaving(false); setBulkSaved(true)
   }
 
   const downloadBatchZip = async () => {
@@ -583,7 +621,7 @@ export default function Upload({ onCertified }) {
                     {item.issues != null && <span className="muted" style={{ fontSize: 12, flexShrink: 0 }}>{item.issues.length} finding{item.issues.length !== 1 ? 's' : ''}</span>}
                     {item.score != null && <span className="badge" style={{ background: scoreBg, color: scoreFg, flexShrink: 0 }}>{item.score} / 100</span>}
                     {item.status === 'done' && item.remBlob && item.driveFileId && (
-                      <DriveUploadButton driveFileId={item.driveFileId} blob={item.remBlob} />
+                      <DriveUploadButton driveFileId={item.driveFileId} blob={item.remBlob} score={item.score} engine={item.engine} />
                     )}
                     {!batchRunning && item.status === 'waiting' && (
                       <button
@@ -621,8 +659,14 @@ export default function Upload({ onCertified }) {
                 {batchZipping ? 'Preparing ZIP…' : `⤓ Download all (${doneCount} file${doneCount !== 1 ? 's' : ''} + CSV)`}
               </button>
             )}
+            {batchDone && queue.some((i) => i.driveFileId && i.remBlob && i.status === 'done') && !bulkSaved && (
+              <button onClick={handleBulkSaveToDrive} disabled={bulkSaving} style={{ background: '#1F5FA8', color: '#fff', border: 'none' }}>
+                {bulkSaving ? '↑ Saving to Drive…' : '↑ Save all to Drive'}
+              </button>
+            )}
+            {bulkSaved && <span style={{ fontSize: 13, color: '#3B6D11' }}>✓ All saved to Drive</span>}
             {queue.length > 0 && !batchRunning && (
-              <button className="ghost" style={{ marginLeft: 'auto' }} onClick={() => { setQueue([]); setBatchDone(false) }}>✕ Clear queue</button>
+              <button className="ghost" style={{ marginLeft: 'auto' }} onClick={() => { setQueue([]); setBatchDone(false); setBulkSaved(false) }}>✕ Clear queue</button>
             )}
           </div>
 
@@ -633,6 +677,23 @@ export default function Upload({ onCertified }) {
               </p>
             </div>
           )}
+          {batchDone && (() => {
+            const driveItems = queue.filter((i) => i.status === 'done' && i.driveFileId && i.score != null)
+            if (!driveItems.length) return null
+            const avgScore = Math.round(driveItems.reduce((s, i) => s + i.score, 0) / driveItems.length)
+            const totalFindings = driveItems.reduce((s, i) => s + (i.issues?.length || 0), 0)
+            return (
+              <div style={{ background: '#E7F0DC', border: '1px solid #B8D89A', borderRadius: 8, padding: '10px 14px', marginTop: 10, fontSize: 13 }}>
+                <b>Google Drive remediation complete</b>
+                <span className="muted"> · </span>
+                {driveItems.length} file{driveItems.length !== 1 ? 's' : ''} from Drive
+                <span className="muted"> · </span>
+                avg score <b>{avgScore}/100</b>
+                <span className="muted"> · </span>
+                {totalFindings} finding{totalFindings !== 1 ? 's' : ''} identified
+              </div>
+            )
+          })()}
         </section>
       )}
 
