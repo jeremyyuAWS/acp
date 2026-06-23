@@ -317,6 +317,13 @@ export default function Upload({ onCertified }) {
     setBatchDone(false)
   }
 
+  const handleGDriveFiles = (fileObjs) => {
+    if (!fileObjs.length) return
+    if (fileObjs.length === 1 && !batchMode) { handleFile(fileObjs[0]); return }
+    setBatchMode(true)
+    addToQueue(fileObjs)
+  }
+
   const runBatch = async () => {
     setBatchRunning(true)
     setBatchDone(false)
