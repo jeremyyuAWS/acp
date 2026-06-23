@@ -367,6 +367,8 @@ input:focus-visible, [role="tab"]:focus-visible {
 .chatmsg.user { align-self: flex-end; background: var(--plum); color: #fff; border-bottom-right-radius: 4px; }
 .chatmsg.thinking { display: flex; align-items: center; gap: 9px; }
 .chatmsg.haschart { max-width: 97%; }
+.chatcursor { display: inline-block; width: 2px; height: 0.9em; background: var(--plum); margin-left: 1px; vertical-align: text-bottom; animation: blink .7s step-end infinite; }
+@keyframes blink { 0%,100% { opacity:1 } 50% { opacity:0 } }
 .chatchart { margin-top: 10px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; overflow-x: auto; }
 .chatchart .critrow { margin: 5px 0; }
 .heatmap { border-collapse: separate; border-spacing: 3px; font-size: 11px; }

@@ -203,7 +203,7 @@ export default function App() {
       </ErrorBoundary>
       </main>
 
-      <ChatWidget files={files} run={run} trend={trend} trendDates={trendDates} />
+      <ChatWidget files={files} run={run} trend={trend} trendDates={trendDates} me={me} />
       {SHOW_A11Y && <A11ySelfCheck />}
       {settingsOpen && me.allow?.includes('settings') && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onOntologyChange={() => setOntology(loadPublished())} />}
     </div>
