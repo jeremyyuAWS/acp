@@ -87,6 +87,13 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
     <div className="rpdoc"><span className="rpdocicon" aria-hidden="true">{isPdf(name) ? '📕' : '📄'}</span><span className="fname">{name}</span>{badge}</div>
   )
 
+  // Build diff rows only for properties that were actually changed or detected
+  const pdfStructRows = remPdf ? [
+    remPdf.changes.some((c) => c.includes('title')) && { label: 'Document title', before: '—', after: name.replace(/\.[^.]+$/, ''), fixed: true },
+    remPdf.changes.some((c) => c.includes('language')) && { label: 'Language', before: '—', after: 'en-US', fixed: true },
+    { label: 'Tagged / reading order', before: 'untagged', after: remPdf.tagged ? 'tagged ✓' : 'structural engine needed', fixed: remPdf.tagged, warn: !remPdf.tagged },
+  ].filter(Boolean) : null
+
   return (
     <section className="panel rppanel">
       <h2>Your document · before → after <span className="muted" style={{ fontWeight: 400 }}>· rendered in your browser, nothing uploaded</span></h2>
@@ -94,14 +101,48 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
         <figure>
           <figcaption className="bafcap before">as received</figcaption>
           {isHtml(name) && srcText ? <iframe sandbox="" title="as received" srcDoc={srcText} />
-            : isPdf(name) && pdfUrl ? <div className="rppdf"><PdfPreview url={pdfUrl} pages={1} /></div>
+            : isPdf(name) && pdfUrl
+              ? <div className="rppdf rpbeforepdf">
+                  <PdfPreview url={pdfUrl} pages={1} />
+                  <div className="rpissueoverlay" aria-hidden="true">
+                    {issues.slice(0, 3).map((iss) => (
+                      <span key={iss.rule} className="rpissuepin">⚠ {iss.detail}</span>
+                    ))}
+                  </div>
+                </div>
               : officeBlob ? <div className="rppdf"><OfficePreview blob={officeBlob} name={name} highlight /></div>
                 : docCard()}
         </figure>
         <figure>
           <figcaption className="bafcap after">remediated</figcaption>
           {isHtml(name) && rem ? <iframe sandbox="" title="remediated" srcDoc={rem.html} />
-            : isPdf(name) && pdfUrl ? <div className="rppdf rpafter"><PdfPreview url={pdfUrl} pages={1} /><span className="rpbadge">{remPdf ? '✓ title + language set' : 'parsing…'}</span></div>
+            : isPdf(name) && pdfUrl
+              ? <div className="rppdf rpafter rpstructpanel">
+                  {pdfStructRows
+                    ? <>
+                        <div className="rpstructhd">
+                          <span className="rpstructicon" aria-hidden="true">📋</span>
+                          <b>Structural properties</b>
+                          <span className="muted">· what changed</span>
+                        </div>
+                        <div className="rpstructrows">
+                          {pdfStructRows.map((row) => (
+                            <div className="rpstructrow" key={row.label}>
+                              <span className="rpstructlabel">{row.label}</span>
+                              <span className="rpstructbefore">{row.before}</span>
+                              <span className="rpstructarrow" aria-hidden="true">→</span>
+                              <span className={`rpstructafter ${row.fixed ? 'ok' : row.warn ? 'warn' : ''}`}>{row.after}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="rpstructs">
+                          {remPdf.changes.map((c) => <span key={c} className="bachip">✓ {c}</span>)}
+                          {!remPdf.tagged && <span className="bachip warn">⚑ full tagging needs structural engine — detected &amp; flagged</span>}
+                        </div>
+                      </>
+                    : <div className="oploading"><span className="spinner" /><span className="muted">applying structural fixes…</span></div>
+                  }
+                </div>
               : officeBlob ? <div className="rppdf rpafter">{remBlob ? <OfficePreview blob={remBlob} name={name} highlight /> : <div className="oploading"><span className="spinner" /> <span className="muted">applying fixes…</span></div>}<span className="rpbadge">✓ remediated</span></div>
                 : docCard(<span className="rpbadge">✓ accessible</span>)}
         </figure>

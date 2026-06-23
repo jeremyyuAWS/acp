@@ -723,6 +723,24 @@ input:focus-visible, [role="tab"]:focus-visible {
 .rpdoc .rpbadge { position: static; background: #E7F0DC; color: #3B6D11; }
 .rpnote { margin-top: 12px; }
 .rpactions { margin-top: 11px; display: flex; gap: 10px; flex-wrap: wrap; }
+/* PDF before/after: issue overlay on the "before" side */
+.rpbeforepdf { position: relative; }
+.rpissueoverlay { position: absolute; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; gap: 3px; padding: 7px 8px; pointer-events: none; }
+.rpissuepin { display: block; font-size: 10.5px; font-weight: 600; color: #7A2B0A; background: rgba(250, 238, 218, 0.96); border-radius: 6px; padding: 3px 8px; border-left: 3px solid #D85A30; }
+/* PDF "after" structural diff panel */
+.rpstructpanel { height: 230px; display: flex; flex-direction: column; gap: 0; padding: 13px 14px; background: #f4fbf0; }
+.rpstructhd { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 10px; }
+.rpstructicon { font-size: 18px; }
+.rpstructrows { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+.rpstructrow { display: grid; grid-template-columns: 6fr 3fr 14px 5fr; gap: 6px; align-items: center; background: #fff; border-radius: 8px; padding: 7px 10px; border: 1px solid var(--line); font-size: 12px; }
+.rpstructlabel { font-weight: 600; color: var(--fg); }
+.rpstructbefore { color: #9E3D12; font-style: italic; text-align: right; }
+.rpstructarrow { color: #b7afbd; text-align: center; font-size: 10px; }
+.rpstructafter { color: #5F5E5A; }
+.rpstructafter.ok { color: #3B6D11; font-weight: 600; }
+.rpstructafter.warn { color: #854F0B; }
+/* warning chip variant */
+.bachip.warn { color: #854F0B; background: #FAEEDA; }
 
 /* --- screen-reader before/after demo --- */
 .srdemo { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
