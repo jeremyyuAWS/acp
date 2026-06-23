@@ -308,9 +308,9 @@ export default function Upload({ onCertified }) {
     setPrescreen(text && isHtml(f.name) ? prescreenHtml(text) : [])
     const html = text && isHtml(f.name)
     const phases = pdf
-      ? ['Connecting to partner accessibility engine…', 'Extracting PDF structure & tag tree…', 'Checking alt text, titles & reading order…', 'Running WCAG 2.1 AA conformance checks…', 'Scoring…']
+      ? ['Extracting PDF structure & tag tree…', 'Checking alt text, titles & reading order…', 'Running WCAG 2.1 AA conformance checks…', 'Scoring…']
       : office
-      ? ['Opening OOXML package…', 'Parsing document structure (headings, tables, images)…', 'Running partner accessibility checks…', 'Checking language, titles & link purpose…', 'Scoring against WCAG 2.1 AA…']
+      ? ['Opening OOXML package…', 'Parsing document structure (headings, tables, images)…', 'Running accessibility checks…', 'Checking language, titles & link purpose…', 'Scoring against WCAG 2.1 AA…']
       : ['Connecting…', 'Reading document…', 'mova Agent classifying & tagging…',
           html ? 'Analysing with axe-core (real WCAG engine)…' : audio ? (isVideo(f.name) ? 'Transcribing the video soundtrack with Whisper…' : 'Transcribing the audio with Whisper…') : image ? 'Describing the image with Claude vision…' : 'Analysing against WCAG 2.1 AA…',
           'Scoring…']
@@ -318,8 +318,8 @@ export default function Upload({ onCertified }) {
     const finish = async () => {
       let found = issuesFor(f.name)
       if (html) { try { found = await auditHtml(text); setRealEngine('axe-core') } catch { /* fall back */ } }
-      else if (office) { try { found = await auditOffice(office); setRealEngine('partner OOXML engine') } catch { /* fall back */ } }
-      else if (pdf) { try { found = await auditPdf(pdf); setRealEngine('partner PDF engine') } catch { /* fall back */ } }
+      else if (office) { try { found = await auditOffice(office); setRealEngine('OOXML engine') } catch { /* fall back */ } }
+      else if (pdf) { try { found = await auditPdf(pdf); setRealEngine('PDF engine') } catch { /* fall back */ } }
       else if (image) { setRealEngine('Claude vision') }
       setScanning(false); setIssues(found); setStep(1)
     }
@@ -552,8 +552,8 @@ export default function Upload({ onCertified }) {
                 <span className="muted">or try a real multi-page sample:</span>
                 <button className="ghost small" onClick={() => sample('quarterly-town-hall.pptx')} title="Town hall deck with 3 embedded charts — Claude Vision reads each chart and writes alt text in real time">PowerPoint ★</button>
                 <button className="ghost small" onClick={() => sample('patient-health-portal.html')} title="Patient portal with contrast failures, unlabeled forms, and structural issues — watch the page visibly transform">HTML ★</button>
-                <button className="ghost small" onClick={() => sample('patient-discharge-instructions.pdf')} title="Multi-page discharge instructions — partner PDF engine checks alt text, tags, titles & reading order in real time">PDF ★</button>
-                <button className="ghost small" onClick={() => sample('benefits-policy.docx')} title="Benefits policy with images and a data table — partner OOXML engine validates alt text, table headers, titles & language">Word ★</button>
+                <button className="ghost small" onClick={() => sample('patient-discharge-instructions.pdf')} title="Multi-page discharge instructions — checks alt text, tags, titles & reading order in real time">PDF ★</button>
+                <button className="ghost small" onClick={() => sample('benefits-policy.docx')} title="Benefits policy with real charts and tables — validates alt text, table headers, titles & language">Word ★</button>
                 <button className="ghost small" onClick={() => sample('finance-metrics.xlsx')}>Excel</button>
                 <button className="ghost small" onClick={() => sample('careers-landing.html')}>HTML (alt)</button>
                 <button className="ghost small" onClick={() => sample('benefits-briefing.mp3')}>Audio</button>
@@ -594,7 +594,7 @@ export default function Upload({ onCertified }) {
               <div className="scaninfo">
                 <div className="scanprogline"><span className="spinner" />{phase}</div>
                 <div className="muted fname" style={{ marginTop: 8, fontSize: 13 }}>{file?.name}</div>
-                {realEngine && <div className="realbadge" style={{ marginLeft: 0, marginTop: 8, display: 'inline-block' }}>⚡ real {realEngine} analysis</div>}
+                {realEngine && <div className="realbadge" style={{ marginLeft: 0, marginTop: 8, display: 'inline-block' }}>⚡ live {realEngine} analysis</div>}
                 <div className="track" style={{ marginTop: 12 }}><i style={{ width: '66%', background: '#BF8C00', transition: 'width .4s' }} /></div>
               </div>
             </section>
@@ -605,21 +605,12 @@ export default function Upload({ onCertified }) {
           {step === 1 && (
             <section className="panel">
               <div className="rubrichdr"><h2 style={{ margin: 0 }}>Assessment · <span className="fname" style={{ fontSize: 14 }}>{file?.name}</span>
-                {realEngine && <span className="realbadge" title={`Findings detected live by the ${realEngine} engine running in your browser`}>⚡ real {realEngine} analysis</span>}</h2>
+                {realEngine && <span className="realbadge" title="Findings detected by live in-browser analysis">⚡ live {realEngine} analysis</span>}</h2>
                 <span className="badge" style={{ background: '#FAEEDA', color: '#854F0B' }}>{issues.length} findings</span></div>
               <div className="lift" style={{ margin: '12px 0 16px' }}>
                 <div className="liftcol"><div className="liftnum" style={{ color: score >= 90 ? '#3B6D11' : score >= 50 ? '#854F0B' : '#1F5FA8' }}>{score}</div><div className="muted">score / 100</div></div>
                 <div className="muted" style={{ flex: 1 }}>Scored against WCAG 2.1 AA. {score < 90 ? 'Below the certifiable threshold — remediation needed.' : 'Meets the bar.'}</div>
               </div>
-              {(isPdf(file?.name) || isOffice(file?.name)) && (
-                <div className="partner-callout">
-                  <span className="covicon covicon-partner">P</span>
-                  <div>
-                    <b>Partner accessibility engine</b>
-                    <span className="muted"> · {isPdf(file?.name) ? 'PDF structure, tagging & WCAG 2.1 AA conformance checks' : 'OOXML structure · alt text, table headers, titles, language & link purpose'}</span>
-                  </div>
-                </div>
-              )}
               <div className="findings">
                 {issues.map((i, n) => {
                   const [bg, fg] = SEV_BADGE[i.sev] || SEV_BADGE.MINOR

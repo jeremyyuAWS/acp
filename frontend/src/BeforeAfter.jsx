@@ -217,6 +217,43 @@ function baFor(sc) {
   }
 }
 
+const SEV_ORDER = { CRITICAL: 0, SERIOUS: 1, MODERATE: 2, MINOR: 3 }
+const SEV_COLOR = {
+  CRITICAL: ['#7B1D1D', '#FDECEA'],
+  SERIOUS:  ['#854F0B', '#FAEEDA'],
+  MODERATE: ['#1F5FA8', '#E2EDFB'],
+  MINOR:    ['#444', '#F1EFF4'],
+}
+
+// Which findings can be auto-fixed vs. need human review
+const AUTO_FIX_SC = new Set(['1.1.1','1.3.1','2.4.2','3.1.1','2.4.4','1.4.1','1.4.3','1.4.4','1.4.10','1.4.11','1.4.12','2.1.1','2.4.3','4.1.2'])
+const MANUAL_RULES = new Set(['DOCX-HEAD-001','DOCX-LINK-001'])
+
+// Who is affected by each SC — shown as user impact
+const IMPACT = {
+  '1.1.1': 'Blind users & screen readers',
+  '1.3.1': 'Screen reader users',
+  '1.3.2': 'Screen reader users',
+  '2.4.2': 'All assistive tech users',
+  '2.4.4': 'Screen reader users & keyboard users',
+  '3.1.1': 'TTS & screen readers',
+  '1.4.3': 'Low-vision users',
+  '1.4.4': 'Low-vision users',
+  '1.4.10': 'Mobile & low-vision users',
+  '1.4.11': 'Low-vision users',
+  '1.4.12': 'Dyslexic & low-vision users',
+  '2.1.1': 'Keyboard-only users',
+  '2.1.2': 'Keyboard-only users',
+  '2.4.3': 'Keyboard-only users',
+  '4.1.2': 'Screen reader & voice-control users',
+}
+
+function fixMode(it) {
+  if (MANUAL_RULES.has(it.rule)) return 'human'
+  const sc = scOf(it.wcag)
+  return AUTO_FIX_SC.has(sc) ? 'auto' : 'human'
+}
+
 export default function BeforeAfter({ file, issues = [], srcText, pdfUrl, officeBlob }) {
   const rem = useMemo(() => (srcText ? remediateHtml(srcText) : null), [srcText])
   const [busy, setBusy] = useState(false)
@@ -230,10 +267,16 @@ export default function BeforeAfter({ file, issues = [], srcText, pdfUrl, office
   }, [officeBlob])
   const dl = (blob, name) => { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000) }
   const downloadFixed = () => { if (rem) dl(new Blob([rem.html], { type: 'text/html' }), `remediated-${(file?.name || 'page').replace(/\.[^.]+$/, '')}.html`) }
-  const downloadOffice = () => {
-    if (!preBlob || busy) return
-    dl(preBlob, `remediated-${file?.name || 'document'}`)
-  }
+  const downloadOffice = () => { if (!preBlob || busy) return; dl(preBlob, `remediated-${file?.name || 'document'}`) }
+
+  // Sort findings: CRITICAL first, then by WCAG SC
+  const sorted = [...issues].sort((a, b) => {
+    const sa = SEV_ORDER[a.sev] ?? 4, sb = SEV_ORDER[b.sev] ?? 4
+    return sa !== sb ? sa - sb : (a.wcag || '').localeCompare(b.wcag || '')
+  })
+  const autoCount = sorted.filter(i => fixMode(i) === 'auto').length
+  const humanCount = sorted.length - autoCount
+
   return (
     <div className="bawrap">
       {rem && (
@@ -256,27 +299,53 @@ export default function BeforeAfter({ file, issues = [], srcText, pdfUrl, office
       )}
       {officeBlob && (
         <div className="balive">
-          <div className="bahd"><b>Remediated file</b><span className="muted"> — fixes written directly into the Office XML in your browser, nothing uploaded</span></div>
-          {issues.length > 0 && (
-            <div className="ba-remsum">
-              {issues.filter(i => /1\.1\.1/.test(i.wcag)).length > 0 && <span className="ba-remchip">✓ Alt text added to {issues.filter(i => /1\.1\.1/.test(i.wcag)).length} image{issues.filter(i => /1\.1\.1/.test(i.wcag)).length !== 1 ? 's' : ''}</span>}
-              {issues.some(i => /2\.4\.2/.test(i.wcag)) && <span className="ba-remchip">✓ Document title set</span>}
-              {issues.some(i => /1\.3\.1/.test(i.wcag) && /table/i.test(i.detail)) && <span className="ba-remchip">✓ Table header row added</span>}
-              {issues.some(i => /DOCX-HEAD/.test(i.rule)) && <span className="ba-remchip ba-remchip-warn">⚑ Heading structure — human review needed</span>}
-              {issues.some(i => /3\.1\.1/.test(i.wcag)) && <span className="ba-remchip">✓ Language declared (en-US)</span>}
-              {issues.some(i => /2\.4\.4/.test(i.wcag)) && <span className="ba-remchip">✓ Link text clarified</span>}
-            </div>
-          )}
-          <button className="ghost small" onClick={downloadOffice} disabled={!preReady || busy}>{!preReady ? 'Preparing…' : `⤓ Download the remediated ${(file?.name || '').split('.').pop().toUpperCase()}`}</button>
+          <div className="bahd"><b>Remediated file ready</b><span className="muted"> — fixes written directly into the Office XML in your browser, nothing uploaded</span></div>
+          <div className="ba-remsum">
+            {issues.filter(i => /1\.1\.1/.test(i.wcag)).length > 0 && <span className="ba-remchip">✓ Alt text added to {issues.filter(i => /1\.1\.1/.test(i.wcag)).length} image{issues.filter(i => /1\.1\.1/.test(i.wcag)).length !== 1 ? 's' : ''}</span>}
+            {issues.some(i => /2\.4\.2/.test(i.wcag)) && <span className="ba-remchip">✓ Document title set</span>}
+            {issues.some(i => /1\.3\.1/.test(i.wcag) && /table/i.test(i.detail)) && <span className="ba-remchip">✓ Table header row added</span>}
+            {issues.some(i => /3\.1\.1/.test(i.wcag)) && <span className="ba-remchip">✓ Language declared (en-US)</span>}
+            {issues.some(i => /2\.4\.4/.test(i.wcag)) && <span className="ba-remchip">✓ Link text clarified</span>}
+            {issues.some(i => /DOCX-HEAD/.test(i.rule)) && <span className="ba-remchip ba-remchip-warn">⚑ Heading structure flagged — needs author review</span>}
+          </div>
+          <button className="badownload" onClick={downloadOffice} disabled={!preReady || busy}>
+            {!preReady ? '⏳ Preparing remediated file…' : `⤓ Download remediated ${(file?.name || '').split('.').pop().toUpperCase()}`}
+          </button>
         </div>
       )}
+
       <div className="bacards">
-        <div className="bahd"><b>What remediation produces</b><span className="muted"> — per finding, before → after</span></div>
-        {issues.map((it, n) => {
+        <div className="ba-findhd">
+          <div>
+            <b>Remediation detail</b>
+            <span className="muted"> — each finding, what changes and why it matters</span>
+          </div>
+          <div className="ba-findcount">
+            {autoCount > 0 && <span className="ba-modebadge auto">⚡ {autoCount} auto-fixed</span>}
+            {humanCount > 0 && <span className="ba-modebadge human">⚑ {humanCount} need review</span>}
+          </div>
+        </div>
+
+        {sorted.map((it, n) => {
           const ba = baFor(scOf(it.wcag))
+          const [sevFg, sevBg] = SEV_COLOR[it.sev] || SEV_COLOR.MINOR
+          const mode = fixMode(it)
+          const sc = scOf(it.wcag)
+          const impact = IMPACT[sc]
           return (
-            <div className="barow" key={n}>
-              <div className="balabel">{it.wcag}<span className="muted" style={{ fontWeight: 400 }}> · {it.detail}</span></div>
+            <div className="barow" key={n} data-sev={it.sev?.toLowerCase()}>
+              <div className="balabel">
+                <div className="balabel-top">
+                  <span className="badge" style={{ background: sevBg, color: sevFg, fontSize: 10, padding: '1px 7px' }}>{(it.sev || 'minor').toLowerCase()}</span>
+                  <span className="basc">{it.wcag}</span>
+                  {mode === 'auto'
+                    ? <span className="ba-modebadge auto" style={{ fontSize: 10 }}>⚡ auto-fixed</span>
+                    : <span className="ba-modebadge human" style={{ fontSize: 10 }}>⚑ human review</span>}
+                </div>
+                <div className="balabel-detail">{it.detail}</div>
+                {impact && <div className="balabel-impact">Affects: {impact}</div>}
+                {mode === 'human' && <div className="balabel-note">⚑ This fix requires understanding content — flagged for author review in the next step.</div>}
+              </div>
               <div className="bacell before"><span className="batag">before</span>{ba.before}</div>
               <div className="baarrow" aria-hidden="true">→</div>
               <div className="bacell after"><span className="batag">after</span>{ba.after}</div>
