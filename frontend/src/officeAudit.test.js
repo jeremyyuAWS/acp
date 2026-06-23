@@ -32,11 +32,11 @@ describe('officeAudit', () => {
   it('detects missing alt, table header, title and language', async () => {
     const findings = await auditOffice(await makeDocx())
     const rules = findings.map((f) => f.rule)
-    expect(rules).toContain('office-image-alt')
-    expect(rules).toContain('office-table-header')
-    expect(rules).toContain('office-title')
-    expect(rules).toContain('office-lang')
-    expect(detailsFor(findings, 'office-image-alt')).toMatch(/1 of 1/)
+    expect(rules).toContain('DOCX-ALT-001')
+    expect(rules).toContain('DOCX-TABLE-001')
+    expect(rules).toContain('DOCX-TITLE-001')
+    expect(rules).toContain('DOCX-LANG-001')
+    expect(detailsFor(findings, 'DOCX-ALT-001')).toMatch(/1 of 1/)
   })
 
   it('remediation clears every finding (incl. language)', async () => {
@@ -75,8 +75,8 @@ describe('officeAudit', () => {
     const findings = await auditOffice(await z.generateAsync({ type: 'blob' }))
     // image alt still flagged because only one cNvPr got descr in this crude clean-up,
     // so assert the structural ones that ARE clean:
-    expect(findings.map((f) => f.rule)).not.toContain('office-table-header')
-    expect(findings.map((f) => f.rule)).not.toContain('office-title')
-    expect(findings.map((f) => f.rule)).not.toContain('office-lang')
+    expect(findings.map((f) => f.rule)).not.toContain('DOCX-TABLE-001')
+    expect(findings.map((f) => f.rule)).not.toContain('DOCX-TITLE-001')
+    expect(findings.map((f) => f.rule)).not.toContain('DOCX-LANG-001')
   })
 })

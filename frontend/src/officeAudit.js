@@ -6,6 +6,8 @@ const CONTENT = /^(word|ppt|xl)\/.*\.xml$/
 const CNVPR = /<(pic:cNvPr|wp:docPr|xdr:cNvPr|p:cNvPr)\b([^>]*?)(\/?)>/g
 const hasDescr = (attrs) => /\bdescr="[^"]*[^\s"][^"]*"/.test(attrs)
 
+const GENERIC_LINK_RE = /\b(click here|click this|^here$|read more|learn more|^more$|this link|this page|^link$)\b/i
+
 export async function auditOffice(blob) {
   const JSZip = (await import('jszip')).default
   const zip = await JSZip.loadAsync(blob)
@@ -58,7 +60,7 @@ const TC_INITIALS = 'MAP'
 // Tag the first row of each Word table as a repeating header row.
 // When tcId is provided ({n: number}), wraps the change in <w:trPrChange> tracked-change
 // markup so the fix is visible as a formatting revision in Word's Track Changes view.
-function addTableHeaders(xml, tcId = null) {
+function addTableHeaders(xml, tcId = null, tcDate = '') {
   return xml.replace(/<w:tbl>([\s\S]*?)<\/w:tbl>/g, (full, inner) => {
     if (/<w:tblHeader\b/.test(inner)) return full
     const tr = /<w:tr\b[^>]*>/.exec(inner)
@@ -164,7 +166,7 @@ export async function remediateOffice(blob, opts = {}) {
       const alt = (media && alts[media]) || fallback
       return `<${tag}${attrs} descr="${esc(alt)}"${slash}>`
     })
-    if (n.startsWith('word/')) xml = addTableHeaders(xml, tcId)
+    if (n.startsWith('word/')) xml = addTableHeaders(xml, tcId, tcDate)
     zip.file(n, xml)
   }
 
@@ -188,9 +190,29 @@ export async function remediateOffice(blob, opts = {}) {
         comments.push({ id: 2, text: '✓ FIXED (DOCX-LANG-001): Document language set to English (en-US). Text-to-speech engines now use the correct English voice and pronunciation rules.' })
       }
     }
-    if (tc && tcId && tcId.n > 100) {
-      const tableCount = (await zip.file('word/document.xml')?.async('string') || '').match(/<w:tblHeader\b/g)?.length || 0
-      comments.push({ id: 3, text: `✓ FIXED (DOCX-TABLE-001): ${tableCount} table header row(s) marked (see formatting tracked changes on each table's first row). Screen readers can now announce column names as users navigate cells.` })
+    if (tc) {
+      const docXml = zip.file('word/document.xml') ? await zip.file('word/document.xml').async('string') : ''
+      if (tcId && tcId.n > 100) {
+        const tableCount = (docXml.match(/<w:tblHeader\b/g) || []).length
+        comments.push({ id: 3, text: `✓ FIXED (DOCX-TABLE-001): ${tableCount} table header row(s) marked (see formatting tracked changes on each table's first row). Screen readers can now announce column names as users navigate cells.` })
+      }
+      // Heading structure: detect skips and add a review comment
+      const headingLevels = [...docXml.matchAll(/<w:pStyle w:val="Heading(\d+)"/g)].map((m) => parseInt(m[1]))
+      let headingSkip = false; let maxSeen = 0
+      for (const h of headingLevels) {
+        if (h > maxSeen + 1 && maxSeen > 0) { headingSkip = true; break }
+        if (h > maxSeen) maxSeen = h
+      }
+      if (headingSkip) {
+        comments.push({ id: 4, text: '\u26a0 REVIEW NEEDED (DOCX-HEAD-001): Heading levels skip in this document — logical structure is broken for screen readers. Open the Styles panel (Home \u2192 Styles) and ensure headings are sequential: Heading 1 \u2192 Heading 2 \u2192 Heading 3, no levels skipped.' })
+      }
+      // Generic link text: flag each link that needs a manual rewrite
+      const genericLinkTexts = [...docXml.matchAll(/<w:hyperlink\b[\s\S]*?<\/w:hyperlink>/g)]
+        .map((m) => m[0].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim())
+        .filter((t) => GENERIC_LINK_RE.test(t))
+      if (genericLinkTexts.length) {
+        comments.push({ id: 5, text: `\u26a0 REVIEW NEEDED (DOCX-LINK-001): ${genericLinkTexts.length} hyperlink(s) use generic text ("${genericLinkTexts[0]}") that is ambiguous out of context. Replace each link's visible text with a description of its destination, e.g. "View the full accessibility report" instead of "click here".` })
+      }
     }
     // Insert a Heading 1 as a tracked insertion so Word shows green underlined text —
     // makes the title fix immediately visible without opening the Reviewing Pane.

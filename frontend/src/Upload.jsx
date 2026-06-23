@@ -348,7 +348,22 @@ export default function Upload({ onCertified }) {
         } else if (isOffice(f.name)) {
           try { found = await auditOffice(f); engine = 'OOXML' } catch { found = issuesFor(f.name) }
           try {
-            remBlob = await remediateOffice(f, { trackedChanges: true })
+            // Extract images from DOCX and get AI-generated alt text (degrades gracefully offline)
+            let alts = {}
+            if (/\.docx$/i.test(f.name) && found.some((x) => x.rule === 'DOCX-ALT-001')) {
+              try {
+                const JSZip = (await import('jszip')).default
+                const zip = await JSZip.loadAsync(f)
+                const mediaFiles = Object.keys(zip.files).filter((n) => /^word\/media\//i.test(n) && /\.(png|jpe?g|gif|webp|bmp)$/i.test(n))
+                for (const mediaPath of mediaFiles) {
+                  const mediaBlob = await zip.file(mediaPath).async('blob')
+                  const b64 = await blobToBase64(mediaBlob)
+                  const res = await generateAltText({ data: b64, mediaType: mediaBlob.type || 'image/png' })
+                  if (res?.alt) alts[mediaPath.split('/').pop()] = res.alt
+                }
+              } catch { /* no key or offline — fallback alt text applied */ }
+            }
+            remBlob = await remediateOffice(f, { trackedChanges: true, alts })
           } catch { /* fall back — no remediated file */ }
         } else if (isPdf(f.name)) {
           try { found = await auditPdf(f); engine = 'pdf-lib' } catch { found = issuesFor(f.name) }
