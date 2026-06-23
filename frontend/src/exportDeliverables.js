@@ -72,7 +72,6 @@ export async function transformXlsx(zip) {
 }
 
 // ---------- PowerPoint: add a "Status" column to the table on each slide ----------
-const COLID_EXT = (val) => `<a:extLst><a:ext uri="{9D8B030D-6E8A-4147-A177-3AD203B41FA5}"><a16:colId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" val="${val}"/></a:ext></a:extLst>`
 
 // Pull the <a:tcPr> (borders + fill) out of a template cell so the new cell matches the
 // table style. Falls back to a plain border-less tcPr.
@@ -104,12 +103,15 @@ export function transformSlideXml(xml) {
   // 1) tblGrid — shrink the existing columns proportionally and add a status column,
   //    keeping the total table width constant so nothing overflows the slide.
   const grid = table.match(/<a:tblGrid>[\s\S]*?<\/a:tblGrid>/)[0]
-  const widths = [...grid.matchAll(/<a:gridCol w="(\d+)">/g)].map((mm) => +mm[1])
+  // w="N" attribute works for both self-closing (<a:gridCol w="N"/>) and open-tag forms
+  const widths = [...grid.matchAll(/w="(\d+)"/g)].map((mm) => +mm[1])
   const total = widths.reduce((a, b) => a + b, 0)
   const statusW = Math.round(total * 0.2)
   const f = (total - statusW) / total
-  let newGrid = grid.replace(/<a:gridCol w="(\d+)">/g, (mm, w) => `<a:gridCol w="${Math.round(+w * f)}">`)
-  newGrid = newGrid.replace('</a:tblGrid>', `<a:gridCol w="${statusW}">${COLID_EXT(20005)}</a:gridCol></a:tblGrid>`)
+  // Replace w="N" on every gridCol, handling self-closing and non-self-closing forms
+  let newGrid = grid.replace(/(<a:gridCol\b[^>]*?)w="(\d+)"([^>]*(?:\/>|>))/g,
+    (m, pre, w, post) => `${pre}w="${Math.round(+w * f)}"${post}`)
+  newGrid = newGrid.replace('</a:tblGrid>', `<a:gridCol w="${statusW}"/></a:tblGrid>`)
   table = table.replace(grid, newGrid)
 
   // 2) capture templates: header cell, a data cell, and a merged (section) cell

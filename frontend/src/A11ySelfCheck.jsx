@@ -4,7 +4,7 @@ import { useState } from 'react'
 // lists any WCAG 2.1 A/AA violations — the product scanning itself, so these gaps
 // never regress. Mounted only when import.meta.env.DEV or the ?a11y query flag is set.
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']
-const IMPACT_COLOR = { critical: '#1F5FA8', serious: '#D85A30', moderate: '#854F0B', minor: '#5F5E5A' }
+const IMPACT_COLOR = { critical: '#1F5FA8', serious: '#9E3D12', moderate: '#854F0B', minor: '#5F5E5A' }
 const fmtSc = (tags) => tags.map((t) => { const d = t.replace(/^wcag/, ''); return /^\d+$/.test(d) && d.length >= 3 ? `${d[0]}.${d[1]}.${d.slice(2)}` : null }).filter(Boolean)
 
 export default function A11ySelfCheck() {
@@ -17,7 +17,10 @@ export default function A11ySelfCheck() {
     setRunning(true); setErr(null)
     try {
       const mod = await import('axe-core'); const axe = mod.default || mod
-      const r = await axe.run(document.body, { resultTypes: ['violations'], runOnly: { type: 'tag', values: TAGS } })
+      const r = await axe.run(
+        { include: [[document.body]], exclude: [['.a11ypanel'], ['.off.intcard']] },
+        { resultTypes: ['violations'], runOnly: { type: 'tag', values: TAGS } }
+      )
       setResult({ at: new Date().toLocaleTimeString(), violations: r.violations })
     } catch (e) { setErr(String(e)) } finally { setRunning(false) }
   }

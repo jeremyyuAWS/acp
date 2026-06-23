@@ -187,8 +187,8 @@ export default function Monitor({ sources = [], files = [], ratified }) {
               </div>
               <div className="watchmeta">
                 <span className="muted">polled {w.polled}</span>
-                <label className="cadsel">scan
-                  <select value={cad[w.id]} onChange={(e) => setCad((c) => ({ ...c, [w.id]: e.target.value }))}>
+                <label htmlFor={`cad-${w.id}`} className="cadsel">scan
+                  <select id={`cad-${w.id}`} value={cad[w.id]} onChange={(e) => setCad((c) => ({ ...c, [w.id]: e.target.value }))}>
                     {['live', 'hourly', 'daily', 'weekly', 'off'].map((v) => <option key={v} value={v}>{v}</option>)}
                   </select>
                 </label>

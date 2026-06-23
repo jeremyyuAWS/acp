@@ -48,18 +48,18 @@ export default function Integrations({ sources, files = [], onScan, busy }) {
       </div>
       <div className="intgrid">
         {sources.map((s) => (
-          <div className="intcard clickable" key={s.id} role="button" tabIndex={0}
-            onClick={() => setSelSrc(s)}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelSrc(s) } }}>
-            <div className="intlogo">{LOGO[s.type] || LOGO.web}</div>
-            <div className="intname">{s.name}</div>
-            <div className="muted" style={{ fontSize: 12 }}>{s.dept} · {(s.files || 0).toLocaleString()} docs</div>
-            <span className="intstatus live"><span className="livedot" />agent · {s.agent}</span>
+          <div className="intcard clickable" key={s.id} onClick={() => setSelSrc(s)}>
+            <button className="intcard-body" onClick={() => setSelSrc(s)} aria-label={`${s.name} — ${(s.files || 0).toLocaleString()} docs in ${s.dept}`}>
+              <div className="intlogo" aria-hidden="true">{LOGO[s.type] || LOGO.web}</div>
+              <div className="intname">{s.name}</div>
+              <div className="muted" style={{ fontSize: 12 }}>{s.dept} · {(s.files || 0).toLocaleString()} docs</div>
+              <span className="intstatus live"><span className="livedot" aria-hidden="true" />agent · {s.agent}</span>
+            </button>
             <button className="intbtn" disabled={busy} onClick={(e) => { e.stopPropagation(); onScan(s.id) }}>{busy ? 'scanning…' : 'Run scan'}</button>
           </div>
         ))}
         {FUTURE.map((s) => (
-          <div className="intcard off" key={s.name}>
+          <div className="intcard off" key={s.name} aria-hidden="true">
             <div className="intlogo">{s.logo}</div>
             <div className="intname">{s.name}</div>
             <span className="intstatus">coming soon</span>

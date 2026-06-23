@@ -226,7 +226,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 /* phase tabs (step ranges under the label) */
 .tab { display: flex; flex-direction: column; line-height: 1.25; text-align: left; }
 .tab .rg { font-size: 11px; color: var(--muted); }
-.tab.on .rg { color: rgba(255, 255, 255, 0.72); }
+.tab.on .rg { color: rgba(255, 255, 255, 0.88); }
 
 /* not-yet-live tabs */
 .previewtag { display: inline-block; font-size: 11px; font-weight: 600; color: #854F0B; background: #FAEEDA; border-radius: 999px; padding: 2px 10px; vertical-align: middle; margin-left: 10px; }
@@ -390,6 +390,8 @@ input:focus-visible, [role="tab"]:focus-visible {
 .pickrow:hover { background: var(--bg); }
 .intcard.clickable { cursor: pointer; }
 .intcard.clickable:hover { border-color: var(--plum); }
+/* Primary-action button inside the card — resets to plain block so the card body stays tappable */
+.intcard-body { appearance: none; background: none; border: none; padding: 0; margin: 0; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 8px; width: 100%; text-align: center; color: inherit; font: inherit; }
 .qrow.clickable { cursor: pointer; }
 .qrow.clickable:hover { background: var(--bg); }
 
