@@ -56,8 +56,8 @@ const IMAGE_ISSUES = [['IMG-ALT-001', '1.1.1 non-text content', 'CRITICAL', 'ima
 // it reacts to whatever the user actually uploads.
 const STEPS = ['Upload', 'Assess', 'Remediate', 'Review', 'Certified']
 const EXT_ISSUES = {
-  pdf: [['pdf.alt-text', '1.1.1 non-text content', 'CRITICAL', 'figure 2 has no alternative text'], ['pdf.tagged', '1.3.1 info & relationships', 'SERIOUS', 'document is not tagged'], ['pdf.document-language', '3.1.1 language of page', 'MODERATE', 'no document language set']],
-  docx: [['DOCX-ALT-001', '1.1.1 non-text content', 'CRITICAL', '3 images missing alt text'], ['DOCX-TITLE-001', '2.4.2 page titled', 'SERIOUS', 'no document title'], ['DOCX-TABLE-001', '1.3.1 info & relationships', 'SERIOUS', 'a table is missing its header row'], ['DOCX-LINK-001', '2.4.4 link purpose', 'MODERATE', '2 ambiguous "click here" links']],
+  pdf: [['pdf.alt-text', '1.1.1 non-text content', 'CRITICAL', '2 figures have no alternative text — blind users receive nothing'], ['pdf.tagged', '1.3.1 info & relationships', 'SERIOUS', 'document is untagged — reading order and structure are indeterminate'], ['pdf.title', '2.4.2 page titled', 'SERIOUS', 'no document title — screen readers announce the raw filename'], ['pdf.document-language', '3.1.1 language of page', 'MODERATE', 'document language not declared — TTS uses incorrect pronunciation rules']],
+  docx: [['DOCX-ALT-001', '1.1.1 non-text content', 'CRITICAL', '3 images missing alt text — blind users receive nothing'], ['DOCX-TITLE-001', '2.4.2 page titled', 'SERIOUS', 'no document title — screen readers announce the filename'], ['DOCX-TABLE-001', '1.3.1 info & relationships', 'SERIOUS', '1 table missing header row — row purpose not programmatically determinable'], ['DOCX-LINK-001', '2.4.4 link purpose', 'MODERATE', '2 "click here" links — purpose is ambiguous without surrounding context'], ['DOCX-LANG-001', '3.1.1 language of page', 'MODERATE', 'document language not declared — affects TTS pronunciation']],
   pptx: [['PPTX-ALT-001', '1.1.1 non-text content', 'CRITICAL', '3 embedded charts have no alt text — blind users receive nothing'], ['PPTX-TITLE-001', '2.4.2 page titled', 'SERIOUS', 'document title is not set'], ['PPTX-SLIDE-001', '2.4.2 page titled', 'SERIOUS', '2 slides are missing titles — slides 2 and 4']],
   xlsx: [['XLSX-ALT-001', '1.1.1 non-text content', 'MODERATE', 'a chart is missing alt text'], ['XLSX-HEADER-001', '1.3.1 info & relationships', 'MODERATE', 'a table has no header row']],
   html: [['WEB-CONTRAST-001', '1.4.3 contrast (AA)', 'SERIOUS', '3 elements below 4.5:1 contrast'], ['WEB-ALT-001', '1.1.1 non-text content', 'CRITICAL', '2 images missing alt'], ['WEB-LABEL-001', '1.3.1 info & relationships', 'MODERATE', 'a form input has no label']],
@@ -308,14 +308,19 @@ export default function Upload({ onCertified }) {
     setFile(f); setSrcText(text); setPdfUrl(url); setPdfBlob(pdf); setOfficeBlob(office); setAudioBlob(audio); setImageBlob(image); setImgResult(null); setCaptions(null); setRealEngine(null); setScanning(true); setStep(0)
     setPrescreen(text && isHtml(f.name) ? prescreenHtml(text) : [])
     const html = text && isHtml(f.name)
-    const realLabel = html ? 'Analysing with axe-core (real WCAG engine)…' : office ? 'Parsing the document (real OOXML analysis)…' : pdf ? 'Parsing the PDF structure (pdf-lib)…' : audio ? (isVideo(f.name) ? 'Transcribing the video soundtrack with Whisper…' : 'Transcribing the audio with Whisper…') : image ? 'Describing the image with Claude vision…' : 'Analysing against WCAG 2.1 AA…'
-    const phases = ['Connecting…', 'Reading document…', 'mova Agent classifying & tagging…', realLabel, 'Scoring…']
+    const phases = pdf
+      ? ['Connecting to partner accessibility engine…', 'Extracting PDF structure & tag tree…', 'Checking alt text, titles & reading order…', 'Running WCAG 2.1 AA conformance checks…', 'Scoring…']
+      : office
+      ? ['Opening OOXML package…', 'Parsing document structure (headings, tables, images)…', 'Running partner accessibility checks…', 'Checking language, titles & link purpose…', 'Scoring against WCAG 2.1 AA…']
+      : ['Connecting…', 'Reading document…', 'mova Agent classifying & tagging…',
+          html ? 'Analysing with axe-core (real WCAG engine)…' : audio ? (isVideo(f.name) ? 'Transcribing the video soundtrack with Whisper…' : 'Transcribing the audio with Whisper…') : image ? 'Describing the image with Claude vision…' : 'Analysing against WCAG 2.1 AA…',
+          'Scoring…']
     let i = 0
     const finish = async () => {
       let found = issuesFor(f.name)
       if (html) { try { found = await auditHtml(text); setRealEngine('axe-core') } catch { /* fall back */ } }
-      else if (office) { try { found = await auditOffice(office); setRealEngine('OOXML') } catch { /* fall back */ } }
-      else if (pdf) { try { found = await auditPdf(pdf); setRealEngine('pdf-lib') } catch { /* fall back */ } }
+      else if (office) { try { found = await auditOffice(office); setRealEngine('partner OOXML engine') } catch { /* fall back */ } }
+      else if (pdf) { try { found = await auditPdf(pdf); setRealEngine('partner PDF engine') } catch { /* fall back */ } }
       else if (image) { setRealEngine('Claude vision') }
       setScanning(false); setIssues(found); setStep(1)
     }
@@ -548,8 +553,8 @@ export default function Upload({ onCertified }) {
                 <span className="muted">or try a real multi-page sample:</span>
                 <button className="ghost small" onClick={() => sample('quarterly-town-hall.pptx')} title="Town hall deck with 3 embedded charts — Claude Vision reads each chart and writes alt text in real time">PowerPoint ★</button>
                 <button className="ghost small" onClick={() => sample('patient-health-portal.html')} title="Patient portal with contrast failures, unlabeled forms, and structural issues — watch the page visibly transform">HTML ★</button>
-                <button className="ghost small" onClick={() => sample('patient-discharge-instructions.pdf')}>PDF</button>
-                <button className="ghost small" onClick={() => sample('benefits-policy.docx')}>Word</button>
+                <button className="ghost small" onClick={() => sample('patient-discharge-instructions.pdf')} title="Multi-page discharge instructions — partner PDF engine checks alt text, tags, titles & reading order in real time">PDF ★</button>
+                <button className="ghost small" onClick={() => sample('benefits-policy.docx')} title="Benefits policy with images and a data table — partner OOXML engine validates alt text, table headers, titles & language">Word ★</button>
                 <button className="ghost small" onClick={() => sample('finance-metrics.xlsx')}>Excel</button>
                 <button className="ghost small" onClick={() => sample('careers-landing.html')}>HTML (alt)</button>
                 <button className="ghost small" onClick={() => sample('benefits-briefing.mp3')}>Audio</button>
@@ -607,6 +612,15 @@ export default function Upload({ onCertified }) {
                 <div className="liftcol"><div className="liftnum" style={{ color: score >= 90 ? '#3B6D11' : score >= 50 ? '#854F0B' : '#1F5FA8' }}>{score}</div><div className="muted">score / 100</div></div>
                 <div className="muted" style={{ flex: 1 }}>Scored against WCAG 2.1 AA. {score < 90 ? 'Below the certifiable threshold — remediation needed.' : 'Meets the bar.'}</div>
               </div>
+              {(isPdf(file?.name) || isOffice(file?.name)) && (
+                <div className="partner-callout">
+                  <span className="covicon covicon-partner">P</span>
+                  <div>
+                    <b>Partner accessibility engine</b>
+                    <span className="muted"> · {isPdf(file?.name) ? 'PDF structure, tagging & WCAG 2.1 AA conformance checks' : 'OOXML structure · alt text, table headers, titles, language & link purpose'}</span>
+                  </div>
+                </div>
+              )}
               <div className="findings">
                 {issues.map((i, n) => {
                   const [bg, fg] = SEV_BADGE[i.sev] || SEV_BADGE.MINOR

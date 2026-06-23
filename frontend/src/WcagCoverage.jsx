@@ -187,7 +187,7 @@ export default function WcagCoverage() {
         </div>
         <div className="covlegend">
           {Object.entries(SRC).map(([k, [label, fg, bg]]) => (
-            <span key={k} className="covkey"><i style={{ background: bg, borderColor: fg }} />{label} · {tally(k)}</span>
+            <span key={k} className="covkey"><i style={{ background: bg, borderColor: fg }} />{k === 'Partner baseline' ? <><span className="covicon covicon-partner" style={{ marginRight: 3 }}>P</span>Partner engine · {tally(k)}</> : `${label} · ${tally(k)}`}</span>
           ))}
         </div>
       </div>
@@ -270,8 +270,9 @@ export default function WcagCoverage() {
                     <div className="covname">{r.name}</div>
                     {WHY[r.sc] && <div className="covwhy"><span className="covwhylbl">Why</span> {WHY[r.sc]}</div>}
                     <div className="covbottom">
-                      <div className="covtag" style={{ color: fg }}>{SRC[r.source][0]}{!r.docApplies && <span className="muted" style={{ fontWeight: 400 }}> · N/A docs</span>}</div>
+                      <div className="covtag" style={{ color: fg }}>{r.source !== 'Partner baseline' && SRC[r.source][0]}{!r.docApplies && <span className="muted" style={{ fontWeight: 400 }}> · N/A docs</span>}</div>
                       <div className="covicons">
+                        {r.source === 'Partner baseline' && <span className="covicon covicon-partner" title="Validated by the partner accessibility engine">P</span>}
                         {r.docApplies && <span className="covicon covicon-doc" title="Applies to document uploads (PDF · Word · PPTX)">doc</span>}
                         {remTier(r) === 'assisted' && <span className="covicon covicon-ai" title="AI-assisted · AI drafts the fix, human approves">✎</span>}
                         {remTier(r) === 'manual' && <span className="covicon covicon-human" title="Human-required · must be verified interactively">✋</span>}

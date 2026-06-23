@@ -256,7 +256,16 @@ export default function BeforeAfter({ file, issues = [], srcText, pdfUrl, office
       )}
       {officeBlob && (
         <div className="balive">
-          <div className="bahd"><b>Remediated file</b><span className="muted"> — alt text, table header rows &amp; document title written back into the real Office XML, in your browser</span></div>
+          <div className="bahd"><b>Remediated file</b><span className="muted"> — fixes written directly into the Office XML in your browser, nothing uploaded</span></div>
+          {issues.length > 0 && (
+            <div className="ba-remsum">
+              {issues.filter(i => /1\.1\.1/.test(i.wcag)).length > 0 && <span className="ba-remchip">✓ Alt text added to {issues.filter(i => /1\.1\.1/.test(i.wcag)).length} image{issues.filter(i => /1\.1\.1/.test(i.wcag)).length !== 1 ? 's' : ''}</span>}
+              {issues.some(i => /2\.4\.2/.test(i.wcag)) && <span className="ba-remchip">✓ Document title set</span>}
+              {issues.some(i => /1\.3\.1/.test(i.wcag)) && <span className="ba-remchip">✓ Table header row added</span>}
+              {issues.some(i => /3\.1\.1/.test(i.wcag)) && <span className="ba-remchip">✓ Language declared (en-US)</span>}
+              {issues.some(i => /2\.4\.4/.test(i.wcag)) && <span className="ba-remchip">✓ Link text clarified</span>}
+            </div>
+          )}
           <button className="ghost small" onClick={downloadOffice} disabled={!preReady || busy}>{!preReady ? 'Preparing…' : `⤓ Download the remediated ${(file?.name || '').split('.').pop().toUpperCase()}`}</button>
         </div>
       )}

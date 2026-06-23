@@ -466,6 +466,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .covtag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
 .covicons { display: flex; gap: 2px; flex-shrink: 0; }
 .covicon { font-size: 9px; font-weight: 700; border-radius: 3px; padding: 0 3px; line-height: 1.7; letter-spacing: 0; text-transform: none; }
+.covicon-partner { color: #3C3489; background: rgba(60,52,137,0.18); font-weight: 800; }
 .covicon-doc { color: #3C3489; background: rgba(60,52,137,0.12); }
 .covicon-ai { color: #854F0B; background: rgba(133,79,11,0.12); }
 .covicon-human { color: #1F5FA8; background: rgba(31,95,168,0.12); }
@@ -660,6 +661,8 @@ input:focus-visible, [role="tab"]:focus-visible {
 .scancount { font-weight: 600; color: var(--ink); }
 .lockbanner { background: #f3efea; border: 1px solid #e2dad0; border-radius: 10px; padding: 10px 12px; font-size: 13px; line-height: 1.45; margin: 4px 0 12px; color: var(--ink); }
 .realbadge { font-size: 11px; font-weight: 600; color: #185FA5; background: #E7F0FB; border: 1px solid #cfe0f5; border-radius: 999px; padding: 2px 9px; margin-left: 10px; white-space: nowrap; }
+.partner-callout { display: flex; align-items: center; gap: 8px; background: #EEEDFE; border: 1px solid #cbc8f5; border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
+.partner-callout .covicon-partner { font-size: 11px; padding: 1px 5px; flex-shrink: 0; }
 
 /* --- Upload scan stage (document + scan-line) + history --- */
 .scanstage { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
@@ -797,6 +800,8 @@ input:focus-visible, [role="tab"]:focus-visible {
 @media (max-width: 720px) { .srrow { grid-template-columns: 1fr; gap: 3px; } .srarrow { display: none; } }
 .bachanges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; }
 .bachip { font-size: 11.5px; font-weight: 600; color: #3B6D11; background: #E7F0DC; border-radius: 999px; padding: 3px 10px; }
+.ba-remsum { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 10px; }
+.ba-remchip { font-size: 11px; font-weight: 600; color: #3B6D11; background: #E7F0DC; border-radius: 999px; padding: 2px 9px; }
 .bacards { display: flex; flex-direction: column; gap: 9px; }
 .barow { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: stretch; border: 1px solid var(--line); border-radius: 11px; padding: 11px 13px; }
 .balabel { grid-column: 1 / -1; font-size: 13px; font-weight: 600; }
