@@ -337,8 +337,8 @@ export default function Upload({ onCertified }) {
   }
 
   const onInput = (e) => {
-    const files = e.target.files
-    if (!files?.length) return
+    const files = [...e.target.files]  // spread before clearing — FileList is live and wiped by value=''
+    if (!files.length) return
     e.target.value = ''
     if (files.length > 1) { setBatchMode(true); addToQueue(files); return }
     if (batchMode) { addToQueue(files); return }
