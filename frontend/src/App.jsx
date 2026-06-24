@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
-import { getSources, getRubric, listScans, getScan, startScan, getJob } from './api'
+import { getSources, getRubric, listScans, getScan, startScan, getJob, setDriveToken } from './api'
 import { setPersona } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
 import { loadRolePrivileges } from './RolePrivilege.jsx'
@@ -103,7 +103,13 @@ export default function App() {
   // Kept above the early return below to satisfy the rules of hooks.
   const files = useMemo(() => annotate(scan?.files ?? [], ontology), [scan, ontology])
 
-  const signIn = (p) => { setPersona(p); setScan(null); setScanList([]); setLoaded(false); setDecisions({}); setCertifiedDocs([]); setSettingsOpen(false); setView((p.allow || ['overview'])[0]); setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label, allow: p.allow || [] }) }
+  const signIn = (p) => {
+    // Pass the signed-in user's Drive token to the API layer so backend scan
+    // requests carry X-Drive-Token and scan that user's Drive, not the demo ADC.
+    const gdToken = sessionStorage.getItem('gd_token')
+    if (gdToken) setDriveToken(gdToken)
+    setPersona(p); setScan(null); setScanList([]); setLoaded(false); setDecisions({}); setCertifiedDocs([]); setSettingsOpen(false); setView((p.allow || ['overview'])[0]); setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label, allow: p.allow || [] })
+  }
   if (!me) return <SignIn onSignedIn={signIn} />
 
   const doScan = async (source) => {

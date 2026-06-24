@@ -2,7 +2,9 @@
 // data so we can showcase agentic discovery, auto-tagging, and unified cross-source
 // compliance. Modeled on a health-system org (UT Southwestern) with departments.
 
-export const SIM = true
+// SIM=true: all data is synthetic (no backend needed).
+// Set VITE_SIM=false in .env (+ VITE_API=http://...) to connect to the real backend.
+export const SIM = import.meta.env.VITE_SIM !== 'false'
 export const IDENTITY = { email: 'alex.rivera@utsouthwestern.edu', name: 'Alex Rivera', org: 'UT Southwestern' }
 
 // connected content stores (made up) — the agent monitors each
