@@ -1,5 +1,12 @@
+import { useState, useRef } from 'react'
 import { PERSONAS } from './sim.js'
 import Logo from './Logo.jsx'
+
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || ''
+const AZURE_CLIENT_ID  = import.meta.env.VITE_AZURE_CLIENT_ID  || ''
+const AZURE_TENANT     = import.meta.env.VITE_AZURE_TENANT_ID  || 'common'
+const GD_SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file'
+const SP_SCOPES = ['Files.Read', 'Files.ReadWrite', 'User.Read']
 
 function GoogleG() {
   return (
@@ -18,7 +25,75 @@ const SSO = [{ name: 'Google', icon: <GoogleG /> }, { name: 'Microsoft', icon: <
 const initials = (n) => n.split(' ').map((x) => x[0]).join('').slice(0, 2)
 
 export default function SignIn({ onSignedIn }) {
+  const [gdLoading, setGdLoading] = useState(false)
+  const [spLoading, setSpLoading] = useState(false)
+  const [gdError,   setGdError]   = useState('')
+  const [spError,   setSpError]   = useState('')
+  const tokenClientRef = useRef(null)
+
   const def = PERSONAS.find((p) => p.id === 'compliance') || PERSONAS[0]
+
+  const connectGoogleDrive = () => {
+    if (!GOOGLE_CLIENT_ID) { setGdError('Add VITE_GOOGLE_CLIENT_ID to frontend/.env and restart the dev server.'); return }
+    if (!window.google?.accounts?.oauth2) { setGdError('Google Identity Services not loaded yet — try again in a moment.'); return }
+    setGdLoading(true); setGdError('')
+    if (!tokenClientRef.current) {
+      tokenClientRef.current = window.google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: GD_SCOPES + ' https://www.googleapis.com/auth/userinfo.profile email',
+        callback: async (resp) => {
+          if (resp.error) { setGdLoading(false); setGdError(resp.error); return }
+          try {
+            sessionStorage.setItem('gd_token', resp.access_token)
+            const me = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+              headers: { Authorization: 'Bearer ' + resp.access_token },
+            }).then((r) => r.json()).catch(() => ({}))
+            onSignedIn({
+              id: 'gdrive-user',
+              name: me.name || 'Google User',
+              role: 'Document Owner',
+              email: me.email || '',
+              sso: 'Google',
+              scope: { label: 'My Google Drive · personal' },
+            })
+          } catch { setGdLoading(false); setGdError('Could not fetch Google profile.') }
+        },
+      })
+    }
+    tokenClientRef.current.requestAccessToken()
+  }
+
+  const connectSharePoint = async () => {
+    if (!AZURE_CLIENT_ID) { setSpError('Add VITE_AZURE_CLIENT_ID to frontend/.env and restart the dev server.'); return }
+    if (!window.msal) { setSpError('MSAL not loaded yet — try again in a moment.'); return }
+    setSpLoading(true); setSpError('')
+    try {
+      const cfg = {
+        auth: { clientId: AZURE_CLIENT_ID, authority: `https://login.microsoftonline.com/${AZURE_TENANT}`, redirectUri: window.location.origin },
+        cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: false },
+      }
+      const instance = new window.msal.PublicClientApplication(cfg)
+      await instance.initialize()
+      const loginResult = await instance.loginPopup({ scopes: SP_SCOPES })
+      instance.setActiveAccount(loginResult.account)
+      const tokenResult = await instance.acquireTokenSilent({ scopes: SP_SCOPES, account: loginResult.account })
+        .catch(() => instance.acquireTokenPopup({ scopes: SP_SCOPES }))
+      sessionStorage.setItem('sp_token', tokenResult.accessToken)
+      sessionStorage.setItem('sp_account', JSON.stringify(loginResult.account))
+      onSignedIn({
+        id: 'sp-user',
+        name: loginResult.account.name || 'Microsoft User',
+        role: 'Document Owner',
+        email: loginResult.account.username || '',
+        sso: 'Microsoft',
+        scope: { label: 'My OneDrive · SharePoint' },
+      })
+    } catch (e) {
+      setSpLoading(false)
+      setSpError(e.errorCode === 'user_cancelled' ? 'Sign-in cancelled.' : (e.message || 'Connection failed.'))
+    }
+  }
+
   return (
     <div className="signin">
       <div className="signin-card wide">
@@ -30,6 +105,29 @@ export default function SignIn({ onSignedIn }) {
             <button key={s.name} className="ssobtn" onClick={() => onSignedIn(def)}>{s.icon} Sign in with {s.name}</button>
           ))}
         </div>
+
+        <div className="signin-or"><span>or connect your storage directly</span></div>
+
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button
+            className="ssobtn"
+            style={{ flex: '1 1 0', width: 'auto' }}
+            onClick={connectGoogleDrive}
+            disabled={gdLoading}
+          >
+            <GoogleG /> {gdLoading ? 'Connecting…' : 'Connect Google Drive'}
+          </button>
+          <button
+            className="ssobtn"
+            style={{ flex: '1 1 0', width: 'auto' }}
+            onClick={connectSharePoint}
+            disabled={spLoading}
+          >
+            <MsLogo /> {spLoading ? 'Connecting…' : 'Connect SharePoint'}
+          </button>
+        </div>
+        {gdError && <p style={{ fontSize: 12, color: '#A32D2D', margin: '6px 0 0', textAlign: 'center' }}>{gdError}</p>}
+        {spError && <p style={{ fontSize: 12, color: '#A32D2D', margin: '6px 0 0', textAlign: 'center' }}>{spError}</p>}
 
         <div className="signin-or"><span>or explore a role — demo</span></div>
 
