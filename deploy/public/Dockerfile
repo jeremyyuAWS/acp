@@ -9,7 +9,10 @@
 FROM mirror.gcr.io/library/node:20-slim AS web
 WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+# npm install instead of npm ci: avoids lockfile/npm-version mismatch between
+# local macOS npm and the container's npm when optional peer deps (esbuild) resolve
+# to different minor versions across npm releases.
+RUN npm install --prefer-offline 2>/dev/null || npm install
 COPY frontend/ ./
 RUN echo "VITE_API=" > .env.production && npm run build   # -> /web/dist
 
