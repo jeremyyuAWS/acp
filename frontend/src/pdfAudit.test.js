@@ -10,7 +10,7 @@ describe('pdfAudit (real pdf-lib engine)', () => {
     const findings = await auditPdf(sample())
     const rules = findings.map((f) => f.rule)
     // The sample is a plain untagged PDF: it should at least flag tagging.
-    expect(rules).toContain('pdf-tagged')
+    expect(rules).toContain('pdf.tagged')
     // log for visibility
     console.log('sample PDF findings:', rules.join(', '))
   })
@@ -20,11 +20,11 @@ describe('pdfAudit (real pdf-lib engine)', () => {
     expect(changes.length).toBeGreaterThan(0)
     const after = await auditPdf(blob)
     const rules = after.map((f) => f.rule)
-    expect(rules).not.toContain('pdf-title')
-    expect(rules).not.toContain('pdf-lang')
+    expect(rules).not.toContain('pdf.document-title')
+    expect(rules).not.toContain('pdf.document-language')
     // tagging is honestly NOT auto-fixed — it should still be reported
     expect(tagged).toBe(false)
-    expect(rules).toContain('pdf-tagged')
+    expect(rules).toContain('pdf.tagged')
   })
 
   it('produces a valid, larger PDF blob', async () => {
