@@ -9,6 +9,7 @@ import PdfPreview from './PdfPreview.jsx'
 import OfficePreview from './OfficePreview.jsx'
 import { auditHtml } from './htmlAudit.js'
 import { auditOffice, remediateOffice } from './officeAudit.js'
+import { auditPptx, remediatePptx } from './pptxAudit.js'
 import { auditPdf } from './pdfAudit.js'
 import { prescreenHtml } from './prescreen.js'
 import { useDialog } from './a11y.js'
@@ -95,8 +96,9 @@ const VERIFY_GUIDE = {
   'pdf.tagged':           { app: 'Acrobat',     tip: 'File → Properties → Description — Tagged PDF: Yes. View → Navigation Panels → Tags shows the structure tree.' },
   'pdf.document-title':   { app: 'Acrobat',     tip: 'File → Properties → Description tab — Title is now set to the document name.' },
   'pdf.document-language':{ app: 'Acrobat',     tip: 'File → Properties → Advanced → Reading Options — Language is now set to English.' },
-  'PPTX-ALT-001':         { app: 'PowerPoint',  tipWin: 'Right-click any image → Edit Alt Text — the AI-generated description is now filled in.', tipMac: 'Right-click (or Control+click) any image → Edit Alt Text — the AI-generated description is now filled in.' },
-  'PPTX-TITLE-001':       { app: 'PowerPoint',  tip: 'View → Outline View — every slide now has a title in the title placeholder.' },
+  'PPTX-ALT-001':         { app: 'PowerPoint',  tipWin: 'Right-click any image → Edit Alt Text — the description is now filled in. Images that still read "[Image — add description]" need a manual update.', tipMac: 'Right-click (or Control+click) any image → Edit Alt Text — the description is now filled in. Images that still read "[Image — add description]" need a manual update.' },
+  'PPTX-TITLE-001':       { app: 'PowerPoint',  tip: 'REVIEW NEEDED: slides flagged have no title placeholder. In the slide panel right-click → Layout and pick a layout that includes a Title placeholder, then type the slide title.' },
+  'PPTX-LANG-001':        { app: 'PowerPoint',  tipWin: 'File → Info → Properties panel shows Language. Also: Review tab → Language → Set Proofing Language — language is now English (United States).', tipMac: 'File → Properties → Summary — language is now English (United States).' },
   'PPTX-SLIDE-001':       { app: 'PowerPoint',  tip: 'View → Outline View — slide titles are visible and descriptive.' },
   'XLSX-ALT-001':         { app: 'Excel',       tipWin: 'Right-click the image → Edit Alt Text — the AI-generated description is now filled in.', tipMac: 'Right-click (or Control+click) the image → Edit Alt Text — the AI-generated description is now filled in.' },
   'XLSX-HEADER-001':      { app: 'Excel',       tip: 'Click any cell in the first row → Table Design tab — Header Row checkbox is now on.' },
@@ -355,6 +357,27 @@ export default function Upload({ onCertified }) {
           try { found = await auditHtml(text); engine = 'axe-core' } catch { found = issuesFor(f.name) }
           const rem = remediateHtml(text)
           if (rem?.html) remBlob = new Blob([rem.html], { type: 'text/html' })
+        } else if (/\.pptx$/i.test(f.name)) {
+          try { found = await auditPptx(f); engine = 'PPTX engine' } catch { found = issuesFor(f.name) }
+          try {
+            // Extract images from PPTX slides for AI alt text
+            let alts = {}
+            if (found.some((x) => x.rule === 'PPTX-ALT-001')) {
+              try {
+                const JSZip = (await import('jszip')).default
+                const zip = await JSZip.loadAsync(f)
+                const mediaFiles = Object.keys(zip.files).filter((n) => /^ppt\/media\//i.test(n) && /\.(png|jpe?g|gif|webp|bmp)$/i.test(n))
+                for (const mediaPath of mediaFiles) {
+                  const mediaBlob = await zip.file(mediaPath).async('blob')
+                  const b64 = await blobToBase64(mediaBlob)
+                  const res = await generateAltText({ data: b64, mediaType: mediaBlob.type || 'image/png' })
+                  if (res?.alt) alts[mediaPath.split('/').pop()] = res.alt
+                }
+              } catch { /* offline — fallback alt text applied */ }
+            }
+            const r = await remediatePptx(f, { alts })
+            remBlob = r.blob
+          } catch { /* fall back — no remediated file */ }
         } else if (isOffice(f.name)) {
           try { found = await auditOffice(f); engine = 'OOXML' } catch { found = issuesFor(f.name) }
           try {
@@ -481,6 +504,7 @@ export default function Upload({ onCertified }) {
     const finish = async () => {
       let found = issuesFor(f.name)
       if (html) { try { found = await auditHtml(text); setRealEngine('axe-core') } catch { /* fall back */ } }
+      else if (/\.pptx$/i.test(f.name) && office) { try { found = await auditPptx(office); setRealEngine('PPTX engine') } catch { /* fall back */ } }
       else if (office) { try { found = await auditOffice(office); setRealEngine('OOXML engine') } catch { /* fall back */ } }
       else if (pdf) { try { found = await auditPdf(pdf); setRealEngine('PDF engine') } catch { /* fall back */ } }
       else if (image) { setRealEngine('Claude vision') }

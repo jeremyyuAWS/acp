@@ -156,6 +156,7 @@ export function DriveUploadButton({ driveFileId, blob, score, engine }) {
 
 export default function GoogleDrive({ onFiles }) {
   const tokenClient = useRef(null)
+  const refreshCallbackRef = useRef(null)   // { resolve, reject } for in-flight silent refresh
   const [token, setToken] = useState(() => sessionStorage.getItem('gd_token') || null)
   const [user, setUser] = useState(() => { try { return JSON.parse(sessionStorage.getItem('gd_user') || 'null') } catch { return null } })
   const [files, setFiles] = useState([])
@@ -171,24 +172,56 @@ export default function GoogleDrive({ onFiles }) {
   const [folders, setFolders] = useState([])
   const [selectedFolder, setSelectedFolder] = useState('')
 
+  // Returns a new access token via silent GIS refresh, falling back to a popup.
+  // Resolves with the new token or rejects after 30 s.
+  const refreshToken = useCallback(() => new Promise((resolve, reject) => {
+    if (!tokenClient.current) { reject(new Error('GIS not ready')); return }
+    refreshCallbackRef.current = { resolve, reject }
+    const timer = setTimeout(() => {
+      if (refreshCallbackRef.current?.resolve === resolve) {
+        refreshCallbackRef.current = null
+        reject(new Error('Token refresh timed out'))
+      }
+    }, 30000)
+    // prompt:'' = silent if Google session still valid, popup otherwise
+    tokenClient.current.requestAccessToken({ prompt: '' })
+    // clear the safety timer once resolved
+    const orig = { resolve, reject }
+    refreshCallbackRef.current = {
+      resolve: (tok) => { clearTimeout(timer); orig.resolve(tok) },
+      reject:  (err) => { clearTimeout(timer); orig.reject(err) },
+    }
+  }), [])
+
   const fetchFiles = useCallback(async (tok, pageToken, searchTerm, folderId) => {
     setLoading(true); setError(null)
-    try {
+    const doFetch = async (t) => {
       let q = DRIVE_Q_BASE
       const term = (searchTerm || '').trim()
       if (term) q = "name contains '" + term.replace(/'/g, "\\'") + "' and " + q
       if (folderId) q += " and '" + folderId + "' in parents"
       const params = new URLSearchParams({ q, fields: 'nextPageToken,files(id,name,mimeType,size,modifiedTime,owners)', pageSize: '50', orderBy: 'modifiedTime desc' })
       if (pageToken) params.set('pageToken', pageToken)
-      const r = await fetch('https://www.googleapis.com/drive/v3/files?' + params, { headers: { Authorization: 'Bearer ' + tok } })
-      if (r.status === 401) { setToken(null); sessionStorage.removeItem('gd_token'); return }
+      return fetch('https://www.googleapis.com/drive/v3/files?' + params, { headers: { Authorization: 'Bearer ' + t } })
+    }
+    try {
+      let r = await doFetch(tok)
+      if (r.status === 401) {
+        // Token expired — attempt silent refresh then retry once
+        try {
+          const newTok = await refreshToken()
+          r = await doFetch(newTok)
+        } catch {
+          setToken(null); sessionStorage.removeItem('gd_token'); return
+        }
+      }
       const data = await r.json()
       if (data.error) { setError(data.error.message); return }
       setFiles(prev => pageToken ? [...prev, ...(data.files || [])] : (data.files || []))
       setNextPage(data.nextPageToken || null)
     } catch { setError('Could not load Drive files.') }
     finally { setLoading(false) }
-  }, [])
+  }, [refreshToken])
 
   const fetchFolders = useCallback(async (tok) => {
     try {
@@ -208,9 +241,19 @@ export default function GoogleDrive({ onFiles }) {
     tokenClient.current = window.google.accounts.oauth2.initTokenClient({
       client_id: CLIENT_ID, scope: SCOPES,
       callback: async (resp) => {
-        if (resp.error) { setError(resp.error_description || resp.error); return }
+        if (resp.error) {
+          const pending = refreshCallbackRef.current
+          refreshCallbackRef.current = null
+          if (pending) { pending.reject(new Error(resp.error_description || resp.error)); return }
+          setError(resp.error_description || resp.error); return
+        }
         const tok = resp.access_token
         setToken(tok); sessionStorage.setItem('gd_token', tok)
+        // Resolve any in-flight refresh promise (silent re-auth path)
+        const pending = refreshCallbackRef.current
+        refreshCallbackRef.current = null
+        if (pending) { pending.resolve(tok); return }
+        // Normal connect path
         try {
           const ur = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', { headers: { Authorization: 'Bearer ' + tok } })
           const u = await ur.json(); setUser(u); sessionStorage.setItem('gd_user', JSON.stringify(u))
@@ -249,7 +292,12 @@ export default function GoogleDrive({ onFiles }) {
           ? 'https://www.googleapis.com/drive/v3/files/' + f.id + '/export?mimeType=' + encodeURIComponent(exp.mime)
           : 'https://www.googleapis.com/drive/v3/files/' + f.id + '?alt=media'
         const name = exp ? (f.name.endsWith(exp.ext) ? f.name : f.name + exp.ext) : f.name
-        const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } })
+        const doGet = (t) => fetch(url, { headers: { Authorization: 'Bearer ' + t } })
+        let r = await doGet(token)
+        if (r.status === 401) {
+          const newTok = await refreshToken()
+          r = await doGet(newTok)
+        }
         if (!r.ok) throw new Error('HTTP ' + r.status)
         const blob = await r.blob()
         const fileObj = new File([blob], name, { type: exp ? exp.mime : (blob.type || f.mimeType) })
