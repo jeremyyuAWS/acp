@@ -4,12 +4,12 @@ import FileDrawer from './FileDrawer.jsx'
 // Step 9 · Publish / Replace / Archive. Re-validated documents are published back
 // to their source — replaced in place, the prior version archived, metadata
 // updated, and owners notified. Simulated actions on the live certifiable set.
-export default function Publish({ run, files = [], certified = [] }) {
+export default function Publish({ run, files = [], certified = [], onPublish }) {
   const ready = files.filter((f) => f.compliant)
   const [done, setDone] = useState({})
   const [sel, setSel] = useState(null)
-  const publish = (file) => setDone((d) => (d[file] ? d : { ...d, [file]: true }))
-  const publishAll = () => setDone(() => Object.fromEntries(ready.map((f) => [f.file, true])))
+  const publish = (file) => { setDone((d) => (d[file] ? d : { ...d, [file]: true })); onPublish?.(file) }
+  const publishAll = () => { setDone(() => Object.fromEntries(ready.map((f) => [f.file, true]))); ready.forEach((f) => onPublish?.(f.file)) }
   const publishedCount = Object.keys(done).length + certified.length
 
   return (

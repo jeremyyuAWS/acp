@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { monitoringState, sourceWatch, IDENTITY } from './sim.js'
 import { prefersReducedMotion } from './a11y.js'
 
@@ -16,8 +16,8 @@ const KIND = {
 const SRC_ICON = { sharepoint: '▤', gdrive: '▣', box: '◰', confluence: '❖', cms: '🌐', s3: '☁', onedrive: '☁' }
 const hrs = (m) => m >= 90 ? `${(m / 60).toFixed(1)} hrs` : `${Math.round(m)} min`
 
-// Immutable evidence trail — the ADA/EAA who/when/what/which-engine log (step 10 · Report).
-const AUDIT = [
+// Baseline audit entries — shown when no real decisions have been made yet.
+const BASELINE_AUDIT = [
   ['auto-fix', 'alt-text added to figure 3', 'benefits-guide.pdf'],
   ['review', 'approved table-header fix', 'q3-board-deck.pptx'],
   ['publish', 'replaced in place', 'hr-policy-2026.docx'],
@@ -25,7 +25,9 @@ const AUDIT = [
   ['archive', 'superseded version archived', '2019-policy-old.docx'],
   ['auto-fix', 'reading order corrected', 'annual-report.pdf'],
 ]
-const ACTOR = { 'auto-fix': 'mova engine', review: 'A. Chen', publish: 'mova engine', 're-scan': 'mova engine', archive: 'mova engine' }
+const DEC_ACT = { auto: 'auto-fix', assisted: 'review', review: 'review', archive: 'archive', keep: 'archive', manual: 'review' }
+const DEC_WHAT = { auto: 'issues auto-remediated', assisted: 'AI fix queued for approval', review: 'flagged for manual review', archive: 'archived — superseded', keep: 'kept as-is', manual: 'flagged for manual rebuild' }
+const ACTOR = { 'auto-fix': 'mova engine', review: 'you', publish: 'mova engine', 're-scan': 'mova engine', archive: 'mova engine' }
 const ACOLOR = { 'auto-fix': '#157A56', review: '#854F0B', publish: '#185FA5', 're-scan': '#3B6D11', archive: '#5F5E5A' }
 
 function Toggle({ label, hint, on, set }) {
@@ -37,15 +39,12 @@ function Toggle({ label, hint, on, set }) {
   )
 }
 
-export default function Monitor({ sources = [], files = [], ratified }) {
+export default function Monitor({ sources = [], files = [], ratified, decisions = {}, publishedFiles = [] }) {
   const m = monitoringState(files)
   const watch = sourceWatch(sources, files)
 
-  // SLA enforcement — the published ontology sets remediation deadlines (e.g. 30-day
-  // SLA on Critical). We watch every classified document still needing remediation and
-  // flag breaches / at-risk. Days-in-queue is a deterministic per-doc demo value (no real
-  // detection timestamp in the sim), but the breach/at-risk/on-track logic is real.
-  const daysInQueue = (f) => { let h = 0; for (const c of (f.file || '')) h = (h * 31 + c.charCodeAt(0)) % 100000; return h % 52 }
+  // SLA enforcement — uses f.age (days since last edit) as elapsed time proxy.
+  const daysInQueue = (f) => Math.floor((f.age || 30) * 0.4)
   const slaItems = files
     .filter((f) => f.ont?.sla && f.status !== 'certifiable' && f.status !== 'error')
     .map((f) => { const elapsed = daysInQueue(f); const remaining = f.ont.sla - elapsed; return { f, sla: f.ont.sla, remaining, status: remaining < 0 ? 'breached' : remaining <= Math.max(3, f.ont.sla * 0.25) ? 'at-risk' : 'on-track' } })
@@ -86,7 +85,7 @@ export default function Monitor({ sources = [], files = [], ratified }) {
           { label: 'Re-scan coverage · 7d', value: m.coveragePct + '%', color: '#3B6D11' },
           { label: 'Open alerts', value: m.alerts.length, color: '#1F5FA8' },
         ],
-        events: AUDIT.map(([action, change, document]) => ({ action, actor: ACTOR[action] || 'mova engine', change, document })),
+        events: realAuditSrc.map(([action, change, document]) => ({ action, actor: ACTOR[action] || 'mova engine', change, document })),
       })
     } catch (e) { console.error('evidence export failed', e) }
     finally { setTimeout(() => setExporting(false), 600) }
@@ -97,13 +96,39 @@ export default function Monitor({ sources = [], files = [], ratified }) {
   const cadCount = (v) => Object.values(cad).filter((c) => c === v).length
   const next = useRef(1)
   const push = (e) => setEvents((cur) => [{ ...e, id: next.current++, when: 'just now' }, ...cur].slice(0, 9))
-  const [audit, setAudit] = useState(() => AUDIT.slice(0, 4).map((e, i) => ({ e, id: -i })))
+
+  // Build the live audit trail: published files first, then remediation decisions, padded with baseline.
+  const realAuditSrc = useMemo(() => {
+    const fromPub = publishedFiles.slice(-3).reverse().map((file) => ['publish', 'replaced in place · owner notified', file])
+    const decided = files.filter((f) => decisions[f.file])
+    const fromDec = decided.slice(0, 4 - fromPub.length).map((f) => {
+      const dec = decisions[f.file]
+      const eff = dec.state === 'override' ? dec.action : dec.state === 'rejected' ? 'archive' : f.rec?.action || 'review'
+      return [DEC_ACT[eff] || 'review', (DEC_WHAT[eff] || 'decision recorded') + ' · ' + f.file, f.file]
+    })
+    const combined = [...fromPub, ...fromDec]
+    const pad = BASELINE_AUDIT.slice(0, Math.max(2, 4 - combined.length))
+    return [...combined, ...pad].slice(0, 6)
+  }, [decisions, files, publishedFiles])
+  const auditSrcRef = useRef(realAuditSrc)
+  auditSrcRef.current = realAuditSrc
+  const [audit, setAudit] = useState(() => realAuditSrc.slice(0, 4).map((e, i) => ({ e, id: -i })))
   const auditNext = useRef(1)
+
+  // When decisions or published files change, refresh the visible audit trail.
+  useEffect(() => {
+    const decided = files.filter((f) => decisions[f.file])
+    if (!decided.length && !publishedFiles.length) return
+    setAudit(realAuditSrc.slice(0, 4).map((e, i) => ({ e, id: -(i + 100) })))
+  }, [decisions, publishedFiles]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (paused || prefersReducedMotion()) return
     const t = setInterval(() => push(POOL[next.current % POOL.length]), 4200)
-    const a = setInterval(() => setAudit((f) => [{ e: AUDIT[auditNext.current % AUDIT.length], id: auditNext.current++ }, ...f].slice(0, 6)), 2600)
+    const a = setInterval(() => {
+      const src = auditSrcRef.current
+      setAudit((f) => [{ e: src[auditNext.current % src.length], id: auditNext.current++ }, ...f].slice(0, 6))
+    }, 2600)
     return () => { clearInterval(t); clearInterval(a) }
   }, [paused]) // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -146,10 +146,43 @@ def _search_folder(svc, folder_id: str) -> list[dict]:
     return _normalize(raw)
 
 
-def _list(source: str, svc=None, folder: str | None = None) -> list[dict]:
+def _sp_list(token: str, max_files: int = 200) -> list[dict]:
+    """List scannable files from OneDrive personal via MS Graph search."""
+    import httpx
+    exts = {".docx", ".pptx", ".xlsx", ".pdf"}
+    hdrs = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    files: list[dict] = []
+    url = "https://graph.microsoft.com/v1.0/me/drive/root/search(q='')?$select=id,name,file&$top=200"
+    while url and len(files) < max_files:
+        r = httpx.get(url, headers=hdrs, timeout=30, follow_redirects=True)
+        r.raise_for_status()
+        data = r.json()
+        for item in data.get("value", []):
+            if "file" not in item:
+                continue
+            name = item.get("name", "")
+            if Path(name).suffix.lower() in exts:
+                files.append({"name": _safe_name(name), "id": item["id"], "sp": True})
+        url = data.get("@odata.nextLink")
+    return files[:max_files]
+
+
+def _sp_download(token: str, item: dict, dest: Path) -> None:
+    """Download a file from OneDrive via MS Graph /content redirect."""
+    import httpx
+    hdrs = {"Authorization": f"Bearer {token}"}
+    url = f"https://graph.microsoft.com/v1.0/me/drive/items/{item['id']}/content"
+    r = httpx.get(url, headers=hdrs, timeout=120, follow_redirects=True)
+    r.raise_for_status()
+    (dest / item["name"]).write_bytes(r.content)
+
+
+def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None = None) -> list[dict]:
     if source == "local":
         return [{"name": p.name, "path": str(p)} for p in sorted((ACP / "test-corpus/files").glob("*"))
                 if p.suffix.lower() in OFFICE + (".pdf",)]
+    if source == "sharepoint":
+        return _sp_list(sp_token)
     if folder and folder != "root":
         # Specific folder: recursive BFS
         return _search_folder(svc, folder)
@@ -163,10 +196,13 @@ def _list(source: str, svc=None, folder: str | None = None) -> list[dict]:
     return _normalize(resp.get("files", []))
 
 
-def _download(item: dict, dest: Path, svc=None) -> None:
+def _download(item: dict, dest: Path, svc=None, sp_token: str | None = None) -> None:
     out = dest / item["name"]
     if "path" in item:
         out.write_bytes(Path(item["path"]).read_bytes())
+        return
+    if item.get("sp"):
+        _sp_download(sp_token, item, dest)
         return
     from googleapiclient.http import MediaIoBaseDownload
     buf = io.BytesIO()
@@ -224,7 +260,7 @@ def _analyse_office(dest: Path) -> dict:
 
 
 def run_scan(source: str = "local", progress=_noop, drive_token: str | None = None,
-             folder: str | None = None) -> dict:
+             folder: str | None = None, sp_token: str | None = None) -> dict:
     rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
     tmp = Path(tempfile.mkdtemp(prefix="acp-api-scan-"))
@@ -232,14 +268,14 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
     effective_folder = folder if folder else ("root" if drive_token else None)
     try:
         progress({"phase": "connecting", "files_found": 0, "files_done": 0, "current": None})
-        svc = None if source == "local" else _drive_service(drive_token)
-        items = _list(source, svc, folder=effective_folder)
+        svc = None if source in ("local", "sharepoint") else _drive_service(drive_token)
+        items = _list(source, svc, folder=effective_folder, sp_token=sp_token)
         n = len(items)
         progress({"phase": "discovering", "files_found": n, "files_done": 0, "current": None})
 
         for i, it in enumerate(items):
             progress({"phase": "reading", "files_found": n, "files_done": i, "current": it["name"]})
-            _download(it, tmp, svc)
+            _download(it, tmp, svc, sp_token=sp_token)
 
         office = _analyse_office(tmp)
         raw: dict[str, dict] = {}

@@ -28,12 +28,21 @@ const LOGO = {
   box: <Tile bg="#0061D5"><b style={{ fontSize: 12 }}>box</b></Tile>,
   web: <Tile bg="#5F6B7A">{G('M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M3 12h18M12 3c2.5 2.5 2.5 15.5 0 18M12 3c-2.5 2.5-2.5 15.5 0 18')}</Tile>,
 }
-const FUTURE = [
+const FUTURE_ALL = [
   { name: 'SharePoint', logo: <Tile bg="#036C70"><b style={{ fontSize: 15 }}>S</b></Tile> },
   { name: 'OneDrive', logo: <Tile bg="#0364B8">{G('M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.5A3.5 3.5 0 0 1 19 18z')}</Tile> },
   { name: 'File Shares', logo: <Tile bg="#E8A400">{G('M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z')}</Tile> },
   { name: 'S3 / Blob', logo: <Tile bg="#2E72C9"><b style={{ fontSize: 12 }}>S3</b></Tile> },
 ]
+
+// Synthetic OneDrive source card shown when the user has an MS token.
+const SP_SOURCE = {
+  id: 'sp-root',
+  type: 'sharepoint',
+  name: 'OneDrive',
+  files: null,
+  access: 'read-only',
+}
 
 // ── Folder picker modal ────────────────────────────────────────────────────────
 
@@ -126,17 +135,23 @@ function FolderPicker({ onScan, onClose }) {
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function Integrations({ sources, files = [], onScan, busy }) {
+export default function Integrations({ sources, files = [], onScan, busy, hasSPToken }) {
   const [selSrc, setSelSrc] = useState(null)
   const [selFile, setSelFile] = useState(null)
   const [pickerSrc, setPickerSrc] = useState(null)
+
+  // Merge in OneDrive source card when user has an MS token
+  const allSources = hasSPToken ? [...sources, SP_SOURCE] : sources
+  const FUTURE = hasSPToken
+    ? FUTURE_ALL.filter((s) => s.name !== 'SharePoint' && s.name !== 'OneDrive')
+    : FUTURE_ALL
 
   const total = sources.reduce((a, s) => a + (s.files || 0), 0)
 
   const handleScan = (srcId) => {
     if (SIM) { onScan(srcId); return }
-    // In real mode: Drive sources open the folder picker; local/unknown scan directly
-    const src = sources.find((s) => s.id === srcId)
+    const src = allSources.find((s) => s.id === srcId)
+    if (src?.type === 'sharepoint') { onScan('sharepoint'); return }
     if (src?.type === 'google_drive') { setPickerSrc(src); return }
     onScan(srcId)
   }
@@ -150,19 +165,19 @@ export default function Integrations({ sources, files = [], onScan, busy }) {
     <>
       <div className="estatebar">
         <div>
-          <b>{sources.length} sources</b> · {total.toLocaleString()} documents under continuous compliance monitoring
+          <b>{allSources.length} sources</b> · {total.toLocaleString()} documents under continuous compliance monitoring
           <div className="muted" style={{ marginTop: 2 }}>the mova Agent discovers, classifies, and re-scans across every store</div>
         </div>
-        <button disabled={busy} onClick={() => SIM ? onScan('all') : handleScan(sources[0]?.id)}>{busy ? 'scanning…' : 'Scan all sources'}</button>
+        <button disabled={busy} onClick={() => SIM ? onScan('all') : handleScan(allSources[0]?.id)}>{busy ? 'scanning…' : 'Scan all sources'}</button>
       </div>
       <div className="intgrid">
-        {sources.map((s) => (
+        {allSources.map((s) => (
           <div className="intcard clickable" key={s.id} onClick={() => setSelSrc(s)}>
-            <button className="intcard-body" onClick={() => setSelSrc(s)} aria-label={`${s.name} — ${(s.files || 0).toLocaleString()} docs`}>
+            <button className="intcard-body" onClick={() => setSelSrc(s)} aria-label={`${s.name} — ${s.files != null ? s.files.toLocaleString() : 'connected'}`}>
               <div className="intlogo" aria-hidden="true">{LOGO[s.type] || LOGO.web}</div>
               <div className="intname">{s.name}</div>
               <div className="muted" style={{ fontSize: 12 }}>
-                {s.user ? `${s.user} · ` : ''}{(s.files || 0).toLocaleString()} scannable files
+                {s.user ? `${s.user} · ` : ''}{s.files != null ? `${s.files.toLocaleString()} scannable files` : 'ready to scan'}
               </div>
               <span className="intstatus live"><span className="livedot" aria-hidden="true" />connected · read-only</span>
             </button>

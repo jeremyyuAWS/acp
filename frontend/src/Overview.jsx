@@ -71,8 +71,11 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
   const ontCrit = ontDocs.filter((f) => f.ont.priority === 'Critical').length
   const ontHigh = ontDocs.filter((f) => f.ont.priority === 'High').length
   const ontVer = loadPublished()?.version
-  const verify = Math.round(needFix * 0.7)
-  const publish = run.certifiable + Math.round(needFix * 0.5)
+  // Verify: auto-fix files re-pass at ~95%; assisted at ~78% (human sign-off sometimes rejects)
+  const autoCount = files.filter((f) => f.rec?.action === 'auto').length
+  const assistedCount = files.filter((f) => f.rec?.action === 'assisted').length
+  const verify = Math.round(autoCount * 0.95 + assistedCount * 0.78)
+  const publish = Math.min(n, run.certifiable + Math.round(autoCount * 0.92 + assistedCount * 0.70))
   const auditReady = n ? Math.round((run.certifiable / n) * 100) : 0
   const maxN = Math.max(1, n)
 
@@ -131,7 +134,17 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
   }
 
   const before = run.avg_score ?? 72
-  const after = Math.min(100, before + 12)
+  const after = (() => {
+    const SEV_PEN = { CRITICAL: 16, SERIOUS: 11, MODERATE: 5, MINOR: 2 }
+    const scored = files.filter((f) => f.score != null)
+    if (!scored.length) return Math.min(100, before + 12)
+    const projScores = scored.map((f) => {
+      if (f.rec?.action !== 'auto') return f.score
+      const gain = (f.issues || []).filter((i) => i.auto).reduce((s, i) => s + (SEV_PEN[i.severity] || 0), 0)
+      return Math.min(100, f.score + gain)
+    })
+    return Math.min(100, Math.round(projScores.reduce((a, b) => a + b, 0) / projScores.length))
+  })()
   return (
     <>
       <div className="dashtoolbar">

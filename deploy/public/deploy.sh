@@ -32,6 +32,7 @@ IMAGE="acp-app:${TAG}"
 ADC_FILE="${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/application_default_credentials.json}"
 CODE="${ACP_ACCESS_CODE:-$(openssl rand -hex 6)}"
 CLIENT_ID="${ACP_GOOGLE_CLIENT_ID:-}"   # set => per-user GIS sign-in, passcode gate off
+DATABASE_URL="${ACP_DATABASE_URL:-}"    # set => Postgres backend; unset => SQLite (single-instance only)
 
 echo "== 0/5 preflight =="
 [ -f "$ADC_FILE" ] || { echo "no Drive ADC at $ADC_FILE — run: gcloud auth application-default login ..."; exit 1; }
@@ -60,7 +61,6 @@ ACRPW="$(az acr credential show -n "$ACR" --query 'passwords[0].value' -o tsv)"
 echo "== 4/5 (re)deploy Container App with external ingress =="
 ADC_JSON="$(cat "$ADC_FILE")"
 # Auth mode: per-user GIS (client id set, passcode off) vs demo (passcode gate on).
-# Empty-string env values disable the unused lever.
 if [ -n "$CLIENT_ID" ]; then
   MODE_ENV="ACP_GOOGLE_CLIENT_ID=$CLIENT_ID ACP_ACCESS_CODE="
   echo "   auth = per-user GIS (passcode gate disabled)"
@@ -68,20 +68,37 @@ else
   MODE_ENV="ACP_GOOGLE_CLIENT_ID= ACP_ACCESS_CODE=secretref:access-code"
   echo "   auth = demo (Basic-auth passcode gate)"
 fi
+# Database: Postgres secret (if DATABASE_URL set) or SQLite fallback.
+if [ -n "$DATABASE_URL" ]; then
+  EXTRA_SECRETS="database-url=$DATABASE_URL"
+  DB_ENV="DATABASE_URL=secretref:database-url"
+  echo "   db = Postgres (DATABASE_URL set)"
+else
+  EXTRA_SECRETS=""
+  DB_ENV="DATABASE_URL="
+  echo "   db = SQLite (ACP_DATABASE_URL not set — single-instance only)"
+fi
 if az containerapp show -g "$RG" -n "$APP" -o none 2>/dev/null; then
-  _retry az containerapp secret set -g "$RG" -n "$APP" \
-    --secrets "google-adc=$ADC_JSON" "access-code=$CODE" -o none
+  if [ -n "$EXTRA_SECRETS" ]; then
+    _retry az containerapp secret set -g "$RG" -n "$APP" \
+      --secrets "google-adc=$ADC_JSON" "access-code=$CODE" "$EXTRA_SECRETS" -o none
+  else
+    _retry az containerapp secret set -g "$RG" -n "$APP" \
+      --secrets "google-adc=$ADC_JSON" "access-code=$CODE" -o none
+  fi
   _retry az containerapp registry set -g "$RG" -n "$APP" \
     --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
   _retry az containerapp update -g "$RG" -n "$APP" --image "$ACRSERVER/$IMAGE" \
-    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV -o none
+    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV $DB_ENV -o none
 else
+  BASE_SECRETS="google-adc=$ADC_JSON access-code=$CODE"
+  [ -n "$EXTRA_SECRETS" ] && BASE_SECRETS="$BASE_SECRETS $EXTRA_SECRETS"
   az containerapp create -g "$RG" -n "$APP" --environment "$ENVNAME" \
     --image "$ACRSERVER/$IMAGE" \
     --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
     --target-port 8077 --ingress external \
-    --secrets "google-adc=$ADC_JSON" "access-code=$CODE" \
-    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV \
+    --secrets $BASE_SECRETS \
+    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV $DB_ENV \
     --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 1 -o none
 fi
 

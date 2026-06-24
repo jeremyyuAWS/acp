@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
 import FileDrawer, { REC_STYLE, fmtEffort, SOURCE_URL } from './FileDrawer.jsx'
@@ -40,13 +40,13 @@ const priWhy = (f) => {
   return r.slice(0, 2).join(' · ')
 }
 
-const FIX_TYPES = [
-  { label: 'alt-text generated', value: 38, color: '#639922' },
-  { label: 'reading order fixed', value: 21, color: '#157A56' },
-  { label: 'headings tagged', value: 14, color: '#378ADD' },
-  { label: 'language set', value: 9, color: '#726BC6' },
-  { label: 'table headers', value: 6, color: '#A56814' },
-]
+const FIX_WCAG_LABELS = {
+  SC_1_1_1: { label: 'alt-text generated', color: '#639922' },
+  SC_1_3_2: { label: 'reading order fixed', color: '#157A56' },
+  SC_2_4_2: { label: 'headings / titles tagged', color: '#378ADD' },
+  SC_3_1_1: { label: 'language set', color: '#726BC6' },
+  SC_1_3_1: { label: 'table headers', color: '#A56814' },
+}
 const FIX_EXAMPLES = [
   { fmt: 'PDF', wcag: 'WCAG 1.1.1 · alt text', auto: true, before: 'figure 3 — no alt text', after: 'alt: “Q3 revenue by region — West 38%, NE 24%, South 22%, Midwest 16%”' },
   { fmt: 'Video', wcag: 'WCAG 1.2.2 · captions', auto: false, before: '4:12 video — no caption track', after: 'Synchronized captions drafted (speech-to-text) — pending human review' },
@@ -54,13 +54,42 @@ const FIX_EXAMPLES = [
   { fmt: 'Web', wcag: 'WCAG 1.4.3 · contrast', auto: false, before: 'body text at 3.1:1 on grey', after: 'recoloured to 4.8:1 — now passes AA (design-reviewed)' },
   { fmt: 'Audio', wcag: 'WCAG 1.2.1 · transcript', auto: false, before: 'podcast episode — no transcript', after: 'transcript drafted from speech-to-text — pending human review' },
 ]
-const QUEUE0 = [
-  { id: 1, icon: '▦', title: 'chart on slide 7 — alt-text', meta: 'suggested alt-text', conf: 61, file: 'open-enrollment-deck.pptx', source: 'SharePoint', rule: 'WCAG 1.1.1 — non-text content', before: '<pic alt="">', after: '<pic alt="Q3 revenue by region — West 38%, NE 24%, South 22%, Midwest 16%">' },
-  { id: 2, icon: '⊞', title: 'merged cells — table headers', meta: 'needs a human structure call', conf: 48, file: 'budget-model.xlsx', source: 'Box', rule: 'WCAG 1.3.1 — info & relationships', before: '<table> — merged A1:C1, no header row', after: '<table> — unmerged, <th scope="col"> on row 1' },
-  { id: 3, icon: '¶', title: 'reading order — multi-column page', meta: 'two plausible orders', conf: 55, file: 'annual-report-2025.pdf', source: 'Google Drive', rule: 'WCAG 1.3.2 — meaningful sequence', before: 'tab order: right column before left', after: 'tab order: left column → right (natural)' },
-  { id: 4, icon: '◫', title: 'scanned page — needs OCR + tags', meta: 'low text confidence', conf: 42, file: 'vendor-contract-acme.pdf', source: 'Box', rule: 'WCAG 1.3.1 — info & relationships', note: 'Image-only PDF — the agent recommends OCR + manual tagging before this can be certified; no auto-fix proposed.' },
-  { id: 5, icon: '🎬', title: 'video captions — AI draft ready', meta: 'ASR captions need review', conf: 58, file: 'patient-explainer.mp4', source: 'Google Drive', rule: 'WCAG 1.2.2 — captions', before: '4:12 video — no caption track', after: 'Synchronized captions drafted (speech-to-text) — review timing & accuracy' },
-]
+const ITEM_ICON = { '1.1.1': '▦', '1.2.1': '🎧', '1.2.2': '🎬', '1.2.5': '🎬', '1.3.1': '⊞', '1.3.2': '¶', '1.4.3': '◑', '2.4.2': '¶', '2.4.4': '↗', '3.1.1': '✦' }
+const ITEM_NAME = { '1.1.1': 'non-text content', '1.2.1': 'audio-only & video-only', '1.2.2': 'captions', '1.2.5': 'audio description', '1.3.1': 'info & relationships', '1.3.2': 'meaningful sequence', '1.4.3': 'contrast minimum', '2.4.2': 'page titled', '2.4.4': 'link purpose', '3.1.1': 'language of page' }
+const ITEM_BA = {
+  '1.1.1': { meta: 'AI alt text — review accuracy', before: (d) => d || 'image / chart — no alt text', after: () => 'AI-generated alt text added — confirm or reword before certifying' },
+  '1.2.1': { meta: 'transcript draft — verify accuracy', before: () => 'audio — no transcript', after: () => 'AI transcript drafted (speech-to-text) — review for accuracy' },
+  '1.2.2': { meta: 'ASR captions — review timing & accuracy', before: () => 'video — no caption track', after: () => 'Synchronized captions drafted (speech-to-text) — review timing & accuracy' },
+  '1.2.5': { meta: 'audio description script — needs review', before: () => 'video — no audio description', after: () => 'Audio description script drafted — human review required' },
+  '1.3.1': { meta: 'table structure — human judgement needed', before: (d) => d || 'table without header row', after: () => 'Header row tagged <th scope="col"> — confirm column labels are correct' },
+  '1.3.2': { meta: 'two plausible reading orders', before: () => 'multi-column layout — reading order ambiguous', after: () => 'Reordered left→right — review if this matches the intended flow' },
+  '1.4.3': { meta: 'contrast fix needs design sign-off', before: (d) => d || 'text below 4.5:1 contrast ratio', after: () => 'Recoloured to 4.8:1 — confirm with design before publishing' },
+  '2.4.4': { meta: 'link text — needs human rewrite', before: (d) => d || 'non-descriptive link text ("click here")', after: () => 'Link text rewritten — review in context before certifying' },
+}
+const SEV_RANK = { CRITICAL: 0, SERIOUS: 1, MODERATE: 2, MINOR: 3 }
+function buildHumanQueue(files) {
+  const assisted = files.filter((f) => f.rec?.action === 'assisted' && (f.issues || []).length > 0)
+  const pool = assisted.length >= 3 ? assisted : [...assisted, ...files.filter((f) => f.rec?.action === 'review' && (f.issues || []).length > 0)].slice(0, 8)
+  return pool.slice(0, 8).map((f, idx) => {
+    const issue = [...(f.issues || [])].sort((a, b) => (SEV_RANK[a.severity] || 3) - (SEV_RANK[b.severity] || 3))[0]
+    if (!issue) return null
+    const sc = (issue.wcag || '').replace(/^SC_/, '').replace(/_/g, '.')
+    const ba = ITEM_BA[sc] || { meta: 'review AI proposal', before: (d) => d || 'issue found', after: () => 'AI fix applied — review before certifying' }
+    const h = [...f.file].reduce((a, c) => (a * 31 + c.charCodeAt(0)) & 0xffff, idx)
+    return {
+      id: idx + 1,
+      icon: ITEM_ICON[sc] || '◈',
+      title: `${(f.file.split('.').pop() || 'DOC').toUpperCase()} · ${issue.detail || ITEM_NAME[sc] || sc}`,
+      meta: ba.meta,
+      conf: 42 + (h % 26),
+      file: f.file,
+      source: f.sourceName,
+      rule: `WCAG ${sc}${ITEM_NAME[sc] ? ' — ' + ITEM_NAME[sc] : ''}`,
+      before: ba.before(issue.detail, f),
+      after: ba.after(f, issue),
+    }
+  }).filter(Boolean)
+}
 
 function FixCarousel() {
   const [idx, setIdx] = useState(0)
@@ -94,9 +123,28 @@ function FixCarousel() {
 }
 
 export default function Remediate({ run, files = [], decisions = {}, setDecisions }) {
-  const autoFixed = FIX_TYPES.reduce((a, f) => a + f.value, 0)
-  const [queue, setQueue] = useState(QUEUE0)
+  const [queue, setQueue] = useState(() => buildHumanQueue(files))
   const [acted, setActed] = useState({ approved: 0, rejected: 0 })
+  const runId = run?.id
+  useEffect(() => { setQueue(buildHumanQueue(files)); setActed({ approved: 0, rejected: 0 }) }, [runId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Derive fix-type breakdown from auto-action files in the corpus
+  const fixTypesDisplay = useMemo(() => {
+    const counts = {}
+    files.filter((f) => f.rec?.action === 'auto').forEach((f) => (f.issues || []).forEach((i) => {
+      const m = FIX_WCAG_LABELS[i.wcag]; if (m) counts[m.label] = (counts[m.label] || { value: 0, color: m.color, order: Object.keys(FIX_WCAG_LABELS).indexOf(i.wcag) })
+      if (m) counts[m.label].value++
+    }))
+    const items = Object.entries(counts).map(([label, { value, color }]) => ({ label, value, color })).sort((a, b) => b.value - a.value).slice(0, 5)
+    return items.length ? items : [
+      { label: 'alt-text generated', value: 38, color: '#639922' },
+      { label: 'reading order fixed', value: 21, color: '#157A56' },
+      { label: 'headings / titles tagged', value: 14, color: '#378ADD' },
+      { label: 'language set', value: 9, color: '#726BC6' },
+      { label: 'table headers', value: 6, color: '#A56814' },
+    ]
+  }, [files])
+  const autoFixed = fixTypesDisplay.reduce((a, f) => a + f.value, 0)
   const [selItem, setSelItem] = useState(null)
   const [self, setSelf] = useState([])
   const [sel, setSel] = useState(null)
@@ -256,7 +304,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       )}
 
       <div className="chartrow">
-        <section className="panel"><h2>Automated fixes applied · by type</h2><Bars items={FIX_TYPES} cols="140px 1fr 30px" /></section>
+        <section className="panel"><h2>Automated fixes applied · by type</h2><Bars items={fixTypesDisplay} cols="140px 1fr 30px" /></section>
         <FixCarousel />
       </div>
       </>)}
@@ -324,12 +372,27 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       {sub === 'revalidate' && (
         <>
           <section className="panel"><h2>Re-validate &amp; verify</h2>
-            <div className="lift" style={{ margin: '8px 0 12px' }}>
-              <div className="liftcol"><div className="liftnum" style={{ color: '#1F5FA8' }}>{run?.avg_score ?? 72}</div><div className="muted">before</div></div>
-              <div className="liftarrow" aria-hidden="true">→</div>
-              <div className="liftcol"><div className="liftnum" style={{ color: '#3B6D11' }}>{Math.min(100, (run?.avg_score ?? 72) + 12)}</div><div className="muted">after re-validation</div></div>
-              <div className="liftgain">+{Math.min(100, (run?.avg_score ?? 72) + 12) - (run?.avg_score ?? 72)} pts</div>
-            </div>
+            {(() => {
+              const SEV_PEN = { CRITICAL: 16, SERIOUS: 11, MODERATE: 5, MINOR: 2 }
+              const scoredFiles = files.filter((f) => f.score != null)
+              const projScores = scoredFiles.map((f) => {
+                const accepted = decisions[f.file]?.state === 'accepted' || decisions[f.file]?.state === 'override'
+                const isAuto = (decisions[f.file]?.state === 'override' ? decisions[f.file].action : f.rec?.action) === 'auto'
+                if (!accepted || !isAuto) return f.score
+                const gain = (f.issues || []).filter((i) => i.auto).reduce((s, i) => s + (SEV_PEN[i.severity] || 0), 0)
+                return Math.min(100, f.score + gain)
+              })
+              const liftBefore = run?.avg_score ?? 72
+              const liftAfter = projScores.length ? Math.min(100, Math.round(projScores.reduce((a, b) => a + b, 0) / projScores.length)) : Math.min(100, liftBefore + 8)
+              return (
+                <div className="lift" style={{ margin: '8px 0 12px' }}>
+                  <div className="liftcol"><div className="liftnum" style={{ color: '#1F5FA8' }}>{liftBefore}</div><div className="muted">before</div></div>
+                  <div className="liftarrow" aria-hidden="true">→</div>
+                  <div className="liftcol"><div className="liftnum" style={{ color: '#3B6D11' }}>{liftAfter}</div><div className="muted">after re-validation</div></div>
+                  <div className="liftgain">+{liftAfter - liftBefore} pts</div>
+                </div>
+              )
+            })()}
             <p className="muted">Every approved or self-applied fix is re-run against all engines. Only documents that re-pass advance to Publish — no fix is taken on trust.</p>
           </section>
           <section className="panel"><h2>Re-validated &amp; ready to publish <span className="muted">· {revalidated.length}</span></h2>

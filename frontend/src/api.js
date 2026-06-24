@@ -2,10 +2,16 @@ import { SIM, simIdentity, simGetSources, simStartScan, simGetJob, simGetScan, s
 
 const BASE = import.meta.env.VITE_API ?? 'http://localhost:8077'
 
-// Per-user Drive token (real mode only). In SIM mode nothing touches a real Drive.
+// Per-user tokens (real mode only). In SIM mode nothing touches a real Drive / OneDrive.
 let driveToken = null
+let spToken = null
 export const setDriveToken = (t) => { driveToken = t }
-const headers = (extra = {}) => ({ ...extra, ...(driveToken ? { 'X-Drive-Token': driveToken } : {}) })
+export const setSPToken = (t) => { spToken = t }
+const headers = (extra = {}) => ({
+  ...extra,
+  ...(driveToken ? { 'X-Drive-Token': driveToken } : {}),
+  ...(spToken ? { 'X-SP-Token': spToken } : {}),
+})
 
 const j = (r) => { if (!r.ok) throw new Error(`${r.status} ${r.statusText}`); return r.json() }
 const sim = (value, ms = 220) => new Promise((res) => setTimeout(() => res(value), ms))

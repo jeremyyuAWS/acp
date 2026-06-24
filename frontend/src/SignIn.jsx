@@ -24,6 +24,21 @@ const OktaLogo = () => <svg width="16" height="16" viewBox="0 0 24 24" aria-hidd
 const SSO = [{ name: 'Google', icon: <GoogleG /> }, { name: 'Microsoft', icon: <MsLogo /> }, { name: 'Okta', icon: <OktaLogo /> }]
 const initials = (n) => n.split(' ').map((x) => x[0]).join('').slice(0, 2)
 
+// Real accounts that get elevated privileges on sign-in (never shown in demo list).
+// Add the same email under both Google and Microsoft keys if you have accounts on both.
+const PRIV_PROFILE = {
+  id: 'jeremy-yu',
+  name: 'Jeremy Yu',
+  role: 'Compliance Officer & Admin',
+  scope: { label: 'Full estate · all departments', departments: 'all' },
+  allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'settings', 'upload'],
+}
+const PRIVILEGED = {
+  'jeremyyu.movate@gmail.com': PRIV_PROFILE,   // Google sign-in
+  // Add your Microsoft account alias here if different from Gmail:
+  // 'jeremyyu@outlook.com': PRIV_PROFILE,
+}
+
 export default function SignIn({ onSignedIn }) {
   const [gdLoading, setGdLoading] = useState(false)
   const [spLoading, setSpLoading] = useState(false)
@@ -48,14 +63,18 @@ export default function SignIn({ onSignedIn }) {
             const me = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
               headers: { Authorization: 'Bearer ' + resp.access_token },
             }).then((r) => r.json()).catch(() => ({}))
-            onSignedIn({
-              id: 'gdrive-user',
-              name: me.name || 'Google User',
-              role: 'Document Owner',
-              email: me.email || '',
-              sso: 'Google',
-              scope: { label: 'My Google Drive · personal' },
-            })
+            const priv = PRIVILEGED[(me.email || '').toLowerCase()]
+            onSignedIn(priv
+              ? { ...priv, email: me.email, name: me.name || priv.name }
+              : {
+                  id: 'gdrive-user',
+                  name: me.name || 'Google User',
+                  role: 'Document Owner',
+                  email: me.email || '',
+                  sso: 'Google',
+                  scope: { label: 'My Google Drive · personal' },
+                }
+            )
           } catch { setGdLoading(false); setGdError('Could not fetch Google profile.') }
         },
       })
@@ -80,14 +99,19 @@ export default function SignIn({ onSignedIn }) {
         .catch(() => instance.acquireTokenPopup({ scopes: SP_SCOPES }))
       sessionStorage.setItem('sp_token', tokenResult.accessToken)
       sessionStorage.setItem('sp_account', JSON.stringify(loginResult.account))
-      onSignedIn({
-        id: 'sp-user',
-        name: loginResult.account.name || 'Microsoft User',
-        role: 'Document Owner',
-        email: loginResult.account.username || '',
-        sso: 'Microsoft',
-        scope: { label: 'My OneDrive · SharePoint' },
-      })
+      const msEmail = loginResult.account.username || ''
+      const msPriv = PRIVILEGED[msEmail.toLowerCase()]
+      onSignedIn(msPriv
+        ? { ...msPriv, email: msEmail, name: loginResult.account.name || msPriv.name, sso: 'Microsoft' }
+        : {
+            id: 'sp-user',
+            name: loginResult.account.name || 'Microsoft User',
+            role: 'Document Owner',
+            email: msEmail,
+            sso: 'Microsoft',
+            scope: { label: 'My OneDrive · SharePoint' },
+          }
+      )
     } catch (e) {
       setSpLoading(false)
       setSpError(e.errorCode === 'user_cancelled' ? 'Sign-in cancelled.' : (e.message || 'Connection failed.'))

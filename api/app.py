@@ -124,13 +124,16 @@ def update_rubric(body: RubricUpdate):
 
 
 @app.post("/scans")
-def start_scan(request: Request, source: str = Query("local", pattern="^(local|drive)$"),
+def start_scan(request: Request, source: str = Query("local", pattern="^(local|drive|sharepoint)$"),
                sync: bool = False, folder: str | None = Query(None)):
-    token = request.headers.get("x-drive-token")  # per-user Drive token (GIS); captured before the thread
+    token = request.headers.get("x-drive-token")      # per-user Drive token (GIS)
+    sp_token = request.headers.get("x-sp-token")      # per-user MS Graph token (MSAL)
     if source == "drive" and GOOGLE_CLIENT_ID and not token:
         raise HTTPException(401, "sign in with Google to scan your Drive")
+    if source == "sharepoint" and not sp_token:
+        raise HTTPException(401, "sign in with Microsoft to scan OneDrive")
     if sync:  # synchronous path for scripts/tests
-        report = run_scan(source, drive_token=token, folder=folder)
+        report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token)
         return {"scan_id": store.save_scan(report), "source": source, "summary": report["summary"]}
     job_id = uuid.uuid4().hex[:12]
     JOBS[job_id] = {"phase": "queued", "files_found": 0, "files_done": 0, "current": None,
@@ -139,7 +142,7 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
     def work():
         try:
             report = run_scan(source, progress=lambda d: JOBS[job_id].update(d),
-                              drive_token=token, folder=folder)
+                              drive_token=token, folder=folder, sp_token=sp_token)
             JOBS[job_id].update({"phase": "done", "done": True, "scan_id": store.save_scan(report),
                                  "files_done": JOBS[job_id].get("files_found", 0)})
         except Exception as e:
