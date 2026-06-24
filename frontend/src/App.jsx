@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
 import { getSources, getRubric, listScans, getScan, startScan, getJob, setDriveToken } from './api'
+import { SIM } from './sim.js'
 import { setPersona } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
 import { loadRolePrivileges } from './RolePrivilege.jsx'
@@ -112,11 +113,13 @@ export default function App() {
   }
   if (!me) return <SignIn onSignedIn={signIn} />
 
-  const doScan = async (source) => {
+  const doScan = async (source, folder = null) => {
     setBusy(true); setErr(null); setProgress({ phase: 'queued' })
     const prevAvg = scan?.run?.avg_score
+    // In real mode the backend only supports 'local' and 'drive'; map everything else to 'drive'
+    const apiSource = SIM ? source : (source === 'local' ? 'local' : 'drive')
     try {
-      const { job_id } = await startScan(source)
+      const { job_id } = await startScan(apiSource, folder)
       let job
       do {
         await new Promise((r) => setTimeout(r, 350))

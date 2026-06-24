@@ -218,23 +218,51 @@ def me(request: Request):
 
 @app.get("/sources")
 def sources(request: Request):
+    from scanner import _DRIVE_MIME_Q
     token = request.headers.get("x-drive-token")
-    # Per-user token: list My Drive root. ADC/demo: use the pinned demo corpus folder.
-    folder = "root" if token else (os.environ.get("ACP_DRIVE_FOLDER") or "1W27ULZsstP7gYGzgKKBId0qEfNxeKn0_")
     name = "My Drive" if token else "acp-demo-corpus"
     try:
         svc = _drive(request)
-        about = svc.about().get(fields="user/displayName,storageQuota").execute()
-        n = len(svc.files().list(q=f"'{folder}' in parents and trashed=false and "
-                                   "mimeType!='application/vnd.google-apps.folder'",
-                                 fields="files(id)", pageSize=200).execute().get("files", []))
-        return [{"type": "google_drive", "name": name, "id": folder,
+        about = svc.about().get(fields="user/displayName").execute()
+        if token:
+            # Count all scannable files across the whole Drive (mirrors the scan search)
+            resp = svc.files().list(q=f"({_DRIVE_MIME_Q}) and trashed=false",
+                                    fields="files(id)", pageSize=200).execute()
+            n = len(resp.get("files", []))
+            source_id = "root"
+        else:
+            demo_folder = os.environ.get("ACP_DRIVE_FOLDER") or "1W27ULZsstP7gYGzgKKBId0qEfNxeKn0_"
+            n = len(svc.files().list(q=f"'{demo_folder}' in parents and trashed=false",
+                                     fields="files(id)", pageSize=200).execute().get("files", []))
+            source_id = demo_folder
+        return [{"type": "google_drive", "name": name, "id": source_id,
                  "files": n, "access": "read-only",
                  "user": about.get("user", {}).get("displayName")}]
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(502, f"Drive connection failed: {e}")
+
+
+@app.get("/folders")
+def folders(request: Request, parent: str = "root"):
+    """List immediate subfolders of a Drive folder — drives the frontend folder picker."""
+    try:
+        svc = _drive(request)
+        items = svc.files().list(
+            q=f"'{parent}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
+            fields="files(id,name)",
+            pageSize=100,
+            orderBy="name",
+        ).execute().get("files", [])
+        parent_name = "My Drive" if parent == "root" else svc.files().get(
+            fileId=parent, fields="name").execute().get("name", "")
+        return {"parent": parent, "name": parent_name,
+                "folders": [{"id": f["id"], "name": f["name"]} for f in items]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"Drive folder listing failed: {e}")
 
 
 # Serve the built React SPA same-origin in the deploy container (ACP_STATIC_DIR

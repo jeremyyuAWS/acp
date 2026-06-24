@@ -5,7 +5,7 @@ control plane can stream live activity. Ephemeral working copies are deleted whe
 scan finishes (the "documents never retained" guarantee).
 """
 from __future__ import annotations
-import io, json, os, shutil, subprocess, sys, tempfile, uuid
+import io, json, os, re, shutil, subprocess, sys, tempfile, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,7 +17,7 @@ DOTNET = os.environ.get("ACP_DOTNET") or os.path.expanduser("~/.dotnet/dotnet")
 CLI_DLL = Path(os.environ.get("ACP_OFFICE_CLI")
                or (ACP / "spike/dotnet/AcpScan.Cli/bin/Release/net10.0/AcpScan.Cli.dll"))
 # Demo corpus folder (ADC / keyless mode). Overridden by ACP_DRIVE_FOLDER env var.
-# In per-user token mode (GIS), _list() uses 'root' so we scan that user's My Drive.
+# In per-user token mode (GIS), the scanner searches the user's whole Drive.
 _DEMO_FOLDER = os.environ.get("ACP_DRIVE_FOLDER") or "1W27ULZsstP7gYGzgKKBId0qEfNxeKn0_"
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
@@ -26,9 +26,31 @@ from rubric import Rubric
 
 OFFICE = (".docx", ".pptx", ".xlsx")
 
+# Google Workspace native types → (export MIME, file extension)
+EXPORT_MAP = {
+    "application/vnd.google-apps.document":     ("application/vnd.openxmlformats-officedocument.wordprocessingml.document",  ".docx"),
+    "application/vnd.google-apps.spreadsheet":  ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",        ".xlsx"),
+    "application/vnd.google-apps.presentation": ("application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx"),
+}
+
+# All MIME types we can scan (uploaded files + Google Workspace natives)
+_SCANNABLE_MIME = list(EXPORT_MAP.keys()) + [
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+]
+
+_DRIVE_MIME_Q = " or ".join(f"mimeType='{m}'" for m in _SCANNABLE_MIME)
+
 
 def _noop(_):
     pass
+
+
+def _safe_name(name: str) -> str:
+    """Strip chars that are invalid on most filesystems."""
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
 
 
 def _drive_service(drive_token: str | None = None):
@@ -44,18 +66,101 @@ def _drive_service(drive_token: str | None = None):
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
+def _normalize(files: list[dict]) -> list[dict]:
+    """Convert raw Drive API file objects to scan items.
+
+    Uploaded files keep their name. Google Workspace files get the export
+    extension appended so the Office/PDF engine sees the right format.
+    """
+    result = []
+    seen: set[str] = set()
+    for f in files:
+        mime = f.get("mimeType", "")
+        raw_name = f["name"]
+        if mime in EXPORT_MAP:
+            export_ext = EXPORT_MAP[mime][1]
+            name = _safe_name(raw_name) + export_ext
+        else:
+            ext = Path(raw_name).suffix.lower()
+            if ext not in OFFICE + (".pdf",):
+                continue
+            name = _safe_name(raw_name)
+        # Deduplicate: Drive can have same-name files in different folders
+        unique = name
+        n = 1
+        while unique in seen:
+            stem = Path(name).stem
+            suffix = Path(name).suffix
+            unique = f"{stem} ({n}){suffix}"
+            n += 1
+        seen.add(unique)
+        result.append({"name": unique, "id": f["id"], **({"mime": mime} if mime in EXPORT_MAP else {})})
+    return result
+
+
+def _search_drive(svc, max_files: int = 500) -> list[dict]:
+    """Whole-Drive search — returns all scannable files regardless of folder."""
+    files: list[dict] = []
+    page_token = None
+    while len(files) < max_files:
+        resp = svc.files().list(
+            q=f"({_DRIVE_MIME_Q}) and trashed=false",
+            fields="nextPageToken,files(id,name,mimeType)",
+            pageSize=200,
+            orderBy="name",
+            pageToken=page_token,
+        ).execute()
+        files.extend(resp.get("files", []))
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+    return _normalize(files[:max_files])
+
+
+def _search_folder(svc, folder_id: str) -> list[dict]:
+    """BFS over a folder subtree — returns all scannable files."""
+    queue = [folder_id]
+    seen_folders: set[str] = set()
+    raw: list[dict] = []
+    while queue:
+        fid = queue.pop(0)
+        if fid in seen_folders:
+            continue
+        seen_folders.add(fid)
+        page_token = None
+        while True:
+            resp = svc.files().list(
+                q=f"'{fid}' in parents and trashed=false",
+                fields="nextPageToken,files(id,name,mimeType)",
+                pageSize=200,
+                pageToken=page_token,
+            ).execute()
+            for f in resp.get("files", []):
+                if f["mimeType"] == "application/vnd.google-apps.folder":
+                    queue.append(f["id"])
+                else:
+                    raw.append(f)
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+    return _normalize(raw)
+
+
 def _list(source: str, svc=None, folder: str | None = None) -> list[dict]:
     if source == "local":
         return [{"name": p.name, "path": str(p)} for p in sorted((ACP / "test-corpus/files").glob("*"))
                 if p.suffix.lower() in OFFICE + (".pdf",)]
-    # Per-user token scans default to My Drive root; ADC/demo uses the pinned demo folder.
-    target = folder or _DEMO_FOLDER
-    files = svc.files().list(q=f"'{target}' in parents and trashed=false",
-                             fields="files(id,name,mimeType)", pageSize=200, orderBy="name").execute().get("files", [])
-    # Filter to supported file types; skip Google Docs native formats (not downloadable as OOXML here)
-    supported = OFFICE + (".pdf",)
-    return [{"name": f["name"], "id": f["id"]} for f in files
-            if Path(f["name"]).suffix.lower() in supported]
+    if folder and folder != "root":
+        # Specific folder: recursive BFS
+        return _search_folder(svc, folder)
+    elif folder == "root" or folder is None:
+        # No specific folder chosen: search the whole Drive
+        return _search_drive(svc)
+    # ADC/demo mode with a pinned folder
+    resp = svc.files().list(q=f"'{_DEMO_FOLDER}' in parents and trashed=false",
+                            fields="files(id,name,mimeType)", pageSize=200,
+                            orderBy="name").execute()
+    return _normalize(resp.get("files", []))
 
 
 def _download(item: dict, dest: Path, svc=None) -> None:
@@ -65,7 +170,13 @@ def _download(item: dict, dest: Path, svc=None) -> None:
         return
     from googleapiclient.http import MediaIoBaseDownload
     buf = io.BytesIO()
-    dl = MediaIoBaseDownload(buf, svc.files().get_media(fileId=item["id"]))
+    if "mime" in item:
+        # Google Workspace native — export as OOXML
+        export_mime = EXPORT_MAP[item["mime"]][0]
+        req = svc.files().export_media(fileId=item["id"], mimeType=export_mime)
+    else:
+        req = svc.files().get_media(fileId=item["id"])
+    dl = MediaIoBaseDownload(buf, req)
     done = False
     while not done:
         _, done = dl.next_chunk()
@@ -117,8 +228,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
     rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
     tmp = Path(tempfile.mkdtemp(prefix="acp-api-scan-"))
-    # Per-user token: default to 'root' (My Drive). ADC/demo: use the pinned demo folder.
-    effective_folder = folder or ("root" if drive_token else None)
+    # Per-user token: default to whole-Drive search. ADC/demo: pinned demo folder.
+    effective_folder = folder if folder else ("root" if drive_token else None)
     try:
         progress({"phase": "connecting", "files_found": 0, "files_done": 0, "current": None})
         svc = None if source == "local" else _drive_service(drive_token)
@@ -142,7 +253,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                              **office.get(name, {"succeeded": False, "issues": [], "errors": ["no engine result"]})}
 
         progress({"phase": "scoring", "files_found": n, "files_done": n, "current": None})
-        for r in raw.values():  # resolve the rubric: disabled rules contribute neither findings nor errors
+        for r in raw.values():
             r["issues"] = [i for i in r["issues"] if i["ruleId"] not in rb.disabled]
             r["errors"] = [e for e in r["errors"] if (e.get("rule") if isinstance(e, dict) else None) not in rb.disabled]
         assessed = {k: rb.assess(r["succeeded"], r["issues"], r["errors"]) for k, r in raw.items()}

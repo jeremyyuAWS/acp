@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { listFolders } from './api.js'
+import { SIM } from './sim.js'
 import SourceDrawer from './SourceDrawer.jsx'
 import FileDrawer from './FileDrawer.jsx'
 
@@ -27,16 +29,123 @@ const LOGO = {
   web: <Tile bg="#5F6B7A">{G('M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M3 12h18M12 3c2.5 2.5 2.5 15.5 0 18M12 3c-2.5 2.5-2.5 15.5 0 18')}</Tile>,
 }
 const FUTURE = [
+  { name: 'SharePoint', logo: <Tile bg="#036C70"><b style={{ fontSize: 15 }}>S</b></Tile> },
   { name: 'OneDrive', logo: <Tile bg="#0364B8">{G('M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.5A3.5 3.5 0 0 1 19 18z')}</Tile> },
   { name: 'File Shares', logo: <Tile bg="#E8A400">{G('M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z')}</Tile> },
   { name: 'S3 / Blob', logo: <Tile bg="#2E72C9"><b style={{ fontSize: 12 }}>S3</b></Tile> },
-  { name: 'Git Repos', logo: <Tile bg="#F05133">{G('M6 3v12a3 3 0 0 0 3 3h6M6 6a2 2 0 1 0 0-.01M18 15a2 2 0 1 0 0 .01M9 18a2 2 0 1 0 0 .01')}</Tile> },
 ]
+
+// ── Folder picker modal ────────────────────────────────────────────────────────
+
+function FolderIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+    </svg>
+  )
+}
+
+function FolderPicker({ onScan, onClose }) {
+  const [stack, setStack] = useState([{ id: 'root', name: 'My Drive' }])
+  const [folders, setFolders] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState('')
+
+  const current = stack[stack.length - 1]
+
+  const load = useCallback((folderId) => {
+    setLoading(true); setErr('')
+    listFolders(folderId)
+      .then((r) => setFolders(r.folders || []))
+      .catch((e) => setErr(e.message || 'Failed to load folders'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load(current.id) }, [current.id, load])
+
+  const enter = (folder) => setStack((s) => [...s, folder])
+  const goTo = (idx) => setStack((s) => s.slice(0, idx + 1))
+
+  return (
+    <div className="setoverlay" onClick={onClose}>
+      <div className="setpanel" style={{ maxWidth: 460, width: '100%' }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Choose a folder to scan">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <strong>Choose a folder to scan</strong>
+          <button className="small ghost" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+
+        {/* Breadcrumb */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, marginBottom: 10, flexWrap: 'wrap' }}>
+          {stack.map((f, i) => (
+            <span key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              {i > 0 && <span style={{ color: 'var(--muted)' }}>›</span>}
+              <button
+                style={{ background: 'none', border: 'none', cursor: i < stack.length - 1 ? 'pointer' : 'default',
+                  color: i < stack.length - 1 ? 'var(--accent)' : 'inherit', fontWeight: i === stack.length - 1 ? 600 : 400, padding: 0 }}
+                onClick={() => i < stack.length - 1 && goTo(i)}
+              >
+                {f.name}
+              </button>
+            </span>
+          ))}
+        </div>
+
+        {/* Folder list */}
+        <div style={{ minHeight: 120, maxHeight: 280, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, marginBottom: 14 }}>
+          {loading && <div style={{ padding: '20px', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>Loading…</div>}
+          {err && <div style={{ padding: '16px', color: '#A32D2D', fontSize: 13 }}>{err}</div>}
+          {!loading && !err && folders.length === 0 && (
+            <div style={{ padding: '20px', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>No subfolders in this location</div>
+          )}
+          {!loading && folders.map((f) => (
+            <button
+              key={f.id}
+              style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '9px 14px', background: 'none',
+                border: 'none', borderBottom: '1px solid var(--border)', cursor: 'pointer', textAlign: 'left', fontSize: 13 }}
+              onClick={() => enter(f)}
+            >
+              <FolderIcon /> {f.name}
+              <span style={{ marginLeft: 'auto', color: 'var(--muted)' }}>›</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Actions */}
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <button className="ghost small" onClick={() => onScan(null)}>
+            Scan all of My Drive
+          </button>
+          <button onClick={() => onScan(current.id === 'root' ? null : current.id)}>
+            Scan "{current.name}"
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Main component ─────────────────────────────────────────────────────────────
 
 export default function Integrations({ sources, files = [], onScan, busy }) {
   const [selSrc, setSelSrc] = useState(null)
   const [selFile, setSelFile] = useState(null)
+  const [pickerSrc, setPickerSrc] = useState(null)
+
   const total = sources.reduce((a, s) => a + (s.files || 0), 0)
+
+  const handleScan = (srcId) => {
+    if (SIM) { onScan(srcId); return }
+    // In real mode: Drive sources open the folder picker; local/unknown scan directly
+    const src = sources.find((s) => s.id === srcId)
+    if (src?.type === 'google_drive') { setPickerSrc(src); return }
+    onScan(srcId)
+  }
+
+  const handlePickerScan = (folder) => {
+    setPickerSrc(null)
+    onScan('drive', folder)
+  }
+
   return (
     <>
       <div className="estatebar">
@@ -44,18 +153,22 @@ export default function Integrations({ sources, files = [], onScan, busy }) {
           <b>{sources.length} sources</b> · {total.toLocaleString()} documents under continuous compliance monitoring
           <div className="muted" style={{ marginTop: 2 }}>the mova Agent discovers, classifies, and re-scans across every store</div>
         </div>
-        <button disabled={busy} onClick={() => onScan('all')}>{busy ? 'scanning…' : 'Scan all sources'}</button>
+        <button disabled={busy} onClick={() => SIM ? onScan('all') : handleScan(sources[0]?.id)}>{busy ? 'scanning…' : 'Scan all sources'}</button>
       </div>
       <div className="intgrid">
         {sources.map((s) => (
           <div className="intcard clickable" key={s.id} onClick={() => setSelSrc(s)}>
-            <button className="intcard-body" onClick={() => setSelSrc(s)} aria-label={`${s.name} — ${(s.files || 0).toLocaleString()} docs in ${s.dept}`}>
+            <button className="intcard-body" onClick={() => setSelSrc(s)} aria-label={`${s.name} — ${(s.files || 0).toLocaleString()} docs`}>
               <div className="intlogo" aria-hidden="true">{LOGO[s.type] || LOGO.web}</div>
               <div className="intname">{s.name}</div>
-              <div className="muted" style={{ fontSize: 12 }}>{s.dept} · {(s.files || 0).toLocaleString()} docs</div>
-              <span className="intstatus live"><span className="livedot" aria-hidden="true" />agent · {s.agent}</span>
+              <div className="muted" style={{ fontSize: 12 }}>
+                {s.user ? `${s.user} · ` : ''}{(s.files || 0).toLocaleString()} scannable files
+              </div>
+              <span className="intstatus live"><span className="livedot" aria-hidden="true" />connected · read-only</span>
             </button>
-            <button className="intbtn" disabled={busy} onClick={(e) => { e.stopPropagation(); onScan(s.id) }}>{busy ? 'scanning…' : 'Run scan'}</button>
+            <button className="intbtn" disabled={busy} onClick={(e) => { e.stopPropagation(); handleScan(s.id) }}>
+              {busy ? 'scanning…' : 'Run scan'}
+            </button>
           </div>
         ))}
         {FUTURE.map((s) => (
@@ -67,6 +180,14 @@ export default function Integrations({ sources, files = [], onScan, busy }) {
           </div>
         ))}
       </div>
+
+      {pickerSrc && !busy && (
+        <FolderPicker
+          onScan={handlePickerScan}
+          onClose={() => setPickerSrc(null)}
+        />
+      )}
+
       {selSrc && <SourceDrawer source={selSrc} files={files.filter((f) => f.source === selSrc.id)} onClose={() => setSelSrc(null)} onPickFile={setSelFile} />}
       {selFile && <FileDrawer file={selFile} onClose={() => setSelFile(null)} />}
     </>
