@@ -3,7 +3,8 @@ import { Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer, { statusOf, critLabel } from './FileDrawer.jsx'
-import { IDENTITY, remediableCount, recommendationSummary } from './sim.js'
+import { IDENTITY, SIM, remediableCount, recommendationSummary } from './sim.js'
+import { reportUrl } from './api.js'
 import { loadPublished } from './ontology.js'
 import WordCloud from './WordCloud.jsx'
 import Insight from './Insight.jsx'
@@ -136,6 +137,9 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
       <div className="dashtoolbar">
         <button className="exportbtn" onClick={doExport} disabled={exporting}>{exporting ? 'Generating PDF…' : '⤓ Quarterly governance report'}</button>
         <button className="exportbtn alt" onClick={exportCsv} title="Every finding as a spreadsheet row">⤓ Findings (CSV)</button>
+        {!SIM && run?.id && (
+          <a className="exportbtn alt" href={reportUrl(run.id)} target="_blank" rel="noreferrer" title="Backend-generated WCAG compliance report PDF">⤓ Compliance report (PDF)</a>
+        )}
       </div>
       <div ref={reportRef}>
       <div className="metrics">

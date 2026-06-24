@@ -10,6 +10,7 @@ import OfficePreview from './OfficePreview.jsx'
 import { auditHtml } from './htmlAudit.js'
 import { auditOffice, remediateOffice } from './officeAudit.js'
 import { auditPptx, remediatePptx } from './pptxAudit.js'
+import { auditXlsx, remediateXlsx } from './xlsxAudit.js'
 import { auditPdf } from './pdfAudit.js'
 import { prescreenHtml } from './prescreen.js'
 import { useDialog } from './a11y.js'
@@ -100,8 +101,10 @@ const VERIFY_GUIDE = {
   'PPTX-TITLE-001':       { app: 'PowerPoint',  tip: 'REVIEW NEEDED: slides flagged have no title placeholder. In the slide panel right-click → Layout and pick a layout that includes a Title placeholder, then type the slide title.' },
   'PPTX-LANG-001':        { app: 'PowerPoint',  tipWin: 'File → Info → Properties panel shows Language. Also: Review tab → Language → Set Proofing Language — language is now English (United States).', tipMac: 'File → Properties → Summary — language is now English (United States).' },
   'PPTX-SLIDE-001':       { app: 'PowerPoint',  tip: 'View → Outline View — slide titles are visible and descriptive.' },
-  'XLSX-ALT-001':         { app: 'Excel',       tipWin: 'Right-click the image → Edit Alt Text — the AI-generated description is now filled in.', tipMac: 'Right-click (or Control+click) the image → Edit Alt Text — the AI-generated description is now filled in.' },
-  'XLSX-HEADER-001':      { app: 'Excel',       tip: 'Click any cell in the first row → Table Design tab — Header Row checkbox is now on.' },
+  'XLSX-TITLE-001':       { app: 'Excel',       tipWin: 'File → Info — the Title field in the Properties panel is now set. Also visible in File → Properties → Summary.', tipMac: 'File → Properties → Summary — the Title field is now set.' },
+  'XLSX-SHEET-001':       { app: 'Excel',       tip: 'REVIEW NEEDED: right-click each flagged sheet tab → Rename and enter a meaningful name that describes the sheet\'s content.' },
+  'XLSX-ALT-001':         { app: 'Excel',       tipWin: 'Right-click the image or chart → Edit Alt Text — the AI-generated description is now filled in.', tipMac: 'Right-click (or Control+click) the image or chart → Edit Alt Text — the AI-generated description is now filled in.' },
+  'XLSX-HEADER-001':      { app: 'Excel',       tip: 'REVIEW NEEDED: select the data range → Insert tab → Table (or Ctrl+T) to create a formal Excel Table, then ensure the "My table has headers" checkbox is ticked.' },
   'WEB-CONTRAST-001':     { app: 'DevTools',    tipWin: 'F12 → Inspect the element → Computed — color/background-color now pass the 4.5:1 (AA) contrast ratio.', tipMac: 'Cmd+Option+I → Inspect the element → Computed — color/background-color now pass the 4.5:1 (AA) contrast ratio.' },
   'WEB-ALT-001':          { app: 'DevTools',    tipWin: 'F12 → Inspect the <img> → Attributes — alt attribute now contains a description.', tipMac: 'Cmd+Option+I → Inspect the <img> → Attributes — alt attribute now contains a description.' },
   'WEB-LABEL-001':        { app: 'DevTools',    tipWin: 'F12 → Inspect the form control → check for a linked <label> or aria-label attribute.', tipMac: 'Cmd+Option+I → Inspect the form control → check for a linked <label> or aria-label attribute.' },
@@ -378,6 +381,9 @@ export default function Upload({ onCertified }) {
             const r = await remediatePptx(f, { alts })
             remBlob = r.blob
           } catch { /* fall back — no remediated file */ }
+        } else if (/\.xlsx$/i.test(f.name)) {
+          try { found = await auditXlsx(f); engine = 'XLSX engine' } catch { found = issuesFor(f.name) }
+          try { const r = await remediateXlsx(f); remBlob = r.blob } catch { /* fall back */ }
         } else if (isOffice(f.name)) {
           try { found = await auditOffice(f); engine = 'OOXML' } catch { found = issuesFor(f.name) }
           try {
@@ -505,6 +511,7 @@ export default function Upload({ onCertified }) {
       let found = issuesFor(f.name)
       if (html) { try { found = await auditHtml(text); setRealEngine('axe-core') } catch { /* fall back */ } }
       else if (/\.pptx$/i.test(f.name) && office) { try { found = await auditPptx(office); setRealEngine('PPTX engine') } catch { /* fall back */ } }
+      else if (/\.xlsx$/i.test(f.name) && office) { try { found = await auditXlsx(office); setRealEngine('XLSX engine') } catch { /* fall back */ } }
       else if (office) { try { found = await auditOffice(office); setRealEngine('OOXML engine') } catch { /* fall back */ } }
       else if (pdf) { try { found = await auditPdf(pdf); setRealEngine('PDF engine') } catch { /* fall back */ } }
       else if (image) { setRealEngine('Claude vision') }
