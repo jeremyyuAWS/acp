@@ -101,33 +101,18 @@ export default function SignIn({ onSignedIn }) {
         <p className="signin-sub">Accessibility Platform</p>
 
         <div className="ssorow">
-          {SSO.map((s) => (
-            <button key={s.name} className="ssobtn" onClick={() => onSignedIn(def)}>{s.icon} Sign in with {s.name}</button>
-          ))}
-        </div>
-
-        <div className="signin-or"><span>or connect your storage directly</span></div>
-
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <button
-            className="ssobtn"
-            style={{ flex: '1 1 0', width: 'auto' }}
-            onClick={connectGoogleDrive}
-            disabled={gdLoading}
-          >
-            <GoogleG /> {gdLoading ? 'Connecting…' : 'Connect Google Drive'}
+          <button className="ssobtn" onClick={connectGoogleDrive} disabled={gdLoading}>
+            <GoogleG /> {gdLoading ? 'Connecting…' : 'Sign in with Google'}
           </button>
-          <button
-            className="ssobtn"
-            style={{ flex: '1 1 0', width: 'auto' }}
-            onClick={connectSharePoint}
-            disabled={spLoading}
-          >
-            <MsLogo /> {spLoading ? 'Connecting…' : 'Connect SharePoint'}
+          <button className="ssobtn" onClick={connectSharePoint} disabled={spLoading}>
+            <MsLogo /> {spLoading ? 'Connecting…' : 'Sign in with Microsoft'}
+          </button>
+          <button className="ssobtn" onClick={() => onSignedIn(def)}>
+            <OktaLogo /> Sign in with Okta
           </button>
         </div>
-        {gdError && <p style={{ fontSize: 12, color: '#A32D2D', margin: '6px 0 0', textAlign: 'center' }}>{gdError}</p>}
-        {spError && <p style={{ fontSize: 12, color: '#A32D2D', margin: '6px 0 0', textAlign: 'center' }}>{spError}</p>}
+        {gdError && <p style={{ fontSize: 12, color: '#A32D2D', margin: '-10px 0 6px', textAlign: 'center' }}>{gdError}</p>}
+        {spError && <p style={{ fontSize: 12, color: '#A32D2D', margin: '-10px 0 6px', textAlign: 'center' }}>{spError}</p>}
 
         <div className="signin-or"><span>or explore a role — demo</span></div>
 
