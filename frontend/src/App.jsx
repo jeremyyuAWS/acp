@@ -72,6 +72,7 @@ export default function App() {
   const [rubric, setRubric] = useState(null)
   const [sources, setSources] = useState([])
   const [scan, setScan] = useState(null)
+  const [scanLoading, setScanLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
   const [view, setView] = useState('overview')
@@ -112,6 +113,16 @@ export default function App() {
     setPersona(p); setScan(null); setScanList([]); setLoaded(false); setDecisions({}); setCertifiedDocs([]); setSettingsOpen(false); setView((p.allow || ['overview'])[0]); setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label, allow: p.allow || [] })
   }
   if (!me) return <SignIn onSignedIn={signIn} />
+
+  const switchScan = async (id) => {
+    if (id === scan?.run?.id) return
+    setScanLoading(true)
+    try {
+      setScan(await getScan(id))
+      setDecisions({})
+      setCertifiedDocs([])
+    } catch { /* leave current scan */ } finally { setScanLoading(false) }
+  }
 
   const doScan = async (source, folder = null) => {
     setBusy(true); setErr(null); setProgress({ phase: 'queued' })
@@ -176,7 +187,32 @@ export default function App() {
           ))}
         </div>
       </nav>
-      {run && <div className="muted runinfo">last run {run.completed_at?.slice(0, 19).replace('T', ' ')}</div>}
+      {scanList.length > 0 && (
+        <div className="runinfo">
+          {scanList.length === 1 ? (
+            <span className="muted">last run {run?.completed_at?.slice(0, 19).replace('T', ' ')}</span>
+          ) : (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+              <span className="muted">scan:</span>
+              <select
+                value={scan?.run?.id || ''}
+                onChange={(e) => switchScan(e.target.value)}
+                disabled={scanLoading || busy}
+                aria-label="Select scan run"
+                style={{ fontSize: 12, padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--surface)', color: 'inherit', cursor: 'pointer' }}
+              >
+                {scanList.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {new Date(s.completed_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                    {' · '}{s.source}{' · '}{s.avg_score ?? 'n/a'}/100{' · '}{s.certifiable} certifiable
+                  </option>
+                ))}
+              </select>
+              {scanLoading && <span className="spinner" />}
+            </label>
+          )}
+        </div>
+      )}
 
       {err && <div className="err" role="alert">{err}</div>}
       {busy && progress && (

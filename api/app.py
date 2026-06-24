@@ -225,10 +225,18 @@ def sources(request: Request):
         svc = _drive(request)
         about = svc.about().get(fields="user/displayName").execute()
         if token:
-            # Count all scannable files across the whole Drive (mirrors the scan search)
-            resp = svc.files().list(q=f"({_DRIVE_MIME_Q}) and trashed=false",
-                                    fields="files(id)", pageSize=200).execute()
-            n = len(resp.get("files", []))
+            # Paginate to get an accurate count (mirrors _search_drive in scanner.py)
+            n = 0
+            page_token = None
+            while True:
+                resp = svc.files().list(
+                    q=f"({_DRIVE_MIME_Q}) and trashed=false",
+                    fields="files(id)", pageSize=1000, pageToken=page_token,
+                ).execute()
+                n += len(resp.get("files", []))
+                page_token = resp.get("nextPageToken")
+                if not page_token:
+                    break
             source_id = "root"
         else:
             demo_folder = os.environ.get("ACP_DRIVE_FOLDER") or "1W27ULZsstP7gYGzgKKBId0qEfNxeKn0_"
