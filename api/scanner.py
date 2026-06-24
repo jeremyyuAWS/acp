@@ -16,7 +16,9 @@ WP = Path(os.environ.get("ACP_PDF_ENGINE") or os.path.expanduser("~/projects/_re
 DOTNET = os.environ.get("ACP_DOTNET") or os.path.expanduser("~/.dotnet/dotnet")
 CLI_DLL = Path(os.environ.get("ACP_OFFICE_CLI")
                or (ACP / "spike/dotnet/AcpScan.Cli/bin/Release/net10.0/AcpScan.Cli.dll"))
-FOLDER = os.environ.get("ACP_DRIVE_FOLDER") or "1W27ULZsstP7gYGzgKKBId0qEfNxeKn0_"
+# Demo corpus folder (ADC / keyless mode). Overridden by ACP_DRIVE_FOLDER env var.
+# In per-user token mode (GIS), _list() uses 'root' so we scan that user's My Drive.
+_DEMO_FOLDER = os.environ.get("ACP_DRIVE_FOLDER") or "1W27ULZsstP7gYGzgKKBId0qEfNxeKn0_"
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 sys.path.insert(0, str(ACP / "scripts"))
@@ -42,13 +44,18 @@ def _drive_service(drive_token: str | None = None):
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
-def _list(source: str, svc=None) -> list[dict]:
+def _list(source: str, svc=None, folder: str | None = None) -> list[dict]:
     if source == "local":
         return [{"name": p.name, "path": str(p)} for p in sorted((ACP / "test-corpus/files").glob("*"))
                 if p.suffix.lower() in OFFICE + (".pdf",)]
-    files = svc.files().list(q=f"'{FOLDER}' in parents and trashed=false",
-                             fields="files(id,name)", pageSize=200, orderBy="name").execute().get("files", [])
-    return [{"name": f["name"], "id": f["id"]} for f in files]
+    # Per-user token scans default to My Drive root; ADC/demo uses the pinned demo folder.
+    target = folder or _DEMO_FOLDER
+    files = svc.files().list(q=f"'{target}' in parents and trashed=false",
+                             fields="files(id,name,mimeType)", pageSize=200, orderBy="name").execute().get("files", [])
+    # Filter to supported file types; skip Google Docs native formats (not downloadable as OOXML here)
+    supported = OFFICE + (".pdf",)
+    return [{"name": f["name"], "id": f["id"]} for f in files
+            if Path(f["name"]).suffix.lower() in supported]
 
 
 def _download(item: dict, dest: Path, svc=None) -> None:
@@ -105,14 +112,17 @@ def _analyse_office(dest: Path) -> dict:
     return res
 
 
-def run_scan(source: str = "local", progress=_noop, drive_token: str | None = None) -> dict:
+def run_scan(source: str = "local", progress=_noop, drive_token: str | None = None,
+             folder: str | None = None) -> dict:
     rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
     tmp = Path(tempfile.mkdtemp(prefix="acp-api-scan-"))
+    # Per-user token: default to 'root' (My Drive). ADC/demo: use the pinned demo folder.
+    effective_folder = folder or ("root" if drive_token else None)
     try:
         progress({"phase": "connecting", "files_found": 0, "files_done": 0, "current": None})
         svc = None if source == "local" else _drive_service(drive_token)
-        items = _list(source, svc)
+        items = _list(source, svc, folder=effective_folder)
         n = len(items)
         progress({"phase": "discovering", "files_found": n, "files_done": 0, "current": None})
 

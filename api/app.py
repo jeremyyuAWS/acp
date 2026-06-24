@@ -124,12 +124,13 @@ def update_rubric(body: RubricUpdate):
 
 
 @app.post("/scans")
-def start_scan(request: Request, source: str = Query("local", pattern="^(local|drive)$"), sync: bool = False):
+def start_scan(request: Request, source: str = Query("local", pattern="^(local|drive)$"),
+               sync: bool = False, folder: str | None = Query(None)):
     token = request.headers.get("x-drive-token")  # per-user Drive token (GIS); captured before the thread
     if source == "drive" and GOOGLE_CLIENT_ID and not token:
         raise HTTPException(401, "sign in with Google to scan your Drive")
     if sync:  # synchronous path for scripts/tests
-        report = run_scan(source, drive_token=token)
+        report = run_scan(source, drive_token=token, folder=folder)
         return {"scan_id": store.save_scan(report), "source": source, "summary": report["summary"]}
     job_id = uuid.uuid4().hex[:12]
     JOBS[job_id] = {"phase": "queued", "files_found": 0, "files_done": 0, "current": None,
@@ -137,7 +138,8 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
 
     def work():
         try:
-            report = run_scan(source, progress=lambda d: JOBS[job_id].update(d), drive_token=token)
+            report = run_scan(source, progress=lambda d: JOBS[job_id].update(d),
+                              drive_token=token, folder=folder)
             JOBS[job_id].update({"phase": "done", "done": True, "scan_id": store.save_scan(report),
                                  "files_done": JOBS[job_id].get("files_found", 0)})
         except Exception as e:
@@ -216,11 +218,23 @@ def me(request: Request):
 
 @app.get("/sources")
 def sources(request: Request):
-    folder = os.environ.get("ACP_DRIVE_FOLDER") or "1W27ULZsstP7gYGzgKKBId0qEfNxeKn0_"
-    n = len(_drive(request).files().list(q=f"'{folder}' in parents and trashed=false",
-                                         fields="files(id)", pageSize=200).execute().get("files", []))
-    return [{"type": "google_drive", "name": "acp-demo-corpus", "id": folder,
-             "files": n, "access": "read-only"}]
+    token = request.headers.get("x-drive-token")
+    # Per-user token: list My Drive root. ADC/demo: use the pinned demo corpus folder.
+    folder = "root" if token else (os.environ.get("ACP_DRIVE_FOLDER") or "1W27ULZsstP7gYGzgKKBId0qEfNxeKn0_")
+    name = "My Drive" if token else "acp-demo-corpus"
+    try:
+        svc = _drive(request)
+        about = svc.about().get(fields="user/displayName,storageQuota").execute()
+        n = len(svc.files().list(q=f"'{folder}' in parents and trashed=false and "
+                                   "mimeType!='application/vnd.google-apps.folder'",
+                                 fields="files(id)", pageSize=200).execute().get("files", []))
+        return [{"type": "google_drive", "name": name, "id": folder,
+                 "files": n, "access": "read-only",
+                 "user": about.get("user", {}).get("displayName")}]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"Drive connection failed: {e}")
 
 
 # Serve the built React SPA same-origin in the deploy container (ACP_STATIC_DIR
