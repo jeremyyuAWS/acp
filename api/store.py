@@ -80,6 +80,18 @@ _SCHEMA = [
       id TEXT PRIMARY KEY, ts TEXT, actor TEXT, action TEXT,
       scan_id TEXT, file TEXT, rule_id TEXT, detail TEXT
     )""",
+    # Durable job queue (ADR 0004). Survives restarts; retried with backoff;
+    # exhausted jobs become 'dead' (dead-letter). Timestamps are ISO-8601 TEXT so
+    # they sort chronologically and compare portably across Postgres + SQLite.
+    """CREATE TABLE IF NOT EXISTS jobs (
+      id TEXT PRIMARY KEY, type TEXT, payload TEXT,
+      status TEXT DEFAULT 'queued',
+      priority INT DEFAULT 100, attempts INT DEFAULT 0, max_attempts INT DEFAULT 5,
+      run_after TEXT, locked_at TEXT, locked_by TEXT,
+      campaign_id TEXT, batch_id TEXT, scan_id TEXT,
+      last_error TEXT, created_at TEXT, updated_at TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_claim ON jobs(status, run_after, priority)",
 ]
 
 _UPSERT_INV = (
@@ -620,4 +632,122 @@ class Store:
             else:
                 self._db.execute(cur,
                     "SELECT * FROM decision_log ORDER BY ts DESC LIMIT %s", (limit,))
+            return self._db.fetchall(cur)
+
+    # ── Durable job queue (ADR 0004) ──────────────────────────────────────────
+    # A worker claims the next eligible job, runs it, and marks it done — or, on
+    # failure, requeues it with backoff until max_attempts, then dead-letters it.
+    # Step-1 claim is optimistic (conditional UPDATE on status='queued'), which is
+    # correct for one worker and portable across Postgres + SQLite. Postgres
+    # `FOR UPDATE SKIP LOCKED` is the throughput optimization for the multi-worker
+    # step (ADR 0004, step 2).
+
+    @staticmethod
+    def _now() -> str:
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).isoformat()
+
+    def enqueue_job(self, type: str, payload: dict | None = None, *,
+                    priority: int = 100, max_attempts: int = 5,
+                    run_after: str | None = None, scan_id: str | None = None,
+                    campaign_id: str | None = None, batch_id: str | None = None) -> str:
+        import json as _json
+        now = self._now()
+        job_id = uuid.uuid4().hex[:16]
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
+                "run_after,campaign_id,batch_id,scan_id,created_at,updated_at) "
+                "VALUES(%s,%s,%s,'queued',%s,0,%s,%s,%s,%s,%s,%s,%s)",
+                (job_id, type, _json.dumps(payload or {}), priority, max_attempts,
+                 run_after or now, campaign_id, batch_id, scan_id, now, now))
+        return job_id
+
+    def get_job(self, job_id: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM jobs WHERE id=%s", (job_id,))
+            row = self._db.fetchone(cur)
+        if row and isinstance(row.get("payload"), str):
+            import json as _json
+            try:
+                row["payload"] = _json.loads(row["payload"])
+            except Exception:
+                pass
+        return row
+
+    def claim_job(self, worker_id: str) -> dict | None:
+        """Atomically claim the next eligible job. Returns the claimed job (with
+        attempts already incremented), or None if the queue is empty."""
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id FROM jobs WHERE status='queued' AND run_after<=%s "
+                "ORDER BY priority, run_after LIMIT 1", (now,))
+            row = self._db.fetchone(cur)
+            if not row:
+                return None
+            jid = row["id"]
+            # Conditional update: only one worker can flip status from 'queued'.
+            self._db.execute(cur,
+                "UPDATE jobs SET status='running', locked_at=%s, locked_by=%s, "
+                "attempts=attempts+1, updated_at=%s "
+                "WHERE id=%s AND status='queued'",
+                (now, worker_id, now, jid))
+            claimed = getattr(cur, "rowcount", 1) == 1
+        return self.get_job(jid) if claimed else None
+
+    def complete_job(self, job_id: str) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE jobs SET status='done', updated_at=%s, last_error=NULL WHERE id=%s",
+                (self._now(), job_id))
+
+    def fail_job(self, job_id: str, error: str, backoff_seconds: float = 0.0,
+                 force_dead: bool = False) -> str:
+        """Requeue a failed job with backoff, or dead-letter it once attempts are
+        exhausted (or immediately when force_dead). Returns 'queued' or 'dead'."""
+        from datetime import datetime, timezone, timedelta
+        job = self.get_job(job_id)
+        if job is None:
+            return "missing"
+        now = datetime.now(timezone.utc)
+        if force_dead or job["attempts"] >= job["max_attempts"]:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "UPDATE jobs SET status='dead', last_error=%s, updated_at=%s WHERE id=%s",
+                    (error[:2000], now.isoformat(), job_id))
+            return "dead"
+        run_after = (now + timedelta(seconds=backoff_seconds)).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE jobs SET status='queued', run_after=%s, locked_at=NULL, "
+                "locked_by=NULL, last_error=%s, updated_at=%s WHERE id=%s",
+                (run_after, error[:2000], now.isoformat(), job_id))
+        return "queued"
+
+    def reclaim_stuck_jobs(self, lease_seconds: int = 600) -> int:
+        """Requeue jobs stuck in 'running' past the lease (worker died mid-job)."""
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=lease_seconds)).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE jobs SET status='queued', locked_at=NULL, locked_by=NULL, updated_at=%s "
+                "WHERE status='running' AND locked_at<%s",
+                (self._now(), cutoff))
+            return getattr(cur, "rowcount", 0) or 0
+
+    def job_stats(self) -> dict:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT status, COUNT(*) AS n FROM jobs GROUP BY status")
+            return {r["status"]: r["n"] for r in self._db.fetchall(cur)}
+
+    def list_jobs(self, status: str | None = None, limit: int = 200) -> list[dict]:
+        with self._db.cursor() as cur:
+            if status:
+                self._db.execute(cur,
+                    "SELECT * FROM jobs WHERE status=%s ORDER BY updated_at DESC LIMIT %s",
+                    (status, limit))
+            else:
+                self._db.execute(cur,
+                    "SELECT * FROM jobs ORDER BY updated_at DESC LIMIT %s", (limit,))
             return self._db.fetchall(cur)

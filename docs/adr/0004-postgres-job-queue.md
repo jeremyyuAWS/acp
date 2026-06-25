@@ -181,3 +181,26 @@ altitude. Revisit in a follow-up ADR if that threshold is crossed.
 
 Each step is independently shippable; step 1 already replaces the fragile in-memory
 background-thread path with a durable one.
+
+## Implementation status (2026-06-25)
+
+Step 1's **durable queue infrastructure** is implemented and tested:
+
+- `jobs` table + claim index (`api/store.py`), timestamps as ISO-8601 TEXT for
+  Postgres/SQLite portability.
+- Store methods: `enqueue_job`, `claim_job` (optimistic conditional-update claim),
+  `complete_job`, `fail_job` (backoff requeue / dead-letter / `force_dead`),
+  `reclaim_stuck_jobs`, `job_stats`, `list_jobs`.
+- `api/worker.py`: `JobWorker` (claim → dispatch → complete/retry loop), a
+  `@handler("type")` registry, capped jittered exponential backoff, and
+  `FatalJobError` for immediate dead-letter.
+- `tests/test_jobs.py`: 10 passing tests (claim/complete, priority, retry→dead,
+  force-dead, backoff gate, stuck reclaim, worker loop).
+
+**Deferred (next):** wiring `scanner.run_scan` to enqueue `scan_file` jobs. The
+open design question is **Drive-token handling** — a per-file Drive job needs an
+access token, and persisting a user's GIS token in `jobs.payload` (at rest in
+Postgres) is a security concern. Options to resolve before integration: scope jobs
+to the local/ADC path first; pass a short-lived token via a side channel; or have
+the worker mint a service-identity token rather than reuse the user's. The
+multi-worker `SKIP LOCKED` claim (step 2) and campaign integration (step 3) follow.
