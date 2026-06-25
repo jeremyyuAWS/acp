@@ -37,3 +37,7 @@ test-corpus/files/_office.json
 
 # vendored compiled engine for the deploy image (not committed)
 deploy/public/vendor/
+
+# Partner code (DigitalA11y) — lives in its own repo: github.com/aveeranjan/digital-accessibility
+# Consumed as a pinned build artifact, not vendored here.
+digital-accessibility/
