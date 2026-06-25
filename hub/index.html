@@ -79,10 +79,10 @@
       <div class="card-desc">Scan, rubric, HITL queue, Drive write-back, AI explain, remediation logging. POST /scans · GET /ai/explain · POST /drive/upload · GET /scans/{id}/files/{f}/content.</div>
       <div class="tags"><span class="tag green">live</span><span class="tag blue">bearer-auth</span></div>
     </a>
-    <a class="card" href="https://acp-grafana.greenwater-4bf2c997.eastus2.azurecontainerapps.io" target="_blank">
-      <div class="card-head"><span class="card-icon">📊</span><div><div class="card-title">Analytics — ACP Grafana</div><div class="card-sub">ACP-specific dashboards · no login required</div></div></div>
-      <div class="card-desc">10 panels covering every workflow step: scan trends, WCAG rule breakdown, HITL funnel, AI vs deterministic split, engine breakdown, inventory compliance table, remediation rate — all live from ACP Postgres.</div>
-      <div class="tags"><span class="tag green">standalone · ACP only</span><span class="tag green">anonymous viewer · no login</span></div>
+    <a class="card" href="https://acp-grafana.greenwater-4bf2c997.eastus2.azurecontainerapps.io/d/acp-overview-v1" target="_blank">
+      <div class="card-head"><span class="card-icon">📊</span><div><div class="card-title">Analytics — ACP Grafana</div><div class="card-sub">ACP dashboard · no login required</div></div></div>
+      <div class="card-desc">The "ACP — Accessibility Compliance Platform" dashboard: scan trends, WCAG rule breakdown, HITL funnel, AI-vs-deterministic split, engine breakdown, inventory table, and the async job-queue panel — all live from the Google-Drive scan data in ACP Postgres.</div>
+      <div class="tags"><span class="tag green">dashboard acp-overview-v1</span><span class="tag green">anonymous viewer · no login</span></div>
     </a>
     <div class="card" style="cursor:default">
       <div class="card-head"><span class="card-icon">🧠</span><div><div class="card-title">AI Explain — Ollama</div><div class="card-sub">WHY / FIX explanations inside the app</div></div></div>
@@ -93,12 +93,12 @@
            style="text-decoration:none"><span class="tag" style="cursor:pointer;background:#f0ebff;border-color:#c4a8ff;color:#5b21b6">check /ai/status →</span></a>
       </div>
     </div>
-    <a class="card" href="https://acp-langfuse.greenwater-4bf2c997.eastus2.azurecontainerapps.io" target="_blank">
-      <div class="card-head"><span class="card-icon">🔭</span><div><div class="card-title">LLM Traces — Langfuse</div><div class="card-sub">Per-scan · per-rule · per-remediation</div></div></div>
-      <div class="card-desc">Every scan emits one trace (per-file spans, per-rule child spans). Drive write-back emits a step-6 span. <strong>Project: ACP Compliance Platform</strong> (dedicated project, not the admin default). Sign up with your work email — registration is open to the team.</div>
-      <div class="tags"><span class="tag green">live · ACP project</span><span class="tag blue">self-register at the link →</span></div>
+    <a class="card" href="https://acp-langfuse.greenwater-4bf2c997.eastus2.azurecontainerapps.io/project/acp-compliance/traces" target="_blank">
+      <div class="card-head"><span class="card-icon">🔭</span><div><div class="card-title">LLM Traces — Langfuse</div><div class="card-sub">Per-scan · per-file · per-rule</div></div></div>
+      <div class="card-desc">Opens the <strong>ACP Compliance Platform</strong> project traces. Each Google-Drive scan is one <code>acp-scan</code> trace with a span per file and per WCAG rule (e.g. a 77-file scan = 1,386 spans). Sign in / self-register with your work email to view.</div>
+      <div class="tags"><span class="tag green">project acp-compliance</span><span class="tag blue">widen date range to 24h →</span></div>
     </a>
-    <a class="card" href="https://acp-grafana.greenwater-4bf2c997.eastus2.azurecontainerapps.io" target="_blank">
+    <a class="card" href="https://acp-grafana.greenwater-4bf2c997.eastus2.azurecontainerapps.io/d/acp-overview-v1" target="_blank">
       <div class="card-head"><span class="card-icon">🗄️</span><div><div class="card-title">Postgres — Audit Trail</div><div class="card-sub">Live data in Grafana · mdk-accessibility-pg v16</div></div></div>
       <div class="card-desc">All 10 steps leave a durable record: <code>scan_runs</code> · <code>file_records</code> (drive_file_id + remediated_at) · <code>issue_records</code> · <code>scan_rule_traces</code> · <code>hitl_queue</code> · <code>inventory</code>. Click to view live in Grafana →</div>
       <div class="tags"><span class="tag">acpdb</span><span class="tag blue">open in Grafana →</span></div>
