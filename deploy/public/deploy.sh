@@ -183,6 +183,11 @@ if [ -n "$DATABASE_URL" ]; then
   _PG_DB="$(echo "$DATABASE_URL"   | sed 's|.*/\([^?]*\).*|\1|')"
   az acr build -r "$ACR" -t "$GF_IMAGE" -f deploy/grafana/Dockerfile deploy/grafana -o none
   if az containerapp show -g "$RG" -n "$GF_APP" -o none 2>/dev/null; then
+    # Ensure the Grafana app can pull from the private ACR before updating its
+    # image (an older acp-grafana may have been created without these creds,
+    # which fails the revision with UNAUTHORIZED).
+    _retry az containerapp registry set -g "$RG" -n "$GF_APP" \
+      --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
     _retry az containerapp update -g "$RG" -n "$GF_APP" --image "$ACRSERVER/$GF_IMAGE" \
       --set-env-vars \
         ACP_GRAFANA_PG_HOST="$_PG_HOST" \
