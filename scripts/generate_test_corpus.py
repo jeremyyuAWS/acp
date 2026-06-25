@@ -164,4 +164,141 @@ for label, y_in in [("Bottom (created first)", 3.5),
 prs2.save(CORPUS / "pptx-reading-order.pptx")
 print("PPTX reading-order written.")
 
+# ── pptx-alt-missing-image.pptx ─────────────────────────────────────────────
+# Targets: PPTX-ALT-001 (image without alt text), PPTX-LANG-001
+# Strategy: embed a tiny in-memory PNG — python-pptx creates <p:pic> with no
+#   <p:nvPr><p:ph/> descr, so the .NET rule's alt-text check finds nothing.
+
+import io
+from PIL import Image as _PILImage
+
+_img = _PILImage.new("RGB", (100, 100), color="#4285F4")
+_img_buf = io.BytesIO()
+_img.save(_img_buf, "PNG")
+_img_buf.seek(0)
+
+prs3 = Presentation()
+slide3 = prs3.slides.add_slide(prs3.slide_layouts[1])  # Title and Content
+slide3.shapes.title.text = "Quarterly Report"
+slide3.shapes.add_picture(_img_buf, Inches(1), Inches(2), Inches(3), Inches(3))
+# Do NOT set alt text or language → PPTX-ALT-001 + PPTX-LANG-001
+
+prs3.save(CORPUS / "pptx-alt-missing-image.pptx")
+print("PPTX alt-missing-image written.")
+
+# ── docx-heading-structure.docx ──────────────────────────────────────────────
+# Targets: DOCX-HEAD-001 (skipped heading levels), DOCX-LANG-001, DOCX-TITLE-001
+# Strategy: H1 immediately followed by H3, skipping H2.
+
+from docx import Document as _DocxDoc
+
+_doc = _DocxDoc()
+_doc.add_paragraph("Introduction", style="Heading 1")
+_doc.add_paragraph("Sub-section skipping H2", style="Heading 3")  # H1→H3 skip
+_doc.add_paragraph("This document intentionally skips heading level 2.")
+# core_properties.title and .language left empty → DOCX-TITLE-001, DOCX-LANG-001
+
+_doc.save(CORPUS / "docx-heading-structure.docx")
+print("DOCX heading-structure written.")
+
+# ── xlsx-chart-no-alt.xlsx ───────────────────────────────────────────────────
+# Targets: XLSX-ALT-001 (chart with no alt text), XLSX-TITLE-001, XLSX-LANG-001
+# Strategy: add a bar chart over numeric data; leave chart.title unset.
+
+from openpyxl.chart import BarChart, Reference as _ORef
+
+_wb2 = Workbook()
+_ws2 = _wb2.active
+_ws2.title = "Data"
+for _r, _v in enumerate([10, 25, 13, 47, 31], start=1):
+    _ws2.cell(row=_r, column=1, value=_v)
+
+_chart = BarChart()
+_chart.type = "col"
+_chart.title = None           # no chart title
+_data_ref = _ORef(_ws2, min_col=1, min_row=1, max_row=5)
+_chart.add_data(_data_ref)
+_ws2.add_chart(_chart, "C1")
+
+# Leave wb.properties.title and language empty → XLSX-TITLE-001, XLSX-LANG-001
+_wb2.save(CORPUS / "xlsx-chart-no-alt.xlsx")
+print("XLSX chart-no-alt written.")
+
+# ── html-partial-violations.html ─────────────────────────────────────────────
+# Targets: HTML_IMG_MISSING_ALT + HTML_VAGUE_LINK only.
+# Deliberately avoids: MISSING_LANG (lang="en"), MISSING_TITLE (title present),
+#   HEADING_SKIP (h1→h2 is sequential), INPUT_NO_LABEL (label present),
+#   EMPTY_LINK (link has text).
+
+(CORPUS / "html-partial-violations.html").write_text(
+    "<!DOCTYPE html>\n"
+    "<html lang=\"en\">\n"
+    "<head><meta charset=\"utf-8\"><title>Partial Violations Test</title></head>\n"
+    "<body>\n"
+    "  <h1>Annual Accessibility Report</h1>\n"
+    "  <h2>Executive Summary</h2>\n"
+    "  <p>This page has exactly two accessibility violations.</p>\n"
+    "  <img src=\"chart.png\">\n"                      # no alt → HTML_IMG_MISSING_ALT
+    "  <p>For details <a href=\"/report\">read more</a>.</p>\n"  # vague → HTML_VAGUE_LINK
+    "  <form>\n"
+    "    <label for=\"q\">Search</label>\n"
+    "    <input type=\"text\" id=\"q\">\n"             # labeled → no HTML_INPUT_NO_LABEL
+    "  </form>\n"
+    "</body>\n"
+    "</html>\n"
+)
+print("HTML partial-violations written.")
+
+# ── docx-all-violations.docx ─────────────────────────────────────────────────
+# Targets: DOCX-TITLE-001, DOCX-LANG-001, DOCX-ALT-001, DOCX-LINK-001, DOCX-TABLE-001
+# Strategy: one doc that hits all five rules in docx-noncompliant's oracle set.
+
+from docx.oxml.ns import qn as _qn
+from docx.oxml import OxmlElement as _OXml
+from docx.shared import Inches as _DIn
+
+def _add_hyperlink(paragraph, url, text):
+    """Add a hyperlink run to an existing paragraph (python-docx XML workaround)."""
+    rel_id = paragraph.part.relate_to(
+        url,
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+        is_external=True,
+    )
+    hl = _OXml("w:hyperlink")
+    hl.set(_qn("r:id"), rel_id)
+    hl.set(_qn("w:history"), "1")
+    run_el = _OXml("w:r")
+    rPr = _OXml("w:rPr")
+    style_el = _OXml("w:rStyle")
+    style_el.set(_qn("w:val"), "Hyperlink")
+    rPr.append(style_el)
+    run_el.append(rPr)
+    t_el = _OXml("w:t")
+    t_el.text = text
+    run_el.append(t_el)
+    hl.append(run_el)
+    paragraph._p.append(hl)
+
+_doc2 = _DocxDoc()
+# No title or language in core_properties → DOCX-TITLE-001, DOCX-LANG-001
+
+_p_link = _doc2.add_paragraph("See ")
+_add_hyperlink(_p_link, "https://example.com", "click here")  # vague → DOCX-LINK-001
+
+# Table with no explicit header row → DOCX-TABLE-001
+_tbl = _doc2.add_table(rows=3, cols=2)
+for _row in _tbl.rows:
+    for _cell in _row.cells:
+        _cell.text = "data"
+
+# Embedded image without alt text → DOCX-ALT-001
+_img2 = _PILImage.new("RGB", (50, 50), color="#EA4335")
+_img2_buf = io.BytesIO()
+_img2.save(_img2_buf, "PNG")
+_img2_buf.seek(0)
+_doc2.add_picture(_img2_buf, width=_DIn(1))
+
+_doc2.save(CORPUS / "docx-all-violations.docx")
+print("DOCX all-violations written.")
+
 print("\nAll synthetic corpus files generated successfully.")

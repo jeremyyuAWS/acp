@@ -75,25 +75,29 @@
       <div class="tags"><span class="tag green">live</span><span class="tag blue">bearer-auth</span></div>
     </a>
     <a class="card" href="https://acp-grafana.greenwater-4bf2c997.eastus2.azurecontainerapps.io" target="_blank">
-      <div class="card-head"><span class="card-icon">📊</span><div><div class="card-title">Analytics — Grafana</div><div class="card-sub">Observability dashboards</div></div></div>
-      <div class="card-desc">Scan overview (files + scores over time), WCAG breakdown by rule, HITL queue funnel, and Drive remediation rate — all from Postgres. Direct SQL datasource.</div>
-      <div class="tags"><span class="tag green">live</span><span class="tag orange">login: admin · ask Jeremy for pw</span></div>
+      <div class="card-head"><span class="card-icon">📊</span><div><div class="card-title">Analytics — ACP Grafana</div><div class="card-sub">ACP-specific dashboards · no login required</div></div></div>
+      <div class="card-desc">10 panels covering every workflow step: scan trends, WCAG rule breakdown, HITL funnel, AI vs deterministic split, engine breakdown, inventory compliance table, remediation rate — all live from ACP Postgres.</div>
+      <div class="tags"><span class="tag green">standalone · ACP only</span><span class="tag green">anonymous viewer · no login</span></div>
     </a>
-    <a class="card" href="https://acp-app.greenwater-4bf2c997.eastus2.azurecontainerapps.io/ai/status" target="_blank">
-      <div class="card-head"><span class="card-icon">🧠</span><div><div class="card-title">AI Explain — Ollama</div><div class="card-sub">Local-model WHY/FIX explanations</div></div></div>
-      <div class="card-desc">"Why?" button on every FAIL row in the rule coverage table. Llama 3.2 explains why the finding matters and exactly what to fix. Fails silently if Ollama is offline.</div>
-      <div class="tags"><span class="tag purple">llama3.2</span><span class="tag">GET /ai/status</span></div>
-    </a>
+    <div class="card" style="cursor:default">
+      <div class="card-head"><span class="card-icon">🧠</span><div><div class="card-title">AI Explain — Ollama</div><div class="card-sub">WHY / FIX explanations inside the app</div></div></div>
+      <div class="card-desc">Not a separate URL — the "Why?" button appears on every FAIL row in the Assess rule-coverage table inside the platform. Llama 3.2 explains why the finding matters and what to fix. Check status below.</div>
+      <div class="tags">
+        <span class="tag purple">llama3.2</span>
+        <a href="https://acp-app.greenwater-4bf2c997.eastus2.azurecontainerapps.io/ai/status" target="_blank"
+           style="text-decoration:none"><span class="tag" style="cursor:pointer;background:#f0ebff;border-color:#c4a8ff;color:#5b21b6">check /ai/status →</span></a>
+      </div>
+    </div>
     <a class="card" href="https://acp-langfuse.greenwater-4bf2c997.eastus2.azurecontainerapps.io" target="_blank">
       <div class="card-head"><span class="card-icon">🔭</span><div><div class="card-title">LLM Traces — Langfuse</div><div class="card-sub">Per-scan · per-rule · per-remediation</div></div></div>
-      <div class="card-desc">Every scan emits one trace (per-file spans, per-rule child spans). Drive write-back emits a step-6 span. Project: ACP Compliance Platform.</div>
-      <div class="tags"><span class="tag green">live</span><span class="tag orange">login: admin@acp.mova.io · ask Jeremy for pw</span></div>
+      <div class="card-desc">Every scan emits one trace (per-file spans, per-rule child spans). Drive write-back emits a step-6 span. <strong>Project: ACP Compliance Platform</strong> (dedicated project, not the admin default). Sign up with your work email — registration is open to the team.</div>
+      <div class="tags"><span class="tag green">live · ACP project</span><span class="tag blue">self-register at the link →</span></div>
     </a>
-    <div class="card">
-      <div class="card-head"><span class="card-icon">🗄️</span><div><div class="card-title">Postgres — Audit Trail</div><div class="card-sub">mdk-accessibility-pg · v16</div></div></div>
-      <div class="card-desc">scan_runs · file_records (drive_file_id + remediated_at + drive_write_url) · issue_records · scan_rule_traces · hitl_queue · inventory. All 10 steps leave a durable record.</div>
-      <div class="tags"><span class="tag">acpdb</span><span class="tag blue">grafana db</span></div>
-    </div>
+    <a class="card" href="https://acp-grafana.greenwater-4bf2c997.eastus2.azurecontainerapps.io" target="_blank">
+      <div class="card-head"><span class="card-icon">🗄️</span><div><div class="card-title">Postgres — Audit Trail</div><div class="card-sub">Live data in Grafana · mdk-accessibility-pg v16</div></div></div>
+      <div class="card-desc">All 10 steps leave a durable record: <code>scan_runs</code> · <code>file_records</code> (drive_file_id + remediated_at) · <code>issue_records</code> · <code>scan_rule_traces</code> · <code>hitl_queue</code> · <code>inventory</code>. Click to view live in Grafana →</div>
+      <div class="tags"><span class="tag">acpdb</span><span class="tag blue">open in Grafana →</span></div>
+    </a>
   </div>
 
   <div class="section-label">Infrastructure</div>

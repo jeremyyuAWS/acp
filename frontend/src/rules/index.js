@@ -1,0 +1,87 @@
+// Rule manifest and orchestrator.
+//
+// Each rule module exports:
+//   meta   — { id, level, name, fixMode: 'auto'|'ai-assisted'|'human-only' }
+//   check  — (doc: Document) => Array<{ element, detail, severity }>
+//   fix    — (doc: Document) => Set<string>  (change descriptions)
+//
+// Add a new rule: create wcag-X-X-X.js alongside this file, import it here,
+// and append it to allRules. No other file needs changing.
+
+import * as r311  from './wcag-3-1-1.js'
+import * as r242  from './wcag-2-4-2.js'
+import * as r111  from './wcag-1-1-1.js'
+import * as r131  from './wcag-1-3-1.js'
+import * as r244  from './wcag-2-4-4.js'
+import * as r143  from './wcag-1-4-3.js'
+import * as r144  from './wcag-1-4-4.js'
+import * as r1410 from './wcag-1-4-10.js'
+import * as r243  from './wcag-2-4-3.js'
+import * as r211  from './wcag-2-1-1.js'
+import * as r141  from './wcag-1-4-1.js'
+import * as r412  from './wcag-4-1-2.js'
+import * as r1411 from './wcag-1-4-11.js'
+import * as r1412 from './wcag-1-4-12.js'
+import * as r246  from './wcag-2-4-6.js'
+import * as r247  from './wcag-2-4-7.js'
+import * as r314  from './wcag-3-1-4.js'
+
+// Ordered by WCAG SC number. Screen-reader-impacting checks run first.
+export const allRules = [
+  r111,  // 1.1.1 Non-text Content
+  r131,  // 1.3.1 Info and Relationships
+  r141,  // 1.4.1 Use of Color
+  r143,  // 1.4.3 Contrast (Minimum)
+  r144,  // 1.4.4 Resize Text
+  r1410, // 1.4.10 Reflow
+  r1411, // 1.4.11 Non-text Contrast
+  r1412, // 1.4.12 Text Spacing
+  r211,  // 2.1.1 Keyboard
+  r242,  // 2.4.2 Page Titled
+  r243,  // 2.4.3 Focus Order
+  r244,  // 2.4.4 Link Purpose
+  r246,  // 2.4.6 Headings and Labels
+  r247,  // 2.4.7 Focus Visible
+  r311,  // 3.1.1 Language of Page
+  r314,  // 3.1.4 Abbreviations
+  r412,  // 4.1.2 Name, Role, Value
+]
+
+// Run check() on every active rule and return a coverage manifest.
+// When aiEnabled=false, ai-assisted rules are still checked (finding is reported)
+// but their fixMode is surfaced as 'human-only' so callers can route to HITL.
+//
+// Returns: Array<{ rule: meta, findings: [], outcome: 'PASS'|'FAIL'|'SKIP' }>
+export function runChecks(doc, { aiEnabled = true } = {}) {
+  return allRules.map((mod) => {
+    try {
+      const findings = mod.check(doc)
+      return {
+        rule: { ...mod.meta, effectiveFixMode: !aiEnabled && mod.meta.fixMode === 'ai-assisted' ? 'human-only' : mod.meta.fixMode },
+        findings,
+        outcome: findings.length > 0 ? 'FAIL' : 'PASS',
+      }
+    } catch (err) {
+      return { rule: mod.meta, findings: [], outcome: 'SKIP', skipReason: String(err) }
+    }
+  })
+}
+
+// Apply fix() from every fixable rule and return the union of change descriptions.
+// When aiEnabled=false, only 'auto' rules run; 'ai-assisted' rules are skipped
+// (their findings stay in the HITL queue).
+//
+// Returns: Array<string>
+export function runFixes(doc, { aiEnabled = true } = {}) {
+  const changes = new Set()
+  allRules.forEach((mod) => {
+    if (mod.meta.fixMode === 'human-only') return
+    if (!aiEnabled && mod.meta.fixMode === 'ai-assisted') return
+    try {
+      mod.fix(doc).forEach((c) => changes.add(c))
+    } catch {
+      // individual rule failure should not abort the remediation run
+    }
+  })
+  return [...changes]
+}

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { monitoringState, sourceWatch, IDENTITY } from './sim.js'
+import { monitoringState, sourceWatch, IDENTITY, SIM } from './sim.js'
+import { getSchedule, putSchedule } from './api.js'
 import { prefersReducedMotion } from './a11y.js'
 
 // Step 10 · Monitor — the always-on surface. Shows every connected source being
@@ -39,9 +40,36 @@ function Toggle({ label, hint, on, set }) {
   )
 }
 
-export default function Monitor({ sources = [], files = [], ratified, decisions = {}, publishedFiles = [] }) {
+// Derive program phase data from the live corpus + decisions
+function useProgramBatches(files, decisions) {
+  const total = files.length || 124
+  const hasCrit = (f) => (f.issues || []).some((i) => i.severity === 'CRITICAL')
+  const hasSer  = (f) => (f.issues || []).some((i) => i.severity === 'SERIOUS')
+  const hasMod  = (f) => (f.issues || []).some((i) => i.severity === 'MODERATE')
+  const isNA    = (f) => (f.score ?? 0) >= 90 && !(f.issues || []).some((i) => i.severity === 'CRITICAL' || i.severity === 'SERIOUS')
+  const b1 = files.filter(hasCrit)
+  const b2 = files.filter((f) => !hasCrit(f) && hasSer(f))
+  const b3 = files.filter((f) => !hasCrit(f) && !hasSer(f) && hasMod(f))
+  const na = files.filter(isNA)
+  const decided = (batch) => batch.filter((f) => decisions[f.file]?.state === 'accepted' || decisions[f.file]?.state === 'override').length
+  // SIM defaults when no real data
+  const sim = !files.length
+  return {
+    total: sim ? total : files.length,
+    deadline: '2026-06-28',
+    batches: [
+      { label: 'Batch 1 · CRITICAL auto-fix',    count: sim ? 47  : b1.length, done: sim ? 38 : decided(b1), color: '#7B1D1D', bg: '#FDECEA', note: 'auto-fix eligible · one click' },
+      { label: 'Batch 2 · SERIOUS HITL review',  count: sim ? 189 : b2.length, done: sim ? 44 : decided(b2), color: '#854F0B', bg: '#FAEEDA', note: 'human approval needed' },
+      { label: 'Batch 3 · MODERATE sweep',       count: sim ? 521 : b3.length, done: sim ? 0  : decided(b3), color: '#1F5FA8', bg: '#E2EDFB', note: 'auto-fix + spot-check' },
+      { label: 'N/A · excluded from plan',       count: sim ? 490 : na.length, done: sim ? 490: na.length,  color: '#9a948f', bg: '#EFEDEA', note: 'internal / compliant / junk' },
+    ],
+  }
+}
+
+export default function Monitor({ sources = [], files = [], ratified, decisions = {}, publishedFiles = [], aiEnabled = true, onAiToggle }) {
   const m = monitoringState(files)
   const watch = sourceWatch(sources, files)
+  const prog = useProgramBatches(files, decisions)
 
   // SLA enforcement — uses f.age (days since last edit) as elapsed time proxy.
   const daysInQueue = (f) => Math.floor((f.age || 30) * 0.4)
@@ -70,6 +98,7 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
   const [paused, setPaused] = useState(false)
   const evidenceRef = useRef(null)
   const [exporting, setExporting] = useState(false)
+  const [schedNext, setSchedNext] = useState(null)
   const exportEvidence = async () => {
     if (exporting) return
     setExporting(true)
@@ -92,7 +121,15 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
   }
   const [triggers, setTriggers] = useState({ newFile: true, onEdit: true, autoRemediate: true, alertRegression: true })
   const [cad, setCad] = useState(() => Object.fromEntries(watch.map((w) => [w.id, w.cadence])))
-  const setAllCad = (v) => setCad(Object.fromEntries(watch.map((w) => [w.id, v])))
+  const setAllCad = (v) => {
+    setCad(Object.fromEntries(watch.map((w) => [w.id, v])))
+    if (!SIM) {
+      const minMap = { live: 5, hourly: 60, daily: 1440, weekly: 10080 }
+      putSchedule({ enabled: v !== 'off', interval_minutes: minMap[v] ?? 60 })
+        .then((s) => setSchedNext(s.next_at))
+        .catch(() => {})
+    }
+  }
   const cadCount = (v) => Object.values(cad).filter((c) => c === v).length
   const next = useRef(1)
   const push = (e) => setEvents((cur) => [{ ...e, id: next.current++, when: 'just now' }, ...cur].slice(0, 9))
@@ -123,6 +160,15 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
   }, [decisions, publishedFiles]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    if (SIM) return
+    getSchedule().then((s) => {
+      setSchedNext(s.next_at)
+      const v = !s.enabled ? 'off' : s.interval_minutes <= 5 ? 'live' : s.interval_minutes <= 60 ? 'hourly' : s.interval_minutes <= 1440 ? 'daily' : 'weekly'
+      setCad((prev) => Object.fromEntries((Object.keys(prev).length ? Object.keys(prev) : watch.map((w) => w.id)).map((k) => [k, v])))
+    }).catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
     if (paused || prefersReducedMotion()) return
     const t = setInterval(() => push(POOL[next.current % POOL.length]), 4200)
     const a = setInterval(() => {
@@ -141,6 +187,39 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
         </div>
         <button className={paused ? '' : 'ghost'} onClick={() => setPaused((p) => !p)}>{paused ? '▶ Resume live feed' : '⏸ Pause live feed'}</button>
       </div>
+
+      <section className="panel" style={{ marginBottom: 14 }}>
+        <div className="proghd">
+          <div>
+            <b>Remediation program &mdash; 2026 ADA Title II Compliance</b>
+            <span className="muted" style={{ marginLeft: 10, fontSize: 12 }}>Deadline: {prog.deadline} &nbsp;&middot;&nbsp; {prog.total} files in scope</span>
+          </div>
+          <span className="trstatchip pending" style={{ fontSize: 12 }}>
+            {prog.batches.reduce((a, b) => a + b.done, 0)} / {prog.batches.reduce((a, b) => a + b.count, 0)} resolved
+          </span>
+        </div>
+        <div className="progbatches">
+          {prog.batches.map((b, i) => {
+            const pct = b.count > 0 ? Math.round((b.done / b.count) * 100) : 100
+            return (
+              <div className="progrow" key={i}>
+                <div className="proglabel">
+                  <span style={{ color: b.color, fontWeight: 600, fontSize: 13 }}>{b.label}</span>
+                  <span className="muted" style={{ fontSize: 11 }}>{b.note}</span>
+                </div>
+                <div className="progtrack">
+                  <div className="progbar"><i style={{ width: `${pct}%`, background: b.color, opacity: 0.75 }} /></div>
+                  <span className="progpct" style={{ color: b.color }}>{pct}%</span>
+                  <span className="muted progn">{b.done} / {b.count}</span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+          Phases run in parallel &mdash; auto-fixable files in Batch 1 clear with one &ldquo;Run batch&rdquo; click in the Remediate tab &middot; Batch 2 items route to the HITL queue
+        </div>
+      </section>
 
       <div className="moncards">
         <div className="moncard"><span className="muted">Documents watched</span><b>{m.watchedDocs}</b><span className="muted">{m.watchedSources} sources</span></div>
@@ -176,6 +255,37 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
       )}
 
       <section className="panel" style={{ marginBottom: 14 }}>
+        <h2>AI remediation mode <span className="muted">· controls which fixes are applied automatically</span></h2>
+        <div className="aimodetoggle">
+          <div className="aimoderow">
+            <div>
+              <div className="ctlsub">{aiEnabled ? 'AI-assisted mode (on)' : 'Deterministic-only mode (AI off)'}</div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>
+                {aiEnabled
+                  ? 'AI drafts fixes for semantic content (alt text, link labels, icon names). Deterministic rules (contrast, viewport, tabindex) run always.'
+                  : 'Only deterministic rules run. AI-assisted fixes (alt text, link labels, icon names) are routed to the human review queue instead.'}
+              </div>
+            </div>
+            {onAiToggle && (
+              <button
+                className={aiEnabled ? 'aitoggle on' : 'aitoggle'}
+                onClick={() => onAiToggle(!aiEnabled)}
+                aria-pressed={aiEnabled}
+                title={aiEnabled ? 'Turn off AI — deterministic only' : 'Turn on AI-assisted remediation'}
+              >
+                {aiEnabled ? 'AI on' : 'AI off'}
+              </button>
+            )}
+          </div>
+          {!aiEnabled && (
+            <div className="aioffnote">
+              AI-assisted rules affected: <b>1.1.1 alt text</b>, <b>2.4.4 link purpose</b>, <b>4.1.2 name/role/value</b>, <b>1.4.11 non-text contrast</b> &mdash; these are routed to human review.
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="panel" style={{ marginBottom: 14 }}>
         <h2>Scan triggers &amp; schedule <span className="muted">· how the agent decides when to scan</span></h2>
         <div className="scanctl">
           <div className="ctlcol">
@@ -189,9 +299,14 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
             <div className="ctlsub">Scheduled sweeps</div>
             <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>Estate default — set every source at once, or override per source below.</div>
             <div className="seg">
-              {['live', 'hourly', 'daily', 'weekly', 'off'].map((v) => (
-                <button key={v} className={'segbtn'} onClick={() => setAllCad(v)}>{v}</button>
-              ))}
+              {['live', 'hourly', 'daily', 'weekly', 'off'].map((v) => {
+                const isActive = watch.length > 0 && cadCount(v) === watch.length
+                return (
+                  <button key={v} className="segbtn"
+                    style={isActive ? { background: '#185FA5', color: '#fff', borderColor: '#185FA5' } : {}}
+                    onClick={() => setAllCad(v)}>{v}</button>
+                )
+              })}
             </div>
             <div className="cadsummary">
               {['live', 'hourly', 'daily', 'weekly', 'off'].map((v) => cadCount(v) ? <span key={v} className="cadpill">{cadCount(v)} {v}</span> : null)}
@@ -259,13 +374,19 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
           <section className="panel" style={{ marginBottom: 14 }}>
             <h2>Scheduled re-scans</h2>
             <div className="schedlist">
-              {watch.slice(0, 6).map((w) => (
-                <div className="schedrow" key={w.id}>
-                  <span className="schedname">{w.name}</span>
-                  <span className="schedcad muted">{w.cadence}</span>
-                  <span className="schednext">{w.next}</span>
-                </div>
-              ))}
+              {watch.slice(0, 6).map((w) => {
+                const thisCad = SIM ? w.cadence : (cad[w.id] || 'off')
+                const nextAt = SIM ? w.next : (schedNext && thisCad !== 'off'
+                  ? new Date(schedNext).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                  : '—')
+                return (
+                  <div className="schedrow" key={w.id}>
+                    <span className="schedname">{w.name}</span>
+                    <span className="schedcad muted">{thisCad}</span>
+                    <span className="schednext">{nextAt}</span>
+                  </div>
+                )
+              })}
             </div>
           </section>
           <section className="panel">

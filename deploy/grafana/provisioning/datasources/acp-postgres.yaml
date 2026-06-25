@@ -1,0 +1,21 @@
+apiVersion: 1
+
+datasources:
+  - name: ACP-Postgres
+    uid: acp_pg
+    type: postgres
+    access: proxy
+    # DATABASE_URL injected at runtime, e.g.:
+    #   postgresql://user:pass@host/acpdb?sslmode=require
+    # Grafana parses the standard DSN components from these env-var overrides.
+    url: ${ACP_GRAFANA_PG_HOST:localhost:5432}
+    database: ${ACP_GRAFANA_PG_DB:acpdb}
+    user: ${ACP_GRAFANA_PG_USER:acpadmin}
+    secureJsonData:
+      password: ${ACP_GRAFANA_PG_PASS:}
+    jsonData:
+      sslmode: require
+      postgresVersion: 1400
+      timescaledb: false
+    isDefault: true
+    editable: false

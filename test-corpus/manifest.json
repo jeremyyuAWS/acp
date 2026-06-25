@@ -1,167 +1,62 @@
 [
   {
-    "file": "docx-compliant.docx",
-    "format": "docx",
-    "quality": "compliant",
-    "expected_outcome": "analysed",
-    "expected_rule_ids": [],
-    "notes": "title+lang+alt+header row+descriptive link; expect ~0 issues, high score",
-    "bytes": 37482,
-    "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    "file": "pdf-critical-untagged-no-lang.pdf",
+    "size_kb": 1.5,
+    "desc": "No tags, no title, no language, ambiguous link text \u2014 worst case"
   },
   {
-    "file": "docx-moderate.docx",
-    "format": "docx",
-    "quality": "moderate",
-    "expected_outcome": "analysed",
-    "expected_rule_ids": [
-      "DOCX-ALT-001",
-      "DOCX-LINK-001"
-    ],
-    "notes": "title+lang OK; missing alt + generic link text",
-    "bytes": 37227,
-    "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    "file": "docx-critical-no-headings.docx",
+    "size_kb": 36.0,
+    "desc": "Bold-as-heading, low-contrast text, pseudo-bullets, no title"
   },
   {
-    "file": "docx-noncompliant.docx",
-    "format": "docx",
-    "quality": "non-compliant",
-    "expected_outcome": "analysed",
-    "expected_rule_ids": [
-      "DOCX-TITLE-001",
-      "DOCX-LANG-001",
-      "DOCX-ALT-001",
-      "DOCX-LINK-001",
-      "DOCX-TABLE-001"
-    ],
-    "notes": "no title/lang, missing alt, generic link, table w/o header \u2014 many SERIOUS/CRITICAL",
-    "bytes": 37325,
-    "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    "file": "pptx-critical-no-titles.pptx",
+    "size_kb": 29.4,
+    "desc": "Blank layout slides, no slide titles, low contrast, no semantic structure"
   },
   {
-    "file": "docx-empty.docx",
-    "format": "docx",
-    "quality": "edge-empty",
-    "expected_outcome": "analysed",
-    "expected_rule_ids": [],
-    "notes": "empty body but title+lang set; tests empty-content handling, expect ~0 issues",
-    "bytes": 36594,
-    "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    "file": "pdf-serious-contrast.pdf",
+    "size_kb": 1.5,
+    "desc": "Nearly-invisible light-grey text on white, no language"
   },
   {
-    "file": "pptx-compliant.pptx",
-    "format": "pptx",
-    "quality": "compliant",
-    "expected_outcome": "analysed",
-    "expected_rule_ids": [],
-    "notes": "slide title + image alt + language; expect ~0 issues",
-    "bytes": 28638,
-    "mime": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    "file": "docx-serious-ambiguous-links.docx",
+    "size_kb": 36.0,
+    "desc": "Ambiguous link text (click here / read more), images without alt"
   },
   {
-    "file": "pptx-noncompliant.pptx",
-    "format": "pptx",
-    "quality": "non-compliant",
-    "expected_outcome": "analysed",
-    "expected_rule_ids": [
-      "PPTX-TITLE-001",
-      "PPTX-ALT-001",
-      "PPTX-LANG-001"
-    ],
-    "notes": "no slide title, image w/o alt, no language (rule ids approximate)",
-    "bytes": 28599,
-    "mime": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    "file": "pdf-moderate-mixed.pdf",
+    "size_kb": 1.5,
+    "desc": "Has title but missing lang, abbreviations unexplained"
   },
   {
-    "file": "xlsx-compliant.xlsx",
-    "format": "xlsx",
-    "quality": "compliant",
-    "expected_outcome": "analysed",
-    "expected_rule_ids": [],
-    "notes": "named sheet + title + lang + header row; expect ~0 issues",
-    "bytes": 4920,
-    "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    "file": "docx-moderate-skipped-headings.docx",
+    "size_kb": 35.9,
+    "desc": "H1 \u2192 H3 (skips H2), otherwise well-structured"
   },
   {
-    "file": "xlsx-noncompliant.xlsx",
-    "format": "xlsx",
-    "quality": "non-compliant",
-    "expected_outcome": "analysed",
-    "expected_rule_ids": [
-      "XLSX-TITLE-001",
-      "XLSX-LANG-001",
-      "XLSX-SHEETNAME-001",
-      "XLSX-MERGED-001",
-      "XLSX-HIDDEN-001"
-    ],
-    "notes": "no title/lang, generic 'Sheet' name, merged cells, hidden sheet (rule ids approximate)",
-    "bytes": 5319,
-    "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    "file": "pptx-moderate-title-only.pptx",
+    "size_kb": 29.5,
+    "desc": "Has slide titles but no content placeholders, pseudo-bullets in textbox"
   },
   {
-    "file": "pdf-untagged.pdf",
-    "format": "pdf",
-    "quality": "non-compliant",
-    "expected_outcome": "analysed",
-    "expected_rule_ids": [
-      "PDF-TAGGED-001",
-      "PDF-TITLE-001",
-      "PDF-LANG-001"
-    ],
-    "notes": "untagged + no title + no /Lang (rule ids approximate)",
-    "bytes": 1400,
-    "mime": "application/pdf"
+    "file": "pdf-borderline-contrast.pdf",
+    "size_kb": 1.5,
+    "desc": "One slightly low-contrast section, otherwise OK"
   },
   {
-    "file": "pdf-titled-lang.pdf",
-    "format": "pdf",
-    "quality": "moderate",
-    "expected_outcome": "analysed",
-    "expected_rule_ids": [
-      "PDF-TAGGED-001"
-    ],
-    "notes": "title + /Lang set, but still untagged \u2014 title/lang pass, tagging fails",
-    "bytes": 1253,
-    "mime": "application/pdf"
+    "file": "pdf-clean-accessible.pdf",
+    "size_kb": 1.5,
+    "desc": "Title set, black text, no structural issues \u2014 should score 100"
   },
   {
-    "file": "pdf-encrypted.pdf",
-    "format": "pdf",
-    "quality": "edge-encrypted",
-    "expected_outcome": "error",
-    "expected_rule_ids": [],
-    "notes": "password-protected; analyser open should FAIL gracefully (Succeeded=false, error captured)",
-    "bytes": 2385,
-    "mime": "application/pdf"
+    "file": "docx-clean-accessible.docx",
+    "size_kb": 36.0,
+    "desc": "Full heading hierarchy, title set, lang set \u2014 should pass"
   },
   {
-    "file": "edge-corrupt.docx",
-    "format": "docx",
-    "quality": "edge-corrupt",
-    "expected_outcome": "error",
-    "expected_rule_ids": [],
-    "notes": "truncated/invalid OOXML zip; Open() should fail gracefully",
-    "bytes": 68,
-    "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-  },
-  {
-    "file": "edge-plaintext.docx",
-    "format": "docx",
-    "quality": "edge-wrongtype",
-    "expected_outcome": "error",
-    "expected_rule_ids": [],
-    "notes": "plain text with .docx extension; should fail gracefully",
-    "bytes": 53,
-    "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-  },
-  {
-    "file": "edge-pdf-as.docx",
-    "format": "docx",
-    "quality": "edge-wrongtype",
-    "expected_outcome": "error",
-    "expected_rule_ids": [],
-    "notes": "real PDF bytes with .docx extension; should fail gracefully",
-    "bytes": 1340,
-    "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    "file": "pptx-clean-accessible.pptx",
+    "size_kb": 29.4,
+    "desc": "Title+Content layout, black text, proper structure \u2014 should pass"
   }
 ]

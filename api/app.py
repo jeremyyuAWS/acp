@@ -44,6 +44,9 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
 # replaced by per-user "Sign in with Google" (GIS) once a Web OAuth client exists.
 ACCESS_CODE = os.environ.get("ACP_ACCESS_CODE")
 GOOGLE_CLIENT_ID = os.environ.get("ACP_GOOGLE_CLIENT_ID") or None
+# Smoke/e2e test key: requests with X-E2E-Key matching this value bypass auth.
+# Set ACP_E2E_KEY in the container env — leave unset in production if not needed.
+E2E_KEY = os.environ.get("ACP_E2E_KEY") or None
 # Comma-separated domains allowed in GIS mode (default: movate.com).
 # Extend via ACP_ALLOWED_DOMAINS env var for demos with external attendees.
 _ALLOWED_DOMAINS = [
@@ -84,12 +87,29 @@ def _verify_gis_token(token: str) -> str | None:
     return email
 
 # Paths that bypass all auth (needed before the user has a token).
-_ALWAYS_PUBLIC = {"/healthz", "/config"}
+_ALWAYS_PUBLIC = {"/healthz", "/config", "/hub", "/ai/status"}
+
+
+_API_PREFIXES = (
+    "/scans", "/rubric", "/rules", "/inventory", "/schedule",
+    "/me", "/sources", "/folders", "/drive", "/hitl", "/ai",
+)
+
+def _is_public(path: str) -> bool:
+    # Explicit allow-list first.
+    if path in _ALWAYS_PUBLIC:
+        return True
+    # API routes require auth; everything else is the SPA (static file or client route).
+    if any(path == p or path.startswith(p + "/") for p in _API_PREFIXES):
+        return False
+    return True
 
 
 @app.middleware("http")
 async def _access_gate(request, call_next):
-    if request.url.path in _ALWAYS_PUBLIC:
+    if E2E_KEY and request.headers.get("x-e2e-key") == E2E_KEY:
+        return await call_next(request)
+    if _is_public(request.url.path):
         return await call_next(request)
     if ACCESS_CODE:
         ok = False
@@ -539,8 +559,13 @@ def _drive(request: Request | None = None):
     from googleapiclient.discovery import build
     token = request.headers.get("x-drive-token") if request is not None else None
     if token:
+        import datetime as _dt
         from google.oauth2.credentials import Credentials
         creds = Credentials(token=token, scopes=DRIVE_SCOPES)
+        # GIS tokens are short-lived (1 h) and have no refresh_token.
+        # Set a far-future expiry so the client library never attempts refresh;
+        # the Drive API returns 401 if the token actually expired.
+        creds.expiry = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=1)
     elif GOOGLE_CLIENT_ID:
         raise HTTPException(401, "sign in with Google to connect your Drive")
     else:

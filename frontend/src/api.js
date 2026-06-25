@@ -17,13 +17,20 @@ const headers = (extra = {}) => ({
   ...(spToken ? { 'X-SP-Token': spToken } : {}),
 })
 
-const j = (r) => {
+const j = async (r) => {
   if (r.status === 401) {
     googleToken = null
     window.dispatchEvent(new CustomEvent('acp:session-expired'))
     throw new Error('Session expired — please sign in again')
   }
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+  if (!r.ok) {
+    let detail = `${r.status} ${r.statusText}`
+    try {
+      const body = await r.json()
+      if (body?.detail) detail = body.detail
+    } catch (_) { /* body wasn't JSON */ }
+    throw new Error(detail)
+  }
   return r.json()
 }
 const sim = (value, ms = 220) => new Promise((res) => setTimeout(() => res(value), ms))

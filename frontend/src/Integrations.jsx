@@ -110,45 +110,79 @@ function FolderPicker({ onScan, onClose }) {
 
   return (
     <div className="setoverlay" onClick={onClose}>
-      <div className="setpanel" style={{ maxWidth: 460, width: '100%' }}
+      <div className="setpanel" style={{ maxWidth: 480, width: '100%', padding: '24px 28px 28px' }}
            onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Choose a folder to scan">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-          <strong>Choose a folder to scan</strong>
-          <button className="small ghost" onClick={onClose} aria-label="Close">✕</button>
+
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <span style={{ fontSize: 15, fontWeight: 650, letterSpacing: '-0.01em' }}>Choose a folder to scan</span>
+          <button className="small ghost" onClick={onClose} aria-label="Close"
+                  style={{ lineHeight: 1, padding: '4px 8px', fontSize: 16, marginRight: -4 }}>✕</button>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, marginBottom: 10, flexWrap: 'wrap' }}>
+
+        {/* Breadcrumb */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, marginBottom: 10,
+                      flexWrap: 'wrap', color: 'var(--muted)', paddingBottom: 10,
+                      borderBottom: '1px solid var(--line)' }}>
           {stack.map((f, i) => (
             <span key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              {i > 0 && <span style={{ color: 'var(--muted)' }}>›</span>}
-              <button style={{ background: 'none', border: 'none', cursor: i < stack.length - 1 ? 'pointer' : 'default',
-                color: i < stack.length - 1 ? 'var(--accent)' : 'inherit',
-                fontWeight: i === stack.length - 1 ? 600 : 400, padding: 0 }}
+              {i > 0 && <span>›</span>}
+              <button style={{ background: 'none', border: 'none', padding: 0, fontSize: 12,
+                cursor: i < stack.length - 1 ? 'pointer' : 'default',
+                color: i < stack.length - 1 ? 'var(--accent)' : 'var(--fg)',
+                fontWeight: i === stack.length - 1 ? 600 : 400 }}
                 onClick={() => i < stack.length - 1 && goTo(i)}>
                 {f.name}
               </button>
             </span>
           ))}
         </div>
-        <div style={{ minHeight: 120, maxHeight: 280, overflowY: 'auto', border: '1px solid var(--border)',
-                      borderRadius: 6, marginBottom: 14 }}>
-          {loading && <div style={{ padding: 20, textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>Loading…</div>}
-          {err     && <div style={{ padding: 16, color: '#A32D2D', fontSize: 13 }}>{err}</div>}
-          {!loading && !err && folders.length === 0 && (
-            <div style={{ padding: 20, textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>No subfolders in this location</div>
+
+        {/* Folder list */}
+        <div style={{ minHeight: 140, maxHeight: 300, overflowY: 'auto',
+                      border: '1px solid var(--line)', borderRadius: 10, marginBottom: 20 }}>
+          {loading && (
+            <div style={{ padding: '32px 0', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
+              Loading…
+            </div>
           )}
-          {!loading && folders.map((f) => (
-            <button key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-              padding: '9px 14px', background: 'none', border: 'none',
-              borderBottom: '1px solid var(--border)', cursor: 'pointer', textAlign: 'left', fontSize: 13 }}
+          {err && (
+            <div style={{ padding: '20px 18px', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+              <span style={{ fontSize: 18, lineHeight: 1 }}>⚠️</span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', marginBottom: 4 }}>
+                  Could not load folders
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>{err}</div>
+              </div>
+            </div>
+          )}
+          {!loading && !err && folders.length === 0 && (
+            <div style={{ padding: '32px 0', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
+              No subfolders here
+            </div>
+          )}
+          {!loading && !err && folders.map((f, idx) => (
+            <button key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+              padding: '11px 18px', background: 'none', border: 'none', cursor: 'pointer',
+              textAlign: 'left', fontSize: 13,
+              borderBottom: idx < folders.length - 1 ? '1px solid var(--line)' : 'none' }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--hover, rgba(0,0,0,.04))'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
               onClick={() => enter(f)}>
-              <FolderIcon /> {f.name}
-              <span style={{ marginLeft: 'auto', color: 'var(--muted)' }}>›</span>
+              <FolderIcon />
+              <span style={{ flex: 1 }}>{f.name}</span>
+              <span style={{ color: 'var(--muted)', fontSize: 15 }}>›</span>
             </button>
           ))}
         </div>
+
+        {/* Footer */}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
           <button className="ghost small" onClick={() => onScan(null)}>Scan all of My Drive</button>
-          <button onClick={() => onScan(current.id === 'root' ? null : current.id)}>Scan "{current.name}"</button>
+          <button onClick={() => onScan(current.id === 'root' ? null : current.id)}>
+            Scan "{current.name}"
+          </button>
         </div>
       </div>
     </div>
@@ -262,72 +296,72 @@ export default function Integrations({ sources, files = [], onScan, busy, hasDri
         </button>
       </div>
 
-      <div className="intgrid">
-        {/* Connectable sources — Drive + OneDrive always visible */}
+      {/* ── Active sources — horizontal cards ─────────────────────────────── */}
+      <div className="intsources">
         {CONNECTABLE.map((s) => {
-          const connected   = s.type === 'google_drive' ? hasDriveToken : hasSPToken
-          const enriched    = s.type === 'google_drive' && hasDriveToken ? (driveBackend || s) : s
-          const isConnecting = s.type === 'google_drive' ? gdConnecting : spConnecting
-          const error        = s.type === 'google_drive' ? gdError      : spError
+          const isGdrive     = s.type === 'google_drive'
+          const connected    = isGdrive ? hasDriveToken : hasSPToken
+          const enriched     = isGdrive && hasDriveToken ? (driveBackend || s) : s
+          const isConnecting = isGdrive ? gdConnecting : spConnecting
+          const error        = isGdrive ? gdError : spError
+          const desc         = isGdrive
+            ? 'Scan Google Drive files for WCAG accessibility issues'
+            : 'Scan OneDrive & SharePoint for accessibility issues'
 
           return (
-            <div className={`intcard${connected ? ' clickable' : ''}`} key={s.id}
-                 onClick={connected ? () => setSelSrc(enriched) : undefined}>
-              <button className="intcard-body"
-                      onClick={connected ? () => setSelSrc(enriched) : undefined}
-                      style={connected ? {} : { cursor: 'default' }}
-                      aria-label={`${enriched.name || s.name} — ${connected ? 'connected' : 'not connected'}`}>
-                <div className="intlogo" aria-hidden="true">{LOGO[s.type] || LOGO.web}</div>
-                <div className="intname">{enriched.name || s.name}</div>
+            <div className={`srccard${connected ? ' srccard--on' : ''}`} key={s.id}>
+              {/* Left: logo */}
+              <div className="srccard-logo" aria-hidden="true">{LOGO[s.type] || LOGO.web}</div>
+
+              {/* Middle: name + status */}
+              <div className="srccard-body">
+                <div className="srccard-name">{enriched.name || s.name}</div>
+                {connected ? (
+                  <div className="srccard-meta">
+                    {enriched.user && <span>{enriched.user}</span>}
+                    {enriched.files != null && <span>{enriched.files.toLocaleString()} files</span>}
+                    <span className="srccard-badge">
+                      <span className="livedot" aria-hidden="true" />connected · read-only
+                    </span>
+                  </div>
+                ) : (
+                  <div className="srccard-desc">{desc}</div>
+                )}
+                {error && <div className="srccard-err">{error}</div>}
+              </div>
+
+              {/* Right: action */}
+              <div className="srccard-actions">
                 {connected ? (
                   <>
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      {enriched.user ? `${enriched.user} · ` : ''}
-                      {enriched.files != null ? `${enriched.files.toLocaleString()} scannable files` : 'ready to scan'}
-                    </div>
-                    <span className="intstatus live"><span className="livedot" aria-hidden="true" />connected · read-only</span>
+                    <button className="ghost small" onClick={() => setSelSrc(enriched)}>Details</button>
+                    <button disabled={busy} onClick={() => handleScan(s.id)}>
+                      {busy ? 'Scanning…' : 'Scan'}
+                    </button>
                   </>
                 ) : (
-                  <>
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      {s.type === 'google_drive'
-                        ? 'Sign in with your Google account to scan Drive'
-                        : 'Sign in with your Microsoft account to scan OneDrive'}
-                    </div>
-                    <span className="intstatus">not connected</span>
-                  </>
+                  <button className="srccard-connect" disabled={isConnecting}
+                          onClick={isGdrive ? connectGoogle : connectMicrosoft}>
+                    {isConnecting
+                      ? 'Connecting…'
+                      : isGdrive
+                        ? <><GoogleG /> Connect Google Drive</>
+                        : <><MsLogo /> Connect Microsoft</>}
+                  </button>
                 )}
-              </button>
-              {error && <p style={{ fontSize: 11, color: '#A32D2D', margin: '0 12px 4px', lineHeight: 1.4 }}>{error}</p>}
-              {connected ? (
-                <button className="intbtn" disabled={busy}
-                        onClick={(e) => { e.stopPropagation(); handleScan(s.id) }}>
-                  {busy ? 'scanning…' : 'Run scan'}
-                </button>
-              ) : s.type === 'google_drive' ? (
-                <button className="intbtn" disabled={isConnecting}
-                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}
-                        onClick={(e) => { e.stopPropagation(); connectGoogle() }}>
-                  {isConnecting ? 'Connecting…' : <><GoogleG /> Sign in to Google</>}
-                </button>
-              ) : (
-                <button className="intbtn" disabled={isConnecting}
-                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}
-                        onClick={(e) => { e.stopPropagation(); connectMicrosoft() }}>
-                  {isConnecting ? 'Connecting…' : <><MsLogo /> Sign in to Microsoft</>}
-                </button>
-              )}
+              </div>
             </div>
           )
         })}
+      </div>
 
-        {/* Coming-soon sources */}
+      {/* ── Coming-soon sources — small chips ─────────────────────────────── */}
+      <div className="intsoon">
         {FUTURE.map((s) => (
-          <div className="intcard off" key={s.name} aria-hidden="true">
-            <div className="intlogo">{s.logo}</div>
-            <div className="intname">{s.name}</div>
-            <span className="intstatus">coming soon</span>
-            <button className="intbtn ghost" disabled>Connect</button>
+          <div className="soonchip" key={s.name} aria-hidden="true">
+            {s.logo}
+            <span className="soonchip-name">{s.name}</span>
+            <span className="soonchip-tag">coming soon</span>
           </div>
         ))}
       </div>

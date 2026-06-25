@@ -34,10 +34,11 @@ CODE="${ACP_ACCESS_CODE:-$(openssl rand -hex 6)}"
 CLIENT_ID="${ACP_GOOGLE_CLIENT_ID:-}"   # set => per-user GIS sign-in, passcode gate off
 DATABASE_URL="${ACP_DATABASE_URL:-}"    # set => Postgres backend; unset => SQLite (single-instance only)
 LF_HOST="${LANGFUSE_HOST:-https://acp-langfuse.greenwater-4bf2c997.eastus2.azurecontainerapps.io}"
-LF_PK="${LANGFUSE_PUBLIC_KEY:-pk-lf-655083d12dacf12febf1f1e8d2293905}"
+LF_PK="${LANGFUSE_PUBLIC_KEY:-pk-lf-af957ed5-23b2-4429-ab13-3189475f0eb9}"  # ACP project
 LF_SK="${LANGFUSE_SECRET_KEY:-}"       # secret — must be passed via env; not baked in
 HITL_WEBHOOK="${HITL_WEBHOOK_URL:-}"   # set => POST to this URL when HITL items are queued
 DEMO_DRIVE_KEY="${ACP_DEMO_DRIVE_KEY:-}"  # set => enables server-side ADC Drive scan for E2E tests
+E2E_KEY="${ACP_E2E_KEY:-}"                # set => X-E2E-Key bypass for smoke tests; leave unset in prod if unused
 
 echo "== 0/5 preflight =="
 # Inherit ACP_GOOGLE_CLIENT_ID from the existing ACA if not provided locally, so a plain
@@ -124,25 +125,83 @@ else
   DEMO_ENV="${EXISTING_DEMO_KEY:+ACP_DEMO_DRIVE_KEY=secretref:$EXISTING_DEMO_KEY}"
   echo "   demo drive key = inherited"
 fi
+# E2E smoke-test key — enables X-E2E-Key auth bypass; inherit if not set.
+if [ -n "$E2E_KEY" ]; then
+  SECRETS+=("e2e-key=$E2E_KEY")
+  E2E_ENV="ACP_E2E_KEY=secretref:e2e-key"
+  echo "   e2e key = set"
+else
+  EXISTING_E2E="$(az containerapp show -g "$RG" -n "$APP" \
+    --query "properties.template.containers[0].env[?name=='ACP_E2E_KEY'].secretRef | [0]" \
+    -o tsv 2>/dev/null || echo "")"
+  E2E_ENV="${EXISTING_E2E:+ACP_E2E_KEY=secretref:$EXISTING_E2E}"
+  echo "   e2e key = inherited"
+fi
 if az containerapp show -g "$RG" -n "$APP" -o none 2>/dev/null; then
   _retry az containerapp secret set -g "$RG" -n "$APP" \
     --secrets "${SECRETS[@]}" -o none
   _retry az containerapp registry set -g "$RG" -n "$APP" \
     --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
   _retry az containerapp update -g "$RG" -n "$APP" --image "$ACRSERVER/$IMAGE" \
-    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV -o none
+    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV -o none
 else
   az containerapp create -g "$RG" -n "$APP" --environment "$ENVNAME" \
     --image "$ACRSERVER/$IMAGE" \
     --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
     --target-port 8077 --ingress external \
     --secrets "${SECRETS[@]}" \
-    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV \
+    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV \
     --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 1 -o none
 fi
 
 echo "== 5/5 done =="
 FQDN="$(az containerapp show -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)"
+
+# ── Optional: standalone ACP Grafana ─────────────────────────────────────────
+# Build + deploy only when ACP_DATABASE_URL (Postgres) is set — Grafana needs
+# it to provision the datasource. Skipped for SQLite-only deployments.
+GF_APP="acp-grafana"
+GF_IMAGE="acp-grafana:${TAG}"
+if [ -n "$DATABASE_URL" ]; then
+  echo "== Grafana: build + deploy ACP-specific dashboard container =="
+  # Parse Postgres DSN → Grafana env vars.
+  # Expected format: postgresql://user:pass@host[:port]/db?...
+  _PG_USER="$(echo "$DATABASE_URL" | sed 's|.*://\([^:]*\):.*|\1|')"
+  _PG_PASS="$(echo "$DATABASE_URL" | sed 's|.*://[^:]*:\([^@]*\)@.*|\1|')"
+  _PG_HOST="$(echo "$DATABASE_URL" | sed 's|.*@\([^/]*\)/.*|\1|')"
+  _PG_DB="$(echo "$DATABASE_URL"   | sed 's|.*/\([^?]*\).*|\1|')"
+  az acr build -r "$ACR" -t "$GF_IMAGE" -f deploy/grafana/Dockerfile deploy/grafana -o none
+  if az containerapp show -g "$RG" -n "$GF_APP" -o none 2>/dev/null; then
+    _retry az containerapp update -g "$RG" -n "$GF_APP" --image "$ACRSERVER/$GF_IMAGE" \
+      --set-env-vars \
+        ACP_GRAFANA_PG_HOST="$_PG_HOST" \
+        ACP_GRAFANA_PG_DB="$_PG_DB" \
+        ACP_GRAFANA_PG_USER="$_PG_USER" \
+        ACP_GRAFANA_PG_PASS="$_PG_PASS" \
+        GF_AUTH_ANONYMOUS_ENABLED=true \
+        GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer \
+        GF_AUTH_DISABLE_LOGIN_FORM=false \
+      -o none
+  else
+    az containerapp create -g "$RG" -n "$GF_APP" --environment "$ENVNAME" \
+      --image "$ACRSERVER/$GF_IMAGE" \
+      --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
+      --target-port 3000 --ingress external \
+      --env-vars \
+        ACP_GRAFANA_PG_HOST="$_PG_HOST" \
+        ACP_GRAFANA_PG_DB="$_PG_DB" \
+        ACP_GRAFANA_PG_USER="$_PG_USER" \
+        ACP_GRAFANA_PG_PASS="$_PG_PASS" \
+        GF_AUTH_ANONYMOUS_ENABLED=true \
+        GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer \
+        GF_AUTH_DISABLE_LOGIN_FORM=false \
+      --cpu 0.5 --memory 1.0Gi --min-replicas 1 --max-replicas 1 -o none
+  fi
+  GF_FQDN="$(az containerapp show -g "$RG" -n "$GF_APP" --query properties.configuration.ingress.fqdn -o tsv)"
+  echo "   Grafana:    https://$GF_FQDN   (anonymous viewer; sign in as admin for edits)"
+else
+  echo "   Grafana:    skipped — ACP_DATABASE_URL not set (SQLite mode)"
+fi
 echo
 echo "   URL:        https://$FQDN"
 if [ -n "$CLIENT_ID" ]; then
