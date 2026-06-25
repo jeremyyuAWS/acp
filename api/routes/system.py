@@ -81,3 +81,12 @@ def decisions(scan_id: str | None = None, limit: int = 500):
     """Immutable decision audit log — every consequential action (scan mode, HITL
     review, settings change, auto-routing). Append-only; filter by scan_id."""
     return core.store.list_decisions(scan_id=scan_id, limit=limit)
+
+
+@router.get("/jobs")
+def jobs(status: str | None = None, limit: int = 100):
+    """Async job-queue visibility (ADR 0004): queue depth by status + recent jobs.
+    Feeds the Grafana queue panel and live UI."""
+    return {"workers": core.WORKERS,
+            "stats": core.store.job_stats(),
+            "jobs": core.store.list_jobs(status=status, limit=limit)}

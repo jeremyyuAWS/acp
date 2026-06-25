@@ -456,6 +456,80 @@
       "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" },
         "rawSql": "SELECT COUNT(*) AS value FROM scan_runs WHERE completed_at > NOW() - INTERVAL '7 days'",
         "format": "table", "refId": "A" }]
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 61 },
+      "id": 107,
+      "title": "Async Processing · Job Queue (ADR 0004)",
+      "type": "row"
+    },
+
+    {
+      "datasource": { "type": "postgres", "uid": "acp_pg" },
+      "fieldConfig": { "defaults": { "unit": "none" },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "queued" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#D68A0C" } }] },
+          { "matcher": { "id": "byName", "options": "running" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#1FA9E1" } }] },
+          { "matcher": { "id": "byName", "options": "done" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3D9E3D" } }] },
+          { "matcher": { "id": "byName", "options": "dead" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#CC3333" } }] }
+        ]
+      },
+      "gridPos": { "h": 7, "w": 10, "x": 0, "y": 62 },
+      "id": 80,
+      "options": { "pieType": "donut", "displayLabels": ["value", "name"],
+        "legend": { "displayMode": "table", "placement": "right", "values": ["value"] } },
+      "title": "Jobs by status",
+      "type": "piechart",
+      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" },
+        "rawSql": "SELECT status, COUNT(*) AS value FROM jobs GROUP BY status",
+        "format": "table", "refId": "A" }]
+    },
+
+    {
+      "datasource": { "type": "postgres", "uid": "acp_pg" },
+      "fieldConfig": { "defaults": { "unit": "none" } },
+      "gridPos": { "h": 7, "w": 7, "x": 10, "y": 62 },
+      "id": 81,
+      "options": { "reduceOptions": { "calcs": ["sum"] }, "orientation": "horizontal", "displayMode": "gradient" },
+      "title": "Jobs by type",
+      "type": "bargauge",
+      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" },
+        "rawSql": "SELECT type AS metric, COUNT(*) AS value FROM jobs GROUP BY type ORDER BY value DESC",
+        "format": "table", "refId": "A" }]
+    },
+
+    {
+      "datasource": { "type": "postgres", "uid": "acp_pg" },
+      "fieldConfig": { "defaults": { "unit": "none",
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }
+        ]} } },
+      "gridPos": { "h": 4, "w": 7, "x": 17, "y": 62 },
+      "id": 82,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "title": "Dead-letter (needs attention)",
+      "type": "stat",
+      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" },
+        "rawSql": "SELECT COUNT(*) AS value FROM jobs WHERE status='dead'",
+        "format": "table", "refId": "A" }]
+    },
+
+    {
+      "datasource": { "type": "postgres", "uid": "acp_pg" },
+      "fieldConfig": { "defaults": { "unit": "none",
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "green", "value": null }, { "color": "yellow", "value": 20 }, { "color": "red", "value": 100 }
+        ]} } },
+      "gridPos": { "h": 3, "w": 7, "x": 17, "y": 66 },
+      "id": 83,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "title": "Queue backlog (queued now)",
+      "type": "stat",
+      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" },
+        "rawSql": "SELECT COUNT(*) AS value FROM jobs WHERE status='queued'",
+        "format": "table", "refId": "A" }]
     }
 
   ],

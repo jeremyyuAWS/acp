@@ -71,6 +71,13 @@ for _router in ROUTERS:
     app.include_router(_router)
 
 
+@app.on_event("startup")
+def _start_job_workers():
+    n = core.start_workers()
+    if n:
+        print(f"[acp] started {n} async job worker(s)", flush=True)
+
+
 # Serve the built React SPA same-origin in the deploy container (ACP_STATIC_DIR
 # points at the vite `dist`). Registered last so all /api routes take precedence;
 # unset locally (the SPA runs on the vite dev server instead).

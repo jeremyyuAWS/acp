@@ -100,7 +100,7 @@ ALWAYS_PUBLIC = {"/healthz", "/config", "/hub", "/ai/status"}
 API_PREFIXES = (
     "/scans", "/rubric", "/rules", "/inventory", "/schedule",
     "/me", "/sources", "/folders", "/drive", "/hitl", "/ai",
-    "/settings", "/decisions",
+    "/settings", "/decisions", "/jobs",
 )
 
 
@@ -196,3 +196,56 @@ def reload_scheduler():
 
 
 reload_scheduler()
+
+
+# ── Async job-queue worker pool (ADR 0004) ────────────────────────────────────
+# Opt-in: set ACP_WORKERS>0 to run N in-process worker threads that drain the
+# `jobs` table (async assess + remediation). Off by default so existing behavior
+# is unchanged until the handlers + enqueue paths are wired.
+WORKERS = int(os.environ.get("ACP_WORKERS", "0") or "0")
+_worker_handles: list = []
+
+# In-memory per-scan Drive tokens for the worker pool. Tokens are NEVER written
+# to the jobs table (which lives in Postgres) — a scan_file job carries only the
+# scan_id and looks the token up here. Lost on restart (in-flight per-user Drive
+# jobs then fail and must be re-triggered); demo/ADC scans need no token.
+SCAN_TOKENS: dict[str, str] = {}
+
+
+def register_scan_token(scan_id: str, token: str | None) -> None:
+    if token:
+        SCAN_TOKENS[scan_id] = token
+
+
+def get_scan_token(scan_id: str) -> str | None:
+    return SCAN_TOKENS.get(scan_id)
+
+
+def clear_scan_token(scan_id: str) -> None:
+    SCAN_TOKENS.pop(scan_id, None)
+
+
+def start_workers() -> int:
+    """Spawn the worker pool + a stuck-job sweeper. No-op when ACP_WORKERS<=0."""
+    if WORKERS <= 0 or _worker_handles:
+        return 0
+    import threading
+    from worker import JobWorker
+    for i in range(WORKERS):
+        w = JobWorker(store, worker_id=f"w{i}")
+        t = threading.Thread(target=w.run_forever, daemon=True, name=f"jobworker-{i}")
+        t.start()
+        _worker_handles.append((w, t))
+
+    def _sweep():
+        import time as _t
+        while True:
+            try:
+                n = store.reclaim_stuck_jobs(lease_seconds=600)
+                if n:
+                    print(f"[sweeper] reclaimed {n} stuck job(s)", flush=True)
+            except Exception as e:
+                print(f"[sweeper] error: {e}", flush=True)
+            _t.sleep(60)
+    threading.Thread(target=_sweep, daemon=True, name="jobsweeper").start()
+    return WORKERS
