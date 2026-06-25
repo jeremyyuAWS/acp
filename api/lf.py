@@ -30,6 +30,14 @@ def _lf():
     return _client
 
 
+def client():
+    """Public accessor for the raw Langfuse client (or None when disabled).
+
+    Used by callers that build their own trace/span (e.g. the remediation
+    write-back span in core.emit_remediation_span)."""
+    return _lf()
+
+
 class _Noop:
     """Stand-in for Langfuse trace/span when observability is off."""
     def span(self, **_): return self

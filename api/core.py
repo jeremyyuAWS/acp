@@ -1,0 +1,183 @@
+"""Shared state, config, and helpers for the acp control plane.
+
+Everything that the route modules (routes/*.py) and the access-gate middleware
+need in common lives here: env config, the Store singleton, the in-memory JOBS
+map, GIS token verification, the Drive client factory, the scheduler, and the
+Langfuse remediation span. The route modules import from this module; this module
+imports no route module (no cycles).
+"""
+from __future__ import annotations
+import os
+import sys
+import time as _time
+from pathlib import Path
+
+# Resolve sibling modules (scanner/store/rubric/report/ai/lf) and ../scripts.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
+from apscheduler.schedulers.background import BackgroundScheduler
+
+from scanner import run_scan
+from store import Store
+from rubric import Rubric
+
+ACP = Path(__file__).resolve().parent.parent
+
+# ── Config (env) ──────────────────────────────────────────────────────────────
+ACCESS_CODE = os.environ.get("ACP_ACCESS_CODE")
+GOOGLE_CLIENT_ID = os.environ.get("ACP_GOOGLE_CLIENT_ID") or None
+# Smoke/e2e test key: requests with X-E2E-Key matching this value bypass auth.
+# Set ACP_E2E_KEY in the container env — leave unset in production if not needed.
+E2E_KEY = os.environ.get("ACP_E2E_KEY") or None
+# Comma-separated domains allowed in GIS mode (default: movate.com).
+ALLOWED_DOMAINS = [
+    d.strip() for d in os.environ.get("ACP_ALLOWED_DOMAINS", "movate.com").split(",") if d.strip()
+]
+DRIVE_SCOPES = [
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive.file",
+]
+HITL_WEBHOOK = os.environ.get("HITL_WEBHOOK_URL", "")
+
+# ── Shared singletons ─────────────────────────────────────────────────────────
+store = Store()
+JOBS: dict[str, dict] = {}
+
+
+def active_rubric() -> Rubric:
+    return Rubric.load_active(ACP / "config")
+
+
+# ── GIS token verification (cached) ───────────────────────────────────────────
+# token → (email, monotonic_expiry). Tokens live 1h; we cache 9 min.
+_gis_cache: dict[str, tuple[str, float]] = {}
+
+
+def verify_gis_token(token: str) -> str | None:
+    now = _time.monotonic()
+    cached = _gis_cache.get(token)
+    if cached:
+        email, exp = cached
+        if now < exp:
+            return email
+        del _gis_cache[token]
+    import urllib.request as _ur
+    import json as _json
+    try:
+        with _ur.urlopen(
+            f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={token}",
+            timeout=5,
+        ) as r:
+            data = _json.load(r)
+    except Exception:
+        return None
+    if "error" in data:
+        return None
+    email = data.get("email", "")
+    _gis_cache[token] = (email, now + 540)
+    return email
+
+
+# ── Access-gate path policy ───────────────────────────────────────────────────
+# Paths that bypass all auth (needed before the user has a token).
+ALWAYS_PUBLIC = {"/healthz", "/config", "/hub", "/ai/status"}
+# API routes require auth; everything else is the SPA (static file or client route).
+API_PREFIXES = (
+    "/scans", "/rubric", "/rules", "/inventory", "/schedule",
+    "/me", "/sources", "/folders", "/drive", "/hitl", "/ai",
+)
+
+
+def is_public(path: str) -> bool:
+    if path in ALWAYS_PUBLIC:
+        return True
+    if any(path == p or path.startswith(p + "/") for p in API_PREFIXES):
+        return False
+    return True
+
+
+# ── Drive client factory ──────────────────────────────────────────────────────
+def drive_service(request=None):
+    """Drive client for the request. A per-user GIS token (X-Drive-Token) scans that
+    user's Drive; otherwise ADC (demo identity). In GIS mode a token is required."""
+    from fastapi import HTTPException
+    from googleapiclient.discovery import build
+    token = request.headers.get("x-drive-token") if request is not None else None
+    if token:
+        import datetime as _dt
+        from google.oauth2.credentials import Credentials
+        creds = Credentials(token=token, scopes=DRIVE_SCOPES)
+        # GIS tokens are short-lived (1 h) and have no refresh_token.
+        # Set a far-future expiry so the client library never attempts refresh;
+        # the Drive API returns 401 if the token actually expired.
+        creds.expiry = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=1)
+    elif GOOGLE_CLIENT_ID:
+        raise HTTPException(401, "sign in with Google to connect your Drive")
+    else:
+        import google.auth
+        creds, _ = google.auth.default(scopes=DRIVE_SCOPES)
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+
+# ── HITL webhook ──────────────────────────────────────────────────────────────
+def fire_webhook(items: list[dict]) -> None:
+    """POST new HITL items to the configured webhook URL (best-effort, non-blocking)."""
+    if not HITL_WEBHOOK or not items:
+        return
+    import threading
+
+    def _post():
+        try:
+            import httpx
+            httpx.post(HITL_WEBHOOK, json={"event": "hitl.queued", "items": items}, timeout=8)
+        except Exception as e:
+            print(f"HITL webhook failed: {e}", flush=True)
+    threading.Thread(target=_post, daemon=True).start()
+
+
+# ── Langfuse remediation span ─────────────────────────────────────────────────
+def emit_remediation_span(scan_id: str, filename: str, drive_write_url: str | None):
+    """Emit a Langfuse observation for the remediation write-back step."""
+    try:
+        import lf as _lf
+        lf = _lf.client()
+        if lf is None:
+            return
+        trace = lf.trace(id=scan_id, name="acp-scan")
+        trace.span(
+            name="remediate",
+            input={"file": filename},
+            output={"drive_write_url": drive_write_url, "written_to_drive": drive_write_url is not None},
+            metadata={"step": "6-remediate"},
+        )
+        lf.flush()
+    except Exception:
+        pass
+
+
+# ── Background scheduler (periodic local scans) ───────────────────────────────
+scheduler = BackgroundScheduler()
+scheduler.start()
+
+
+def _do_scheduled_scan():
+    try:
+        report = run_scan("local")
+        store.save_scan(report)
+        print(f"scheduled scan complete: {report['summary']['files']} files", flush=True)
+    except Exception as e:
+        print(f"scheduled scan failed: {e}", flush=True)
+
+
+def reload_scheduler():
+    cfg = store.get_schedule()
+    scheduler.remove_all_jobs()
+    if cfg["enabled"] and cfg["interval_minutes"] > 0:
+        scheduler.add_job(_do_scheduled_scan, "interval",
+                          minutes=cfg["interval_minutes"],
+                          id="scheduled_local_scan",
+                          coalesce=True, max_instances=1)
+
+
+reload_scheduler()
