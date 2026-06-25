@@ -86,14 +86,25 @@ fi
 # containing '=' or '?' (e.g. a Postgres URL with ?sslmode=require) are never
 # split or mangled by either the shell or the az CLI parser.
 SECRETS=("google-adc=$ADC_JSON" "access-code=$CODE")
-# Database: Postgres secret (if DATABASE_URL set) or SQLite fallback.
+# Database: Postgres secret (if DATABASE_URL set) or inherit the existing one.
+# IMPORTANT: a bare redeploy must NOT silently downgrade Postgres → SQLite (that
+# loses persistence + skips Grafana). So when ACP_DATABASE_URL isn't passed we
+# INHERIT the already-configured secretref instead of clearing it.
 if [ -n "$DATABASE_URL" ]; then
   SECRETS+=("database-url=$DATABASE_URL")
   DB_ENV="DATABASE_URL=secretref:database-url"
   echo "   db = Postgres (DATABASE_URL set)"
 else
-  DB_ENV="DATABASE_URL="
-  echo "   db = SQLite (ACP_DATABASE_URL not set — single-instance only)"
+  EXISTING_DB="$(az containerapp show -g "$RG" -n "$APP" \
+    --query "properties.template.containers[0].env[?name=='DATABASE_URL'].secretRef | [0]" \
+    -o tsv 2>/dev/null || echo "")"
+  if [ -n "$EXISTING_DB" ]; then
+    DB_ENV="DATABASE_URL=secretref:$EXISTING_DB"
+    echo "   db = Postgres (inherited from existing deployment)"
+  else
+    DB_ENV="DATABASE_URL="
+    echo "   db = SQLite (no DATABASE_URL set or inherited — single-instance only)"
+  fi
 fi
 # Langfuse observability (optional — no-ops when absent).
 if [ -n "$LF_SK" ]; then
