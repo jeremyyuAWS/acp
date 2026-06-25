@@ -83,6 +83,67 @@ field. Three places, one convention:
 → Owning WCAG 1.4.3? Open [`rules/wcag-1-4-3/`](rules/wcag-1-4-3) and everything you
 need is linked from there.
 
+### File map — every file that touches a WCAG rule
+
+Where rule-related files live across the repo:
+
+```
+acp/
+├── config/
+│   └── rule-catalog.json ........ REGISTRY · every Office/PDF rule, keyed by wcag_sc
+│                                   (id · severity · fix_mode · source path to engine)
+├── frontend/src/rules/ .......... HTML ENGINE (deterministic, fully in-repo)
+│   ├── index.js ................. orchestrator — runChecks() / runFixes()
+│   ├── utils.js ................. shared matchers (AMBIGUOUS_LINK, …)
+│   ├── wcag-1-1-1.js ...........┐
+│   ├── wcag-1-4-3.js ...........├─ ONE FILE PER SC — exports meta + check() + fix()
+│   └── wcag-X-X-X.js ...........┘
+├── rules/ ....................... DEVELOPER MAP (generated from the 3 sources)
+│   ├── README.md ................ ownership table — who owns each SC
+│   ├── index.json ............... machine-readable  SC → engines
+│   └── wcag-1-4-3/README.md ..... per-SC guide: engines, rule IDs, how-to, fixtures
+├── docs/rules/
+│   └── DOCX-CONTRAST-001.md ..... per-rule deep dive (what · why · fix rationale)
+├── test-corpus/
+│   ├── files/ ................... fixtures that trigger rules
+│   └── manifest.json ............ fixture → expected findings
+├── scripts/
+│   └── gen_rules_index.py ....... regenerates rules/ from catalog + frontend + corpus
+└── api/
+    ├── scanner.py ............... runs the engines, emits per-rule outcomes
+    ├── lf.py ⟶ Langfuse ......... one trace span per (file, rule)
+    └── store.py ⟶ Postgres ...... scan_file_manifests · scan_rule_traces
+                                    (PASS / FAIL / ERROR / NOT_APPLICABLE per rule)
+```
+
+Following **one** Success Criterion — `1.4.3 Contrast (Minimum)` — through every file:
+
+```
+                    WCAG 1.4.3 — Contrast (Minimum)   [the cross-engine key]
+                                   │
+        ┌──────────────────────────┼──────────────────────────┐
+        ▼                          ▼                           ▼
+   HTML engine                Office engine                PDF engine
+   (JS · in-repo)             (.NET · vendored)            (Python · vendored)
+        │                          │                           │
+ frontend/src/rules/        config/rule-catalog.json    config/rule-catalog.json
+   wcag-1-4-3.js              docx: DOCX-CONTRAST-001     (no 1.4.3 PDF rule yet)
+   ├ meta {id:'1.4.3'}        pptx: PPTX-CONTRAST-001          → NOT_APPLICABLE
+   ├ check(doc) → findings    each entry's `source`:
+   └ fix(doc)   → changes       …/Rules/.../ContrastRule.cs
+        │                          │                           │
+        └──────────────┬───────────┴───────────────────────────┘
+                       ▼
+        scanner.py runs it → recorded for EVERY scanned file:
+        ├ Postgres :  scan_file_manifests · scan_rule_traces   (PASS/FAIL/ERROR/N-A)
+        └ Langfuse :  one span per (file, rule)                → GET /scans/{id}/manifest
+                       │
+                       ▼  documentation for this SC
+        rules/wcag-1-4-3/README.md ....... dev guide (generated)
+        docs/rules/DOCX-CONTRAST-001.md .. deep dive
+        test-corpus/files/*contrast*.pdf . fixtures (pdf-serious-contrast.pdf, …)
+```
+
 ### Anatomy of an HTML rule module
 
 Each `frontend/src/rules/wcag-X-X-X.js` exports exactly three things and imports
