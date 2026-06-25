@@ -9,6 +9,29 @@ import core
 router = APIRouter()
 
 
+def _drive_error(e: Exception) -> HTTPException:
+    """Translate a Google API error into a clear, actionable HTTPException so the
+    UI shows *why* Drive failed instead of a bare status code."""
+    status = getattr(getattr(e, "resp", None), "status", None)
+    msg = ""
+    try:
+        import json as _json
+        msg = (_json.loads(getattr(e, "content", b"") or b"{}")
+               .get("error", {}).get("message", "")) or ""
+    except Exception:
+        msg = str(getattr(e, "reason", "") or "")
+    low = msg.lower()
+    if status == 403:
+        if "has not been used" in low or "is disabled" in low or "accessnotconfigured" in low:
+            return HTTPException(403, "Google Drive API is not enabled for this app's "
+                                 "Google Cloud project. Enable it in Console → APIs & Services → Library.")
+        if "insufficient" in low or "scope" in low:
+            return HTTPException(403, "Your Google sign-in didn't grant Drive access. "
+                                 "Sign out and sign in again, and approve the Drive permission.")
+        return HTTPException(403, f"Google denied Drive access: {msg or 'permission denied'}")
+    return HTTPException(status or 502, f"Drive error: {msg or e}")
+
+
 @router.get("/me")
 def me(request: Request):
     """Signed-in identity = the connected Google account (real, via the Drive API)."""
@@ -17,7 +40,7 @@ def me(request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(401, f"no connected Google account: {e}")
+        raise _drive_error(e)
     return {"email": u.get("emailAddress"), "name": u.get("displayName"), "photo": u.get("photoLink")}
 
 
@@ -54,7 +77,7 @@ def sources(request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(502, f"Drive connection failed: {e}")
+        raise _drive_error(e)
 
 
 @router.get("/folders")
@@ -75,7 +98,7 @@ def folders(request: Request, parent: str = "root"):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(502, f"Drive folder listing failed: {e}")
+        raise _drive_error(e)
 
 
 @router.post("/drive/upload")
