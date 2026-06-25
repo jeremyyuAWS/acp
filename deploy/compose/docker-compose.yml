@@ -1,0 +1,95 @@
+# ACP — full local / customer-VPC stack.
+#
+#   cd deploy/compose
+#   cp .env.example .env        # then edit secrets
+#   docker compose up --build
+#
+# Brings up four services, no external dependencies (no Azure, no MDK):
+#   db        Postgres 16   — acpdb (app) + langfusedb (tracing), one instance
+#   acp-app   FastAPI + SPA — the platform itself (http://localhost:8077)
+#   grafana   dashboards    — 10-panel ACP board (http://localhost:3000, anon viewer)
+#   langfuse  LLM tracing   — per-scan / per-rule traces (http://localhost:3001)
+#
+# See README.md in this folder for the two build prerequisites (the .NET Office
+# CLI and the vendored Python PDF engine) the acp-app image needs.
+
+name: acp
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-acpadmin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-acp_local_dev}
+      POSTGRES_DB: acpdb
+    volumes:
+      - acp-db:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-acpadmin} -d acpdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  acp-app:
+    build:
+      context: ../..                       # repo root — Dockerfile bundles both engines
+      dockerfile: deploy/public/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 8077
+      # App data → acpdb. No GIS/ADC locally → runs in demo mode (scans bundled corpus).
+      DATABASE_URL: postgresql://${POSTGRES_USER:-acpadmin}:${POSTGRES_PASSWORD:-acp_local_dev}@db:5432/acpdb?sslmode=disable
+      # Tracing → the langfuse service. Keys come from .env (see README to mint them).
+      LANGFUSE_HOST: http://langfuse:3000
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      # Optional: set to enable per-user Google sign-in. Unset → demo/local mode.
+      ACP_GOOGLE_CLIENT_ID: ${ACP_GOOGLE_CLIENT_ID:-}
+      ACP_E2E_KEY: ${ACP_E2E_KEY:-}
+    ports:
+      - "${ACP_APP_PORT:-8077}:8077"
+
+  grafana:
+    build:
+      context: ../grafana
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ACP_GRAFANA_PG_HOST: db:5432
+      ACP_GRAFANA_PG_DB: acpdb
+      ACP_GRAFANA_PG_USER: ${POSTGRES_USER:-acpadmin}
+      ACP_GRAFANA_PG_PASS: ${POSTGRES_PASSWORD:-acp_local_dev}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+
+  langfuse:
+    image: langfuse/langfuse:2          # v2 — single Postgres dependency (v3 adds CH/redis/minio)
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-acpadmin}:${POSTGRES_PASSWORD:-acp_local_dev}@db:5432/langfusedb
+      NEXTAUTH_URL: http://localhost:${LANGFUSE_PORT:-3001}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-changeme_generate_a_long_random_string}
+      SALT: ${LANGFUSE_SALT:-changeme_generate_another_random_string}
+      TELEMETRY_ENABLED: "false"
+      # Open registration so the team can self-serve accounts (matches the cloud deploy).
+      AUTH_DISABLE_SIGNUP: "false"
+    ports:
+      - "${LANGFUSE_PORT:-3001}:3000"
+
+volumes:
+  acp-db:
