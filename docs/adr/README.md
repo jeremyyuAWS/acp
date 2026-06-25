@@ -5,3 +5,6 @@ Numbered sequentially; newest decisions may supersede older ones (noted in the
 header). Match the structure of the latest ADR when adding a new one.
 
 - [0001 — Read-only assessment spine on MDK; engines harvested behind the `A11yIssue` contract](0001-read-only-assessment-spine-on-mdk.md) — **Accepted** (2026-06-16)
+- [0002 — Assessment transparency specification](0002-assessment-transparency-spec.md) — **Accepted** (2026-06-24)
+- [0003 — Document lifecycle data model](0003-document-lifecycle-model.md) — **Proposed** (2026-06-25)
+- [0004 — Durable orchestration via a Postgres job queue](0004-postgres-job-queue.md) — **Proposed** (2026-06-25)

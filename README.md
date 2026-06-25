@@ -422,6 +422,7 @@ apply. See [ADR 0002](docs/adr/0002-assessment-transparency-spec.md).
 - [ADR 0001 — read-only assessment spine on MDK](docs/adr/0001-read-only-assessment-spine-on-mdk.md)
 - [ADR 0002 — assessment transparency spec](docs/adr/0002-assessment-transparency-spec.md)
 - [ADR 0003 — document lifecycle model](docs/adr/0003-document-lifecycle-model.md)
+- [ADR 0004 — durable orchestration via a Postgres job queue](docs/adr/0004-postgres-job-queue.md)
 - [PRD conformance roadmap](docs/prd-conformance-roadmap.md)
 - [MVP build plan (lean first cut)](docs/mvp-build-plan.md)
 - [Engine provenance (internal)](docs/provenance.md)
