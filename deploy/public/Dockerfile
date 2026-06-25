@@ -38,6 +38,7 @@ RUN pip install --no-cache-dir -r /app/api/requirements.txt
 COPY api/ /app/api/
 COPY scripts/ /app/scripts/
 COPY config/ /app/config/
+COPY hub/ /app/hub/
 COPY test-corpus/files/ /app/test-corpus/files/
 
 # compiled engines (no source)
