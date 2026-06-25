@@ -6,6 +6,7 @@ import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
 import { prefersReducedMotion } from './a11y.js'
+import { remediateScan } from './api.js'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
 // (what to fix, prioritized, accept/reject/modify), the HITL queue, and self-remediation.
@@ -161,6 +162,20 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [sub, setSub] = useState('triage')
   const [triage, setTriage] = useState({})
   const [triageSel, setTriageSel] = useState(new Set())
+  const [remBusy, setRemBusy] = useState(false)
+  const [remMsg, setRemMsg] = useState('')
+  const runServerRemediation = async () => {
+    if (!runId) return
+    setRemBusy(true); setRemMsg('')
+    try {
+      const r = await remediateScan(runId)
+      setRemMsg(r.workers
+        ? `Enqueued ${r.enqueued} remediation job${r.enqueued === 1 ? '' : 's'} — watch them run in the Monitor queue.`
+        : `Enqueued ${r.enqueued}, but no workers are running. Set ACP_WORKERS to process them.`)
+    } catch (e) {
+      setRemMsg(`Could not enqueue: ${e.message || e}`)
+    } finally { setRemBusy(false) }
+  }
   const triageFile = (file, st) => { setTriage((t) => { const n = { ...t }; if (st == null) delete n[file]; else n[file] = st; return n }); setTriageSel((s) => { const n = new Set(s); n.delete(file); return n }) }
   const triageBulk = (flist, st) => { setTriage((t) => { const n = { ...t }; flist.forEach((f) => { if (st == null) delete n[f.file]; else n[f.file] = st }); return n }); setTriageSel(new Set()) }
   const toggleSel = (file) => setTriageSel((s) => { const n = new Set(s); if (n.has(file)) n.delete(file); else n.add(file); return n })
@@ -223,6 +238,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         <div className="metric"><span>approved</span><b>{acted.approved}</b></div>
         <div className="metric"><span>deferred</span><b style={{ color: '#1F5FA8' }}>{acted.deferred}</b></div>
         <div className="metric"><span>re-verified</span><b style={{ color: '#3B6D11' }}>{verified}</b></div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', margin: '4px 0 12px' }}>
+        <button disabled={remBusy || !runId} onClick={runServerRemediation}
+                title="Run deterministic HTML remediation server-side, in the durable worker queue. Fixed copies are written to a Remediated/ folder; results trace to Langfuse.">
+          {remBusy ? 'Enqueueing…' : '⚡ Remediate all (server-side)'}
+        </button>
+        {remMsg && <span className="muted" role="status" aria-live="polite" style={{ fontSize: 13 }}>{remMsg}</span>}
       </div>
 
       <div className="subtabs" role="tablist" aria-label="Remediate steps">

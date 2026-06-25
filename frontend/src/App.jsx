@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
-import { getSources, getRubric, listScans, getScan, startScan, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens } from './api'
+import { getSources, getRubric, listScans, getScan, startScan, startScanQueued, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens } from './api'
 import { SIM } from './sim.js'
 import { setPersona } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -93,6 +93,7 @@ export default function App() {
   const [rolePrivileges, setRolePrivileges] = useState(loadRolePrivileges)
   const [ontology, setOntology] = useState(loadPublished)
   const [aiEnabled, setAiEnabled] = useState(true)
+  const [queuedScan, setQueuedScan] = useState(false)  // durable queue vs in-process
 
   useEffect(() => {
     const onExpired = () => {
@@ -183,15 +184,28 @@ export default function App() {
       'local'
     )
     try {
-      const { job_id } = await startScan(apiSource, folder, aiEnabled)
-      let job
-      do {
-        await new Promise((r) => setTimeout(r, 350))
-        job = await getJob(job_id)
-        setProgress(job)
-      } while (!job.done)
-      if (job.error) throw new Error(job.error)
-      const fresh = await getScan(job.scan_id)
+      let fresh
+      if (queuedScan) {
+        // Durable path: enqueue a scan job, then poll until the scan is persisted.
+        const { scan_id, workers } = await startScanQueued(apiSource, folder, aiEnabled)
+        if (!SIM && !workers) throw new Error('no workers running — set ACP_WORKERS to use the durable queue (see Monitor)')
+        setProgress({ phase: 'queued (durable) · processing in the worker pool — see Monitor' })
+        for (let i = 0; i < 180 && !fresh; i++) {       // up to ~3 min
+          await new Promise((r) => setTimeout(r, 1000))
+          try { fresh = await getScan(scan_id) } catch { fresh = null }   // 404 until done
+        }
+        if (!fresh) throw new Error('scan still processing — watch it finish in the Monitor queue')
+      } else {
+        const { job_id } = await startScan(apiSource, folder, aiEnabled)
+        let job
+        do {
+          await new Promise((r) => setTimeout(r, 350))
+          job = await getJob(job_id)
+          setProgress(job)
+        } while (!job.done)
+        if (job.error) throw new Error(job.error)
+        fresh = await getScan(job.scan_id)
+      }
       setScan(fresh)
       setScanList(await listScans())
       const newAvg = fresh.run.avg_score
@@ -230,6 +244,13 @@ export default function App() {
             title={aiEnabled ? 'AI-assisted mode — click to switch to deterministic-only' : 'Deterministic-only mode — click to enable AI'}
             aria-pressed={aiEnabled}>
             {aiEnabled ? '✦ AI on' : '◻ AI off'}
+          </button>
+          <button
+            className={`ai-toggle${queuedScan ? ' ai-toggle--on' : ''}`}
+            onClick={() => setQueuedScan(v => !v)}
+            title={queuedScan ? 'Durable mode — scans run in the worker queue (survive restarts, visible in Monitor/Grafana). Click for in-process.' : 'In-process mode — scans run on a background thread. Click for the durable queue.'}
+            aria-pressed={queuedScan}>
+            {queuedScan ? '⚡ Queued' : '◻ In-process'}
           </button>
           <span className="user">{me.email}</span>
           {me.allow?.includes('settings') && <button className="cogbtn" aria-label="Platform settings" title="Platform settings" onClick={() => setSettingsOpen(true)}>⚙</button>}
