@@ -8,13 +8,17 @@
 # ---- stage 1: build the SPA (same-origin → relative API base) ----
 FROM mirror.gcr.io/library/node:20-slim AS web
 WORKDIR /web
+# VITE_SIM=false → the SPA calls the real backend (scans persist to Postgres +
+# emit Langfuse traces). Default false for this deployed image; override with
+# --build-arg VITE_SIM=true to ship the offline synthetic-data demo instead.
+ARG VITE_SIM=false
 COPY frontend/package.json frontend/package-lock.json ./
 # npm install instead of npm ci: avoids lockfile/npm-version mismatch between
 # local macOS npm and the container's npm when optional peer deps (esbuild) resolve
 # to different minor versions across npm releases.
 RUN npm install --prefer-offline 2>/dev/null || npm install
 COPY frontend/ ./
-RUN echo "VITE_API=" > .env.production && npm run build   # -> /web/dist
+RUN printf 'VITE_API=\nVITE_SIM=%s\n' "$VITE_SIM" > .env.production && npm run build   # -> /web/dist
 
 # ---- stage 2: runtime ----
 FROM mirror.gcr.io/library/python:3.12-slim AS runtime
