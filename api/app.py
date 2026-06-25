@@ -20,6 +20,7 @@ import threading
 import uuid
 from pathlib import Path
 
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -66,9 +67,31 @@ async def _access_gate(request, call_next):
 
 store = Store()
 JOBS: dict[str, dict] = {}
-WCAG_LEVEL = {"SC_1_4_3": "AA"}  # the only AA criterion in our rule set; rest are level A
+
+_scheduler = BackgroundScheduler()
+_scheduler.start()
 
 
+def _do_scheduled_scan():
+    try:
+        report = run_scan("local")
+        store.save_scan(report)
+        print(f"scheduled scan complete: {report['summary']['files']} files", flush=True)
+    except Exception as e:
+        print(f"scheduled scan failed: {e}", flush=True)
+
+
+def _reload_scheduler():
+    cfg = store.get_schedule()
+    _scheduler.remove_all_jobs()
+    if cfg["enabled"] and cfg["interval_minutes"] > 0:
+        _scheduler.add_job(_do_scheduled_scan, "interval",
+                           minutes=cfg["interval_minutes"],
+                           id="scheduled_local_scan",
+                           coalesce=True, max_instances=1)
+
+
+_reload_scheduler()
 def active_rubric():
     return Rubric.load_active(ACP / "config")
 
@@ -86,6 +109,28 @@ def config():
             "auth": "gis" if GOOGLE_CLIENT_ID else "demo"}
 
 
+class ScheduleUpdate(BaseModel):
+    enabled: bool
+    interval_minutes: int
+
+
+@app.get("/schedule")
+def schedule():
+    cfg = store.get_schedule()
+    job = _scheduler.get_job("scheduled_local_scan")
+    cfg["next_at"] = job.next_run_time.isoformat() if job and job.next_run_time else None
+    scans = store.list_scans()
+    cfg["last_at"] = scans[0]["completed_at"] if scans else None
+    return cfg
+
+
+@app.put("/schedule")
+def update_schedule(body: ScheduleUpdate):
+    store.save_schedule(body.enabled, body.interval_minutes)
+    _reload_scheduler()
+    return schedule()
+
+
 @app.get("/rubric")
 def rubric():
     rb = active_rubric()
@@ -99,9 +144,22 @@ def rules():
     catalog = json.loads((ACP / "config/rule-catalog.json").read_text())
     disabled = set(active_rubric().disabled)
     findings = store.rule_findings()
-    return {fmt: [{**r, "enabled": r["id"] not in disabled,
-                   "findings": findings.get(r["id"], 0), "level": WCAG_LEVEL.get(r["wcag"], "A")}
-                  for r in items] for fmt, items in catalog.items()}
+    # Exclude the _meta key; enrich each rule with runtime state.
+    return {
+        fmt: [
+            {
+                **r,
+                "enabled": r["id"] not in disabled,
+                "findings": findings.get(r["id"], 0),
+                # wcag_level already present in the enriched catalog; fall back for
+                # older catalog rows that only have the legacy wcag key.
+                "level": r.get("wcag_level") or ("AA" if r.get("wcag") == "SC_1_4_3" else "A"),
+            }
+            for r in items
+        ]
+        for fmt, items in catalog.items()
+        if fmt != "_meta"
+    }
 
 
 class RubricUpdate(BaseModel):
@@ -128,7 +186,12 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
                sync: bool = False, folder: str | None = Query(None)):
     token = request.headers.get("x-drive-token")      # per-user Drive token (GIS)
     sp_token = request.headers.get("x-sp-token")      # per-user MS Graph token (MSAL)
-    if source == "drive" and GOOGLE_CLIENT_ID and not token:
+    # ACP_DEMO_DRIVE_KEY lets the E2E test and demo scripts trigger a server-side
+    # ADC Drive scan without needing per-user GIS — pass as X-Demo-Key header.
+    DEMO_KEY = os.environ.get("ACP_DEMO_DRIVE_KEY", "")
+    demo_key = request.headers.get("x-demo-key", "")
+    is_demo_drive = source == "drive" and DEMO_KEY and demo_key == DEMO_KEY
+    if source == "drive" and GOOGLE_CLIENT_ID and not token and not is_demo_drive:
         raise HTTPException(401, "sign in with Google to scan your Drive")
     if source == "sharepoint" and not sp_token:
         raise HTTPException(401, "sign in with Microsoft to scan OneDrive")
@@ -171,6 +234,117 @@ def scan(sid: str):
     if res is None:
         raise HTTPException(404, "scan not found")
     return res
+
+
+@app.get("/ai/explain")
+def ai_explain(scan_id: str = Query(...), file: str = Query(...), rule_id: str = Query(...)):
+    """Generate a plain-English explanation + fix example for one WCAG finding.
+
+    Calls the local Ollama instance (OLLAMA_BASE_URL, default http://localhost:11434).
+    Returns 503 when Ollama is unavailable — callers should handle gracefully.
+    """
+    import ai as _ai
+    trace = store.get_trace_row(scan_id, file, rule_id)
+    if trace is None:
+        raise HTTPException(404, "trace not found")
+    engine_rule_ids = store.get_issue_rule_ids(scan_id, file, rule_id)
+    result = _ai.explain_finding(
+        rule_id=rule_id,
+        rule_name=trace["rule_name"],
+        level=trace["level"],
+        filename=file,
+        finding_count=trace["finding_count"],
+        severity=trace.get("severity", ""),
+        engine_rule_ids=engine_rule_ids,
+    )
+    if result is None:
+        raise HTTPException(503, "AI explanation unavailable — is Ollama running?")
+    return result
+
+
+@app.get("/ai/status")
+def ai_status():
+    """Check whether the local Ollama instance is reachable."""
+    import ai as _ai
+    return {"available": _ai.is_available(), "base_url": _ai.OLLAMA_BASE_URL, "model": _ai.OLLAMA_MODEL}
+
+
+@app.get("/scans/{sid}/traces")
+def scan_traces(sid: str, file: str | None = None):
+    """Per-rule trace for a scan. Returns one row per (file, rule) pair showing
+    PASS/FAIL/SKIP and the finding count. Optionally filter to a single file."""
+    if store.get_scan(sid) is None:
+        raise HTTPException(404, "scan not found")
+    return store.get_scan_traces(sid, file=file)
+
+
+@app.get("/scans/{sid}/manifest")
+def scan_manifest(sid: str):
+    """Rule-execution manifest for a scan.
+
+    Returns per-file completeness: how many rules were expected to run (based on
+    the file type's rule catalog), how many ran successfully (PASS or FAIL), and
+    how many errored (ENGINE failed to assess that rule). A scan is COMPLETE when
+    rules_errored_total == 0. Use this to detect partial assessments before acting
+    on a score.
+    """
+    if store.get_scan(sid) is None:
+        raise HTTPException(404, "scan not found")
+    return store.get_scan_manifest(sid)
+
+
+_HITL_WEBHOOK = os.environ.get("HITL_WEBHOOK_URL", "")
+
+
+def _fire_webhook(items: list[dict]) -> None:
+    """POST new HITL items to the configured webhook URL (best-effort, non-blocking)."""
+    if not _HITL_WEBHOOK or not items:
+        return
+    import threading
+    def _post():
+        try:
+            import httpx
+            httpx.post(_HITL_WEBHOOK, json={"event": "hitl.queued", "items": items}, timeout=8)
+        except Exception as e:
+            print(f"HITL webhook failed: {e}", flush=True)
+    threading.Thread(target=_post, daemon=True).start()
+
+
+class HitlUpdate(BaseModel):
+    status: str                     # pending | approved | rejected | skipped
+    reviewer_note: str | None = None
+
+
+@app.post("/hitl/queue/{scan_id}/auto")
+def hitl_auto_queue(scan_id: str):
+    """Auto-populate the HITL review queue from ai-assisted FAILs in an existing scan.
+
+    Idempotent — safe to call multiple times. Returns the newly created items.
+    Fires a webhook (HITL_WEBHOOK_URL) if configured.
+    """
+    if store.get_scan(scan_id) is None:
+        raise HTTPException(404, "scan not found")
+    created = store.queue_hitl_items(scan_id)
+    _fire_webhook(created)
+    return {"queued": len(created), "items": created}
+
+
+@app.get("/hitl/queue")
+def hitl_list(status: str | None = None, scan_id: str | None = None):
+    """List HITL review items. Filter by status (pending/approved/rejected/skipped) or scan_id."""
+    return store.list_hitl_queue(status=status, scan_id=scan_id)
+
+
+@app.put("/hitl/queue/{item_id}")
+def hitl_update(item_id: str, body: HitlUpdate):
+    """Update a HITL review item status (approve, reject, skip) with an optional reviewer note."""
+    item = store.get_hitl_item(item_id)
+    if item is None:
+        raise HTTPException(404, "item not found")
+    valid = {"pending", "approved", "rejected", "skipped"}
+    if body.status not in valid:
+        raise HTTPException(422, f"status must be one of {sorted(valid)}")
+    return store.update_hitl_item(item_id, body.status, body.reviewer_note)
 
 
 @app.get("/scans/{sid}/report.pdf")

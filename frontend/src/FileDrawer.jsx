@@ -1,6 +1,10 @@
+import { useState, Fragment } from 'react'
 import Drawer from './Drawer.jsx'
 import Tag from './Tag.jsx'
 import { PRI_COLOR } from './ontology.js'
+import { baFor, scOf } from './BeforeAfter.jsx'
+import { allRules } from './rules/index.js'
+import { explainFinding } from './api.js'
 
 // Prescriptive-action styling, shared with the Discover inventory.
 // Distinct hue per action so a long list scans at a glance. The human-touch
@@ -94,7 +98,15 @@ const STATE_NOTE = {
   remediated: 'auto-remediated', reviewed: 'no findings — cleared',
 }
 
-export default function FileDrawer({ file, onClose, context = 'full', overrideOwner = null, delegatedFrom = null }) {
+export default function FileDrawer({ file, onClose, context = 'full', overrideOwner = null, delegatedFrom = null, decision = null, aiEnabled = true, scanId = null }) {
+  const [explanations, setExplanations] = useState({})
+  const fetchExplanation = (ruleId) => {
+    if (!scanId || explanations[ruleId]) return
+    setExplanations((e) => ({ ...e, [ruleId]: { loading: true } }))
+    explainFinding(scanId, file.file, ruleId)
+      .then((res) => setExplanations((e) => ({ ...e, [ruleId]: res })))
+      .catch(() => setExplanations((e) => ({ ...e, [ruleId]: { error: true } })))
+  }
   if (!file) return null
   const st = statusOf(file)
   const [sbg, sfg] = STATUS_BADGE[st]
@@ -205,6 +217,17 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                     {i.detail && <div className="findingdetail">{i.detail}</div>}
                     {i.impact && <div className="muted findingimpact">{i.impact}</div>}
                     {i.fix && <div className="findingfix"><span className={i.auto ? 'fixauto' : 'fixreview'}>{i.auto ? '⚡ auto-fixable' : '✎ needs review'}</span> · {i.fix}<span className="muted"> · {i.rule_id ?? i.ruleId}</span></div>}
+                    {context === 'remediate' && (() => {
+                      const sc = scOf(i.wcag)
+                      const ba = sc ? baFor(sc, (file?.file || '').replace(/\.[^.]+$/, '')) : null
+                      if (!ba) return null
+                      return (
+                        <div style={{ marginTop: 8 }}>
+                          <div className="diffbox before" style={{ marginTop: 0 }}><span className="difftag">before</span>{ba.before}</div>
+                          <div className="diffbox after" style={{ marginTop: 4 }}><span className="difftag">after</span>{ba.after}</div>
+                        </div>
+                      )
+                    })()}
                   </div>
                 </div>
               )
@@ -233,6 +256,81 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           </div>
         </>
       )}
+
+      {context === 'remediate' && (() => {
+        // Cross-reference the rule manifest against this file's actual issues to
+        // produce a per-rule outcome row: PASS (no findings) / FAIL (N findings) /
+        // SKIP (rule not applicable to this file type).
+        const isHtmlFile = /\.html?$/i.test(file.file || '')
+        const issuesBySc = {}
+        ;(file.issues || []).forEach((i) => {
+          const sc = scOf(i.wcag)
+          if (sc) issuesBySc[sc] = (issuesBySc[sc] || 0) + 1
+        })
+        const rows = allRules.map((mod) => {
+          const { id, name, level, fixMode } = mod.meta
+          const effectiveFixMode = !aiEnabled && fixMode === 'ai-assisted' ? 'human-only' : fixMode
+          const count = issuesBySc[id] || 0
+          const outcome = !isHtmlFile && id !== '1.1.1' && id !== '1.3.1' && id !== '2.4.2' && id !== '3.1.1'
+            ? 'SKIP'
+            : count > 0 ? 'FAIL' : 'PASS'
+          return { id, name, level, fixMode: effectiveFixMode, outcome, count }
+        })
+        const passCount = rows.filter((r) => r.outcome === 'PASS').length
+        const failCount = rows.filter((r) => r.outcome === 'FAIL').length
+        const skipCount = rows.filter((r) => r.outcome === 'SKIP').length
+        return (
+          <details className="covmanifest" open={failCount > 0}>
+            <summary className="covmanifest-sum">
+              Rule coverage · {allRules.length} checks
+              <span className="covstat pass">{passCount} pass</span>
+              {failCount > 0 && <span className="covstat fail">{failCount} fail</span>}
+              {skipCount > 0 && <span className="covstat skip">{skipCount} skip</span>}
+            </summary>
+            <div className="covmanifest-note muted">Every WCAG rule checked by this engine, with its outcome for this file.</div>
+            <table className="covtable">
+              <thead><tr><th>SC</th><th>Name</th><th>Lvl</th><th>Fix</th><th>Outcome</th></tr></thead>
+              <tbody>
+                {rows.map((r) => {
+                  const exp = explanations[r.id]
+                  return (
+                    <Fragment key={r.id}>
+                      <tr className={`covrow ${r.outcome.toLowerCase()}`}>
+                        <td className="covsc">{r.id}</td>
+                        <td>{r.name}</td>
+                        <td className="muted">{r.level}</td>
+                        <td className="muted">{r.fixMode === 'auto' ? '⚡ auto' : r.fixMode === 'ai-assisted' ? '✎ AI' : '✋ human'}</td>
+                        <td className={`covoutcome ${r.outcome.toLowerCase()}`}>
+                          {r.outcome === 'PASS' ? '✓' : r.outcome === 'FAIL' ? `✕ ${r.count}` : '–'}
+                          <span className="covouttxt">{r.outcome === 'PASS' ? 'pass' : r.outcome === 'FAIL' ? 'fail' : 'skip'}</span>
+                          {r.outcome === 'FAIL' && scanId && !exp && (
+                            <button className="explain-btn" onClick={() => fetchExplanation(r.id)} title="Get AI explanation">Why?</button>
+                          )}
+                        </td>
+                      </tr>
+                      {r.outcome === 'FAIL' && exp && (
+                        <tr className="covrow-explain">
+                          <td colSpan={5}>
+                            {exp.loading && <span className="explain-loading">⏳ thinking…</span>}
+                            {exp.error && <span className="explain-error muted">AI explanation unavailable — is Ollama running?</span>}
+                            {exp.why && (
+                              <div className="explain-body">
+                                <div className="explain-why"><b>Why it matters:</b> {exp.why}</div>
+                                {exp.fix && <div className="explain-fix"><b>Fix:</b> <code>{exp.fix}</code></div>}
+                                <span className="explain-model muted">{exp.model}</span>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
+              </tbody>
+            </table>
+          </details>
+        )
+      })()}
 
       <h4 className="drawerh">Document journey</h4>
       <ol className="journeyline">

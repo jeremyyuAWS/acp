@@ -33,3 +33,17 @@ export const reportUrl = (id) => (SIM ? '#' : `${BASE}/scans/${id}/report.pdf`)
 export const startScan = (source = 'local', folder = null) => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}`, { method: 'POST', headers: headers() }).then(j))
 export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/scans/jobs/${id}`, { headers: headers() }).then(j))
 export const listFolders = (parent = 'root') => (SIM ? sim({ parent, name: 'My Drive', folders: [] }) : fetch(`${BASE}/folders?parent=${encodeURIComponent(parent)}`, { headers: headers() }).then(j))
+export const getSchedule = () => (SIM
+  ? sim({ enabled: false, interval_minutes: 60, next_at: null, last_at: null })
+  : fetch(`${BASE}/schedule`, { headers: headers() }).then(j))
+export const putSchedule = (body) => (SIM
+  ? sim({ ...body, next_at: null, last_at: null })
+  : fetch(`${BASE}/schedule`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) }).then(j))
+
+export const explainFinding = (scanId, file, ruleId) => (SIM
+  ? sim({ why: 'Screen readers cannot announce this element — blind users get no information about it.', fix: 'Add a descriptive alt attribute: <img src="logo.png" alt="Company logo">', model: 'llama3.2 (simulated)' })
+  : fetch(`${BASE}/ai/explain?scan_id=${encodeURIComponent(scanId)}&file=${encodeURIComponent(file)}&rule_id=${encodeURIComponent(ruleId)}`, { headers: headers() }).then(j))
+
+export const getAiStatus = () => (SIM
+  ? sim({ available: true, base_url: 'http://localhost:11434', model: 'llama3.2' })
+  : fetch(`${BASE}/ai/status`, { headers: headers() }).then(j))

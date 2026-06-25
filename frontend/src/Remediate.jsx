@@ -10,7 +10,14 @@ import { prefersReducedMotion } from './a11y.js'
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
 // (what to fix, prioritized, accept/reject/modify), the HITL queue, and self-remediation.
 const REM_ACTIONS = REMEDIATION_ACTIONS
-const SUBS = [['auto', '6 · Auto-remediate'], ['review', '7 · Human review'], ['revalidate', '8 · Re-validate']]
+const SUBS = [['triage', '5 · Triage'], ['auto', '6 · Auto-remediate'], ['review', '7 · Human review'], ['revalidate', '8 · Re-validate']]
+const JUNK_PATTERNS = ['_draft', '_old', '_v1', '_backup', '~$', '.tmp', '_temp', '_copy', '_archive', '_test', '_sample', ' copy', '(1)', '(2)']
+const isAutoJunk = (f) => {
+  const name = (f.file || '').toLowerCase()
+  if (JUNK_PATTERNS.some((p) => name.includes(p))) return true
+  if ((f.score ?? 100) >= 90 && !(f.issues || []).some((i) => i.severity === 'CRITICAL' || i.severity === 'SERIOUS')) return true
+  return false
+}
 const ACTIONS = ['auto', 'assisted', 'review', 'archive', 'keep', 'manual']
 const ETA_OVERRIDE = { archive: 2, keep: 0, manual: 35, review: 10 }
 const hrs = (m) => m >= 90 ? `${(m / 60).toFixed(1)} hrs` : `${Math.round(m)} min`
@@ -122,11 +129,12 @@ function FixCarousel() {
   )
 }
 
-export default function Remediate({ run, files = [], decisions = {}, setDecisions }) {
+export default function Remediate({ run, files = [], decisions = {}, setDecisions, aiEnabled = true }) {
   const [queue, setQueue] = useState(() => buildHumanQueue(files))
-  const [acted, setActed] = useState({ approved: 0, rejected: 0 })
+  const [acted, setActed] = useState({ approved: 0, rejected: 0, deferred: 0 })
+  const [deferredItems, setDeferredItems] = useState([])
   const runId = run?.id
-  useEffect(() => { setQueue(buildHumanQueue(files)); setActed({ approved: 0, rejected: 0 }) }, [runId]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setQueue(buildHumanQueue(files)); setActed({ approved: 0, rejected: 0, deferred: 0 }); setDeferredItems([]) }, [runId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Derive fix-type breakdown from auto-action files in the corpus
   const fixTypesDisplay = useMemo(() => {
@@ -150,7 +158,12 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [sel, setSel] = useState(null)
   const [seg, setSeg] = useState(null)
   const [editing, setEditing] = useState(null)
-  const [sub, setSub] = useState('auto')
+  const [sub, setSub] = useState('triage')
+  const [triage, setTriage] = useState({})
+  const [triageSel, setTriageSel] = useState(new Set())
+  const triageFile = (file, st) => { setTriage((t) => { const n = { ...t }; if (st == null) delete n[file]; else n[file] = st; return n }); setTriageSel((s) => { const n = new Set(s); n.delete(file); return n }) }
+  const triageBulk = (flist, st) => { setTriage((t) => { const n = { ...t }; flist.forEach((f) => { if (st == null) delete n[f.file]; else n[f.file] = st }); return n }); setTriageSel(new Set()) }
+  const toggleSel = (file) => setTriageSel((s) => { const n = new Set(s); if (n.has(file)) n.delete(file); else n.add(file); return n })
   const revalidated = files.filter((f) => f.compliant)
 
   const act = (id, kind) => {
@@ -158,6 +171,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     setQueue((q) => q.filter((x) => x.id !== id))
     setSelItem(null)
     if (kind === 'self') { if (item) setSelf((s) => [{ ...item, status: 'awaiting' }, ...s]); return }
+    if (kind === 'deferred') { if (item) setDeferredItems((d) => [...d, item]); setActed((a) => ({ ...a, deferred: a.deferred + 1 })); return }
     setActed((a) => ({ ...a, [kind]: a[kind] + 1 }))
   }
   const rescan = (id) => {
@@ -165,6 +179,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     setTimeout(() => setSelf((s) => s.map((x) => x.id === id ? { ...x, status: 'verified' } : x)), 1700)
   }
   const verified = self.filter((x) => x.status === 'verified').length
+  const pendingHitlFiles = new Set(queue.map((q) => q.file))
+  const totalHitl = queue.length + acted.approved + acted.rejected + acted.deferred + self.length
+  const hitlProgress = totalHitl > 0 ? Math.round(((totalHitl - queue.length) / totalHitl) * 100) : 0
 
   // --- remediation plan + decisions (moved from Discover) ---
   const plan = files.length ? recommendationSummary(files) : null
@@ -172,8 +189,13 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // Published business ontology takes precedence in the queue order (Critical → Low),
   // then the AI risk triage breaks ties.
   const ontRank = (f) => f.ont?.priority ? PRI_RANK[f.ont.priority] : 9
-  const remediable = files.filter((f) => f.rec && REM_ACTIONS.includes(f.rec.action)).sort((a, b) => (ontRank(a) - ontRank(b)) || (priority(b) - priority(a)))
+  const remediable = files.filter((f) => f.rec && REM_ACTIONS.includes(f.rec.action) && triage[f.file] !== 'na' && triage[f.file] !== 'defer').sort((a, b) => (ontRank(a) - ontRank(b)) || (priority(b) - priority(a)))
   const ontCount = remediable.filter((f) => f.ont).length
+  const autoFiles = remediable.filter((f) => {
+    const eff = decisions[f.file]?.state === 'override' ? decisions[f.file].action : f.rec?.action
+    return eff === 'auto' && !decisions[f.file]
+  })
+  const batchAutoRemediate = () => setDecisions?.((s) => { const n = { ...s }; autoFiles.forEach((f) => { n[f.file] = { state: 'accepted' } }); return n })
   const decide = (file, d) => { setDecisions?.((s) => ({ ...s, [file]: d })); setEditing(null) }
   const undo = (file) => setDecisions?.((s) => { const n = { ...s }; delete n[file]; return n })
   const acceptAll = () => setDecisions?.((s) => { const n = { ...s }; remediable.forEach((f) => { if (!n[f.file]) n[f.file] = { state: 'accepted' } }); return n })
@@ -197,15 +219,127 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     <>
       <div className="metrics">
         <div className="metric"><span>auto-fixed issues</span><b style={{ color: '#3B6D11' }}>{autoFixed}</b></div>
-        <div className="metric"><span>in review queue</span><b style={{ color: '#854F0B' }}>{queue.length}</b></div>
+        <div className="metric"><span>HITL queue</span><b style={{ color: queue.length ? '#854F0B' : '#3B6D11' }}>{queue.length} remaining</b>{totalHitl > 0 && <span className="muted" style={{ fontSize: 11 }}> · {hitlProgress}% done</span>}</div>
         <div className="metric"><span>approved</span><b>{acted.approved}</b></div>
-        <div className="metric"><span>self-remediated</span><b style={{ color: '#185FA5' }}>{self.length}</b></div>
+        <div className="metric"><span>deferred</span><b style={{ color: '#1F5FA8' }}>{acted.deferred}</b></div>
         <div className="metric"><span>re-verified</span><b style={{ color: '#3B6D11' }}>{verified}</b></div>
       </div>
 
       <div className="subtabs" role="tablist" aria-label="Remediate steps">
         {SUBS.map(([k, label]) => <button key={k} role="tab" aria-selected={sub === k} className={sub === k ? 'fchip on' : 'fchip'} onClick={() => setSub(k)}>{label}</button>)}
       </div>
+
+      {sub === 'triage' && (() => {
+        const scoreColor = (s) => s >= 80 ? '#3B6D11' : s >= 60 ? '#854F0B' : '#7B1D1D'
+        const SEV_C = { CRITICAL: '#7B1D1D', SERIOUS: '#854F0B', MODERATE: '#1F5FA8', MINOR: '#9a948f' }
+        const topSev = (f) => { for (const s of ['CRITICAL', 'SERIOUS', 'MODERATE', 'MINOR']) if ((f.issues || []).some((i) => i.severity === s)) return s; return null }
+        const triageFiles = [...files].sort((a, b) => {
+          const aDec = triage[a.file], bDec = triage[b.file]
+          const aJ = isAutoJunk(a), bJ = isAutoJunk(b)
+          if (!aDec && !bDec) return (bJ ? 1 : 0) - (aJ ? 1 : 0) || ((a.score ?? 50) - (b.score ?? 50))
+          if (!aDec) return -1; if (!bDec) return 1; return 0
+        })
+        const junkCount = triageFiles.filter(isAutoJunk).length
+        const naCount = triageFiles.filter((f) => triage[f.file] === 'na').length
+        const deferCount = triageFiles.filter((f) => triage[f.file] === 'defer').length
+        const inscopeCount = triageFiles.filter((f) => triage[f.file] === 'inscope').length
+        const undecided = triageFiles.filter((f) => !triage[f.file]).length
+        const selFiles = triageFiles.filter((f) => triageSel.has(f.file))
+        const allSel = triageSel.size === triageFiles.length && triageFiles.length > 0
+        return (
+          <section className="panel" key="triage">
+            <div className="triagehd">
+              <div>
+                <b>File triage</b>
+                <span className="muted"> · {triageFiles.length} files · classify before remediation</span>
+              </div>
+              <div className="triagesum">
+                <span className="trstatchip inscope">{inscopeCount} in scope</span>
+                <span className="trstatchip na">{naCount} N/A</span>
+                <span className="trstatchip defer">{deferCount} deferred</span>
+                {undecided > 0 && <span className="trstatchip pending">{undecided} undecided</span>}
+              </div>
+            </div>
+
+            {junkCount > 0 && (
+              <div className="junkbanner">
+                ⚑ <b>{junkCount} file{junkCount !== 1 ? 's' : ''} auto-flagged</b> — name patterns or score ≥ 90 with no critical/serious findings
+                <button className="ghost small" style={{ marginLeft: 10 }} onClick={() => triageBulk(triageFiles.filter(isAutoJunk), 'na')}>Mark all N/A</button>
+                <button className="ghost small" style={{ marginLeft: 6 }} onClick={() => triageBulk(triageFiles.filter(isAutoJunk), 'defer')}>Defer all</button>
+              </div>
+            )}
+
+            {triageSel.size > 0 && (
+              <div className="triagetools">
+                <span className="muted" style={{ fontSize: 13 }}>{triageSel.size} selected ·</span>
+                <button className="ghost small" onClick={() => triageBulk(selFiles, 'inscope')}>✓ In scope</button>
+                <button className="ghost small" onClick={() => triageBulk(selFiles, 'na')}>N/A</button>
+                <button className="ghost small" onClick={() => triageBulk(selFiles, 'defer')}>⏸ Defer</button>
+                <button className="ghost small" style={{ color: 'var(--muted)' }} onClick={() => setTriageSel(new Set())}>clear</button>
+              </div>
+            )}
+
+            <div className="trlist">
+              <div className="trheader">
+                <input type="checkbox" checked={allSel} onChange={() => setTriageSel(allSel ? new Set() : new Set(triageFiles.map((f) => f.file)))} aria-label="Select all" />
+                <span>File</span>
+                <span style={{ textAlign: 'right' }}>Score</span>
+                <span>Issues</span>
+                <span>Decision</span>
+              </div>
+              {triageFiles.map((f) => {
+                const dec = triage[f.file]
+                const junk = isAutoJunk(f)
+                const sev = topSev(f)
+                const issel = triageSel.has(f.file)
+                return (
+                  <div className={`trrow${dec === 'na' ? ' trna' : dec === 'defer' ? ' trdefer' : dec === 'inscope' ? ' trinscope' : junk && !dec ? ' trjunkrow' : ''}`} key={f.file}>
+                    <input type="checkbox" checked={issel} onChange={() => toggleSel(f.file)} aria-label={`Select ${f.file}`} />
+                    <div className="trname">
+                      <button className="remname" onClick={() => setSel(f)}>{f.file}</button>
+                      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>
+                        {f.department && <span>{f.department}</span>}
+                        {f.department && f.sourceName && <span> · </span>}
+                        {f.sourceName && <span>{f.sourceName}</span>}
+                        {junk && !dec && <span className="junkflag">⚑ likely junk</span>}
+                      </div>
+                    </div>
+                    <span className="trscore" style={{ color: f.score != null ? scoreColor(f.score) : 'var(--muted)' }}>
+                      {f.score != null ? f.score : '—'}
+                    </span>
+                    <span className="trissues">
+                      {(f.issues || []).length > 0
+                        ? <><b>{(f.issues || []).length}</b>{sev && <span style={{ marginLeft: 5, fontSize: 11, color: SEV_C[sev] }}>{sev.toLowerCase()}</span>}</>
+                        : <span style={{ color: 'var(--muted)', fontSize: 12 }}>none</span>}
+                    </span>
+                    <span className="tractions">
+                      {dec ? (
+                        <>
+                          <span className={`trstatchip ${dec}`}>{dec === 'inscope' ? '✓ in scope' : dec === 'na' ? 'N/A' : '⏸ deferred'}</span>
+                          <button className="ghost small" style={{ marginLeft: 6 }} onClick={() => triageFile(f.file, null)} title="Undo">↺</button>
+                        </>
+                      ) : (
+                        <>
+                          <button className="trbtn inscope" onClick={() => triageFile(f.file, 'inscope')} title="In scope — include in remediation plan">✓</button>
+                          <button className="trbtn na" onClick={() => triageFile(f.file, 'na')} title="Not applicable — exclude from plan">N/A</button>
+                          <button className="trbtn defer" onClick={() => triageFile(f.file, 'defer')} title="Defer to a later batch">⏸</button>
+                        </>
+                      )}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+
+            {undecided === 0 && triageFiles.length > 0 && (
+              <div className="triagecta">
+                <b>✓ Triage complete</b> — {inscopeCount} file{inscopeCount !== 1 ? 's' : ''} in scope · {naCount} N/A · {deferCount} deferred
+                <button className="decbtn ok" style={{ marginLeft: 14 }} onClick={() => setSub('auto')}>→ Go to remediation plan</button>
+              </div>
+            )}
+          </section>
+        )
+      })()}
 
       {sub === 'auto' && (<>
       {plan && (
@@ -219,6 +353,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             </div>
             <div className="plandec">
               <span className="muted">{dcount('accepted')} accepted · {dcount('override')} modified · {dcount('rejected')} rejected · {pending} pending</span>
+              {autoFiles.length > 0 && <button className="batchbtn" onClick={batchAutoRemediate}>⚡ Run batch · {autoFiles.length} auto-fixable</button>}
               <button disabled={!pending} onClick={acceptAll}>✓ Accept all</button>
             </div>
           </div>
@@ -264,7 +399,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               return (
                 <div className={`remrow${dec?.state === 'rejected' ? ' rowrej' : ''}`} key={f.file} style={{ borderLeft: `3px solid ${rfg}`, paddingLeft: 10 }}>
                   <div className="remmaincol">
-                    <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span></button>
+                    <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span>
+                      {pendingHitlFiles.has(f.file) && <span className="hitlbadge">⚑ awaiting review</span>}
+                    </button>
                     {f.ont ? (
                       <div className="rempri">
                         <span className="pritag" style={{ background: PRI_COLOR[f.ont.priority][1], color: PRI_COLOR[f.ont.priority][0] }}>{f.ont.priority}</span>
@@ -311,9 +448,18 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
       {sub === 'review' && (<>
       <section className="panel">
-        <h2>Human-in-the-loop review queue {queue.length === 0 && <span className="muted">· all clear</span>}</h2>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+          <h2 style={{ margin: 0 }}>Human-in-the-loop review queue {queue.length === 0 && <span className="muted">· all clear</span>}</h2>
+          {totalHitl > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+              <div className="conftrack" style={{ width: 120 }}><i style={{ width: `${hitlProgress}%`, background: hitlProgress === 100 ? '#3B6D11' : '#1F5FA8' }} /></div>
+              <span className="muted">{totalHitl - queue.length} of {totalHitl} reviewed</span>
+              {acted.deferred > 0 && <span className="trstatchip defer">{acted.deferred} deferred</span>}
+            </div>
+          )}
+        </div>
         {queue.length === 0 ? (
-          <p className="muted">Queue cleared — {acted.approved} approved, {acted.rejected} rejected. Re-validation runs on the approved fixes.</p>
+          <p className="muted">Queue cleared — {acted.approved} approved, {acted.rejected} rejected{acted.deferred ? `, ${acted.deferred} deferred to next cycle` : ''}. Re-validation runs on the approved fixes.</p>
         ) : (
           <div className="queue">
             {queue.map((q) => (
@@ -338,6 +484,26 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         )}
         <p className="muted" style={{ marginTop: 12 }}>↻ Re-validated against all engines after each approved fix — only re-passing files advance to publish.</p>
       </section>
+
+      {deferredItems.length > 0 && (
+        <section className="panel">
+          <h2>Deferred <span className="muted">· {deferredItems.length} item{deferredItems.length !== 1 && "s"} &mdash; resurface on next scan</span></h2>
+          <div className="queue">
+            {deferredItems.map((it) => (
+              <div className="qrow" key={it.id} style={{ opacity: 0.7 }}>
+                <span className="qico" aria-hidden="true">{it.icon}</span>
+                <div className="qmain">
+                  <div className="qtitle">{it.title} <span className="muted" style={{ fontSize: 12 }}>· {it.file}</span></div>
+                  <div className="qmeta">{it.rule}</div>
+                </div>
+                <span className="trstatchip defer" style={{ fontSize: 12, padding: "3px 10px" }}>⏸ deferred</span>
+                <button className="ghost small" onClick={() => { setDeferredItems((d) => d.filter((x) => x.id !== it.id)); setQueue((q) => [...q, it]); setActed((a) => ({ ...a, deferred: a.deferred - 1 })) }}>↺ restore</button>
+              </div>
+            ))}
+          </div>
+          <p className="muted" style={{ marginTop: 10 }}>Deferred findings are tracked in the compliance record and flagged automatically when the next scheduled scan runs.</p>
+        </section>
+      )}
 
       {self.length > 0 && (
         <section className="panel">
@@ -394,6 +560,20 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               )
             })()}
             <p className="muted">Every approved or self-applied fix is re-run against all engines. Only documents that re-pass advance to Publish — no fix is taken on trust.</p>
+            {dcount('accepted') + dcount('override') > 0 && (
+              <div className="outpanel" style={{ marginTop: 14 }}>
+                <div className="muted" style={{ fontSize: 13, marginBottom: 8 }}><b>Output settings</b> — where should remediated files go?</div>
+                <div className="outmodes">
+                  {[['download','⤓ Download'], ['drive','☁ Save to Drive'], ['archive','⊡ Archive original']].map(([k, l]) => (
+                    <button key={k} className={k === 'download' ? 'outmode on' : 'outmode'} onClick={() => {}}>{l}</button>
+                  ))}
+                </div>
+                <div className="outact" style={{ marginTop: 8 }}>
+                  <span className="muted" style={{ fontSize: 12 }}>Remediated files are stamped <b>_a11y-certified-{new Date().toISOString().split('T')[0]}</b> · originals kept for audit trail</span>
+                  <span className="muted" style={{ fontSize: 12, marginLeft: 12 }}>Drive &amp; archive options: connect via Settings &rarr; Integrations</span>
+                </div>
+              </div>
+            )}
           </section>
           <section className="panel"><h2>Re-validated &amp; ready to publish <span className="muted">· {revalidated.length}</span></h2>
             {revalidated.length === 0 ? <p className="muted">None yet — approve fixes in the review step first.</p> : (
@@ -411,7 +591,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       )}
 
       {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
-      {sel && <FileDrawer file={sel} onClose={() => setSel(null)} />}
+      {sel && <FileDrawer file={sel} context="remediate" aiEnabled={aiEnabled} scanId={run?.id} onClose={() => setSel(null)} />}
       {selItem && <ReviewDrawer item={selItem} onClose={() => setSelItem(null)} onAct={act} />}
     </>
   )
