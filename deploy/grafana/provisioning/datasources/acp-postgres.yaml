@@ -5,14 +5,14 @@ datasources:
     uid: acp_pg
     type: postgres
     access: proxy
-    # DATABASE_URL injected at runtime, e.g.:
-    #   postgresql://user:pass@host/acpdb?sslmode=require
-    # Grafana parses the standard DSN components from these env-var overrides.
-    url: ${ACP_GRAFANA_PG_HOST:localhost:5432}
-    database: ${ACP_GRAFANA_PG_DB:acpdb}
-    user: ${ACP_GRAFANA_PG_USER:acpadmin}
+    # Connection from env vars set by deploy.sh (parsed from DATABASE_URL).
+    # NOTE: Grafana only supports $VAR / ${VAR} substitution — NOT bash-style
+    # ${VAR:default}, which leaves the field empty. Keep these plain.
+    url: ${ACP_GRAFANA_PG_HOST}
+    database: ${ACP_GRAFANA_PG_DB}
+    user: ${ACP_GRAFANA_PG_USER}
     secureJsonData:
-      password: ${ACP_GRAFANA_PG_PASS:}
+      password: ${ACP_GRAFANA_PG_PASS}
     jsonData:
       sslmode: require
       postgresVersion: 1400
