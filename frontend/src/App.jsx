@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
-import { getSources, getRubric, listScans, getScan, startScan, getJob, setDriveToken, setSPToken, setGoogleToken } from './api'
+import { getSources, getRubric, listScans, getScan, startScan, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens } from './api'
 import { SIM } from './sim.js'
 import { setPersona } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -95,6 +95,19 @@ export default function App() {
   const [aiEnabled, setAiEnabled] = useState(true)
 
   useEffect(() => {
+    const onExpired = () => {
+      clearAllTokens()
+      sessionStorage.removeItem('gd_token')
+      sessionStorage.removeItem('sp_token')
+      setHasDriveToken(false)
+      setHasSPToken(false)
+      setMe(null)
+    }
+    window.addEventListener('acp:session-expired', onExpired)
+    return () => window.removeEventListener('acp:session-expired', onExpired)
+  }, [])
+
+  useEffect(() => {
     if (!me) return
     getRubric().then(setRubric).catch(() => {})
     getSources().then(setSources).catch(() => {})
@@ -118,9 +131,14 @@ export default function App() {
   const PRIVILEGED = { 'jeremyyu.movate@gmail.com': PRIV_PROFILE }
 
   const signIn = (p) => {
-    if (p.token) setGoogleToken(p.token)  // GIS auth mode
-    const gdToken = sessionStorage.getItem('gd_token')
-    if (gdToken) { setDriveToken(gdToken); setHasDriveToken(true) }
+    if (p.token) {
+      setGoogleToken(p.token)   // API Bearer auth
+      setDriveToken(p.token)    // Same token has Drive scopes — no separate connect needed
+      setHasDriveToken(true)
+    } else {
+      const gdToken = sessionStorage.getItem('gd_token')
+      if (gdToken) { setDriveToken(gdToken); setHasDriveToken(true) }
+    }
     const sp = sessionStorage.getItem('sp_token')
     if (sp) { setSPToken(sp); setHasSPToken(true) }
     setPersona(p); setScan(null); setScanList([]); setLoaded(false); setDecisions({}); setCertifiedDocs([]); setPublishedFiles([]); setSettingsOpen(false); setView((p.allow || ['overview'])[0]); setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label, allow: p.allow || [] })
@@ -208,7 +226,14 @@ export default function App() {
           {rubric && me.allow?.includes('settings') && <span className="chip">{rubric.target} · rubric {rubric.hash.slice(0, 8)}</span>}
           <span className="user">{me.email}</span>
           {me.allow?.includes('settings') && <button className="cogbtn" aria-label="Platform settings" title="Platform settings" onClick={() => setSettingsOpen(true)}>⚙</button>}
-          <button className="ghost small" onClick={() => setMe(null)}>sign out</button>
+          <button className="ghost small" onClick={() => {
+            clearAllTokens()
+            sessionStorage.removeItem('gd_token')
+            sessionStorage.removeItem('sp_token')
+            setHasDriveToken(false)
+            setHasSPToken(false)
+            setMe(null)
+          }}>sign out</button>
         </div>
       </header>
       {me.scope && <div className="scopebar"><i className="scopedot" />access scope · <b>{me.scope}</b></div>}

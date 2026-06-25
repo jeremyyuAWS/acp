@@ -44,7 +44,7 @@ export default function SignIn({ onSignedIn }) {
     setErr('')
     const client = window.google.accounts.oauth2.initTokenClient({
       client_id: cfg.google_client_id,
-      scope: 'email profile',
+      scope: 'email profile https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file',
       callback: async (resp) => {
         setBusy(false)
         if (resp.error) { setErr(resp.error_description || resp.error); return }

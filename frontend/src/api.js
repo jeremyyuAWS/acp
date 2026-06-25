@@ -9,6 +9,7 @@ let googleToken = null  // GIS Bearer token (auth mode = "gis")
 export const setDriveToken = (t) => { driveToken = t }
 export const setSPToken = (t) => { spToken = t }
 export const setGoogleToken = (t) => { googleToken = t }
+export const clearAllTokens = () => { googleToken = null; driveToken = null; spToken = null }
 const headers = (extra = {}) => ({
   ...extra,
   ...(googleToken ? { 'Authorization': 'Bearer ' + googleToken } : {}),
@@ -16,7 +17,15 @@ const headers = (extra = {}) => ({
   ...(spToken ? { 'X-SP-Token': spToken } : {}),
 })
 
-const j = (r) => { if (!r.ok) throw new Error(`${r.status} ${r.statusText}`); return r.json() }
+const j = (r) => {
+  if (r.status === 401) {
+    googleToken = null
+    window.dispatchEvent(new CustomEvent('acp:session-expired'))
+    throw new Error('Session expired — please sign in again')
+  }
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+  return r.json()
+}
 const sim = (value, ms = 220) => new Promise((res) => setTimeout(() => res(value), ms))
 
 export const getConfig = () => (SIM ? sim({ google_client_id: null, auth: 'demo', sim: true }) : fetch(`${BASE}/config`).then(j))
