@@ -238,6 +238,18 @@ file is never certified** (incomplete analysis is never a pass).
 - **Security:** read-only scopes · ephemeral document copies (never persisted) ·
   admin-gated AI (off ⇒ zero LLM egress) · per-customer single-tenant deploy.
 
+**System overview** — how the pieces fit together:
+
+![ACP system overview: browser and data sources feed the FastAPI control plane, which drives the HTML, Office, and PDF engines, writes to Postgres, and exposes Grafana, Langfuse, and an optional local AI service](docs/images/system-overview.svg)
+
+**Scan flow** — what happens to a document, end to end (blue = automated/deterministic, amber = human review & audit):
+
+![ACP scan flow: connect, discover and read, analyze across three engines, record every check, score, and persist — with judgment calls routed to a human review queue and every decision written to an audit log](docs/images/scan-flow.svg)
+
+**Deployment** — runs on Azure, or entirely inside a customer's own cloud:
+
+![ACP deployment: four services (app, Grafana, Langfuse, Postgres) running either on Azure Container Apps or in a customer VPC via docker compose](docs/images/deployment.svg)
+
 ## Validation engine — where every WCAG rule lives
 
 ACP's validation framework is **deterministic-first and modular by design**: every
