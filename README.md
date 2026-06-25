@@ -242,19 +242,17 @@ file is never certified** (incomplete analysis is never a pass).
 
 ### In more detail
 
-Three focused views of the same system.
+**Runtime architecture** — deterministic-first, AI assist only when needed. The
+FastAPI control plane drives the three validation engines (HTML, Office, PDF),
+persists to Postgres, and exposes Grafana, Langfuse, and an optional local AI service:
 
-**System overview** — how the running pieces fit together:
+![ACP runtime architecture: browser and the FastAPI control plane (access gate, routes, core) drive the HTML, Office, and PDF engines, which write to Postgres and feed Grafana, Langfuse, and an optional Ollama AI service — deterministic validation first, immutable audit trail, rule-level traceability, explainable by design, human-in-the-loop](docs/images/acp-flow-diagram.png)
 
-![ACP system overview: browser and data sources feed the FastAPI control plane, which drives the HTML, Office, and PDF engines, writes to Postgres, and exposes Grafana, Langfuse, and an optional local AI service](docs/images/system-overview.svg)
+**Scan data flow, end to end** — connect → discover → analyze → record every check
+→ score → persist, with judgment calls routed to human review and every decision
+audited; plus the data model and the two deployment options:
 
-**Scan flow** — what happens to a document, end to end (blue = automated/deterministic, amber = human review & audit):
-
-![ACP scan flow: connect, discover and read, analyze across three engines, record every check, score, and persist — with judgment calls routed to a human review queue and every decision written to an audit log](docs/images/scan-flow.svg)
-
-**Deployment** — runs on Azure, or entirely inside a customer's own cloud:
-
-![ACP deployment: four services (app, Grafana, Langfuse, Postgres) running either on Azure Container Apps or in a customer VPC via docker compose](docs/images/deployment.svg)
+![ACP scan data flow end to end: connect, discover, read, analyze across three engines, trace every rule, score, and persist — with the Postgres data model, monitoring and tracing surfaces, and Azure-vs-customer-VPC deployment topology](docs/images/acp-scan-flow.png)
 
 ## Validation engine — where every WCAG rule lives
 
