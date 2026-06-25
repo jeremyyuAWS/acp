@@ -31,6 +31,10 @@
   @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 22px; display: flex; flex-direction: column; gap: 10px; text-decoration: none; color: inherit; transition: border-color .15s, transform .15s; }
   .card:hover { border-color: #b0b0c8; transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,.08); }
+  .card.primary { background: linear-gradient(135deg, #fff7f3 0%, #fdeee7 100%); border: 2px solid var(--accent); box-shadow: 0 4px 18px rgba(232,73,15,.12); }
+  .card.primary:hover { border-color: var(--accent); transform: translateY(-3px); box-shadow: 0 8px 26px rgba(232,73,15,.22); }
+  .card.primary .card-title { color: var(--accent); }
+  .card-flag { display: inline-block; align-self: flex-start; background: var(--accent); color: #fff; font-size: 9.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding: 2px 8px; border-radius: 5px; margin-bottom: 2px; }
   .card-head { display: flex; align-items: flex-start; gap: 10px; }
   .card-icon { font-size: 20px; flex-shrink: 0; margin-top: 2px; }
   .card-title { font-size: 15px; font-weight: 700; }
@@ -64,10 +68,11 @@
 
   <div class="section-label">Live services</div>
   <div class="grid">
-    <a class="card" href="https://acp-app.greenwater-4bf2c997.eastus2.azurecontainerapps.io/" target="_blank">
+    <a class="card primary" href="https://acp-app.greenwater-4bf2c997.eastus2.azurecontainerapps.io/" target="_blank">
+      <span class="card-flag">Start here</span>
       <div class="card-head"><span class="card-icon">♿</span><div><div class="card-title">Accessibility Platform</div><div class="card-sub">Main application</div></div></div>
       <div class="card-desc">Full 10-step compliance workflow: discover → triage → auto-remediate → HITL review → re-validate. Scans PDF, Office, and HTML from Google Drive or local upload.</div>
-      <div class="tags"><span class="tag green">live</span><span class="tag blue">Sign in with Google · @movate.com</span></div>
+      <div class="tags"><span class="tag green">live</span><span class="tag blue">Sign in with Google</span></div>
     </a>
     <a class="card" href="https://acp-app.greenwater-4bf2c997.eastus2.azurecontainerapps.io/docs" target="_blank">
       <div class="card-head"><span class="card-icon">⚙️</span><div><div class="card-title">Runtime API</div><div class="card-sub">FastAPI · OpenAPI docs</div></div></div>

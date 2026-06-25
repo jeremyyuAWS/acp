@@ -34,6 +34,20 @@ E2E_KEY = os.environ.get("ACP_E2E_KEY") or None
 ALLOWED_DOMAINS = [
     d.strip() for d in os.environ.get("ACP_ALLOWED_DOMAINS", "movate.com").split(",") if d.strip()
 ]
+# Comma-separated individual emails allowed in GIS mode, in addition to the
+# domains above. Lets you permit a specific outside account (e.g. a personal
+# gmail used for a demo) without opening the whole gmail.com domain.
+ALLOWED_EMAILS = {
+    e.strip().lower() for e in os.environ.get("ACP_ALLOWED_EMAILS", "").split(",") if e.strip()
+}
+
+
+def email_allowed(email: str) -> bool:
+    """True if an email passes the GIS allow-list (exact email OR allowed domain)."""
+    email = (email or "").lower()
+    if email in ALLOWED_EMAILS:
+        return True
+    return any(email.endswith("@" + d.lower()) for d in ALLOWED_DOMAINS)
 DRIVE_SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/drive.file",

@@ -61,7 +61,7 @@ async def _access_gate(request, call_next):
         if not email:
             return Response(status_code=401, media_type="application/json",
                             content='{"detail":"Google token expired — sign in again"}')
-        if not any(email.endswith("@" + d) for d in core.ALLOWED_DOMAINS):
+        if not core.email_allowed(email):
             return Response(status_code=403, media_type="application/json",
                             content='{"detail":"Access restricted to authorized accounts"}')
     return await call_next(request)
