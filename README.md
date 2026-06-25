@@ -8,6 +8,12 @@ OneDrive), checks every Word doc, PowerPoint, PDF, Excel file, and web page, and
 tells you — in plain terms — which ones a person with a disability would struggle
 to use, and why.
 
+**▶ [See it live](https://acp-app.greenwater-4bf2c997.eastus2.azurecontainerapps.io/hub)**
+ · New here? Just read on. · Engineer? Skip to **[For developers](#for-developers)**.
+
+<!-- Screenshots welcome here: drop product images into docs/images/ and embed them,
+     e.g. ![Compliance dashboard](docs/images/dashboard.png) — see README suggestions. -->
+
 ---
 
 ## Why this matters
@@ -142,6 +148,38 @@ judgment call goes to a human, and no document data ever leaves your environment
 > In short: the rules are a transparent, editable checklist mapped to a recognized
 > standard — not a mysterious score from a black box. You can read every rule, see
 > what it found, decide how it's fixed, and prove it ran.
+
+## Frequently asked questions
+
+**Does ACP change my original files?**
+No — not unless you tell it to. Scanning is entirely read-only. When you remediate,
+ACP writes a *fixed copy* to a separate folder and leaves the original untouched;
+nothing is moved, renamed, or deleted without an approval step you configure.
+
+**What about data privacy — does my content go to an AI service?**
+You control that. ACP can run in **deterministic-only mode**, where no document
+content ever leaves your environment and no AI is involved at all. Even with AI
+assistance turned on, it's used only to *draft* a fix that a person approves.
+
+**Which file types can it check?**
+Word (`.docx`), PowerPoint (`.pptx`), Excel (`.xlsx`), PDF, and web pages (HTML) —
+all measured against the same WCAG 2.1 standard.
+
+**How do I know a given rule was actually checked on a document?**
+Every check on every document is recorded — pass, fail, error, or not-applicable —
+so you can produce that evidence for any file, for any rule, at any time. That's the
+core of how ACP supports an audit.
+
+**How accurate is it — what about false positives?**
+The checks are deterministic (rule-based), so results are consistent and
+explainable. Anything that genuinely needs human judgment is *routed to a person*
+rather than guessed at, which keeps confident automated fixes separate from
+judgment calls.
+
+**Can we run it inside our own cloud?**
+Yes — ACP is designed to run entirely within your environment, with no dependency on
+outside services. There's a one-command local/VPC stack with its own setup guide
+([`deploy/compose/`](deploy/compose)) and an Azure deployment path.
 
 ## Who it's for
 
@@ -284,9 +322,10 @@ gcloud auth application-default login
 ./scripts/run.sh        # open http://localhost:5173
 ```
 
-The **bundled sample corpus** (`test-corpus/files`, 14 synthetic WCAG fixtures of
-varying quality) lets you run a full scan with no Drive connection — use the
-"run a scan on the bundled sample corpus" link on the Sources screen.
+The **bundled sample corpus** (`test-corpus/files`, 55 synthetic WCAG fixtures of
+varying quality across every supported file type) lets you run a full scan with no
+Drive connection — use the "run a scan on the bundled sample corpus" link on the
+Sources screen.
 
 ## Tests
 
@@ -481,9 +520,9 @@ apply. See [ADR 0002](docs/adr/0002-assessment-transparency-spec.md).
 - [ADR 0003 — document lifecycle model](docs/adr/0003-document-lifecycle-model.md)
 - [PRD conformance roadmap](docs/prd-conformance-roadmap.md)
 - [MVP build plan (lean first cut)](docs/mvp-build-plan.md)
+- [Engine provenance (internal)](docs/provenance.md)
 
-## Provenance note
+## License & usage
 
-The `~/projects/_review-digital-accessibility` checkout (devSEAL "Digital A11y")
-is a **read-only diligence clone**, kept outside this repo. No customer code is
-vendored here until IP rights are secured in writing.
+**Proprietary — © mova.io. All rights reserved.** This software is not open-source
+and is not licensed for redistribution or external use. Contact mova.io for terms.
