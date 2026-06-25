@@ -84,11 +84,11 @@
       <div class="card-desc">"Why?" button on every FAIL row in the rule coverage table. Llama 3.2 explains why the finding matters and exactly what to fix. Fails silently if Ollama is offline.</div>
       <div class="tags"><span class="tag purple">llama3.2</span><span class="tag">GET /ai/status</span></div>
     </a>
-    <div class="card">
+    <a class="card" href="https://acp-langfuse.greenwater-4bf2c997.eastus2.azurecontainerapps.io" target="_blank">
       <div class="card-head"><span class="card-icon">🔭</span><div><div class="card-title">LLM Traces — Langfuse</div><div class="card-sub">Per-scan · per-rule · per-remediation</div></div></div>
-      <div class="card-desc">Every scan emits one trace (per-file spans, per-rule child spans). Drive write-back emits a step-6 span. Set LANGFUSE_HOST + keys in ACA env vars to activate.</div>
-      <div class="tags"><span class="tag">LANGFUSE_HOST</span><span class="tag blue">LANGFUSE_SECRET_KEY</span></div>
-    </div>
+      <div class="card-desc">Every scan emits one trace (per-file spans, per-rule child spans). Drive write-back emits a step-6 span. Project: ACP Compliance Platform.</div>
+      <div class="tags"><span class="tag green">live</span><span class="tag orange">login: admin@acp.mova.io · ask Jeremy for pw</span></div>
+    </a>
     <div class="card">
       <div class="card-head"><span class="card-icon">🗄️</span><div><div class="card-title">Postgres — Audit Trail</div><div class="card-sub">mdk-accessibility-pg · v16</div></div></div>
       <div class="card-desc">scan_runs · file_records (drive_file_id + remediated_at + drive_write_url) · issue_records · scan_rule_traces · hitl_queue · inventory. All 10 steps leave a durable record.</div>
