@@ -59,6 +59,90 @@ it automatically, at scale, and — crucially — **keeps a record an auditor wi
 - **You stay in control.** Nothing is deleted, moved, or published without an
   approval step you configure.
 
+## How ACP manages its accessibility rules
+
+The easiest way to picture ACP is as an **automated accessibility inspector with a
+detailed checklist.** Each item on the checklist is one specific accessibility
+requirement. ACP runs the *entire* checklist against *every* document, every time,
+and writes down the result of each item — so you always end up with a completed,
+signed-off inspection sheet you can hand to an auditor.
+
+Here's how that checklist is put together and kept trustworthy.
+
+### Each rule is one accessibility requirement — in plain language
+
+A "rule" isn't technical jargon — it's a single, specific thing that has to be true
+for a document to be accessible. For example:
+
+> **Every image needs a written description.**
+> A person using a screen reader can't see the picture — the software reads the
+> written description aloud instead. No description means they get nothing.
+
+That's one rule. ACP has dozens of them, and each one maps to a specific line in
+**WCAG 2.1**, the international accessibility standard. So a finding is never just
+ACP's opinion — it's a citable requirement from a recognized standard.
+
+### What every rule tells you
+
+Each rule is small, self-contained, and described in the same plain-language way, so
+anyone can understand exactly what it does. Think of each rule as a little index card:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  RULE:  "Non-text Content"                                    │
+│  Standard:    WCAG 1.1.1  (Level A)                           │
+│  Checks:      Does every image have a text description?       │
+│  Why:         Screen readers read the description aloud to    │
+│               people who can't see the image.                 │
+│  Severity:    Critical                                        │
+│  How it's fixed:  Description drafted automatically →         │
+│                   a person reviews and approves it            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Every rule carries those same facts: **which standard** it comes from, **what** it
+looks for, **why** it matters, **how serious** a failure is (Critical, Serious, or
+Moderate), and **how it gets fixed.**
+
+### Three ways a problem gets fixed — and you choose how much AI is involved
+
+Not every issue should be fixed the same way. ACP sorts each rule into one of three
+"fix modes," so the easy things happen automatically and the judgment calls always
+reach a person:
+
+| Fix mode | What happens | Example |
+|----------|--------------|---------|
+| **Automatic** | Clear-cut and safe — ACP just fixes it, no review needed. | Tagging a document with its language so screen readers pronounce it correctly. |
+| **Suggested → you approve** | ACP (optionally with AI) drafts a fix; a person reviews and approves it before anything changes. | Writing a good, meaningful description for a photo. |
+| **Human-only** | Needs human judgment — ACP flags it and routes it to a review queue. It never guesses. | Deciding whether a complex chart conveys meaning that text alone can't. |
+
+You set the policy. ACP can run with AI assistance on the "Suggested" items, or you
+can switch AI **off entirely** — in which case nothing is auto-drafted, every
+judgment call goes to a human, and no document data ever leaves your environment.
+
+### How the rules stay organized, current, and trustworthy
+
+- **One rule, one requirement.** Because each rule is self-contained, a rule can be
+  added, adjusted, or turned off **without disturbing any of the others.** There's no
+  tangled "change one thing, break five others" risk — which means the checklist can
+  grow and improve safely over time.
+- **You can see — and tune — the whole checklist.** The complete list of rules is
+  visible in the app, along with what each one found across your documents. You can
+  switch individual rules on or off to match your organization's policy or the
+  conformance level you're targeting.
+- **Every document type has its own checklist, one shared standard.** Word docs,
+  PDFs, PowerPoint, Excel, and web pages are each checked by rules built for that
+  format — but all of them are measured against the same WCAG 2.1 standard, so a
+  score on a PDF means the same thing as a score on a Word doc.
+- **Nothing is hidden.** For every document, ACP records every rule it ran and the
+  outcome — passed, failed, errored, or not-applicable to that file type. That's how
+  you can answer, for any file, "how do we know this requirement was actually
+  checked?" — the question an auditor will eventually ask.
+
+> In short: the rules are a transparent, editable checklist mapped to a recognized
+> standard — not a mysterious score from a black box. You can read every rule, see
+> what it found, decide how it's fixed, and prove it ran.
+
 ## Who it's for
 
 Compliance officers, accessibility leads, legal and records teams, and the IT
