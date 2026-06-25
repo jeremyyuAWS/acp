@@ -17,6 +17,18 @@ from __future__ import annotations
 import core
 from worker import handler, FatalJobError
 from scanner import run_scan
+from remediate import remediate_html
+
+
+def _drive_client(token: str):
+    """Drive client for a worker (no request). GIS token → far-future expiry so the
+    client never attempts the (impossible) refresh."""
+    import datetime as _dt
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+    creds = Credentials(token=token, scopes=core.DRIVE_SCOPES)
+    creds.expiry = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=1)
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
 @handler("scan")
@@ -45,3 +57,51 @@ def _scan(payload: dict, job: dict) -> None:
     core.store.save_scan(report)
     core.finalize_scan(scan_id, effective_ai, source)
     core.clear_scan_tokens(scan_id)
+
+
+@handler("remediate_file")
+def _remediate_file(payload: dict, job: dict) -> None:
+    """Apply server-side remediation to one file and write the fixed copy to Drive.
+
+    payload: {scan_id, file, drive_file_id}
+    HTML files are remediated deterministically (ADR 0005); other types are routed
+    to human review (no in-repo Office/PDF remediator yet)."""
+    scan_id = payload.get("scan_id") or job.get("scan_id")
+    filename = payload.get("file")
+    drive_file_id = payload.get("drive_file_id")
+    if not (scan_id and filename and drive_file_id):
+        raise FatalJobError("remediate_file job missing scan_id/file/drive_file_id")
+
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext not in ("html", "htm"):
+        # No server-side remediator for this type yet → leave for human review.
+        core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
+                                file=filename, detail=f"no server-side remediator for .{ext}")
+        return
+
+    token = core.get_scan_tokens(scan_id).get("drive")
+    if not token:
+        raise FatalJobError("no Drive token for this scan (expired/restarted) — re-trigger")
+
+    svc = _drive_client(token)
+    data = svc.files().get_media(fileId=drive_file_id).execute()
+    fixed, applied, _deferred = remediate_html(
+        data.decode("utf-8", errors="replace"), ai_enabled=core.store.get_ai_enabled())
+
+    import io
+    from googleapiclient.http import MediaIoBaseUpload
+    q = "name='Remediated' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    folders = svc.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
+    folder_id = folders[0]["id"] if folders else svc.files().create(
+        body={"name": "Remediated", "mimeType": "application/vnd.google-apps.folder"},
+        fields="id").execute()["id"]
+    media = MediaIoBaseUpload(io.BytesIO(fixed.encode("utf-8")), mimetype="text/html", resumable=False)
+    result = svc.files().create(
+        body={"name": filename, "parents": [folder_id]},
+        media_body=media, fields="id,webViewLink").execute()
+    web_url = result.get("webViewLink", "")
+
+    core.store.record_remediation(scan_id, filename, drive_write_url=web_url)
+    core.emit_remediation_span(scan_id, filename, drive_write_url=web_url)
+    core.store.log_decision("system", "remediate.applied", scan_id=scan_id, file=filename,
+                            detail="; ".join(applied) or "no auto fixes needed")

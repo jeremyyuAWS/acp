@@ -70,6 +70,31 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
     return {"job_id": job_id}
 
 
+@router.post("/scans/{sid}/remediate")
+def remediate_scan(sid: str, request: Request):
+    """Async server-side remediation (ADR 0005): enqueue a remediate_file job per
+    HTML file in the scan that came from Drive. The worker fixes it and writes the
+    corrected copy back to a Remediated/ folder. Needs ACP_WORKERS>0."""
+    res = core.store.get_scan(sid)
+    if res is None:
+        raise HTTPException(404, "scan not found")
+    token = request.headers.get("x-drive-token")
+    core.register_scan_tokens(sid, drive=token)  # in-memory only
+    enqueued = []
+    for f in res["files"]:
+        if not f["file"].lower().endswith((".html", ".htm")):
+            continue
+        drive_file_id = core.store.get_file_drive_id(sid, f["file"])
+        if not drive_file_id:
+            continue
+        jid = core.store.enqueue_job(
+            "remediate_file",
+            {"scan_id": sid, "file": f["file"], "drive_file_id": drive_file_id},
+            scan_id=sid)
+        enqueued.append(jid)
+    return {"scan_id": sid, "enqueued": len(enqueued), "job_ids": enqueued, "workers": core.WORKERS}
+
+
 @router.get("/scans/jobs/{job_id}")
 def scan_job(job_id: str):
     j = core.JOBS.get(job_id)

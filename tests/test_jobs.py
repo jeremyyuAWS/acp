@@ -176,3 +176,78 @@ def test_scan_handler_runs_persists_finalizes(store, monkeypatch):
     assert store.get_scan(sid) is not None
     # ... and cleared the token afterwards.
     assert core.get_scan_tokens(sid) == {}
+
+
+def test_remediate_file_handler(store, monkeypatch):
+    """remediate_file: fetch → remediate_html → write back → record + audit.
+    The Drive client is stubbed; remediation is real (lxml)."""
+    import core, handlers  # noqa: F401 — registers the handler
+    import worker
+
+    core.store = store
+    monkeypatch.setattr(store, "get_ai_enabled", lambda: True)
+
+    written = {}
+
+    class _FakeFiles:
+        def get_media(self, fileId):
+            class _Exec:
+                def execute(_self):
+                    return b"<html><head></head><body><h1>Doc</h1></body></html>"
+            return _Exec()
+
+        def list(self, **k):
+            class _Exec:
+                def execute(_self):
+                    return {"files": [{"id": "remediated-folder"}]}
+            return _Exec()
+
+        def create(self, body=None, media_body=None, fields=None):
+            class _Exec:
+                def execute(_self):
+                    written["body"] = body
+                    written["uploaded"] = media_body is not None
+                    return {"id": "new-file", "webViewLink": "https://drive/remediated/x"}
+            return _Exec()
+
+    class _FakeSvc:
+        def files(self):
+            return _FakeFiles()
+
+    monkeypatch.setattr(handlers, "_drive_client", lambda token: _FakeSvc())
+
+    sid = "scan-rem-1"
+    core.register_scan_tokens(sid, drive="tok")
+    jid = store.enqueue_job("remediate_file",
+                            {"scan_id": sid, "file": "page.html", "drive_file_id": "orig-id"},
+                            scan_id=sid)
+    # the scan must exist for record_remediation's UPDATE to target a row
+    with store._db.cursor() as cur:
+        store._db.execute(cur, "INSERT INTO scan_runs(id,completed_at) VALUES(%s,%s)", (sid, "t"))
+        store._db.execute(cur,
+            "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)", (sid, "page.html", "python/html", "issues", 70, 0, 0, "orig-id"))
+
+    w = worker.JobWorker(store, worker_id="w-test")
+    assert w.run_once() is True
+    assert store.get_job(jid)["status"] == "done"
+    assert written["uploaded"] is True
+    assert written["body"]["name"] == "page.html"
+    # the remediated file was recorded with the Drive write-back url
+    decisions = store.list_decisions(scan_id=sid)
+    assert any(d["action"] == "remediate.applied" for d in decisions)
+
+
+def test_remediate_file_non_html_deferred(store, monkeypatch):
+    import core, handlers  # noqa: F401
+    import worker
+    core.store = store
+    sid = "scan-rem-2"
+    jid = store.enqueue_job("remediate_file",
+                            {"scan_id": sid, "file": "report.pdf", "drive_file_id": "p"},
+                            scan_id=sid)
+    w = worker.JobWorker(store, worker_id="w-test")
+    assert w.run_once() is True
+    assert store.get_job(jid)["status"] == "done"   # completes, but defers
+    assert any(d["action"] == "remediate.deferred"
+               for d in store.list_decisions(scan_id=sid))
