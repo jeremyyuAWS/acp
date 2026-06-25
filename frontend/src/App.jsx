@@ -183,7 +183,7 @@ export default function App() {
       'local'
     )
     try {
-      const { job_id } = await startScan(apiSource, folder)
+      const { job_id } = await startScan(apiSource, folder, aiEnabled)
       let job
       do {
         await new Promise((r) => setTimeout(r, 350))
@@ -224,6 +224,13 @@ export default function App() {
         <div className="userbox">
           {me.role && <span className="chip" title={me.scope}>{me.role}</span>}
           {rubric && me.allow?.includes('settings') && <span className="chip">{rubric.target} · rubric {rubric.hash.slice(0, 8)}</span>}
+          <button
+            className={`ai-toggle${aiEnabled ? ' ai-toggle--on' : ''}`}
+            onClick={() => setAiEnabled(v => !v)}
+            title={aiEnabled ? 'AI-assisted mode — click to switch to deterministic-only' : 'Deterministic-only mode — click to enable AI'}
+            aria-pressed={aiEnabled}>
+            {aiEnabled ? '✦ AI on' : '◻ AI off'}
+          </button>
           <span className="user">{me.email}</span>
           {me.allow?.includes('settings') && <button className="cogbtn" aria-label="Platform settings" title="Platform settings" onClick={() => setSettingsOpen(true)}>⚙</button>}
           <button className="ghost small" onClick={() => {

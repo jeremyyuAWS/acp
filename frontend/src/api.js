@@ -49,7 +49,7 @@ export const listScans = () => (SIM ? sim(simListScans()) : fetch(`${BASE}/scans
 export const getScan = (id) => (SIM ? sim(simGetScan(id)) : fetch(`${BASE}/scans/${id}`, { headers: headers() }).then(j))
 export const getInventory = () => (SIM ? sim([]) : fetch(`${BASE}/inventory`, { headers: headers() }).then(j))
 export const reportUrl = (id) => (SIM ? '#' : `${BASE}/scans/${id}/report.pdf`)
-export const startScan = (source = 'local', folder = null) => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}`, { method: 'POST', headers: headers() }).then(j))
+export const startScan = (source = 'local', folder = null, aiEnabled = true) => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}`, { method: 'POST', headers: headers() }).then(j))
 export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/scans/jobs/${id}`, { headers: headers() }).then(j))
 export const listFolders = (parent = 'root') => (SIM ? sim({ parent, name: 'My Drive', folders: [] }) : fetch(`${BASE}/folders?parent=${encodeURIComponent(parent)}`, { headers: headers() }).then(j))
 export const getSchedule = () => (SIM

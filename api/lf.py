@@ -38,7 +38,7 @@ class _Noop:
     def flush(self): pass
 
 
-def scan_trace(scan_id: str, source: str, n_files: int):
+def scan_trace(scan_id: str, source: str, n_files: int, ai_enabled: bool = True):
     """Create a Langfuse trace for one scan run. Returns a trace handle."""
     lf = _lf()
     if lf is None:
@@ -46,7 +46,13 @@ def scan_trace(scan_id: str, source: str, n_files: int):
     return lf.trace(
         id=scan_id,
         name="acp-scan",
-        metadata={"source": source, "n_files": n_files},
+        metadata={
+            "source": source,
+            "n_files": n_files,
+            "ai_enabled": ai_enabled,
+            "mode": "ai-assisted" if ai_enabled else "deterministic",
+        },
+        tags=["ai-assisted" if ai_enabled else "deterministic"],
     )
 
 
@@ -57,19 +63,39 @@ def file_span(trace, filename: str, engine: str):
     return trace.span(name=f"file:{filename}", input={"engine": engine})
 
 
-def rule_spans(file_span_, sc_counts: dict[str, int], rule_catalog: list[dict]):
-    """Emit one child span per WCAG rule for a file. sc_counts: {sc_id: finding_count}."""
+def rule_spans(file_span_, sc_counts: dict[str, int], rule_catalog: list[dict],
+               severity_map: dict[str, str] | None = None):
+    """Emit one child span per WCAG rule for a file.
+
+    sc_counts: {sc_id: finding_count}
+    severity_map: optional {sc_id: 'critical'|'serious'|'moderate'} from engine output
+    """
     if isinstance(file_span_, _Noop):
         return
     for rule in rule_catalog:
         rid = rule["id"]
         count = sc_counts.get(rid, 0)
         outcome = "FAIL" if count > 0 else "PASS"
+        severity = (severity_map or {}).get(rid, rule.get("severity", ""))
         s = file_span_.span(
             name=f"rule:{rid}",
-            metadata={"name": rule["name"], "level": rule["level"], "fix_mode": rule["fix_mode"]},
+            metadata={
+                "name": rule["name"],
+                "level": rule["level"],
+                "fix_mode": rule["fix_mode"],
+                "severity": severity,
+                "wcag_sc": rid,
+            },
         )
-        s.end(output={"outcome": outcome, "finding_count": count})
+        s.end(output={"outcome": outcome, "finding_count": count, "severity": severity})
+
+
+def error_span(file_span_, rule_id: str, error_msg: str):
+    """Emit a span for a rule that errored during execution (not just no findings)."""
+    if isinstance(file_span_, _Noop):
+        return
+    s = file_span_.span(name=f"rule:{rule_id}", metadata={"error": True})
+    s.end(output={"outcome": "ERROR", "error": error_msg, "finding_count": 0})
 
 
 def flush():

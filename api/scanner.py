@@ -61,8 +61,13 @@ def _drive_service(drive_token: str | None = None):
     scans that user's Drive; with no token it falls back to ADC (the demo identity)."""
     from googleapiclient.discovery import build
     if drive_token:
+        import datetime as _dt
         from google.oauth2.credentials import Credentials
         creds = Credentials(token=drive_token, scopes=SCOPES)
+        # GIS tokens are short-lived and carry no refresh_token.
+        # Set far-future expiry so the client library never tries to refresh;
+        # Drive API returns 401 on its own if the token actually expired.
+        creds.expiry = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=1)
     else:
         import google.auth
         creds, _ = google.auth.default(scopes=SCOPES)
@@ -329,7 +334,8 @@ def _analyse_html(path: Path) -> dict:
 
 
 def run_scan(source: str = "local", progress=_noop, drive_token: str | None = None,
-             folder: str | None = None, sp_token: str | None = None) -> dict:
+             folder: str | None = None, sp_token: str | None = None,
+             ai_enabled: bool = True) -> dict:
     from store import RULE_CATALOG, _extract_sc  # import here to avoid circular at module load
     rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
@@ -351,7 +357,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         office = _analyse_office(tmp)
 
         # One Langfuse trace covers the full scan; one span per file; one child span per rule.
-        trace = _lf_mod.scan_trace(scan_id, source, n)
+        trace = _lf_mod.scan_trace(scan_id, source, n, ai_enabled=ai_enabled)
 
         raw: dict[str, dict] = {}
         for i, it in enumerate(items):
@@ -372,11 +378,14 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             engine = raw[name]["engine"]
             fspan = _lf_mod.file_span(trace, name, engine)
             sc_counts: dict[str, int] = {}
+            sc_severity: dict[str, str] = {}
             for issue in raw[name].get("issues", []):
                 sc = _extract_sc(issue.get("wcag", ""))
                 if sc:
                     sc_counts[sc] = sc_counts.get(sc, 0) + 1
-            _lf_mod.rule_spans(fspan, sc_counts, RULE_CATALOG)
+                    if issue.get("severity") and sc not in sc_severity:
+                        sc_severity[sc] = issue["severity"]
+            _lf_mod.rule_spans(fspan, sc_counts, RULE_CATALOG, severity_map=sc_severity)
             fspan.end(output={"issue_count": len(raw[name].get("issues", [])), "engine": engine})
 
         progress({"phase": "scoring", "files_found": n, "files_done": n, "current": None})

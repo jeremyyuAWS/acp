@@ -254,7 +254,8 @@ def update_rubric(body: RubricUpdate):
 
 @app.post("/scans")
 def start_scan(request: Request, source: str = Query("local", pattern="^(local|drive|sharepoint)$"),
-               sync: bool = False, folder: str | None = Query(None)):
+               sync: bool = False, folder: str | None = Query(None),
+               ai: bool = Query(True)):
     token = request.headers.get("x-drive-token")      # per-user Drive token (GIS)
     sp_token = request.headers.get("x-sp-token")      # per-user MS Graph token (MSAL)
     # ACP_DEMO_DRIVE_KEY lets the E2E test and demo scripts trigger a server-side
@@ -267,16 +268,16 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
     if source == "sharepoint" and not sp_token:
         raise HTTPException(401, "sign in with Microsoft to scan OneDrive")
     if sync:  # synchronous path for scripts/tests
-        report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token)
+        report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token, ai_enabled=ai)
         return {"scan_id": store.save_scan(report), "source": source, "summary": report["summary"]}
     job_id = uuid.uuid4().hex[:12]
     JOBS[job_id] = {"phase": "queued", "files_found": 0, "files_done": 0, "current": None,
-                    "done": False, "scan_id": None, "error": None, "source": source}
+                    "done": False, "scan_id": None, "error": None, "source": source, "ai": ai}
 
     def work():
         try:
             report = run_scan(source, progress=lambda d: JOBS[job_id].update(d),
-                              drive_token=token, folder=folder, sp_token=sp_token)
+                              drive_token=token, folder=folder, sp_token=sp_token, ai_enabled=ai)
             JOBS[job_id].update({"phase": "done", "done": True, "scan_id": store.save_scan(report),
                                  "files_done": JOBS[job_id].get("files_found", 0)})
         except Exception as e:
