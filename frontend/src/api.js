@@ -40,6 +40,23 @@ export const putSchedule = (body) => (SIM
   ? sim({ ...body, next_at: null, last_at: null })
   : fetch(`${BASE}/schedule`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) }).then(j))
 
+export const markRemediated = (scanId, file) => (SIM
+  ? sim({ remediated_at: new Date().toISOString() })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/remediate`, { method: 'POST', headers: headers() }).then(j))
+
+export const getFileContent = (scanId, file) => (SIM
+  ? sim(null)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/content`, { headers: headers() }).then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.arrayBuffer() }))
+
+export const uploadToDrive = (scanId, file, blob, contentType) => {
+  if (SIM) return sim({ url: 'https://drive.google.com/file/d/sim/view', file_id: 'sim' })
+  const fd = new FormData()
+  fd.append('scan_id', scanId)
+  fd.append('file', file)
+  fd.append('blob', new File([blob], file, { type: contentType }))
+  return fetch(`${BASE}/drive/upload`, { method: 'POST', headers: headers(), body: fd }).then(j)
+}
+
 export const explainFinding = (scanId, file, ruleId) => (SIM
   ? sim({ why: 'Screen readers cannot announce this element — blind users get no information about it.', fix: 'Add a descriptive alt attribute: <img src="logo.png" alt="Company logo">', model: 'llama3.2 (simulated)' })
   : fetch(`${BASE}/ai/explain?scan_id=${encodeURIComponent(scanId)}&file=${encodeURIComponent(file)}&rule_id=${encodeURIComponent(ruleId)}`, { headers: headers() }).then(j))

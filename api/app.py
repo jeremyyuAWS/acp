@@ -47,7 +47,10 @@ ACCESS_CODE = os.environ.get("ACP_ACCESS_CODE")
 # Google" (GIS) and sends each user's Drive access token as X-Drive-Token; the
 # passcode gate is then disabled at deploy time. Unset = demo mode (baked ADC).
 GOOGLE_CLIENT_ID = os.environ.get("ACP_GOOGLE_CLIENT_ID") or None
-DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+DRIVE_SCOPES = [
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive.file",
+]
 
 
 @app.middleware("http")
@@ -363,6 +366,114 @@ def report_pdf(sid: str):
 @app.get("/inventory")
 def inventory():
     return store.inventory()
+
+
+# ── Remediation endpoints ─────────────────────────────────────────────────────
+
+@app.post("/scans/{scan_id}/files/{filename:path}/remediate")
+def mark_remediated(scan_id: str, filename: str):
+    """Record that a file was remediated (download or Drive write-back)."""
+    now = store.record_remediation(scan_id, filename)
+    _emit_remediation_span(scan_id, filename, drive_write_url=None)
+    return {"remediated_at": now}
+
+
+@app.get("/scans/{scan_id}/files/{filename:path}/content")
+def get_file_content(scan_id: str, filename: str, request: Request):
+    """Fetch the original file bytes from Drive using the stored drive_file_id.
+    Returns raw bytes so the browser can run remediateHtml() client-side."""
+    drive_file_id = store.get_file_drive_id(scan_id, filename)
+    if not drive_file_id:
+        raise HTTPException(404, "drive_file_id not recorded for this file — was it scanned from Drive?")
+    try:
+        svc = _drive(request)
+        data = svc.files().get_media(fileId=drive_file_id).execute()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"Drive fetch failed: {e}")
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
+    mime_map = {"html": "text/html", "htm": "text/html", "pdf": "application/pdf",
+                "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation"}
+    return Response(data, media_type=mime_map.get(ext, "application/octet-stream"))
+
+
+@app.post("/drive/upload")
+async def drive_upload(request: Request):
+    """Upload a remediated file to Google Drive → Remediated/ folder.
+    Body: multipart/form-data with fields: scan_id, file (filename), blob (file bytes)."""
+    from fastapi import Form, UploadFile, File
+    import io
+    from googleapiclient.http import MediaIoBaseUpload
+
+    form = await request.form()
+    scan_id = form.get("scan_id", "")
+    filename = form.get("file", "")
+    upload_file: UploadFile = form.get("blob")
+    if not upload_file:
+        raise HTTPException(400, "missing blob field")
+
+    token = request.headers.get("x-drive-token")
+    if not token:
+        raise HTTPException(401, "No Drive token — connect Google Drive in Settings → Integrations")
+
+    content = await upload_file.read()
+    content_type = upload_file.content_type or "application/octet-stream"
+
+    try:
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+        creds = Credentials(token=token, scopes=["https://www.googleapis.com/auth/drive.file"])
+        svc = build("drive", "v3", credentials=creds, cache_discovery=False)
+
+        # Find or create the Remediated/ folder
+        q = "name='Remediated' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        folders = svc.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
+        if folders:
+            folder_id = folders[0]["id"]
+        else:
+            folder_id = svc.files().create(
+                body={"name": "Remediated", "mimeType": "application/vnd.google-apps.folder"},
+                fields="id"
+            ).execute()["id"]
+
+        media = MediaIoBaseUpload(io.BytesIO(content), mimetype=content_type, resumable=False)
+        result = svc.files().create(
+            body={"name": filename, "parents": [folder_id]},
+            media_body=media, fields="id,webViewLink"
+        ).execute()
+        web_url = result.get("webViewLink", "")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"Drive upload failed: {e}")
+
+    if scan_id and filename:
+        store.record_remediation(scan_id, filename, drive_write_url=web_url)
+        _emit_remediation_span(scan_id, filename, drive_write_url=web_url)
+
+    return {"url": web_url, "file_id": result.get("id", "")}
+
+
+def _emit_remediation_span(scan_id: str, filename: str, drive_write_url: str | None):
+    """Emit a Langfuse observation for the remediation write-back step."""
+    try:
+        import lf as _lf
+        lf = _lf.client()
+        if lf is None:
+            return
+        trace = lf.trace(id=scan_id, name="acp-scan")
+        trace.span(
+            name="remediate",
+            input={"file": filename},
+            output={"drive_write_url": drive_write_url, "written_to_drive": drive_write_url is not None},
+            metadata={"step": "6-remediate"},
+        )
+        lf.flush()
+    except Exception:
+        pass
 
 
 def _drive(request: Request | None = None):

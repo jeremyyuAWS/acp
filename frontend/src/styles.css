@@ -1229,6 +1229,7 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .aioff-banner b { color: #6b3800; }
 
 /* Rule coverage manifest (FileDrawer, context=remediate) */
+.drive-rem-panel { margin-top: 16px; padding: 12px 14px; background: #f5faf7; border: 1px solid #c4ddd0; border-radius: 8px; font-size: 13px; }
 .covmanifest { margin-top: 18px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .covmanifest summary { cursor: pointer; padding: 10px 14px; font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px; user-select: none; background: var(--bg); }
 .covmanifest summary::-webkit-details-marker { display: none; }

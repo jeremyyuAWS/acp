@@ -388,6 +388,9 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         trace.update(output={"files": n, "avg_score": summary.get("avg_score")})
         _lf_mod.flush()
 
+        # Build name → Drive file id map so write-back can reference the original.
+        drive_id_map = {it["name"]: it.get("id") for it in items}
+
         return {
             "_scan_id": scan_id,   # hint to save_scan so it reuses the same ID → trace joins
             "rubric": {"name": rb.name, "version": rb.version, "hash": rb.hash},
@@ -395,7 +398,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             "started_at": started,
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "source": source,
-            "files": [{"file": k, "engine": raw[k]["engine"], **assessed[k], "issues": raw[k]["issues"]}
+            "files": [{"file": k, "engine": raw[k]["engine"], **assessed[k], "issues": raw[k]["issues"],
+                       "drive_file_id": drive_id_map.get(k)}
                       for k in sorted(raw)],
         }
     finally:

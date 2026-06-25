@@ -1,142 +1,29 @@
 import { useMemo, useState, useEffect } from 'react'
 import PdfPreview from './PdfPreview.jsx'
 import { remediateOffice } from './officeAudit.js'
+import { runFixes } from './rules/index.js'
+import { markRemediated, uploadToDrive } from './api.js'
 
 // Side-by-side "what you'd get" preview. For HTML we genuinely remediate the
 // uploaded markup and render both versions in sandboxed iframes (contrast fixes
 // are visibly different). For every finding we also render a concrete before→after
 // of the fix, since most a11y improvements are invisible in the visual render.
 
-function isLight(hex) {
-  let h = hex.replace('#', '')
-  if (h.length === 3) h = h.split('').map((c) => c + c).join('')
-  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16)
-  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.62
-}
-const altFromSrc = (src) => {
-  if (!src) return 'descriptive image'
-  const base = src.split('/').pop().replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim()
-  return base ? `image: ${base}` : 'descriptive image'
-}
-
 // Real, best-effort HTML remediation. Returns the fixed markup + a list of changes.
-export function remediateHtml(text) {
+// When aiEnabled=false only deterministic (auto) rules run; ai-assisted rules are
+// skipped and their findings stay in the HITL queue.
+export function remediateHtml(text, { aiEnabled = true } = {}) {
   try {
     const doc = new DOMParser().parseFromString(text, 'text/html')
-    const changes = new Set()
-    if (!doc.documentElement.getAttribute('lang')) { doc.documentElement.setAttribute('lang', 'en'); changes.add('Set document language to English · 3.1.1') }
-    let title = doc.querySelector('title')
-    if (!title || !title.textContent.trim()) {
-      if (!title) { title = doc.createElement('title'); (doc.head || doc.documentElement).appendChild(title) }
-      title.textContent = (doc.querySelector('h1')?.textContent?.trim() || 'Document').slice(0, 80)
-      changes.add('Added a descriptive page title · 2.4.2')
-    }
-    doc.querySelectorAll('img').forEach((img) => { if (!img.getAttribute('alt')) { img.setAttribute('alt', altFromSrc(img.getAttribute('src'))); changes.add('Generated alt text for images · 1.1.1') } })
-    doc.querySelectorAll('input, select, textarea').forEach((inp) => {
-      const id = inp.getAttribute('id')
-      const labelled = inp.getAttribute('aria-label') || (id && doc.querySelector(`label[for="${id}"]`))
-      if (!labelled) { inp.setAttribute('aria-label', inp.getAttribute('placeholder') || inp.getAttribute('name') || 'form field'); changes.add('Labeled form fields · 1.3.1') }
-    })
-    doc.querySelectorAll('a').forEach((a) => { if (/^(click here|read more|learn more|here|more)\.?$/i.test((a.textContent || '').trim())) { a.setAttribute('aria-label', `${a.textContent.trim()} — ${doc.title || 'link'}`); changes.add('Clarified ambiguous links · 2.4.4') } })
-    doc.querySelectorAll('[style*="color"]').forEach((el) => {
-      const s = el.getAttribute('style'); const m = /(^|[^-])color:\s*(#[0-9a-fA-F]{3,6})/.exec(s)
-      if (m && isLight(m[2])) { el.setAttribute('style', s.replace(m[2], '#333333')); changes.add('Darkened low-contrast text to meet 4.5:1 · 1.4.3'); changes.add('Recolour also meets the enhanced 7:1 ratio · 1.4.6') }
-    })
-    // 1.4.4 Resize Text / 1.4.10 Reflow — the viewport must allow zoom and adapt to width.
-    let vp = doc.querySelector('meta[name="viewport"]')
-    if (vp) {
-      const c = vp.getAttribute('content') || ''
-      if (/user-scalable\s*=\s*(no|0)|maximum-scale\s*=\s*(0|1)(\.0+)?\b/i.test(c)) {
-        const fixed = c.replace(/,?\s*user-scalable\s*=\s*[^,]+/ig, '').replace(/,?\s*maximum-scale\s*=\s*[^,]+/ig, '').replace(/^\s*,|,\s*$/g, '').trim()
-        vp.setAttribute('content', fixed || 'width=device-width, initial-scale=1')
-        changes.add('Re-enabled pinch-zoom & text resize · 1.4.4')
-      }
-    } else if (doc.querySelector('meta, link, style')) {
-      vp = doc.createElement('meta'); vp.setAttribute('name', 'viewport'); vp.setAttribute('content', 'width=device-width, initial-scale=1')
-      ;(doc.head || doc.documentElement).insertBefore(vp, doc.head?.firstChild || null)
-      changes.add('Added a responsive viewport for reflow · 1.4.10')
-    }
-    // 2.4.3 Focus Order — positive tabindex jumps the natural reading order.
-    doc.querySelectorAll('[tabindex]').forEach((el) => { if (parseInt(el.getAttribute('tabindex'), 10) > 0) { el.setAttribute('tabindex', '0'); changes.add('Reset positive tabindex to keep focus order · 2.4.3') } })
-    // 2.1.1 Keyboard — click-only elements need to be focusable and operable.
-    doc.querySelectorAll('[onclick]').forEach((el) => {
-      if (/^(a|button|input|select|textarea|summary)$/i.test(el.tagName)) return
-      if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '0')
-      if (!el.getAttribute('role')) el.setAttribute('role', 'button')
-      changes.add('Made click-only controls keyboard-operable · 2.1.1')
-    })
-    // 1.4.1 Use of Color — in-text links must be distinguishable by more than colour.
-    doc.querySelectorAll('p a, li a, td a').forEach((a) => {
-      const s = a.getAttribute('style') || ''
-      if (/text-decoration[^;]*none/i.test(s) || !/text-decoration/i.test(s)) { a.setAttribute('style', (s ? s.replace(/;?\s*$/, '; ') : '') + 'text-decoration:underline'); changes.add('Underlined in-text links (not colour alone) · 1.4.1') }
-    })
-    // 4.1.2 Name, Role, Value — every control needs an accessible name.
-    doc.querySelectorAll('button, [role="button"], a').forEach((el) => {
-      if ((el.textContent || '').trim() || el.getAttribute('aria-label') || el.getAttribute('title')) return
-      const hint = el.querySelector('img[alt]')?.getAttribute('alt')?.trim() || el.getAttribute('name') || (el.tagName === 'A' ? 'link' : 'button')
-      el.setAttribute('aria-label', hint); changes.add('Named unlabeled controls (icon-only) · 4.1.2')
-    })
-    // 1.4.11 Non-text Contrast — UI borders/icons must hit 3:1; darken light declared borders.
-    doc.querySelectorAll('[style*="border"]').forEach((el) => {
-      const s = el.getAttribute('style')
-      const m = /border(?:-[a-z]+)?:[^;]*?(#[0-9a-fA-F]{3,6})/.exec(s)
-      if (m && isLight(m[1])) { el.setAttribute('style', s.replace(m[1], '#767676')); changes.add('Darkened low-contrast UI borders to 3:1 · 1.4.11') }
-    })
-    // 1.4.12 Text Spacing — fixed px line-heights block the user's spacing override; make them adaptive.
-    doc.querySelectorAll('[style*="line-height"]').forEach((el) => {
-      const s = el.getAttribute('style')
-      if (/line-height:\s*\d+px/i.test(s)) { el.setAttribute('style', s.replace(/line-height:\s*\d+px/i, 'line-height:1.5')); changes.add('Unblocked text-spacing overrides · 1.4.12') }
-    })
-    // 2.4.6 Headings and Labels — promote visually-styled pseudo-headings (large, bold, short
-    // leaf text) to real headings so screen-reader users can navigate the document by heading.
-    doc.querySelectorAll('p, div').forEach((el) => {
-      if (el.children.length) return
-      const txt = (el.textContent || '').trim()
-      if (!txt || txt.length > 50 || /[.?!]$/.test(txt)) return
-      const s = el.getAttribute('style') || ''
-      const fs = parseInt((/font-size:\s*(\d+)px/i.exec(s) || [])[1] || 0, 10)
-      if (fs >= 18 && /font-weight:\s*(bold|[6-9]00)/i.test(s)) {
-        const h = doc.createElement('h2'); h.textContent = txt; if (s) h.setAttribute('style', s)
-        el.replaceWith(h); changes.add('Promoted styled text to real headings · 2.4.6')
-      }
-    })
-    // 2.4.7 Focus Visible — when the page suppresses focus outlines, inject a focus-visible
-    // rule so keyboard users can always see where they are.
-    const css = [...doc.querySelectorAll('style')].map((s) => s.textContent || '').join('\n')
-    const suppressed = /outline:\s*(none|0)\b/i.test(css) || [...doc.querySelectorAll('[style*="outline"]')].some((el) => /outline:\s*(none|0)\b/i.test(el.getAttribute('style') || ''))
-    if (suppressed && doc.querySelector('a, button, input, select, textarea')) {
-      const st = doc.createElement('style'); st.textContent = ':focus-visible{outline:2px solid #1F5FA8;outline-offset:2px}'
-      ;(doc.head || doc.documentElement).appendChild(st); changes.add('Ensured a visible keyboard focus indicator · 2.4.7')
-    }
-    // 3.1.4 Abbreviations (AAA) — wrap known abbreviations in <abbr title> so AT can expand them.
-    const ABBR = { WCAG: 'Web Content Accessibility Guidelines', ADA: 'Americans with Disabilities Act', PDF: 'Portable Document Format', PPO: 'Preferred Provider Organization', HDHP: 'High-Deductible Health Plan', FSA: 'Flexible Spending Account', HSA: 'Health Savings Account', FAQ: 'Frequently Asked Questions', PII: 'Personally Identifiable Information', UTSW: 'UT Southwestern', HR: 'Human Resources' }
-    const keys = Object.keys(ABBR)
-    if (doc.body && keys.length) {
-      const re = new RegExp('\\b(' + keys.join('|') + ')\\b')
-      const walker = doc.createTreeWalker(doc.body, 4 /* SHOW_TEXT */)
-      const nodes = []; while (walker.nextNode()) nodes.push(walker.currentNode)
-      nodes.forEach((node) => {
-        if (node.parentElement?.closest('abbr, script, style, title')) return
-        let text = node.textContent
-        if (!re.test(text)) return
-        const frag = doc.createDocumentFragment(); let m
-        while ((m = re.exec(text))) {
-          if (m.index) frag.appendChild(doc.createTextNode(text.slice(0, m.index)))
-          const ab = doc.createElement('abbr'); ab.setAttribute('title', ABBR[m[1]]); ab.textContent = m[1]
-          frag.appendChild(ab); text = text.slice(m.index + m[1].length); changes.add('Expanded abbreviations with <abbr> · 3.1.4')
-        }
-        if (text) frag.appendChild(doc.createTextNode(text))
-        node.replaceWith(frag)
-      })
-    }
-    return { html: '<!doctype html>' + doc.documentElement.outerHTML, changes: [...changes] }
+    const changes = runFixes(doc, { aiEnabled })
+    return { html: '<!doctype html>' + doc.documentElement.outerHTML, changes }
   } catch { return null }
 }
 
-const scOf = (wcag) => ((wcag || '').match(/^\d+\.\d+\.\d+/) || [''])[0]
+export const scOf = (wcag) => ((wcag || '').match(/^\d+\.\d+\.\d+/) || [''])[0]
 
 // Concrete before→after visuals per success criterion.
-function baFor(sc, docTitle) {
+export function baFor(sc, docTitle) {
   switch (sc) {
     case '1.1.1': return {
       before: <div className="baimg"><span aria-hidden="true">🖼</span><span className="bawarn">no alt text — screen readers skip this</span></div>,
@@ -254,8 +141,8 @@ function fixMode(it) {
   return AUTO_FIX_SC.has(sc) ? 'auto' : 'human'
 }
 
-export default function BeforeAfter({ file, issues = [], srcText, pdfUrl, officeBlob }) {
-  const rem = useMemo(() => (srcText ? remediateHtml(srcText) : null), [srcText])
+export default function BeforeAfter({ file, issues = [], srcText, pdfUrl, officeBlob, aiEnabled = true, scanId = null }) {
+  const rem = useMemo(() => (srcText ? remediateHtml(srcText, { aiEnabled }) : null), [srcText, aiEnabled])
   const [busy, setBusy] = useState(false)
   const [preBlob, setPreBlob] = useState(null)
   const [preReady, setPreReady] = useState(false)
@@ -265,9 +152,38 @@ export default function BeforeAfter({ file, issues = [], srcText, pdfUrl, office
     remediateOffice(officeBlob).then((b) => { if (live) { setPreBlob(b); setPreReady(true) } }).catch(() => { if (live) setPreReady(true) })
     return () => { live = false }
   }, [officeBlob])
+  const [outMode, setOutMode] = useState('download')
+  const [driveMsg, setDriveMsg] = useState(null)
+  const certDate = new Date().toISOString().split('T')[0]
+  const baseName = (file?.name || 'document').replace(/\.[^.]+$/, '')
+  const ext = (file?.name || '').split('.').pop() || 'html'
+  const certName = (suffix) => `${baseName}_a11y-certified-${certDate}.${suffix}`
   const dl = (blob, name) => { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000) }
-  const downloadFixed = () => { if (rem) dl(new Blob([rem.html], { type: 'text/html' }), `remediated-${(file?.name || 'page').replace(/\.[^.]+$/, '')}.html`) }
-  const downloadOffice = () => { if (!preBlob || busy) return; dl(preBlob, `remediated-${file?.name || 'document'}`) }
+  const downloadFixed = () => {
+    if (!rem) return
+    dl(new Blob([rem.html], { type: 'text/html' }), certName('html'))
+    if (scanId && file?.name) markRemediated(scanId, file.name).catch(() => {})
+  }
+  const downloadOffice = () => {
+    if (!preBlob || busy) return
+    dl(preBlob, certName(ext))
+    if (scanId && file?.name) markRemediated(scanId, file.name).catch(() => {})
+  }
+  const saveToDrive = async () => {
+    if (!scanId) { setDriveMsg('Connect Google Drive in Settings → Integrations first.'); setTimeout(() => setDriveMsg(null), 4000); return }
+    setDriveMsg('Uploading to Google Drive…')
+    try {
+      let blob, contentType
+      if (rem) { blob = new Blob([rem.html], { type: 'text/html' }); contentType = 'text/html' }
+      else if (preBlob) { blob = preBlob; contentType = preBlob.type || 'application/octet-stream' }
+      else { setDriveMsg('Nothing to upload yet.'); setTimeout(() => setDriveMsg(null), 3000); return }
+      const result = await uploadToDrive(scanId, certName(ext === 'html' ? 'html' : ext), blob, contentType)
+      setDriveMsg(`✓ Saved → ${result.url ? `<a href="${result.url}" target="_blank" rel="noreferrer">Remediated/${certName(ext === 'html' ? 'html' : ext)}</a>` : 'Drive/Remediated/'}`)
+    } catch (e) {
+      setDriveMsg(`Drive upload failed — ${e.message || 'check console'}`)
+      setTimeout(() => setDriveMsg(null), 5000)
+    }
+  }
 
   // Sort findings: CRITICAL first, then by WCAG SC
   const sorted = [...issues].sort((a, b) => {
@@ -279,6 +195,11 @@ export default function BeforeAfter({ file, issues = [], srcText, pdfUrl, office
 
   return (
     <div className="bawrap">
+      {!aiEnabled && (
+        <div className="aioff-banner">
+          <b>AI off</b> — only deterministic fixes are applied. AI-assisted improvements (alt text, link labels, icon names) are routed to the human review queue.
+        </div>
+      )}
       {rem && (
         <div className="balive">
           <div className="bahd"><b>Live preview · your page, before → after</b><span className="muted"> — real DOM remediation, rendered in your browser</span></div>
@@ -287,7 +208,31 @@ export default function BeforeAfter({ file, issues = [], srcText, pdfUrl, office
             <figure><figcaption className="bafcap after">remediated</figcaption><iframe sandbox="" title="remediated" srcDoc={rem.html} /></figure>
           </div>
           {rem.changes.length > 0 && <div className="bachanges">{rem.changes.map((c, i) => <span key={i} className="bachip">✓ {c}</span>)}</div>}
-          <div style={{ marginTop: 11 }}><button className="ghost small" onClick={downloadFixed}>⤓ Download the remediated HTML</button></div>
+          <div className="outpanel">
+            <div className="outmodes">
+              {[['download','⤓ Download'],['drive','☁ Save to Drive'],['archive','⊡ Archive original']].map(([k,l]) => (
+                <button key={k} className={outMode === k ? 'outmode on' : 'outmode'} onClick={() => setOutMode(k)}>{l}</button>
+              ))}
+            </div>
+            {outMode === 'download' && (
+              <div className="outact">
+                <button className="ghost small" onClick={downloadFixed}>⤓ {certName('html')}</button>
+                <span className="muted" style={{ fontSize: 11 }}>Original preserved alongside in your folder</span>
+              </div>
+            )}
+            {outMode === 'drive' && (
+              <div className="outact">
+                <button className="ghost small" onClick={saveToDrive}>☁ Save to Google Drive → Remediated/</button>
+                {driveMsg && <span className="muted" style={{ fontSize: 12, marginLeft: 8 }} dangerouslySetInnerHTML={{ __html: driveMsg }} />}
+              </div>
+            )}
+            {outMode === 'archive' && (
+              <div className="outact">
+                <span className="muted" style={{ fontSize: 12 }}>Original will be moved to <b>Archive/{certDate}/</b> in Drive — remediated version takes its place.</span>
+                <button className="ghost small" onClick={saveToDrive} style={{ marginLeft: 8 }}>Archive + save</button>
+              </div>
+            )}
+          </div>
         </div>
       )}
       {pdfUrl && !rem && (
@@ -308,9 +253,26 @@ export default function BeforeAfter({ file, issues = [], srcText, pdfUrl, office
             {issues.some(i => /2\.4\.4/.test(i.wcag)) && <span className="ba-remchip">✓ Link text clarified</span>}
             {issues.some(i => /DOCX-HEAD/.test(i.rule)) && <span className="ba-remchip ba-remchip-warn">⚑ Heading structure flagged — needs author review</span>}
           </div>
-          <button className="badownload" onClick={downloadOffice} disabled={!preReady || busy}>
-            {!preReady ? '⏳ Preparing remediated file…' : `⤓ Download remediated ${(file?.name || '').split('.').pop().toUpperCase()}`}
-          </button>
+          <div className="outpanel">
+            <div className="outmodes">
+              {[['download','⤓ Download'],['drive','☁ Save to Drive'],['archive','⊡ Archive original']].map(([k,l]) => (
+                <button key={k} className={outMode === k ? 'outmode on' : 'outmode'} onClick={() => setOutMode(k)}>{l}</button>
+              ))}
+            </div>
+            {outMode === 'download' && (
+              <button className="badownload" onClick={downloadOffice} disabled={!preReady || busy}>
+                {!preReady ? 'Preparing remediated file...' : `⤓ ${certName(ext)}`}
+              </button>
+            )}
+            {outMode !== 'download' && (
+              <div className="outact">
+                <button className="ghost small" onClick={saveToDrive}>
+                  {outMode === 'drive' ? `☁ Save to Google Drive → Remediated/${certName(ext)}` : `⊡ Archive original + save ${certName(ext)} in place`}
+                </button>
+                {driveMsg && <span className="muted" style={{ fontSize: 12, marginLeft: 8 }} dangerouslySetInnerHTML={{ __html: driveMsg }} />}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

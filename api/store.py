@@ -26,8 +26,15 @@ _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS file_records (
       scan_id TEXT, file TEXT, engine TEXT, status TEXT, score INT,
       compliant INT, skipped_rules INT,
+      drive_file_id TEXT,
+      remediated_at TEXT,
+      drive_write_url TEXT,
       PRIMARY KEY (scan_id, file)
     )""",
+    # Migrations for existing deployments
+    "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS drive_file_id TEXT",
+    "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS remediated_at TEXT",
+    "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS drive_write_url TEXT",
     """CREATE TABLE IF NOT EXISTS issue_records (
       scan_id TEXT, file TEXT, rule_id TEXT, wcag TEXT, severity TEXT
     )""",
@@ -270,10 +277,10 @@ class Store:
                  s["files"], s["certifiable"], s["uncertain"], s["error"], s["avg_score"]))
             for f in report["files"]:
                 self._db.execute(cur,
-                    "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s)",
+                    "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
                     (sid, f["file"], f["engine"], f["status"], f["score"],
-                     int(f["compliant"]), f["skipped_rules"]))
+                     int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id")))
                 for i in f["issues"]:
                     self._db.execute(cur,
                         "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity) "
@@ -380,6 +387,24 @@ class Store:
                 (scan_id, file, f"{wcag_sc}%"))
             rows = self._db.fetchall(cur)
         return [r["rule_id"] for r in rows]
+
+    def get_file_drive_id(self, scan_id: str, file: str) -> str | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT drive_file_id FROM file_records WHERE scan_id=%s AND file=%s",
+                (scan_id, file))
+            row = self._db.fetchone(cur)
+        return row["drive_file_id"] if row else None
+
+    def record_remediation(self, scan_id: str, file: str, drive_write_url: str | None = None) -> str:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE file_records SET remediated_at=%s, drive_write_url=%s "
+                "WHERE scan_id=%s AND file=%s",
+                (now, drive_write_url, scan_id, file))
+        return now
 
     def get_scan_manifest(self, scan_id: str) -> dict:
         """Return per-file rule-execution manifest for a scan.

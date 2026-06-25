@@ -2,9 +2,9 @@ import { useState, Fragment } from 'react'
 import Drawer from './Drawer.jsx'
 import Tag from './Tag.jsx'
 import { PRI_COLOR } from './ontology.js'
-import { baFor, scOf } from './BeforeAfter.jsx'
+import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules } from './rules/index.js'
-import { explainFinding } from './api.js'
+import { explainFinding, getFileContent, uploadToDrive, markRemediated } from './api.js'
 
 // Prescriptive-action styling, shared with the Discover inventory.
 // Distinct hue per action so a long list scans at a glance. The human-touch
@@ -106,6 +106,26 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
     explainFinding(scanId, file.file, ruleId)
       .then((res) => setExplanations((e) => ({ ...e, [ruleId]: res })))
       .catch(() => setExplanations((e) => ({ ...e, [ruleId]: { error: true } })))
+  }
+
+  const [driveRem, setDriveRem] = useState(null) // {status, url, error}
+  const remediateAndSaveToDrive = async () => {
+    setDriveRem({ status: 'loading' })
+    try {
+      const buf = await getFileContent(scanId, file.file)
+      if (!buf) { setDriveRem({ status: 'error', error: 'Could not fetch file from Drive' }); return }
+      const text = new TextDecoder().decode(buf)
+      const result = remediateHtml(text, { aiEnabled })
+      if (!result) { setDriveRem({ status: 'error', error: 'HTML parse failed' }); return }
+      const blob = new Blob([result.html], { type: 'text/html' })
+      const certDate = new Date().toISOString().split('T')[0]
+      const certName = file.file.replace(/\.html?$/i, '') + `_a11y-certified-${certDate}.html`
+      const up = await uploadToDrive(scanId, certName, blob, 'text/html')
+      await markRemediated(scanId, file.file).catch(() => {})
+      setDriveRem({ status: 'done', url: up.url, name: certName })
+    } catch (e) {
+      setDriveRem({ status: 'error', error: e.message || 'Upload failed' })
+    }
   }
   if (!file) return null
   const st = statusOf(file)
@@ -255,6 +275,33 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
             ))}
           </div>
         </>
+      )}
+
+      {context === 'remediate' && /\.html?$/i.test(file.file || '') && scanId && (
+        <div className="drive-rem-panel">
+          <b>Remediate HTML → Google Drive</b>
+          <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>fetches original from Drive, applies auto-fixes, saves to Remediated/</span>
+          <div style={{ marginTop: 8 }}>
+            {!driveRem && (
+              <button className="ghost small" onClick={remediateAndSaveToDrive}>☁ Remediate &amp; save to Drive</button>
+            )}
+            {driveRem?.status === 'loading' && <span className="muted" style={{ fontSize: 12 }}>⏳ fetching, fixing, uploading…</span>}
+            {driveRem?.status === 'done' && (
+              <span style={{ fontSize: 12 }}>
+                ✓ Saved → {driveRem.url
+                  ? <a href={driveRem.url} target="_blank" rel="noreferrer">Drive/Remediated/{driveRem.name}</a>
+                  : `Drive/Remediated/${driveRem.name}`}
+                {' '}<button className="explain-btn" onClick={() => setDriveRem(null)}>redo</button>
+              </span>
+            )}
+            {driveRem?.status === 'error' && (
+              <span style={{ fontSize: 12, color: 'var(--red, #c0392b)' }}>
+                ✕ {driveRem.error}{' '}
+                <button className="explain-btn" onClick={() => setDriveRem(null)}>retry</button>
+              </span>
+            )}
+          </div>
+        </div>
       )}
 
       {context === 'remediate' && (() => {
