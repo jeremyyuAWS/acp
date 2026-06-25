@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { monitoringState, sourceWatch, IDENTITY, SIM } from './sim.js'
 import { getSchedule, putSchedule } from './api.js'
 import { prefersReducedMotion } from './a11y.js'
+import QueuePanel from './QueuePanel.jsx'
 
 // Step 10 · Monitor — the always-on surface. Shows every connected source being
 // continuously watched for new files and changes, a live event stream (with demo
@@ -187,6 +188,8 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
         </div>
         <button className={paused ? '' : 'ghost'} onClick={() => setPaused((p) => !p)}>{paused ? '▶ Resume live feed' : '⏸ Pause live feed'}</button>
       </div>
+
+      <QueuePanel />
 
       <section className="panel" style={{ marginBottom: 14 }}>
         <div className="proghd">

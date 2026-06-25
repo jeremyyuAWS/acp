@@ -51,6 +51,20 @@ export const getInventory = () => (SIM ? sim([]) : fetch(`${BASE}/inventory`, { 
 export const reportUrl = (id) => (SIM ? '#' : `${BASE}/scans/${id}/report.pdf`)
 export const startScan = (source = 'local', folder = null, aiEnabled = true) => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}`, { method: 'POST', headers: headers() }).then(j))
 export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/scans/jobs/${id}`, { headers: headers() }).then(j))
+
+// ── Durable async queue (ADR 0004/0005) ───────────────────────────────────────
+// Queued scan: runs in the worker pool, survives restarts, shows in /jobs + Grafana.
+export const startScanQueued = (source = 'local', folder = null, aiEnabled = true) => (SIM
+  ? sim({ scan_id: 'sim-scan', job_id: 'sim-job', queued: true, workers: 4 })
+  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}&queue=true`, { method: 'POST', headers: headers() }).then(j))
+// Async server-side remediation: one remediate_file job per HTML file in the scan.
+export const remediateScan = (scanId) => (SIM
+  ? sim({ scan_id: scanId, enqueued: 3, job_ids: ['a', 'b', 'c'], workers: 4 })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediate`, { method: 'POST', headers: headers() }).then(j))
+// Queue state: depth by status + recent jobs (drives the in-app queue panel).
+export const getJobs = (status = null) => (SIM
+  ? sim({ workers: 4, stats: { done: 12, running: 1, queued: 3 }, jobs: [] })
+  : fetch(`${BASE}/jobs${status ? `?status=${status}` : ''}`, { headers: headers() }).then(j))
 export const listFolders = (parent = 'root') => (SIM ? sim({ parent, name: 'My Drive', folders: [] }) : fetch(`${BASE}/folders?parent=${encodeURIComponent(parent)}`, { headers: headers() }).then(j))
 export const getSchedule = () => (SIM
   ? sim({ enabled: false, interval_minutes: 60, next_at: null, last_at: null })
