@@ -1,16 +1,81 @@
-# acp — Accessibility Compliance Platform
+# ACP — Accessibility Compliance Platform
 
-A standalone, MDK-based platform that connects to enterprise content stores
-(Google Drive, SharePoint/OneDrive), inventories them, and **scores documents
-against a structured WCAG rubric** — read-only, secure, deployable into the
-customer's own cloud.
+**ACP finds the accessibility problems in your organization's documents, fixes the
+ones it safely can, and gives you the proof you fixed them.**
 
-> **Status:** built and demo-ready — sign in → connect Google Drive → scan →
-> live progress → score against a versioned WCAG rubric → inventory → knowledge
-> graph → PDF report, plus deterministic auto-remediation, an **admin-gated
-> AI-assist layer** (off ⇒ fully deterministic), HITL review, and Drive write-back.
+It connects to where your documents already live (Google Drive, SharePoint /
+OneDrive), checks every Word doc, PowerPoint, PDF, Excel file, and web page, and
+tells you — in plain terms — which ones a person with a disability would struggle
+to use, and why.
 
-## Run the MVP locally
+---
+
+## Why this matters
+
+Millions of everyday business documents can't be read by people who are blind,
+low-vision, or who rely on assistive technology like screen readers. That's not
+just a barrier for real people — in most regions it's now a **legal requirement**
+(ADA, Section 508, the European Accessibility Act). Organizations are expected to
+prove their documents meet **WCAG 2.1**, the international accessibility standard.
+
+Doing that by hand across thousands or millions of files is impossible. ACP does
+it automatically, at scale, and — crucially — **keeps a record an auditor will accept.**
+
+## How it works
+
+```
+   1. CONNECT          2. SCAN            3. SCORE           4. FIX             5. PROVE
+  ┌──────────┐       ┌──────────┐       ┌──────────┐       ┌──────────┐       ┌──────────┐
+  │  Google  │       │  reads   │       │  rates   │       │  fixes   │       │  audit   │
+  │  Drive / │  ──▶  │  every   │  ──▶  │  every   │  ──▶  │ what it  │  ──▶  │  report  │
+  │SharePoint│       │ document │       │ document │       │ safely   │       │  + PDF   │
+  └──────────┘       └──────────┘       └──────────┘       │   can    │       └──────────┘
+   your files         originals          0–100 vs          └──────────┘        every check,
+   stay in place      never changed      WCAG 2.1          rest → human         on the record
+                                                            review queue
+```
+
+1. **Connect** — point ACP at your document library. It only ever *reads* your
+   files; your originals are never moved or changed without your say-so.
+2. **Scan** — it inspects every document against the WCAG accessibility rules.
+3. **Score** — each document gets a 0–100 compliance score and a clear list of issues.
+4. **Fix** — issues it can fix safely and automatically, it fixes. Anything that
+   needs judgment is sent to a **human review queue** instead of guessed at.
+5. **Prove** — you get a compliance report (and per-document PDF) showing exactly
+   which checks ran and what was found — the evidence for an audit or regulator.
+
+## Why you can trust it
+
+- **Rule-based, not black-box AI.** The checks are deterministic — the same
+  document always gets the same result. You can read exactly what each rule looks
+  for. AI is only ever used to *draft* a fix that a human approves, and it can be
+  **switched off entirely** for a fully deterministic, audit-strict mode.
+- **A complete paper trail.** Every check on every document is recorded — pass,
+  fail, error, or not-applicable — so you can answer "how do we know rule X was
+  checked on this file?" for any document, at any time.
+- **Your data stays yours.** ACP runs inside your own cloud. It reads documents
+  into temporary memory, never stores copies, and (in deterministic mode) sends
+  nothing to any outside AI service.
+- **You stay in control.** Nothing is deleted, moved, or published without an
+  approval step you configure.
+
+## Who it's for
+
+Compliance officers, accessibility leads, legal and records teams, and the IT
+groups who support them — anyone responsible for making (and *proving*) that an
+organization's documents are accessible.
+
+> **Status:** built and demo-ready — connect a library, scan, score against WCAG
+> 2.1, auto-fix what's safe, route the rest to human review, and export the report.
+
+---
+
+# For developers
+
+Everything below is the technical reference — how to run it, how it's built, and
+where every accessibility rule lives.
+
+## Run it locally
 
 ```bash
 # one-time setup
