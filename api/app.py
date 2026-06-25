@@ -368,6 +368,15 @@ def inventory():
     return store.inventory()
 
 
+@app.get("/hub", response_class=Response)
+def hub():
+    """Landing page — all key links in one place."""
+    hub_file = ACP / "hub" / "index.html"
+    if not hub_file.exists():
+        raise HTTPException(404, "hub/index.html not found")
+    return Response(hub_file.read_bytes(), media_type="text/html")
+
+
 # ── Remediation endpoints ─────────────────────────────────────────────────────
 
 @app.post("/scans/{scan_id}/files/{filename:path}/remediate")
