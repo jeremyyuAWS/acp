@@ -43,19 +43,55 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
 # (env unset). This is a thin shared-passcode gate in front of the demo; it is
 # replaced by per-user "Sign in with Google" (GIS) once a Web OAuth client exists.
 ACCESS_CODE = os.environ.get("ACP_ACCESS_CODE")
-# When a Web OAuth client id is configured, the SPA does per-user "Sign in with
-# Google" (GIS) and sends each user's Drive access token as X-Drive-Token; the
-# passcode gate is then disabled at deploy time. Unset = demo mode (baked ADC).
 GOOGLE_CLIENT_ID = os.environ.get("ACP_GOOGLE_CLIENT_ID") or None
+# Comma-separated domains allowed in GIS mode (default: movate.com).
+# Extend via ACP_ALLOWED_DOMAINS env var for demos with external attendees.
+_ALLOWED_DOMAINS = [
+    d.strip() for d in os.environ.get("ACP_ALLOWED_DOMAINS", "movate.com").split(",") if d.strip()
+]
 DRIVE_SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/drive.file",
 ]
 
+# GIS token verification cache: token → (email, monotonic_expiry).
+# Avoids hitting Google on every request; tokens live 1h, we cache 9 min.
+import time as _time
+_gis_cache: dict[str, tuple[str, float]] = {}
+
+def _verify_gis_token(token: str) -> str | None:
+    now = _time.monotonic()
+    cached = _gis_cache.get(token)
+    if cached:
+        email, exp = cached
+        if now < exp:
+            return email
+        del _gis_cache[token]
+    import urllib.request as _ur
+    import json as _json
+    try:
+        with _ur.urlopen(
+            f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={token}",
+            timeout=5,
+        ) as r:
+            data = _json.load(r)
+    except Exception:
+        return None
+    if "error" in data:
+        return None
+    email = data.get("email", "")
+    _gis_cache[token] = (email, now + 540)
+    return email
+
+# Paths that bypass all auth (needed before the user has a token).
+_ALWAYS_PUBLIC = {"/healthz", "/config"}
+
 
 @app.middleware("http")
 async def _access_gate(request, call_next):
-    if ACCESS_CODE and request.url.path != "/healthz":
+    if request.url.path in _ALWAYS_PUBLIC:
+        return await call_next(request)
+    if ACCESS_CODE:
         ok = False
         hdr = request.headers.get("authorization", "")
         if hdr.startswith("Basic "):
@@ -65,6 +101,18 @@ async def _access_gate(request, call_next):
                 ok = False
         if not ok:
             return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="acp"'})
+    elif GOOGLE_CLIENT_ID:
+        hdr = request.headers.get("authorization", "")
+        if not hdr.startswith("Bearer "):
+            return Response(status_code=401, media_type="application/json",
+                            content='{"detail":"Sign in with Google required"}')
+        email = _verify_gis_token(hdr[7:])
+        if not email:
+            return Response(status_code=401, media_type="application/json",
+                            content='{"detail":"Google token expired — sign in again"}')
+        if not any(email.endswith("@" + d) for d in _ALLOWED_DOMAINS):
+            return Response(status_code=403, media_type="application/json",
+                            content='{"detail":"Access restricted to authorized accounts"}')
     return await call_next(request)
 
 

@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
-import { getSources, getRubric, listScans, getScan, startScan, getJob, setDriveToken, setSPToken } from './api'
+import { getSources, getRubric, listScans, getScan, startScan, getJob, setDriveToken, setSPToken, setGoogleToken } from './api'
 import { SIM } from './sim.js'
 import { setPersona } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -86,10 +86,13 @@ export default function App() {
   const [loaded, setLoaded] = useState(false)
   const [certifiedDocs, setCertifiedDocs] = useState([])
   const [publishedFiles, setPublishedFiles] = useState([])
+  const [hasDriveToken, setHasDriveToken] = useState(() => !!sessionStorage.getItem('gd_token'))
+  const [hasSPToken, setHasSPToken] = useState(() => !!sessionStorage.getItem('sp_token'))
   const [delegations, setDelegations] = useState(loadDelegations)
   const [fileTypeConfig, setFileTypeConfig] = useState(loadFileTypeConfig)
   const [rolePrivileges, setRolePrivileges] = useState(loadRolePrivileges)
   const [ontology, setOntology] = useState(loadPublished)
+  const [aiEnabled, setAiEnabled] = useState(true)
 
   useEffect(() => {
     if (!me) return
@@ -106,12 +109,36 @@ export default function App() {
   // Kept above the early return below to satisfy the rules of hooks.
   const files = useMemo(() => annotate(scan?.files ?? [], ontology), [scan, ontology])
 
+  // Real accounts that get elevated privileges on source connect (never shown in demo list)
+  const PRIV_PROFILE = {
+    id: 'jeremy-yu', name: 'Jeremy Yu', role: 'Compliance Officer & Admin',
+    scope: { label: 'Full estate · all departments', departments: 'all' },
+    allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'settings', 'upload'],
+  }
+  const PRIVILEGED = { 'jeremyyu.movate@gmail.com': PRIV_PROFILE }
+
   const signIn = (p) => {
+    if (p.token) setGoogleToken(p.token)  // GIS auth mode
     const gdToken = sessionStorage.getItem('gd_token')
-    if (gdToken) setDriveToken(gdToken)
+    if (gdToken) { setDriveToken(gdToken); setHasDriveToken(true) }
     const sp = sessionStorage.getItem('sp_token')
-    if (sp) setSPToken(sp)
+    if (sp) { setSPToken(sp); setHasSPToken(true) }
     setPersona(p); setScan(null); setScanList([]); setLoaded(false); setDecisions({}); setCertifiedDocs([]); setPublishedFiles([]); setSettingsOpen(false); setView((p.allow || ['overview'])[0]); setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label, allow: p.allow || [] })
+  }
+
+  // Called from Integrations when a source OAuth succeeds
+  const handleConnect = (provider, email, token) => {
+    const priv = PRIVILEGED[email?.toLowerCase()]
+    if (provider === 'google') {
+      sessionStorage.setItem('gd_token', token)
+      setDriveToken(token); setHasDriveToken(true)
+      if (priv) setMe((m) => ({ ...m, ...priv, email, scope: priv.scope?.label }))
+      getSources().then(setSources).catch(() => {})
+    } else if (provider === 'microsoft') {
+      sessionStorage.setItem('sp_token', token)
+      setSPToken(token); setHasSPToken(true)
+      if (priv) setMe((m) => ({ ...m, ...priv, email, sso: 'Microsoft', scope: priv.scope?.label }))
+    }
   }
   if (!me) return <SignIn onSignedIn={signIn} />
 
@@ -124,9 +151,6 @@ export default function App() {
       setCertifiedDocs([])
     } catch { /* leave current scan */ } finally { setScanLoading(false) }
   }
-
-  const hasDriveToken = !!sessionStorage.getItem('gd_token')
-  const hasSPToken = !!sessionStorage.getItem('sp_token')
 
   const doScan = async (source, folder = null) => {
     setBusy(true); setErr(null); setProgress({ phase: 'queued' })
@@ -240,7 +264,7 @@ export default function App() {
       <ErrorBoundary key={view}>
         {view === 'overview' && (run ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} /> : placeholder)}
 
-        {view === 'integrations' && <Integrations sources={sources} files={files} onScan={doScan} busy={busy} hasSPToken={hasSPToken} />}
+        {view === 'integrations' && <Integrations sources={sources} files={files} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect} />}
 
         {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} delegations={delegations} fileTypeConfig={fileTypeConfig} />}
 
@@ -255,11 +279,11 @@ export default function App() {
           </>
         )}
 
-        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} /> : placeholder)}
+        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} aiEnabled={aiEnabled} /> : placeholder)}
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} onPublish={(file) => setPublishedFiles((s) => [...s, file])} /> : placeholder)}
 
-        {view === 'monitor' && (run ? <Monitor sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} /> : placeholder)}
+        {view === 'monitor' && (run ? <Monitor sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} /> : placeholder)}
 
         {view === 'upload' && <Upload onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
       </ErrorBoundary>

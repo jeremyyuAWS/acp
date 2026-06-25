@@ -5,10 +5,13 @@ const BASE = import.meta.env.VITE_API ?? 'http://localhost:8077'
 // Per-user tokens (real mode only). In SIM mode nothing touches a real Drive / OneDrive.
 let driveToken = null
 let spToken = null
+let googleToken = null  // GIS Bearer token (auth mode = "gis")
 export const setDriveToken = (t) => { driveToken = t }
 export const setSPToken = (t) => { spToken = t }
+export const setGoogleToken = (t) => { googleToken = t }
 const headers = (extra = {}) => ({
   ...extra,
+  ...(googleToken ? { 'Authorization': 'Bearer ' + googleToken } : {}),
   ...(driveToken ? { 'X-Drive-Token': driveToken } : {}),
   ...(spToken ? { 'X-SP-Token': spToken } : {}),
 })

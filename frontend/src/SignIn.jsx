@@ -1,123 +1,110 @@
-import { useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
+import { getConfig } from './api.js'
 import { PERSONAS } from './sim.js'
 import Logo from './Logo.jsx'
 
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || ''
-const AZURE_CLIENT_ID  = import.meta.env.VITE_AZURE_CLIENT_ID  || ''
-const AZURE_TENANT     = import.meta.env.VITE_AZURE_TENANT_ID  || 'common'
-const GD_SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file'
-const SP_SCOPES = ['Files.Read', 'Files.ReadWrite', 'User.Read']
+const initials = (n) => n.split(' ').map((x) => x[0]).join('').slice(0, 2)
 
-function GoogleG() {
+function GoogleIcon() {
   return (
-    <svg width="17" height="17" viewBox="0 0 48 48" aria-hidden="true">
-      <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.9 2.6 30.4 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.8 6.1C12.3 13.2 17.6 9.5 24 9.5z" />
-      <path fill="#4285F4" d="M46.1 24.6c0-1.6-.1-3.1-.4-4.6H24v9.1h12.4c-.5 2.9-2.1 5.3-4.6 7l7.1 5.5c4.2-3.9 6.2-9.6 6.2-17z" />
-      <path fill="#FBBC05" d="M10.4 28.3a14.5 14.5 0 0 1 0-8.6l-7.8-6.1a24 24 0 0 0 0 20.8l7.8-6.1z" />
-      <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.1-5.5c-2 1.3-4.5 2.1-8.8 2.1-6.4 0-11.7-3.7-13.6-9.8l-7.8 6.1C6.5 42.6 14.6 48 24 48z" />
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
     </svg>
   )
 }
-const MsLogo = () => <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="9.2" height="9.2" fill="#F25022" /><rect x="12.8" y="2" width="9.2" height="9.2" fill="#7FBA00" /><rect x="2" y="12.8" width="9.2" height="9.2" fill="#00A4EF" /><rect x="12.8" y="12.8" width="9.2" height="9.2" fill="#FFB900" /></svg>
-const OktaLogo = () => <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="#007DC1" strokeWidth="5.5" /></svg>
 
-const SSO = [{ name: 'Google', icon: <GoogleG /> }, { name: 'Microsoft', icon: <MsLogo /> }, { name: 'Okta', icon: <OktaLogo /> }]
-const initials = (n) => n.split(' ').map((x) => x[0]).join('').slice(0, 2)
-
-// Real accounts that get elevated privileges on sign-in (never shown in demo list).
-// Add the same email under both Google and Microsoft keys if you have accounts on both.
-const PRIV_PROFILE = {
-  id: 'jeremy-yu',
-  name: 'Jeremy Yu',
-  role: 'Compliance Officer & Admin',
-  scope: { label: 'Full estate · all departments', departments: 'all' },
-  allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'settings', 'upload'],
-}
-const PRIVILEGED = {
-  'jeremyyu.movate@gmail.com': PRIV_PROFILE,   // Google sign-in
-  // Add your Microsoft account alias here if different from Gmail:
-  // 'jeremyyu@outlook.com': PRIV_PROFILE,
+function LockIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+         strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  )
 }
 
 export default function SignIn({ onSignedIn }) {
-  const [gdLoading, setGdLoading] = useState(false)
-  const [spLoading, setSpLoading] = useState(false)
-  const [gdError,   setGdError]   = useState('')
-  const [spError,   setSpError]   = useState('')
-  const tokenClientRef = useRef(null)
+  const [cfg, setCfg] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
 
+  useEffect(() => {
+    getConfig().then(setCfg).catch(() => setCfg({ auth: 'demo' }))
+  }, [])
+
+  const signInWithGoogle = () => {
+    if (!window.google?.accounts?.oauth2) {
+      setErr('Google Identity Services not loaded — please refresh.')
+      return
+    }
+    setBusy(true)
+    setErr('')
+    const client = window.google.accounts.oauth2.initTokenClient({
+      client_id: cfg.google_client_id,
+      scope: 'email profile',
+      callback: async (resp) => {
+        setBusy(false)
+        if (resp.error) { setErr(resp.error_description || resp.error); return }
+        try {
+          const me = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+            headers: { Authorization: 'Bearer ' + resp.access_token },
+          }).then((r) => r.json())
+          onSignedIn({
+            id: me.email,
+            name: me.name || me.email,
+            email: me.email,
+            photo: me.picture,
+            token: resp.access_token,
+            role: 'Compliance Officer',
+            sso: 'Google',
+            scope: { label: 'Full estate · all departments', departments: 'all' },
+            allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'settings', 'upload'],
+          })
+        } catch {
+          setErr('Could not retrieve your Google profile — please try again.')
+        }
+      },
+    })
+    client.requestAccessToken()
+  }
+
+  if (!cfg) {
+    return (
+      <div className="signin">
+        <div className="signin-card wide">
+          <Logo big />
+          <p className="signin-sub">Loading…</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (cfg.auth === 'gis') {
+    return (
+      <div className="signin">
+        <div className="signin-card wide">
+          <Logo big />
+          <p className="signin-sub">Accessibility Platform</p>
+          {err && <p style={{ color: 'var(--red, #dc2626)', fontSize: 13, margin: '8px 0 0' }}>{err}</p>}
+          <div className="ssorow" style={{ marginTop: 24 }}>
+            <button className="ssobtn google-sso" onClick={signInWithGoogle} disabled={busy}>
+              <GoogleIcon />
+              {busy ? 'Signing in…' : 'Sign in with Google'}
+            </button>
+          </div>
+          <p className="muted signin-foot" style={{ marginTop: 20 }}>
+            Authorized accounts only · documents never retained
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  // Demo mode — persona picker
   const def = PERSONAS.find((p) => p.id === 'compliance') || PERSONAS[0]
-
-  const connectGoogleDrive = () => {
-    if (!GOOGLE_CLIENT_ID) { setGdError('Add VITE_GOOGLE_CLIENT_ID to frontend/.env and restart the dev server.'); return }
-    if (!window.google?.accounts?.oauth2) { setGdError('Google Identity Services not loaded yet — try again in a moment.'); return }
-    setGdLoading(true); setGdError('')
-    if (!tokenClientRef.current) {
-      tokenClientRef.current = window.google.accounts.oauth2.initTokenClient({
-        client_id: GOOGLE_CLIENT_ID,
-        scope: GD_SCOPES + ' https://www.googleapis.com/auth/userinfo.profile email',
-        callback: async (resp) => {
-          if (resp.error) { setGdLoading(false); setGdError(resp.error); return }
-          try {
-            sessionStorage.setItem('gd_token', resp.access_token)
-            const me = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-              headers: { Authorization: 'Bearer ' + resp.access_token },
-            }).then((r) => r.json()).catch(() => ({}))
-            const priv = PRIVILEGED[(me.email || '').toLowerCase()]
-            onSignedIn(priv
-              ? { ...priv, email: me.email, name: me.name || priv.name }
-              : {
-                  id: 'gdrive-user',
-                  name: me.name || 'Google User',
-                  role: 'Document Owner',
-                  email: me.email || '',
-                  sso: 'Google',
-                  scope: { label: 'My Google Drive · personal' },
-                }
-            )
-          } catch { setGdLoading(false); setGdError('Could not fetch Google profile.') }
-        },
-      })
-    }
-    tokenClientRef.current.requestAccessToken()
-  }
-
-  const connectSharePoint = async () => {
-    if (!AZURE_CLIENT_ID) { setSpError('Add VITE_AZURE_CLIENT_ID to frontend/.env and restart the dev server.'); return }
-    if (!window.msal) { setSpError('MSAL not loaded yet — try again in a moment.'); return }
-    setSpLoading(true); setSpError('')
-    try {
-      const cfg = {
-        auth: { clientId: AZURE_CLIENT_ID, authority: `https://login.microsoftonline.com/${AZURE_TENANT}`, redirectUri: window.location.origin },
-        cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: false },
-      }
-      const instance = new window.msal.PublicClientApplication(cfg)
-      await instance.initialize()
-      const loginResult = await instance.loginPopup({ scopes: SP_SCOPES })
-      instance.setActiveAccount(loginResult.account)
-      const tokenResult = await instance.acquireTokenSilent({ scopes: SP_SCOPES, account: loginResult.account })
-        .catch(() => instance.acquireTokenPopup({ scopes: SP_SCOPES }))
-      sessionStorage.setItem('sp_token', tokenResult.accessToken)
-      sessionStorage.setItem('sp_account', JSON.stringify(loginResult.account))
-      const msEmail = loginResult.account.username || ''
-      const msPriv = PRIVILEGED[msEmail.toLowerCase()]
-      onSignedIn(msPriv
-        ? { ...msPriv, email: msEmail, name: loginResult.account.name || msPriv.name, sso: 'Microsoft' }
-        : {
-            id: 'sp-user',
-            name: loginResult.account.name || 'Microsoft User',
-            role: 'Document Owner',
-            email: msEmail,
-            sso: 'Microsoft',
-            scope: { label: 'My OneDrive · SharePoint' },
-          }
-      )
-    } catch (e) {
-      setSpLoading(false)
-      setSpError(e.errorCode === 'user_cancelled' ? 'Sign-in cancelled.' : (e.message || 'Connection failed.'))
-    }
-  }
-
   return (
     <div className="signin">
       <div className="signin-card wide">
@@ -125,18 +112,10 @@ export default function SignIn({ onSignedIn }) {
         <p className="signin-sub">Accessibility Platform</p>
 
         <div className="ssorow">
-          <button className="ssobtn" onClick={connectGoogleDrive} disabled={gdLoading}>
-            <GoogleG /> {gdLoading ? 'Connecting…' : 'Sign in with Google'}
-          </button>
-          <button className="ssobtn" onClick={connectSharePoint} disabled={spLoading}>
-            <MsLogo /> {spLoading ? 'Connecting…' : 'Sign in with Microsoft'}
-          </button>
           <button className="ssobtn" onClick={() => onSignedIn(def)}>
-            <OktaLogo /> Sign in with Okta
+            <LockIcon /> Sign in with SSO
           </button>
         </div>
-        {gdError && <p style={{ fontSize: 12, color: '#A32D2D', margin: '-10px 0 6px', textAlign: 'center' }}>{gdError}</p>}
-        {spError && <p style={{ fontSize: 12, color: '#A32D2D', margin: '-10px 0 6px', textAlign: 'center' }}>{spError}</p>}
 
         <div className="signin-or"><span>or explore a role — demo</span></div>
 
