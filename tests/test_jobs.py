@@ -136,3 +136,43 @@ def test_worker_no_handler_dead_letters_eventually(store):
     w = worker.JobWorker(store, worker_id="w-test")
     w.run_once()
     assert store.get_job(jid)["status"] == "dead"
+
+
+def test_scan_handler_runs_persists_finalizes(store, monkeypatch):
+    """The async `scan` job: run_scan → save_scan → finalize, with the token cleared.
+    run_scan is stubbed so the test needs no engines."""
+    import core, scanner, handlers  # noqa: F401 — registers the 'scan' handler
+    import worker
+
+    core.store = store  # handler + finalize use core.store
+
+    captured = {}
+
+    def fake_run_scan(source, *, drive_token=None, sp_token=None, folder=None,
+                      ai_enabled=True, scan_id=None):
+        captured["scan_id"] = scan_id
+        captured["drive_token"] = drive_token
+        captured["ai_enabled"] = ai_enabled
+        return {"_scan_id": scan_id, "summary": {"files": 1, "certifiable": 1,
+                "uncertain": 0, "error": 0, "avg_score": 100},
+                "rubric": {"name": "r", "version": "1", "hash": "h"},
+                "started_at": "t0", "completed_at": "t1", "source": source, "files": []}
+
+    monkeypatch.setattr(handlers, "run_scan", fake_run_scan)
+    monkeypatch.setattr(store, "get_ai_enabled", lambda: True)
+
+    sid = "scan-async-1"
+    core.register_scan_tokens(sid, drive="user-token-xyz")
+    jid = store.enqueue_job("scan", {"source": "drive", "scan_id": sid, "ai": True}, scan_id=sid)
+
+    w = worker.JobWorker(store, worker_id="w-test")
+    assert w.run_once() is True
+    assert store.get_job(jid)["status"] == "done"
+
+    # The handler received the in-memory token (never from the job payload) ...
+    assert captured["drive_token"] == "user-token-xyz"
+    assert captured["scan_id"] == sid
+    # ... persisted the scan ...
+    assert store.get_scan(sid) is not None
+    # ... and cleared the token afterwards.
+    assert core.get_scan_tokens(sid) == {}

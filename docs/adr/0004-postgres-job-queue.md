@@ -197,10 +197,16 @@ Step 1's **durable queue infrastructure** is implemented and tested:
 - `tests/test_jobs.py`: 10 passing tests (claim/complete, priority, retry→dead,
   force-dead, backoff gate, stuck reclaim, worker loop).
 
-**Deferred (next):** wiring `scanner.run_scan` to enqueue `scan_file` jobs. The
-open design question is **Drive-token handling** — a per-file Drive job needs an
-access token, and persisting a user's GIS token in `jobs.payload` (at rest in
-Postgres) is a security concern. Options to resolve before integration: scope jobs
-to the local/ADC path first; pass a short-lived token via a side channel; or have
-the worker mint a service-identity token rather than reuse the user's. The
-multi-worker `SKIP LOCKED` claim (step 2) and campaign integration (step 3) follow.
+**Async assess shipped (2026-06-25):** `POST /scans?queue=true` enqueues a durable
+`scan` job; the worker pool (`ACP_WORKERS>0`) runs it via `handlers._scan` →
+`run_scan` → `save_scan` → `finalize_scan`, emitting the same per-file/per-rule
+Langfuse spans and showing up in `/jobs` + the Grafana queue panel. The
+**token-at-rest question is resolved**: tokens live only in an in-memory registry
+(`core.SCAN_TOKENS`) keyed by scan_id; the job payload carries the scan_id, never
+the token. Per-file fan-out is intentionally *not* used (the .NET Office analyser
+is batch), so the durable unit is one scan job.
+
+**Deferred (next):** async **remediation** — needs server-side fix engines first
+(today HTML remediation runs in the browser; Office/PDF remediators aren't wired
+server-side). Then a `remediate_file` job per in-scope file. Also: multi-worker
+`SKIP LOCKED` claim (step 2) and campaign integration (step 3).

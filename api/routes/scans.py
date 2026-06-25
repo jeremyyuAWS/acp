@@ -18,7 +18,7 @@ router = APIRouter()
 @router.post("/scans")
 def start_scan(request: Request, source: str = Query("local", pattern="^(local|drive|sharepoint)$"),
                sync: bool = False, folder: str | None = Query(None),
-               ai: bool = Query(True)):
+               ai: bool = Query(True), queue: bool = Query(False)):
     token = request.headers.get("x-drive-token")      # per-user Drive token (GIS)
     sp_token = request.headers.get("x-sp-token")      # per-user MS Graph token (MSAL)
     # ACP_DEMO_DRIVE_KEY lets the E2E test and demo scripts trigger a server-side
@@ -34,25 +34,23 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
     # no scan runs AI regardless of the per-scan ?ai= request.
     effective_ai = ai and core.store.get_ai_enabled()
 
-    def _finalize(sid: str) -> None:
-        """After a scan persists: in deterministic mode, auto-route the findings that
-        would need AI interpretation straight to the HITL queue, and audit the run."""
-        core.store.log_decision(
-            "system", "scan.completed", scan_id=sid,
-            detail=f"source={source} mode={'ai-assisted' if effective_ai else 'deterministic'}")
-        if not effective_ai:
-            created = core.store.queue_hitl_items(sid)
-            if created:
-                core.fire_webhook(created)
-                core.store.log_decision(
-                    "system", "hitl.auto_routed", scan_id=sid,
-                    detail=f"deterministic mode → {len(created)} ai-assisted findings routed to HITL")
+    # ── Durable async path: enqueue a scan job for the worker pool (ADR 0004). ──
+    # Survives restarts, retries on transient failure, shows up in /jobs + Grafana.
+    if queue:
+        scan_id = uuid.uuid4().hex[:12]
+        core.register_scan_tokens(scan_id, drive=token, sp=sp_token)  # in-memory only
+        job_id = core.store.enqueue_job(
+            "scan", {"source": source, "scan_id": scan_id, "folder": folder, "ai": ai},
+            scan_id=scan_id)
+        return {"scan_id": scan_id, "job_id": job_id, "queued": True, "workers": core.WORKERS}
 
     if sync:  # synchronous path for scripts/tests
         report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token, ai_enabled=effective_ai)
         sid = core.store.save_scan(report)
-        _finalize(sid)
+        core.finalize_scan(sid, effective_ai, source)
         return {"scan_id": sid, "source": source, "summary": report["summary"]}
+
+    # Default: in-process background thread (fast, but lost on restart).
     job_id = uuid.uuid4().hex[:12]
     core.JOBS[job_id] = {"phase": "queued", "files_found": 0, "files_done": 0, "current": None,
                          "done": False, "scan_id": None, "error": None, "source": source, "ai": effective_ai}
@@ -62,7 +60,7 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
             report = run_scan(source, progress=lambda d: core.JOBS[job_id].update(d),
                               drive_token=token, folder=folder, sp_token=sp_token, ai_enabled=effective_ai)
             sid = core.store.save_scan(report)
-            _finalize(sid)
+            core.finalize_scan(sid, effective_ai, source)
             core.JOBS[job_id].update({"phase": "done", "done": True, "scan_id": sid,
                                       "files_done": core.JOBS[job_id].get("files_found", 0)})
         except Exception as e:

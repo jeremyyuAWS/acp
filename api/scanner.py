@@ -335,11 +335,11 @@ def _analyse_html(path: Path) -> dict:
 
 def run_scan(source: str = "local", progress=_noop, drive_token: str | None = None,
              folder: str | None = None, sp_token: str | None = None,
-             ai_enabled: bool = True) -> dict:
+             ai_enabled: bool = True, scan_id: str | None = None) -> dict:
     from store import RULE_CATALOG, _extract_sc  # import here to avoid circular at module load
     rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
-    scan_id = uuid.uuid4().hex[:12]
+    scan_id = scan_id or uuid.uuid4().hex[:12]
     tmp = Path(tempfile.mkdtemp(prefix="acp-api-scan-"))
     # Per-user token: default to whole-Drive search. ADC/demo: pinned demo folder.
     effective_folder = folder if folder else ("root" if drive_token else None)

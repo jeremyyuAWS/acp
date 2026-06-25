@@ -205,24 +205,45 @@ reload_scheduler()
 WORKERS = int(os.environ.get("ACP_WORKERS", "0") or "0")
 _worker_handles: list = []
 
-# In-memory per-scan Drive tokens for the worker pool. Tokens are NEVER written
-# to the jobs table (which lives in Postgres) — a scan_file job carries only the
-# scan_id and looks the token up here. Lost on restart (in-flight per-user Drive
-# jobs then fail and must be re-triggered); demo/ADC scans need no token.
-SCAN_TOKENS: dict[str, str] = {}
+# In-memory per-scan auth tokens for the worker pool. Tokens are NEVER written to
+# the jobs table (which lives in Postgres) — a scan job carries only the scan_id
+# and the worker looks the tokens up here. Lost on restart (an in-flight per-user
+# scan then fails and must be re-triggered); demo/ADC scans need no token.
+SCAN_TOKENS: dict[str, dict] = {}
 
 
-def register_scan_token(scan_id: str, token: str | None) -> None:
-    if token:
-        SCAN_TOKENS[scan_id] = token
+def register_scan_tokens(scan_id: str, *, drive: str | None = None, sp: str | None = None) -> None:
+    toks = {}
+    if drive:
+        toks["drive"] = drive
+    if sp:
+        toks["sp"] = sp
+    if toks:
+        SCAN_TOKENS[scan_id] = toks
 
 
-def get_scan_token(scan_id: str) -> str | None:
-    return SCAN_TOKENS.get(scan_id)
+def get_scan_tokens(scan_id: str) -> dict:
+    return SCAN_TOKENS.get(scan_id, {})
 
 
-def clear_scan_token(scan_id: str) -> None:
+def clear_scan_tokens(scan_id: str) -> None:
     SCAN_TOKENS.pop(scan_id, None)
+
+
+def finalize_scan(scan_id: str, effective_ai: bool, source: str) -> None:
+    """Shared post-scan step: audit the run and, in deterministic mode, auto-route
+    ai-assisted findings to the HITL queue. Used by both the threaded and queued
+    scan paths so they behave identically."""
+    store.log_decision(
+        "system", "scan.completed", scan_id=scan_id,
+        detail=f"source={source} mode={'ai-assisted' if effective_ai else 'deterministic'}")
+    if not effective_ai:
+        created = store.queue_hitl_items(scan_id)
+        if created:
+            fire_webhook(created)
+            store.log_decision(
+                "system", "hitl.auto_routed", scan_id=scan_id,
+                detail=f"deterministic mode → {len(created)} ai-assisted findings routed to HITL")
 
 
 def start_workers() -> int:
@@ -230,6 +251,7 @@ def start_workers() -> int:
     if WORKERS <= 0 or _worker_handles:
         return 0
     import threading
+    import handlers  # noqa: F401 — registers job handlers with the worker
     from worker import JobWorker
     for i in range(WORKERS):
         w = JobWorker(store, worker_id=f"w{i}")
