@@ -227,6 +227,8 @@ file is never certified** (incomplete analysis is never a pass).
 
 ## Architecture at a glance
 
+![ACP enterprise architecture: content sources flow through ingestion and discovery into the ACP core platform (document intelligence, accessibility engine, AI remediation, workflow orchestration, knowledge graph), with observability & governance, an enterprise interface, and a storage layer — multi-tenant, secure, scalable, Azure-native, API-first, human-in-the-loop](docs/images/acp-architecture.png)
+
 - **Substrate:** MDK (`StorageProvider`, observability, deploy, OAuth, secrets) —
   consumed as a dependency, *not* extended.
 - **Orchestration:** the FastAPI control plane (`api/`, split into `core.py` +
@@ -238,7 +240,11 @@ file is never certified** (incomplete analysis is never a pass).
 - **Security:** read-only scopes · ephemeral document copies (never persisted) ·
   admin-gated AI (off ⇒ zero LLM egress) · per-customer single-tenant deploy.
 
-**System overview** — how the pieces fit together:
+### In more detail
+
+Three focused views of the same system.
+
+**System overview** — how the running pieces fit together:
 
 ![ACP system overview: browser and data sources feed the FastAPI control plane, which drives the HTML, Office, and PDF engines, writes to Postgres, and exposes Grafana, Langfuse, and an optional local AI service](docs/images/system-overview.svg)
 
