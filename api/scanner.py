@@ -8,6 +8,7 @@ from __future__ import annotations
 import io, json, os, re, shutil, subprocess, sys, tempfile, uuid
 from datetime import datetime, timezone
 from pathlib import Path
+import lf as _lf_mod
 
 ACP = Path(__file__).resolve().parent.parent
 # Engine + corpus locations default to the local dev layout but are env-overridable
@@ -25,6 +26,7 @@ sys.path.insert(0, str(ACP / "scripts"))
 from rubric import Rubric
 
 OFFICE = (".docx", ".pptx", ".xlsx")
+HTML_EXTS = (".html", ".htm")
 
 # Google Workspace native types → (export MIME, file extension)
 EXPORT_MAP = {
@@ -39,6 +41,7 @@ _SCANNABLE_MIME = list(EXPORT_MAP.keys()) + [
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/html",
 ]
 
 _DRIVE_MIME_Q = " or ".join(f"mimeType='{m}'" for m in _SCANNABLE_MIME)
@@ -149,7 +152,7 @@ def _search_folder(svc, folder_id: str) -> list[dict]:
 def _sp_list(token: str, max_files: int = 200) -> list[dict]:
     """List scannable files from OneDrive personal via MS Graph search."""
     import httpx
-    exts = {".docx", ".pptx", ".xlsx", ".pdf"}
+    exts = {".docx", ".pptx", ".xlsx", ".pdf", ".html", ".htm"}
     hdrs = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     files: list[dict] = []
     url = "https://graph.microsoft.com/v1.0/me/drive/root/search(q='')?$select=id,name,file&$top=200"
@@ -180,7 +183,7 @@ def _sp_download(token: str, item: dict, dest: Path) -> None:
 def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None = None) -> list[dict]:
     if source == "local":
         return [{"name": p.name, "path": str(p)} for p in sorted((ACP / "test-corpus/files").glob("*"))
-                if p.suffix.lower() in OFFICE + (".pdf",)]
+                if p.suffix.lower() in OFFICE + (".pdf",) + HTML_EXTS]
     if source == "sharepoint":
         return _sp_list(sp_token)
     if folder and folder != "root":
@@ -259,10 +262,78 @@ def _analyse_office(dest: Path) -> dict:
     return res
 
 
+_VAGUE_LINK_TEXT = frozenset({"click here", "here", "read more", "more", "link", "this", "click", "learn more", "details"})
+
+
+def _analyse_html(path: Path) -> dict:
+    try:
+        from lxml import html as lx
+        root = lx.fromstring(path.read_bytes(), base_url=str(path))
+    except Exception as e:
+        return {"succeeded": False, "issues": [], "errors": [{"message": f"{type(e).__name__}: {e}", "rule": None}]}
+
+    issues: list[dict] = []
+
+    # 2.4.2 Page Titled — missing or empty <title>
+    titles = root.findall(".//title")
+    if not titles or not (titles[0].text or "").strip():
+        issues.append({"ruleId": "HTML_MISSING_TITLE", "wcag": "2.4.2 Page Titled", "severity": "SERIOUS"})
+
+    # 3.1.1 Language of Page — missing lang on <html>
+    # lxml.html.fromstring returns the root element (html or body depending on fragment)
+    html_el = root if root.tag == "html" else root.find(".//html") or root
+    lang = html_el.get("lang") or html_el.get("{http://www.w3.org/XML/1998/namespace}lang")
+    if not lang:
+        issues.append({"ruleId": "HTML_MISSING_LANG", "wcag": "3.1.1 Language of Page", "severity": "SERIOUS"})
+
+    # 1.1.1 Non-text Content — <img> without alt attribute (decorative: role=presentation is ok)
+    for img in root.iter("img"):
+        if img.get("alt") is None and img.get("role", "") not in ("presentation", "none"):
+            issues.append({"ruleId": "HTML_IMG_MISSING_ALT", "wcag": "1.1.1 Non-text Content", "severity": "CRITICAL"})
+
+    # 2.4.4 Link Purpose (In Context) — empty or vague <a> text
+    for a in root.iter("a"):
+        text = (a.text_content() or "").strip()
+        aria = (a.get("aria-label") or a.get("title") or "").strip()
+        if not text and not aria:
+            issues.append({"ruleId": "HTML_EMPTY_LINK", "wcag": "2.4.4 Link Purpose (In Context)", "severity": "SERIOUS"})
+        elif text.lower() in _VAGUE_LINK_TEXT and not aria:
+            issues.append({"ruleId": "HTML_VAGUE_LINK", "wcag": "2.4.4 Link Purpose (In Context)", "severity": "MODERATE"})
+
+    # 2.4.6 Headings and Labels — skipped heading levels (e.g. h1 → h3)
+    HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+    prev_level = 0
+    for el in root.iter():
+        if el.tag in HEADING_TAGS:
+            level = int(el.tag[1])
+            if prev_level > 0 and level > prev_level + 1:
+                issues.append({"ruleId": "HTML_HEADING_SKIP", "wcag": "2.4.6 Headings and Labels", "severity": "MODERATE"})
+                break
+            prev_level = level
+
+    # 4.1.2 Name, Role, Value — <input> without an associated label
+    labelled_ids: set[str] = set()
+    for label in root.iter("label"):
+        for_attr = label.get("for")
+        if for_attr:
+            labelled_ids.add(for_attr)
+    SKIP_INPUT_TYPES = {"hidden", "submit", "button", "image", "reset"}
+    for inp in root.iter("input"):
+        if (inp.get("type") or "text").lower() in SKIP_INPUT_TYPES:
+            continue
+        if not (inp.get("aria-label") or inp.get("aria-labelledby") or inp.get("title")):
+            if inp.get("id", "") not in labelled_ids:
+                issues.append({"ruleId": "HTML_INPUT_NO_LABEL", "wcag": "4.1.2 Name, Role, Value", "severity": "CRITICAL"})
+
+    return {"succeeded": True, "issues": issues, "errors": []}
+
+
 def run_scan(source: str = "local", progress=_noop, drive_token: str | None = None,
              folder: str | None = None, sp_token: str | None = None) -> dict:
+    from store import RULE_CATALOG, _extract_sc  # import here to avoid circular at module load
     rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
+    scan_id = uuid.uuid4().hex[:12]
     tmp = Path(tempfile.mkdtemp(prefix="acp-api-scan-"))
     # Per-user token: default to whole-Drive search. ADC/demo: pinned demo folder.
     effective_folder = folder if folder else ("root" if drive_token else None)
@@ -278,6 +349,10 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             _download(it, tmp, svc, sp_token=sp_token)
 
         office = _analyse_office(tmp)
+
+        # One Langfuse trace covers the full scan; one span per file; one child span per rule.
+        trace = _lf_mod.scan_trace(scan_id, source, n)
+
         raw: dict[str, dict] = {}
         for i, it in enumerate(items):
             name, ext = it["name"], Path(it["name"]).suffix.lower()
@@ -287,15 +362,36 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             elif ext in OFFICE:
                 raw[name] = {"engine": ".net/office",
                              **office.get(name, {"succeeded": False, "issues": [], "errors": ["no engine result"]})}
+            elif ext in HTML_EXTS:
+                raw[name] = {"engine": "python/html", **_analyse_html(tmp / name)}
+            else:
+                continue
+
+            # Emit per-rule spans immediately after each file is analysed so they
+            # appear in Langfuse in real time rather than all at once at scan end.
+            engine = raw[name]["engine"]
+            fspan = _lf_mod.file_span(trace, name, engine)
+            sc_counts: dict[str, int] = {}
+            for issue in raw[name].get("issues", []):
+                sc = _extract_sc(issue.get("wcag", ""))
+                if sc:
+                    sc_counts[sc] = sc_counts.get(sc, 0) + 1
+            _lf_mod.rule_spans(fspan, sc_counts, RULE_CATALOG)
+            fspan.end(output={"issue_count": len(raw[name].get("issues", [])), "engine": engine})
 
         progress({"phase": "scoring", "files_found": n, "files_done": n, "current": None})
         for r in raw.values():
             r["issues"] = [i for i in r["issues"] if i["ruleId"] not in rb.disabled]
             r["errors"] = [e for e in r["errors"] if (e.get("rule") if isinstance(e, dict) else None) not in rb.disabled]
         assessed = {k: rb.assess(r["succeeded"], r["issues"], r["errors"]) for k, r in raw.items()}
+        summary = rb.aggregate(assessed)
+        trace.update(output={"files": n, "avg_score": summary.get("avg_score")})
+        _lf_mod.flush()
+
         return {
+            "_scan_id": scan_id,   # hint to save_scan so it reuses the same ID → trace joins
             "rubric": {"name": rb.name, "version": rb.version, "hash": rb.hash},
-            "summary": rb.aggregate(assessed),
+            "summary": summary,
             "started_at": started,
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "source": source,
