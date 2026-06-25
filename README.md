@@ -152,6 +152,118 @@ organization's documents are accessible.
 > **Status:** built and demo-ready — connect a library, scan, score against WCAG
 > 2.1, auto-fix what's safe, route the rest to human review, and export the report.
 
+## Capability roadmap — the nine product goals
+
+ACP is designed against nine capability goals (the product wishlist below). We track
+them **honestly**: some run today, some are partly there, and some are designed and
+written down but not yet built. Nothing here is marketing —
+
+- ✅ **Built** — works in the platform today.
+- 🟡 **Partial** — the foundation is real; some pieces remain.
+- 📋 **Designed** — specified in a written design doc (linked), on the roadmap, not yet built.
+
+The full engineering breakdown lives in the
+[PRD conformance roadmap](docs/prd-conformance-roadmap.md).
+
+| # | Goal | Status |
+|---|------|--------|
+| 1 | Configurable file disposition | 📋 Designed |
+| 2 | Partial remediation workflow | 📋 Designed |
+| 3 | Intelligent file triage & prioritization | 📋 Designed |
+| 4 | Phased remediation strategy | 📋 Designed |
+| 5 | Modular deterministic validation engine | ✅ / 🟡 |
+| 6 | Deterministic-only operating mode | ✅ Built |
+| 7 | Validation coverage & traceability | ✅ Built |
+| 8 | Transparent validation specification | 🟡 Partial |
+| 9 | White-box controls & explainability | 🟡 Partial |
+
+### 1 · Configurable file disposition — 📋 Designed
+**Goal:** let an administrator choose what happens to each document after analysis
+or remediation — *leave in place, archive, rename by a naming convention, move, or
+delete (with approval)* — so ACP fits an organization's existing records-management
+process.
+**Today:** ACP writes a remediated *copy* into a Drive `Remediated/` folder; your
+originals are never moved, renamed, or deleted.
+**Planned:** admin-defined disposition policies (e.g. "archive PDFs older than two
+years"), real move/archive/delete actions, and an immutable record of what was done
+to each file. Specified in [ADR 0003](docs/adr/0003-document-lifecycle-model.md).
+
+### 2 · Partial remediation workflow — 📋 Designed
+**Goal:** track files that are only partly fixed — which violations remain, which
+need human review, and the ability to resume — with clear states (*Not Started → In
+Progress → Partially Remediated → Awaiting Human Review → Complete*).
+**Today:** each finding that needs judgment lands in a real **human review queue**
+(the "Awaiting Human Review" state), and a file is marked remediated once written back.
+**Planned:** a per-violation status machine so "3 of 5 issues fixed" and "resume from
+where we stopped" are first-class. Specified in [ADR 0003](docs/adr/0003-document-lifecycle-model.md).
+
+### 3 · Intelligent file triage & prioritization — 📋 Designed
+**Goal:** decide *where to spend effort first* — surface high-value documents, flag
+obsolete/duplicate/low-value files, and rank by accessibility risk, usage, business
+criticality, owner, department, age, and regulatory importance.
+**Today:** the interface demonstrates triage and prioritization on sample data.
+**Planned:** a server-side scorer that ranks real documents from stored metadata, plus
+duplicate/obsolete detection. Specified in [ADR 0003](docs/adr/0003-document-lifecycle-model.md).
+
+### 4 · Phased remediation strategy — 📋 Designed
+**Goal:** roll out remediation across thousands or millions of files in controlled
+stages — batches, priority queues, department-by-department, with progress dashboards
+and the ability to pause and resume a campaign.
+**Today:** the interface shows staged, batched progress on sample data.
+**Planned:** persisted campaigns and batches with real pause/resume, scoped to a
+department or business unit. Specified in [ADR 0003](docs/adr/0003-document-lifecycle-model.md).
+
+### 5 · Modular deterministic validation engine — ✅ / 🟡
+**Goal:** one self-contained module per WCAG rule, independent and well-documented,
+so any rule can be updated without disturbing the others — deterministic checks over
+opaque AI logic.
+**Today:** ✅ fully realized for the **web/HTML** engine — one file per rule, zero
+coupling, documented; see [How ACP manages its accessibility rules](#how-acp-manages-its-accessibility-rules)
+and the [Validation engine](#validation-engine--where-every-wcag-rule-lives) reference.
+🟡 the Office and PDF rules are catalogued and parameterized here, but their detection
+code lives in a separate (vendored) engine — so those rules aren't yet editable in this
+repo to the same degree.
+**Planned:** bring Office/PDF rules under the same one-module-per-rule contract.
+
+### 6 · Deterministic-only operating mode — ✅ Built
+**Goal:** an admin switch that disables **all** AI — only deterministic checks run, no
+AI-generated fixes, and anything needing interpretation goes straight to human review —
+for organizations with strict compliance, privacy, or audit requirements.
+**Today:** ✅ a persisted, platform-wide setting. When off: AI explanations are blocked,
+no AI fixes run, and findings that would need interpretation are **automatically routed
+to the human review queue**. With AI off, no document content leaves your environment.
+
+### 7 · Validation coverage & traceability — ✅ Built
+**Goal:** complete transparency into every check on every document — record every WCAG
+rule run, with pass/fail/not-applicable status and trace-level logging — so an auditor
+can ask *"How do we know rule 1.1.3 was actually evaluated for this document?"* and get
+an answer.
+**Today:** ✅ every rule execution is recorded per document as **PASS / FAIL / ERROR /
+NOT_APPLICABLE**, with a trace span (Langfuse) per rule per file. A per-scan completeness
+report (`GET /scans/{id}/manifest`) answers that auditor question for *every* rule —
+including the ones that didn't apply. See [ADR 0002](docs/adr/0002-assessment-transparency-spec.md).
+
+### 8 · Transparent validation specification — 🟡 Partial
+**Goal:** a formal written spec of the validation framework — pipeline, rule execution
+order, deterministic algorithms, human-review boundaries, remediation decision logic,
+and extensibility.
+**Today:** [ADR 0002](docs/adr/0002-assessment-transparency-spec.md) specifies the
+transparency contract (what every rule records, how completeness is proven), and every
+rule has a plain-language write-up.
+**Planned:** formalize the remediation decision tree, the rule execution order, and the
+extensibility contract for the Office/PDF engines.
+
+### 9 · White-box controls & explainability — 🟡 Partial
+**Goal:** a fully inspectable platform — show what ACP is doing at each stage, explain
+why decisions were made, surface confidence where AI is used, and keep audit logs and
+execution history, rather than a black-box score.
+**Today:** ✅ an **immutable audit log** records every consequential decision (scan mode,
+auto-routing, each human review with reviewer + note, settings changes), and the per-rule
+trace + completeness data is queryable for any scan.
+🟡 the in-app surfacing of that data (completeness warnings, remediation rationale, AI
+confidence) is still being built out — today the evidence is fully recorded and available
+via the API, but not yet shown in every screen.
+
 ---
 
 # For developers
