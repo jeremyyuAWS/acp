@@ -148,20 +148,31 @@ else
   E2E_ENV="${EXISTING_E2E:+ACP_E2E_KEY=secretref:$EXISTING_E2E}"
   echo "   e2e key = inherited"
 fi
+# Async worker pool — ACP_WORKERS=N runs N in-process job workers. Plain (non-secret)
+# env vars; inherit when not passed so a bare redeploy keeps them.
+_inherit_env() {  # $1 = var name → echoes "NAME=value" if currently set, else ""
+  local v; v="$(az containerapp show -g "$RG" -n "$APP" \
+    --query "properties.template.containers[0].env[?name=='$1'].value | [0]" -o tsv 2>/dev/null || echo "")"
+  [ -n "$v" ] && echo "$1=$v"
+}
+WORKERS_ENV="${ACP_WORKERS:+ACP_WORKERS=$ACP_WORKERS}"; [ -z "$WORKERS_ENV" ] && WORKERS_ENV="$(_inherit_env ACP_WORKERS)"
+EMAILS_ENV="${ACP_ALLOWED_EMAILS:+ACP_ALLOWED_EMAILS=$ACP_ALLOWED_EMAILS}"; [ -z "$EMAILS_ENV" ] && EMAILS_ENV="$(_inherit_env ACP_ALLOWED_EMAILS)"
+echo "   workers = ${ACP_WORKERS:-${WORKERS_ENV:+inherited}}${WORKERS_ENV:+}"
+echo "   allowed emails = ${ACP_ALLOWED_EMAILS:-${EMAILS_ENV:+inherited}}"
 if az containerapp show -g "$RG" -n "$APP" -o none 2>/dev/null; then
   _retry az containerapp secret set -g "$RG" -n "$APP" \
     --secrets "${SECRETS[@]}" -o none
   _retry az containerapp registry set -g "$RG" -n "$APP" \
     --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
   _retry az containerapp update -g "$RG" -n "$APP" --image "$ACRSERVER/$IMAGE" \
-    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV -o none
+    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV -o none
 else
   az containerapp create -g "$RG" -n "$APP" --environment "$ENVNAME" \
     --image "$ACRSERVER/$IMAGE" \
     --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
     --target-port 8077 --ingress external \
     --secrets "${SECRETS[@]}" \
-    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV \
+    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV \
     --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 1 -o none
 fi
 
