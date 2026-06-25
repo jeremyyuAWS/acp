@@ -86,6 +86,7 @@ ALWAYS_PUBLIC = {"/healthz", "/config", "/hub", "/ai/status"}
 API_PREFIXES = (
     "/scans", "/rubric", "/rules", "/inventory", "/schedule",
     "/me", "/sources", "/folders", "/drive", "/hitl", "/ai",
+    "/settings", "/decisions",
 )
 
 

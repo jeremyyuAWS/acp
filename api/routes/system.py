@@ -52,3 +52,32 @@ def hub():
     if not hub_file.exists():
         raise HTTPException(404, "hub/index.html not found")
     return Response(hub_file.read_bytes(), media_type="text/html")
+
+
+class SettingsUpdate(BaseModel):
+    ai_enabled: bool | None = None
+
+
+@router.get("/settings")
+def get_settings():
+    """Platform settings. ai_enabled=false → deterministic-only mode platform-wide
+    (overrides per-scan ?ai=true and blocks /ai/explain)."""
+    return {"ai_enabled": core.store.get_ai_enabled()}
+
+
+@router.put("/settings")
+def update_settings(body: SettingsUpdate):
+    """Admin: set platform settings. Persisted across restarts. Audited."""
+    if body.ai_enabled is not None:
+        core.store.set_ai_enabled(body.ai_enabled)
+        core.store.log_decision(
+            "admin", "settings.ai_enabled",
+            detail=f"ai_enabled set to {body.ai_enabled}")
+    return get_settings()
+
+
+@router.get("/decisions")
+def decisions(scan_id: str | None = None, limit: int = 500):
+    """Immutable decision audit log — every consequential action (scan mode, HITL
+    review, settings change, auto-routing). Append-only; filter by scan_id."""
+    return core.store.list_decisions(scan_id=scan_id, limit=limit)

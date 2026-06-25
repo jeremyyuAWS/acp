@@ -30,18 +30,40 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
         raise HTTPException(401, "sign in with Google to scan your Drive")
     if source == "sharepoint" and not sp_token:
         raise HTTPException(401, "sign in with Microsoft to scan OneDrive")
+    # Admin deterministic-only mode is a HARD override: if AI is disabled platform-wide,
+    # no scan runs AI regardless of the per-scan ?ai= request.
+    effective_ai = ai and core.store.get_ai_enabled()
+
+    def _finalize(sid: str) -> None:
+        """After a scan persists: in deterministic mode, auto-route the findings that
+        would need AI interpretation straight to the HITL queue, and audit the run."""
+        core.store.log_decision(
+            "system", "scan.completed", scan_id=sid,
+            detail=f"source={source} mode={'ai-assisted' if effective_ai else 'deterministic'}")
+        if not effective_ai:
+            created = core.store.queue_hitl_items(sid)
+            if created:
+                core.fire_webhook(created)
+                core.store.log_decision(
+                    "system", "hitl.auto_routed", scan_id=sid,
+                    detail=f"deterministic mode → {len(created)} ai-assisted findings routed to HITL")
+
     if sync:  # synchronous path for scripts/tests
-        report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token, ai_enabled=ai)
-        return {"scan_id": core.store.save_scan(report), "source": source, "summary": report["summary"]}
+        report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token, ai_enabled=effective_ai)
+        sid = core.store.save_scan(report)
+        _finalize(sid)
+        return {"scan_id": sid, "source": source, "summary": report["summary"]}
     job_id = uuid.uuid4().hex[:12]
     core.JOBS[job_id] = {"phase": "queued", "files_found": 0, "files_done": 0, "current": None,
-                         "done": False, "scan_id": None, "error": None, "source": source, "ai": ai}
+                         "done": False, "scan_id": None, "error": None, "source": source, "ai": effective_ai}
 
     def work():
         try:
             report = run_scan(source, progress=lambda d: core.JOBS[job_id].update(d),
-                              drive_token=token, folder=folder, sp_token=sp_token, ai_enabled=ai)
-            core.JOBS[job_id].update({"phase": "done", "done": True, "scan_id": core.store.save_scan(report),
+                              drive_token=token, folder=folder, sp_token=sp_token, ai_enabled=effective_ai)
+            sid = core.store.save_scan(report)
+            _finalize(sid)
+            core.JOBS[job_id].update({"phase": "done", "done": True, "scan_id": sid,
                                       "files_done": core.JOBS[job_id].get("files_found", 0)})
         except Exception as e:
             core.JOBS[job_id].update({"phase": "error", "done": True, "error": str(e)})

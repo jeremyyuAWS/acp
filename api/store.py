@@ -68,6 +68,18 @@ _SCHEMA = [
       scan_id TEXT, file TEXT, rule_id TEXT, status TEXT, finding_count INT,
       PRIMARY KEY (scan_id, file, rule_id)
     )""",
+    # Admin-controlled platform settings (key/value). e.g. ai_enabled='false'
+    # forces deterministic-only mode for the whole platform (overrides per-scan ?ai=).
+    """CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY, value TEXT
+    )""",
+    # Append-only audit log of every consequential decision (HITL review, scan
+    # mode, remediation, disposition). Never updated or deleted — the immutable
+    # record an auditor asks for. id is monotonic via created_at + a uuid tiebreak.
+    """CREATE TABLE IF NOT EXISTS decision_log (
+      id TEXT PRIMARY KEY, ts TEXT, actor TEXT, action TEXT,
+      scan_id TEXT, file TEXT, rule_id TEXT, detail TEXT
+    )""",
 ]
 
 _UPSERT_INV = (
@@ -406,12 +418,24 @@ class Store:
                 (now, drive_write_url, scan_id, file))
         return now
 
+    def _full_catalog_rules(self) -> dict[str, list[dict]]:
+        """Load rule-catalog.json grouped by engine (docx/pptx/xlsx/pdf/html)."""
+        import json as _json
+        cat = _json.loads(
+            (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text()
+        )
+        return {k: v for k, v in cat.items() if isinstance(v, list)}
+
     def get_scan_manifest(self, scan_id: str) -> dict:
         """Return per-file rule-execution manifest for a scan.
 
-        Groups scan_file_manifests rows by file, then computes per-file
-        completeness (PASS + FAIL = checked; ERROR = not checked).
-        Returns a summary plus per-file breakdowns.
+        Each file lists every catalog rule and an explicit status:
+          PASS / FAIL / ERROR  — the rule applies to this file's format and ran
+          NOT_APPLICABLE       — the rule belongs to a different format (e.g. a
+                                 PPTX rule against a .docx). Recorded explicitly so
+                                 an auditor can see a rule was *considered*, not
+                                 silently omitted. N/A does not count against
+                                 completeness (completeness = checked / applicable).
         """
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -419,7 +443,15 @@ class Store:
                 "FROM scan_file_manifests WHERE scan_id=%s ORDER BY file, rule_id",
                 (scan_id,))
             rows = self._db.fetchall(cur)
-        # Group by file
+            # File extensions in this scan (to know each file's applicable rule set).
+            self._db.execute(cur,
+                "SELECT DISTINCT file FROM scan_file_manifests WHERE scan_id=%s", (scan_id,))
+            scan_files = [r["file"] for r in self._db.fetchall(cur)]
+
+        catalog = self._full_catalog_rules()
+        # Map every engine rule_id → its engine, for NOT_APPLICABLE derivation.
+        all_rule_ids = {r["id"]: eng for eng, rules in catalog.items() for r in rules}
+
         by_file: dict[str, list[dict]] = {}
         for r in rows:
             by_file.setdefault(r["file"], []).append({
@@ -428,22 +460,29 @@ class Store:
                 "finding_count": r["finding_count"],
             })
         files = []
-        total_expected = total_checked = total_errored = 0
-        for fname, rules in sorted(by_file.items()):
+        total_expected = total_checked = total_errored = total_na = 0
+        for fname in sorted(scan_files):
+            rules = by_file.get(fname, [])
+            applied_ids = {r["rule_id"] for r in rules}
+            # Rules from other formats → explicit NOT_APPLICABLE.
+            na = [{"rule_id": rid, "status": "NOT_APPLICABLE", "finding_count": 0}
+                  for rid in sorted(all_rule_ids) if rid not in applied_ids]
             expected = len(rules)
             errored = sum(1 for r in rules if r["status"] == "ERROR")
             checked = expected - errored
             total_expected += expected
             total_checked += checked
             total_errored += errored
+            total_na += len(na)
             files.append({
                 "file": fname,
                 "rules_expected": expected,
                 "rules_checked": checked,
                 "rules_errored": errored,
+                "rules_not_applicable": len(na),
                 "completeness_pct": round(checked / expected * 100) if expected else 100,
                 "complete": errored == 0,
-                "rules": rules,
+                "rules": rules + na,
             })
         return {
             "scan_id": scan_id,
@@ -451,6 +490,7 @@ class Store:
             "rules_expected_total": total_expected,
             "rules_checked_total": total_checked,
             "rules_errored_total": total_errored,
+            "rules_not_applicable_total": total_na,
             "completeness_pct": (
                 round(total_checked / total_expected * 100) if total_expected else 100
             ),
@@ -535,3 +575,49 @@ class Store:
                 "UPDATE hitl_queue SET status=%s, reviewed_at=%s, reviewer_note=%s WHERE id=%s",
                 (status, now, reviewer_note, item_id))
         return self.get_hitl_item(item_id)
+
+    # ── Admin settings (persisted; survives restarts) ─────────────────────────
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT value FROM app_settings WHERE key=%s", (key,))
+            row = self._db.fetchone(cur)
+        return row["value"] if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO app_settings(key,value) VALUES(%s,%s) "
+                "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value",
+                (key, value))
+
+    def get_ai_enabled(self) -> bool:
+        """Platform AI mode. Defaults to enabled; admin can hard-disable it
+        (deterministic-only mode) — which overrides any per-scan ?ai=true."""
+        return self.get_setting("ai_enabled", "true") != "false"
+
+    def set_ai_enabled(self, enabled: bool) -> None:
+        self.set_setting("ai_enabled", "true" if enabled else "false")
+
+    # ── Immutable decision audit log ──────────────────────────────────────────
+    def log_decision(self, actor: str, action: str, *, scan_id: str | None = None,
+                     file: str | None = None, rule_id: str | None = None,
+                     detail: str | None = None) -> None:
+        """Append one row to the immutable decision log. Never updated/deleted."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO decision_log(id,ts,actor,action,scan_id,file,rule_id,detail) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                (uuid.uuid4().hex[:12], now, actor, action, scan_id, file, rule_id, detail))
+
+    def list_decisions(self, scan_id: str | None = None, limit: int = 500) -> list[dict]:
+        with self._db.cursor() as cur:
+            if scan_id:
+                self._db.execute(cur,
+                    "SELECT * FROM decision_log WHERE scan_id=%s ORDER BY ts DESC LIMIT %s",
+                    (scan_id, limit))
+            else:
+                self._db.execute(cur,
+                    "SELECT * FROM decision_log ORDER BY ts DESC LIMIT %s", (limit,))
+            return self._db.fetchall(cur)

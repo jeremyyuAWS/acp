@@ -15,6 +15,10 @@ def ai_explain(scan_id: str = Query(...), file: str = Query(...), rule_id: str =
     Calls the local Ollama instance (OLLAMA_BASE_URL, default http://localhost:11434).
     Returns 503 when Ollama is unavailable — callers should handle gracefully.
     """
+    # Deterministic-only mode is a hard gate: no AI calls when an admin has
+    # disabled AI platform-wide. Findings are reachable via the HITL queue instead.
+    if not core.store.get_ai_enabled():
+        raise HTTPException(403, "AI is disabled (deterministic-only mode) — findings route to human review")
     import ai as _ai
     trace = core.store.get_trace_row(scan_id, file, rule_id)
     if trace is None:
@@ -36,6 +40,8 @@ def ai_explain(scan_id: str = Query(...), file: str = Query(...), rule_id: str =
 
 @router.get("/ai/status")
 def ai_status():
-    """Check whether the local Ollama instance is reachable."""
+    """Check whether the local Ollama instance is reachable, and report whether
+    AI is enabled platform-wide (admin deterministic-only toggle)."""
     import ai as _ai
-    return {"available": _ai.is_available(), "base_url": _ai.OLLAMA_BASE_URL, "model": _ai.OLLAMA_MODEL}
+    return {"available": _ai.is_available(), "base_url": _ai.OLLAMA_BASE_URL,
+            "model": _ai.OLLAMA_MODEL, "ai_enabled": core.store.get_ai_enabled()}

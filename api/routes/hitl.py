@@ -43,4 +43,10 @@ def hitl_update(item_id: str, body: HitlUpdate):
     valid = {"pending", "approved", "rejected", "skipped"}
     if body.status not in valid:
         raise HTTPException(422, f"status must be one of {sorted(valid)}")
-    return core.store.update_hitl_item(item_id, body.status, body.reviewer_note)
+    updated = core.store.update_hitl_item(item_id, body.status, body.reviewer_note)
+    # Immutable audit trail: who decided what, when, on which finding.
+    core.store.log_decision(
+        "reviewer", f"hitl.{body.status}",
+        scan_id=item.get("scan_id"), file=item.get("file"), rule_id=item.get("rule_id"),
+        detail=body.reviewer_note or None)
+    return updated
