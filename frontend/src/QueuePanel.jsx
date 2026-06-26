@@ -1,8 +1,13 @@
 import { useEffect, useState } from 'react'
-import { getJobs } from './api.js'
+import { getJobs, setWorkers } from './api.js'
 
 // Live view of the durable async job queue (ADR 0004). Polls /jobs and shows
 // queue depth by status. The same data Grafana's queue panel renders.
+const WBTN = {
+  width: 26, height: 26, borderRadius: 7, border: '1px solid var(--line)',
+  background: '#fff', color: 'var(--ink)', fontSize: 17, lineHeight: 1,
+  cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+}
 const STATUS = {
   queued:  ['#854F0B', '#FAEEDA', 'queued'],
   running: ['#185FA5', '#E7F0FB', 'running'],
@@ -14,6 +19,7 @@ const STATUS = {
 export default function QueuePanel() {
   const [q, setQ] = useState(null)
   const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     let on = true
@@ -24,6 +30,16 @@ export default function QueuePanel() {
     const t = setInterval(load, 4000)
     return () => { on = false; clearInterval(t) }
   }, [])
+
+  const scaleWorkers = (next) => {
+    const n = Math.max(0, Math.min(16, next))
+    setBusy(true)
+    setQ((cur) => ({ ...(cur || {}), workers: n }))   // optimistic
+    setWorkers(n)
+      .then((d) => setQ((cur) => ({ ...(cur || {}), workers: d.workers })))
+      .catch((e) => setErr(e.message || 'could not change workers'))
+      .finally(() => setBusy(false))
+  }
 
   const stats = q?.stats || {}
   const workers = q?.workers ?? 0
@@ -40,15 +56,26 @@ export default function QueuePanel() {
 
       {q && workers === 0 && (
         <p className="muted" style={{ marginTop: 8, fontSize: 13 }}>
-          No workers running. Set <code>ACP_WORKERS</code> (e.g. 4) at deploy to process
-          queued scans and remediation jobs.
+          No workers running — queued scans and remediation jobs won't process.
+          Use <strong>+</strong> below to start some.
         </p>
       )}
       {!q && err && <p className="muted" style={{ marginTop: 8, fontSize: 13 }}>Queue status unavailable: {err}</p>}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap', marginTop: 12 }}
            role="status" aria-live="polite">
-        <Stat label="workers" value={workers} />
+        <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button onClick={() => scaleWorkers(workers - 1)}
+                    disabled={busy || workers <= 0} aria-label="Remove a worker" title="Remove a worker"
+                    style={WBTN}>−</button>
+            <span style={{ fontSize: 22, fontWeight: 700, minWidth: 22, textAlign: 'center' }}>{workers}</span>
+            <button onClick={() => scaleWorkers(workers + 1)}
+                    disabled={busy || workers >= 16} aria-label="Add a worker" title="Add a worker"
+                    style={WBTN}>+</button>
+          </span>
+          <span className="muted" style={{ fontSize: 11 }}>workers · live-scale (0–16)</span>
+        </span>
         <Stat label="total jobs" value={total} />
         {shown.length === 0 && !err && (
           <span className="muted" style={{ fontSize: 13 }}>queue empty — nothing in flight</span>

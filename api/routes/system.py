@@ -1,13 +1,23 @@
 """System & meta endpoints: liveness, SPA auth config, schedule, hub landing page."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 import core
 
 router = APIRouter()
+
+
+@router.put("/workers")
+def set_workers(count: int = Query(..., ge=0, le=16)):
+    """Admin: live-scale the in-process worker pool (0–16). Persisted + audited.
+    Scaled-down workers finish their current job before exiting."""
+    new = core.set_worker_count(count)
+    core.store.log_decision("admin", "settings.worker_count",
+                            detail=f"worker pool scaled to {new}")
+    return {"workers": new}
 
 
 @router.get("/healthz")

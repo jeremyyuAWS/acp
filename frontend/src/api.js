@@ -65,6 +65,10 @@ export const remediateScan = (scanId) => (SIM
 export const getJobs = (status = null) => (SIM
   ? sim({ workers: 4, stats: { done: 12, running: 1, queued: 3 }, jobs: [] })
   : fetch(`${BASE}/jobs${status ? `?status=${status}` : ''}`, { headers: headers() }).then(j))
+// Live-scale the in-process worker pool (0–16). Persisted server-side.
+export const setWorkers = (count) => (SIM
+  ? sim({ workers: count })
+  : fetch(`${BASE}/workers?count=${count}`, { method: 'PUT', headers: headers() }).then(j))
 export const listFolders = (parent = 'root') => (SIM ? sim({ parent, name: 'My Drive', folders: [] }) : fetch(`${BASE}/folders?parent=${encodeURIComponent(parent)}`, { headers: headers() }).then(j))
 export const getSchedule = () => (SIM
   ? sim({ enabled: false, interval_minutes: 60, next_at: null, last_at: null })

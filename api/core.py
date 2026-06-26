@@ -205,6 +205,42 @@ reload_scheduler()
 # is unchanged until the handlers + enqueue paths are wired.
 WORKERS = int(os.environ.get("ACP_WORKERS", "0") or "0")
 _worker_handles: list = []
+_worker_seq = 0          # monotonic id source so scaled-in workers get fresh ids
+_MAX_WORKERS = 16        # safety cap on live scaling
+
+
+def _spawn_worker() -> None:
+    import threading
+    from worker import JobWorker
+    global _worker_seq
+    w = JobWorker(store, worker_id=f"w{_worker_seq}")
+    t = threading.Thread(target=w.run_forever, daemon=True, name=f"jobworker-{_worker_seq}")
+    _worker_seq += 1
+    t.start()
+    _worker_handles.append((w, t))
+
+
+def set_worker_count(n: int) -> int:
+    """Scale the in-process worker pool to n live workers (spawn or stop threads).
+    Stopped workers finish their current job before exiting. Persisted so a restart
+    keeps the chosen size. Returns the new live count."""
+    global WORKERS
+    n = max(0, min(int(n), _MAX_WORKERS))
+    import handlers  # noqa: F401 — ensure job handlers are registered before spawning
+    cur = len(_worker_handles)
+    if n > cur:
+        for _ in range(n - cur):
+            _spawn_worker()
+    elif n < cur:
+        for w, _t in _worker_handles[n:]:
+            w.stop()                       # exits after the current job (if any)
+        del _worker_handles[n:]
+    WORKERS = n
+    try:
+        store.set_setting("worker_count", str(n))
+    except Exception:
+        pass
+    return len(_worker_handles)
 
 # In-memory per-scan auth tokens for the worker pool. Tokens are NEVER written to
 # the jobs table (which lives in Postgres) — a scan job carries only the scan_id
@@ -248,18 +284,24 @@ def finalize_scan(scan_id: str, effective_ai: bool, source: str) -> None:
 
 
 def start_workers() -> int:
-    """Spawn the worker pool + a stuck-job sweeper. No-op when ACP_WORKERS<=0."""
-    if WORKERS <= 0 or _worker_handles:
-        return 0
+    """Spawn the worker pool + a stuck-job sweeper. Pool size = the persisted
+    worker_count setting if set (live-scaled via the UI), else ACP_WORKERS.
+    No-op when the resolved size is 0."""
+    global WORKERS
+    if _worker_handles:
+        return len(_worker_handles)
     import threading
     import handlers  # noqa: F401 — registers job handlers with the worker
-    from worker import JobWorker
-    for i in range(WORKERS):
-        w = JobWorker(store, worker_id=f"w{i}")
-        t = threading.Thread(target=w.run_forever, daemon=True, name=f"jobworker-{i}")
-        t.start()
-        _worker_handles.append((w, t))
+    try:
+        saved = store.get_setting("worker_count")
+        target = int(saved) if saved not in (None, "") else WORKERS
+    except Exception:
+        target = WORKERS
+    WORKERS = max(0, min(target, _MAX_WORKERS))
+    for _ in range(WORKERS):
+        _spawn_worker()
 
+    # Always start the sweeper (even at 0 workers) so a later live scale-up is covered.
     def _sweep():
         import time as _t
         while True:

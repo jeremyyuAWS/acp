@@ -50,6 +50,9 @@ function progressText(p) {
   }
   let s = m[p.phase] ?? p.phase
   if (p.current && (p.phase === 'reading' || p.phase === 'analysing')) s += ` · ${p.current}`
+  // Queued scans don't stream per-file progress, so reassure the user it's alive
+  // by showing elapsed time on the long worker-pool phase.
+  if (p.elapsed != null) s += ` · still working (${p.elapsed}s)`
   return s
 }
 
@@ -60,6 +63,7 @@ function progressText(p) {
 const PHASE_PCT = { queued: 2, connecting: 5, discovering: 9, reading: 12, tagging: 88, analysing: 92, scoring: 97, done: 100, error: 100 }
 function progressPct(p) {
   if (!p) return 0
+  if (typeof p.pct === 'number') return p.pct   // explicit (e.g. queued elapsed-creep)
   if (p.phase === 'reading' && p.files_found) {
     const frac = Math.min(1, (p.files_done || 0) / p.files_found)
     return Math.round(12 + frac * (84 - 12))
@@ -189,10 +193,15 @@ export default function App() {
       if (queuedScan) {
         // Durable path: enqueue a scan job, then poll until the scan is persisted.
         const { scan_id, workers } = await startScanQueued(apiSource, folder, aiEnabled, deepScan)
-        if (!SIM && !workers) throw new Error('no workers running — set ACP_WORKERS to use the durable queue (see Monitor)')
-        setProgress({ phase: 'queued (durable) · processing in the worker pool — see Monitor' })
-        for (let i = 0; i < 180 && !fresh; i++) {       // up to ~3 min
+        if (!SIM && !workers) throw new Error('no workers running — start some in Monitor (or set ACP_WORKERS)')
+        const t0 = Date.now()
+        for (let i = 0; i < 600 && !fresh; i++) {        // up to ~10 min for large estates
           await new Promise((r) => setTimeout(r, 1000))
+          // No per-file stream on the durable path; show elapsed time + a bar that
+          // eases toward ~95% so the user can see it's still working.
+          const elapsed = Math.round((Date.now() - t0) / 1000)
+          setProgress({ phase: 'scoring', queued: true, elapsed,
+                        pct: Math.min(95, 10 + Math.round(85 * (1 - Math.exp(-elapsed / 90)))) })
           try { fresh = await getScan(scan_id) } catch { fresh = null }   // 404 until done
         }
         if (!fresh) throw new Error('scan still processing — watch it finish in the Monitor queue')
