@@ -105,43 +105,70 @@ function AllowList() {
       .finally(() => setBusy(false))
   }
 
-  return (
-    <section style={{ maxWidth: 560 }}>
-      <h3 style={{ marginTop: 0 }}>Who can use the app</h3>
-      <p className="muted" style={{ fontSize: 13, marginTop: 4, lineHeight: 1.5 }}>
-        Google emails allowed to sign in and scan. Changes take effect on the user’s next
-        sign-in. (Each user must also be a Google OAuth <b>test user</b> until the app is verified.)
-      </p>
+  const avatar = (e) => (e.trim()[0] || '?').toUpperCase()
+  const dirty = loaded   // Save is always available once loaded; cheap idempotent write
 
-      <div style={{ display: 'flex', gap: 8, margin: '12px 0' }}>
-        <input value={input} onChange={(e) => setInput(e.target.value)}
-               onKeyDown={(e) => e.key === 'Enter' && add()}
-               placeholder="name@example.com" aria-label="Email to allow"
-               style={{ flex: 1, padding: '7px 10px', borderRadius: 7, border: '1px solid var(--line)', background: 'var(--surface)', color: 'inherit' }} />
-        <button className="ghost" onClick={add}>Add</button>
+  return (
+    <section style={{ maxWidth: 640 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+        <h3 style={{ margin: 0 }}>Test users</h3>
+        <span className="muted" style={{ fontSize: 13 }}>{emails.length} added · who can sign in &#38; scan</span>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
-        {loaded && emails.length === 0 && <span className="muted" style={{ fontSize: 13 }}>No additional emails yet.</span>}
+      {/* How access works — the two gates, stated plainly */}
+      <div style={{ marginTop: 12, padding: '12px 14px', borderRadius: 10, background: '#EEF2FB', border: '1px solid #D3DDF1' }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: '#2B4A7E', marginBottom: 6 }}>Two things let someone in:</div>
+        <div style={{ fontSize: 12.5, color: '#33405C', lineHeight: 1.55 }}>
+          <div><b>1.</b> They’re on this list <span className="muted">— manage it right here; applies on their next sign-in.</span></div>
+          <div><b>2.</b> They’re a Google <b>test user</b> <span className="muted">— required until the app is Google-verified. Add them once in&nbsp;</span>
+            <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noopener noreferrer" style={{ color: '#2B6CB0', fontWeight: 600 }}>Google Cloud → OAuth consent screen ↗</a>.
+          </div>
+        </div>
+      </div>
+
+      {/* Add */}
+      <div style={{ display: 'flex', gap: 8, margin: '14px 0 10px' }}>
+        <input value={input} onChange={(e) => setInput(e.target.value)}
+               onKeyDown={(e) => e.key === 'Enter' && add()}
+               placeholder="name@gmail.com" aria-label="Add a test user email" type="email"
+               style={{ flex: 1, padding: '8px 11px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'inherit', fontSize: 14 }} />
+        <button onClick={add}>+ Add user</button>
+      </div>
+
+      {/* Editable list */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 14 }}>
+        {loaded && emails.length === 0 && (
+          <div className="muted" style={{ fontSize: 13, padding: '14px', textAlign: 'center', border: '1px dashed var(--line)', borderRadius: 8 }}>
+            No test users added yet — add a Gmail above to grant access.
+          </div>
+        )}
         {emails.map((e) => (
-          <div key={e} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                                padding: '6px 10px', borderRadius: 7, background: '#F1EFF3', border: '1px solid var(--line)' }}>
-            <span style={{ fontSize: 13 }}>{e}</span>
-            <button className="ghost small" onClick={() => remove(e)} aria-label={`Remove ${e}`}>✕</button>
+          <div key={e} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 11px', borderRadius: 9, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+            <span aria-hidden="true" style={{ width: 30, height: 30, borderRadius: '50%', background: '#6D28D9', color: '#fff', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{avatar(e)}</span>
+            <span style={{ fontSize: 14, flex: 1, wordBreak: 'break-all' }}>{e}</span>
+            <button className="ghost small" onClick={() => remove(e)} aria-label={`Remove ${e}`}>Remove</button>
           </div>
         ))}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <button onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save allow-list'}</button>
+        <button onClick={save} disabled={busy || !dirty}>{busy ? 'Saving…' : 'Save changes'}</button>
         {msg && <span className="muted" role="status" aria-live="polite" style={{ fontSize: 13 }}>{msg}</span>}
       </div>
 
+      {/* Always-allowed baseline (read-only) */}
       {(baseline.length > 0 || domains.length > 0) && (
-        <p className="muted" style={{ fontSize: 12, marginTop: 16, lineHeight: 1.5 }}>
-          Always allowed (from deploy config, not editable here): {baseline.join(', ') || '—'}
-          {domains.length > 0 && <> · anyone @{domains.join(', @')}</>}
-        </p>
+        <div style={{ marginTop: 20, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#6B7280', marginBottom: 8 }}>🔒 ALWAYS ALLOWED <span style={{ fontWeight: 400 }}>· from deploy config, not editable here</span></div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+            {baseline.map((e) => (
+              <span key={e} style={{ fontSize: 12.5, padding: '4px 10px', borderRadius: 20, background: '#F0F0F4', border: '1px solid var(--line)', color: '#444' }}>{e}</span>
+            ))}
+            {domains.map((d) => (
+              <span key={d} style={{ fontSize: 12.5, padding: '4px 10px', borderRadius: 20, background: '#EAF3EC', border: '1px solid #CFE5D6', color: '#2F6B43' }}>anyone @{d}</span>
+            ))}
+          </div>
+        </div>
       )}
     </section>
   )
@@ -175,7 +202,7 @@ export default function Settings({ onClose, onRubricSaved, files = [], onOntolog
           <button role="tab" aria-selected={tab === 'owners'} className={tab === 'owners' ? 'fchip on' : 'fchip'} onClick={() => setTab('owners')}>Owners</button>
           <button role="tab" aria-selected={tab === 'permissions'} className={tab === 'permissions' ? 'fchip on' : 'fchip'} onClick={() => setTab('permissions')}>Permissions</button>
           <button role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'fchip on' : 'fchip'} onClick={() => setTab('users')}>Users</button>
-          <button role="tab" aria-selected={tab === 'access'} className={tab === 'access' ? 'fchip on' : 'fchip'} onClick={() => setTab('access')}>Access</button>
+          <button role="tab" aria-selected={tab === 'access'} className={tab === 'access' ? 'fchip on' : 'fchip'} onClick={() => setTab('access')}>Test users</button>
           <button role="tab" aria-selected={tab === 'data'} className={tab === 'data' ? 'fchip on' : 'fchip'} onClick={() => setTab('data')}>Data</button>
         </div>
         <div className="setbody">
