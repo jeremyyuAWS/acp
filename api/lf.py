@@ -144,7 +144,9 @@ def pii_span(file_span_, pinfo: dict):
     for f in findings:
         n = f["count"]
         noun = f["label"].lower()
-        parts.append(f"{n} {noun if n != 1 else noun.rstrip('s')}")
+        if n == 1:  # singularize: "addresses"->"address", "numbers"->"number"
+            noun = noun[:-2] if noun.endswith("addresses") else (noun[:-1] if noun.endswith("s") else noun)
+        parts.append(f"{n} {noun}")
     summary = ", ".join(parts)
     level = "ERROR" if pinfo.get("severity") == "critical" else "WARNING"
     s = file_span_.span(

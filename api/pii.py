@@ -192,7 +192,7 @@ def summarize(findings: list[dict]) -> str:
     for f in findings:
         n = f["count"]
         noun = f["label"].lower()
-        if n == 1:
-            noun = noun.rstrip("s") if noun.endswith("s") else noun
+        if n == 1:  # "addresses"->"address", "numbers"->"number"
+            noun = noun[:-2] if noun.endswith("addresses") else (noun[:-1] if noun.endswith("s") else noun)
         bits.append(f"{n} {noun}")
     return ", ".join(bits)
