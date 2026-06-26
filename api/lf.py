@@ -62,11 +62,10 @@ def scan_trace(scan_id: str, source: str, n_files: int, ai_enabled: bool = True,
     src = _SOURCE_LABEL.get(source, source)
     mode = "AI-assisted" if ai_enabled else "Deterministic (no AI)"
     who = user or "demo"
-    step = "1–2 · Discover + Deep scan" if deep_scan else "1 · Discover"
-    step_tag = "step:1-2" if deep_scan else "step:1"
+    label = "Scan (Deep)" if deep_scan else "Scan"
     # Lead the name with who ran it so the trace LIST segregates by user at a glance,
     # in addition to user_id (which powers Langfuse's Users view) and a user: tag.
-    name = f"{who} · Step {step} · {n_files} document{'s' if n_files != 1 else ''} · {src}"
+    name = f"{who} · {label} · {n_files} document{'s' if n_files != 1 else ''} · {src}"
     return lf.trace(
         id=scan_id,
         name=name,
@@ -74,7 +73,6 @@ def scan_trace(scan_id: str, source: str, n_files: int, ai_enabled: bool = True,
         metadata={
             "what": (f"Discovered + deep-scanned (PII) {n_files} documents" if deep_scan
                      else f"Discovered {n_files} documents (deep scan off)"),
-            "workflow_step": step,
             "deep_scan": deep_scan,
             "source": src,
             "documents": n_files,
@@ -82,7 +80,8 @@ def scan_trace(scan_id: str, source: str, n_files: int, ai_enabled: bool = True,
             "ai_enabled": ai_enabled,
             "run_by": who,
         },
-        tags=["accessibility-scan", step_tag, f"source:{source}", f"user:{who}",
+        tags=["accessibility-scan", ("deep-scan" if deep_scan else "discover-only"),
+              f"source:{source}", f"user:{who}",
               "ai-assisted" if ai_enabled else "deterministic"],
     )
 
@@ -256,10 +255,10 @@ def open_assess_trace(scan_id: str, level: str, n_files: int, user: str | None =
         return _Noop()
     return lf.trace(
         id=f"{scan_id}-assess",
-        name=f"{user or 'demo'} · Step 4 · Assess · WCAG 2.1 {level} · {n_files} document{'s' if n_files != 1 else ''}",
+        name=f"{user or 'demo'} · Assess · WCAG 2.1 {level} · {n_files} document{'s' if n_files != 1 else ''}",
         user_id=user or "demo",
-        tags=["accessibility-assessment", "step:4", f"level:{level}", f"user:{user or 'demo'}"],
-        metadata={"scan_id": scan_id, "workflow_step": "4 · Assess", "level": level, "documents": n_files},
+        tags=["accessibility-assessment", f"level:{level}", f"user:{user or 'demo'}"],
+        metadata={"scan_id": scan_id, "level": level, "documents": n_files},
     )
 
 

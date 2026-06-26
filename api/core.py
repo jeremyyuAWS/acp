@@ -179,15 +179,14 @@ def emit_remediation_span(scan_id: str, filename: str, drive_write_url: str | No
             return
         trace = lf.trace(
             id=f"{scan_id}-remediate",
-            name="Step 6 · Remediate",
-            tags=["accessibility-remediation", "step:6"],
-            metadata={"scan_id": scan_id, "workflow_step": "6 · Remediate"},
+            name="Remediate",
+            tags=["accessibility-remediation"],
+            metadata={"scan_id": scan_id},
         )
         trace.span(
             name=filename,
             input={"file": filename},
             output={"drive_write_url": drive_write_url, "written_to_drive": drive_write_url is not None},
-            metadata={"workflow_step": "6 · Remediate"},
         )
         lf.flush()
     except Exception:
