@@ -62,20 +62,21 @@ def scan_trace(scan_id: str, source: str, n_files: int, ai_enabled: bool = True,
     who = user or "demo"
     # Lead the name with who ran it so the trace LIST segregates by user at a glance,
     # in addition to user_id (which powers Langfuse's Users view) and a user: tag.
-    name = f"{who} · Accessibility scan · {n_files} document{'s' if n_files != 1 else ''} · {src}"
+    name = f"{who} · Step 1–2 · Discover + Deep scan · {n_files} document{'s' if n_files != 1 else ''} · {src}"
     return lf.trace(
         id=scan_id,
         name=name,
         user_id=who,
         metadata={
-            "what": f"Checked {n_files} documents against WCAG 2.1 accessibility rules",
+            "what": f"Discovered + deep-scanned (PII) {n_files} documents",
+            "workflow_step": "1-2 · Discover + Deep scan",
             "source": src,
             "documents": n_files,
             "mode": mode,
             "ai_enabled": ai_enabled,
             "run_by": who,
         },
-        tags=["accessibility-scan", f"source:{source}", f"user:{who}",
+        tags=["accessibility-scan", "step:1-2", f"source:{source}", f"user:{who}",
               "ai-assisted" if ai_enabled else "deterministic"],
     )
 
@@ -249,10 +250,10 @@ def open_assess_trace(scan_id: str, level: str, n_files: int, user: str | None =
         return _Noop()
     return lf.trace(
         id=f"{scan_id}-assess",
-        name=f"WCAG 2.1 {level} assessment · {n_files} document{'s' if n_files != 1 else ''}",
+        name=f"{user or 'demo'} · Step 4 · Assess · WCAG 2.1 {level} · {n_files} document{'s' if n_files != 1 else ''}",
         user_id=user or "demo",
-        tags=["accessibility-assessment", f"level:{level}", f"user:{user or 'demo'}"],
-        metadata={"scan_id": scan_id, "level": level, "documents": n_files},
+        tags=["accessibility-assessment", "step:4", f"level:{level}", f"user:{user or 'demo'}"],
+        metadata={"scan_id": scan_id, "workflow_step": "4 · Assess", "level": level, "documents": n_files},
     )
 
 

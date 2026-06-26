@@ -169,18 +169,25 @@ def fire_webhook(items: list[dict]) -> None:
 
 # ── Langfuse remediation span ─────────────────────────────────────────────────
 def emit_remediation_span(scan_id: str, filename: str, drive_write_url: str | None):
-    """Emit a Langfuse observation for the remediation write-back step."""
+    """Emit a Langfuse span for the remediation write-back (Step 6) on its OWN trace —
+    keyed off the scan id with a '-remediate' suffix, so it never muddies the Step 1–2
+    scan trace. One span per fixed document; the trace accumulates them."""
     try:
         import lf as _lf
         lf = _lf.client()
         if lf is None:
             return
-        trace = lf.trace(id=scan_id, name="acp-scan")
+        trace = lf.trace(
+            id=f"{scan_id}-remediate",
+            name="Step 6 · Remediate",
+            tags=["accessibility-remediation", "step:6"],
+            metadata={"scan_id": scan_id, "workflow_step": "6 · Remediate"},
+        )
         trace.span(
-            name="remediate",
+            name=filename,
             input={"file": filename},
             output={"drive_write_url": drive_write_url, "written_to_drive": drive_write_url is not None},
-            metadata={"step": "6-remediate"},
+            metadata={"workflow_step": "6 · Remediate"},
         )
         lf.flush()
     except Exception:
