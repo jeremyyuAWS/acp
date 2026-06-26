@@ -93,13 +93,19 @@ def _ooxml_text(path: Path) -> str:
     return " ".join(parts)
 
 
-def _pdf_text(path: Path) -> str:
-    import pdfplumber
-    out: list[str] = []
-    with pdfplumber.open(path) as pdf:
-        for page in pdf.pages:
-            out.append(page.extract_text() or "")
-    return "\n".join(out)
+def _pdf_text(path: Path, *, max_pages: int = 30, max_chars: int = 120_000) -> str:
+    """Extract text for PII scanning. Uses pdfminer.high_level — lighter than the
+    pdfplumber layout/table pass the accessibility engine runs — and caps pages,
+    chars, and file size so a long or scanned PDF can't dominate scan time.
+    PII almost always appears early (forms, headers), so the caps are safe.
+    (ADR 0006 — addresses the scan-time regression from per-PDF extraction.)"""
+    try:
+        if path.stat().st_size > 15 * 1024 * 1024:   # very large → likely a scan, no text layer
+            return ""
+        from pdfminer.high_level import extract_text as _extract
+        return (_extract(str(path), maxpages=max_pages) or "")[:max_chars]
+    except Exception:
+        return ""
 
 
 def extract_text(path: Path) -> str:
