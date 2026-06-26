@@ -129,7 +129,7 @@ function FolderPicker({ onScan, onClose }) {
               {i > 0 && <span>›</span>}
               <button style={{ background: 'none', border: 'none', padding: 0, fontSize: 12,
                 cursor: i < stack.length - 1 ? 'pointer' : 'default',
-                color: i < stack.length - 1 ? 'var(--accent)' : 'var(--fg)',
+                color: i < stack.length - 1 ? 'var(--accent)' : 'var(--ink)',
                 fontWeight: i === stack.length - 1 ? 600 : 400 }}
                 onClick={() => i < stack.length - 1 && goTo(i)}>
                 {f.name}
@@ -150,7 +150,7 @@ function FolderPicker({ onScan, onClose }) {
             <div style={{ padding: '20px 18px', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
               <span style={{ fontSize: 18, lineHeight: 1 }}>⚠️</span>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', marginBottom: 4 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)', marginBottom: 4 }}>
                   Could not load folders
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--muted)' }}>{err}</div>
@@ -171,17 +171,18 @@ function FolderPicker({ onScan, onClose }) {
               onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
               onClick={() => enter(f)}>
               <FolderIcon />
-              <span style={{ flex: 1 }}>{f.name}</span>
-              <span style={{ color: 'var(--muted)', fontSize: 15 }}>›</span>
+              <span style={{ flex: 1, color: 'var(--ink)', fontWeight: 500 }}>{f.name}</span>
+              <span style={{ color: 'var(--ink)', fontSize: 15 }}>›</span>
             </button>
           ))}
         </div>
 
         {/* Recursion note */}
-        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12,
-                      display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span aria-hidden="true">↳</span>
-          Scans the chosen folder <strong>and everything inside it</strong> — all subfolders, recursively.
+        <div style={{ fontSize: 12.5, color: 'var(--ink)', marginBottom: 14,
+                      background: '#F1EFF3', border: '1px solid var(--line)', borderRadius: 8,
+                      padding: '9px 12px', display: 'flex', alignItems: 'center', gap: 8, lineHeight: 1.4 }}>
+          <span aria-hidden="true" style={{ fontSize: 14 }}>↳</span>
+          <span>Scans the chosen folder <strong>and everything inside it</strong> — all subfolders, recursively.</span>
         </div>
 
         {/* Footer */}
