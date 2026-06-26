@@ -433,8 +433,9 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
 
         office = _analyse_office(tmp)
 
-        # One Langfuse trace covers the full scan; one span per file; one child span per rule.
-        trace = _lf_mod.scan_trace(scan_id, source, n, ai_enabled=ai_enabled, user=user)
+        # One Langfuse trace covers the full scan. Per-file spans only when Deep scan is on.
+        trace = _lf_mod.scan_trace(scan_id, source, n, ai_enabled=ai_enabled, user=user,
+                                   deep_scan=detect_pii)
 
         import pii as _pii_mod  # sensitive-data detection dimension (ADR 0006)
         pii_by_file: dict[str, dict] = {}
@@ -467,16 +468,18 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             progress({"phase": "scoring", "files_found": n, "files_done": done_i, "current": name})
             raw[name] = r
             engine = r["engine"]
-            # SCAN trace = discovery + DEEP SCAN (PII). The per-WCAG-rule assessment is
-            # written separately when the user runs Assess (assess_trace job).
-            fspan = _lf_mod.file_span(trace, name, engine)
             pii_total = 0
             if detect_pii and pinfo is not None:
                 pii_by_file[name] = pinfo
                 pii_total = pinfo.get("total", 0)
+            # Per-file Langfuse spans ONLY when Deep scan is on — a plain discover leaves
+            # Langfuse with just the discovery summary, no per-file noise. The per-WCAG-rule
+            # assessment is a separate trace, written only when the user runs Assess.
+            if detect_pii:
+                fspan = _lf_mod.file_span(trace, name, engine)
                 if pii_total:
                     _lf_mod.pii_span(fspan, pinfo, filename=name)
-            fspan.end(output={"engine": engine, "sensitive_data": pii_total})
+                fspan.end(output={"engine": engine, "sensitive_data": pii_total})
 
         progress({"phase": "scoring", "files_found": n, "files_done": n, "current": None})
         for r in raw.values():

@@ -198,7 +198,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
                   max_files=FANOUT_MAX_FILES)
     started = _dt.datetime.now(_dt.timezone.utc).isoformat()
     core.store.init_scan_run(scan_id, source, len(items), started, rb.name, rb.hash, owner=user)
-    _lf.scan_trace(scan_id, source, len(items), ai_enabled=ai, user=user)
+    _lf.scan_trace(scan_id, source, len(items), ai_enabled=ai, user=user, deep_scan=pii)
     if not items:
         core.store.enqueue_job("scan_finalize",
                                {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)
@@ -247,12 +247,15 @@ def _scan_file(payload: dict, job: dict) -> None:
         if pinfo:
             fdict["pii"] = pinfo
         core.store.save_file_result(scan_id, fdict, now)
-        # SCAN trace = discovery + DEEP SCAN (PII) only — the per-WCAG-rule assessment is
-        # written separately when the user runs Assess (see the assess_trace job).
-        fspan = _lf.file_span_for(scan_id, name, fdict["engine"])
-        if pinfo and pinfo.get("total"):
-            _lf.pii_span(fspan, pinfo, filename=name)
-        fspan.end(output={"engine": fdict["engine"], "sensitive_data": (pinfo or {}).get("total", 0)})
+        # Per-file Langfuse spans are written ONLY when Deep scan is on — that's the
+        # per-document processing worth tracing. A plain discover (deep scan off) leaves
+        # Langfuse with just the discovery summary, no per-file noise. The per-WCAG-rule
+        # assessment is a separate trace, written only when the user runs Assess.
+        if pii:
+            fspan = _lf.file_span_for(scan_id, name, fdict["engine"])
+            if pinfo and pinfo.get("total"):
+                _lf.pii_span(fspan, pinfo, filename=name)
+            fspan.end(output={"engine": fdict["engine"], "sensitive_data": (pinfo or {}).get("total", 0)})
     finally:
         _shutil.rmtree(tmp, ignore_errors=True)
     done, total = core.store.bump_files_done(scan_id)

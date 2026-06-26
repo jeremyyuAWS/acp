@@ -49,34 +49,40 @@ class _Noop:
 
 
 def scan_trace(scan_id: str, source: str, n_files: int, ai_enabled: bool = True,
-               user: str | None = None):
+               user: str | None = None, deep_scan: bool = False):
     """Create a Langfuse trace for one scan run, with a human-readable name.
 
     user — the signed-in person's email (GIS). Sets the Langfuse trace user_id so
-    traces group by who ran the scan; falls back to 'demo' for the keyless demo."""
+    traces group by who ran the scan; falls back to 'demo' for the keyless demo.
+    deep_scan — whether PII detection ran. When off, the trace is a plain "Discover"
+    (Step 1) and carries no per-file spans; when on it's "Discover + Deep scan" (1–2)."""
     lf = _lf()
     if lf is None:
         return _Noop()
     src = _SOURCE_LABEL.get(source, source)
     mode = "AI-assisted" if ai_enabled else "Deterministic (no AI)"
     who = user or "demo"
+    step = "1–2 · Discover + Deep scan" if deep_scan else "1 · Discover"
+    step_tag = "step:1-2" if deep_scan else "step:1"
     # Lead the name with who ran it so the trace LIST segregates by user at a glance,
     # in addition to user_id (which powers Langfuse's Users view) and a user: tag.
-    name = f"{who} · Step 1–2 · Discover + Deep scan · {n_files} document{'s' if n_files != 1 else ''} · {src}"
+    name = f"{who} · Step {step} · {n_files} document{'s' if n_files != 1 else ''} · {src}"
     return lf.trace(
         id=scan_id,
         name=name,
         user_id=who,
         metadata={
-            "what": f"Discovered + deep-scanned (PII) {n_files} documents",
-            "workflow_step": "1-2 · Discover + Deep scan",
+            "what": (f"Discovered + deep-scanned (PII) {n_files} documents" if deep_scan
+                     else f"Discovered {n_files} documents (deep scan off)"),
+            "workflow_step": step,
+            "deep_scan": deep_scan,
             "source": src,
             "documents": n_files,
             "mode": mode,
             "ai_enabled": ai_enabled,
             "run_by": who,
         },
-        tags=["accessibility-scan", "step:1-2", f"source:{source}", f"user:{who}",
+        tags=["accessibility-scan", step_tag, f"source:{source}", f"user:{who}",
               "ai-assisted" if ai_enabled else "deterministic"],
     )
 
