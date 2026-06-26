@@ -27,12 +27,18 @@ ACP = Path(__file__).resolve().parent.parent
 # ── Config (env) ──────────────────────────────────────────────────────────────
 ACCESS_CODE = os.environ.get("ACP_ACCESS_CODE")
 GOOGLE_CLIENT_ID = os.environ.get("ACP_GOOGLE_CLIENT_ID") or None
-# Smoke/e2e test key: requests with X-E2E-Key matching this value bypass auth.
-# Set ACP_E2E_KEY in the container env — leave unset in production if not needed.
-E2E_KEY = os.environ.get("ACP_E2E_KEY") or None
-# Comma-separated domains allowed in GIS mode (default: movate.com).
+# Production mode: hard-disables the test/demo auth bypasses (X-E2E-Key, X-Demo-Key)
+# regardless of whether their keys are set — defence in depth, so a stray env var
+# can't reopen a backdoor in prod. Set ACP_ENV=production on production deployments.
+IS_PROD = os.environ.get("ACP_ENV", "").lower() in ("production", "prod")
+# Smoke/e2e test key: requests with X-E2E-Key bypass auth. Only honoured when
+# IS_PROD is false AND the key is set — inert in production.
+E2E_KEY = (os.environ.get("ACP_E2E_KEY") or None) if not IS_PROD else None
+# Comma-separated domains allowed in GIS mode. DENY-BY-DEFAULT: empty unless the
+# operator configures ACP_ALLOWED_DOMAINS, so a fresh deploy admits no one until
+# explicitly opened to a domain.
 ALLOWED_DOMAINS = [
-    d.strip() for d in os.environ.get("ACP_ALLOWED_DOMAINS", "movate.com").split(",") if d.strip()
+    d.strip() for d in os.environ.get("ACP_ALLOWED_DOMAINS", "").split(",") if d.strip()
 ]
 # Comma-separated individual emails allowed in GIS mode, in addition to the
 # domains above. Lets you permit a specific outside account (e.g. a personal
