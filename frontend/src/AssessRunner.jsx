@@ -109,6 +109,7 @@ export default function AssessRunner({ files = [], runId }) {
   }
 
   const assess = () => {
+    if (phase === 'running') return               // never launch a second pass while one runs
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
     const computed = computeResult(level)        // result is instant + deterministic
     const startedAt = Date.now()

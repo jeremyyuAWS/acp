@@ -199,6 +199,7 @@ export default function App() {
   }
 
   const doScan = async (source, folder = null) => {
+    if (busy) return                              // a scan/assessment is already running — don't launch another
     setBusy(true); setErr(null); setProgress({ phase: 'queued' })
     const prevAvg = scan?.run?.avg_score
     // SIM: sim functions handle any source string synthetically.
