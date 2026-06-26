@@ -3,7 +3,7 @@ import Drawer from './Drawer.jsx'
 import Tag from './Tag.jsx'
 import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
-import { allRules } from './rules/index.js'
+import { allRules, PLAIN_NAMES } from './rules/index.js'
 import { explainFinding, getFileContent, uploadToDrive, markRemediated } from './api.js'
 
 // Prescriptive-action styling, shared with the Discover inventory.
@@ -321,7 +321,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           const outcome = !isHtmlFile && id !== '1.1.1' && id !== '1.3.1' && id !== '2.4.2' && id !== '3.1.1'
             ? 'SKIP'
             : count > 0 ? 'FAIL' : 'PASS'
-          return { id, name, level, fixMode: effectiveFixMode, outcome, count }
+          return { id, name, plain: PLAIN_NAMES[id] || name, level, fixMode: effectiveFixMode, outcome, count }
         })
         const passCount = rows.filter((r) => r.outcome === 'PASS').length
         const failCount = rows.filter((r) => r.outcome === 'FAIL').length
@@ -344,7 +344,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                     <Fragment key={r.id}>
                       <tr className={`covrow ${r.outcome.toLowerCase()}`}>
                         <td className="covsc">{r.id}</td>
-                        <td>{r.name}</td>
+                        <td>{r.plain}<div className="muted" style={{ fontSize: 11 }}>{r.name}</div></td>
                         <td className="muted">{r.level}</td>
                         <td className="muted">{r.fixMode === 'auto' ? '⚡ auto' : r.fixMode === 'ai-assisted' ? '✎ AI' : '✋ human'}</td>
                         <td className={`covoutcome ${r.outcome.toLowerCase()}`}>

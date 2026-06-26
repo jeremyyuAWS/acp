@@ -434,12 +434,12 @@ class Store:
         with self._db.cursor() as cur:
             if file:
                 self._db.execute(cur,
-                    "SELECT rule_id,rule_name,level,fix_mode,outcome,finding_count "
+                    "SELECT rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count "
                     "FROM scan_rule_traces WHERE scan_id=%s AND file=%s ORDER BY rule_id",
                     (scan_id, file))
             else:
                 self._db.execute(cur,
-                    "SELECT file,rule_id,rule_name,level,fix_mode,outcome,finding_count "
+                    "SELECT file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count "
                     "FROM scan_rule_traces WHERE scan_id=%s ORDER BY file,rule_id",
                     (scan_id,))
             return self._db.fetchall(cur)

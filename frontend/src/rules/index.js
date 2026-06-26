@@ -47,6 +47,28 @@ export const allRules = [
   r412,  // 4.1.2 Name, Role, Value
 ]
 
+// Non-technical phrase per SC — mirrors the backend RULE_CATALOG.plain (api/store.py).
+// Used so the in-app rule-coverage manifest reads like Grafana/Langfuse.
+export const PLAIN_NAMES = {
+  '1.1.1': 'Images missing a text description',
+  '1.3.1': 'Structure not marked up (headings, lists, tables)',
+  '1.4.1': 'Information shown by color alone',
+  '1.4.3': 'Text with low color contrast',
+  '1.4.4': "Text that can't be enlarged",
+  '1.4.10': "Content that doesn't reflow on small screens",
+  '1.4.11': 'Buttons or icons with low contrast',
+  '1.4.12': "Text spacing can't be adjusted",
+  '2.1.1': "Can't be used with a keyboard",
+  '2.4.2': 'Missing a page or document title',
+  '2.4.3': 'Illogical keyboard navigation order',
+  '2.4.4': "Unclear link text (e.g. 'click here')",
+  '2.4.6': 'Unclear headings or labels',
+  '2.4.7': 'No visible keyboard focus indicator',
+  '3.1.1': 'Document language not set',
+  '3.1.4': 'Unexplained abbreviations',
+  '4.1.2': 'Controls missing names/roles for assistive tech',
+}
+
 // Run check() on every active rule and return a coverage manifest.
 // When aiEnabled=false, ai-assisted rules are still checked (finding is reported)
 // but their fixMode is surfaced as 'human-only' so callers can route to HITL.
