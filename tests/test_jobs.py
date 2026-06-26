@@ -149,10 +149,11 @@ def test_scan_handler_runs_persists_finalizes(store, monkeypatch):
     captured = {}
 
     def fake_run_scan(source, *, drive_token=None, sp_token=None, folder=None,
-                      ai_enabled=True, scan_id=None):
+                      ai_enabled=True, scan_id=None, user=None):
         captured["scan_id"] = scan_id
         captured["drive_token"] = drive_token
         captured["ai_enabled"] = ai_enabled
+        captured["user"] = user
         return {"_scan_id": scan_id, "summary": {"files": 1, "certifiable": 1,
                 "uncertain": 0, "error": 0, "avg_score": 100},
                 "rubric": {"name": "r", "version": "1", "hash": "h"},

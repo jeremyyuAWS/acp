@@ -48,8 +48,12 @@ class _Noop:
     def flush(self): pass
 
 
-def scan_trace(scan_id: str, source: str, n_files: int, ai_enabled: bool = True):
-    """Create a Langfuse trace for one scan run, with a human-readable name."""
+def scan_trace(scan_id: str, source: str, n_files: int, ai_enabled: bool = True,
+               user: str | None = None):
+    """Create a Langfuse trace for one scan run, with a human-readable name.
+
+    user — the signed-in person's email (GIS). Sets the Langfuse trace user_id so
+    traces group by who ran the scan; falls back to 'demo' for the keyless demo."""
     lf = _lf()
     if lf is None:
         return _Noop()
@@ -59,12 +63,14 @@ def scan_trace(scan_id: str, source: str, n_files: int, ai_enabled: bool = True)
     return lf.trace(
         id=scan_id,
         name=name,
+        user_id=user or "demo",
         metadata={
             "what": f"Checked {n_files} documents against WCAG 2.1 accessibility rules",
             "source": src,
             "documents": n_files,
             "mode": mode,
             "ai_enabled": ai_enabled,
+            "run_by": user or "demo",
         },
         tags=["accessibility-scan", f"source:{source}", "ai-assisted" if ai_enabled else "deterministic"],
     )
@@ -101,7 +107,8 @@ def rule_spans(file_span_, sc_counts: dict[str, int], rule_catalog: list[dict],
         count = sc_counts.get(rid, 0)
         outcome = "FAIL" if count > 0 else "PASS"
         severity = (severity_map or {}).get(rid, rule.get("severity", ""))
-        plain = rule.get("name", rid)
+        # Prefer the non-technical phrase; fall back to the WCAG name, then the id.
+        plain = rule.get("plain") or rule.get("name", rid)
         if outcome == "FAIL":
             label = f"✗ {plain} — {count} issue{'s' if count != 1 else ''}"
             status = f"{count} document issue{'s' if count != 1 else ''} ({(severity or 'finding').lower()})"

@@ -53,6 +53,7 @@ def _scan(payload: dict, job: dict) -> None:
         folder=payload.get("folder"),
         ai_enabled=effective_ai,
         scan_id=scan_id,
+        user=payload.get("user"),
     )
     core.store.save_scan(report)
     core.finalize_scan(scan_id, effective_ai, source)

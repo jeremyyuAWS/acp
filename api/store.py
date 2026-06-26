@@ -50,6 +50,8 @@ _SCHEMA = [
       level TEXT, fix_mode TEXT, outcome TEXT, finding_count INT,
       PRIMARY KEY (scan_id, file, rule_id)
     )""",
+    # plain-English label (ADR: non-technical surfaces). Backfilled per scan.
+    "ALTER TABLE scan_rule_traces ADD COLUMN IF NOT EXISTS plain_name TEXT",
     """CREATE TABLE IF NOT EXISTS hitl_queue (
       id TEXT PRIMARY KEY,
       created_at TEXT,
@@ -113,24 +115,27 @@ _UPSERT_INV = (
 # Used to compute per-file pass/fail/skip traces when saving scan results.
 # fix_mode: 'auto' = deterministic, 'ai-assisted' = AI draft + human approve,
 #           'human-only' = must be verified by a person.
+# plain: a non-technical phrase for the rule, used in Langfuse span names and the
+# Grafana "most common problems" panel (persisted to scan_rule_traces.plain_name).
+# This is the single source of truth for the plain-English rule labels.
 RULE_CATALOG: list[dict] = [
-    {"id": "1.1.1",  "name": "Non-text Content",           "level": "A",   "fix_mode": "ai-assisted"},
-    {"id": "1.3.1",  "name": "Info and Relationships",      "level": "A",   "fix_mode": "auto"},
-    {"id": "1.4.1",  "name": "Use of Color",                "level": "A",   "fix_mode": "auto"},
-    {"id": "1.4.3",  "name": "Contrast (Minimum)",          "level": "AA",  "fix_mode": "auto"},
-    {"id": "1.4.4",  "name": "Resize Text",                 "level": "AA",  "fix_mode": "auto"},
-    {"id": "1.4.10", "name": "Reflow",                      "level": "AA",  "fix_mode": "auto"},
-    {"id": "1.4.11", "name": "Non-text Contrast",           "level": "AA",  "fix_mode": "ai-assisted"},
-    {"id": "1.4.12", "name": "Text Spacing",                "level": "AA",  "fix_mode": "auto"},
-    {"id": "2.1.1",  "name": "Keyboard",                    "level": "A",   "fix_mode": "auto"},
-    {"id": "2.4.2",  "name": "Page Titled",                 "level": "A",   "fix_mode": "auto"},
-    {"id": "2.4.3",  "name": "Focus Order",                 "level": "A",   "fix_mode": "auto"},
-    {"id": "2.4.4",  "name": "Link Purpose (In Context)",   "level": "A",   "fix_mode": "ai-assisted"},
-    {"id": "2.4.6",  "name": "Headings and Labels",         "level": "AA",  "fix_mode": "auto"},
-    {"id": "2.4.7",  "name": "Focus Visible",               "level": "AA",  "fix_mode": "auto"},
-    {"id": "3.1.1",  "name": "Language of Page",            "level": "A",   "fix_mode": "auto"},
-    {"id": "3.1.4",  "name": "Abbreviations",               "level": "AAA", "fix_mode": "auto"},
-    {"id": "4.1.2",  "name": "Name, Role, Value",           "level": "A",   "fix_mode": "ai-assisted"},
+    {"id": "1.1.1",  "name": "Non-text Content",           "level": "A",   "fix_mode": "ai-assisted", "plain": "Images missing a text description"},
+    {"id": "1.3.1",  "name": "Info and Relationships",      "level": "A",   "fix_mode": "auto",         "plain": "Structure not marked up (headings, lists, tables)"},
+    {"id": "1.4.1",  "name": "Use of Color",                "level": "A",   "fix_mode": "auto",         "plain": "Information shown by color alone"},
+    {"id": "1.4.3",  "name": "Contrast (Minimum)",          "level": "AA",  "fix_mode": "auto",         "plain": "Text with low color contrast"},
+    {"id": "1.4.4",  "name": "Resize Text",                 "level": "AA",  "fix_mode": "auto",         "plain": "Text that can't be enlarged"},
+    {"id": "1.4.10", "name": "Reflow",                      "level": "AA",  "fix_mode": "auto",         "plain": "Content that doesn't reflow on small screens"},
+    {"id": "1.4.11", "name": "Non-text Contrast",           "level": "AA",  "fix_mode": "ai-assisted", "plain": "Buttons or icons with low contrast"},
+    {"id": "1.4.12", "name": "Text Spacing",                "level": "AA",  "fix_mode": "auto",         "plain": "Text spacing can't be adjusted"},
+    {"id": "2.1.1",  "name": "Keyboard",                    "level": "A",   "fix_mode": "auto",         "plain": "Can't be used with a keyboard"},
+    {"id": "2.4.2",  "name": "Page Titled",                 "level": "A",   "fix_mode": "auto",         "plain": "Missing a page or document title"},
+    {"id": "2.4.3",  "name": "Focus Order",                 "level": "A",   "fix_mode": "auto",         "plain": "Illogical keyboard navigation order"},
+    {"id": "2.4.4",  "name": "Link Purpose (In Context)",   "level": "A",   "fix_mode": "ai-assisted", "plain": "Unclear link text (e.g. 'click here')"},
+    {"id": "2.4.6",  "name": "Headings and Labels",         "level": "AA",  "fix_mode": "auto",         "plain": "Unclear headings or labels"},
+    {"id": "2.4.7",  "name": "Focus Visible",               "level": "AA",  "fix_mode": "auto",         "plain": "No visible keyboard focus indicator"},
+    {"id": "3.1.1",  "name": "Language of Page",            "level": "A",   "fix_mode": "auto",         "plain": "Document language not set"},
+    {"id": "3.1.4",  "name": "Abbreviations",               "level": "AAA", "fix_mode": "auto",         "plain": "Unexplained abbreviations"},
+    {"id": "4.1.2",  "name": "Name, Role, Value",           "level": "A",   "fix_mode": "ai-assisted", "plain": "Controls missing names/roles for assistive tech"},
 ]
 
 def _extract_sc(wcag: str) -> str:
@@ -329,10 +334,10 @@ class Store:
                     count = sc_counts.get(rid, 0)
                     outcome = "FAIL" if count > 0 else "PASS"
                     self._db.execute(cur,
-                        "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,level,fix_mode,outcome,finding_count) "
-                        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s) "
+                        "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "
+                        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                         "ON CONFLICT(scan_id,file,rule_id) DO UPDATE SET outcome=EXCLUDED.outcome,finding_count=EXCLUDED.finding_count",
-                        (sid, f["file"], rid, rule["name"], rule["level"], rule["fix_mode"], outcome, count))
+                        (sid, f["file"], rid, rule["name"], rule.get("plain"), rule["level"], rule["fix_mode"], outcome, count))
                 self._save_file_manifest(cur, sid, f, catalog)
                 # Sensitive-data (PII) findings — masked samples only (ADR 0006).
                 for pf in (f.get("pii") or {}).get("findings", []):

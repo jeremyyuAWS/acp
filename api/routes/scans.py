@@ -33,6 +33,9 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
     # Admin deterministic-only mode is a HARD override: if AI is disabled platform-wide,
     # no scan runs AI regardless of the per-scan ?ai= request.
     effective_ai = ai and core.store.get_ai_enabled()
+    # Who ran this scan (GIS email, set by the access-gate). Used to group traces
+    # by user in Langfuse; falls back to the demo identity on the keyless path.
+    user = getattr(request.state, "user_email", None) or ("demo" if is_demo_drive else None)
 
     # ── Durable async path: enqueue a scan job for the worker pool (ADR 0004). ──
     # Survives restarts, retries on transient failure, shows up in /jobs + Grafana.
@@ -40,12 +43,12 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
         scan_id = uuid.uuid4().hex[:12]
         core.register_scan_tokens(scan_id, drive=token, sp=sp_token)  # in-memory only
         job_id = core.store.enqueue_job(
-            "scan", {"source": source, "scan_id": scan_id, "folder": folder, "ai": ai},
+            "scan", {"source": source, "scan_id": scan_id, "folder": folder, "ai": ai, "user": user},
             scan_id=scan_id)
         return {"scan_id": scan_id, "job_id": job_id, "queued": True, "workers": core.WORKERS}
 
     if sync:  # synchronous path for scripts/tests
-        report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token, ai_enabled=effective_ai)
+        report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token, ai_enabled=effective_ai, user=user)
         sid = core.store.save_scan(report)
         core.finalize_scan(sid, effective_ai, source)
         return {"scan_id": sid, "source": source, "summary": report["summary"]}
@@ -58,7 +61,8 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
     def work():
         try:
             report = run_scan(source, progress=lambda d: core.JOBS[job_id].update(d),
-                              drive_token=token, folder=folder, sp_token=sp_token, ai_enabled=effective_ai)
+                              drive_token=token, folder=folder, sp_token=sp_token,
+                              ai_enabled=effective_ai, user=user)
             sid = core.store.save_scan(report)
             core.finalize_scan(sid, effective_ai, source)
             core.JOBS[job_id].update({"phase": "done", "done": True, "scan_id": sid,

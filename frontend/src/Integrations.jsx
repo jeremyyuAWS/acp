@@ -177,11 +177,18 @@ function FolderPicker({ onScan, onClose }) {
           ))}
         </div>
 
+        {/* Recursion note */}
+        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12,
+                      display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span aria-hidden="true">↳</span>
+          Scans the chosen folder <strong>and everything inside it</strong> — all subfolders, recursively.
+        </div>
+
         {/* Footer */}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
           <button className="ghost small" onClick={() => onScan(null)}>Scan all of My Drive</button>
           <button onClick={() => onScan(current.id === 'root' ? null : current.id)}>
-            Scan "{current.name}"
+            Scan "{current.name}" + subfolders
           </button>
         </div>
       </div>

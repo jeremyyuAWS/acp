@@ -125,12 +125,14 @@ def _search_drive(svc, max_files: int = 500) -> list[dict]:
     return _normalize(files[:max_files])
 
 
-def _search_folder(svc, folder_id: str) -> list[dict]:
-    """BFS over a folder subtree — returns all scannable files."""
+def _search_folder(svc, folder_id: str, max_files: int = 1000) -> list[dict]:
+    """BFS over a folder subtree — returns all scannable files in the folder AND
+    every nested subfolder. Bounded by max_files (newest folders may be skipped
+    once the cap is hit) and a cycle guard, so a huge tree can't run unbounded."""
     queue = [folder_id]
     seen_folders: set[str] = set()
     raw: list[dict] = []
-    while queue:
+    while queue and len(raw) < max_files:
         fid = queue.pop(0)
         if fid in seen_folders:
             continue
@@ -149,9 +151,9 @@ def _search_folder(svc, folder_id: str) -> list[dict]:
                 else:
                     raw.append(f)
             page_token = resp.get("nextPageToken")
-            if not page_token:
+            if not page_token or len(raw) >= max_files:
                 break
-    return _normalize(raw)
+    return _normalize(raw[:max_files])
 
 
 def _sp_list(token: str, max_files: int = 200) -> list[dict]:
@@ -335,7 +337,8 @@ def _analyse_html(path: Path) -> dict:
 
 def run_scan(source: str = "local", progress=_noop, drive_token: str | None = None,
              folder: str | None = None, sp_token: str | None = None,
-             ai_enabled: bool = True, scan_id: str | None = None) -> dict:
+             ai_enabled: bool = True, scan_id: str | None = None,
+             user: str | None = None) -> dict:
     from store import RULE_CATALOG, _extract_sc  # import here to avoid circular at module load
     rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
@@ -357,7 +360,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         office = _analyse_office(tmp)
 
         # One Langfuse trace covers the full scan; one span per file; one child span per rule.
-        trace = _lf_mod.scan_trace(scan_id, source, n, ai_enabled=ai_enabled)
+        trace = _lf_mod.scan_trace(scan_id, source, n, ai_enabled=ai_enabled, user=user)
 
         import pii as _pii_mod  # sensitive-data detection dimension (ADR 0006)
         pii_by_file: dict[str, dict] = {}

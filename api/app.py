@@ -64,6 +64,7 @@ async def _access_gate(request, call_next):
         if not core.email_allowed(email):
             return Response(status_code=403, media_type="application/json",
                             content='{"detail":"Access restricted to authorized accounts"}')
+        request.state.user_email = email   # so routes can attribute the scan (Langfuse user)
     return await call_next(request)
 
 
