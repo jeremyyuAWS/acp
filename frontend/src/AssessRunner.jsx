@@ -53,7 +53,7 @@ const loadSaved = (id) => { try { return JSON.parse(sessionStorage.getItem(SKEY(
 export default function AssessRunner({ files = [], runId }) {
   const saved = loadSaved(runId)
   const [level, setLevel] = useState(saved?.level || 'AA')
-  const [phase, setPhase] = useState(saved?.result ? 'done' : 'idle') // idle | running | done
+  const [phase, setPhase] = useState(saved?.phase || 'idle') // idle | running | done
   const [progress, setProgress] = useState(0)
   const [currentFile, setCurrentFile] = useState(null)
   const [currentPhase, setCurrentPhase] = useState('')
@@ -84,46 +84,52 @@ export default function AssessRunner({ files = [], runId }) {
              pct: Math.round((conformant / total) * 100) }
   }
 
-  const runPhases = (file, onDone) => {
-    const phases = phaseFor(file?.name)
-    let pi = 0
-    const next = () => {
-      if (pi >= phases.length) { onDone(); return }
-      setCurrentPhase(phases[pi++])
-      // each phase message shows for 180–280ms
-      phaseTimer.current = setTimeout(next, 180 + Math.random() * 100)
+  // Time-based cosmetic pass (~600ms/doc). Driven by wall-clock since startedAt so it
+  // resumes correctly after a tab switch / reload — like the Scan progress bar.
+  const DURATION = Math.max(1, docs.length) * 600
+
+  const save = (obj) => { try { sessionStorage.setItem(SKEY(runId), JSON.stringify(obj)) } catch { /* ignore */ } }
+
+  const runTicker = (startedAt, lvl, computed) => {
+    clearInterval(timer.current)
+    const step = () => {
+      const elapsed = Date.now() - startedAt
+      if (elapsed >= DURATION) {
+        clearInterval(timer.current)
+        setProgress(docs.length); setCurrentFile(null); setCurrentPhase('')
+        setResult(computed); setPhase('done')
+        save({ phase: 'done', level: lvl, result: computed })
+        return
+      }
+      const idx = Math.min(docs.length - 1, Math.floor((elapsed / DURATION) * docs.length))
+      setProgress(idx); setCurrentFile(docs[idx]); setCurrentPhase(phaseFor(docs[idx]?.name)[idx % 2])
     }
-    next()
+    step()
+    timer.current = setInterval(step, 200)
   }
 
   const assess = () => {
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
-    // Compute + persist the result up front so it survives leaving the tab mid-run.
-    const computed = computeResult(level)
-    try { sessionStorage.setItem(SKEY(runId), JSON.stringify({ level, result: computed })) } catch { /* ignore */ }
-    setPhase('running'); setProgress(0); setResult(null); setCurrentFile(null); setCurrentPhase('')
-    const total = Math.max(1, docs.length)
-    let i = 0
-
-    const tick = () => {
-      if (i >= total) {
-        clearInterval(timer.current)
-        setProgress(total); setCurrentFile(null); setCurrentPhase('')
-        setResult(computed)
-        setPhase('done')
-        return
-      }
-      const file = docs[i]
-      setCurrentFile(file)
-      setProgress(i)
-      runPhases(file, () => {})
-      i++
-    }
-
-    tick()
-    // Each file takes ~500–700ms: phases (3×~220ms) + a small gap
-    timer.current = setInterval(tick, 600)
+    const computed = computeResult(level)        // result is instant + deterministic
+    const startedAt = Date.now()
+    save({ phase: 'running', startedAt, level, result: computed })
+    setPhase('running'); setResult(null); setProgress(0)
+    runTicker(startedAt, level, computed)
   }
+
+  // Resume an in-flight pass after a tab switch or reload: continue from the elapsed
+  // point, or finish if the expected duration already passed while away.
+  useEffect(() => {
+    if (saved?.phase === 'running' && saved.startedAt) {
+      if (Date.now() - saved.startedAt >= DURATION) {
+        setProgress(docs.length); setResult(saved.result); setPhase('done')
+        save({ phase: 'done', level: saved.level, result: saved.result })
+      } else {
+        runTicker(saved.startedAt, saved.level, saved.result)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const note = result && (result.level === 'A'
     ? 'Level A is the floor — only must-have criteria block conformance.'
