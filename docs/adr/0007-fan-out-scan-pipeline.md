@@ -73,9 +73,14 @@ discover and updated as files complete. Existing columns and the monolithic
 
 ### Compatibility / rollout
 
-- **Opt-in** via `?fanout=true` (and a `ACP_SCAN_FANOUT` default). The monolithic
-  `run_scan` stays as the default + fallback and still backs the sync/in-process
-  paths and tests, so nothing regresses while the fan-out is proven in production.
+- Gated by `?fanout=true`. Shipped opt-in first, then promoted to the **default
+  for the durable (queued) path** once the wiring was verified end-to-end (real
+  worker draining discover→scan_file→finalize, finalize-fires-exactly-once, and
+  aggregation matching `file_records`). The monolithic `run_scan`/`scan` handler
+  stays as the fallback and still backs the sync/in-process paths and tests, so a
+  caller can always force the old path with `?fanout=false`.
+- Discovery cap is `ACP_FANOUT_MAX_FILES` (default 50k) on the fan-out path; the
+  monolithic path keeps the conservative 500/1000 caps that protect its one-box disk.
 - Per-file persistence reuses the exact column writes `save_scan` already does,
   factored into `store.save_file_result(scan_id, file_result)`.
 
