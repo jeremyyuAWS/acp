@@ -75,9 +75,14 @@ def _remediate_file(payload: dict, job: dict) -> None:
     if not (scan_id and filename and drive_file_id):
         raise FatalJobError("remediate_file job missing scan_id/file/drive_file_id")
 
+    _OFFICE_MIME = {
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if ext not in ("html", "htm", "pdf"):
-        # No server-side remediator for this type yet (Office deferred) → human review.
+    if ext not in ("html", "htm", "pdf", *_OFFICE_MIME):
+        # No server-side remediator for this type → human review.
         core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
                                 file=filename, detail=f"no server-side remediator for .{ext}")
         return
@@ -94,20 +99,25 @@ def _remediate_file(payload: dict, job: dict) -> None:
             data.decode("utf-8", errors="replace"), ai_enabled=core.store.get_ai_enabled())
         fixed_bytes = fixed_html.encode("utf-8")
         mimetype = "text/html"
-    else:  # pdf — vendored DigitalA11y remediation engine (ADR 0005 step 4)
+    else:  # pdf / office — file-based deterministic remediators (ADR 0005 step 4)
         import tempfile
         from pathlib import Path as _Path
-        from remediate_pdf import remediate_pdf
         with tempfile.TemporaryDirectory(prefix="acp-rem-") as _d:
             src = _Path(_d) / filename
             src.write_bytes(data)
-            out_path, applied, _skipped = remediate_pdf(src)
+            if ext == "pdf":
+                from remediate_pdf import remediate_pdf
+                out_path, applied, _skipped = remediate_pdf(src)
+                mimetype = "application/pdf"
+            else:  # docx / pptx / xlsx
+                from remediate_office import remediate_office
+                out_path, applied, _skipped = remediate_office(src)
+                mimetype = _OFFICE_MIME[ext]
             if not out_path or not _Path(out_path).exists():
                 core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
-                                        file=filename, detail="PDF: no deterministic fixes applied")
+                                        file=filename, detail=f".{ext}: no deterministic fixes applied")
                 return
             fixed_bytes = _Path(out_path).read_bytes()
-        mimetype = "application/pdf"
 
     import io
     from googleapiclient.http import MediaIoBaseUpload

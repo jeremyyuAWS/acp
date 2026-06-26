@@ -89,9 +89,9 @@ def remediate_scan(sid: str, request: Request):
     core.register_scan_tokens(sid, drive=token)  # in-memory only
     enqueued = []
     for f in res["files"]:
-        # Server-side remediators today: HTML (in-repo) + PDF (vendored engine, ADR
-        # 0005 step 4). Office (.docx/.pptx/.xlsx) still routes to human review.
-        if not f["file"].lower().endswith((".html", ".htm", ".pdf")):
+        # Server-side deterministic remediators (ADR 0005 step 4): HTML (in-repo),
+        # PDF (vendored engine), and Office docx/pptx/xlsx (core-properties fixer).
+        if not f["file"].lower().endswith((".html", ".htm", ".pdf", ".docx", ".pptx", ".xlsx")):
             continue
         drive_file_id = core.store.get_file_drive_id(sid, f["file"])
         if not drive_file_id:
