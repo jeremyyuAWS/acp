@@ -25,6 +25,9 @@ CLI_DLL = Path(os.environ.get("ACP_OFFICE_CLI")
 # Demo corpus folder (ADC / keyless mode). Overridden by ACP_DRIVE_FOLDER env var.
 # In per-user token mode (GIS), the scanner searches the user's whole Drive.
 _DEMO_FOLDER = os.environ.get("ACP_DRIVE_FOLDER") or "1W27ULZsstP7gYGzgKKBId0qEfNxeKn0_"
+# Fan-out discovery cap (ADR 0007): each file is its own durable job, so the
+# whole estate need not fit one box — bound only against a runaway listing.
+FANOUT_MAX_FILES = int(os.environ.get("ACP_FANOUT_MAX_FILES", "50000"))
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 sys.path.insert(0, str(ACP / "scripts"))
@@ -196,18 +199,21 @@ def _sp_download(token: str, item: dict, dest: Path) -> None:
     (dest / item["name"]).write_bytes(r.content)
 
 
-def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None = None) -> list[dict]:
+def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None = None,
+          max_files: int | None = None) -> list[dict]:
+    # The monolithic scan keeps conservative caps (one box's disk holds every file);
+    # the fan-out path (ADR 0007) passes a high cap since each file is its own job.
     if source == "local":
         return [{"name": p.name, "path": str(p)} for p in sorted((ACP / "test-corpus/files").glob("*"))
                 if p.suffix.lower() in OFFICE + (".pdf",) + HTML_EXTS]
     if source == "sharepoint":
-        return _sp_list(sp_token)
+        return _sp_list(sp_token, max_files or 200)
     if folder and folder != "root":
         # Specific folder: recursive BFS
-        return _search_folder(svc, folder)
+        return _search_folder(svc, folder, max_files or 1000)
     elif folder == "root" or folder is None:
         # No specific folder chosen: search the whole Drive
-        return _search_drive(svc)
+        return _search_drive(svc, max_files or 500)
     # ADC/demo mode with a pinned folder
     resp = svc.files().list(q=f"'{_DEMO_FOLDER}' in parents and trashed=false",
                             fields="files(id,name,mimeType)", pageSize=200,

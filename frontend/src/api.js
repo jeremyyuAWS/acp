@@ -56,7 +56,7 @@ export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/sca
 // Queued scan: runs in the worker pool, survives restarts, shows in /jobs + Grafana.
 export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = true) => (SIM
   ? sim({ scan_id: 'sim-scan', job_id: 'sim-job', queued: true, workers: 4 })
-  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}&pii=${pii}&queue=true`, { method: 'POST', headers: headers() }).then(j))
+  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}&pii=${pii}&queue=true&fanout=true`, { method: 'POST', headers: headers() }).then(j))
 // Async server-side remediation: one remediate_file job per HTML file in the scan.
 export const remediateScan = (scanId) => (SIM
   ? sim({ scan_id: scanId, enqueued: 3, job_ids: ['a', 'b', 'c'], workers: 4 })

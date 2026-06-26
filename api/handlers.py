@@ -173,7 +173,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
     Langfuse trace, and enqueue one scan_file job per file."""
     import lf as _lf
     from rubric import Rubric
-    from scanner import _list, _drive_service, ACP
+    from scanner import _list, _drive_service, ACP, FANOUT_MAX_FILES
     scan_id = payload.get("scan_id") or job.get("scan_id")
     source = payload.get("source", "drive")
     ai = bool(payload.get("ai", True)) and core.store.get_ai_enabled()
@@ -184,7 +184,8 @@ def _scan_discover(payload: dict, job: dict) -> None:
     rb = Rubric.load_active(ACP / "config")
     svc = None if source in ("local", "sharepoint") else _drive_service(toks.get("drive"))
     effective_folder = folder if folder else ("root" if toks.get("drive") else None)
-    items = _list(source, svc, folder=effective_folder, sp_token=toks.get("sp"))
+    items = _list(source, svc, folder=effective_folder, sp_token=toks.get("sp"),
+                  max_files=FANOUT_MAX_FILES)
     started = _dt.datetime.now(_dt.timezone.utc).isoformat()
     core.store.init_scan_run(scan_id, source, len(items), started, rb.name, rb.hash)
     _lf.scan_trace(scan_id, source, len(items), ai_enabled=ai, user=user)
@@ -195,7 +196,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
     for it in items:
         core.store.enqueue_job("scan_file", {
             "scan_id": scan_id, "source": source, "file": it["name"],
-            "drive_file_id": it.get("id"), "mime": it.get("mime"),
+            "drive_file_id": it.get("id"), "mime": it.get("mime"), "path": it.get("path"),
             "ai": ai, "pii": pii, "user": user}, scan_id=scan_id)
 
 
@@ -222,6 +223,8 @@ def _scan_file(payload: dict, job: dict) -> None:
             item = {"name": name, "id": payload.get("drive_file_id")}
             if payload.get("mime"):
                 item["mime"] = payload["mime"]
+            if payload.get("path"):                 # local source — read from disk
+                item["path"] = payload["path"]
             _download(item, tmp, svc, sp_token=toks.get("sp"))
             fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii)
         except Exception as e:
