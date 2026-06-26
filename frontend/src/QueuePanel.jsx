@@ -20,6 +20,7 @@ export default function QueuePanel() {
   const [q, setQ] = useState(null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState('')
 
   useEffect(() => {
     let on = true
@@ -32,13 +33,19 @@ export default function QueuePanel() {
   }, [])
 
   const scaleWorkers = (next) => {
+    const cur = q?.workers ?? 0
     const n = Math.max(0, Math.min(16, next))
+    if (n === cur) return
     setBusy(true)
-    setQ((cur) => ({ ...(cur || {}), workers: n }))   // optimistic
+    setNote(n > cur ? '⏳ initializing a worker…' : '⏳ retiring a worker (finishes its current job)…')
+    setQ((c) => ({ ...(c || {}), workers: n }))   // optimistic
     setWorkers(n)
-      .then((d) => setQ((cur) => ({ ...(cur || {}), workers: d.workers })))
-      .catch((e) => setErr(e.message || 'could not change workers'))
-      .finally(() => setBusy(false))
+      .then((d) => {
+        setQ((c) => ({ ...(c || {}), workers: d.workers }))
+        setNote(n > cur ? '✓ worker ready' : '✓ worker retired')
+      })
+      .catch((e) => { setErr(e.message || 'could not change workers'); setNote('') })
+      .finally(() => { setBusy(false); setTimeout(() => setNote(''), 2500) })
   }
 
   const stats = q?.stats || {}
@@ -74,7 +81,9 @@ export default function QueuePanel() {
                     disabled={busy || workers >= 16} aria-label="Add a worker" title="Add a worker"
                     style={WBTN}>+</button>
           </span>
-          <span className="muted" style={{ fontSize: 11 }}>workers · live-scale (0–16)</span>
+          <span className="muted" style={{ fontSize: 11, color: note ? '#185FA5' : undefined }}>
+            {note || 'workers · live-scale (0–16)'}
+          </span>
         </span>
         <Stat label="total jobs" value={total} />
         {shown.length === 0 && !err && (

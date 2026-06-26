@@ -93,6 +93,9 @@ def remediate_scan(sid: str, request: Request):
         # PDF (vendored engine), and Office docx/pptx/xlsx (core-properties fixer).
         if not f["file"].lower().endswith((".html", ".htm", ".pdf", ".docx", ".pptx", ".xlsx")):
             continue
+        # Skip already-clean files — nothing to remediate, no point queuing a job.
+        if not f.get("issues"):
+            continue
         drive_file_id = core.store.get_file_drive_id(sid, f["file"])
         if not drive_file_id:
             continue
