@@ -198,9 +198,13 @@ def test_remediate_file_handler(store, monkeypatch):
             return _Exec()
 
         def list(self, **k):
+            q = k.get("q", "")
+            # Folder search → the Remediated folder; file-existence search → none
+            # (so the upsert writes a fresh copy via create()).
+            files = [{"id": "remediated-folder"}] if "Remediated" in q else []
             class _Exec:
                 def execute(_self):
-                    return {"files": [{"id": "remediated-folder"}]}
+                    return {"files": files}
             return _Exec()
 
         def create(self, body=None, media_body=None, fields=None):
@@ -209,6 +213,14 @@ def test_remediate_file_handler(store, monkeypatch):
                     written["body"] = body
                     written["uploaded"] = media_body is not None
                     return {"id": "new-file", "webViewLink": "https://drive/remediated/x"}
+            return _Exec()
+
+        def update(self, fileId=None, media_body=None, fields=None):
+            class _Exec:
+                def execute(_self):
+                    written["updated"] = fileId
+                    written["uploaded"] = media_body is not None
+                    return {"id": fileId, "webViewLink": "https://drive/remediated/x"}
             return _Exec()
 
     class _FakeSvc:

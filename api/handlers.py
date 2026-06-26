@@ -32,6 +32,21 @@ def _drive_client(token: str):
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
+def ensure_remediated_folder(svc) -> str:
+    """Find-or-create the single 'Remediated' Drive folder. If legacy duplicates
+    exist, picks the oldest deterministically. Call this ONCE per remediate batch
+    (in the request handler) and pass the id to the jobs — calling it concurrently
+    from many workers is what created duplicate folders."""
+    q = "name='Remediated' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    folders = svc.files().list(q=q, fields="files(id)", orderBy="createdTime",
+                               pageSize=1).execute().get("files", [])
+    if folders:
+        return folders[0]["id"]
+    return svc.files().create(
+        body={"name": "Remediated", "mimeType": "application/vnd.google-apps.folder"},
+        fields="id").execute()["id"]
+
+
 @handler("scan")
 def _scan(payload: dict, job: dict) -> None:
     """Run a scan to completion: discover → analyse → score → persist → finalize.
@@ -121,15 +136,22 @@ def _remediate_file(payload: dict, job: dict) -> None:
 
     import io
     from googleapiclient.http import MediaIoBaseUpload
-    q = "name='Remediated' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-    folders = svc.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
-    folder_id = folders[0]["id"] if folders else svc.files().create(
-        body={"name": "Remediated", "mimeType": "application/vnd.google-apps.folder"},
-        fields="id").execute()["id"]
+    # Folder id is created once per batch in the endpoint and passed in, so
+    # concurrent workers don't each create their own 'Remediated' folder.
+    # Fall back to find-or-create for a standalone job.
+    folder_id = payload.get("remediated_folder_id") or ensure_remediated_folder(svc)
     media = MediaIoBaseUpload(io.BytesIO(fixed_bytes), mimetype=mimetype, resumable=False)
-    result = svc.files().create(
-        body={"name": filename, "parents": [folder_id]},
-        media_body=media, fields="id,webViewLink").execute()
+    # Upsert: update an existing fixed copy rather than piling up duplicates on re-run.
+    safe = filename.replace("\\", "\\\\").replace("'", "\\'")
+    existing = svc.files().list(
+        q=f"name='{safe}' and '{folder_id}' in parents and trashed=false",
+        fields="files(id)", pageSize=1).execute().get("files", [])
+    if existing:
+        result = svc.files().update(fileId=existing[0]["id"], media_body=media,
+                                    fields="id,webViewLink").execute()
+    else:
+        result = svc.files().create(body={"name": filename, "parents": [folder_id]},
+                                    media_body=media, fields="id,webViewLink").execute()
     web_url = result.get("webViewLink", "")
 
     core.store.record_remediation(scan_id, filename, drive_write_url=web_url)

@@ -87,6 +87,15 @@ def remediate_scan(sid: str, request: Request):
         raise HTTPException(404, "scan not found")
     token = request.headers.get("x-drive-token")
     core.register_scan_tokens(sid, drive=token)  # in-memory only
+    # Create the single 'Remediated' folder ONCE here (single-threaded), then pass
+    # its id to every job — avoids concurrent workers each creating their own.
+    remediated_folder_id = None
+    if token:
+        try:
+            import handlers
+            remediated_folder_id = handlers.ensure_remediated_folder(handlers._drive_client(token))
+        except Exception:
+            remediated_folder_id = None   # jobs fall back to find-or-create
     enqueued = []
     for f in res["files"]:
         # Server-side deterministic remediators (ADR 0005 step 4): HTML (in-repo),
@@ -101,7 +110,8 @@ def remediate_scan(sid: str, request: Request):
             continue
         jid = core.store.enqueue_job(
             "remediate_file",
-            {"scan_id": sid, "file": f["file"], "drive_file_id": drive_file_id},
+            {"scan_id": sid, "file": f["file"], "drive_file_id": drive_file_id,
+             "remediated_folder_id": remediated_folder_id},
             scan_id=sid)
         enqueued.append(jid)
     return {"scan_id": sid, "enqueued": len(enqueued), "job_ids": enqueued, "workers": core.WORKERS}
