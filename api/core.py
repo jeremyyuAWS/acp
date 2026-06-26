@@ -264,7 +264,10 @@ def start_workers() -> int:
         import time as _t
         while True:
             try:
-                n = store.reclaim_stuck_jobs(lease_seconds=600)
+                # 30-min lease: scans of large estates legitimately run ~10-15min,
+                # so reclaim only clearly-dead jobs. The worker heartbeat (best-effort)
+                # extends this further; this is the reliable floor if it can't.
+                n = store.reclaim_stuck_jobs(lease_seconds=1800)
                 if n:
                     print(f"[sweeper] reclaimed {n} stuck job(s)", flush=True)
             except Exception as e:

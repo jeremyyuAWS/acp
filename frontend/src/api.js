@@ -49,14 +49,14 @@ export const listScans = () => (SIM ? sim(simListScans()) : fetch(`${BASE}/scans
 export const getScan = (id) => (SIM ? sim(simGetScan(id)) : fetch(`${BASE}/scans/${id}`, { headers: headers() }).then(j))
 export const getInventory = () => (SIM ? sim([]) : fetch(`${BASE}/inventory`, { headers: headers() }).then(j))
 export const reportUrl = (id) => (SIM ? '#' : `${BASE}/scans/${id}/report.pdf`)
-export const startScan = (source = 'local', folder = null, aiEnabled = true) => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}`, { method: 'POST', headers: headers() }).then(j))
+export const startScan = (source = 'local', folder = null, aiEnabled = true, pii = true) => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}&pii=${pii}`, { method: 'POST', headers: headers() }).then(j))
 export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/scans/jobs/${id}`, { headers: headers() }).then(j))
 
 // ── Durable async queue (ADR 0004/0005) ───────────────────────────────────────
 // Queued scan: runs in the worker pool, survives restarts, shows in /jobs + Grafana.
-export const startScanQueued = (source = 'local', folder = null, aiEnabled = true) => (SIM
+export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = true) => (SIM
   ? sim({ scan_id: 'sim-scan', job_id: 'sim-job', queued: true, workers: 4 })
-  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}&queue=true`, { method: 'POST', headers: headers() }).then(j))
+  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}&pii=${pii}&queue=true`, { method: 'POST', headers: headers() }).then(j))
 // Async server-side remediation: one remediate_file job per HTML file in the scan.
 export const remediateScan = (scanId) => (SIM
   ? sim({ scan_id: scanId, enqueued: 3, job_ids: ['a', 'b', 'c'], workers: 4 })

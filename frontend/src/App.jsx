@@ -94,6 +94,7 @@ export default function App() {
   const [ontology, setOntology] = useState(loadPublished)
   const [aiEnabled, setAiEnabled] = useState(true)
   const [queuedScan, setQueuedScan] = useState(false)  // durable queue vs in-process
+  const [deepScan, setDeepScan] = useState(true)       // PII/sensitive-data detection on/off
 
   useEffect(() => {
     const onExpired = () => {
@@ -187,7 +188,7 @@ export default function App() {
       let fresh
       if (queuedScan) {
         // Durable path: enqueue a scan job, then poll until the scan is persisted.
-        const { scan_id, workers } = await startScanQueued(apiSource, folder, aiEnabled)
+        const { scan_id, workers } = await startScanQueued(apiSource, folder, aiEnabled, deepScan)
         if (!SIM && !workers) throw new Error('no workers running — set ACP_WORKERS to use the durable queue (see Monitor)')
         setProgress({ phase: 'queued (durable) · processing in the worker pool — see Monitor' })
         for (let i = 0; i < 180 && !fresh; i++) {       // up to ~3 min
@@ -196,7 +197,7 @@ export default function App() {
         }
         if (!fresh) throw new Error('scan still processing — watch it finish in the Monitor queue')
       } else {
-        const { job_id } = await startScan(apiSource, folder, aiEnabled)
+        const { job_id } = await startScan(apiSource, folder, aiEnabled, deepScan)
         let job
         do {
           await new Promise((r) => setTimeout(r, 350))
@@ -251,6 +252,13 @@ export default function App() {
             title={queuedScan ? 'Durable mode — scans run in the worker queue (survive restarts, visible in Monitor/Grafana). Click for in-process.' : 'In-process mode — scans run on a background thread. Click for the durable queue.'}
             aria-pressed={queuedScan}>
             {queuedScan ? '⚡ Queued' : '◻ In-process'}
+          </button>
+          <button
+            className={`ai-toggle${deepScan ? ' ai-toggle--on' : ''}`}
+            onClick={() => setDeepScan(v => !v)}
+            title={deepScan ? 'Deep scan — also detects sensitive data (SSNs, cards, emails). Slower on PDF-heavy estates. Click for a faster accessibility-only scan.' : 'Fast scan — accessibility only, no sensitive-data detection. Click to also scan for PII.'}
+            aria-pressed={deepScan}>
+            {deepScan ? '🔍 Deep scan' : '◻ Fast scan'}
           </button>
           <span className="user">{me.email}</span>
           {me.allow?.includes('settings') && <button className="cogbtn" aria-label="Platform settings" title="Platform settings" onClick={() => setSettingsOpen(true)}>⚙</button>}
