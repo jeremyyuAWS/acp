@@ -1,0 +1,15 @@
+apiVersion: 1
+
+# Webhook contact point → the ACP app's /alerts/webhook receiver, which records
+# each alert in the immutable decision log (visible in-product). Self-contained,
+# no SMTP. To also deliver email/Slack, add another receiver here.
+contactPoints:
+  - orgId: 1
+    name: acp-webhook
+    receivers:
+      - uid: acp_webhook_rcv
+        type: webhook
+        settings:
+          url: https://acp-app.greenwater-4bf2c997.eastus2.azurecontainerapps.io/alerts/webhook?key=acp-alert-demo-key
+          httpMethod: POST
+        disableResolveMessage: false

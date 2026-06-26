@@ -1,13 +1,45 @@
 """System & meta endpoints: liveness, SPA auth config, schedule, hub landing page."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 import core
 
 router = APIRouter()
+
+
+@router.post("/alerts/webhook")
+async def alert_webhook(request: Request, key: str = Query("")):
+    """Receiver for Grafana alert notifications (public path, shared-secret).
+    Each firing/resolved alert is recorded in the immutable decision log, so
+    delivery is visible in-product (audit feed + the Grafana 'Recent decisions'
+    panel) without needing external SMTP."""
+    if key != core.ALERT_KEY:
+        raise HTTPException(401, "bad alert key")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    alerts = body.get("alerts") or []
+    for a in alerts:
+        labels = a.get("labels", {}) or {}
+        name = labels.get("alertname", "alert")
+        status = a.get("status", "firing")
+        summary = (a.get("annotations", {}) or {}).get("summary", "")
+        core.store.log_decision("grafana", f"alert.{status}",
+                                detail=f"{name}: {summary}".strip(" :"))
+    # If a downstream HITL webhook is configured, forward a compact note too.
+    if alerts and core.HITL_WEBHOOK:
+        try:
+            import httpx
+            httpx.post(core.HITL_WEBHOOK, json={"event": "grafana.alert", "alerts": [
+                {"name": (a.get("labels", {}) or {}).get("alertname"),
+                 "status": a.get("status")} for a in alerts]}, timeout=6)
+        except Exception:
+            pass
+    return {"received": len(alerts)}
 
 
 @router.put("/workers")

@@ -95,7 +95,9 @@ def verify_gis_token(token: str) -> str | None:
 
 # ── Access-gate path policy ───────────────────────────────────────────────────
 # Paths that bypass all auth (needed before the user has a token).
-ALWAYS_PUBLIC = {"/healthz", "/config", "/hub", "/ai/status"}
+ALWAYS_PUBLIC = {"/healthz", "/config", "/hub", "/ai/status", "/alerts/webhook"}
+# Shared secret for the Grafana alert webhook (public path, key-validated).
+ALERT_KEY = os.environ.get("ACP_ALERT_KEY", "acp-alert-demo-key")
 # API routes require auth; everything else is the SPA (static file or client route).
 API_PREFIXES = (
     "/scans", "/rubric", "/rules", "/inventory", "/schedule",
