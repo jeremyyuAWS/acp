@@ -197,9 +197,24 @@ function FolderPicker({ onScan, onClose }) {
   )
 }
 
+// Most-recent completed scan for a source, formatted like "Jun 26, 7:55 AM".
+// Maps the connector type to the scan_runs.source value.
+function lastScanLabel(scans, type) {
+  const src = type === 'google_drive' ? 'drive' : type === 'onedrive' ? 'sharepoint' : null
+  if (!src) return null
+  let latest = null
+  for (const s of scans || []) {
+    if (s.source === src && s.completed_at && (!latest || s.completed_at > latest)) latest = s.completed_at
+  }
+  if (!latest) return null
+  const d = new Date(latest)
+  if (isNaN(d.getTime())) return null
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function Integrations({ sources, files = [], onScan, busy, hasDriveToken, hasSPToken, onConnect }) {
+export default function Integrations({ sources, files = [], scans = [], onScan, busy, hasDriveToken, hasSPToken, onConnect }) {
   const [selSrc,      setSelSrc]      = useState(null)
   const [selFile,     setSelFile]     = useState(null)
   const [pickerSrc,   setPickerSrc]   = useState(null)
@@ -315,6 +330,7 @@ export default function Integrations({ sources, files = [], onScan, busy, hasDri
           const desc         = isGdrive
             ? 'Scan Google Drive files for WCAG accessibility issues'
             : 'Scan OneDrive & SharePoint for accessibility issues'
+          const lastScan     = lastScanLabel(scans, s.type)
 
           return (
             <div className={`srccard${connected ? ' srccard--on' : ''}`} key={s.id}>
@@ -328,6 +344,7 @@ export default function Integrations({ sources, files = [], onScan, busy, hasDri
                   <div className="srccard-meta">
                     {enriched.user && <span>{enriched.user}</span>}
                     {enriched.files != null && <span>{enriched.files.toLocaleString()} files</span>}
+                    <span>{lastScan ? `last scanned ${lastScan}` : 'not yet scanned'}</span>
                     <span className="srccard-badge">
                       <span className="livedot" aria-hidden="true" />connected · read-only
                     </span>
