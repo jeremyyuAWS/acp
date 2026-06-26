@@ -344,7 +344,7 @@ export default function App() {
                 {scanList.map((s) => (
                   <option key={s.id} value={s.id}>
                     {new Date(s.completed_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
-                    {' · '}{s.source}{' · '}{s.avg_score ?? 'n/a'}/100{' · '}{s.certifiable} certifiable
+                    {' · '}{s.source}{' · '}{(s.files ?? 0).toLocaleString()} documents
                   </option>
                 ))}
               </select>
