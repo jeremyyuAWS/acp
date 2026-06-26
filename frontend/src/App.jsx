@@ -61,23 +61,22 @@ function progressText(p) {
 // analysing and scoring still follow). The read phase spans 12→84%, scaled by the
 // real per-file count; the post-read phases fill the remainder.
 const PHASE_PCT = { queued: 2, connecting: 5, discovering: 9, reading: 12, tagging: 88, analysing: 92, scoring: 97, done: 100, error: 100 }
-// Light-hearted "still working" lines for the long worker-pool phase, so a
-// multi-minute scan feels alive instead of frozen. Cycled by elapsed seconds.
-const FUNNY = [
-  'Politely asking 200 documents to declare their language…',
-  'Counting alt-texts that should exist but mysteriously don’t…',
-  'Negotiating with PDFs about their reading order…',
-  'Checking contrast ratios with a very picky ruler…',
-  'Untangling heading levels (h1 → h7, really?)…',
-  'Hunting down every “click here” link to gently scold…',
-  'Sniffing out SSNs hiding in spreadsheets…',
-  'Making sure every button has a name to answer to…',
-  'Reticulating WCAG splines…',
-  'Reading the fine print so you don’t have to…',
-  'Teaching screen readers to read between the lines…',
-  'Bribing the rubric to score a little faster…',
+// Informative "still working" lines for the long worker-pool phase, so a
+// multi-minute scan reports what it's doing instead of looking frozen. Each line
+// names a real check (with its WCAG success criterion). Cycled by elapsed seconds.
+const STATUS_LINES = [
+  'Downloading and parsing each document…',
+  'Checking images for text alternatives (WCAG 1.1.1)…',
+  'Verifying heading structure and reading order (1.3.1)…',
+  'Measuring text and UI color contrast (1.4.3 / 1.4.11)…',
+  'Reviewing link text and button names (2.4.4 / 4.1.2)…',
+  'Confirming document titles and language (2.4.2 / 3.1.1)…',
+  'Checking tables, lists and landmarks for structure (1.3.1)…',
+  'Running deep scan for sensitive data (PII)…',
+  'Scoring each document against WCAG 2.1 AA…',
+  'Aggregating results and compliance scores…',
 ]
-function funnyMsg(elapsed) { return FUNNY[Math.floor(elapsed / 5) % FUNNY.length] }
+function statusMsg(elapsed) { return STATUS_LINES[Math.floor(elapsed / 5) % STATUS_LINES.length] }
 
 function progressPct(p) {
   if (!p) return 0
@@ -362,7 +361,7 @@ export default function App() {
           </div>
           <div className="track"><i style={{ width: `${progressPct(progress)}%`, background: '#BF8C00', transition: 'width .3s' }} /></div>
           {progress.elapsed != null && (
-            <div className="muted" style={{ marginTop: 6, fontSize: 12, fontStyle: 'italic' }}>{funnyMsg(progress.elapsed)}</div>
+            <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>{statusMsg(progress.elapsed)}</div>
           )}
         </div>
       )}
