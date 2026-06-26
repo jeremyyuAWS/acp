@@ -97,6 +97,7 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
   const seed = [3, 2, 1, 0].map((k, i) => ({ ...POOL[k], id: -i, when: ['just now', '4m ago', '9m ago', '15m ago'][i] }))
   const [events, setEvents] = useState(seed)
   const [paused, setPaused] = useState(false)
+  const [controlsOpen, setControlsOpen] = useState(false)  // collapsible settings at top
   const evidenceRef = useRef(null)
   const [exporting, setExporting] = useState(false)
   const [schedNext, setSchedNext] = useState(null)
@@ -189,6 +190,81 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
         <button className={paused ? '' : 'ghost'} onClick={() => setPaused((p) => !p)}>{paused ? '▶ Resume live feed' : '⏸ Pause live feed'}</button>
       </div>
 
+      {/* All behaviour settings (AI mode, scan triggers, schedule) collapsed into one
+          panel at the top, so the tab leads with live status. Collapsed by default. */}
+      <section className="panel" style={{ marginBottom: 14 }}>
+        <button onClick={() => setControlsOpen((o) => !o)} aria-expanded={controlsOpen}
+          style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                   background: 'none', border: 'none', cursor: 'pointer', padding: 0, font: 'inherit', textAlign: 'left' }}>
+          <h2 style={{ margin: 0 }}>⚙ Monitoring settings <span className="muted">· AI mode, scan triggers &amp; schedule</span></h2>
+          <span aria-hidden="true" style={{ fontSize: 13, color: 'var(--muted)', whiteSpace: 'nowrap' }}>{controlsOpen ? '▴ hide' : '▾ show'}</span>
+        </button>
+
+        {controlsOpen && (
+          <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 18 }}>
+            {/* AI remediation mode */}
+            <div>
+              <h3 style={{ margin: '0 0 8px' }}>AI remediation mode <span className="muted" style={{ fontWeight: 400 }}>· controls which fixes are applied automatically</span></h3>
+              <div className="aimodetoggle">
+                <div className="aimoderow">
+                  <div>
+                    <div className="ctlsub">{aiEnabled ? 'AI-assisted mode (on)' : 'Deterministic-only mode (AI off)'}</div>
+                    <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>
+                      {aiEnabled
+                        ? 'AI drafts fixes for semantic content (alt text, link labels, icon names). Deterministic rules (contrast, viewport, tabindex) run always.'
+                        : 'Only deterministic rules run. AI-assisted fixes (alt text, link labels, icon names) are routed to the human review queue instead.'}
+                    </div>
+                  </div>
+                  {onAiToggle && (
+                    <button className={aiEnabled ? 'aitoggle on' : 'aitoggle'} onClick={() => onAiToggle(!aiEnabled)}
+                      aria-pressed={aiEnabled}
+                      title={aiEnabled ? 'Turn off AI — deterministic only' : 'Turn on AI-assisted remediation'}>
+                      {aiEnabled ? 'AI on' : 'AI off'}
+                    </button>
+                  )}
+                </div>
+                {!aiEnabled && (
+                  <div className="aioffnote">
+                    AI-assisted rules affected: <b>1.1.1 alt text</b>, <b>2.4.4 link purpose</b>, <b>4.1.2 name/role/value</b>, <b>1.4.11 non-text contrast</b> &mdash; these are routed to human review.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Scan triggers & schedule */}
+            <div>
+              <h3 style={{ margin: '0 0 8px' }}>Scan triggers &amp; schedule <span className="muted" style={{ fontWeight: 400 }}>· how the agent decides when to scan</span></h3>
+              <div className="scanctl">
+                <div className="ctlcol">
+                  <div className="ctlsub">Event-based triggers</div>
+                  <Toggle label="Scan new files on arrival" hint="within 1 hour of landing in a watched source" on={triggers.newFile} set={(v) => setTriggers((t) => ({ ...t, newFile: v }))} />
+                  <Toggle label="Re-scan on document edit" hint="detect drift the moment content changes" on={triggers.onEdit} set={(v) => setTriggers((t) => ({ ...t, onEdit: v }))} />
+                  <Toggle label="Auto-remediate high-confidence fixes" hint="apply + re-certify without waiting for a sweep" on={triggers.autoRemediate} set={(v) => setTriggers((t) => ({ ...t, autoRemediate: v }))} />
+                  <Toggle label="Alert owner on regression" hint="notify when a published doc drops > 5 points" on={triggers.alertRegression} set={(v) => setTriggers((t) => ({ ...t, alertRegression: v }))} />
+                </div>
+                <div className="ctlcol">
+                  <div className="ctlsub">Scheduled sweeps</div>
+                  <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>Estate default — set every source at once, or override per source below.</div>
+                  <div className="seg">
+                    {['live', 'hourly', 'daily', 'weekly', 'off'].map((v) => {
+                      const isActive = watch.length > 0 && cadCount(v) === watch.length
+                      return (
+                        <button key={v} className="segbtn"
+                          style={isActive ? { background: '#185FA5', color: '#fff', borderColor: '#185FA5' } : {}}
+                          onClick={() => setAllCad(v)}>{v}</button>
+                      )
+                    })}
+                  </div>
+                  <div className="cadsummary">
+                    {['live', 'hourly', 'daily', 'weekly', 'off'].map((v) => cadCount(v) ? <span key={v} className="cadpill">{cadCount(v)} {v}</span> : null)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
       <QueuePanel />
 
       <section className="panel" style={{ marginBottom: 14 }}>
@@ -256,67 +332,6 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
           <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>Breaches notify the document owner and surface on the executive dashboard — the agent escalates before the deadline, not after.</p>
         </section>
       )}
-
-      <section className="panel" style={{ marginBottom: 14 }}>
-        <h2>AI remediation mode <span className="muted">· controls which fixes are applied automatically</span></h2>
-        <div className="aimodetoggle">
-          <div className="aimoderow">
-            <div>
-              <div className="ctlsub">{aiEnabled ? 'AI-assisted mode (on)' : 'Deterministic-only mode (AI off)'}</div>
-              <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>
-                {aiEnabled
-                  ? 'AI drafts fixes for semantic content (alt text, link labels, icon names). Deterministic rules (contrast, viewport, tabindex) run always.'
-                  : 'Only deterministic rules run. AI-assisted fixes (alt text, link labels, icon names) are routed to the human review queue instead.'}
-              </div>
-            </div>
-            {onAiToggle && (
-              <button
-                className={aiEnabled ? 'aitoggle on' : 'aitoggle'}
-                onClick={() => onAiToggle(!aiEnabled)}
-                aria-pressed={aiEnabled}
-                title={aiEnabled ? 'Turn off AI — deterministic only' : 'Turn on AI-assisted remediation'}
-              >
-                {aiEnabled ? 'AI on' : 'AI off'}
-              </button>
-            )}
-          </div>
-          {!aiEnabled && (
-            <div className="aioffnote">
-              AI-assisted rules affected: <b>1.1.1 alt text</b>, <b>2.4.4 link purpose</b>, <b>4.1.2 name/role/value</b>, <b>1.4.11 non-text contrast</b> &mdash; these are routed to human review.
-            </div>
-          )}
-        </div>
-      </section>
-
-      <section className="panel" style={{ marginBottom: 14 }}>
-        <h2>Scan triggers &amp; schedule <span className="muted">· how the agent decides when to scan</span></h2>
-        <div className="scanctl">
-          <div className="ctlcol">
-            <div className="ctlsub">Event-based triggers</div>
-            <Toggle label="Scan new files on arrival" hint="within 1 hour of landing in a watched source" on={triggers.newFile} set={(v) => setTriggers((t) => ({ ...t, newFile: v }))} />
-            <Toggle label="Re-scan on document edit" hint="detect drift the moment content changes" on={triggers.onEdit} set={(v) => setTriggers((t) => ({ ...t, onEdit: v }))} />
-            <Toggle label="Auto-remediate high-confidence fixes" hint="apply + re-certify without waiting for a sweep" on={triggers.autoRemediate} set={(v) => setTriggers((t) => ({ ...t, autoRemediate: v }))} />
-            <Toggle label="Alert owner on regression" hint="notify when a published doc drops > 5 points" on={triggers.alertRegression} set={(v) => setTriggers((t) => ({ ...t, alertRegression: v }))} />
-          </div>
-          <div className="ctlcol">
-            <div className="ctlsub">Scheduled sweeps</div>
-            <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>Estate default — set every source at once, or override per source below.</div>
-            <div className="seg">
-              {['live', 'hourly', 'daily', 'weekly', 'off'].map((v) => {
-                const isActive = watch.length > 0 && cadCount(v) === watch.length
-                return (
-                  <button key={v} className="segbtn"
-                    style={isActive ? { background: '#185FA5', color: '#fff', borderColor: '#185FA5' } : {}}
-                    onClick={() => setAllCad(v)}>{v}</button>
-                )
-              })}
-            </div>
-            <div className="cadsummary">
-              {['live', 'hourly', 'daily', 'weekly', 'off'].map((v) => cadCount(v) ? <span key={v} className="cadpill">{cadCount(v)} {v}</span> : null)}
-            </div>
-          </div>
-        </div>
-      </section>
 
       <section className="panel" style={{ marginBottom: 14 }}>
         <h2>Watched sources <span className="muted">· polled continuously for new files &amp; edits</span></h2>
