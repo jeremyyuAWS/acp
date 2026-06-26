@@ -52,10 +52,12 @@ def remediate_pdf(path: Path, *, lang: str = "en"):
             # Provenance stamp in the document Info dictionary — who/what/when/standard.
             from datetime import datetime, timezone
             from remediate_office import TOOL, VERSION
+            now = datetime.now(timezone.utc)
             stamp = {
                 "/Producer": f"{TOOL} {VERSION}",
                 "/RemediatedBy": TOOL,
-                "/RemediationDate": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                "/RemediationDate": now.strftime("%Y-%m-%d"),
+                "/ModDate": "D:" + now.strftime("%Y%m%d%H%M%S") + "Z",  # standard "Modified" date
                 "/WCAGTarget": "WCAG 2.1 AA",
                 "/FixesApplied": "; ".join(applied)[:255],
             }

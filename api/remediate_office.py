@@ -120,6 +120,20 @@ def remediate_office(path: Path, *, lang: str = "en-US"):
     if not applied:
         return None, [], ["language and title already set"]
 
+    # Also stamp the STANDARD (visible) core properties: the remediation date as the
+    # Modified date + "Last saved by" — so it shows on the General tab, not only Custom.
+    _DCTERMS, _XSI = _NS["dcterms"], _NS["xsi"]
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    lmb = root.find(f"{{{_CP}}}lastModifiedBy")
+    if lmb is None:
+        lmb = ET.SubElement(root, f"{{{_CP}}}lastModifiedBy")
+    lmb.text = TOOL
+    mod = root.find(f"{{{_DCTERMS}}}modified")
+    if mod is None:
+        mod = ET.SubElement(root, f"{{{_DCTERMS}}}modified")
+    mod.set(f"{{{_XSI}}}type", "dcterms:W3CDTF")
+    mod.text = ts
+
     new_core = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
                 + ET.tostring(root, encoding="unicode"))
     entries[_CORE] = new_core.encode("utf-8")
