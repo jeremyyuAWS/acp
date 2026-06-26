@@ -244,7 +244,8 @@ export default function App() {
       setScanList(await listScans())
       const newAvg = fresh.run.avg_score
       if (prevAvg != null && newAvg != null && newAvg !== prevAvg) { setDelta(newAvg - prevAvg); setDeltaKey((k) => k + 1) }
-      setView('overview')
+      // Guide the user into the workflow: land on Discover (step 1) after a scan.
+      setView(me?.allow && !me.allow.includes('discover') ? 'overview' : 'discover')
     } catch (e) { setErr(`scan failed: ${e}`) } finally { setBusy(false); setProgress(null) }
   }
 
@@ -393,6 +394,25 @@ export default function App() {
         {view === 'monitor' && (run ? <Monitor sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} /> : placeholder)}
 
         {view === 'upload' && <Upload onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
+
+        {/* Guided workflow: a "next step" CTA on each workflow tab once a scan exists. */}
+        {run && ['integrations', 'discover', 'assess', 'remediate', 'publish'].includes(view) && (() => {
+          const flow = ['integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor']
+          const label = { discover: '1 · Discover — classify the estate', assess: '2 · Assess — score vs WCAG',
+                          remediate: '3 · Remediate — fix the issues', publish: '4 · Publish — certify what passes',
+                          monitor: '5 · Monitor — keep it compliant' }
+          let nxt = null
+          for (let j = flow.indexOf(view) + 1; j < flow.length; j++) {
+            if (!me.allow || me.allow.includes(flow[j])) { nxt = flow[j]; break }
+          }
+          return nxt ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12,
+                          margin: '20px 0 4px', paddingTop: 14, borderTop: '1px solid var(--line)' }}>
+              <span className="muted" style={{ fontSize: 13 }}>Done here? Continue →</span>
+              <button onClick={() => { setView(nxt); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>{label[nxt]} →</button>
+            </div>
+          ) : null
+        })()}
       </ErrorBoundary>
       </main>
 
