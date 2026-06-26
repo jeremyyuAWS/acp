@@ -1,4 +1,4 @@
-# ACP — Overview deck outline (for Deva)
+# ACP — Overview deck outline
 
 A ~14-slide walkthrough of what the Accessibility Compliance Platform does and how
 it's built on Azure. Each slide has talking points + speaker notes. Build it in
