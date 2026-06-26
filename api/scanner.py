@@ -5,10 +5,15 @@ control plane can stream live activity. Ephemeral working copies are deleted whe
 scan finishes (the "documents never retained" guarantee).
 """
 from __future__ import annotations
+import concurrent.futures as _cf
 import io, json, os, re, shutil, subprocess, sys, tempfile, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 import lf as _lf_mod
+
+# Per-file analysis is CPU/IO bound and independent; run it across a small thread
+# pool. pikepdf/lxml release the GIL and each analyser is built fresh per call.
+_SCAN_WORKERS = min(8, (os.cpu_count() or 2) * 2)
 
 ACP = Path(__file__).resolve().parent.parent
 # Engine + corpus locations default to the local dev layout but are env-overridable
@@ -368,48 +373,52 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
 
         import pii as _pii_mod  # sensitive-data detection dimension (ADR 0006)
         pii_by_file: dict[str, dict] = {}
-
         raw: dict[str, dict] = {}
-        for i, it in enumerate(items):
-            name, ext = it["name"], Path(it["name"]).suffix.lower()
-            progress({"phase": "analysing", "files_found": n, "files_done": i, "current": name})
-            if ext == ".pdf":
-                raw[name] = {"engine": "python/pdf", **_analyse_pdf(tmp / name)}
-            elif ext in OFFICE:
-                raw[name] = {"engine": ".net/office",
-                             **office.get(name, {"succeeded": False, "issues": [], "errors": ["no engine result"]})}
-            elif ext in HTML_EXTS:
-                raw[name] = {"engine": "python/html", **_analyse_html(tmp / name)}
-            else:
-                continue
 
-            # Emit per-rule spans immediately after each file is analysed so they
-            # appear in Langfuse in real time rather than all at once at scan end.
-            engine = raw[name]["engine"]
+        # Analyse each file + detect PII concurrently. Each call builds a fresh
+        # analyser (no shared state) and reads only its own temp file, so the work
+        # parallelises safely; pikepdf/lxml release the GIL. Langfuse spans are then
+        # emitted sequentially from the main thread (one trace, no concurrent writes).
+        # Opt-out (detect_pii=False) skips PII text extraction — faster on PDF estates.
+        def _analyse_one(it):
+            name, ext = it["name"], Path(it["name"]).suffix.lower()
+            if ext == ".pdf":
+                r = {"engine": "python/pdf", **_analyse_pdf(tmp / name)}
+            elif ext in OFFICE:
+                r = {"engine": ".net/office",
+                     **office.get(name, {"succeeded": False, "issues": [], "errors": ["no engine result"]})}
+            elif ext in HTML_EXTS:
+                r = {"engine": "python/html", **_analyse_html(tmp / name)}
+            else:
+                return None
+            pinfo = _pii_mod.detect_file(tmp / name) if detect_pii else None
+            return (name, r, pinfo)
+
+        progress({"phase": "analysing", "files_found": n, "files_done": 0, "current": None})
+        with _cf.ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as _ex:
+            analysed = [x for x in _ex.map(_analyse_one, items) if x is not None]
+
+        for done_i, (name, r, pinfo) in enumerate(analysed):
+            progress({"phase": "scoring", "files_found": n, "files_done": done_i, "current": name})
+            raw[name] = r
+            engine = r["engine"]
             fspan = _lf_mod.file_span(trace, name, engine)
             sc_counts: dict[str, int] = {}
             sc_severity: dict[str, str] = {}
-            for issue in raw[name].get("issues", []):
+            for issue in r.get("issues", []):
                 sc = _extract_sc(issue.get("wcag", ""))
                 if sc:
                     sc_counts[sc] = sc_counts.get(sc, 0) + 1
                     if issue.get("severity") and sc not in sc_severity:
                         sc_severity[sc] = issue["severity"]
             _lf_mod.rule_spans(fspan, sc_counts, RULE_CATALOG, severity_map=sc_severity)
-
-            # Sensitive-data (PII) detection — a second, orthogonal risk axis (ADR 0006).
-            # Runs on the same temp file; results are masked-only. Never fails the scan.
-            # Opt-out (detect_pii=False) skips the per-file text extraction — much
-            # faster on PDF-heavy estates where each PDF would otherwise be parsed twice.
             pii_total = 0
-            if detect_pii:
-                pinfo = _pii_mod.detect_file(tmp / name)
+            if detect_pii and pinfo is not None:
                 pii_by_file[name] = pinfo
                 pii_total = pinfo.get("total", 0)
                 if pii_total:
                     _lf_mod.pii_span(fspan, pinfo)
-
-            fspan.end(output={"issue_count": len(raw[name].get("issues", [])),
+            fspan.end(output={"issue_count": len(r.get("issues", [])),
                               "engine": engine, "sensitive_data": pii_total})
 
         progress({"phase": "scoring", "files_found": n, "files_done": n, "current": None})
