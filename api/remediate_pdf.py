@@ -48,6 +48,19 @@ def remediate_pdf(path: Path, *, lang: str = "en"):
             issue = SimpleNamespace(issue_id=uuid.uuid4())
             res = fixer.apply(pdf, issue, meta, behavior)
             (applied if res.status == FixStatus.FIXED else skipped).append(res.description)
+        if applied:
+            # Provenance stamp in the document Info dictionary — who/what/when/standard.
+            from datetime import datetime, timezone
+            from remediate_office import TOOL, VERSION
+            stamp = {
+                "/Producer": f"{TOOL} {VERSION}",
+                "/RemediatedBy": TOOL,
+                "/RemediationDate": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                "/WCAGTarget": "WCAG 2.1 AA",
+                "/FixesApplied": "; ".join(applied)[:255],
+            }
+            for k, v in stamp.items():
+                pdf.docinfo[pikepdf.Name(k)] = v
         out_path = path.with_name(f"remediated-{path.name}")
         pdf.save(str(out_path))
     finally:

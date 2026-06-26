@@ -15,11 +15,66 @@ content judgement (alt text, reading order, contrast) is NOT touched here and
 routes to human review — same contract as the HTML/PDF remediators.
 """
 from __future__ import annotations
+import os
+import re
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
 _CORE = "docProps/core.xml"
+_CUSTOM = "docProps/custom.xml"
+_FMTID = "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}"  # standard OPC custom-properties GUID
+TOOL = "Mova.io ACP"
+VERSION = os.environ.get("ACP_VERSION", "2026.06")
+
+
+def _xesc(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def _stamp_provenance(entries: dict, applied: list[str]) -> None:
+    """Write a remediation provenance stamp into docProps/custom.xml — shows in the
+    'Custom' tab of the file's Properties: who/what fixed it, the standard, the date,
+    and the fixes applied. Creates the part (+ content-type + relationship) if absent,
+    or appends to an existing custom-properties part."""
+    props = [
+        ("Remediated By", TOOL),
+        ("ACP Version", VERSION),
+        ("Remediation Date", datetime.now(timezone.utc).strftime("%Y-%m-%d")),
+        ("WCAG Target", "WCAG 2.1 AA"),
+        ("Fixes Applied", "; ".join(applied)[:255]),
+    ]
+    if _CUSTOM in entries:  # append, continuing the pid sequence; part already declared
+        xml = entries[_CUSTOM].decode("utf-8", "replace")
+        pids = [int(m) for m in re.findall(r'pid="(\d+)"', xml)]
+        start = (max(pids) + 1) if pids else 2
+        frag = "".join(
+            f'<property fmtid="{_FMTID}" pid="{start + i}" name="{_xesc(n)}">'
+            f'<vt:lpwstr>{_xesc(v)}</vt:lpwstr></property>'
+            for i, (n, v) in enumerate(props))
+        entries[_CUSTOM] = xml.replace("</Properties>", frag + "</Properties>").encode("utf-8")
+        return
+    body = "".join(
+        f'<property fmtid="{_FMTID}" pid="{2 + i}" name="{_xesc(n)}">'
+        f'<vt:lpwstr>{_xesc(v)}</vt:lpwstr></property>'
+        for i, (n, v) in enumerate(props))
+    entries[_CUSTOM] = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+        '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" '
+        'xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+        + body + '</Properties>').encode("utf-8")
+    ct = "[Content_Types].xml"
+    if ct in entries and "docProps/custom.xml" not in entries[ct].decode("utf-8", "replace"):
+        ov = ('<Override PartName="/docProps/custom.xml" '
+              'ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/>')
+        entries[ct] = entries[ct].decode("utf-8").replace("</Types>", ov + "</Types>").encode("utf-8")
+    rels = "_rels/.rels"
+    if rels in entries and "custom-properties" not in entries[rels].decode("utf-8", "replace"):
+        rel = ('<Relationship Id="rIdACPprov" '
+               'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties" '
+               'Target="docProps/custom.xml"/>')
+        entries[rels] = entries[rels].decode("utf-8").replace("</Relationships>", rel + "</Relationships>").encode("utf-8")
 _CP = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
 _DC = "http://purl.org/dc/elements/1.1/"
 _NS = {
@@ -68,6 +123,9 @@ def remediate_office(path: Path, *, lang: str = "en-US"):
     new_core = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
                 + ET.tostring(root, encoding="unicode"))
     entries[_CORE] = new_core.encode("utf-8")
+
+    # Tamper-evident provenance in the Custom-properties tab (who/what/when/standard).
+    _stamp_provenance(entries, applied)
 
     out_path = path.with_name(f"remediated-{path.name}")
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zout:

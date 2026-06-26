@@ -103,5 +103,15 @@ def remediate_html(html_text: str, *, ai_enabled: bool = True) -> tuple[str, lis
             # ai-assisted / human-only → defer (HITL). When AI is off this is the
             # only path; when AI is on a later step may draft a fix for approval.
             deferred.append(sc)
+    # Provenance: self-identify the remediated HTML (generator meta + leading comment).
+    if applied:
+        from datetime import datetime, timezone
+        from remediate_office import TOOL, VERSION
+        _prov = f"{TOOL} {VERSION} — remediated {datetime.now(timezone.utc).strftime('%Y-%m-%d')}, WCAG 2.1 AA"
+        head = tree.find('.//head')
+        if head is not None:
+            head.insert(0, head.makeelement('meta', {'name': 'generator', 'content': _prov}))
     fixed = _lh.tostring(tree, encoding="unicode")
+    if applied:
+        fixed = f"<!-- Remediated by {_prov} -->\n" + fixed
     return fixed, applied, deferred
