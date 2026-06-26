@@ -18,9 +18,29 @@ const BADGE = {
   uncertain: ['#E6EFFB', '#2A5E9E'], unanalysable: ['#EEEDEA', '#5F5E5A'],
 }
 
+// Google Drive appends " (1)", " (2)"… when the same file is uploaded more than
+// once. Strip the suffix to recover the logical document name.
+const baseName = (name) => name.replace(/ \(\d+\)(\.[^.]+)$/, '$1')
+
+// Collapse duplicate uploads into one representative row per logical document,
+// carrying a copy count + the list of actual file names.
+function groupDuplicates(files) {
+  const map = new Map()
+  for (const f of files) {
+    const k = baseName(f.file)
+    const g = map.get(k)
+    if (!g) { map.set(k, { rep: f, copies: 1, names: [f.file] }) }
+    else { g.copies += 1; g.names.push(f.file); if (f.file === k) g.rep = f }
+  }
+  return [...map.values()].map((g) => ({ ...g.rep, _copies: g.copies, _names: g.names }))
+}
+
 export default function Dashboard({ run, files, trend, delta, deltaKey }) {
   const [sel, setSel] = useState(null)
   const [seg, setSeg] = useState(null)
+  const [groupDupes, setGroupDupes] = useState(true)
+  const rows = groupDupes ? groupDuplicates(files) : files
+  const dupeCount = files.length - groupDuplicates(files).length
   const pickStatus = (s) => { const fs = files.filter((f) => statusOf(f) === s.label); setSeg({ title: `${s.label} documents`, subtitle: `${fs.length} of ${files.length}`, files: fs }) }
   const pickSeverity = (it) => { const sev = it.label.toUpperCase(); const fs = files.filter((f) => (f.issues || []).some((i) => i.severity === sev)); setSeg({ title: `${it.label} findings`, subtitle: `${fs.length} document(s) affected`, files: fs }) }
   const pickCrit = (c) => { const fs = files.filter((f) => (f.issues || []).some((i) => i.wcag === c)); setSeg({ title: `${critLabel(c)}`, subtitle: `${fs.length} document(s) failing this criterion`, files: fs }) }
@@ -82,17 +102,35 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
         </section>
       )}
       <section className="panel">
-        <h2>File inventory · <span style={{ fontWeight: 400 }}>click a row for details</span></h2>
+        <h2 style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+          <span>File inventory · <span style={{ fontWeight: 400 }}>
+            {groupDupes && dupeCount > 0
+              ? `${rows.length} document${rows.length === 1 ? '' : 's'} · click a row for details`
+              : 'click a row for details'}</span></span>
+          {dupeCount > 0 && (
+            <label className="muted" style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 400, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input type="checkbox" checked={groupDupes} onChange={(e) => setGroupDupes(e.target.checked)} />
+              Group duplicate uploads <span style={{ opacity: 0.7 }}>({dupeCount} copies)</span>
+            </label>
+          )}
+        </h2>
         <div className="tablewrap"><table>
           <thead><tr><th>file</th><th>status</th><th>score</th><th>findings</th></tr></thead>
           <tbody>
-            {files.map((f) => {
+            {rows.map((f) => {
               const st = statusOf(f); const [bg, fg] = BADGE[st]
               return (
                 <tr key={f.file} className="filerow" role="button" tabIndex={0}
                   onClick={() => setSel(f)}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSel(f) } }}>
-                  <td className="fname">{f.file}
+                  <td className="fname">{groupDupes && f._copies > 1 ? baseName(f.file) : f.file}
+                    {groupDupes && f._copies > 1 && (
+                      <span title={`${f._copies} identical copies in Drive:\n${f._names.join('\n')}`}
+                        style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, color: '#854F0B',
+                          background: '#FAEEDA', borderRadius: 10, padding: '1px 7px', verticalAlign: 'middle' }}>
+                        ×{f._copies} copies
+                      </span>
+                    )}
                     <div className="filemeta">
                       {f.sourceName && <span className="srcpill">{f.sourceName}</span>}
                       {(f.tags || []).slice(0, 4).map((t) => <Tag key={t} t={t} />)}
