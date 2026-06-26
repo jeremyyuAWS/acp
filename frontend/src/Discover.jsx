@@ -207,6 +207,14 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
       {files.length === 0 ? <p className="muted">No documents yet — run a scan from Integrations.</p> : sub === 'classify' ? (
         <>
           <div className="muted" style={{ margin: '4px 0 10px' }}>Step 2 · how the agent classifies the estate by content &amp; risk — expand a department to <b>confirm or correct</b> each document’s tags</div>
+          <div style={{ fontSize: 12.5, color: 'var(--ink)', background: '#F1EFF3', border: '1px solid var(--line)',
+                        borderRadius: 8, padding: '9px 12px', margin: '0 0 12px', lineHeight: 1.5 }}>
+            <b>How classification works:</b> <strong>document type</strong> comes from the file format ·
+            <strong> department</strong> &amp; <strong>exposure</strong> are inferred from the file name
+            (e.g. <code>HR-</code>, <code>Legal-</code>, <code>Finance-</code>, <code>public-</code>, <code>-hold</code>) ·
+            <strong> sensitive-data</strong> flags come from the scan (Deep scan). Confirm or correct any tag below —
+            your edits win over the agent’s guess.
+          </div>
           <div className="chartrow">
             <section className="panel"><h2>By exposure &amp; risk <span className="muted" style={{ fontWeight: 400 }}>· expand internal to see its risk flags</span></h2>
               <ExposureRisk pub={exposurePub} internal={exposureInternal} internalRisk={internalRisk} />
