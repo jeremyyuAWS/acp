@@ -244,8 +244,10 @@ def test_remediate_file_non_html_deferred(store, monkeypatch):
     import worker
     core.store = store
     sid = "scan-rem-2"
+    # Office (.docx/.pptx/.xlsx) has no server-side remediator yet → deferred.
+    # (HTML + PDF are now remediated server-side; see ADR 0005.)
     jid = store.enqueue_job("remediate_file",
-                            {"scan_id": sid, "file": "report.pdf", "drive_file_id": "p"},
+                            {"scan_id": sid, "file": "report.docx", "drive_file_id": "p"},
                             scan_id=sid)
     w = worker.JobWorker(store, worker_id="w-test")
     assert w.run_once() is True
