@@ -293,23 +293,34 @@ def _assess_trace(payload: dict, job: dict) -> None:
     scan_id = payload["scan_id"]
     level = payload.get("level", "AA")
     rows = core.store.get_scan_traces(scan_id)                 # per file + rule
-    by_file: dict[str, dict] = {}
+    # A finding blocks conformance when its WCAG level is at or below the target
+    # (A ⊆ AA ⊆ AAA), so the score is level-aware — matching the Assess tab.
+    RANK = {"A": 1, "AA": 2, "AAA": 3}
+    target = RANK.get(str(level).upper(), 2)
+    by_file: dict[str, dict] = {}              # file → {rule_id: count} for ALL failures (spans)
+    blocking_files: set[str] = set()           # files with a failure at/below the target level
     for r in rows:
-        by_file.setdefault(r["file"], {})
+        f = r["file"]
+        by_file.setdefault(f, {})
         if r["outcome"] == "FAIL":
-            by_file[r["file"]][r["rule_id"]] = r.get("finding_count") or 1
+            by_file[f][r["rule_id"]] = r.get("finding_count") or 1
+            if RANK.get((r.get("level") or "A").upper(), 1) <= target:
+                blocking_files.add(f)
     if not by_file:
         return
+    total = len(by_file)
+    failing = len(blocking_files)
+    conformant = total - failing
+    pct = round(conformant / total * 100) if total else 0
     res = core.store.get_scan(scan_id)
     owner = (res or {}).get("run", {}).get("owner_email")
-    trace = _lf.open_assess_trace(scan_id, level, len(by_file), user=owner)
-    fails = 0
+    trace = _lf.open_assess_trace(scan_id, level, total, user=owner)
     for fname, sc_counts in by_file.items():
         fspan = trace.span(name=fname, input={"document": fname})
         _lf.rule_spans(fspan, sc_counts, RULE_CATALOG, filename=fname)
         fspan.end(output={"failing_criteria": len(sc_counts)})
-        if sc_counts:
-            fails += 1
-    _lf.finish_assess_trace(trace, {"level": level, "documents": len(by_file),
-                                    "with_failing_findings": fails})
+    _lf.finish_assess_trace(trace, {
+        "level": level, "documents": total, "conformant": conformant,
+        "with_blocking_findings": failing, "estate_conformant_pct": pct,
+    }, scan_id=scan_id, score=pct)
     _lf.flush()

@@ -190,38 +190,24 @@ def finish_scan_trace(trace, scan_id: str, summary: dict, *, source: str, ai_ena
     if isinstance(trace, _Noop):
         return
     files = summary.get("files", 0)
-    cert = summary.get("certifiable", 0)
-    uncertain = summary.get("uncertain", 0)
     err = summary.get("error", 0)
-    avg = summary.get("avg_score")
-    need_work = max(files - cert - uncertain - err, 0)
     src = _SOURCE_LABEL.get(source, source)
-    sentence = (f"Scanned {files} documents from {src}. "
-                f"{cert} ready to certify, {need_work} need fixing"
-                + (f", {err} could not be opened" if err else "")
-                + (f". Average score {avg}/100." if avg is not None else "."))
+    # The scan trace reports DISCOVERY + deep-scan only. The compliance score and the
+    # ready-to-certify / need-fixing conformance counts belong to the Assess trace
+    # (written on demand), so they are deliberately not attached here.
+    sentence = (f"Scanned {files} documents from {src}"
+                + (f", {err} could not be opened" if err else "") + ".")
     if pii_docs:
         sentence += (f" ⚠ {pii_docs} document{'s' if pii_docs != 1 else ''} "
                      f"contain sensitive data ({pii_total} item{'s' if pii_total != 1 else ''}).")
     trace.update(output={
         "summary": sentence,
         "documents_scanned": files,
-        "ready_to_certify": cert,
-        "need_fixing": need_work,
-        "uncertain": uncertain,
         "could_not_open": err,
-        "average_score": avg,
         "documents_with_sensitive_data": pii_docs,
         "sensitive_items_found": pii_total,
         "mode": "AI-assisted" if ai_enabled else "Deterministic (no AI)",
     })
-    lf = _lf()
-    if lf and avg is not None:
-        try:
-            lf.score(trace_id=scan_id, name="compliance_score", value=float(avg),
-                     comment=sentence)
-        except Exception:
-            pass
 
 
 # ── Fan-out helpers: spans/finish referencing a trace by id (ADR 0007) ─────────
@@ -262,10 +248,22 @@ def open_assess_trace(scan_id: str, level: str, n_files: int, user: str | None =
     )
 
 
-def finish_assess_trace(trace, summary: dict) -> None:
+def finish_assess_trace(trace, summary: dict, *, scan_id: str | None = None,
+                        score: float | None = None) -> None:
+    """Close the Assess trace with the conformance summary + the compliance score
+    (the score lives here, not on the Scan trace)."""
     if isinstance(trace, _Noop):
         return
     trace.update(output=summary)
+    lf = _lf()
+    if lf and scan_id and score is not None:
+        try:
+            lf.score(trace_id=f"{scan_id}-assess", name="compliance_score",
+                     value=float(score),
+                     comment=f"WCAG 2.1 {summary.get('level', 'AA')} · "
+                             f"{score}% of documents conformant")
+        except Exception:
+            pass
 
 
 def flush():
