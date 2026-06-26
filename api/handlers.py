@@ -76,8 +76,8 @@ def _remediate_file(payload: dict, job: dict) -> None:
         raise FatalJobError("remediate_file job missing scan_id/file/drive_file_id")
 
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if ext not in ("html", "htm"):
-        # No server-side remediator for this type yet → leave for human review.
+    if ext not in ("html", "htm", "pdf"):
+        # No server-side remediator for this type yet (Office deferred) → human review.
         core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
                                 file=filename, detail=f"no server-side remediator for .{ext}")
         return
@@ -88,8 +88,26 @@ def _remediate_file(payload: dict, job: dict) -> None:
 
     svc = _drive_client(token)
     data = svc.files().get_media(fileId=drive_file_id).execute()
-    fixed, applied, _deferred = remediate_html(
-        data.decode("utf-8", errors="replace"), ai_enabled=core.store.get_ai_enabled())
+
+    if ext in ("html", "htm"):
+        fixed_html, applied, _deferred = remediate_html(
+            data.decode("utf-8", errors="replace"), ai_enabled=core.store.get_ai_enabled())
+        fixed_bytes = fixed_html.encode("utf-8")
+        mimetype = "text/html"
+    else:  # pdf — vendored DigitalA11y remediation engine (ADR 0005 step 4)
+        import tempfile
+        from pathlib import Path as _Path
+        from remediate_pdf import remediate_pdf
+        with tempfile.TemporaryDirectory(prefix="acp-rem-") as _d:
+            src = _Path(_d) / filename
+            src.write_bytes(data)
+            out_path, applied, _skipped = remediate_pdf(src)
+            if not out_path or not _Path(out_path).exists():
+                core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
+                                        file=filename, detail="PDF: no deterministic fixes applied")
+                return
+            fixed_bytes = _Path(out_path).read_bytes()
+        mimetype = "application/pdf"
 
     import io
     from googleapiclient.http import MediaIoBaseUpload
@@ -98,7 +116,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
     folder_id = folders[0]["id"] if folders else svc.files().create(
         body={"name": "Remediated", "mimeType": "application/vnd.google-apps.folder"},
         fields="id").execute()["id"]
-    media = MediaIoBaseUpload(io.BytesIO(fixed.encode("utf-8")), mimetype="text/html", resumable=False)
+    media = MediaIoBaseUpload(io.BytesIO(fixed_bytes), mimetype=mimetype, resumable=False)
     result = svc.files().create(
         body={"name": filename, "parents": [folder_id]},
         media_body=media, fields="id,webViewLink").execute()

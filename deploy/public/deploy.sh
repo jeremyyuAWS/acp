@@ -60,7 +60,7 @@ echo "== 1/5 vendor the Python PDF engine into the build context (compiled-equiv
 VEND="deploy/public/vendor/worker-python"
 WP="${ACP_PDF_ENGINE_SRC:-$HOME/projects/_review-digital-accessibility/worker-python}"
 rm -rf "$VEND" && mkdir -p "$VEND"
-cp -R "$WP/analysers" "$WP/models" "$VEND/"
+cp -R "$WP/analysers" "$WP/models" "$WP/remediation" "$VEND/"  # remediation/ = ADR 0005 step 4 (PDF fixers)
 find "$VEND" -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null || true
 echo "   vendored $(find "$VEND" -name '*.py' | wc -l | tr -d ' ') engine modules"
 
