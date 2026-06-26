@@ -508,6 +508,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             "started_at": started,
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "source": source,
+            "owner": user,            # per-user isolation: who ran this scan
+
             "files": [{"file": k, "engine": raw[k]["engine"], **assessed[k], "issues": raw[k]["issues"],
                        "drive_file_id": drive_id_map.get(k), "pii": pii_by_file.get(k),
                        "acp_stamped": detect_acp_stamp(tmp / k, Path(k).suffix.lower())}

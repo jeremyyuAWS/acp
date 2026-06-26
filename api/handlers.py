@@ -197,7 +197,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
     items = _list(source, svc, folder=effective_folder, sp_token=toks.get("sp"),
                   max_files=FANOUT_MAX_FILES)
     started = _dt.datetime.now(_dt.timezone.utc).isoformat()
-    core.store.init_scan_run(scan_id, source, len(items), started, rb.name, rb.hash)
+    core.store.init_scan_run(scan_id, source, len(items), started, rb.name, rb.hash, owner=user)
     _lf.scan_trace(scan_id, source, len(items), ai_enabled=ai, user=user)
     if not items:
         core.store.enqueue_job("scan_finalize",

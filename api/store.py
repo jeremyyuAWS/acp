@@ -22,7 +22,7 @@ _SCHEMA = [
       id TEXT PRIMARY KEY, started_at TEXT, completed_at TEXT, source TEXT,
       rubric_name TEXT, rubric_hash TEXT,
       files INT, certifiable INT, uncertain INT, error INT, avg_score INT,
-      status TEXT, files_done INT
+      status TEXT, files_done INT, owner_email TEXT
     )""",
     """CREATE TABLE IF NOT EXISTS file_records (
       scan_id TEXT, file TEXT, engine TEXT, status TEXT, score INT,
@@ -37,6 +37,8 @@ _SCHEMA = [
     # status=running + a files_done counter, then finalized once all per-file jobs land.
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS status TEXT",
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS files_done INT",
+    # Per-user isolation: scans are scoped to the signed-in user's email.
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS owner_email TEXT",
     # Migrations for existing deployments
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS drive_file_id TEXT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS remediated_at TEXT",
@@ -110,6 +112,14 @@ _SCHEMA = [
       PRIMARY KEY (scan_id, file, pii_type)
     )""",
 ]
+
+# One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
+# existing history isn't orphaned when per-user isolation turns on. Idempotent — only
+# touches NULL-owner rows, and new scans always carry an owner. Value is validated to
+# plain email characters before interpolation (no params in DDL-style _SCHEMA execution).
+_LEGACY_OWNER = os.environ.get("ACP_LEGACY_SCAN_OWNER", "").strip().lower()
+if _LEGACY_OWNER and "@" in _LEGACY_OWNER and all(c.isalnum() or c in ".+-_@" for c in _LEGACY_OWNER):
+    _SCHEMA.append(f"UPDATE scan_runs SET owner_email='{_LEGACY_OWNER}' WHERE owner_email IS NULL")
 
 _UPSERT_INV = (
     "INSERT INTO inventory(file,first_seen,last_seen,last_status,last_score) "
@@ -315,11 +325,12 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO scan_runs(id,started_at,completed_at,source,rubric_name,rubric_hash,"
-                "files,certifiable,uncertain,error,avg_score,status,files_done) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'done',%s)",
+                "files,certifiable,uncertain,error,avg_score,status,files_done,owner_email) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'done',%s,%s)",
                 (sid, report["started_at"], report["completed_at"], report["source"],
                  report["rubric"]["name"], report["rubric"]["hash"],
-                 s["files"], s["certifiable"], s["uncertain"], s["error"], s["avg_score"], s["files"]))
+                 s["files"], s["certifiable"], s["uncertain"], s["error"], s["avg_score"], s["files"],
+                 report.get("owner")))
             for f in report["files"]:
                 self._db.execute(cur,
                     "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped) "
@@ -363,13 +374,13 @@ class Store:
 
     # ── Fan-out scan pipeline (ADR 0007) ──────────────────────────────────────
     def init_scan_run(self, scan_id: str, source: str, total: int, started_at: str,
-                      rubric_name: str, rubric_hash: str) -> None:
+                      rubric_name: str, rubric_hash: str, owner: str | None = None) -> None:
         """Create the scan_runs row at discover time (status=running, counter=0)."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "INSERT INTO scan_runs(id,started_at,source,rubric_name,rubric_hash,files,files_done,status) "
-                "VALUES(%s,%s,%s,%s,%s,%s,0,'running') ON CONFLICT(id) DO NOTHING",
-                (scan_id, started_at, source, rubric_name, rubric_hash, total))
+                "INSERT INTO scan_runs(id,started_at,source,rubric_name,rubric_hash,files,files_done,status,owner_email) "
+                "VALUES(%s,%s,%s,%s,%s,%s,0,'running',%s) ON CONFLICT(id) DO NOTHING",
+                (scan_id, started_at, source, rubric_name, rubric_hash, total, owner))
 
     def save_file_result(self, scan_id: str, f: dict, completed_at: str) -> None:
         """Persist one assessed file (same shape save_scan writes). Idempotent so a
@@ -489,28 +500,40 @@ class Store:
                 self._db.execute(cur, f"DELETE FROM {t}")
         return list(self._ANALYTICS_TABLES)
 
-    def list_scans(self) -> list[dict]:
+    def list_scans(self, owner: str | None = None) -> list[dict]:
         # Completed scans only — in-flight (status='running', no completed_at) scans
         # are excluded so they don't appear as bogus entries in the scan picker.
+        # Scoped to the signed-in user (per-user isolation): a user sees only their scans.
+        where, params = "completed_at IS NOT NULL", ()
+        if owner:
+            where += " AND owner_email=%s"; params = (owner,)
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT id,completed_at,source,rubric_hash,files,certifiable,uncertain,error,avg_score "
-                "FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC")
+                f"FROM scan_runs WHERE {where} ORDER BY completed_at DESC", params)
             return self._db.fetchall(cur)
 
-    def active_scan(self) -> dict | None:
-        """The most recent in-flight scan (for reconnecting after a page reload), or None."""
+    def active_scan(self, owner: str | None = None) -> dict | None:
+        """The most recent in-flight scan (for reconnecting after a page reload), or None.
+        Scoped to the signed-in user so reconnect never picks up someone else's scan."""
+        where, params = "status='running'", ()
+        if owner:
+            where += " AND owner_email=%s"; params = (owner,)
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT id,started_at,source,files,files_done FROM scan_runs "
-                "WHERE status='running' ORDER BY started_at DESC LIMIT 1")
+                f"WHERE {where} ORDER BY started_at DESC LIMIT 1", params)
             return self._db.fetchone(cur)
 
-    def get_scan(self, sid: str) -> dict | None:
+    def get_scan(self, sid: str, owner: str | None = None) -> dict | None:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT * FROM scan_runs WHERE id=%s", (sid,))
             run = self._db.fetchone(cur)
             if not run:
+                return None
+            # Per-user isolation: a user can only read their own scan (legacy/None owner
+            # scans are not shown to anyone once isolation is on).
+            if owner is not None and run.get("owner_email") != owner:
                 return None
             self._db.execute(cur,
                 "SELECT file,engine,status,score,compliant,skipped_rules,remediated_at,drive_write_url,acp_stamped "

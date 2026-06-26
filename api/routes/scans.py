@@ -15,6 +15,12 @@ from report import build_report
 router = APIRouter()
 
 
+def _owner(request: Request) -> str:
+    """The current user for per-user data isolation — the gate-verified email, or
+    'demo' for the keyless/demo path. Matches the owner stamped on scans at creation."""
+    return getattr(request.state, "user_email", None) or "demo"
+
+
 @router.post("/scans")
 def start_scan(request: Request, source: str = Query("local", pattern="^(local|drive|sharepoint)$"),
                sync: bool = False, folder: str | None = Query(None),
@@ -37,7 +43,8 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
     effective_ai = ai and core.store.get_ai_enabled()
     # Who ran this scan (GIS email, set by the access-gate). Used to group traces
     # by user in Langfuse; falls back to the demo identity on the keyless path.
-    user = getattr(request.state, "user_email", None) or ("demo" if is_demo_drive else None)
+    # Owner for per-user isolation: the gate-verified email, else 'demo' (keyless/demo).
+    user = getattr(request.state, "user_email", None) or "demo"
 
     # ── Durable async path: enqueue a scan job for the worker pool (ADR 0004). ──
     # Survives restarts, retries on transient failure, shows up in /jobs + Grafana.
@@ -131,21 +138,21 @@ def scan_job(job_id: str):
 
 
 @router.get("/scans")
-def scans():
-    return core.store.list_scans()
+def scans(request: Request):
+    return core.store.list_scans(owner=_owner(request))
 
 
 # Registered before /scans/{sid} so "active" isn't treated as a scan id.
 @router.get("/scans/active")
-def active_scan():
+def active_scan(request: Request):
     """The in-flight scan, if any — lets the UI reconnect to a running scan after a
-    page reload (the durable fan-out keeps running server-side)."""
-    return core.store.active_scan() or {}
+    page reload (the durable fan-out keeps running server-side). Scoped to the user."""
+    return core.store.active_scan(owner=_owner(request)) or {}
 
 
 @router.get("/scans/{sid}")
-def scan(sid: str):
-    res = core.store.get_scan(sid)
+def scan(sid: str, request: Request):
+    res = core.store.get_scan(sid, owner=_owner(request))
     if res is None:
         raise HTTPException(404, "scan not found")
     return res

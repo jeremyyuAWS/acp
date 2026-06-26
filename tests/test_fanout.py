@@ -51,6 +51,20 @@ def test_counter_and_finalize_aggregation(st):
     assert len(res["files"]) == 3          # get_scan returns the file rows
 
 
+def test_per_user_isolation(st):
+    # Two users each run a scan; each only sees their own.
+    st.init_scan_run("sA", "drive", 1, "t0", "r", "h", owner="alice@x.com")
+    st.save_file_result("sA", _file("a.html"), "t1"); st.finalize_scan_run("sA", "t2")
+    st.init_scan_run("sB", "drive", 1, "t0", "r", "h", owner="bob@x.com")
+    st.save_file_result("sB", _file("b.html"), "t1"); st.finalize_scan_run("sB", "t2")
+
+    assert [s["id"] for s in st.list_scans(owner="alice@x.com")] == ["sA"]
+    assert [s["id"] for s in st.list_scans(owner="bob@x.com")] == ["sB"]
+    assert st.get_scan("sA", owner="alice@x.com") is not None     # own scan: visible
+    assert st.get_scan("sA", owner="bob@x.com") is None           # other's scan: hidden
+    assert st.get_scan("sA") is not None                          # no owner = no check (internal)
+
+
 def test_save_file_result_idempotent(st):
     st.init_scan_run("s2", "drive", total=1, started_at="t0", rubric_name="r", rubric_hash="h")
     f = _file("x.html", issues=[{"ruleId": "3.1.1", "wcag": "3.1.1 Language of Page", "severity": "SERIOUS"}])
