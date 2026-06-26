@@ -1,7 +1,9 @@
 {
   "__inputs": [],
   "__requires": [],
-  "annotations": { "list": [] },
+  "annotations": {
+    "list": []
+  },
   "description": "ACP — Accessibility Compliance Platform: live compliance posture, findings, remediation, async queue, and audit trail (from Postgres).",
   "editable": true,
   "graphTooltip": 1,
@@ -9,308 +11,1702 @@
   "links": [],
   "refresh": "30s",
   "schemaVersion": 39,
-  "tags": ["acp", "accessibility", "wcag"],
-  "time": { "from": "now-30d", "to": "now" },
+  "tags": [
+    "acp",
+    "accessibility",
+    "wcag"
+  ],
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
   "timezone": "browser",
   "title": "ACP — Accessibility Compliance Platform",
   "uid": "acp-overview-v1",
   "version": 2,
   "panels": [
-
-    { "type": "row", "id": 100, "title": "Compliance posture · latest scan", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
-
     {
-      "type": "gauge", "id": 1, "title": "Avg compliance score",
+      "type": "text",
+      "id": 99,
+      "title": "",
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "### 📋 Document accessibility — at a glance\nThis shows how usable your documents are for people with disabilities, scored against the **WCAG 2.1** standard. **Score 0–100** (higher is better; **90+** can be certified). **Green = good · amber = needs attention · red = problem.** Each scan checks every document against dozens of rules — below are the latest results, trends, the most common problems, and the documents that need the most work."
+      }
+    },
+    {
+      "type": "row",
+      "id": 100,
+      "title": "Compliance posture · latest scan",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 3
+      }
+    },
+    {
+      "type": "gauge",
+      "id": 1,
+      "title": "Avg compliance score",
       "description": "Mean 0–100 WCAG compliance score of the most recent completed scan. Target ≥ 90.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 1 },
-      "fieldConfig": { "defaults": { "min": 0, "max": 100, "unit": "none", "decimals": 0,
-        "thresholds": { "mode": "absolute", "steps": [
-          { "color": "#CC3333", "value": null }, { "color": "#D68A0C", "value": 60 },
-          { "color": "#9BBE2E", "value": 80 }, { "color": "#3D9E3D", "value": 90 } ] } } },
-      "options": { "showThresholdLabels": false, "showThresholdMarkers": true, "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT avg_score AS value FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 100,
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#CC3333",
+                "value": null
+              },
+              {
+                "color": "#D68A0C",
+                "value": 60
+              },
+              {
+                "color": "#9BBE2E",
+                "value": 80
+              },
+              {
+                "color": "#3D9E3D",
+                "value": 90
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT avg_score AS value FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1"
+        }
+      ]
     },
     {
-      "type": "stat", "id": 2, "title": "Certifiable rate",
+      "type": "stat",
+      "id": 2,
+      "title": "Certifiable rate",
       "description": "Share of documents in the latest scan that pass the rubric and can be certified.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 4, "w": 5, "x": 6, "y": 1 },
-      "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 0,
-        "thresholds": { "mode": "absolute", "steps": [ { "color": "#CC3333", "value": null }, { "color": "#D68A0C", "value": 0.3 }, { "color": "#3D9E3D", "value": 0.6 } ] } } },
-      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT ROUND(CAST(certifiable AS NUMERIC)/NULLIF(files,0),3) AS value FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 6,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#CC3333",
+                "value": null
+              },
+              {
+                "color": "#D68A0C",
+                "value": 0.3
+              },
+              {
+                "color": "#3D9E3D",
+                "value": 0.6
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT ROUND(CAST(certifiable AS NUMERIC)/NULLIF(files,0),3) AS value FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1"
+        }
+      ]
     },
     {
-      "type": "stat", "id": 3, "title": "Open findings (latest)",
+      "type": "stat",
+      "id": 3,
+      "title": "Open findings (latest)",
       "description": "Total WCAG violations found across all documents in the most recent scan.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 4, "w": 5, "x": 11, "y": 1 },
-      "fieldConfig": { "defaults": { "unit": "none",
-        "thresholds": { "mode": "absolute", "steps": [ { "color": "#3D9E3D", "value": null }, { "color": "#D68A0C", "value": 1 }, { "color": "#CC3333", "value": 50 } ] } } },
-      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT COUNT(*) AS value FROM issue_records WHERE scan_id = (SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1)" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 11,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3D9E3D",
+                "value": null
+              },
+              {
+                "color": "#D68A0C",
+                "value": 1
+              },
+              {
+                "color": "#CC3333",
+                "value": 50
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT COUNT(*) AS value FROM issue_records WHERE scan_id = (SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1)"
+        }
+      ]
     },
     {
-      "type": "stat", "id": 4, "title": "HITL pending",
+      "type": "stat",
+      "id": 4,
+      "title": "Awaiting human review",
       "description": "Findings awaiting human review in the queue.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
-      "fieldConfig": { "defaults": { "unit": "none",
-        "thresholds": { "mode": "absolute", "steps": [ { "color": "#3D9E3D", "value": null }, { "color": "#D68A0C", "value": 1 }, { "color": "#CC3333", "value": 25 } ] } } },
-      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT COUNT(*) AS value FROM hitl_queue WHERE status='pending'" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3D9E3D",
+                "value": null
+              },
+              {
+                "color": "#D68A0C",
+                "value": 1
+              },
+              {
+                "color": "#CC3333",
+                "value": 25
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT COUNT(*) AS value FROM hitl_queue WHERE status='pending'"
+        }
+      ]
     },
     {
-      "type": "stat", "id": 5, "title": "Queue in-flight",
+      "type": "stat",
+      "id": 5,
+      "title": "Processing now",
       "description": "Async jobs currently queued or running in the worker pool.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
-      "fieldConfig": { "defaults": { "unit": "none",
-        "thresholds": { "mode": "absolute", "steps": [ { "color": "#3D9E3D", "value": null }, { "color": "#185FA5", "value": 1 } ] } } },
-      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT COUNT(*) AS value FROM jobs WHERE status IN ('queued','running')" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3D9E3D",
+                "value": null
+              },
+              {
+                "color": "#185FA5",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT COUNT(*) AS value FROM jobs WHERE status IN ('queued','running')"
+        }
+      ]
     },
     {
-      "type": "stat", "id": 6, "title": "Total scans",
+      "type": "stat",
+      "id": 6,
+      "title": "Total scans",
       "description": "Completed scans over time (with trend).",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 4, "w": 5, "x": 6, "y": 5 },
-      "fieldConfig": { "defaults": { "unit": "none", "color": { "mode": "fixed", "fixedColor": "#185FA5" } } },
-      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "time_series", "refId": "A",
-        "rawSql": "SELECT completed_at::timestamptz AS time, (ROW_NUMBER() OVER (ORDER BY completed_at))::int AS \"scans\" FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 6,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#185FA5"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "time_series",
+          "refId": "A",
+          "rawSql": "SELECT completed_at::timestamptz AS time, (ROW_NUMBER() OVER (ORDER BY completed_at))::int AS \"scans\" FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at"
+        }
+      ]
     },
     {
-      "type": "stat", "id": 7, "title": "Documents covered",
+      "type": "stat",
+      "id": 7,
+      "title": "Documents covered",
       "description": "Unique documents seen across all scans (idempotent inventory).",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 4, "w": 5, "x": 11, "y": 5 },
-      "fieldConfig": { "defaults": { "unit": "none", "color": { "mode": "fixed", "fixedColor": "#0F6E56" } } },
-      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT COUNT(*) AS value FROM inventory" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 11,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#0F6E56"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT COUNT(*) AS value FROM inventory"
+        }
+      ]
     },
     {
-      "type": "stat", "id": 8, "title": "Dead-letter jobs",
+      "type": "stat",
+      "id": 8,
+      "title": "Stuck items (need attention)",
       "description": "Async jobs that exhausted retries — need attention.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 5 },
-      "fieldConfig": { "defaults": { "unit": "none",
-        "thresholds": { "mode": "absolute", "steps": [ { "color": "#3D9E3D", "value": null }, { "color": "#CC3333", "value": 1 } ] } } },
-      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT COUNT(*) AS value FROM jobs WHERE status='dead'" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3D9E3D",
+                "value": null
+              },
+              {
+                "color": "#CC3333",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT COUNT(*) AS value FROM jobs WHERE status='dead'"
+        }
+      ]
     },
-
-    { "type": "row", "id": 101, "title": "Trends", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 } },
-
     {
-      "type": "timeseries", "id": 10, "title": "Compliance score over time",
+      "type": "row",
+      "id": 101,
+      "title": "Trends",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 10,
+      "title": "Compliance score over time",
       "description": "Average score per scan. The dashed line is the 90 certification target.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
-      "fieldConfig": { "defaults": { "unit": "none", "min": 0, "max": 100,
-        "custom": { "lineWidth": 2, "fillOpacity": 12, "lineInterpolation": "smooth", "showPoints": "always", "pointSize": 6, "spanNulls": true,
-          "thresholdsStyle": { "mode": "dashed" } },
-        "color": { "mode": "fixed", "fixedColor": "#185FA5" },
-        "thresholds": { "mode": "absolute", "steps": [ { "color": "transparent", "value": null }, { "color": "#3D9E3D", "value": 90 } ] } } },
-      "options": { "tooltip": { "mode": "single" }, "legend": { "displayMode": "hidden" } },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "time_series", "refId": "A",
-        "rawSql": "SELECT completed_at::timestamptz AS time, avg_score AS \"avg score\" FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "lineInterpolation": "smooth",
+            "showPoints": "always",
+            "pointSize": 6,
+            "spanNulls": true,
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#185FA5"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "#3D9E3D",
+                "value": 90
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "hidden"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "time_series",
+          "refId": "A",
+          "rawSql": "SELECT completed_at::timestamptz AS time, avg_score AS \"avg score\" FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at"
+        }
+      ]
     },
     {
-      "type": "timeseries", "id": 11, "title": "Scan outcomes over time",
+      "type": "timeseries",
+      "id": 11,
+      "title": "Scan outcomes over time",
       "description": "Per-scan breakdown: certifiable vs. needs-work vs. uncertain vs. error.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
-      "fieldConfig": { "defaults": { "unit": "none", "custom": { "lineWidth": 1, "fillOpacity": 25, "stacking": { "mode": "normal" }, "showPoints": "never" } },
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 25,
+            "stacking": {
+              "mode": "normal"
+            },
+            "showPoints": "never"
+          }
+        },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "certifiable" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3D9E3D" } }] },
-          { "matcher": { "id": "byName", "options": "needs work" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#D68A0C" } }] },
-          { "matcher": { "id": "byName", "options": "uncertain" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#888780" } }] },
-          { "matcher": { "id": "byName", "options": "error" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#CC3333" } }] } ] },
-      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "time_series", "refId": "A",
-        "rawSql": "SELECT completed_at::timestamptz AS time, certifiable, GREATEST(files-certifiable-uncertain-error,0) AS \"needs work\", uncertain, error FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at" }]
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "certifiable"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3D9E3D"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "needs work"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#D68A0C"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "uncertain"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#888780"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "error"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#CC3333"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "time_series",
+          "refId": "A",
+          "rawSql": "SELECT completed_at::timestamptz AS time, certifiable, GREATEST(files-certifiable-uncertain-error,0) AS \"needs work\", uncertain, error FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at"
+        }
+      ]
     },
-
-    { "type": "row", "id": 102, "title": "Findings", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 } },
-
     {
-      "type": "piechart", "id": 20, "title": "Findings by severity",
+      "type": "row",
+      "id": 102,
+      "title": "Findings",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      }
+    },
+    {
+      "type": "piechart",
+      "id": 20,
+      "title": "Findings by severity",
       "description": "All recorded WCAG violations by severity.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 8, "w": 7, "x": 0, "y": 19 },
-      "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [
-        { "matcher": { "id": "byName", "options": "CRITICAL" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#A32D2D" } }] },
-        { "matcher": { "id": "byName", "options": "SERIOUS" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#BA7517" } }] },
-        { "matcher": { "id": "byName", "options": "MODERATE" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#185FA5" } }] },
-        { "matcher": { "id": "byName", "options": "MINOR" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#888780" } }] } ] },
-      "options": { "pieType": "donut", "displayLabels": ["percent"], "legend": { "displayMode": "table", "placement": "right", "values": ["value"] } },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT severity, COUNT(*) AS value FROM issue_records GROUP BY severity ORDER BY value DESC" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 7,
+        "x": 0,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "CRITICAL"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#A32D2D"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "SERIOUS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#BA7517"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MODERATE"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#185FA5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MINOR"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#888780"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT severity, COUNT(*) AS value FROM issue_records GROUP BY severity ORDER BY value DESC"
+        }
+      ]
     },
     {
-      "type": "bargauge", "id": 21, "title": "Top failing WCAG rules",
-      "description": "Most-violated rules across all scans.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 8, "w": 8, "x": 7, "y": 19 },
-      "fieldConfig": { "defaults": { "unit": "none", "color": { "mode": "continuous-RdYlGr" } } },
-      "options": { "reduceOptions": { "calcs": ["sum"] }, "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT rule_id AS metric, COUNT(*) AS value FROM issue_records GROUP BY rule_id ORDER BY value DESC LIMIT 12" }]
+      "type": "bargauge",
+      "id": 21,
+      "title": "Most common accessibility problems",
+      "description": "The issues found most often, in plain language (e.g. 'Non-text Content' = images missing a text description).",
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 7,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "continuous-RdYlGr"
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ]
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT COALESCE(NULLIF(rule_name,''), rule_id) AS metric, SUM(finding_count) AS value FROM scan_rule_traces WHERE outcome='FAIL' GROUP BY 1 ORDER BY value DESC LIMIT 12"
+        }
+      ]
     },
     {
-      "type": "table", "id": 22, "title": "Lowest-scoring documents (latest scan)",
+      "type": "table",
+      "id": 22,
+      "title": "Lowest-scoring documents (latest scan)",
       "description": "The documents most in need of remediation in the most recent scan.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 8, "w": 9, "x": 15, "y": 19 },
-      "fieldConfig": { "defaults": { "custom": { "align": "left" } },
-        "overrides": [ { "matcher": { "id": "byName", "options": "score" }, "properties": [
-          { "id": "custom.cellOptions", "value": { "type": "color-background" } },
-          { "id": "thresholds", "value": { "mode": "absolute", "steps": [ { "color": "#CC3333", "value": null }, { "color": "#D68A0C", "value": 60 }, { "color": "#3D9E3D", "value": 85 } ] } },
-          { "id": "custom.width", "value": 70 } ] } ] },
-      "options": { "showHeader": true, "sortBy": [{ "displayName": "score", "desc": false }] },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT file, engine, status, score FROM file_records WHERE scan_id = (SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1) ORDER BY score ASC LIMIT 12" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 9,
+        "x": 15,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "score"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#CC3333",
+                      "value": null
+                    },
+                    {
+                      "color": "#D68A0C",
+                      "value": 60
+                    },
+                    {
+                      "color": "#3D9E3D",
+                      "value": 85
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "score",
+            "desc": false
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT file, engine, status, score FROM file_records WHERE scan_id = (SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1) ORDER BY score ASC LIMIT 12"
+        }
+      ]
     },
-
-    { "type": "row", "id": 103, "title": "Coverage & engines", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 } },
-
     {
-      "type": "piechart", "id": 30, "title": "Rule coverage (latest scan)",
+      "type": "row",
+      "id": 103,
+      "title": "Coverage & engines",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      }
+    },
+    {
+      "type": "piechart",
+      "id": 30,
+      "title": "Rule coverage (latest scan)",
       "description": "Every rule evaluation in the latest scan: passed, failed, errored, or not-applicable to the file type. Proves completeness.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 28 },
-      "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [
-        { "matcher": { "id": "byName", "options": "PASS" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3D9E3D" } }] },
-        { "matcher": { "id": "byName", "options": "FAIL" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#CC3333" } }] },
-        { "matcher": { "id": "byName", "options": "ERROR" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#BA7517" } }] } ] },
-      "options": { "pieType": "donut", "displayLabels": ["percent"], "legend": { "displayMode": "table", "placement": "right", "values": ["value"] } },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT status, COUNT(*) AS value FROM scan_file_manifests WHERE scan_id = (SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1) GROUP BY status" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 31
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "PASS"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3D9E3D"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "FAIL"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#CC3333"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ERROR"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#BA7517"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT status, COUNT(*) AS value FROM scan_file_manifests WHERE scan_id = (SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1) GROUP BY status"
+        }
+      ]
     },
     {
-      "type": "bargauge", "id": 31, "title": "Avg score by engine (latest)",
+      "type": "bargauge",
+      "id": 31,
+      "title": "Avg score by engine (latest)",
       "description": "Compliance score by document engine — which formats fare best.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 28 },
-      "fieldConfig": { "defaults": { "unit": "none", "min": 0, "max": 100, "color": { "mode": "continuous-RdYlGr" } } },
-      "options": { "reduceOptions": { "calcs": ["mean"] }, "orientation": "horizontal", "displayMode": "lcd" },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT engine AS metric, ROUND(AVG(score)) AS value FROM file_records WHERE scan_id = (SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1) GROUP BY engine ORDER BY value" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 31
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 100,
+          "color": {
+            "mode": "continuous-RdYlGr"
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "mean"
+          ]
+        },
+        "orientation": "horizontal",
+        "displayMode": "lcd"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT engine AS metric, ROUND(AVG(score)) AS value FROM file_records WHERE scan_id = (SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1) GROUP BY engine ORDER BY value"
+        }
+      ]
     },
     {
-      "type": "piechart", "id": 32, "title": "File status (latest scan)",
+      "type": "piechart",
+      "id": 32,
+      "title": "File status (latest scan)",
       "description": "Per-document outcome in the latest scan.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
-      "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [
-        { "matcher": { "id": "byName", "options": "certifiable" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3D9E3D" } }] },
-        { "matcher": { "id": "byName", "options": "issues" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#D68A0C" } }] },
-        { "matcher": { "id": "byName", "options": "uncertain" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#888780" } }] },
-        { "matcher": { "id": "byName", "options": "error" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#CC3333" } }] } ] },
-      "options": { "pieType": "pie", "displayLabels": ["percent"], "legend": { "displayMode": "list", "placement": "bottom" } },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT status, COUNT(*) AS value FROM file_records WHERE scan_id = (SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1) GROUP BY status" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 31
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "certifiable"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3D9E3D"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "issues"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#D68A0C"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "uncertain"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#888780"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "error"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#CC3333"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "pieType": "pie",
+        "displayLabels": [
+          "percent"
+        ],
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT status, COUNT(*) AS value FROM file_records WHERE scan_id = (SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1) GROUP BY status"
+        }
+      ]
     },
-
-    { "type": "row", "id": 104, "title": "Remediation & human review", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 } },
-
     {
-      "type": "piechart", "id": 40, "title": "HITL queue status",
+      "type": "row",
+      "id": 104,
+      "title": "Fixing & human review",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      }
+    },
+    {
+      "type": "piechart",
+      "id": 40,
+      "title": "Human-review outcomes",
       "description": "Human-review items by disposition.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 37 },
-      "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [
-        { "matcher": { "id": "byName", "options": "pending" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#D68A0C" } }] },
-        { "matcher": { "id": "byName", "options": "approved" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3D9E3D" } }] },
-        { "matcher": { "id": "byName", "options": "rejected" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#CC3333" } }] },
-        { "matcher": { "id": "byName", "options": "skipped" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#888780" } }] } ] },
-      "options": { "pieType": "pie", "displayLabels": ["value"], "legend": { "displayMode": "list", "placement": "bottom" } },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT status, COUNT(*) AS value FROM hitl_queue GROUP BY status" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 40
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pending"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#D68A0C"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "approved"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3D9E3D"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rejected"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#CC3333"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "skipped"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#888780"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "pieType": "pie",
+        "displayLabels": [
+          "value"
+        ],
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT status, COUNT(*) AS value FROM hitl_queue GROUP BY status"
+        }
+      ]
     },
     {
-      "type": "bargauge", "id": 41, "title": "Top rules awaiting review",
+      "type": "bargauge",
+      "id": 41,
+      "title": "Issues awaiting review",
       "description": "Which rules are stacking up in the human-review queue.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 37 },
-      "fieldConfig": { "defaults": { "unit": "none", "color": { "mode": "fixed", "fixedColor": "#BA7517" } } },
-      "options": { "reduceOptions": { "calcs": ["sum"] }, "orientation": "horizontal", "displayMode": "gradient" },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT rule_name AS metric, COUNT(*) AS value FROM hitl_queue WHERE status='pending' GROUP BY rule_name ORDER BY value DESC LIMIT 8" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 40
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#BA7517"
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ]
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT rule_name AS metric, COUNT(*) AS value FROM hitl_queue WHERE status='pending' GROUP BY rule_name ORDER BY value DESC LIMIT 8"
+        }
+      ]
     },
     {
-      "type": "stat", "id": 42, "title": "Files remediated",
+      "type": "stat",
+      "id": 42,
+      "title": "Files remediated",
       "description": "Documents with a remediation written back to source.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 37 },
-      "fieldConfig": { "defaults": { "unit": "none", "color": { "mode": "fixed", "fixedColor": "#0F6E56" } } },
-      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "time_series", "refId": "A",
-        "rawSql": "SELECT remediated_at::timestamptz AS time, (ROW_NUMBER() OVER (ORDER BY remediated_at))::int AS \"remediated\" FROM file_records WHERE remediated_at IS NOT NULL ORDER BY remediated_at" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 40
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#0F6E56"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "time_series",
+          "refId": "A",
+          "rawSql": "SELECT remediated_at::timestamptz AS time, (ROW_NUMBER() OVER (ORDER BY remediated_at))::int AS \"remediated\" FROM file_records WHERE remediated_at IS NOT NULL ORDER BY remediated_at"
+        }
+      ]
     },
-
-    { "type": "row", "id": 105, "title": "Async processing · job queue (ADR 0004)", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 44 } },
-
     {
-      "type": "piechart", "id": 50, "title": "Jobs by status",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 45 },
-      "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [
-        { "matcher": { "id": "byName", "options": "queued" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#D68A0C" } }] },
-        { "matcher": { "id": "byName", "options": "running" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#185FA5" } }] },
-        { "matcher": { "id": "byName", "options": "done" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3D9E3D" } }] },
-        { "matcher": { "id": "byName", "options": "dead" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#CC3333" } }] } ] },
-      "options": { "pieType": "donut", "displayLabels": ["value"], "legend": { "displayMode": "table", "placement": "right", "values": ["value"] } },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT status, COUNT(*) AS value FROM jobs GROUP BY status" }]
+      "type": "row",
+      "id": 105,
+      "title": "Behind the scenes · automatic processing",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 47
+      }
     },
     {
-      "type": "bargauge", "id": 51, "title": "Jobs by type",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 7, "w": 7, "x": 8, "y": 45 },
-      "fieldConfig": { "defaults": { "unit": "none", "color": { "mode": "fixed", "fixedColor": "#534AB7" } } },
-      "options": { "reduceOptions": { "calcs": ["sum"] }, "orientation": "horizontal", "displayMode": "gradient" },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT type AS metric, COUNT(*) AS value FROM jobs GROUP BY type ORDER BY value DESC" }]
+      "type": "piechart",
+      "id": 50,
+      "title": "Work items by status",
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 48
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "queued"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#D68A0C"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "running"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#185FA5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "done"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3D9E3D"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "dead"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#CC3333"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "pieType": "donut",
+        "displayLabels": [
+          "value"
+        ],
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT status, COUNT(*) AS value FROM jobs GROUP BY status"
+        }
+      ]
     },
     {
-      "type": "timeseries", "id": 52, "title": "Jobs completed (throughput)",
+      "type": "bargauge",
+      "id": 51,
+      "title": "Work items by type",
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 7,
+        "x": 8,
+        "y": 48
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#534AB7"
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ]
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT type AS metric, COUNT(*) AS value FROM jobs GROUP BY type ORDER BY value DESC"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 52,
+      "title": "Work completed over time",
       "description": "Jobs finishing over time — worker-pool throughput.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 7, "w": 9, "x": 15, "y": 45 },
-      "fieldConfig": { "defaults": { "unit": "none", "custom": { "lineWidth": 2, "fillOpacity": 15, "drawStyle": "bars", "barAlignment": 0 }, "color": { "mode": "fixed", "fixedColor": "#3D9E3D" } } },
-      "options": { "tooltip": { "mode": "single" }, "legend": { "displayMode": "hidden" } },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "time_series", "refId": "A",
-        "rawSql": "SELECT date_trunc('minute', updated_at::timestamptz) AS time, COUNT(*) AS \"completed\" FROM jobs WHERE status='done' GROUP BY 1 ORDER BY 1" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 9,
+        "x": 15,
+        "y": 48
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "drawStyle": "bars",
+            "barAlignment": 0
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3D9E3D"
+          }
+        }
+      },
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "hidden"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "time_series",
+          "refId": "A",
+          "rawSql": "SELECT date_trunc('minute', updated_at::timestamptz) AS time, COUNT(*) AS \"completed\" FROM jobs WHERE status='done' GROUP BY 1 ORDER BY 1"
+        }
+      ]
     },
-
-    { "type": "row", "id": 106, "title": "Audit trail · immutable decision log", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 52 } },
-
     {
-      "type": "table", "id": 60, "title": "Recent decisions",
+      "type": "row",
+      "id": 106,
+      "title": "Audit trail · what happened and when",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 55
+      }
+    },
+    {
+      "type": "table",
+      "id": 60,
+      "title": "Recent decisions",
       "description": "Append-only record of every consequential action — scan mode, auto-routing, HITL reviews, remediation, settings.",
-      "datasource": { "type": "postgres", "uid": "acp_pg" },
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 53 },
-      "fieldConfig": { "defaults": { "custom": { "align": "left" } },
-        "overrides": [ { "matcher": { "id": "byName", "options": "action" }, "properties": [
-          { "id": "custom.cellOptions", "value": { "type": "color-text" } },
-          { "id": "mappings", "value": [
-            { "type": "regex", "options": { "pattern": "hitl.approved", "result": { "color": "#3D9E3D", "index": 0 } } },
-            { "type": "regex", "options": { "pattern": "hitl.rejected", "result": { "color": "#CC3333", "index": 1 } } },
-            { "type": "regex", "options": { "pattern": "hitl.auto_routed", "result": { "color": "#BA7517", "index": 2 } } } ] } ] } ] },
-      "options": { "showHeader": true, "sortBy": [{ "displayName": "when", "desc": true }] },
-      "targets": [{ "datasource": { "type": "postgres", "uid": "acp_pg" }, "format": "table", "refId": "A",
-        "rawSql": "SELECT ts AS \"when\", actor, action, file, rule_id, detail FROM decision_log ORDER BY ts DESC LIMIT 50" }]
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 56
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "action"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "hitl.approved",
+                      "result": {
+                        "color": "#3D9E3D",
+                        "index": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "hitl.rejected",
+                      "result": {
+                        "color": "#CC3333",
+                        "index": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "hitl.auto_routed",
+                      "result": {
+                        "color": "#BA7517",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "when",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT ts AS \"when\", actor, action, file, rule_id, detail FROM decision_log ORDER BY ts DESC LIMIT 50"
+        }
+      ]
     }
-
   ]
 }
