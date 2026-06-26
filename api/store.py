@@ -813,6 +813,16 @@ class Store:
                 "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value",
                 (key, value))
 
+    def get_allowlist(self) -> list[str]:
+        """Runtime-editable allowed emails (managed from Settings), lowercased."""
+        raw = self.get_setting("allowed_emails", "") or ""
+        return [e.strip().lower() for e in raw.split(",") if e.strip()]
+
+    def set_allowlist(self, emails: list[str]) -> list[str]:
+        clean = sorted({e.strip().lower() for e in (emails or []) if e and "@" in e})
+        self.set_setting("allowed_emails", ",".join(clean))
+        return clean
+
     def get_ai_enabled(self) -> bool:
         """Platform AI mode. Defaults to enabled; admin can hard-disable it
         (deterministic-only mode) — which overrides any per-scan ?ai=true."""

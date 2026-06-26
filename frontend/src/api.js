@@ -63,6 +63,13 @@ export const startScanQueued = (source = 'local', folder = null, aiEnabled = tru
 export const remediateScan = (scanId) => (SIM
   ? sim({ scan_id: scanId, enqueued: 3, job_ids: ['a', 'b', 'c'], workers: 4 })
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediate`, { method: 'POST', headers: headers() }).then(j))
+// Access allow-list (who can use the app) — managed from Settings.
+export const getAllowlist = () => (SIM
+  ? sim({ emails: [], baseline_emails: ['demo@sim'], domains: [] })
+  : fetch(`${BASE}/admin/allowlist`, { headers: headers() }).then(j))
+export const setAllowlist = (emails) => (SIM
+  ? sim({ emails })
+  : fetch(`${BASE}/admin/allowlist`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ emails }) }).then(j))
 // Run the WCAG assessment into Langfuse on demand (separate from the scan trace).
 export const assessScan = (scanId, level = 'AA') => (SIM
   ? sim({ ok: true })

@@ -63,6 +63,26 @@ async def alert_webhook(request: Request, key: str = Query("")):
     return {"received": len(alerts)}
 
 
+@router.get("/admin/allowlist")
+def get_allowlist():
+    """Who can use the app: the editable runtime list + the read-only deploy baseline."""
+    return {"emails": core.store.get_allowlist(),
+            "baseline_emails": sorted(core.ALLOWED_EMAILS),
+            "domains": core.ALLOWED_DOMAINS}
+
+
+@router.put("/admin/allowlist")
+def set_allowlist(body: dict):
+    """Replace the runtime allowed-email list (managed from Settings)."""
+    emails = body.get("emails", [])
+    if not isinstance(emails, list):
+        raise HTTPException(400, "emails must be a list of strings")
+    saved = core.store.set_allowlist(emails)
+    core.store.log_decision("admin", "settings.allowlist",
+                            detail=f"runtime allow-list set to {len(saved)} email(s)")
+    return {"emails": saved}
+
+
 @router.put("/workers")
 def set_workers(count: int = Query(..., ge=0, le=16)):
     """Admin: live-scale the in-process worker pool (0–16). Persisted + audited.

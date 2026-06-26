@@ -1,5 +1,5 @@
-import { useState, useRef } from 'react'
-import { resetDemoData } from './api.js'
+import { useState, useRef, useEffect } from 'react'
+import { resetDemoData, getAllowlist, setAllowlist } from './api.js'
 
 // Danger zone — wipe scan results (Grafana + in-app charts) and/or Langfuse
 // traces so the dashboards start fresh. Settings are preserved. Typed-confirm.
@@ -74,6 +74,79 @@ import { downloadUpdatedXlsx, downloadUpdatedPptx } from './exportDeliverables.j
 // the scoring rules (Rubric), the validation coverage (WCAG 2.1 + 2.2 matrix), and
 // the business ontology/taxonomy — i.e. the configuration an admin owns, kept out
 // of the day-to-day workflow tabs.
+function AllowList() {
+  const [emails, setEmails] = useState([])
+  const [baseline, setBaseline] = useState([])
+  const [domains, setDomains] = useState([])
+  const [input, setInput] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    getAllowlist()
+      .then((d) => { setEmails(d.emails || []); setBaseline(d.baseline_emails || []); setDomains(d.domains || []) })
+      .catch(() => setMsg('Could not load the allow-list.'))
+      .finally(() => setLoaded(true))
+  }, [])
+
+  const add = () => {
+    const e = input.trim().toLowerCase()
+    if (!e.includes('@')) { setMsg('Enter a valid email.'); return }
+    if (emails.includes(e) || baseline.includes(e)) { setMsg('Already allowed.'); setInput(''); return }
+    setEmails((s) => [...s, e].sort()); setInput(''); setMsg('')
+  }
+  const remove = (e) => setEmails((s) => s.filter((x) => x !== e))
+  const save = () => {
+    setBusy(true); setMsg('')
+    setAllowlist(emails)
+      .then((d) => { setEmails(d.emails || []); setMsg('✓ Saved — applies on each user’s next sign-in.') })
+      .catch((err) => setMsg(`Could not save: ${err.message || err}`))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <section style={{ maxWidth: 560 }}>
+      <h3 style={{ marginTop: 0 }}>Who can use the app</h3>
+      <p className="muted" style={{ fontSize: 13, marginTop: 4, lineHeight: 1.5 }}>
+        Google emails allowed to sign in and scan. Changes take effect on the user’s next
+        sign-in. (Each user must also be a Google OAuth <b>test user</b> until the app is verified.)
+      </p>
+
+      <div style={{ display: 'flex', gap: 8, margin: '12px 0' }}>
+        <input value={input} onChange={(e) => setInput(e.target.value)}
+               onKeyDown={(e) => e.key === 'Enter' && add()}
+               placeholder="name@example.com" aria-label="Email to allow"
+               style={{ flex: 1, padding: '7px 10px', borderRadius: 7, border: '1px solid var(--line)', background: 'var(--surface)', color: 'inherit' }} />
+        <button className="ghost" onClick={add}>Add</button>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
+        {loaded && emails.length === 0 && <span className="muted" style={{ fontSize: 13 }}>No additional emails yet.</span>}
+        {emails.map((e) => (
+          <div key={e} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                padding: '6px 10px', borderRadius: 7, background: '#F1EFF3', border: '1px solid var(--line)' }}>
+            <span style={{ fontSize: 13 }}>{e}</span>
+            <button className="ghost small" onClick={() => remove(e)} aria-label={`Remove ${e}`}>✕</button>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <button onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save allow-list'}</button>
+        {msg && <span className="muted" role="status" aria-live="polite" style={{ fontSize: 13 }}>{msg}</span>}
+      </div>
+
+      {(baseline.length > 0 || domains.length > 0) && (
+        <p className="muted" style={{ fontSize: 12, marginTop: 16, lineHeight: 1.5 }}>
+          Always allowed (from deploy config, not editable here): {baseline.join(', ') || '—'}
+          {domains.length > 0 && <> · anyone @{domains.join(', @')}</>}
+        </p>
+      )}
+    </section>
+  )
+}
+
 export default function Settings({ onClose, onRubricSaved, files = [], onOntologyChange, onDelegationChange, onFileTypeChange, onPrivilegeChange }) {
   const [tab, setTab] = useState('rules')
   const [dl, setDl] = useState(null) // 'xlsx' | 'pptx' while a deliverable is generating
@@ -102,6 +175,7 @@ export default function Settings({ onClose, onRubricSaved, files = [], onOntolog
           <button role="tab" aria-selected={tab === 'owners'} className={tab === 'owners' ? 'fchip on' : 'fchip'} onClick={() => setTab('owners')}>Owners</button>
           <button role="tab" aria-selected={tab === 'permissions'} className={tab === 'permissions' ? 'fchip on' : 'fchip'} onClick={() => setTab('permissions')}>Permissions</button>
           <button role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'fchip on' : 'fchip'} onClick={() => setTab('users')}>Users</button>
+          <button role="tab" aria-selected={tab === 'access'} className={tab === 'access' ? 'fchip on' : 'fchip'} onClick={() => setTab('access')}>Access</button>
           <button role="tab" aria-selected={tab === 'data'} className={tab === 'data' ? 'fchip on' : 'fchip'} onClick={() => setTab('data')}>Data</button>
         </div>
         <div className="setbody">
@@ -112,6 +186,7 @@ export default function Settings({ onClose, onRubricSaved, files = [], onOntolog
           {tab === 'owners' && <OwnerDelegate files={files} onChanged={onDelegationChange} />}
           {tab === 'permissions' && <RolePrivilege onChanged={onPrivilegeChange} />}
           {tab === 'users' && <UserManagement />}
+          {tab === 'access' && <AllowList />}
           {tab === 'data' && <ResetData />}
         </div>
       </div>

@@ -49,10 +49,17 @@ ALLOWED_EMAILS = {
 
 
 def email_allowed(email: str) -> bool:
-    """True if an email passes the GIS allow-list (exact email OR allowed domain)."""
+    """True if an email passes the allow-list: the env baseline (ACP_ALLOWED_EMAILS,
+    a bootstrap so the owner is never locked out), the runtime list managed from
+    Settings, or an allowed domain."""
     email = (email or "").lower()
     if email in ALLOWED_EMAILS:
         return True
+    try:
+        if email in store.get_allowlist():
+            return True
+    except Exception:
+        pass
     return any(email.endswith("@" + d.lower()) for d in ALLOWED_DOMAINS)
 DRIVE_SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
