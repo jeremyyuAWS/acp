@@ -27,7 +27,8 @@ def _drive_client(token: str):
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
     creds = Credentials(token=token, scopes=core.DRIVE_SCOPES)
-    creds.expiry = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=1)
+    # NAIVE UTC: google-auth compares expiry to a naive utcnow() (aware → TypeError).
+    creds.expiry = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None) + _dt.timedelta(hours=1)
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 

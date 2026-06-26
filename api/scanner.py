@@ -64,10 +64,12 @@ def _drive_service(drive_token: str | None = None):
         import datetime as _dt
         from google.oauth2.credentials import Credentials
         creds = Credentials(token=drive_token, scopes=SCOPES)
-        # GIS tokens are short-lived and carry no refresh_token.
-        # Set far-future expiry so the client library never tries to refresh;
-        # Drive API returns 401 on its own if the token actually expired.
-        creds.expiry = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=1)
+        # GIS tokens are short-lived and carry no refresh_token. Set an expiry so
+        # the client library never tries to refresh; Drive returns 401 on its own
+        # if the token actually expired. NOTE: google-auth stores expiry as a
+        # NAIVE UTC datetime and compares it against a naive utcnow() — an aware
+        # value raises "can't compare offset-naive and offset-aware datetimes".
+        creds.expiry = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None) + _dt.timedelta(hours=1)
     else:
         import google.auth
         creds, _ = google.auth.default(scopes=SCOPES)
