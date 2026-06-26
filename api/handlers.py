@@ -136,6 +136,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
 
     import io
     from googleapiclient.http import MediaIoBaseUpload
+    from googleapiclient.errors import HttpError
     # Folder id is created once per batch in the endpoint and passed in, so
     # concurrent workers don't each create their own 'Remediated' folder.
     # Fall back to find-or-create for a standalone job.
@@ -143,15 +144,24 @@ def _remediate_file(payload: dict, job: dict) -> None:
     media = MediaIoBaseUpload(io.BytesIO(fixed_bytes), mimetype=mimetype, resumable=False)
     # Upsert: update an existing fixed copy rather than piling up duplicates on re-run.
     safe = filename.replace("\\", "\\\\").replace("'", "\\'")
-    existing = svc.files().list(
-        q=f"name='{safe}' and '{folder_id}' in parents and trashed=false",
-        fields="files(id)", pageSize=1).execute().get("files", [])
-    if existing:
-        result = svc.files().update(fileId=existing[0]["id"], media_body=media,
-                                    fields="id,webViewLink").execute()
-    else:
-        result = svc.files().create(body={"name": filename, "parents": [folder_id]},
-                                    media_body=media, fields="id,webViewLink").execute()
+    try:
+        existing = svc.files().list(
+            q=f"name='{safe}' and '{folder_id}' in parents and trashed=false",
+            fields="files(id)", pageSize=1).execute().get("files", [])
+        if existing:
+            result = svc.files().update(fileId=existing[0]["id"], media_body=media,
+                                        fields="id,webViewLink").execute()
+        else:
+            result = svc.files().create(body={"name": filename, "parents": [folder_id]},
+                                        media_body=media, fields="id,webViewLink").execute()
+    except HttpError as e:
+        # A 403 here means the user's Drive grant lacks write access (drive.file) —
+        # retrying won't help, so dead-letter with a clear, actionable reason.
+        if getattr(e, "resp", None) is not None and e.resp.status == 403:
+            raise FatalJobError(
+                "Drive write denied (403) — the signed-in user must grant write access "
+                "(drive.file). Re-connect Drive (re-consent) and re-run remediation.")
+        raise
     web_url = result.get("webViewLink", "")
 
     core.store.record_remediation(scan_id, filename, drive_write_url=web_url)

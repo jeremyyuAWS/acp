@@ -500,8 +500,8 @@ class Store:
             if not run:
                 return None
             self._db.execute(cur,
-                "SELECT file,engine,status,score,compliant,skipped_rules FROM file_records "
-                "WHERE scan_id=%s ORDER BY file", (sid,))
+                "SELECT file,engine,status,score,compliant,skipped_rules,remediated_at,drive_write_url "
+                "FROM file_records WHERE scan_id=%s ORDER BY file", (sid,))
             files = self._db.fetchall(cur)
             for f in files:
                 self._db.execute(cur,

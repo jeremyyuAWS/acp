@@ -252,6 +252,33 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         {SUBS.map(([k, label]) => <button key={k} role="tab" aria-selected={sub === k} className={sub === k ? 'fchip on' : 'fchip'} onClick={() => setSub(k)}>{label}</button>)}
       </div>
 
+      {/* Write-back results — proof the fixed copies landed in Drive. Surfaces the
+          drive_write_url recorded server-side, so a successful remediation is visible. */}
+      {(() => {
+        const written = files.filter((f) => f.drive_write_url)
+        const downloadOnly = files.filter((f) => f.remediated_at && !f.drive_write_url)
+        if (!written.length && !downloadOnly.length) return null
+        return (
+          <div style={{ margin: '0 0 14px', padding: '10px 14px', borderRadius: 9,
+                        background: '#E7F0DC', border: '1px solid #C5DBA8',
+                        display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: '#2F5310' }}>
+              ✓ {written.length} fixed document{written.length !== 1 ? 's' : ''} written back to Drive
+              {downloadOnly.length > 0 && ` · ${downloadOnly.length} remediated (no Drive write)`}
+            </span>
+            <span style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              {written.slice(0, 6).map((f) => (
+                <a key={f.file} href={f.drive_write_url} target="_blank" rel="noreferrer"
+                   style={{ fontSize: 12, color: '#185FA5' }} title={`Open ${f.file} in the Remediated/ folder`}>
+                  {f.file} ↗
+                </a>
+              ))}
+              {written.length > 6 && <span className="muted" style={{ fontSize: 12 }}>+{written.length - 6} more</span>}
+            </span>
+          </div>
+        )
+      })()}
+
       {sub === 'triage' && (() => {
         const scoreColor = (s) => s >= 80 ? '#3B6D11' : s >= 60 ? '#854F0B' : '#7B1D1D'
         const SEV_C = { CRITICAL: '#7B1D1D', SERIOUS: '#854F0B', MODERATE: '#1F5FA8', MINOR: '#9a948f' }
