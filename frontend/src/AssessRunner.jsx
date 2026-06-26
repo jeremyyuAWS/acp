@@ -34,16 +34,20 @@ const phaseFor = (name = '') => {
   return ['Analysing…', 'Scoring…']
 }
 
-export default function AssessRunner({ files = [], runId, saved, onSaved }) {
-  // Restore a prior assessment for THIS scan, so leaving the tab + coming back shows
-  // the result instead of resetting to idle (the run is over the already-scanned data).
-  const restorable = saved && saved.runId === runId
-  const [level, setLevel] = useState(restorable ? saved.level : 'AA')
-  const [phase, setPhase] = useState(restorable ? 'done' : 'idle') // idle | running | done
+// Persist the assessment per-scan in sessionStorage, so leaving the Assess tab (or even
+// reloading) and coming back shows the result instead of resetting to idle. Self-contained
+// — no reliance on parent state surviving an unmount/remount.
+const SKEY = (id) => `acp-assess-${id || 'none'}`
+const loadSaved = (id) => { try { return JSON.parse(sessionStorage.getItem(SKEY(id)) || 'null') } catch { return null } }
+
+export default function AssessRunner({ files = [], runId }) {
+  const saved = loadSaved(runId)
+  const [level, setLevel] = useState(saved?.level || 'AA')
+  const [phase, setPhase] = useState(saved?.result ? 'done' : 'idle') // idle | running | done
   const [progress, setProgress] = useState(0)
   const [currentFile, setCurrentFile] = useState(null)
   const [currentPhase, setCurrentPhase] = useState('')
-  const [result, setResult] = useState(restorable ? saved.result : null)
+  const [result, setResult] = useState(saved?.result || null)
   const timer = useRef(null)
   const phaseTimer = useRef(null)
   useEffect(() => () => { clearInterval(timer.current); clearTimeout(phaseTimer.current) }, [])
@@ -52,7 +56,7 @@ export default function AssessRunner({ files = [], runId, saved, onSaved }) {
   const reset = () => {
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
     setPhase('idle'); setResult(null); setProgress(0); setCurrentFile(null); setCurrentPhase('')
-    onSaved?.(null)
+    try { sessionStorage.removeItem(SKEY(runId)) } catch { /* ignore */ }
   }
 
   // Deterministic conformance result over the already-scanned docs at a WCAG level.
@@ -86,7 +90,7 @@ export default function AssessRunner({ files = [], runId, saved, onSaved }) {
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
     // Compute + persist the result up front so it survives leaving the tab mid-run.
     const computed = computeResult(level)
-    onSaved?.({ runId, level, result: computed })
+    try { sessionStorage.setItem(SKEY(runId), JSON.stringify({ level, result: computed })) } catch { /* ignore */ }
     setPhase('running'); setProgress(0); setResult(null); setCurrentFile(null); setCurrentPhase('')
     const total = Math.max(1, docs.length)
     let i = 0
