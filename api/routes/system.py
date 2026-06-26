@@ -65,22 +65,25 @@ async def alert_webhook(request: Request, key: str = Query("")):
 
 @router.get("/admin/allowlist")
 def get_allowlist():
-    """Who can use the app: the editable runtime list + the read-only deploy baseline."""
+    """Test users who can use the app: the editable list, the protected owner (can't be
+    removed), and any always-allowed domains."""
     return {"emails": core.store.get_allowlist(),
-            "baseline_emails": sorted(core.ALLOWED_EMAILS),
+            "owner": core.OWNER_EMAIL,
             "domains": core.ALLOWED_DOMAINS}
 
 
 @router.put("/admin/allowlist")
 def set_allowlist(body: dict):
-    """Replace the runtime allowed-email list (managed from Settings)."""
+    """Replace the editable test-user list. The owner is always kept (anti-lockout)."""
     emails = body.get("emails", [])
     if not isinstance(emails, list):
         raise HTTPException(400, "emails must be a list of strings")
+    if core.OWNER_EMAIL:
+        emails = list(emails) + [core.OWNER_EMAIL]   # never drop the owner
     saved = core.store.set_allowlist(emails)
     core.store.log_decision("admin", "settings.allowlist",
-                            detail=f"runtime allow-list set to {len(saved)} email(s)")
-    return {"emails": saved}
+                            detail=f"test-user list set to {len(saved)} email(s)")
+    return {"emails": saved, "owner": core.OWNER_EMAIL}
 
 
 @router.put("/workers")

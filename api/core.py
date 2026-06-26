@@ -46,14 +46,19 @@ ALLOWED_DOMAINS = [
 ALLOWED_EMAILS = {
     e.strip().lower() for e in os.environ.get("ACP_ALLOWED_EMAILS", "").split(",") if e.strip()
 }
+# The one email that can NEVER be removed from the list (anti-lockout safety). Defaults
+# to ACP_OWNER_EMAIL, else the first ACP_ALLOWED_EMAILS entry.
+OWNER_EMAIL = (os.environ.get("ACP_OWNER_EMAIL", "").strip().lower()
+               or (sorted(ALLOWED_EMAILS)[0] if ALLOWED_EMAILS else ""))
 
 
 def email_allowed(email: str) -> bool:
-    """True if an email passes the allow-list: the env baseline (ACP_ALLOWED_EMAILS,
-    a bootstrap so the owner is never locked out), the runtime list managed from
-    Settings, or an allowed domain."""
+    """True if an email may use the app: the protected owner, the runtime test-user list
+    managed from Settings → Test users, or an allowed domain. ACP_ALLOWED_EMAILS is a
+    one-time SEED for that list (see seed_allowlist_once), NOT a separate permanent grant
+    — so a user removed from the list is genuinely revoked."""
     email = (email or "").lower()
-    if email in ALLOWED_EMAILS:
+    if email and email == OWNER_EMAIL:
         return True
     try:
         if email in store.get_allowlist():
@@ -61,6 +66,20 @@ def email_allowed(email: str) -> bool:
     except Exception:
         pass
     return any(email.endswith("@" + d.lower()) for d in ALLOWED_DOMAINS)
+
+
+def seed_allowlist_once() -> None:
+    """One-time bootstrap: copy ACP_ALLOWED_EMAILS into the editable runtime list so
+    pre-existing users appear in Settings → Test users and can be removed. Guarded by a
+    marker so it never resurrects a user the admin later deletes."""
+    try:
+        if store.get_setting("allowlist_seeded") == "true":
+            return
+        if ALLOWED_EMAILS:
+            store.set_allowlist(sorted(set(store.get_allowlist()) | ALLOWED_EMAILS))
+        store.set_setting("allowlist_seeded", "true")
+    except Exception:
+        pass
 DRIVE_SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/drive.file",
@@ -69,6 +88,7 @@ HITL_WEBHOOK = os.environ.get("HITL_WEBHOOK_URL", "")
 
 # ── Shared singletons ─────────────────────────────────────────────────────────
 store = Store()
+seed_allowlist_once()   # bootstrap the editable test-user list from env (once)
 JOBS: dict[str, dict] = {}
 
 

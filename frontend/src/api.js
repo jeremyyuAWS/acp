@@ -65,7 +65,7 @@ export const remediateScan = (scanId) => (SIM
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediate`, { method: 'POST', headers: headers() }).then(j))
 // Access allow-list (who can use the app) — managed from Settings.
 export const getAllowlist = () => (SIM
-  ? sim({ emails: [], baseline_emails: ['demo@sim'], domains: [] })
+  ? sim({ emails: ['demo@sim'], owner: 'demo@sim', domains: [] })
   : fetch(`${BASE}/admin/allowlist`, { headers: headers() }).then(j))
 export const setAllowlist = (emails) => (SIM
   ? sim({ emails })

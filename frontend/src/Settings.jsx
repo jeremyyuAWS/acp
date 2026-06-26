@@ -76,7 +76,7 @@ import { downloadUpdatedXlsx, downloadUpdatedPptx } from './exportDeliverables.j
 // of the day-to-day workflow tabs.
 function AllowList() {
   const [emails, setEmails] = useState([])
-  const [baseline, setBaseline] = useState([])
+  const [owner, setOwner] = useState('')
   const [domains, setDomains] = useState([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -85,15 +85,15 @@ function AllowList() {
 
   useEffect(() => {
     getAllowlist()
-      .then((d) => { setEmails(d.emails || []); setBaseline(d.baseline_emails || []); setDomains(d.domains || []) })
-      .catch(() => setMsg('Could not load the allow-list.'))
+      .then((d) => { setEmails(d.emails || []); setOwner(d.owner || ''); setDomains(d.domains || []) })
+      .catch(() => setMsg('Could not load the test-user list.'))
       .finally(() => setLoaded(true))
   }, [])
 
   const add = () => {
     const e = input.trim().toLowerCase()
     if (!e.includes('@')) { setMsg('Enter a valid email.'); return }
-    if (emails.includes(e) || baseline.includes(e)) { setMsg('Already allowed.'); setInput(''); return }
+    if (emails.includes(e)) { setMsg('Already added.'); setInput(''); return }
     setEmails((s) => [...s, e].sort()); setInput(''); setMsg('')
   }
   const remove = (e) => setEmails((s) => s.filter((x) => x !== e))
@@ -142,13 +142,18 @@ function AllowList() {
             No test users added yet — add a Gmail above to grant access.
           </div>
         )}
-        {emails.map((e) => (
-          <div key={e} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 11px', borderRadius: 9, background: 'var(--surface)', border: '1px solid var(--line)' }}>
-            <span aria-hidden="true" style={{ width: 30, height: 30, borderRadius: '50%', background: '#6D28D9', color: '#fff', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{avatar(e)}</span>
-            <span style={{ fontSize: 14, flex: 1, wordBreak: 'break-all' }}>{e}</span>
-            <button className="ghost small" onClick={() => remove(e)} aria-label={`Remove ${e}`}>Remove</button>
-          </div>
-        ))}
+        {emails.map((e) => {
+          const isOwner = e === owner
+          return (
+            <div key={e} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 11px', borderRadius: 9, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+              <span aria-hidden="true" style={{ width: 30, height: 30, borderRadius: '50%', background: isOwner ? '#854F0B' : '#6D28D9', color: '#fff', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{avatar(e)}</span>
+              <span style={{ fontSize: 14, flex: 1, wordBreak: 'break-all' }}>{e}</span>
+              {isOwner
+                ? <span title="The owner can’t be removed — anti-lockout safety" style={{ fontSize: 11.5, fontWeight: 600, color: '#854F0B', background: '#FBF1DF', border: '1px solid #EAD9BF', borderRadius: 20, padding: '3px 9px', whiteSpace: 'nowrap' }}>🔒 owner</span>
+                : <button className="ghost small" onClick={() => remove(e)} aria-label={`Remove ${e}`}>Remove</button>}
+            </div>
+          )
+        })}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -156,14 +161,11 @@ function AllowList() {
         {msg && <span className="muted" role="status" aria-live="polite" style={{ fontSize: 13 }}>{msg}</span>}
       </div>
 
-      {/* Always-allowed baseline (read-only) */}
-      {(baseline.length > 0 || domains.length > 0) && (
+      {/* Always-allowed domains (read-only) */}
+      {domains.length > 0 && (
         <div style={{ marginTop: 20, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#6B7280', marginBottom: 8 }}>🔒 ALWAYS ALLOWED <span style={{ fontWeight: 400 }}>· from deploy config, not editable here</span></div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#6B7280', marginBottom: 8 }}>🔒 ALWAYS ALLOWED <span style={{ fontWeight: 400 }}>· by domain, set at deploy</span></div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-            {baseline.map((e) => (
-              <span key={e} style={{ fontSize: 12.5, padding: '4px 10px', borderRadius: 20, background: '#F0F0F4', border: '1px solid var(--line)', color: '#444' }}>{e}</span>
-            ))}
             {domains.map((d) => (
               <span key={d} style={{ fontSize: 12.5, padding: '4px 10px', borderRadius: 20, background: '#EAF3EC', border: '1px solid #CFE5D6', color: '#2F6B43' }}>anyone @{d}</span>
             ))}
