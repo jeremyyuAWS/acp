@@ -115,7 +115,7 @@ export default function App() {
   const [rolePrivileges, setRolePrivileges] = useState(loadRolePrivileges)
   const [ontology, setOntology] = useState(loadPublished)
   const [aiEnabled, setAiEnabled] = useState(true)
-  const [queuedScan, setQueuedScan] = useState(false)  // durable queue vs in-process
+  const [queuedScan, setQueuedScan] = useState(true)   // durable fan-out queue by default; "This session" is the opt-out
   const [deepScan, setDeepScan] = useState(true)       // PII/sensitive-data detection on/off
 
   useEffect(() => {
