@@ -327,9 +327,9 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
             <button type="button" className={`ai-toggle${queuedScan ? ' ai-toggle--on' : ''}`}
               onClick={() => setQueuedScan(v => !v)} aria-pressed={queuedScan}
               title={queuedScan
-                ? 'Runs this scan in the background queue — it keeps going if you close the tab and handles large libraries reliably (recommended). Click to run it in this browser session instead.'
-                : 'Runs this scan in your current browser session (faster to start, but stops if you close the tab). Click to run it in the background queue instead.'}>
-              {queuedScan ? '⚡ Background' : '◻ This session'}
+                ? 'Background ON — scans run in the durable queue: they survive closing the tab AND server restarts, with parallel downloads for large libraries (recommended). Click to turn Background off (run in this browser session).'
+                : 'Background OFF — scans run in your current browser session: faster to start, but lost on a server restart and slower on large libraries. Click to turn Background on (durable queue).'}>
+              {queuedScan ? '⚡ Background on' : '◻ Background off'}
             </button>
           )}
           <button disabled={busy || !canScanAll} onClick={() => {
