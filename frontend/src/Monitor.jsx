@@ -41,6 +41,15 @@ function Toggle({ label, hint, on, set }) {
   )
 }
 
+// Marks panels that show illustrative content (continuous-monitoring demo data) rather
+// than live scan output — so a real user isn't misled. Renders nothing in SIM/demo mode.
+const SampleTag = () => SIM ? null : (
+  <span title="Illustrative — not from your live scans (continuous monitoring isn't wired yet)"
+        style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.04em', color: '#7A6A3A',
+                 background: '#F3ECD7', border: '1px solid #E3D3A8', borderRadius: 6,
+                 padding: '1px 7px', marginLeft: 8, verticalAlign: 'middle' }}>SAMPLE</span>
+)
+
 // Derive program phase data from the live corpus + decisions
 function useProgramBatches(files, decisions) {
   const total = files.length || 124
@@ -184,7 +193,7 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
     <>
       <div className="estatebar" style={{ marginTop: 6 }}>
         <div>
-          <span className="monlive"><span className="livedot" aria-hidden="true" /> Continuous monitoring · ON</span>
+          <span className="monlive"><span className="livedot" aria-hidden="true" /> Continuous monitoring · ON<SampleTag /></span>
           <div className="muted" style={{ marginTop: 3 }}>watching {m.watchedSources} sources · {m.watchedDocs} documents · re-scans {m.cadence} · last {m.lastRescan} · next {m.nextRescan}</div>
         </div>
         <button className={paused ? '' : 'ghost'} onClick={() => setPaused((p) => !p)}>{paused ? '▶ Resume live feed' : '⏸ Pause live feed'}</button>
@@ -307,6 +316,13 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
         <div className="moncard"><span className="muted">Remediation backlog</span><b>{hrs(m.backlogMin)}</b><span className="muted">{m.autoPct}% automatic</span></div>
         <div className="moncard"><span className="muted">Open alerts · 7d</span><b style={{ color: '#1F5FA8' }}>{m.alerts.length}</b><span className="muted">drift &amp; regressions</span></div>
       </div>
+      {!SIM && (
+        <div className="muted" style={{ fontSize: 11.5, margin: '-6px 0 14px' }}>
+          <SampleTag /> Re-scan coverage, new/changed, backlog &amp; open alerts are illustrative until
+          continuous monitoring is wired. <b>Documents watched</b>, the <b>job queue</b>, and the
+          <b> remediation program</b> are live from your scans.
+        </div>
+      )}
 
       {slaItems.length > 0 && (
         <section className="panel" style={{ marginBottom: 14 }}>
@@ -334,7 +350,7 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
       )}
 
       <section className="panel" style={{ marginBottom: 14 }}>
-        <h2>Watched sources <span className="muted">· polled continuously for new files &amp; edits</span></h2>
+        <h2>Watched sources <span className="muted">· polled continuously for new files &amp; edits</span><SampleTag /></h2>
         <div className="watchgrid">
           {watch.map((w) => (
             <div className="watchcard" key={w.id}>
@@ -366,11 +382,13 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
       <div className="monsplit">
         <section className="panel">
           <div className="monfeedhd">
-            <h2 style={{ margin: 0 }}>Live monitoring feed <span className="livedot" aria-hidden="true" /></h2>
-            <div className="simbtns">
-              <button className="ghost small" onClick={() => push(POOL[0])}>＋ Simulate new file</button>
-              <button className="ghost small" onClick={() => push(POOL[2])}>✎ Simulate an edit</button>
-            </div>
+            <h2 style={{ margin: 0 }}>Live monitoring feed {SIM && <span className="livedot" aria-hidden="true" />}<SampleTag /></h2>
+            {SIM && (
+              <div className="simbtns">
+                <button className="ghost small" onClick={() => push(POOL[0])}>＋ Simulate new file</button>
+                <button className="ghost small" onClick={() => push(POOL[2])}>✎ Simulate an edit</button>
+              </div>
+            )}
           </div>
           <div className="monfeed" style={{ marginTop: 10 }} role="log" aria-live="polite" aria-label="Live monitoring feed">
             {events.map((e) => {
@@ -390,7 +408,7 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
 
         <div>
           <section className="panel" style={{ marginBottom: 14 }}>
-            <h2>Scheduled re-scans</h2>
+            <h2>Scheduled re-scans <SampleTag /></h2>
             <div className="schedlist">
               {watch.slice(0, 6).map((w) => {
                 const thisCad = SIM ? w.cadence : (cad[w.id] || 'off')
@@ -408,7 +426,7 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
             </div>
           </section>
           <section className="panel">
-            <h2>Active monitoring rules</h2>
+            <h2>Active monitoring rules <SampleTag /></h2>
             <ul className="monrules">
               {m.rules.map((r) => <li key={r}><span className="ruledot" aria-hidden="true" />{r}</li>)}
             </ul>
