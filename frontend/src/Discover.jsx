@@ -43,7 +43,7 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
   )
 }
 
-export default function Discover({ sources, files, busy, onScan, delegations = {}, fileTypeConfig = {} }) {
+export default function Discover({ sources, files, busy, onScan, delegations = {}, fileTypeConfig = {}, onAdvance }) {
   const [sub, setSub] = useState('inventory')
   const [sel, setSel] = useState(null)
   const [open, setOpen] = useState(() => new Set())
@@ -252,6 +252,20 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
           {deptList(sub === 'retain' ? 'retain' : 'inventory')}
         </>
       )}
+      {/* Sub-step CTA: walk Inventory → Classify → Actions, then hand off to Assess. */}
+      {files.length > 0 && (() => {
+        const idx = SUBS.findIndex(([k]) => k === sub)
+        const next = SUBS[idx + 1]
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12,
+                        margin: '20px 0 4px', paddingTop: 14, borderTop: '1px solid var(--line)' }}>
+            <span className="muted" style={{ fontSize: 13 }}>Done here? Continue →</span>
+            {next
+              ? <button onClick={() => { setSub(next[0]); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>{next[1]} →</button>
+              : <button onClick={() => onAdvance?.()}>Assess — score vs WCAG →</button>}
+          </div>
+        )
+      })()}
       {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
       {sel && <FileDrawer file={sel} context="discover" onClose={() => setSel(null)} overrideOwner={ownerOf(sel)} delegatedFrom={isDelegated(sel) ? sel.owner : null} />}
     </>

@@ -373,7 +373,7 @@ export default function App() {
         {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
           deepScan={deepScan} setDeepScan={setDeepScan} queuedScan={queuedScan} setQueuedScan={setQueuedScan} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} delegations={delegations} fileTypeConfig={fileTypeConfig} />}
+        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />}
 
         {view === 'assess' && (
           <>
@@ -394,8 +394,9 @@ export default function App() {
 
         {view === 'upload' && <Upload onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
 
-        {/* Guided workflow: a "next step" CTA on each workflow tab once a scan exists. */}
-        {run && ['integrations', 'discover', 'assess', 'remediate', 'publish'].includes(view) && (() => {
+        {/* Guided workflow: a "next step" CTA on each workflow tab once a scan exists.
+            'discover' is excluded — it owns a sub-step CTA (Inventory → Classify → Actions → Assess). */}
+        {run && ['integrations', 'assess', 'remediate', 'publish'].includes(view) && (() => {
           const flow = ['integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor']
           const label = { discover: '1 · Discover — classify the estate', assess: '2 · Assess — score vs WCAG',
                           remediate: '3 · Remediate — fix the issues', publish: '4 · Publish — certify what passes',
