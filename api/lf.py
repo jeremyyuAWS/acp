@@ -122,6 +122,34 @@ def rule_spans(file_span_, sc_counts: dict[str, int], rule_catalog: list[dict],
         s.end(output={"result": status, "outcome": outcome, "issues": count})
 
 
+def pii_span(file_span_, pinfo: dict):
+    """Emit a span flagging sensitive data found in a document (ADR 0006).
+
+    Counts + MASKED samples only — never raw PII. Flagged WARNING (ERROR when any
+    critical type like SSN/credit-card is present) so it stands out in the UI.
+    """
+    if isinstance(file_span_, _Noop):
+        return
+    findings = pinfo.get("findings", [])
+    if not findings:
+        return
+    parts = []
+    for f in findings:
+        n = f["count"]
+        noun = f["label"].lower()
+        parts.append(f"{n} {noun if n != 1 else noun.rstrip('s')}")
+    summary = ", ".join(parts)
+    level = "ERROR" if pinfo.get("severity") == "critical" else "WARNING"
+    s = file_span_.span(
+        name=f"🔒 Sensitive data — {summary}",
+        level=level,
+        status_message=f"This document exposes {pinfo.get('total', 0)} sensitive item(s)",
+        metadata={"sensitive_data_types": pinfo.get("types", {})},
+    )
+    s.end(output={"found": summary,
+                  "examples_masked": {f["type"]: f["samples"] for f in findings}})
+
+
 def error_span(file_span_, rule_id: str, error_msg: str):
     """A rule that could not be evaluated (engine error) — flagged ERROR."""
     if isinstance(file_span_, _Noop):
@@ -131,7 +159,8 @@ def error_span(file_span_, rule_id: str, error_msg: str):
     s.end(output={"outcome": "ERROR", "error": error_msg})
 
 
-def finish_scan_trace(trace, scan_id: str, summary: dict, *, source: str, ai_enabled: bool) -> None:
+def finish_scan_trace(trace, scan_id: str, summary: dict, *, source: str, ai_enabled: bool,
+                      pii_docs: int = 0, pii_total: int = 0) -> None:
     """Close out a scan trace with a plain-language summary + a 0–100 score, so a
     non-technical viewer sees the outcome at a glance."""
     if isinstance(trace, _Noop):
@@ -147,6 +176,9 @@ def finish_scan_trace(trace, scan_id: str, summary: dict, *, source: str, ai_ena
                 f"{cert} ready to certify, {need_work} need fixing"
                 + (f", {err} could not be opened" if err else "")
                 + (f". Average score {avg}/100." if avg is not None else "."))
+    if pii_docs:
+        sentence += (f" ⚠ {pii_docs} document{'s' if pii_docs != 1 else ''} "
+                     f"contain sensitive data ({pii_total} item{'s' if pii_total != 1 else ''}).")
     trace.update(output={
         "summary": sentence,
         "documents_scanned": files,
@@ -155,6 +187,8 @@ def finish_scan_trace(trace, scan_id: str, summary: dict, *, source: str, ai_ena
         "uncertain": uncertain,
         "could_not_open": err,
         "average_score": avg,
+        "documents_with_sensitive_data": pii_docs,
+        "sensitive_items_found": pii_total,
         "mode": "AI-assisted" if ai_enabled else "Deterministic (no AI)",
     })
     lf = _lf()

@@ -92,6 +92,14 @@ _SCHEMA = [
       last_error TEXT, created_at TEXT, updated_at TEXT
     )""",
     "CREATE INDEX IF NOT EXISTS idx_jobs_claim ON jobs(status, run_after, priority)",
+    # Sensitive-data (PII) findings per document (ADR 0006). A detection dimension
+    # orthogonal to WCAG. samples holds JSON array of MASKED strings only — never
+    # raw PII (the masking is enforced in api/pii.py).
+    """CREATE TABLE IF NOT EXISTS pii_findings (
+      scan_id TEXT, file TEXT, pii_type TEXT, label TEXT,
+      count INT, severity TEXT, samples TEXT,
+      PRIMARY KEY (scan_id, file, pii_type)
+    )""",
 ]
 
 _UPSERT_INV = (
@@ -326,10 +334,50 @@ class Store:
                         "ON CONFLICT(scan_id,file,rule_id) DO UPDATE SET outcome=EXCLUDED.outcome,finding_count=EXCLUDED.finding_count",
                         (sid, f["file"], rid, rule["name"], rule["level"], rule["fix_mode"], outcome, count))
                 self._save_file_manifest(cur, sid, f, catalog)
+                # Sensitive-data (PII) findings — masked samples only (ADR 0006).
+                for pf in (f.get("pii") or {}).get("findings", []):
+                    self._db.execute(cur,
+                        "INSERT INTO pii_findings(scan_id,file,pii_type,label,count,severity,samples) "
+                        "VALUES(%s,%s,%s,%s,%s,%s,%s) "
+                        "ON CONFLICT(scan_id,file,pii_type) DO UPDATE SET "
+                        "count=EXCLUDED.count,severity=EXCLUDED.severity,samples=EXCLUDED.samples",
+                        (sid, f["file"], pf["type"], pf["label"], pf["count"],
+                         pf["severity"], _json.dumps(pf["samples"])))
                 self._db.execute(cur, _UPSERT_INV,
                     (f["file"], report["completed_at"], report["completed_at"],
                      f["status"], f["score"]))
         return sid
+
+    def pii_summary(self, sid: str | None = None) -> dict:
+        """Sensitive-data rollup: docs affected, total items, and per-type counts.
+        Scoped to one scan when sid is given, else across all scans."""
+        where, params = ("WHERE scan_id=%s", (sid,)) if sid else ("", ())
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT COUNT(DISTINCT file) AS docs, COALESCE(SUM(count),0) AS items "
+                f"FROM pii_findings {where}", params)
+            roll = self._db.fetchone(cur) or {"docs": 0, "items": 0}
+            self._db.execute(cur,
+                f"SELECT pii_type, label, COALESCE(SUM(count),0) AS count, "
+                f"COUNT(DISTINCT file) AS docs FROM pii_findings {where} "
+                f"GROUP BY pii_type, label ORDER BY count DESC", params)
+            by_type = self._db.fetchall(cur)
+        return {"documents": roll["docs"], "items": roll["items"], "by_type": by_type}
+
+    def list_pii(self, sid: str) -> list[dict]:
+        """Per-document sensitive-data findings for one scan (masked samples)."""
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT file, pii_type, label, count, severity, samples "
+                "FROM pii_findings WHERE scan_id=%s ORDER BY file, count DESC", (sid,))
+            rows = self._db.fetchall(cur)
+        for r in rows:
+            try:
+                r["samples"] = _json.loads(r["samples"]) if r.get("samples") else []
+            except Exception:
+                r["samples"] = []
+        return rows
 
     def list_scans(self) -> list[dict]:
         with self._db.cursor() as cur:

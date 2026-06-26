@@ -125,6 +125,18 @@ def scan_traces(sid: str, file: str | None = None):
     return core.store.get_scan_traces(sid, file=file)
 
 
+@router.get("/scans/{sid}/pii")
+def scan_pii(sid: str):
+    """Sensitive-data (PII) findings for a scan (ADR 0006).
+
+    Returns a rollup (documents affected, total items, per-type counts) plus the
+    per-document detail. All samples are MASKED — raw PII is never stored or
+    returned."""
+    if core.store.get_scan(sid) is None:
+        raise HTTPException(404, "scan not found")
+    return {"summary": core.store.pii_summary(sid), "files": core.store.list_pii(sid)}
+
+
 @router.get("/scans/{sid}/manifest")
 def scan_manifest(sid: str):
     """Rule-execution manifest for a scan.

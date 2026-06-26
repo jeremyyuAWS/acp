@@ -359,6 +359,9 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         # One Langfuse trace covers the full scan; one span per file; one child span per rule.
         trace = _lf_mod.scan_trace(scan_id, source, n, ai_enabled=ai_enabled)
 
+        import pii as _pii_mod  # sensitive-data detection dimension (ADR 0006)
+        pii_by_file: dict[str, dict] = {}
+
         raw: dict[str, dict] = {}
         for i, it in enumerate(items):
             name, ext = it["name"], Path(it["name"]).suffix.lower()
@@ -386,7 +389,16 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                     if issue.get("severity") and sc not in sc_severity:
                         sc_severity[sc] = issue["severity"]
             _lf_mod.rule_spans(fspan, sc_counts, RULE_CATALOG, severity_map=sc_severity)
-            fspan.end(output={"issue_count": len(raw[name].get("issues", [])), "engine": engine})
+
+            # Sensitive-data (PII) detection — a second, orthogonal risk axis (ADR 0006).
+            # Runs on the same temp file; results are masked-only. Never fails the scan.
+            pinfo = _pii_mod.detect_file(tmp / name)
+            pii_by_file[name] = pinfo
+            if pinfo.get("total"):
+                _lf_mod.pii_span(fspan, pinfo)
+
+            fspan.end(output={"issue_count": len(raw[name].get("issues", [])),
+                              "engine": engine, "sensitive_data": pinfo.get("total", 0)})
 
         progress({"phase": "scoring", "files_found": n, "files_done": n, "current": None})
         for r in raw.values():
@@ -394,7 +406,10 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             r["errors"] = [e for e in r["errors"] if (e.get("rule") if isinstance(e, dict) else None) not in rb.disabled]
         assessed = {k: rb.assess(r["succeeded"], r["issues"], r["errors"]) for k, r in raw.items()}
         summary = rb.aggregate(assessed)
-        _lf_mod.finish_scan_trace(trace, scan_id, summary, source=source, ai_enabled=ai_enabled)
+        pii_docs = sum(1 for p in pii_by_file.values() if p.get("total"))
+        pii_total = sum(p.get("total", 0) for p in pii_by_file.values())
+        _lf_mod.finish_scan_trace(trace, scan_id, summary, source=source, ai_enabled=ai_enabled,
+                                  pii_docs=pii_docs, pii_total=pii_total)
         _lf_mod.flush()
 
         # Build name → Drive file id map so write-back can reference the original.
@@ -408,7 +423,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "source": source,
             "files": [{"file": k, "engine": raw[k]["engine"], **assessed[k], "issues": raw[k]["issues"],
-                       "drive_file_id": drive_id_map.get(k)}
+                       "drive_file_id": drive_id_map.get(k), "pii": pii_by_file.get(k)}
                       for k in sorted(raw)],
         }
     finally:

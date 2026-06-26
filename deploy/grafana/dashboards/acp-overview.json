@@ -1707,6 +1707,247 @@
           "rawSql": "SELECT ts AS \"when\", actor, action, file, rule_id, detail FROM decision_log ORDER BY ts DESC LIMIT 50"
         }
       ]
+    },
+    {
+      "type": "row",
+      "id": 107,
+      "title": "Sensitive data exposure (PII)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 65
+      }
+    },
+    {
+      "type": "stat",
+      "id": 70,
+      "title": "Documents with sensitive data",
+      "description": "Documents found to contain PII (SSNs, cards, emails, phone numbers) in the latest scan.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 0,
+        "y": 66
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3D9E3D",
+                "value": null
+              },
+              {
+                "color": "#D68A0C",
+                "value": 1
+              },
+              {
+                "color": "#CC3333",
+                "value": 5
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT COUNT(DISTINCT file) AS value FROM pii_findings WHERE scan_id=(SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1)"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 71,
+      "title": "Sensitive items found",
+      "description": "Total count of sensitive values across all documents in the latest scan.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 6,
+        "y": 66
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#A32D2D"
+          }
+        }
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT COALESCE(SUM(count),0) AS value FROM pii_findings WHERE scan_id=(SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1)"
+        }
+      ]
+    },
+    {
+      "type": "bargauge",
+      "id": 72,
+      "title": "Sensitive data by type",
+      "description": "What kind of sensitive data was found (latest scan).",
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 66
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "continuous-RdYlGr"
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ]
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT label AS metric, SUM(count) AS value FROM pii_findings WHERE scan_id=(SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1) GROUP BY label ORDER BY value DESC"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 73,
+      "title": "Documents exposing sensitive data (masked samples)",
+      "description": "Per-document sensitive-data findings. Samples are masked — raw values are never stored.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 73
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "severity"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "critical": {
+                        "color": "#CC3333",
+                        "index": 0
+                      },
+                      "moderate": {
+                        "color": "#D68A0C",
+                        "index": 1
+                      },
+                      "low": {
+                        "color": "#888780",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "count",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT file, label AS type, count, severity, samples FROM pii_findings WHERE scan_id=(SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1) ORDER BY count DESC LIMIT 50"
+        }
+      ]
     }
   ]
 }
