@@ -113,7 +113,7 @@
           },
           "format": "table",
           "refId": "A",
-          "rawSql": "SELECT avg_score AS value FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1"
+          "rawSql": "SELECT avg_score AS value FROM scan_runs WHERE id='${scan}'"
         }
       ]
     },
@@ -172,7 +172,7 @@
           },
           "format": "table",
           "refId": "A",
-          "rawSql": "SELECT ROUND(CAST(certifiable AS NUMERIC)/NULLIF(files,0),3) AS value FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1"
+          "rawSql": "SELECT ROUND(CAST(certifiable AS NUMERIC)/NULLIF(files,0),3) AS value FROM scan_runs WHERE id='${scan}'"
         }
       ]
     },
@@ -230,7 +230,7 @@
           },
           "format": "table",
           "refId": "A",
-          "rawSql": "SELECT COUNT(*) AS value FROM issue_records WHERE scan_id = (SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1)"
+          "rawSql": "SELECT COUNT(*) AS value FROM issue_records WHERE scan_id = '${scan}'"
         }
       ]
     },
@@ -568,7 +568,7 @@
           },
           "format": "time_series",
           "refId": "A",
-          "rawSql": "SELECT completed_at::timestamptz AS time, avg_score AS \"avg score\" FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at"
+          "rawSql": "SELECT completed_at::timestamptz AS time, avg_score AS \"avg score\" FROM scan_runs WHERE completed_at IS NOT NULL AND source LIKE '${source}' ORDER BY completed_at"
         }
       ]
     },
@@ -679,7 +679,7 @@
           },
           "format": "time_series",
           "refId": "A",
-          "rawSql": "SELECT completed_at::timestamptz AS time, certifiable, GREATEST(files-certifiable-uncertain-error,0) AS \"needs work\", uncertain, error FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at"
+          "rawSql": "SELECT completed_at::timestamptz AS time, certifiable, GREATEST(files-certifiable-uncertain-error,0) AS \"needs work\", uncertain, error FROM scan_runs WHERE completed_at IS NOT NULL AND source LIKE '${source}' ORDER BY completed_at"
         }
       ]
     },
@@ -798,7 +798,7 @@
           },
           "format": "table",
           "refId": "A",
-          "rawSql": "SELECT severity, COUNT(*) AS value FROM issue_records GROUP BY severity ORDER BY value DESC"
+          "rawSql": "SELECT severity, COUNT(*) AS value FROM issue_records WHERE scan_id='${scan}' GROUP BY severity ORDER BY value DESC"
         }
       ]
     },
@@ -843,7 +843,7 @@
           },
           "format": "table",
           "refId": "A",
-          "rawSql": "SELECT COALESCE(NULLIF(rule_name,''), rule_id) AS metric, SUM(finding_count) AS value FROM scan_rule_traces WHERE outcome='FAIL' GROUP BY 1 ORDER BY value DESC LIMIT 12"
+          "rawSql": "SELECT COALESCE(NULLIF(plain_name,''), NULLIF(rule_name,''), rule_id) AS metric, SUM(finding_count) AS value FROM scan_rule_traces WHERE outcome='FAIL' AND scan_id='${scan}' GROUP BY 1 ORDER BY value DESC LIMIT 12"
         }
       ]
     },
@@ -926,7 +926,7 @@
           },
           "format": "table",
           "refId": "A",
-          "rawSql": "SELECT file, engine, status, score FROM file_records WHERE scan_id = (SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1) ORDER BY score ASC LIMIT 12"
+          "rawSql": "SELECT file, engine, status, score FROM file_records WHERE scan_id = '${scan}' ORDER BY score ASC LIMIT 12"
         }
       ]
     },
@@ -1030,7 +1030,7 @@
           },
           "format": "table",
           "refId": "A",
-          "rawSql": "SELECT status, COUNT(*) AS value FROM scan_file_manifests WHERE scan_id = (SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1) GROUP BY status"
+          "rawSql": "SELECT status, COUNT(*) AS value FROM scan_file_manifests WHERE scan_id = '${scan}' GROUP BY status"
         }
       ]
     },
@@ -1076,7 +1076,7 @@
           },
           "format": "table",
           "refId": "A",
-          "rawSql": "SELECT engine AS metric, ROUND(AVG(score)) AS value FROM file_records WHERE scan_id = (SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1) GROUP BY engine ORDER BY value"
+          "rawSql": "SELECT engine AS metric, ROUND(AVG(score)) AS value FROM file_records WHERE scan_id = '${scan}' GROUP BY engine ORDER BY value"
         }
       ]
     },
@@ -1180,7 +1180,7 @@
           },
           "format": "table",
           "refId": "A",
-          "rawSql": "SELECT status, COUNT(*) AS value FROM file_records WHERE scan_id = (SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1) GROUP BY status"
+          "rawSql": "SELECT status, COUNT(*) AS value FROM file_records WHERE scan_id = '${scan}' GROUP BY status"
         }
       ]
     },
@@ -1774,7 +1774,7 @@
           },
           "format": "table",
           "refId": "A",
-          "rawSql": "SELECT COUNT(DISTINCT file) AS value FROM pii_findings WHERE scan_id=(SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1)"
+          "rawSql": "SELECT COUNT(DISTINCT file) AS value FROM pii_findings WHERE scan_id='${scan}'"
         }
       ]
     },
@@ -1819,7 +1819,7 @@
           },
           "format": "table",
           "refId": "A",
-          "rawSql": "SELECT COALESCE(SUM(count),0) AS value FROM pii_findings WHERE scan_id=(SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1)"
+          "rawSql": "SELECT COALESCE(SUM(count),0) AS value FROM pii_findings WHERE scan_id='${scan}'"
         }
       ]
     },
@@ -1864,7 +1864,7 @@
           },
           "format": "table",
           "refId": "A",
-          "rawSql": "SELECT label AS metric, SUM(count) AS value FROM pii_findings WHERE scan_id=(SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1) GROUP BY label ORDER BY value DESC"
+          "rawSql": "SELECT label AS metric, SUM(count) AS value FROM pii_findings WHERE scan_id='${scan}' GROUP BY label ORDER BY value DESC"
         }
       ]
     },
@@ -1945,9 +1945,195 @@
           },
           "format": "table",
           "refId": "A",
-          "rawSql": "SELECT file, label AS type, count, severity, samples FROM pii_findings WHERE scan_id=(SELECT id FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1) ORDER BY count DESC LIMIT 50"
+          "rawSql": "SELECT file, label AS type, count, severity, samples FROM pii_findings WHERE scan_id='${scan}' ORDER BY count DESC LIMIT 50"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 108,
+      "title": "WCAG conformance level",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 81
+      }
+    },
+    {
+      "type": "piechart",
+      "id": 23,
+      "title": "Failures by WCAG level (A / AA / AAA)",
+      "description": "How the selected scan's failures break down by WCAG conformance level. Level A = most basic, AA = legal baseline (ADA/EAA), AAA = enhanced.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 0,
+        "y": 82
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "A"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#CC3333"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "AA"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#D68A0C"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "AAA"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#185FA5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT level, SUM(finding_count) AS value FROM scan_rule_traces WHERE outcome='FAIL' AND scan_id='${scan}' GROUP BY level ORDER BY level"
+        }
+      ]
+    },
+    {
+      "type": "bargauge",
+      "id": 24,
+      "title": "Failing rules by level (plain names)",
+      "description": "Top failing checks for the selected scan, labeled in plain language, colored by WCAG level.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 14,
+        "x": 10,
+        "y": 82
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "continuous-RdYlGr"
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ]
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT (level || ' · ' || COALESCE(NULLIF(plain_name,''), rule_name)) AS metric, SUM(finding_count) AS value FROM scan_rule_traces WHERE outcome='FAIL' AND scan_id='${scan}' GROUP BY 1 ORDER BY value DESC LIMIT 10"
         }
       ]
     }
-  ]
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "source",
+        "label": "Source",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "acp_pg"
+        },
+        "query": "SELECT 'All' AS __text, '%' AS __value UNION ALL SELECT DISTINCT source, source FROM scan_runs ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "includeAll": false,
+        "multi": false,
+        "current": {
+          "text": "All",
+          "value": "%"
+        }
+      },
+      {
+        "name": "scan",
+        "label": "Scan",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "acp_pg"
+        },
+        "query": "SELECT (completed_at || ' · ' || source || ' · ' || files || ' docs · ' || COALESCE(avg_score,0) || '/100') AS __text, id AS __value FROM scan_runs WHERE completed_at IS NOT NULL AND source LIKE '${source}' ORDER BY completed_at DESC",
+        "refresh": 2,
+        "sort": 0,
+        "includeAll": false,
+        "multi": false,
+        "current": {}
+      }
+    ]
+  }
 }
