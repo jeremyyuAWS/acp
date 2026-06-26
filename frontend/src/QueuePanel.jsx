@@ -62,6 +62,12 @@ export default function QueuePanel() {
   const order = ['queued', 'running', 'done', 'failed', 'dead']
   const shown = order.filter((s) => stats[s])
   const deadReason = q?.dead_letters?.top_errors?.[0]?.error
+  // Real-time worker state: each 'running' job occupies one worker, so active ≈ running.
+  const running = stats.running || 0
+  const queued = stats.queued || 0
+  const active = Math.min(running, workers)
+  const idle = Math.max(0, workers - active)
+  const initializing = note.includes('initializing')
 
   return (
     <section className="panel" style={{ marginBottom: 14 }}>
@@ -92,6 +98,21 @@ export default function QueuePanel() {
           </span>
           <span className="muted" style={{ fontSize: 11, color: note ? '#185FA5' : undefined }}>
             {note || 'workers · live-scale (0–16)'}
+          </span>
+        </span>
+        {/* Real-time worker state — what the pool is doing right now. */}
+        <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600 }}>
+            <span style={{ color: active > 0 ? '#185FA5' : 'var(--muted)' }}>
+              {active > 0 && <span className="livedot" aria-hidden="true" style={{ marginRight: 5 }} />}
+              {active} active
+            </span>
+            <span style={{ color: 'var(--muted)' }}>· {idle} idle</span>
+            {initializing && <span style={{ color: '#185FA5' }}>· ⏳ initializing</span>}
+          </span>
+          <span className="muted" style={{ fontSize: 11 }}>
+            {running > 0 ? `processing ${running} job${running !== 1 ? 's' : ''}` : 'idle — nothing in flight'}
+            {queued > 0 ? ` · ${queued} waiting` : ''}
           </span>
         </span>
         <Stat label="total jobs" value={total} />

@@ -328,7 +328,7 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
               onClick={() => setQueuedScan(v => !v)} aria-pressed={queuedScan}
               title={queuedScan
                 ? 'Durable scan — runs in the background queue: keeps going if you close the tab AND survives server restarts, with parallel downloads for large libraries (recommended). Click for a quick one-off scan in this browser session.'
-                : 'Quick scan — runs in your current browser session: faster to start, but lost on a server restart and slower on large libraries. Click to switch to a durable scan.'}>
+                : 'Quick scan — runs right here in your browser session: starts instantly with no queue wait, streams live per-file progress so you watch it work, and is the lightest way to spot-check a few files or re-run a scan you are watching now. Trade-off: it stops if the server restarts and is slower on very large libraries — use Durable scan for those. Click to switch to a durable scan.'}>
               {queuedScan ? '⚡ Durable scan' : '◻ Quick scan'}
             </button>
           )}

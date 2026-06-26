@@ -110,11 +110,47 @@ export function taxonomyPaths(node, prefix = '') {
   const path = prefix ? `${prefix} / ${node.name}` : node.name
   return [path, ...(node.children || []).flatMap((c) => taxonomyPaths(c, path))]
 }
-// Annotate a corpus with the published ontology (adds `.ont`). Identity-safe: returns the
-// same array untouched when nothing is published, so views degrade gracefully.
+// Lightweight, real-data classifier for the Classify tab. Document TYPE is derived
+// from the real file extension; DEPARTMENT and exposure TAGS are heuristics keyed off
+// the filename, so naming a sample file (e.g. "HR-benefits-public.docx") makes it
+// classify into a department / exposure. Honest about being heuristic — but it turns a
+// flat "internal · Unassigned · one type" view into a realistic spread.
+const DEPT_KW = [
+  ['Human Resources',    /(^|[^a-z])(hr|payroll|benefit|employee|onboard|new.?starter|welcome|leave)([^a-z]|$)/],
+  ['Legal & Compliance', /(^|[^a-z])(legal|contract|nda|policy|complian|litig|hold|gdpr|retention)([^a-z]|$)/],
+  ['Finance',            /(^|[^a-z])(finance|invoice|expense|budget|q[1-4]|fiscal|tax|audit|payroll)([^a-z]|$)/],
+  ['Marketing',          /(^|[^a-z])(marketing|brand|campaign|press|brochure|landing|web|seo)([^a-z]|$)/],
+  ['Operations',         /(^|[^a-z])(ops|operation|procedure|safety|evac|facilit|logist|incident)([^a-z]|$)/],
+  ['Clinical',           /(^|[^a-z])(clinic|patient|medical|health|cardio|diagnos|rx)([^a-z]|$)/],
+]
+const EXPOSE_KW = [
+  ['public-facing', /(^|[^a-z])(public|www|web|landing|press|brochure|external|customer)([^a-z]|$)/],
+  ['legal-hold',    /(^|[^a-z])(legal|hold|litig|contract|nda|retention)([^a-z]|$)/],
+  ['high-traffic',  /(^|[^a-z])(faq|help|home|index|portal|policy|guide)([^a-z]|$)/],
+]
+export function classifyByName(name) {
+  const n = (name || '').toLowerCase()
+  const ext = n.includes('.') ? n.split('.').pop().replace(/[^a-z0-9]/g, '') : 'file'
+  const tags = EXPOSE_KW.filter(([, re]) => re.test(n)).map(([t]) => t)
+  const dept = (DEPT_KW.find(([, re]) => re.test(n)) || [])[0] || 'Unassigned'
+  return { type: ext.toUpperCase(), department: dept, tags }
+}
+
+// Annotate a corpus: fill real type + heuristic department/exposure (gap-filling, so SIM
+// and ontology data are preserved), then add `.ont` when an ontology is published.
 export function annotate(files, pub) {
-  if (!pub || !(pub.rules || []).length) return files
-  return files.map((f) => ({ ...f, ont: classifyFile(f, pub) }))
+  const hasOnt = pub && (pub.rules || []).length
+  return files.map((f) => {
+    const c = classifyByName(f.file)
+    const piiTag = (f.pii && f.pii.total) ? ['PII'] : []
+    return {
+      ...f,
+      type: f.type || c.type,
+      department: f.department || c.department,
+      tags: (f.tags && f.tags.length) ? f.tags : [...c.tags, ...piiTag],
+      ...(hasOnt ? { ont: classifyFile(f, pub) } : {}),
+    }
+  })
 }
 // ---- Seed ontology — an org's starting model, live by default so the demo shows the
 // loop closed without a manual publish. The admin edits → drafts → re-publishes. ----
