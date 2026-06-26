@@ -284,11 +284,26 @@ def reset_langfuse_traces() -> int:
     return deleted
 
 
-# In-memory per-scan auth tokens for the worker pool. Tokens are NEVER written to
-# the jobs table (which lives in Postgres) — a scan job carries only the scan_id
-# and the worker looks the tokens up here. Lost on restart (an in-flight per-user
-# scan then fails and must be re-triggered); demo/ADC scans need no token.
-SCAN_TOKENS: dict[str, dict] = {}
+# Per-scan auth tokens for the worker pool. With REDIS_URL set they live in Redis
+# with a short TTL — SHARED across replicas, so a scan enqueued on one replica is
+# processable by a worker on another (enables horizontal scaling). Without it they
+# live in process memory (single replica). Either way tokens are NEVER written to
+# Postgres; Redis is transient (TTL + no persistence). A job carries only scan_id.
+_TOKEN_TTL = 3600                         # GIS tokens live ~1h and don't refresh
+SCAN_TOKENS: dict[str, dict] = {}          # in-memory fallback
+REDIS_URL = os.environ.get("REDIS_URL", "")
+_redis = None
+
+
+def _get_redis():
+    global _redis
+    if not REDIS_URL:
+        return None
+    if _redis is None:
+        import redis
+        _redis = redis.Redis.from_url(REDIS_URL, decode_responses=True,
+                                      socket_timeout=3, socket_connect_timeout=3)
+    return _redis
 
 
 def register_scan_tokens(scan_id: str, *, drive: str | None = None, sp: str | None = None) -> None:
@@ -297,15 +312,39 @@ def register_scan_tokens(scan_id: str, *, drive: str | None = None, sp: str | No
         toks["drive"] = drive
     if sp:
         toks["sp"] = sp
-    if toks:
-        SCAN_TOKENS[scan_id] = toks
+    if not toks:
+        return
+    r = _get_redis()
+    if r is not None:
+        try:
+            import json as _j
+            r.set(f"scantok:{scan_id}", _j.dumps(toks), ex=_TOKEN_TTL)
+            return
+        except Exception:
+            pass                          # fall through to in-memory
+    SCAN_TOKENS[scan_id] = toks
 
 
 def get_scan_tokens(scan_id: str) -> dict:
+    r = _get_redis()
+    if r is not None:
+        try:
+            import json as _j
+            v = r.get(f"scantok:{scan_id}")
+            if v:
+                return _j.loads(v)
+        except Exception:
+            pass
     return SCAN_TOKENS.get(scan_id, {})
 
 
 def clear_scan_tokens(scan_id: str) -> None:
+    r = _get_redis()
+    if r is not None:
+        try:
+            r.delete(f"scantok:{scan_id}")
+        except Exception:
+            pass
     SCAN_TOKENS.pop(scan_id, None)
 
 
