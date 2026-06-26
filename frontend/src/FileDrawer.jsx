@@ -161,6 +161,15 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   )
   const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
   const shownTags = context === 'discover' ? (file.tags || []).filter((t) => !STATUS_TAGS.has(t)) : (file.tags || [])
+  const provBlock = file.acp_stamped ? (
+    <div style={{ margin: '0 0 12px', padding: '8px 12px', borderRadius: 8, background: '#E7F0DC',
+                  border: '1px solid #C5DBA8', fontSize: 12.5, color: '#2F5310',
+                  display: 'flex', alignItems: 'center', gap: 8 }}>
+      <span aria-hidden="true">🛡️</span>
+      <span>Remediated by <b>Mova.io ACP</b>{file.acp_stamped !== 'yes' ? ` · ${file.acp_stamped}` : ''} — carries an ACP provenance stamp.</span>
+    </div>
+  ) : null
+
   const tagBlock = shownTags.length > 0 && (
     <>
       <h4 className="drawerh">{context === 'discover' ? 'Classification · auto-assigned by agent' : 'Tags · auto-assigned by agent'}</h4>
@@ -174,6 +183,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
     return (
       <Drawer title={file.file} subtitle={`${file.sourceName ? `${file.sourceName} · ${file.dept} · ` : ''}${(file.type || '').toUpperCase()}`} onClose={onClose}>
         {file.locked && <div className="lockbanner">🔒 Could not open — <b>{file.openIssue}</b>. Discovered from its metadata, but the content couldn’t be read.</div>}
+        {provBlock}
         {tagBlock}
         {ontBlock}
         {metaBlock}
@@ -190,6 +200,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
 
   return (
     <Drawer title={file.file} subtitle={`${file.sourceName ? `${file.sourceName} · ${file.dept} · ` : ''}${file.engine}`} onClose={onClose}>
+      {provBlock}
       <div className="drawerstats">
         <span className="badge" style={{ background: sbg, color: sfg }}>{st}</span>
         <span className="drawerscore">{file.score === null ? 'n/a' : `${st === 'uncertain' ? '≤' : ''}${file.score}`}<span className="muted"> / 100</span></span>

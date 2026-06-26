@@ -6,7 +6,7 @@ scan finishes (the "documents never retained" guarantee).
 """
 from __future__ import annotations
 import concurrent.futures as _cf
-import io, json, os, re, shutil, subprocess, sys, tempfile, uuid
+import io, json, os, re, shutil, subprocess, sys, tempfile, uuid, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 import lf as _lf_mod
@@ -350,6 +350,35 @@ def _analyse_html(path: Path) -> dict:
     return {"succeeded": True, "issues": issues, "errors": []}
 
 
+def detect_acp_stamp(path: Path, ext: str) -> str | None:
+    """Detect a prior Mova.io ACP remediation stamp in a file (the provenance written
+    by the remediators); return the remediation date, 'yes' if undated, else None.
+    Lets a scan flag already-remediated documents."""
+    try:
+        if ext in OFFICE:
+            with zipfile.ZipFile(path) as z:
+                if "docProps/custom.xml" in z.namelist():
+                    x = z.read("docProps/custom.xml").decode("utf-8", "replace")
+                    if "Mova.io ACP" in x:
+                        m = re.search(r"Remediation Date.*?<vt:lpwstr>([^<]+)</vt:lpwstr>", x, re.S)
+                        return m.group(1).strip() if m else "yes"
+        elif ext == ".pdf":
+            import pikepdf
+            with pikepdf.open(str(path)) as pdf:
+                rb = pdf.docinfo.get("/RemediatedBy")
+                if rb is not None and "Mova.io ACP" in str(rb):
+                    d = pdf.docinfo.get("/RemediationDate")
+                    return str(d) if d is not None else "yes"
+        elif ext in HTML_EXTS:
+            txt = path.read_text("utf-8", errors="replace")[:4000]
+            if "Mova.io ACP" in txt and ("generator" in txt or "Remediated by" in txt):
+                m = re.search(r"remediated (\d{4}-\d\d-\d\d)", txt)
+                return m.group(1) if m else "yes"
+    except Exception:
+        pass
+    return None
+
+
 def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = True):
     """Analyse + rubric-assess ONE already-downloaded file (fan-out path, ADR 0007).
     `tmp` is a directory containing `name`. Returns (assessed_file_dict, pii_info),
@@ -371,7 +400,8 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = True):
     raw["errors"] = [e for e in raw["errors"]
                      if (e.get("rule") if isinstance(e, dict) else None) not in rb.disabled]
     assessed = rb.assess(raw["succeeded"], raw["issues"], raw["errors"])
-    fdict = {"file": name, "engine": raw["engine"], **assessed, "issues": raw["issues"]}
+    fdict = {"file": name, "engine": raw["engine"], **assessed, "issues": raw["issues"],
+             "acp_stamped": detect_acp_stamp(tmp / name, ext)}
     pinfo = None
     if detect_pii:
         import pii as _pii_mod
@@ -479,7 +509,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "source": source,
             "files": [{"file": k, "engine": raw[k]["engine"], **assessed[k], "issues": raw[k]["issues"],
-                       "drive_file_id": drive_id_map.get(k), "pii": pii_by_file.get(k)}
+                       "drive_file_id": drive_id_map.get(k), "pii": pii_by_file.get(k),
+                       "acp_stamped": detect_acp_stamp(tmp / k, Path(k).suffix.lower())}
                       for k in sorted(raw)],
         }
     finally:

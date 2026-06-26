@@ -30,6 +30,7 @@ _SCHEMA = [
       drive_file_id TEXT,
       remediated_at TEXT,
       drive_write_url TEXT,
+      acp_stamped TEXT,
       PRIMARY KEY (scan_id, file)
     )""",
     # Fan-out scan pipeline (ADR 0007): scan_runs is created at 'discover' with
@@ -40,6 +41,7 @@ _SCHEMA = [
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS drive_file_id TEXT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS remediated_at TEXT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS drive_write_url TEXT",
+    "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS acp_stamped TEXT",
     """CREATE TABLE IF NOT EXISTS issue_records (
       scan_id TEXT, file TEXT, rule_id TEXT, wcag TEXT, severity TEXT
     )""",
@@ -320,10 +322,10 @@ class Store:
                  s["files"], s["certifiable"], s["uncertain"], s["error"], s["avg_score"], s["files"]))
             for f in report["files"]:
                 self._db.execute(cur,
-                    "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                    "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     (sid, f["file"], f["engine"], f["status"], f["score"],
-                     int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id")))
+                     int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id"), f.get("acp_stamped")))
                 for i in f["issues"]:
                     self._db.execute(cur,
                         "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity) "
@@ -377,12 +379,13 @@ class Store:
             (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text())
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
+                "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
                 "engine=EXCLUDED.engine,status=EXCLUDED.status,score=EXCLUDED.score,"
-                "compliant=EXCLUDED.compliant,skipped_rules=EXCLUDED.skipped_rules,drive_file_id=EXCLUDED.drive_file_id",
+                "compliant=EXCLUDED.compliant,skipped_rules=EXCLUDED.skipped_rules,"
+                "drive_file_id=EXCLUDED.drive_file_id,acp_stamped=EXCLUDED.acp_stamped",
                 (scan_id, f["file"], f["engine"], f["status"], f["score"],
-                 int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id")))
+                 int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id"), f.get("acp_stamped")))
             self._db.execute(cur, "DELETE FROM issue_records WHERE scan_id=%s AND file=%s", (scan_id, f["file"]))
             for i in f.get("issues", []):
                 self._db.execute(cur,
@@ -510,7 +513,7 @@ class Store:
             if not run:
                 return None
             self._db.execute(cur,
-                "SELECT file,engine,status,score,compliant,skipped_rules,remediated_at,drive_write_url "
+                "SELECT file,engine,status,score,compliant,skipped_rules,remediated_at,drive_write_url,acp_stamped "
                 "FROM file_records WHERE scan_id=%s ORDER BY file", (sid,))
             files = self._db.fetchall(cur)
             for f in files:
