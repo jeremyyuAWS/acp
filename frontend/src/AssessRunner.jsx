@@ -34,13 +34,16 @@ const phaseFor = (name = '') => {
   return ['Analysing…', 'Scoring…']
 }
 
-export default function AssessRunner({ files = [] }) {
-  const [level, setLevel] = useState('AA')
-  const [phase, setPhase] = useState('idle') // idle | running | done
+export default function AssessRunner({ files = [], runId, saved, onSaved }) {
+  // Restore a prior assessment for THIS scan, so leaving the tab + coming back shows
+  // the result instead of resetting to idle (the run is over the already-scanned data).
+  const restorable = saved && saved.runId === runId
+  const [level, setLevel] = useState(restorable ? saved.level : 'AA')
+  const [phase, setPhase] = useState(restorable ? 'done' : 'idle') // idle | running | done
   const [progress, setProgress] = useState(0)
   const [currentFile, setCurrentFile] = useState(null)
   const [currentPhase, setCurrentPhase] = useState('')
-  const [result, setResult] = useState(null)
+  const [result, setResult] = useState(restorable ? saved.result : null)
   const timer = useRef(null)
   const phaseTimer = useRef(null)
   useEffect(() => () => { clearInterval(timer.current); clearTimeout(phaseTimer.current) }, [])
@@ -49,6 +52,22 @@ export default function AssessRunner({ files = [] }) {
   const reset = () => {
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
     setPhase('idle'); setResult(null); setProgress(0); setCurrentFile(null); setCurrentPhase('')
+    onSaved?.(null)
+  }
+
+  // Deterministic conformance result over the already-scanned docs at a WCAG level.
+  const computeResult = (lvl) => {
+    const target = RANK[lvl]
+    let conformant = 0, applicable = 0, autoFix = 0
+    docs.forEach((f) => {
+      const blocking = (f.issues || []).filter((x) => RANK[x.level] && RANK[x.level] <= target)
+      applicable += blocking.length
+      autoFix += blocking.filter((x) => x.auto).length
+      if (!blocking.length) conformant++
+    })
+    const total = Math.max(1, docs.length)
+    return { level: lvl, total, conformant, failing: total - conformant, applicable, autoFix,
+             pct: Math.round((conformant / total) * 100) }
   }
 
   const runPhases = (file, onDone) => {
@@ -65,6 +84,9 @@ export default function AssessRunner({ files = [] }) {
 
   const assess = () => {
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
+    // Compute + persist the result up front so it survives leaving the tab mid-run.
+    const computed = computeResult(level)
+    onSaved?.({ runId, level, result: computed })
     setPhase('running'); setProgress(0); setResult(null); setCurrentFile(null); setCurrentPhase('')
     const total = Math.max(1, docs.length)
     let i = 0
@@ -73,15 +95,7 @@ export default function AssessRunner({ files = [] }) {
       if (i >= total) {
         clearInterval(timer.current)
         setProgress(total); setCurrentFile(null); setCurrentPhase('')
-        const target = RANK[level]
-        let conformant = 0, applicable = 0, autoFix = 0
-        docs.forEach((f) => {
-          const blocking = (f.issues || []).filter((x) => RANK[x.level] && RANK[x.level] <= target)
-          applicable += blocking.length
-          autoFix += blocking.filter((x) => x.auto).length
-          if (!blocking.length) conformant++
-        })
-        setResult({ level, total, conformant, failing: total - conformant, applicable, autoFix, pct: Math.round((conformant / total) * 100) })
+        setResult(computed)
         setPhase('done')
         return
       }

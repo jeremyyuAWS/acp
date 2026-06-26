@@ -105,6 +105,7 @@ export default function App() {
   const [delta, setDelta] = useState(null)
   const [deltaKey, setDeltaKey] = useState(0)
   const [progress, setProgress] = useState(null)
+  const [assessResult, setAssessResult] = useState(null)  // persists the Assess run across tab navigation
   const [loaded, setLoaded] = useState(false)
   const [certifiedDocs, setCertifiedDocs] = useState([])
   const [publishedFiles, setPublishedFiles] = useState([])
@@ -357,7 +358,7 @@ export default function App() {
               <button role="tab" aria-selected={assess === 'results'} className={assess === 'results' ? 'fchip on' : 'fchip'} onClick={() => setAssess('results')}>4 · Assess</button>
               <button role="tab" aria-selected={assess === 'graph'} className={assess === 'graph' ? 'fchip on' : 'fchip'} onClick={() => setAssess('graph')}>5 · Risk &amp; findings</button>
             </div>
-            {assess === 'results' && (run ? <><AssessRunner files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} /></> : placeholder)}
+            {assess === 'results' && (run ? <><AssessRunner files={files} runId={run.id} saved={assessResult} onSaved={setAssessResult} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} /></> : placeholder)}
             {(assess === 'graph' || assess === 'rubric' || assess === 'coverage') && (run ? <><RiskScore run={run} files={files} /><KnowledgeGraph files={files} /></> : placeholder)}
           </>
         )}
