@@ -24,7 +24,7 @@ groups:
           area: accessibility
         data:
           - refId: A
-            relativeTimeRange: { from: 0, to: 0 }
+            relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: acp_pg
             model:
               refId: A
@@ -67,7 +67,7 @@ groups:
           area: queue
         data:
           - refId: A
-            relativeTimeRange: { from: 0, to: 0 }
+            relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: acp_pg
             model:
               refId: A
