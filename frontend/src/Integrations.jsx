@@ -214,7 +214,8 @@ function lastScanLabel(scans, type) {
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function Integrations({ sources, files = [], scans = [], onScan, busy, hasDriveToken, hasSPToken, onConnect }) {
+export default function Integrations({ sources, files = [], scans = [], onScan, busy, hasDriveToken, hasSPToken, onConnect,
+                                       deepScan = true, setDeepScan, queuedScan = false, setQueuedScan }) {
   const [selSrc,      setSelSrc]      = useState(null)
   const [selFile,     setSelFile]     = useState(null)
   const [pickerSrc,   setPickerSrc]   = useState(null)
@@ -310,13 +311,35 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
             connect a source below, then run a scan — the mova Agent classifies and re-scans continuously
           </div>
         </div>
-        <button disabled={busy || !canScanAll} onClick={() => {
-          if (SIM) { onScan('all'); return }
-          if (hasDriveToken) { handleScan('_gdrive'); return }
-          if (hasSPToken)    { onScan('sharepoint'); return }
-        }}>
-          {busy ? 'scanning…' : 'Scan all sources'}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {/* Scan-time options — they configure the NEXT scan, so they live here next
+              to the Scan button (not in the global header). */}
+          {setDeepScan && (
+            <button type="button" className={`ai-toggle${deepScan ? ' ai-toggle--on' : ''}`}
+              onClick={() => setDeepScan(v => !v)} aria-pressed={deepScan}
+              title={deepScan
+                ? 'Deep scan also looks for sensitive data (SSNs, credit cards, emails) in your documents. A bit slower on large PDF sets. Click for a faster accessibility-only scan.'
+                : 'Fast scan checks accessibility only — no sensitive-data detection. Click to also scan for sensitive data.'}>
+              {deepScan ? '🔍 Deep scan' : '◻ Fast scan'}
+            </button>
+          )}
+          {setQueuedScan && (
+            <button type="button" className={`ai-toggle${queuedScan ? ' ai-toggle--on' : ''}`}
+              onClick={() => setQueuedScan(v => !v)} aria-pressed={queuedScan}
+              title={queuedScan
+                ? 'Runs this scan in the background queue — it keeps going if you close the tab and handles large libraries reliably (recommended). Click to run it in this browser session instead.'
+                : 'Runs this scan in your current browser session (faster to start, but stops if you close the tab). Click to run it in the background queue instead.'}>
+              {queuedScan ? '⚡ Background' : '◻ This session'}
+            </button>
+          )}
+          <button disabled={busy || !canScanAll} onClick={() => {
+            if (SIM) { onScan('all'); return }
+            if (hasDriveToken) { handleScan('_gdrive'); return }
+            if (hasSPToken)    { onScan('sharepoint'); return }
+          }}>
+            {busy ? 'scanning…' : 'Scan all sources'}
+          </button>
+        </div>
       </div>
 
       {/* ── Active sources — horizontal cards ─────────────────────────────── */}

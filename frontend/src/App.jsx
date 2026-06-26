@@ -267,26 +267,16 @@ export default function App() {
         <div className="userbox">
           {me.role && <span className="chip" title={me.scope}>{me.role}</span>}
           {rubric && me.allow?.includes('settings') && <span className="chip">{rubric.target} · rubric {rubric.hash.slice(0, 8)}</span>}
+          {/* Global mode (applies across scanning, explanations, and remediation). The
+              scan-only options (Deep scan, Queued) live on the Sources tab where you scan. */}
           <button
             className={`ai-toggle${aiEnabled ? ' ai-toggle--on' : ''}`}
             onClick={() => setAiEnabled(v => !v)}
-            title={aiEnabled ? 'AI-assisted mode — click to switch to deterministic-only' : 'Deterministic-only mode — click to enable AI'}
+            title={aiEnabled
+              ? 'AI is on across the whole platform — it helps explain findings and draft fixes. Click to turn AI off (rules-only mode; AI-dependent fixes route to human review).'
+              : 'AI is off — everything runs on the deterministic rules engine only. Click to turn AI back on.'}
             aria-pressed={aiEnabled}>
             {aiEnabled ? '✦ AI on' : '◻ AI off'}
-          </button>
-          <button
-            className={`ai-toggle${queuedScan ? ' ai-toggle--on' : ''}`}
-            onClick={() => setQueuedScan(v => !v)}
-            title={queuedScan ? 'Durable mode — scans run in the worker queue (survive restarts, visible in Monitor/Grafana). Click for in-process.' : 'In-process mode — scans run on a background thread. Click for the durable queue.'}
-            aria-pressed={queuedScan}>
-            {queuedScan ? '⚡ Queued' : '◻ In-process'}
-          </button>
-          <button
-            className={`ai-toggle${deepScan ? ' ai-toggle--on' : ''}`}
-            onClick={() => setDeepScan(v => !v)}
-            title={deepScan ? 'Deep scan — also detects sensitive data (SSNs, cards, emails). Slower on PDF-heavy estates. Click for a faster accessibility-only scan.' : 'Fast scan — accessibility only, no sensitive-data detection. Click to also scan for PII.'}
-            aria-pressed={deepScan}>
-            {deepScan ? '🔍 Deep scan' : '◻ Fast scan'}
           </button>
           <span className="user">{me.email}</span>
           {me.allow?.includes('settings') && <button className="cogbtn" aria-label="Platform settings" title="Platform settings" onClick={() => setSettingsOpen(true)}>⚙</button>}
@@ -356,7 +346,8 @@ export default function App() {
       <ErrorBoundary key={view}>
         {view === 'overview' && (run ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} /> : placeholder)}
 
-        {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect} />}
+        {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
+          deepScan={deepScan} setDeepScan={setDeepScan} queuedScan={queuedScan} setQueuedScan={setQueuedScan} />}
 
         {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} delegations={delegations} fileTypeConfig={fileTypeConfig} />}
 
