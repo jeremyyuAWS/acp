@@ -92,7 +92,9 @@ def _normalize(files: list[dict]) -> list[dict]:
             name = _safe_name(raw_name) + export_ext
         else:
             ext = Path(raw_name).suffix.lower()
-            if ext not in OFFICE + (".pdf",):
+            # Accept the same set the local path + scan loop handle, including HTML
+            # (was dropping .html/.htm uploaded to Drive as real text/html).
+            if ext not in OFFICE + (".pdf",) + HTML_EXTS:
                 continue
             name = _safe_name(raw_name)
         # Deduplicate: Drive can have same-name files in different folders
