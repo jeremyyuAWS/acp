@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { allRules } from './rules'
 
 // Re-assess the whole estate against a chosen WCAG 2.1 conformance level. A finding blocks
 // conformance when its level is at or below the target (A ⊆ AA ⊆ AAA), so the numbers
@@ -10,6 +11,15 @@ const LEVELS = [
   { k: 'AA', desc: 'legal target · ADA · EAA · 508' },
   { k: 'AAA', desc: 'enhanced' },
 ]
+
+// Real scan findings carry {rule_id, wcag, severity} but no conformance level or auto flag,
+// so derive both from the SC catalog (rules/*.js meta) keyed by the WCAG SC number.
+const SC_LEVEL = Object.fromEntries(allRules.map((r) => [r.meta.id, r.meta.level]))
+const SC_AUTO = Object.fromEntries(allRules.map((r) => [r.meta.id, r.meta.fixMode === 'auto']))
+const scOf = (w) => (String(w || '').match(/\d+\.\d+\.\d+/) || [])[0]
+// Level of a finding: explicit field (SIM) → SC catalog → default A (unknown SCs still count).
+const levelOf = (x) => x.level || SC_LEVEL[scOf(x.wcag)] || 'A'
+const autoOf = (x) => (x.auto != null ? x.auto : !!SC_AUTO[scOf(x.wcag)])
 
 // Engine label shown per file type during scanning — mirrors what the real pipeline uses
 const engineFor = (name = '') => {
@@ -64,9 +74,9 @@ export default function AssessRunner({ files = [], runId }) {
     const target = RANK[lvl]
     let conformant = 0, applicable = 0, autoFix = 0
     docs.forEach((f) => {
-      const blocking = (f.issues || []).filter((x) => RANK[x.level] && RANK[x.level] <= target)
+      const blocking = (f.issues || []).filter((x) => RANK[levelOf(x)] <= target)
       applicable += blocking.length
-      autoFix += blocking.filter((x) => x.auto).length
+      autoFix += blocking.filter(autoOf).length
       if (!blocking.length) conformant++
     })
     const total = Math.max(1, docs.length)
