@@ -152,4 +152,13 @@ def jobs(status: str | None = None, limit: int = 100):
     Feeds the Grafana queue panel and live UI."""
     return {"workers": core.WORKERS,
             "stats": core.store.job_stats(),
+            "dead_letters": core.store.dead_letter_breakdown(),
             "jobs": core.store.list_jobs(status=status, limit=limit)}
+
+
+@router.post("/admin/jobs/clear-dead")
+def clear_dead_jobs():
+    """Delete unrecoverable dead-lettered jobs (gated — signed-in admins only).
+    Dead-letters are terminal failures; clearing them just removes the noise from
+    the queue. Re-run the originating action (e.g. remediate) to retry the work."""
+    return {"purged": core.store.purge_dead_jobs()}

@@ -857,6 +857,27 @@ class Store:
                 "UPDATE jobs SET status='done', updated_at=%s, last_error=NULL WHERE id=%s",
                 (self._now(), job_id))
 
+    def dead_letter_breakdown(self) -> dict:
+        """Diagnostic: dead-lettered jobs grouped by type + the most common errors."""
+        out: dict = {}
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT type, COUNT(*) AS n FROM jobs WHERE status='dead' GROUP BY type")
+            out["by_type"] = {r["type"]: r["n"] for r in self._db.fetchall(cur)}
+            self._db.execute(cur,
+                "SELECT type, SUBSTR(last_error,1,200) AS err, COUNT(*) AS n FROM jobs "
+                "WHERE status='dead' GROUP BY type, SUBSTR(last_error,1,200) ORDER BY n DESC LIMIT 15")
+            out["top_errors"] = [{"type": r["type"], "n": r["n"], "error": r["err"]}
+                                 for r in self._db.fetchall(cur)]
+        return out
+
+    def purge_dead_jobs(self) -> int:
+        """Delete dead-lettered jobs (unrecoverable). Returns how many were removed."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT COUNT(*) AS n FROM jobs WHERE status='dead'")
+            n = self._db.fetchone(cur)["n"]
+            self._db.execute(cur, "DELETE FROM jobs WHERE status='dead'")
+        return n
+
     def touch_job(self, job_id: str) -> None:
         """Heartbeat: extend a running job's lease so the stuck-job sweeper won't
         reclaim a slow-but-alive job (e.g. a long PII scan). Called periodically by

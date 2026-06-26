@@ -65,6 +65,10 @@ export const remediateScan = (scanId) => (SIM
 export const getJobs = (status = null) => (SIM
   ? sim({ workers: 4, stats: { done: 12, running: 1, queued: 3 }, jobs: [] })
   : fetch(`${BASE}/jobs${status ? `?status=${status}` : ''}`, { headers: headers() }).then(j))
+// Delete unrecoverable dead-lettered jobs (signed-in admins only).
+export const clearDeadJobs = () => (SIM
+  ? sim({ purged: 0 })
+  : fetch(`${BASE}/admin/jobs/clear-dead`, { method: 'POST', headers: headers() }).then(j))
 // Live-scale the in-process worker pool (0–16). Persisted server-side.
 export const setWorkers = (count) => (SIM
   ? sim({ workers: count })

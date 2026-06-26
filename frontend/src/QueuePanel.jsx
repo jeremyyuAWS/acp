@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getJobs, setWorkers } from './api.js'
+import { getJobs, setWorkers, clearDeadJobs } from './api.js'
 
 // Live view of the durable async job queue (ADR 0004). Polls /jobs and shows
 // queue depth by status. The same data Grafana's queue panel renders.
@@ -48,11 +48,20 @@ export default function QueuePanel() {
       .finally(() => { setBusy(false); setTimeout(() => setNote(''), 2500) })
   }
 
+  const clearDead = () => {
+    setBusy(true); setNote('⏳ clearing dead-letters…')
+    clearDeadJobs()
+      .then((d) => { setNote(`✓ cleared ${d.purged ?? 0} dead-letter job(s)`); return getJobs().then(setQ) })
+      .catch((e) => setErr(e.message || 'could not clear dead-letters'))
+      .finally(() => { setBusy(false); setTimeout(() => setNote(''), 2500) })
+  }
+
   const stats = q?.stats || {}
   const workers = q?.workers ?? 0
   const total = Object.values(stats).reduce((a, b) => a + b, 0)
   const order = ['queued', 'running', 'done', 'failed', 'dead']
   const shown = order.filter((s) => stats[s])
+  const deadReason = q?.dead_letters?.top_errors?.[0]?.error
 
   return (
     <section className="panel" style={{ marginBottom: 14 }}>
@@ -103,6 +112,26 @@ export default function QueuePanel() {
           )
         })}
       </div>
+
+      {/* Dead-letters: show WHY they failed + a one-click clear (terminal failures —
+          re-run the originating action to retry the actual work). */}
+      {stats.dead > 0 && (
+        <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 9,
+                      background: '#FCEBEB', border: '1px solid #F3C9C9',
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12.5, color: '#7A2020' }}>
+            <strong>{stats.dead} job{stats.dead !== 1 ? 's' : ''} failed permanently.</strong>{' '}
+            {deadReason ? `Reason: ${deadReason}` : 'See server logs for details.'}
+            {deadReason?.includes('Drive token') &&
+              ' — re-run remediation while signed in to retry the work.'}
+          </span>
+          <button className="ghost small" onClick={clearDead} disabled={busy}
+                  title="Remove these terminal-failure jobs from the queue">
+            Clear dead-letters
+          </button>
+        </div>
+      )}
     </section>
   )
 }
