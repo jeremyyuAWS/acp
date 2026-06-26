@@ -21,7 +21,8 @@ _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS scan_runs (
       id TEXT PRIMARY KEY, started_at TEXT, completed_at TEXT, source TEXT,
       rubric_name TEXT, rubric_hash TEXT,
-      files INT, certifiable INT, uncertain INT, error INT, avg_score INT
+      files INT, certifiable INT, uncertain INT, error INT, avg_score INT,
+      status TEXT, files_done INT
     )""",
     """CREATE TABLE IF NOT EXISTS file_records (
       scan_id TEXT, file TEXT, engine TEXT, status TEXT, score INT,
@@ -31,6 +32,10 @@ _SCHEMA = [
       drive_write_url TEXT,
       PRIMARY KEY (scan_id, file)
     )""",
+    # Fan-out scan pipeline (ADR 0007): scan_runs is created at 'discover' with
+    # status=running + a files_done counter, then finalized once all per-file jobs land.
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS status TEXT",
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS files_done INT",
     # Migrations for existing deployments
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS drive_file_id TEXT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS remediated_at TEXT",
@@ -46,7 +51,7 @@ _SCHEMA = [
       key TEXT PRIMARY KEY, value TEXT
     )""",
     """CREATE TABLE IF NOT EXISTS scan_rule_traces (
-      scan_id TEXT, file TEXT, rule_id TEXT, rule_name TEXT,
+      scan_id TEXT, file TEXT, rule_id TEXT, rule_name TEXT, plain_name TEXT,
       level TEXT, fix_mode TEXT, outcome TEXT, finding_count INT,
       PRIMARY KEY (scan_id, file, rule_id)
     )""",
@@ -308,10 +313,11 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO scan_runs(id,started_at,completed_at,source,rubric_name,rubric_hash,"
-                "files,certifiable,uncertain,error,avg_score) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "files,certifiable,uncertain,error,avg_score,status,files_done) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'done',%s)",
                 (sid, report["started_at"], report["completed_at"], report["source"],
                  report["rubric"]["name"], report["rubric"]["hash"],
-                 s["files"], s["certifiable"], s["uncertain"], s["error"], s["avg_score"]))
+                 s["files"], s["certifiable"], s["uncertain"], s["error"], s["avg_score"], s["files"]))
             for f in report["files"]:
                 self._db.execute(cur,
                     "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id) "
@@ -352,6 +358,87 @@ class Store:
                     (f["file"], report["completed_at"], report["completed_at"],
                      f["status"], f["score"]))
         return sid
+
+    # ── Fan-out scan pipeline (ADR 0007) ──────────────────────────────────────
+    def init_scan_run(self, scan_id: str, source: str, total: int, started_at: str,
+                      rubric_name: str, rubric_hash: str) -> None:
+        """Create the scan_runs row at discover time (status=running, counter=0)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO scan_runs(id,started_at,source,rubric_name,rubric_hash,files,files_done,status) "
+                "VALUES(%s,%s,%s,%s,%s,%s,0,'running') ON CONFLICT(id) DO NOTHING",
+                (scan_id, started_at, source, rubric_name, rubric_hash, total))
+
+    def save_file_result(self, scan_id: str, f: dict, completed_at: str) -> None:
+        """Persist one assessed file (same shape save_scan writes). Idempotent so a
+        retried scan_file job doesn't double-insert."""
+        import json as _json
+        catalog = _json.loads(
+            (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text())
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
+                "engine=EXCLUDED.engine,status=EXCLUDED.status,score=EXCLUDED.score,"
+                "compliant=EXCLUDED.compliant,skipped_rules=EXCLUDED.skipped_rules,drive_file_id=EXCLUDED.drive_file_id",
+                (scan_id, f["file"], f["engine"], f["status"], f["score"],
+                 int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id")))
+            self._db.execute(cur, "DELETE FROM issue_records WHERE scan_id=%s AND file=%s", (scan_id, f["file"]))
+            for i in f.get("issues", []):
+                self._db.execute(cur,
+                    "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity) VALUES(%s,%s,%s,%s,%s)",
+                    (scan_id, f["file"], i["ruleId"], i["wcag"], i["severity"]))
+            sc_counts: dict[str, int] = {}
+            for i in f.get("issues", []):
+                sc = _extract_sc(i.get("wcag", ""))
+                if sc:
+                    sc_counts[sc] = sc_counts.get(sc, 0) + 1
+            for rule in RULE_CATALOG:
+                rid = rule["id"]; count = sc_counts.get(rid, 0)
+                outcome = "FAIL" if count > 0 else "PASS"
+                self._db.execute(cur,
+                    "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file,rule_id) DO UPDATE SET "
+                    "outcome=EXCLUDED.outcome,finding_count=EXCLUDED.finding_count",
+                    (scan_id, f["file"], rid, rule["name"], rule.get("plain"), rule["level"],
+                     rule["fix_mode"], outcome, count))
+            self._save_file_manifest(cur, scan_id, f, catalog)
+            for pf in (f.get("pii") or {}).get("findings", []):
+                self._db.execute(cur,
+                    "INSERT INTO pii_findings(scan_id,file,pii_type,label,count,severity,samples) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file,pii_type) DO UPDATE SET "
+                    "count=EXCLUDED.count,severity=EXCLUDED.severity,samples=EXCLUDED.samples",
+                    (scan_id, f["file"], pf["type"], pf["label"], pf["count"], pf["severity"],
+                     _json.dumps(pf["samples"])))
+            self._db.execute(cur, _UPSERT_INV,
+                (f["file"], completed_at, completed_at, f["status"], f["score"]))
+
+    def bump_files_done(self, scan_id: str) -> tuple[int, int]:
+        """Atomically increment the done counter; returns (done, total enqueued)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE scan_runs SET files_done=COALESCE(files_done,0)+1 WHERE id=%s "
+                "RETURNING files_done, files", (scan_id,))
+            row = self._db.fetchone(cur)
+        return (row["files_done"], row["files"]) if row else (0, 0)
+
+    def finalize_scan_run(self, scan_id: str, completed_at: str) -> dict:
+        """Aggregate per-file results into the scan_runs summary — matches
+        Rubric.aggregate (certifiable=Σcompliant, uncertain/error by status,
+        avg=mean of scored). 'files' becomes the count actually analysed."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE scan_runs SET status='done', completed_at=%s, "
+                "files=(SELECT COUNT(*) FROM file_records WHERE scan_id=%s), "
+                "certifiable=(SELECT COALESCE(SUM(compliant),0) FROM file_records WHERE scan_id=%s), "
+                "uncertain=(SELECT COUNT(*) FROM file_records WHERE scan_id=%s AND status='uncertain'), "
+                "error=(SELECT COUNT(*) FROM file_records WHERE scan_id=%s AND status='error'), "
+                "avg_score=(SELECT ROUND(AVG(score)) FROM file_records WHERE scan_id=%s AND score IS NOT NULL) "
+                "WHERE id=%s",
+                (completed_at, scan_id, scan_id, scan_id, scan_id, scan_id, scan_id))
+            self._db.execute(cur,
+                "SELECT files,certifiable,uncertain,error,avg_score FROM scan_runs WHERE id=%s", (scan_id,))
+            return self._db.fetchone(cur) or {}
 
     def pii_summary(self, sid: str | None = None) -> dict:
         """Sensitive-data rollup: docs affected, total items, and per-type counts.

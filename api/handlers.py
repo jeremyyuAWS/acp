@@ -158,3 +158,119 @@ def _remediate_file(payload: dict, job: dict) -> None:
     core.emit_remediation_span(scan_id, filename, drive_write_url=web_url)
     core.store.log_decision("system", "remediate.applied", scan_id=scan_id, file=filename,
                             detail="; ".join(applied) or "no auto fixes needed")
+
+
+# ── Fan-out scan pipeline (ADR 0007): discover → scan_file → finalize ─────────
+import datetime as _dt
+import shutil as _shutil
+import tempfile as _tempfile
+from pathlib import Path as _Path
+
+
+@handler("scan_discover")
+def _scan_discover(payload: dict, job: dict) -> None:
+    """List the source (paginated, no cap), create the scan_runs row, open the
+    Langfuse trace, and enqueue one scan_file job per file."""
+    import lf as _lf
+    from rubric import Rubric
+    from scanner import _list, _drive_service, ACP
+    scan_id = payload.get("scan_id") or job.get("scan_id")
+    source = payload.get("source", "drive")
+    ai = bool(payload.get("ai", True)) and core.store.get_ai_enabled()
+    pii = bool(payload.get("pii", True))
+    user = payload.get("user")
+    folder = payload.get("folder")
+    toks = core.get_scan_tokens(scan_id)
+    rb = Rubric.load_active(ACP / "config")
+    svc = None if source in ("local", "sharepoint") else _drive_service(toks.get("drive"))
+    effective_folder = folder if folder else ("root" if toks.get("drive") else None)
+    items = _list(source, svc, folder=effective_folder, sp_token=toks.get("sp"))
+    started = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    core.store.init_scan_run(scan_id, source, len(items), started, rb.name, rb.hash)
+    _lf.scan_trace(scan_id, source, len(items), ai_enabled=ai, user=user)
+    if not items:
+        core.store.enqueue_job("scan_finalize",
+                               {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)
+        return
+    for it in items:
+        core.store.enqueue_job("scan_file", {
+            "scan_id": scan_id, "source": source, "file": it["name"],
+            "drive_file_id": it.get("id"), "mime": it.get("mime"),
+            "ai": ai, "pii": pii, "user": user}, scan_id=scan_id)
+
+
+@handler("scan_file")
+def _scan_file(payload: dict, job: dict) -> None:
+    """Download + analyse + assess + persist ONE file, emit its Langfuse spans, then
+    bump the done counter — the job that completes the count enqueues finalize.
+    Resilient: a fetch/analyse failure is recorded as an 'error' file so the counter
+    always advances and the scan can finalize."""
+    import lf as _lf
+    from scanner import _download, _drive_service, analyse_and_assess
+    from store import RULE_CATALOG, _extract_sc
+    scan_id = payload["scan_id"]
+    name = payload["file"]
+    source = payload.get("source", "drive")
+    pii = bool(payload.get("pii", True))
+    toks = core.get_scan_tokens(scan_id)
+    now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    tmp = _Path(_tempfile.mkdtemp(prefix="acp-scanone-"))
+    fdict = pinfo = None
+    try:
+        try:
+            svc = None if source in ("local", "sharepoint") else _drive_service(toks.get("drive"))
+            item = {"name": name, "id": payload.get("drive_file_id")}
+            if payload.get("mime"):
+                item["mime"] = payload["mime"]
+            _download(item, tmp, svc, sp_token=toks.get("sp"))
+            fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii)
+        except Exception as e:
+            core.store.log_decision("system", "scan.file_error", scan_id=scan_id, file=name,
+                                    detail=f"{type(e).__name__}: {e}"[:200])
+        if fdict is None:                              # fetch/analyse failed → error record
+            fdict = {"file": name, "engine": "n/a", "status": "error", "score": None,
+                     "compliant": 0, "skipped_rules": 0, "issues": []}
+        fdict["drive_file_id"] = payload.get("drive_file_id")
+        if pinfo:
+            fdict["pii"] = pinfo
+        core.store.save_file_result(scan_id, fdict, now)
+        # Langfuse spans for this file (on the trace by id).
+        fspan = _lf.file_span_for(scan_id, name, fdict["engine"])
+        sc_counts: dict[str, int] = {}
+        sc_sev: dict[str, str] = {}
+        for issue in fdict.get("issues", []):
+            sc = _extract_sc(issue.get("wcag", ""))
+            if sc:
+                sc_counts[sc] = sc_counts.get(sc, 0) + 1
+                if issue.get("severity") and sc not in sc_sev:
+                    sc_sev[sc] = issue["severity"]
+        _lf.rule_spans(fspan, sc_counts, RULE_CATALOG, severity_map=sc_sev)
+        if pinfo and pinfo.get("total"):
+            _lf.pii_span(fspan, pinfo)
+        fspan.end(output={"issue_count": len(fdict.get("issues", [])), "engine": fdict["engine"],
+                          "sensitive_data": (pinfo or {}).get("total", 0)})
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+    done, total = core.store.bump_files_done(scan_id)
+    if done >= total > 0:
+        core.store.enqueue_job("scan_finalize",
+                               {"scan_id": scan_id, "source": source,
+                                "ai": bool(payload.get("ai", True)), "pii": pii}, scan_id=scan_id)
+
+
+@handler("scan_finalize")
+def _scan_finalize(payload: dict, job: dict) -> None:
+    """Aggregate the per-file results into the scan summary, finish the Langfuse
+    trace, and run the shared post-scan step (HITL routing + audit)."""
+    import lf as _lf
+    scan_id = payload["scan_id"]
+    source = payload.get("source", "drive")
+    ai = bool(payload.get("ai", True)) and core.store.get_ai_enabled()
+    now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    summary = core.store.finalize_scan_run(scan_id, now)
+    roll = core.store.pii_summary(scan_id)
+    _lf.finish_scan_trace_by_id(scan_id, summary, source=source, ai_enabled=ai,
+                                pii_docs=roll.get("documents", 0), pii_total=roll.get("items", 0))
+    _lf.flush()
+    core.finalize_scan(scan_id, ai, source)
+    core.clear_scan_tokens(scan_id)

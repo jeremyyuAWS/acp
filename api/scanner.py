@@ -344,6 +344,35 @@ def _analyse_html(path: Path) -> dict:
     return {"succeeded": True, "issues": issues, "errors": []}
 
 
+def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = True):
+    """Analyse + rubric-assess ONE already-downloaded file (fan-out path, ADR 0007).
+    `tmp` is a directory containing `name`. Returns (assessed_file_dict, pii_info),
+    or (None, None) for an unsupported extension. Engines catch their own errors and
+    return an error result rather than raising."""
+    rb = Rubric.load_active(ACP / "config")
+    ext = Path(name).suffix.lower()
+    if ext == ".pdf":
+        raw = {"engine": "python/pdf", **_analyse_pdf(tmp / name)}
+    elif ext in OFFICE:
+        office = _analyse_office(tmp)                 # .NET CLI over the one-file dir
+        raw = {"engine": ".net/office",
+               **office.get(name, {"succeeded": False, "issues": [], "errors": ["no engine result"]})}
+    elif ext in HTML_EXTS:
+        raw = {"engine": "python/html", **_analyse_html(tmp / name)}
+    else:
+        return None, None
+    raw["issues"] = [i for i in raw["issues"] if i["ruleId"] not in rb.disabled]
+    raw["errors"] = [e for e in raw["errors"]
+                     if (e.get("rule") if isinstance(e, dict) else None) not in rb.disabled]
+    assessed = rb.assess(raw["succeeded"], raw["issues"], raw["errors"])
+    fdict = {"file": name, "engine": raw["engine"], **assessed, "issues": raw["issues"]}
+    pinfo = None
+    if detect_pii:
+        import pii as _pii_mod
+        pinfo = _pii_mod.detect_file(tmp / name)
+    return fdict, pinfo
+
+
 def run_scan(source: str = "local", progress=_noop, drive_token: str | None = None,
              folder: str | None = None, sp_token: str | None = None,
              ai_enabled: bool = True, scan_id: str | None = None,

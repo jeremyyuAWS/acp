@@ -209,6 +209,27 @@ def finish_scan_trace(trace, scan_id: str, summary: dict, *, source: str, ai_ena
             pass
 
 
+# ── Fan-out helpers: spans/finish referencing a trace by id (ADR 0007) ─────────
+def file_span_for(scan_id: str, filename: str, engine: str):
+    """A file span on an EXISTING trace, addressed by id — for the fan-out path
+    where each file is processed in its own job (no shared in-process handle)."""
+    lf = _lf()
+    if lf is None:
+        return _Noop()
+    return lf.trace(id=scan_id).span(name=filename,
+                                     input={"document": filename, "checked_with": engine})
+
+
+def finish_scan_trace_by_id(scan_id: str, summary: dict, *, source: str, ai_enabled: bool,
+                            pii_docs: int = 0, pii_total: int = 0) -> None:
+    """finish_scan_trace addressed by trace id (fan-out finalize job)."""
+    lf = _lf()
+    if lf is None:
+        return
+    finish_scan_trace(lf.trace(id=scan_id), scan_id, summary, source=source,
+                      ai_enabled=ai_enabled, pii_docs=pii_docs, pii_total=pii_total)
+
+
 def flush():
     """Flush pending events — call at the end of each scan."""
     lf = _lf()

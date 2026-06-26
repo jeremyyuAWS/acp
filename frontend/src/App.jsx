@@ -220,7 +220,8 @@ export default function App() {
           const elapsed = Math.round((Date.now() - t0) / 1000)
           setProgress({ phase: 'scoring', queued: true, elapsed,
                         pct: Math.min(95, 10 + Math.round(85 * (1 - Math.exp(-elapsed / 90)))) })
-          try { fresh = await getScan(scan_id) } catch { fresh = null }   // 404 until done
+          // Fan-out scans create the row early with status 'running'; wait for 'done'.
+          try { const g = await getScan(scan_id); if (g && g.run && g.run.status !== 'running') fresh = g } catch { fresh = null }
         }
         if (!fresh) throw new Error('scan still processing — watch it finish in the Monitor queue')
       } else {
