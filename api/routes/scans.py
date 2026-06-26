@@ -135,6 +135,14 @@ def scans():
     return core.store.list_scans()
 
 
+# Registered before /scans/{sid} so "active" isn't treated as a scan id.
+@router.get("/scans/active")
+def active_scan():
+    """The in-flight scan, if any — lets the UI reconnect to a running scan after a
+    page reload (the durable fan-out keeps running server-side)."""
+    return core.store.active_scan() or {}
+
+
 @router.get("/scans/{sid}")
 def scan(sid: str):
     res = core.store.get_scan(sid)

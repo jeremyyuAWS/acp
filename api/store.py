@@ -487,11 +487,21 @@ class Store:
         return list(self._ANALYTICS_TABLES)
 
     def list_scans(self) -> list[dict]:
+        # Completed scans only — in-flight (status='running', no completed_at) scans
+        # are excluded so they don't appear as bogus entries in the scan picker.
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT id,completed_at,source,rubric_hash,files,certifiable,uncertain,error,avg_score "
-                "FROM scan_runs ORDER BY completed_at DESC")
+                "FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY completed_at DESC")
             return self._db.fetchall(cur)
+
+    def active_scan(self) -> dict | None:
+        """The most recent in-flight scan (for reconnecting after a page reload), or None."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id,started_at,source,files,files_done FROM scan_runs "
+                "WHERE status='running' ORDER BY started_at DESC LIMIT 1")
+            return self._db.fetchone(cur)
 
     def get_scan(self, sid: str) -> dict | None:
         with self._db.cursor() as cur:

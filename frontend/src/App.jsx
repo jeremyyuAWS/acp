@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
-import { getSources, getRubric, listScans, getScan, startScan, startScanQueued, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens } from './api'
+import { getSources, getRubric, listScans, getScan, getActiveScan, startScan, startScanQueued, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens } from './api'
 import { SIM } from './sim.js'
 import { setPersona } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -137,7 +137,11 @@ export default function App() {
     getRubric().then(setRubric).catch(() => {})
     getSources().then(setSources).catch(() => {})
     listScans()
-      .then(async (l) => { setScanList(l); if (l.length) setScan(await getScan(l[0].id)) })
+      .then(async (l) => {
+        setScanList(l); if (l.length) setScan(await getScan(l[0].id))
+        // If a scan is still running (e.g. user reloaded mid-scan), resume tracking it.
+        try { const a = await getActiveScan(); if (a && a.id) reconnectScan(a.id) } catch { /* ignore */ }
+      })
       .catch(() => {})
       .finally(() => setLoaded(true))
   }, [me])
@@ -242,6 +246,25 @@ export default function App() {
       if (prevAvg != null && newAvg != null && newAvg !== prevAvg) { setDelta(newAvg - prevAvg); setDeltaKey((k) => k + 1) }
       setView('overview')
     } catch (e) { setErr(`scan failed: ${e}`) } finally { setBusy(false); setProgress(null) }
+  }
+
+  // Reconnect to an in-flight scan after a page reload — the durable fan-out keeps
+  // running server-side, so we just resume polling until it finishes.
+  const reconnectScan = async (scan_id) => {
+    setBusy(true); setProgress({ phase: 'scoring', queued: true, elapsed: 0 })
+    const t0 = Date.now()
+    let fresh
+    try {
+      for (let i = 0; i < 600 && !fresh; i++) {
+        await new Promise((r) => setTimeout(r, 1500))
+        const elapsed = Math.round((Date.now() - t0) / 1000)
+        setProgress({ phase: 'scoring', queued: true, elapsed,
+                      pct: Math.min(95, 10 + Math.round(85 * (1 - Math.exp(-elapsed / 90)))) })
+        try { const g = await getScan(scan_id); if (g && g.run && g.run.status !== 'running') fresh = g } catch { fresh = null }
+      }
+      if (fresh) { setScan(fresh); setScanList(await listScans()); setView('overview') }
+    } catch { /* best-effort reconnect */ }
+    finally { setBusy(false); setProgress(null) }
   }
 
   const run = scan?.run
