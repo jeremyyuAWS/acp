@@ -467,24 +467,16 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             progress({"phase": "scoring", "files_found": n, "files_done": done_i, "current": name})
             raw[name] = r
             engine = r["engine"]
+            # SCAN trace = discovery + DEEP SCAN (PII). The per-WCAG-rule assessment is
+            # written separately when the user runs Assess (assess_trace job).
             fspan = _lf_mod.file_span(trace, name, engine)
-            sc_counts: dict[str, int] = {}
-            sc_severity: dict[str, str] = {}
-            for issue in r.get("issues", []):
-                sc = _extract_sc(issue.get("wcag", ""))
-                if sc:
-                    sc_counts[sc] = sc_counts.get(sc, 0) + 1
-                    if issue.get("severity") and sc not in sc_severity:
-                        sc_severity[sc] = issue["severity"]
-            _lf_mod.rule_spans(fspan, sc_counts, RULE_CATALOG, severity_map=sc_severity, filename=name)
             pii_total = 0
             if detect_pii and pinfo is not None:
                 pii_by_file[name] = pinfo
                 pii_total = pinfo.get("total", 0)
                 if pii_total:
                     _lf_mod.pii_span(fspan, pinfo, filename=name)
-            fspan.end(output={"issue_count": len(r.get("issues", [])),
-                              "engine": engine, "sensitive_data": pii_total})
+            fspan.end(output={"engine": engine, "sensitive_data": pii_total})
 
         progress({"phase": "scoring", "files_found": n, "files_done": n, "current": None})
         for r in raw.values():

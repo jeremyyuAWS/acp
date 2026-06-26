@@ -239,6 +239,29 @@ def finish_scan_trace_by_id(scan_id: str, summary: dict, *, source: str, ai_enab
                       ai_enabled=ai_enabled, pii_docs=pii_docs, pii_total=pii_total)
 
 
+# ── Assessment trace — written when the user runs Assess (NOT during the scan) ──
+def open_assess_trace(scan_id: str, level: str, n_files: int, user: str | None = None):
+    """A SEPARATE Langfuse trace for the WCAG rule assessment. The scan trace covers
+    discovery + deep-scan (PII); the per-rule ✓/✗ assessment lives here, emitted only
+    when the user explicitly runs Assess."""
+    lf = _lf()
+    if lf is None:
+        return _Noop()
+    return lf.trace(
+        id=f"{scan_id}-assess",
+        name=f"WCAG 2.1 {level} assessment · {n_files} document{'s' if n_files != 1 else ''}",
+        user_id=user or "demo",
+        tags=["accessibility-assessment", f"level:{level}", f"user:{user or 'demo'}"],
+        metadata={"scan_id": scan_id, "level": level, "documents": n_files},
+    )
+
+
+def finish_assess_trace(trace, summary: dict) -> None:
+    if isinstance(trace, _Noop):
+        return
+    trace.update(output=summary)
+
+
 def flush():
     """Flush pending events — call at the end of each scan."""
     lf = _lf()

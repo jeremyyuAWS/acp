@@ -247,21 +247,12 @@ def _scan_file(payload: dict, job: dict) -> None:
         if pinfo:
             fdict["pii"] = pinfo
         core.store.save_file_result(scan_id, fdict, now)
-        # Langfuse spans for this file (on the trace by id).
+        # SCAN trace = discovery + DEEP SCAN (PII) only — the per-WCAG-rule assessment is
+        # written separately when the user runs Assess (see the assess_trace job).
         fspan = _lf.file_span_for(scan_id, name, fdict["engine"])
-        sc_counts: dict[str, int] = {}
-        sc_sev: dict[str, str] = {}
-        for issue in fdict.get("issues", []):
-            sc = _extract_sc(issue.get("wcag", ""))
-            if sc:
-                sc_counts[sc] = sc_counts.get(sc, 0) + 1
-                if issue.get("severity") and sc not in sc_sev:
-                    sc_sev[sc] = issue["severity"]
-        _lf.rule_spans(fspan, sc_counts, RULE_CATALOG, severity_map=sc_sev, filename=name)
         if pinfo and pinfo.get("total"):
             _lf.pii_span(fspan, pinfo, filename=name)
-        fspan.end(output={"issue_count": len(fdict.get("issues", [])), "engine": fdict["engine"],
-                          "sensitive_data": (pinfo or {}).get("total", 0)})
+        fspan.end(output={"engine": fdict["engine"], "sensitive_data": (pinfo or {}).get("total", 0)})
     finally:
         _shutil.rmtree(tmp, ignore_errors=True)
     done, total = core.store.bump_files_done(scan_id)
@@ -287,3 +278,35 @@ def _scan_finalize(payload: dict, job: dict) -> None:
     _lf.flush()
     core.finalize_scan(scan_id, ai, source)
     core.clear_scan_tokens(scan_id)
+
+
+@handler("assess_trace")
+def _assess_trace(payload: dict, job: dict) -> None:
+    """Emit the WCAG rule assessment to Langfuse — runs ONLY when the user clicks Assess,
+    not during the scan. The per-rule ✓/✗ data comes from scan_rule_traces (recorded at
+    scan time); this turns it into a separate, on-demand 'assessment' trace."""
+    import lf as _lf
+    from store import RULE_CATALOG
+    scan_id = payload["scan_id"]
+    level = payload.get("level", "AA")
+    rows = core.store.get_scan_traces(scan_id)                 # per file + rule
+    by_file: dict[str, dict] = {}
+    for r in rows:
+        by_file.setdefault(r["file"], {})
+        if r["outcome"] == "FAIL":
+            by_file[r["file"]][r["rule_id"]] = r.get("finding_count") or 1
+    if not by_file:
+        return
+    res = core.store.get_scan(scan_id)
+    owner = (res or {}).get("run", {}).get("owner_email")
+    trace = _lf.open_assess_trace(scan_id, level, len(by_file), user=owner)
+    fails = 0
+    for fname, sc_counts in by_file.items():
+        fspan = trace.span(name=fname, input={"document": fname})
+        _lf.rule_spans(fspan, sc_counts, RULE_CATALOG, filename=fname)
+        fspan.end(output={"failing_criteria": len(sc_counts)})
+        if sc_counts:
+            fails += 1
+    _lf.finish_assess_trace(trace, {"level": level, "documents": len(by_file),
+                                    "with_failing_findings": fails})
+    _lf.flush()

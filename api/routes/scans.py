@@ -158,6 +158,16 @@ def scan(sid: str, request: Request):
     return res
 
 
+@router.post("/scans/{sid}/assess")
+def assess(sid: str, request: Request, level: str = Query("AA")):
+    """Write the WCAG rule assessment to Langfuse on demand — separate from the scan
+    trace (which is discovery + deep-scan only). Enqueued to the durable worker."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    jid = core.store.enqueue_job("assess_trace", {"scan_id": sid, "level": level}, scan_id=sid)
+    return {"scan_id": sid, "level": level, "job_id": jid, "workers": core.WORKERS}
+
+
 @router.get("/scans/{sid}/remediation-status")
 def remediation_status(sid: str):
     """Live remediation progress (in-flight jobs + latest fixed file) for the bar."""

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { allRules } from './rules'
+import { assessScan } from './api.js'
 
 // Re-assess the whole estate against a chosen WCAG 2.1 conformance level. A finding blocks
 // conformance when its level is at or below the target (A ⊆ AA ⊆ AAA), so the numbers
@@ -112,6 +113,8 @@ export default function AssessRunner({ files = [], runId }) {
     if (phase === 'running') return               // never launch a second pass while one runs
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
     const computed = computeResult(level)        // result is instant + deterministic
+    // Write the WCAG assessment to Langfuse on demand (separate from the scan trace).
+    if (runId) assessScan(runId, level).catch(() => {})
     const startedAt = Date.now()
     save({ phase: 'running', startedAt, level, result: computed })
     setPhase('running'); setResult(null); setProgress(0)

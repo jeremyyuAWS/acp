@@ -63,6 +63,11 @@ export const startScanQueued = (source = 'local', folder = null, aiEnabled = tru
 export const remediateScan = (scanId) => (SIM
   ? sim({ scan_id: scanId, enqueued: 3, job_ids: ['a', 'b', 'c'], workers: 4 })
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediate`, { method: 'POST', headers: headers() }).then(j))
+// Run the WCAG assessment into Langfuse on demand (separate from the scan trace).
+export const assessScan = (scanId, level = 'AA') => (SIM
+  ? sim({ ok: true })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/assess?level=${encodeURIComponent(level)}`,
+          { method: 'POST', headers: headers() }).then(j))
 // Live remediation progress: in-flight jobs + latest fixed file (drives the Remediate bar).
 export const getRemediationStatus = (scanId) => (SIM
   ? sim({ in_flight: 0, failed: 0, latest_file: null })
