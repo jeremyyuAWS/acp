@@ -59,20 +59,24 @@ def scan_trace(scan_id: str, source: str, n_files: int, ai_enabled: bool = True,
         return _Noop()
     src = _SOURCE_LABEL.get(source, source)
     mode = "AI-assisted" if ai_enabled else "Deterministic (no AI)"
-    name = f"Accessibility scan · {n_files} document{'s' if n_files != 1 else ''} · {src}"
+    who = user or "demo"
+    # Lead the name with who ran it so the trace LIST segregates by user at a glance,
+    # in addition to user_id (which powers Langfuse's Users view) and a user: tag.
+    name = f"{who} · Accessibility scan · {n_files} document{'s' if n_files != 1 else ''} · {src}"
     return lf.trace(
         id=scan_id,
         name=name,
-        user_id=user or "demo",
+        user_id=who,
         metadata={
             "what": f"Checked {n_files} documents against WCAG 2.1 accessibility rules",
             "source": src,
             "documents": n_files,
             "mode": mode,
             "ai_enabled": ai_enabled,
-            "run_by": user or "demo",
+            "run_by": who,
         },
-        tags=["accessibility-scan", f"source:{source}", "ai-assisted" if ai_enabled else "deterministic"],
+        tags=["accessibility-scan", f"source:{source}", f"user:{who}",
+              "ai-assisted" if ai_enabled else "deterministic"],
     )
 
 
@@ -94,11 +98,13 @@ def _level_for(outcome: str, severity: str) -> str:
 
 
 def rule_spans(file_span_, sc_counts: dict[str, int], rule_catalog: list[dict],
-               severity_map: dict[str, str] | None = None):
+               severity_map: dict[str, str] | None = None, filename: str | None = None):
     """One child span per WCAG rule for a document, in plain language.
 
-    Pass → "✓ Non-text Content".  Fail → "✗ Non-text Content — 3 issues",
-    flagged WARNING (or ERROR for critical) so it's visibly highlighted.
+    Pass → "✓ Non-text Content (1.1.1)".  Fail → "✗ Non-text Content (1.1.1) —
+    3 issues", flagged WARNING (or ERROR for critical) so it's visibly highlighted.
+    The document name rides on every span (name + input) so an individual rule span
+    is associable with its file even outside the trace tree.
     """
     if isinstance(file_span_, _Noop):
         return
@@ -110,26 +116,28 @@ def rule_spans(file_span_, sc_counts: dict[str, int], rule_catalog: list[dict],
         # Prefer the non-technical phrase; fall back to the WCAG name, then the id.
         plain = rule.get("plain") or rule.get("name", rid)
         if outcome == "FAIL":
-            label = f"✗ {plain} — {count} issue{'s' if count != 1 else ''}"
+            label = f"✗ {plain} ({rid}) — {count} issue{'s' if count != 1 else ''}"
             status = f"{count} document issue{'s' if count != 1 else ''} ({(severity or 'finding').lower()})"
         else:
-            label = f"✓ {plain}"
+            label = f"✓ {plain} ({rid})"
             status = "No issues"
         s = file_span_.span(
             name=label,
             level=_level_for(outcome, severity),
             status_message=status,
+            input={"document": filename, "rule": f"{rid} {plain}"} if filename else None,
             metadata={
+                "document": filename,
                 "wcag": f"{rid} {plain}",
                 "wcag_level": rule.get("level"),
                 "severity": severity,
                 "how_its_fixed": rule.get("fix_mode"),
             },
         )
-        s.end(output={"result": status, "outcome": outcome, "issues": count})
+        s.end(output={"document": filename, "result": status, "outcome": outcome, "issues": count})
 
 
-def pii_span(file_span_, pinfo: dict):
+def pii_span(file_span_, pinfo: dict, filename: str | None = None):
     """Emit a span flagging sensitive data found in a document (ADR 0006).
 
     Counts + MASKED samples only — never raw PII. Flagged WARNING (ERROR when any
@@ -153,7 +161,8 @@ def pii_span(file_span_, pinfo: dict):
         name=f"🔒 Sensitive data — {summary}",
         level=level,
         status_message=f"This document exposes {pinfo.get('total', 0)} sensitive item(s)",
-        metadata={"sensitive_data_types": pinfo.get("types", {})},
+        input={"document": filename} if filename else None,
+        metadata={"document": filename, "sensitive_data_types": pinfo.get("types", {})},
     )
     s.end(output={"found": summary,
                   "examples_masked": {f["type"]: f["samples"] for f in findings}})

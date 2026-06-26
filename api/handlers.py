@@ -247,9 +247,9 @@ def _scan_file(payload: dict, job: dict) -> None:
                 sc_counts[sc] = sc_counts.get(sc, 0) + 1
                 if issue.get("severity") and sc not in sc_sev:
                     sc_sev[sc] = issue["severity"]
-        _lf.rule_spans(fspan, sc_counts, RULE_CATALOG, severity_map=sc_sev)
+        _lf.rule_spans(fspan, sc_counts, RULE_CATALOG, severity_map=sc_sev, filename=name)
         if pinfo and pinfo.get("total"):
-            _lf.pii_span(fspan, pinfo)
+            _lf.pii_span(fspan, pinfo, filename=name)
         fspan.end(output={"issue_count": len(fdict.get("issues", [])), "engine": fdict["engine"],
                           "sensitive_data": (pinfo or {}).get("total", 0)})
     finally:

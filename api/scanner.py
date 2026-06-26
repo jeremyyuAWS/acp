@@ -446,13 +446,13 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                     sc_counts[sc] = sc_counts.get(sc, 0) + 1
                     if issue.get("severity") and sc not in sc_severity:
                         sc_severity[sc] = issue["severity"]
-            _lf_mod.rule_spans(fspan, sc_counts, RULE_CATALOG, severity_map=sc_severity)
+            _lf_mod.rule_spans(fspan, sc_counts, RULE_CATALOG, severity_map=sc_severity, filename=name)
             pii_total = 0
             if detect_pii and pinfo is not None:
                 pii_by_file[name] = pinfo
                 pii_total = pinfo.get("total", 0)
                 if pii_total:
-                    _lf_mod.pii_span(fspan, pinfo)
+                    _lf_mod.pii_span(fspan, pinfo, filename=name)
             fspan.end(output={"issue_count": len(r.get("issues", [])),
                               "engine": engine, "sensitive_data": pii_total})
 
