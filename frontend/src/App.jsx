@@ -46,7 +46,9 @@ function progressText(p) {
     reading: `Reading files · ${p.files_done}/${p.files_found}`,
     tagging: 'mova Agent classifying & tagging documents…',
     analysing: `Analysing documents · ${p.files_done}/${p.files_found}`,
-    scoring: 'Scoring against rubric…', done: 'Complete', error: 'Error',
+    // NB: 'scoring' here is the scan compiling per-document results, NOT the WCAG
+    // assessment — that runs on the Assess tab. Label it as such to avoid conflation.
+    scoring: 'Compiling results…', done: 'Complete', error: 'Error',
   }
   let s = m[p.phase] ?? p.phase
   if (p.current && (p.phase === 'reading' || p.phase === 'analysing')) s += ` · ${p.current}`
@@ -355,7 +357,8 @@ export default function App() {
       {err && <div className="err" role="alert">{err}</div>}
       {busy && progress && (
         <div className="scanprog" role="status" aria-live="polite">
-          <div className="scanprogline"><span className="spinner" />{progressText(progress)}
+          <div className="scanprogline"><span className="spinner" />
+            <span style={{ fontWeight: 700, color: '#BF8C00', marginRight: 6 }}>Scan</span>{progressText(progress)}
             {progress.files_found ? <span className="scancount"> · {progress.files_found.toLocaleString()} files</span> : null}
             {progress.blocked ? <span className="lockwarn"> · 🔒 {progress.blocked} password-protected / couldn’t open</span> : null}
           </div>
@@ -381,7 +384,7 @@ export default function App() {
               <button role="tab" aria-selected={assess === 'results'} className={assess === 'results' ? 'fchip on' : 'fchip'} onClick={() => setAssess('results')}>4 · Assess</button>
               <button role="tab" aria-selected={assess === 'graph'} className={assess === 'graph' ? 'fchip on' : 'fchip'} onClick={() => setAssess('graph')}>5 · Risk &amp; findings</button>
             </div>
-            {assess === 'results' && (run ? <><AssessRunner files={files} runId={run.id} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} /></> : placeholder)}
+            {assess === 'results' && (run ? <><AssessRunner files={files} runId={run.id} scanBusy={busy} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} /></> : placeholder)}
             {(assess === 'graph' || assess === 'rubric' || assess === 'coverage') && (run ? <><RiskScore run={run} files={files} /><KnowledgeGraph files={files} /></> : placeholder)}
           </>
         )}

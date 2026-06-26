@@ -51,7 +51,7 @@ const phaseFor = (name = '') => {
 const SKEY = (id) => `acp-assess-${id || 'none'}`
 const loadSaved = (id) => { try { return JSON.parse(sessionStorage.getItem(SKEY(id)) || 'null') } catch { return null } }
 
-export default function AssessRunner({ files = [], runId }) {
+export default function AssessRunner({ files = [], runId, scanBusy = false }) {
   const saved = loadSaved(runId)
   const [level, setLevel] = useState(saved?.level || 'AA')
   const [phase, setPhase] = useState(saved?.phase || 'idle') // idle | running | done
@@ -111,6 +111,7 @@ export default function AssessRunner({ files = [], runId }) {
 
   const assess = () => {
     if (phase === 'running') return               // never launch a second pass while one runs
+    if (scanBusy) return                          // a scan must finish before assessing its results
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
     const computed = computeResult(level)        // result is instant + deterministic
     // Write the WCAG assessment to Langfuse on demand (separate from the scan trace).
@@ -149,9 +150,11 @@ export default function AssessRunner({ files = [], runId }) {
         <div>
           <h2 style={{ margin: 0 }}>Assess the estate against WCAG 2.1</h2>
           <p className="muted" style={{ margin: '3px 0 0' }}>Run all {docs.length.toLocaleString()} readable documents against the success criteria at your target conformance level.</p>
+          {scanBusy && <p style={{ margin: '6px 0 0', fontSize: 13, color: '#854F0B' }}>⏳ A scan is still running — assessment will be available once it finishes.</p>}
         </div>
-        <button className="assessbtn" onClick={assess} disabled={phase === 'running' || !docs.length}>
-          {phase === 'running' ? 'Assessing…' : `▶ Assess ${docs.length.toLocaleString()} files`}
+        <button className="assessbtn" onClick={assess} disabled={phase === 'running' || !docs.length || scanBusy}
+                title={scanBusy ? 'A scan is still running — assessment will be available when it completes' : undefined}>
+          {phase === 'running' ? 'Assessing…' : scanBusy ? 'Scan in progress…' : `▶ Assess ${docs.length.toLocaleString()} files`}
         </button>
       </div>
 
@@ -170,7 +173,7 @@ export default function AssessRunner({ files = [], runId }) {
               <i style={{ width: `${pct}%` }} />
             </div>
             <div className="assessrunmeta">
-              <span className="muted">Document {Math.min(progress + 1, docs.length).toLocaleString()} of {docs.length.toLocaleString()}</span>
+              <span className="muted"><b style={{ color: '#1F5FA8' }}>Assessment</b> · document {Math.min(progress + 1, docs.length).toLocaleString()} of {docs.length.toLocaleString()}</span>
               <span className="assesspct">{pct}%</span>
             </div>
             {currentFile && (
