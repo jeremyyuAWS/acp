@@ -84,9 +84,13 @@ ACP_WORKERS=<n>                            # or live-scale from Monitor
   every signed-in user sees every other user's results. Fine for a single trusted
   team; **not** safe for unrelated users each scanning a private Drive. Needs an
   `owner_email` column + per-user filtering on every read first.
-- **Single replica.** The app runs at `min/maxReplicas = 1`. Per-scan Drive tokens
-  live in process memory (`SCAN_TOKENS`), so horizontal scaling needs an external
-  token store (e.g. Redis) and a shared worker queue (already durable in Postgres).
+- **Horizontal scaling** is now supported: set `REDIS_URL` (per-scan tokens move to
+  Redis with a 1h TTL, shared across replicas) and raise `maxReplicas`. Also enable
+  **session affinity** (`az containerapp ingress sticky-sessions set --affinity
+  sticky`) so the in-process scan-progress poll stays on one replica. The worker
+  queue is already durable in Postgres, and each replica runs its own worker pool
+  draining it. For production, run Redis with a password + `--save "" --appendonly
+  no` (transient, no token persistence to disk).
 - **Scan size.** A single scan is capped (`_search_drive` 500, `_search_folder`
   1000 files) and stages every file to the container's ephemeral disk. Thousands
   of files per scan needs higher caps, streaming, and a larger scan container.
