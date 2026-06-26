@@ -68,14 +68,16 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
   const lockedCount = visibleFiles.filter((f) => f.locked).length
 
   const PLUM = '#7a5c8e'
+  // Effective tags = the agent's guess unless a human has edited them (classState), so
+  // manually marking a file "public-facing" below flows straight into the exposure chart.
+  const tagsOf = (f) => classState[f.file]?.tags ?? classTags(f).filter((t) => CLASS_TAGS.includes(t))
   const byType = Object.entries(visibleFiles.reduce((m, f) => { const k = (f.type || '').toUpperCase(); m[k] = (m[k] || 0) + 1; return m }, {})).sort((a, b) => b[1] - a[1]).map(([label, value]) => ({ label, value, color: TYPE_COLOR[label] || PLUM }))
-  const internalDocs = visibleFiles.filter((f) => !(f.tags || []).includes('public-facing'))
+  const internalDocs = visibleFiles.filter((f) => !tagsOf(f).includes('public-facing'))
   const exposurePub = { label: 'public-facing · high-traffic', value: visibleFiles.length - internalDocs.length, color: '#D85A30' }
   const exposureInternal = { label: 'internal', value: internalDocs.length, color: '#9a948f' }
-  const internalRisk = ['PII', 'legal-hold', 'high-traffic'].map((t) => ({ label: t, value: internalDocs.filter((f) => (f.tags || []).includes(t)).length, color: RISK_COLOR[t] })).filter((d) => d.value)
+  const internalRisk = ['PII', 'legal-hold', 'high-traffic'].map((t) => ({ label: t, value: internalDocs.filter((f) => tagsOf(f).includes(t)).length, color: RISK_COLOR[t] })).filter((d) => d.value)
 
   // ---- Classify HITL ----
-  const tagsOf = (f) => classState[f.file]?.tags ?? classTags(f).filter((t) => CLASS_TAGS.includes(t))
   const isConfirmed = (f) => !!classState[f.file]?.confirmed
   const toggleTag = (f, t) => setClassState((s) => { const cur = s[f.file]?.tags ?? tagsOf(f); const next = cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]; return { ...s, [f.file]: { tags: next, confirmed: false } } })
   const confirmClass = (f) => setClassState((s) => ({ ...s, [f.file]: { tags: tagsOf(f), confirmed: true } }))
