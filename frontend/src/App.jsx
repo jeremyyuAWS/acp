@@ -90,11 +90,28 @@ function progressPct(p) {
   return PHASE_PCT[p.phase] ?? 6
 }
 
+// Shown on results views (Overview / Dashboard / Monitor) until the user runs Assess —
+// scores, trends and dashboards only appear after an explicit assessment.
+function AssessGate({ onGo }) {
+  return (
+    <section className="panel" style={{ textAlign: 'center', padding: '52px 24px' }}>
+      <div style={{ fontSize: 30, marginBottom: 10 }}>📋</div>
+      <h2 style={{ margin: '0 0 6px' }}>Run the assessment to see results</h2>
+      <p className="muted" style={{ maxWidth: 480, margin: '0 auto 20px', lineHeight: 1.55 }}>
+        This estate has been discovered and deep-scanned, but not yet assessed against WCAG 2.1.
+        Compliance scores, trends and dashboards appear here once you run <b>Assess</b>.
+      </p>
+      <button onClick={onGo}>Go to Assess →</button>
+    </section>
+  )
+}
+
 export default function App() {
   const [me, setMe] = useState(null)
   const [rubric, setRubric] = useState(null)
   const [sources, setSources] = useState([])
   const [scan, setScan] = useState(null)
+  const [justAssessed, setJustAssessed] = useState(null) // scan id assessed this session (optimistic)
   const [scanLoading, setScanLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
@@ -284,6 +301,11 @@ export default function App() {
     return acc
   }, { auto: 0, assisted: 0, review: 0, archive: 0, keep: 0, manual: 0, total: 0 })
   const placeholder = loaded ? <EmptyState onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} /> : <Loading />
+  // Presentation decouple: results views stay blank until the user runs Assess. The flag
+  // is persisted on the scan (assessed_at); justAssessed gives an immediate optimistic flip.
+  const assessed = !!run?.assessed_at || justAssessed === run?.id
+  const assessGate = <AssessGate onGo={() => { setAssess('results'); setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
+
 
   return (
     <div className="app">
@@ -371,7 +393,7 @@ export default function App() {
 
       <main id="main-content" tabIndex={-1}>
       <ErrorBoundary key={view}>
-        {view === 'overview' && (run ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} /> : placeholder)}
+        {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} /> : assessGate) : placeholder)}
 
         {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
           deepScan={deepScan} setDeepScan={setDeepScan} queuedScan={queuedScan} setQueuedScan={setQueuedScan} />}
@@ -384,7 +406,7 @@ export default function App() {
               <button role="tab" aria-selected={assess === 'results'} className={assess === 'results' ? 'fchip on' : 'fchip'} onClick={() => setAssess('results')}>4 · Assess</button>
               <button role="tab" aria-selected={assess === 'graph'} className={assess === 'graph' ? 'fchip on' : 'fchip'} onClick={() => setAssess('graph')}>5 · Risk &amp; findings</button>
             </div>
-            {assess === 'results' && (run ? <><AssessRunner files={files} runId={run.id} scanBusy={busy} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} /></> : placeholder)}
+            {assess === 'results' && (run ? <><AssessRunner files={files} runId={run.id} scanBusy={busy} onAssessed={() => setJustAssessed(run.id)} />{assessed && <Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} />}</> : placeholder)}
             {(assess === 'graph' || assess === 'rubric' || assess === 'coverage') && (run ? <><RiskScore run={run} files={files} /><KnowledgeGraph files={files} /></> : placeholder)}
           </>
         )}
@@ -393,7 +415,7 @@ export default function App() {
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} onPublish={(file) => setPublishedFiles((s) => [...s, file])} /> : placeholder)}
 
-        {view === 'monitor' && (run ? <Monitor sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} /> : placeholder)}
+        {view === 'monitor' && (run ? (assessed ? <Monitor sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} /> : assessGate) : placeholder)}
 
         {view === 'upload' && <Upload onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
 

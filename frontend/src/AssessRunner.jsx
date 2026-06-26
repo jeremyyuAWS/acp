@@ -51,7 +51,7 @@ const phaseFor = (name = '') => {
 const SKEY = (id) => `acp-assess-${id || 'none'}`
 const loadSaved = (id) => { try { return JSON.parse(sessionStorage.getItem(SKEY(id)) || 'null') } catch { return null } }
 
-export default function AssessRunner({ files = [], runId, scanBusy = false }) {
+export default function AssessRunner({ files = [], runId, scanBusy = false, onAssessed }) {
   const saved = loadSaved(runId)
   const [level, setLevel] = useState(saved?.level || 'AA')
   const [phase, setPhase] = useState(saved?.phase || 'idle') // idle | running | done
@@ -114,8 +114,9 @@ export default function AssessRunner({ files = [], runId, scanBusy = false }) {
     if (scanBusy) return                          // a scan must finish before assessing its results
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
     const computed = computeResult(level)        // result is instant + deterministic
-    // Write the WCAG assessment to Langfuse on demand (separate from the scan trace).
-    if (runId) assessScan(runId, level).catch(() => {})
+    // Write the WCAG assessment to Langfuse on demand + mark the scan assessed (unlocks
+    // the results views). The endpoint stamps assessed_at; onAssessed flips it optimistically.
+    if (runId) { assessScan(runId, level).catch(() => {}); onAssessed?.() }
     const startedAt = Date.now()
     save({ phase: 'running', startedAt, level, result: computed })
     setPhase('running'); setResult(null); setProgress(0)

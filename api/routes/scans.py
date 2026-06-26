@@ -164,6 +164,10 @@ def assess(sid: str, request: Request, level: str = Query("AA")):
     trace (which is discovery + deep-scan only). Enqueued to the durable worker."""
     if core.store.get_scan(sid, owner=_owner(request)) is None:
         raise HTTPException(404, "scan not found")
+    # Mark the scan assessed — the results views (Overview/Dashboard/Monitor) gate on this,
+    # so scores only appear once the user has explicitly run Assess.
+    import datetime as _dt
+    core.store.mark_assessed(sid, _dt.datetime.now(_dt.timezone.utc).isoformat())
     jid = core.store.enqueue_job("assess_trace", {"scan_id": sid, "level": level}, scan_id=sid)
     return {"scan_id": sid, "level": level, "job_id": jid, "workers": core.WORKERS}
 

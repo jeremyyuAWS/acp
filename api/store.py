@@ -22,7 +22,7 @@ _SCHEMA = [
       id TEXT PRIMARY KEY, started_at TEXT, completed_at TEXT, source TEXT,
       rubric_name TEXT, rubric_hash TEXT,
       files INT, certifiable INT, uncertain INT, error INT, avg_score INT,
-      status TEXT, files_done INT, owner_email TEXT
+      status TEXT, files_done INT, owner_email TEXT, assessed_at TEXT
     )""",
     """CREATE TABLE IF NOT EXISTS file_records (
       scan_id TEXT, file TEXT, engine TEXT, status TEXT, score INT,
@@ -39,6 +39,8 @@ _SCHEMA = [
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS files_done INT",
     # Per-user isolation: scans are scoped to the signed-in user's email.
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS owner_email TEXT",
+    # Presentation decouple: set when the user runs Assess — results views gate on it.
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS assessed_at TEXT",
     # Migrations for existing deployments
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS drive_file_id TEXT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS remediated_at TEXT",
@@ -509,9 +511,15 @@ class Store:
             where += " AND owner_email=%s"; params = (owner,)
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT id,completed_at,source,rubric_hash,files,certifiable,uncertain,error,avg_score "
+                "SELECT id,completed_at,source,rubric_hash,files,certifiable,uncertain,error,avg_score,assessed_at "
                 f"FROM scan_runs WHERE {where} ORDER BY completed_at DESC", params)
             return self._db.fetchall(cur)
+
+    def mark_assessed(self, scan_id: str, when: str) -> None:
+        """Stamp the scan as assessed (the user ran Assess). Results views gate on this."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "UPDATE scan_runs SET assessed_at=%s WHERE id=%s AND assessed_at IS NULL",
+                             (when, scan_id))
 
     def active_scan(self, owner: str | None = None) -> dict | None:
         """The most recent in-flight scan (for reconnecting after a page reload), or None.
