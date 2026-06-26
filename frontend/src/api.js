@@ -69,6 +69,10 @@ export const getJobs = (status = null) => (SIM
 export const setWorkers = (count) => (SIM
   ? sim({ workers: count })
   : fetch(`${BASE}/workers?count=${count}`, { method: 'PUT', headers: headers() }).then(j))
+// Reset demo data — clears scan results (Grafana) and/or Langfuse traces. Keeps settings.
+export const resetDemoData = (scope = 'all') => (SIM
+  ? sim({ scope, cleared_tables: [], langfuse_traces_deleted: 0 })
+  : fetch(`${BASE}/admin/reset?scope=${scope}&confirm=true`, { method: 'POST', headers: headers() }).then(j))
 export const listFolders = (parent = 'root') => (SIM ? sim({ parent, name: 'My Drive', folders: [] }) : fetch(`${BASE}/folders?parent=${encodeURIComponent(parent)}`, { headers: headers() }).then(j))
 export const getSchedule = () => (SIM
   ? sim({ enabled: false, interval_minutes: 60, next_at: null, last_at: null })

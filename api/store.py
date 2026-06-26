@@ -384,6 +384,21 @@ class Store:
                 r["samples"] = []
         return rows
 
+    # Tables holding scan results / activity (what the dashboards chart). Cleared by
+    # reset_analytics. Deliberately EXCLUDES app_settings + schedule_config so a
+    # reset wipes data but keeps configuration (worker count, AI mode, schedule).
+    _ANALYTICS_TABLES = ["scan_runs", "file_records", "issue_records", "scan_rule_traces",
+                         "scan_file_manifests", "pii_findings", "hitl_queue",
+                         "decision_log", "inventory", "jobs"]
+
+    def reset_analytics(self) -> list[str]:
+        """Clear all scan results / activity so the Grafana + in-app charts start
+        fresh. Keeps settings + schedule. Returns the cleared table names."""
+        with self._db.cursor() as cur:
+            for t in self._ANALYTICS_TABLES:
+                self._db.execute(cur, f"DELETE FROM {t}")
+        return list(self._ANALYTICS_TABLES)
+
     def list_scans(self) -> list[dict]:
         with self._db.cursor() as cur:
             self._db.execute(cur,

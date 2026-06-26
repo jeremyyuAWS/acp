@@ -10,6 +10,27 @@ import core
 router = APIRouter()
 
 
+@router.post("/admin/reset")
+def admin_reset(scope: str = Query("all", pattern="^(all|grafana|langfuse)$"),
+                confirm: bool = Query(False)):
+    """Reset demo data so the charts start fresh (admin, audited).
+    scope=grafana → clear the ACP Postgres analytics tables (Grafana + in-app
+    charts); scope=langfuse → delete the project's Langfuse traces; all → both.
+    Settings (worker count, AI mode, schedule, rubric) are preserved."""
+    if not confirm:
+        raise HTTPException(400, "confirmation required — pass confirm=true")
+    cleared: list[str] = []
+    lf_deleted = 0
+    if scope in ("all", "grafana"):
+        cleared = core.store.reset_analytics()
+    if scope in ("all", "langfuse"):
+        lf_deleted = core.reset_langfuse_traces()
+    # Logged AFTER the wipe so the reset itself is recorded.
+    core.store.log_decision("admin", "demo.reset",
+                            detail=f"scope={scope} · tables={len(cleared)} · langfuse_traces={lf_deleted}")
+    return {"scope": scope, "cleared_tables": cleared, "langfuse_traces_deleted": lf_deleted}
+
+
 @router.post("/alerts/webhook")
 async def alert_webhook(request: Request, key: str = Query("")):
     """Receiver for Grafana alert notifications (public path, shared-secret).

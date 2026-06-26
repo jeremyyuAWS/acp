@@ -102,7 +102,7 @@ ALERT_KEY = os.environ.get("ACP_ALERT_KEY", "acp-alert-demo-key")
 API_PREFIXES = (
     "/scans", "/rubric", "/rules", "/inventory", "/schedule",
     "/me", "/sources", "/folders", "/drive", "/hitl", "/ai",
-    "/settings", "/decisions", "/jobs",
+    "/settings", "/decisions", "/jobs", "/workers", "/admin",
 )
 
 
@@ -243,6 +243,40 @@ def set_worker_count(n: int) -> int:
     except Exception:
         pass
     return len(_worker_handles)
+
+
+def reset_langfuse_traces() -> int:
+    """Best-effort: delete all traces in the ACP Langfuse project via the public
+    API. Returns the count deleted (0 if Langfuse isn't configured, or its version
+    doesn't support trace deletion — the Postgres reset still works regardless)."""
+    import lf as _lf
+    host, pk, sk = _lf._HOST, _lf._PK, _lf._SK
+    if not (host and pk and sk):
+        return 0
+    import base64
+    import httpx
+    auth = {"Authorization": "Basic " + base64.b64encode(f"{pk}:{sk}".encode()).decode()}
+    deleted = 0
+    try:
+        with httpx.Client(timeout=30) as c:
+            ids: list[str] = []
+            for page in range(1, 101):                       # cap at 10k traces
+                r = c.get(f"{host}/api/public/traces",
+                          params={"limit": 100, "page": page}, headers=auth)
+                r.raise_for_status()
+                data = r.json().get("data", [])
+                ids += [t["id"] for t in data if t.get("id")]
+                if len(data) < 100:
+                    break
+            for i in range(0, len(ids), 100):                # bulk delete in batches
+                resp = c.request("DELETE", f"{host}/api/public/traces",
+                                 json={"traceIds": ids[i:i + 100]}, headers=auth)
+                if resp.status_code < 300:
+                    deleted += len(ids[i:i + 100])
+    except Exception:
+        pass
+    return deleted
+
 
 # In-memory per-scan auth tokens for the worker pool. Tokens are NEVER written to
 # the jobs table (which lives in Postgres) — a scan job carries only the scan_id

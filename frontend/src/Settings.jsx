@@ -1,4 +1,65 @@
 import { useState, useRef } from 'react'
+import { resetDemoData } from './api.js'
+
+// Danger zone — wipe scan results (Grafana + in-app charts) and/or Langfuse
+// traces so the dashboards start fresh. Settings are preserved. Typed-confirm.
+function ResetData() {
+  const [scope, setScope] = useState('all')
+  const [typed, setTyped] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState(null)
+  const [err, setErr] = useState('')
+  const SCOPES = [
+    ['all', 'Both', 'Clear scan results and delete Langfuse traces — full clean slate.'],
+    ['grafana', 'Grafana / charts only', 'Clear the scan-results tables. Langfuse traces are kept.'],
+    ['langfuse', 'Langfuse only', 'Delete the project’s traces. Scan history & charts are kept.'],
+  ]
+  const run = () => {
+    setBusy(true); setErr(''); setResult(null)
+    resetDemoData(scope)
+      .then((d) => { setResult(d); setTyped('') })
+      .catch((e) => setErr(e.message || 'reset failed'))
+      .finally(() => setBusy(false))
+  }
+  return (
+    <div style={{ maxWidth: 560 }}>
+      <h3 style={{ marginTop: 0 }}>Reset demo data</h3>
+      <p className="muted" style={{ fontSize: 13 }}>
+        Wipes scan results so Grafana, Langfuse, and the in-app charts start fresh.
+        <strong> Your settings are preserved</strong> — worker count, AI mode, schedule, rubric.
+        This cannot be undone.
+      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '14px 0' }}>
+        {SCOPES.map(([v, label, desc]) => (
+          <label key={v} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer' }}>
+            <input type="radio" name="rscope" checked={scope === v} onChange={() => setScope(v)} style={{ marginTop: 3 }} />
+            <span><b>{label}</b><br /><span className="muted" style={{ fontSize: 12 }}>{desc}</span></span>
+          </label>
+        ))}
+      </div>
+      <label style={{ fontSize: 13 }}>Type <code>RESET</code> to confirm:
+        <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="RESET"
+               style={{ marginLeft: 8, padding: '4px 8px', border: '1px solid var(--line)', borderRadius: 6 }} />
+      </label>
+      <div style={{ marginTop: 14 }}>
+        <button onClick={run} disabled={busy || typed !== 'RESET'}
+                style={{ background: typed === 'RESET' ? '#A32D2D' : '#ccc', color: '#fff', border: 'none',
+                         borderRadius: 8, padding: '8px 16px', cursor: typed === 'RESET' ? 'pointer' : 'not-allowed', fontWeight: 600 }}>
+          {busy ? 'Resetting…' : 'Reset data'}
+        </button>
+      </div>
+      {result && (
+        <p style={{ marginTop: 12, fontSize: 13, color: '#3B6D11' }}>
+          ✓ Reset done — cleared {result.cleared_tables?.length || 0} table(s)
+          {result.scope !== 'grafana' && `, deleted ${result.langfuse_traces_deleted} Langfuse trace(s)`}.
+          {result.scope !== 'grafana' && result.langfuse_traces_deleted === 0 &&
+            ' (No traces deleted — if Langfuse still shows data, clear it from its UI / retention settings.)'}
+        </p>
+      )}
+      {err && <p style={{ marginTop: 12, fontSize: 13, color: '#A32D2D' }}>⚠ {err}</p>}
+    </div>
+  )
+}
 import Rubric from './Rubric.jsx'
 import WcagCoverage from './WcagCoverage.jsx'
 import Ontology from './Ontology.jsx'
@@ -41,6 +102,7 @@ export default function Settings({ onClose, onRubricSaved, files = [], onOntolog
           <button role="tab" aria-selected={tab === 'owners'} className={tab === 'owners' ? 'fchip on' : 'fchip'} onClick={() => setTab('owners')}>Owners</button>
           <button role="tab" aria-selected={tab === 'permissions'} className={tab === 'permissions' ? 'fchip on' : 'fchip'} onClick={() => setTab('permissions')}>Permissions</button>
           <button role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'fchip on' : 'fchip'} onClick={() => setTab('users')}>Users</button>
+          <button role="tab" aria-selected={tab === 'data'} className={tab === 'data' ? 'fchip on' : 'fchip'} onClick={() => setTab('data')}>Data</button>
         </div>
         <div className="setbody">
           {tab === 'rules' && <Rubric onSaved={onRubricSaved} />}
@@ -50,6 +112,7 @@ export default function Settings({ onClose, onRubricSaved, files = [], onOntolog
           {tab === 'owners' && <OwnerDelegate files={files} onChanged={onDelegationChange} />}
           {tab === 'permissions' && <RolePrivilege onChanged={onPrivilegeChange} />}
           {tab === 'users' && <UserManagement />}
+          {tab === 'data' && <ResetData />}
         </div>
       </div>
     </div>
