@@ -342,7 +342,7 @@ def _analyse_html(path: Path) -> dict:
 def run_scan(source: str = "local", progress=_noop, drive_token: str | None = None,
              folder: str | None = None, sp_token: str | None = None,
              ai_enabled: bool = True, scan_id: str | None = None,
-             user: str | None = None) -> dict:
+             user: str | None = None, detect_pii: bool = True) -> dict:
     from store import RULE_CATALOG, _extract_sc  # import here to avoid circular at module load
     rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
@@ -399,13 +399,18 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
 
             # Sensitive-data (PII) detection — a second, orthogonal risk axis (ADR 0006).
             # Runs on the same temp file; results are masked-only. Never fails the scan.
-            pinfo = _pii_mod.detect_file(tmp / name)
-            pii_by_file[name] = pinfo
-            if pinfo.get("total"):
-                _lf_mod.pii_span(fspan, pinfo)
+            # Opt-out (detect_pii=False) skips the per-file text extraction — much
+            # faster on PDF-heavy estates where each PDF would otherwise be parsed twice.
+            pii_total = 0
+            if detect_pii:
+                pinfo = _pii_mod.detect_file(tmp / name)
+                pii_by_file[name] = pinfo
+                pii_total = pinfo.get("total", 0)
+                if pii_total:
+                    _lf_mod.pii_span(fspan, pinfo)
 
             fspan.end(output={"issue_count": len(raw[name].get("issues", [])),
-                              "engine": engine, "sensitive_data": pinfo.get("total", 0)})
+                              "engine": engine, "sensitive_data": pii_total})
 
         progress({"phase": "scoring", "files_found": n, "files_done": n, "current": None})
         for r in raw.values():

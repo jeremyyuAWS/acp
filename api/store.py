@@ -755,6 +755,16 @@ class Store:
                 "UPDATE jobs SET status='done', updated_at=%s, last_error=NULL WHERE id=%s",
                 (self._now(), job_id))
 
+    def touch_job(self, job_id: str) -> None:
+        """Heartbeat: extend a running job's lease so the stuck-job sweeper won't
+        reclaim a slow-but-alive job (e.g. a long PII scan). Called periodically by
+        the worker while the handler runs."""
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE jobs SET locked_at=%s, updated_at=%s WHERE id=%s AND status='running'",
+                (now, now, job_id))
+
     def fail_job(self, job_id: str, error: str, backoff_seconds: float = 0.0,
                  force_dead: bool = False) -> str:
         """Requeue a failed job with backoff, or dead-letter it once attempts are

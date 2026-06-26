@@ -19,6 +19,7 @@ queue methods and the tests in tests/test_jobs.py.
 """
 from __future__ import annotations
 import random
+import threading
 import time
 import uuid
 
@@ -62,6 +63,16 @@ class JobWorker:
             self.store.fail_job(job["id"], f"no handler for job type '{job['type']}'",
                                 backoff_seconds=_backoff_seconds(job["attempts"]))
             return True
+        # Heartbeat: extend the lease every 2 min while the handler runs, so a
+        # slow-but-alive job (e.g. a long PII scan) isn't reclaimed by the sweeper.
+        stop_hb = threading.Event()
+        def _heartbeat():
+            while not stop_hb.wait(120):
+                try:
+                    self.store.touch_job(job["id"])
+                except Exception:
+                    pass
+        threading.Thread(target=_heartbeat, daemon=True, name="job-heartbeat").start()
         try:
             fn(job.get("payload", {}), job)
             self.store.complete_job(job["id"])
@@ -70,6 +81,8 @@ class JobWorker:
         except Exception as e:  # retryable
             self.store.fail_job(job["id"], str(e),
                                 backoff_seconds=_backoff_seconds(job["attempts"]))
+        finally:
+            stop_hb.set()
         return True
 
     def run_forever(self, stop=lambda: False) -> None:

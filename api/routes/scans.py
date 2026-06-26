@@ -18,7 +18,8 @@ router = APIRouter()
 @router.post("/scans")
 def start_scan(request: Request, source: str = Query("local", pattern="^(local|drive|sharepoint)$"),
                sync: bool = False, folder: str | None = Query(None),
-               ai: bool = Query(True), queue: bool = Query(False)):
+               ai: bool = Query(True), queue: bool = Query(False),
+               pii: bool = Query(True)):
     token = request.headers.get("x-drive-token")      # per-user Drive token (GIS)
     sp_token = request.headers.get("x-sp-token")      # per-user MS Graph token (MSAL)
     # ACP_DEMO_DRIVE_KEY lets the E2E test and demo scripts trigger a server-side
@@ -43,12 +44,14 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
         scan_id = uuid.uuid4().hex[:12]
         core.register_scan_tokens(scan_id, drive=token, sp=sp_token)  # in-memory only
         job_id = core.store.enqueue_job(
-            "scan", {"source": source, "scan_id": scan_id, "folder": folder, "ai": ai, "user": user},
+            "scan", {"source": source, "scan_id": scan_id, "folder": folder, "ai": ai,
+                     "user": user, "pii": pii},
             scan_id=scan_id)
         return {"scan_id": scan_id, "job_id": job_id, "queued": True, "workers": core.WORKERS}
 
     if sync:  # synchronous path for scripts/tests
-        report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token, ai_enabled=effective_ai, user=user)
+        report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token,
+                          ai_enabled=effective_ai, user=user, detect_pii=pii)
         sid = core.store.save_scan(report)
         core.finalize_scan(sid, effective_ai, source)
         return {"scan_id": sid, "source": source, "summary": report["summary"]}
@@ -62,7 +65,7 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
         try:
             report = run_scan(source, progress=lambda d: core.JOBS[job_id].update(d),
                               drive_token=token, folder=folder, sp_token=sp_token,
-                              ai_enabled=effective_ai, user=user)
+                              ai_enabled=effective_ai, user=user, detect_pii=pii)
             sid = core.store.save_scan(report)
             core.finalize_scan(sid, effective_ai, source)
             core.JOBS[job_id].update({"phase": "done", "done": True, "scan_id": sid,
