@@ -394,7 +394,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             r["errors"] = [e for e in r["errors"] if (e.get("rule") if isinstance(e, dict) else None) not in rb.disabled]
         assessed = {k: rb.assess(r["succeeded"], r["issues"], r["errors"]) for k, r in raw.items()}
         summary = rb.aggregate(assessed)
-        trace.update(output={"files": n, "avg_score": summary.get("avg_score")})
+        _lf_mod.finish_scan_trace(trace, scan_id, summary, source=source, ai_enabled=ai_enabled)
         _lf_mod.flush()
 
         # Build name → Drive file id map so write-back can reference the original.
