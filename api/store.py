@@ -580,6 +580,26 @@ class Store:
             rows = self._db.fetchall(cur)
         return [r["rule_id"] for r in rows]
 
+    def remediation_status(self, scan_id: str) -> dict:
+        """Live progress for an in-flight remediation batch: how many remediate_file
+        jobs are still queued/running for this scan, plus the most recently fixed file."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE scan_id=%s AND type='remediate_file' "
+                "AND status IN ('queued','running')", (scan_id,))
+            in_flight = self._db.fetchone(cur)["n"]
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE scan_id=%s AND type='remediate_file' "
+                "AND status='dead'", (scan_id,))
+            failed = self._db.fetchone(cur)["n"]
+            self._db.execute(cur,
+                "SELECT file,drive_write_url FROM file_records WHERE scan_id=%s "
+                "AND remediated_at IS NOT NULL ORDER BY remediated_at DESC LIMIT 1", (scan_id,))
+            latest = self._db.fetchone(cur)
+        return {"in_flight": in_flight, "failed": failed,
+                "latest_file": latest["file"] if latest else None,
+                "latest_url": latest["drive_write_url"] if latest else None}
+
     def get_file_drive_id(self, scan_id: str, file: str) -> str | None:
         with self._db.cursor() as cur:
             self._db.execute(cur,

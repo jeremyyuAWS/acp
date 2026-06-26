@@ -386,7 +386,7 @@ export default function App() {
           </>
         )}
 
-        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} aiEnabled={aiEnabled} /> : placeholder)}
+        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} aiEnabled={aiEnabled} onRefresh={() => getScan(run.id).then(setScan).catch(() => {})} /> : placeholder)}
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} onPublish={(file) => setPublishedFiles((s) => [...s, file])} /> : placeholder)}
 

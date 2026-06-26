@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
 import FileDrawer, { REC_STYLE, fmtEffort, SOURCE_URL } from './FileDrawer.jsx'
@@ -6,7 +6,7 @@ import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
 import { prefersReducedMotion } from './a11y.js'
-import { remediateScan } from './api.js'
+import { remediateScan, getRemediationStatus } from './api.js'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
 // (what to fix, prioritized, accept/reject/modify), the HITL queue, and self-remediation.
@@ -130,7 +130,7 @@ function FixCarousel() {
   )
 }
 
-export default function Remediate({ run, files = [], decisions = {}, setDecisions, aiEnabled = true }) {
+export default function Remediate({ run, files = [], decisions = {}, setDecisions, aiEnabled = true, onRefresh }) {
   const [queue, setQueue] = useState(() => buildHumanQueue(files))
   const [acted, setActed] = useState({ approved: 0, rejected: 0, deferred: 0 })
   const [deferredItems, setDeferredItems] = useState([])
@@ -164,17 +164,37 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [triageSel, setTriageSel] = useState(new Set())
   const [remBusy, setRemBusy] = useState(false)
   const [remMsg, setRemMsg] = useState('')
+  const [remProg, setRemProg] = useState(null)   // { total, done, latest, failed }
+  const pollRef = useRef(null)
+  useEffect(() => () => clearInterval(pollRef.current), [])
+
   const runServerRemediation = async () => {
-    if (!runId) return
-    setRemBusy(true); setRemMsg('')
+    if (!runId || remBusy) return
+    setRemBusy(true); setRemMsg(''); setRemProg(null)
     try {
       const r = await remediateScan(runId)
-      setRemMsg(r.workers
-        ? `Enqueued ${r.enqueued} remediation job${r.enqueued === 1 ? '' : 's'} — watch them run in the Monitor queue.`
-        : `Enqueued ${r.enqueued}, but no workers are running. Set ACP_WORKERS to process them.`)
+      if (!r.enqueued) { setRemMsg('Nothing to remediate — no eligible files with issues.'); setRemBusy(false); return }
+      if (!r.workers) { setRemMsg(`Enqueued ${r.enqueued}, but no workers are running. Add some in the Monitor tab.`); setRemBusy(false); return }
+      const total = r.enqueued
+      setRemProg({ total, done: 0, latest: null, failed: 0 })
+      clearInterval(pollRef.current)
+      pollRef.current = setInterval(async () => {
+        try {
+          const s = await getRemediationStatus(runId)
+          const done = Math.max(0, total - (s.in_flight || 0))
+          setRemProg({ total, done, latest: s.latest_file, failed: s.failed || 0 })
+          if (!s.in_flight) {                       // queue drained — batch complete
+            clearInterval(pollRef.current)
+            setRemProg(null); setRemBusy(false)
+            const ok = total - (s.failed || 0)
+            setRemMsg(`✓ Remediation complete — ${ok} document${ok === 1 ? '' : 's'} fixed${s.failed ? `, ${s.failed} failed` : ''}.`)
+            onRefresh?.()                            // refresh scan so the write-back banner updates
+          }
+        } catch { /* transient — keep polling */ }
+      }, 1500)
     } catch (e) {
-      setRemMsg(`Could not enqueue: ${e.message || e}`)
-    } finally { setRemBusy(false) }
+      setRemMsg(`Could not enqueue: ${e.message || e}`); setRemBusy(false)
+    }
   }
   const triageFile = (file, st) => { setTriage((t) => { const n = { ...t }; if (st == null) delete n[file]; else n[file] = st; return n }); setTriageSel((s) => { const n = new Set(s); n.delete(file); return n }) }
   const triageBulk = (flist, st) => { setTriage((t) => { const n = { ...t }; flist.forEach((f) => { if (st == null) delete n[f.file]; else n[f.file] = st }); return n }); setTriageSel(new Set()) }
@@ -247,6 +267,21 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         </button>
         {remMsg && <span className="muted" role="status" aria-live="polite" style={{ fontSize: 13 }}>{remMsg}</span>}
       </div>
+
+      {remProg && (
+        <div style={{ margin: '0 0 14px', maxWidth: 560 }} role="status" aria-live="polite">
+          <div style={{ height: 9, borderRadius: 6, background: 'var(--line)', overflow: 'hidden' }}>
+            <i style={{ display: 'block', height: '100%',
+                        width: `${Math.round((remProg.done / Math.max(1, remProg.total)) * 100)}%`,
+                        background: '#BF8C00', transition: 'width .35s' }} />
+          </div>
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
+            ⚡ Remediating {remProg.done.toLocaleString()} of {remProg.total.toLocaleString()}
+            {remProg.latest ? <> · last fixed <span className="fname">{remProg.latest}</span></> : '…'}
+            {remProg.failed ? ` · ${remProg.failed} failed` : ''}
+          </div>
+        </div>
+      )}
 
       <div className="subtabs" role="tablist" aria-label="Remediate steps">
         {SUBS.map(([k, label]) => <button key={k} role="tab" aria-selected={sub === k} className={sub === k ? 'fchip on' : 'fchip'} onClick={() => setSub(k)}>{label}</button>)}

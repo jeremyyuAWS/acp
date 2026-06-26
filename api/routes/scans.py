@@ -151,6 +151,12 @@ def scan(sid: str):
     return res
 
 
+@router.get("/scans/{sid}/remediation-status")
+def remediation_status(sid: str):
+    """Live remediation progress (in-flight jobs + latest fixed file) for the bar."""
+    return core.store.remediation_status(sid)
+
+
 @router.get("/scans/{sid}/traces")
 def scan_traces(sid: str, file: str | None = None):
     """Per-rule trace for a scan. Returns one row per (file, rule) pair showing

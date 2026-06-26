@@ -63,6 +63,10 @@ export const startScanQueued = (source = 'local', folder = null, aiEnabled = tru
 export const remediateScan = (scanId) => (SIM
   ? sim({ scan_id: scanId, enqueued: 3, job_ids: ['a', 'b', 'c'], workers: 4 })
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediate`, { method: 'POST', headers: headers() }).then(j))
+// Live remediation progress: in-flight jobs + latest fixed file (drives the Remediate bar).
+export const getRemediationStatus = (scanId) => (SIM
+  ? sim({ in_flight: 0, failed: 0, latest_file: null })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation-status`, { headers: headers() }).then(j))
 // Queue state: depth by status + recent jobs (drives the in-app queue panel).
 export const getJobs = (status = null) => (SIM
   ? sim({ workers: 4, stats: { done: 12, running: 1, queued: 3 }, jobs: [] })
