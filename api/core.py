@@ -219,12 +219,31 @@ scheduler.start()
 
 
 def _do_scheduled_scan():
+    """A scheduled sweep. Re-scans the configured source (Drive via the service-account
+    ADC identity — no user token is available in the background), stamps it with the
+    owner who set the schedule so it shows up in their scan list, and finalizes it.
+    Falls back to the local corpus if the Drive/ADC path is unavailable."""
+    cfg = store.get_schedule()
+    owner = cfg.get("owner_email")
+    source = cfg.get("source") or "drive"
+    ai = store.get_ai_enabled()
+
+    def _run(src):
+        report = run_scan(src, drive_token=None, ai_enabled=ai, user=owner)  # ADC for drive
+        sid = store.save_scan(report)
+        finalize_scan(sid, ai, src)
+        return report["summary"]["files"]
+
     try:
-        report = run_scan("local")
-        store.save_scan(report)
-        print(f"scheduled scan complete: {report['summary']['files']} files", flush=True)
+        n = _run(source)
+        print(f"scheduled {source} sweep complete: {n} files (owner={owner})", flush=True)
     except Exception as e:
-        print(f"scheduled scan failed: {e}", flush=True)
+        # Drive/ADC may be unconfigured in this environment — keep the sweep alive on local.
+        try:
+            n = _run("local")
+            print(f"scheduled sweep fell back to local ({n} files); drive error: {e}", flush=True)
+        except Exception as e2:
+            print(f"scheduled sweep failed: {e2}", flush=True)
 
 
 def reload_scheduler():

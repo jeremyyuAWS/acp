@@ -245,15 +245,18 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
               <h3 style={{ margin: '0 0 8px' }}>Scan triggers &amp; schedule <span className="muted" style={{ fontWeight: 400 }}>· how the agent decides when to scan</span></h3>
               <div className="scanctl">
                 <div className="ctlcol">
-                  <div className="ctlsub">Event-based triggers</div>
+                  <div className="ctlsub">Event-based triggers <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, color: '#854F0B', background: '#FBF1DF', border: '1px solid #EAD9BF', borderRadius: 4, padding: '1px 5px', marginLeft: 6, verticalAlign: 'middle' }}>PREVIEW</span></div>
+                  <div className="muted" style={{ fontSize: 11.5, margin: '0 0 8px', lineHeight: 1.45 }}>Planned agent behaviour — needs Drive change-notifications; not wired yet. The <b>scheduled sweep</b> on the right <b>is live</b>.</div>
+                  <div style={{ opacity: 0.5, pointerEvents: 'none' }} aria-hidden="true">
                   <Toggle label="Scan new files on arrival" hint="within 1 hour of landing in a watched source" on={triggers.newFile} set={(v) => setTriggers((t) => ({ ...t, newFile: v }))} />
                   <Toggle label="Re-scan on document edit" hint="detect drift the moment content changes" on={triggers.onEdit} set={(v) => setTriggers((t) => ({ ...t, onEdit: v }))} />
                   <Toggle label="Auto-remediate high-confidence fixes" hint="apply + re-certify without waiting for a sweep" on={triggers.autoRemediate} set={(v) => setTriggers((t) => ({ ...t, autoRemediate: v }))} />
                   <Toggle label="Alert owner on regression" hint="notify when a published doc drops > 5 points" on={triggers.alertRegression} set={(v) => setTriggers((t) => ({ ...t, alertRegression: v }))} />
+                  </div>
                 </div>
                 <div className="ctlcol">
-                  <div className="ctlsub">Scheduled sweeps</div>
-                  <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>Estate default — set every source at once, or override per source below.</div>
+                  <div className="ctlsub">Scheduled sweeps <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, color: '#3B6D11', background: '#E7F0DC', border: '1px solid #C9E0B0', borderRadius: 4, padding: '1px 5px', marginLeft: 6, verticalAlign: 'middle' }}>LIVE</span></div>
+                  <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>Re-scans your source on this cadence (background, via the service account) and attributes the scan to you.</div>
                   <div className="seg">
                     {['live', 'hourly', 'daily', 'weekly', 'off'].map((v) => {
                       const isActive = watch.length > 0 && cadCount(v) === watch.length

@@ -125,8 +125,11 @@ def schedule():
 
 
 @router.put("/schedule")
-def update_schedule(body: ScheduleUpdate):
-    core.store.save_schedule(body.enabled, body.interval_minutes)
+def update_schedule(body: ScheduleUpdate, request: Request):
+    # Attribute scheduled sweeps to whoever set the schedule, so the resulting scans
+    # show up in their (owner-scoped) scan list.
+    owner = getattr(request.state, "user_email", None)
+    core.store.save_schedule(body.enabled, body.interval_minutes, owner=owner, source="drive")
     core.reload_scheduler()
     return schedule()
 

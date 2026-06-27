@@ -567,11 +567,19 @@ class Store:
         return {
             "enabled": rows.get("enabled", "false") == "true",
             "interval_minutes": int(rows.get("interval_minutes", "60")),
+            "owner_email": rows.get("owner_email") or None,   # who scheduled it (scans attributed here)
+            "source": rows.get("source") or "drive",          # background sweeps default to Drive (ADC)
         }
 
-    def save_schedule(self, enabled: bool, interval_minutes: int) -> None:
+    def save_schedule(self, enabled: bool, interval_minutes: int,
+                      owner: str | None = None, source: str | None = None) -> None:
+        pairs = [("enabled", str(enabled).lower()), ("interval_minutes", str(interval_minutes))]
+        if owner:
+            pairs.append(("owner_email", owner))
+        if source:
+            pairs.append(("source", source))
         with self._db.cursor() as cur:
-            for k, v in [("enabled", str(enabled).lower()), ("interval_minutes", str(interval_minutes))]:
+            for k, v in pairs:
                 self._db.execute(cur,
                     "INSERT INTO schedule_config(key,value) VALUES(%s,%s) "
                     "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", (k, v))
