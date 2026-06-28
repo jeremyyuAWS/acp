@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { getSources, getRubric, listScans, getScan, getActiveScan, startScan, startScanQueued, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens } from './api'
 import { SIM } from './sim.js'
 import { setPersona } from './sim.js'
@@ -38,6 +38,23 @@ const TABS = [
   ['monitor', 'Monitor', 'step 10'],
   ['upload', 'Upload', 'try it live'],
 ]
+
+function timeAgo(iso) {
+  if (!iso) return null
+  const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+  if (secs < 60) return 'just now'
+  const mins = Math.floor(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  return `${days}d ago`
+}
+
+function fmtStamp(iso) {
+  if (!iso) return null
+  return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
 
 function progressText(p) {
   if (!p) return ''
@@ -135,6 +152,12 @@ export default function App() {
   const [aiEnabled, setAiEnabled] = useState(true)
   const [queuedScan, setQueuedScan] = useState(true)   // durable fan-out queue by default; "This session" is the opt-out
   const [deepScan, setDeepScan] = useState(true)       // PII/sensitive-data detection on/off
+  const [tick, setTick] = useState(0)                  // bumped every minute to keep timeAgo labels fresh
+
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 60_000)
+    return () => clearInterval(t)
+  }, [])
 
   useEffect(() => {
     const onExpired = () => {
@@ -351,11 +374,18 @@ export default function App() {
       </nav>
       {scanList.length > 0 && (
         <div className="runinfo">
-          {scanList.length === 1 ? (
-            <span className="muted">last run {run?.completed_at?.slice(0, 19).replace('T', ' ')}</span>
-          ) : (
+          <div className="runinfo-stamp">
+            <span className="runinfo-ago" title={fmtStamp(run?.completed_at)}>
+              {void tick /* re-render every minute */}
+              {timeAgo(run?.completed_at) ?? '—'}
+            </span>
+            <span className="runinfo-abs">{fmtStamp(run?.completed_at) ?? '—'}</span>
+            {run?.source && <span className="runinfo-source">{run.source}</span>}
+            {run?.files != null && <span className="muted">{run.files.toLocaleString()} documents</span>}
+          </div>
+          {scanList.length > 1 && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-              <span className="muted">scan:</span>
+              <span className="muted">switch scan:</span>
               <select
                 value={scan?.run?.id || ''}
                 onChange={(e) => switchScan(e.target.value)}

@@ -149,7 +149,12 @@ td { padding: 10px 0; border-top: 1px solid var(--line); }
 .userbox { display: flex; align-items: center; gap: 10px; }
 .user { font-size: 13px; color: var(--ink); }
 button.small { padding: 6px 12px; font-size: 13px; }
-.runinfo { margin: 4px 0 2px 2px; }
+.runinfo { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 5px 16px; background: var(--surface-1, #f7f6f3); border-bottom: 0.5px solid var(--line); font-size: 12px; }
+.runinfo::before { content: 'Last scan'; font-size: 11px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.runinfo-stamp { display: flex; align-items: center; gap: 10px; }
+.runinfo-ago { font-size: 13px; font-weight: 500; color: var(--ink); }
+.runinfo-abs { color: var(--muted); }
+.runinfo-source { padding: 1px 7px; border-radius: 20px; background: #e6f1fb; color: #185fa5; font-size: 11px; font-weight: 500; }
 
 /* keyboard focus — this is an accessibility product; it should be accessible */
 button:focus-visible, a:focus-visible, .tab:focus-visible, .fchip:focus-visible,
