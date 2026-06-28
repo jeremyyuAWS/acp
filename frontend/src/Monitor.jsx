@@ -314,16 +314,15 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
 
       <div className="moncards">
         <div className="moncard"><span className="muted">Documents watched</span><b>{m.watchedDocs}</b><span className="muted">{m.watchedSources} sources</span></div>
-        <div className="moncard"><span className="muted">Re-scan coverage · 7d</span><b style={{ color: '#3B6D11' }}>{m.coveragePct}%</b><span className="muted">{m.slaPct}% within SLA</span></div>
-        <div className="moncard"><span className="muted">New / changed · 7d</span><b>{watch.reduce((a, w) => a + w.newFiles, 0)} / {watch.reduce((a, w) => a + w.changed, 0)}</b><span className="muted">detected &amp; re-assessed</span></div>
-        <div className="moncard"><span className="muted">Remediation backlog</span><b>{hrs(m.backlogMin)}</b><span className="muted">{m.autoPct}% automatic</span></div>
+        <div className="moncard moncard-sample"><span className="muted">Re-scan coverage · 7d</span><b style={{ color: '#3B6D11', opacity: SIM ? 1 : 0.45 }}>{m.coveragePct}%</b><span className="muted">{m.slaPct}% within SLA{!SIM && <SampleTag />}</span></div>
+        <div className="moncard moncard-sample"><span className="muted">New / changed · 7d</span><b style={{ opacity: SIM ? 1 : 0.45 }}>{watch.reduce((a, w) => a + w.newFiles, 0)} / {watch.reduce((a, w) => a + w.changed, 0)}</b><span className="muted">detected &amp; re-assessed{!SIM && <SampleTag />}</span></div>
+        <div className="moncard moncard-sample"><span className="muted">Remediation backlog</span><b style={{ opacity: SIM ? 1 : 0.45 }}>{hrs(m.backlogMin)}</b><span className="muted">{m.autoPct}% automatic{!SIM && <SampleTag />}</span></div>
         <div className="moncard"><span className="muted">Open alerts · 7d</span><b style={{ color: '#1F5FA8' }}>{m.alerts.length}</b><span className="muted">drift &amp; regressions</span></div>
       </div>
       {!SIM && (
         <div className="muted" style={{ fontSize: 11.5, margin: '-6px 0 14px' }}>
-          <SampleTag /> Re-scan coverage, new/changed, backlog &amp; open alerts are illustrative until
-          continuous monitoring is wired. <b>Documents watched</b>, the <b>job queue</b>, and the
-          <b> remediation program</b> are live from your scans.
+          <SampleTag /> Re-scan coverage, new/changed, backlog &amp; open alerts are projected — continuous monitoring not yet wired.
+          <b> Documents watched</b>, the <b>job queue</b>, and the <b>remediation program</b> are live from your scans.
         </div>
       )}
 
@@ -417,12 +416,14 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
                 const thisCad = SIM ? w.cadence : (cad[w.id] || 'off')
                 const nextAt = SIM ? w.next : (schedNext && thisCad !== 'off'
                   ? new Date(schedNext).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                  : '—')
+                  : null)
                 return (
                   <div className="schedrow" key={w.id}>
                     <span className="schedname">{w.name}</span>
                     <span className="schedcad muted">{thisCad}</span>
-                    <span className="schednext">{nextAt}</span>
+                    {nextAt
+                      ? <span className="schednext">{nextAt}</span>
+                      : <span className="schednext muted" style={{ fontStyle: 'italic' }}>paused — enable a cadence to schedule</span>}
                   </div>
                 )
               })}

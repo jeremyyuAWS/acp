@@ -383,6 +383,7 @@ export default function App() {
             {run?.source && <span className="runinfo-source">{run.source}</span>}
             {run?.files != null && <span className="muted">{run.files.toLocaleString()} documents</span>}
           </div>
+          <span className="runinfo-build" title={`Built ${fmtStamp(__BUILD_TIME__)}`}>v{__BUILD_VERSION__}</span>
           {scanList.length > 1 && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
               <span className="muted">switch scan:</span>

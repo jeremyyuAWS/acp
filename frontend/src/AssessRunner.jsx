@@ -177,16 +177,9 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               <i style={{ width: `${pct}%` }} />
             </div>
             <div className="assessrunmeta">
-              <span className="muted"><b style={{ color: '#1F5FA8' }}>Assessment</b> · document {Math.min(progress + 1, docs.length).toLocaleString()} of {docs.length.toLocaleString()}</span>
+              <span className="muted"><b style={{ color: '#1F5FA8' }}>Computing conformance</b> · {docs.length.toLocaleString()} documents at WCAG 2.1 {level}</span>
               <span className="assesspct">{pct}%</span>
             </div>
-            {currentFile && (
-              <div className="assessfile">
-                <span className="assessfname">{currentFile.name}</span>
-                <span className="assessengine">{engineFor(currentFile.name)}</span>
-                {currentPhase && <span className="assessphase muted">{currentPhase}</span>}
-              </div>
-            )}
           </div>
         )}
         {phase === 'done' && result && (

@@ -255,7 +255,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     <>
       <div className="metrics">
         <div className="metric" title="Issues fixed automatically by the server-side remediation engine after the batch ran"><span>auto-fixed issues</span><b style={{ color: '#3B6D11' }}>{autoFixed}</b></div>
-        <div className="metric"><span>HITL queue</span><b style={{ color: queue.length ? '#854F0B' : '#3B6D11' }}>{queue.length} remaining</b>{totalHitl > 0 && <span className="muted" style={{ fontSize: 11 }}> · {hitlProgress}% done</span>}</div>
+        <div className="metric"><span>HITL queue</span><b style={{ color: queue.length ? '#854F0B' : '#3B6D11' }}>{totalHitl === 0 ? 'no items' : `${queue.length} remaining`}</b>{totalHitl > 0 && <span className="muted" style={{ fontSize: 11 }}> · {hitlProgress}% done</span>}</div>
         <div className="metric"><span>approved</span><b>{acted.approved}</b></div>
         <div className="metric"><span>deferred</span><b style={{ color: '#1F5FA8' }}>{acted.deferred}</b></div>
         <div className="metric"><span>re-verified</span><b style={{ color: '#3B6D11' }}>{verified}</b></div>
@@ -349,7 +349,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
             {junkCount > 0 && (
               <div className="junkbanner">
-                ⚑ <b>{junkCount} file{junkCount !== 1 ? 's' : ''} auto-flagged</b> — name patterns or score ≥ 90 with no critical/serious findings · suggested N/A or archive, not queued for remediation
+                ⚑ <b>{junkCount} file{junkCount !== 1 ? 's' : ''} auto-flagged</b> — name patterns or score ≥ 90 with no critical/serious findings · suggested N/A or archive (counted within the {undecided} undecided above), not queued for remediation
                 <button className="ghost small" style={{ marginLeft: 10 }} onClick={() => triageBulk(triageFiles.filter(isAutoJunk), 'na')}>Mark all N/A</button>
                 <button className="ghost small" style={{ marginLeft: 6 }} onClick={() => triageBulk(triageFiles.filter(isAutoJunk), 'defer')}>Defer all</button>
               </div>
@@ -643,7 +643,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 <div className="lift" style={{ margin: '8px 0 12px' }}>
                   <div className="liftcol"><div className="liftnum" style={{ color: '#1F5FA8' }}>{liftBefore}</div><div className="muted">before</div></div>
                   <div className="liftarrow" aria-hidden="true">→</div>
-                  <div className="liftcol"><div className="liftnum" style={{ color: '#3B6D11' }}>{liftAfter}</div><div className="muted">after re-validation</div></div>
+                  <div className="liftcol"><div className="liftnum" style={{ color: '#3B6D11' }}>{liftAfter}</div><div className="muted">after re-validation <span style={{ fontSize: 10, opacity: 0.7 }}>(projected)</span></div></div>
                   <div className="liftgain">+{liftAfter - liftBefore} pts</div>
                 </div>
               )

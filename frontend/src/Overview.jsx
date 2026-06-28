@@ -215,14 +215,14 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
         <section className="panel"><h2>Compliance trend · {trend.length} scans</h2><Sparkline points={trend} labels={trendDates} width={620} height={104} /></section>
       )}
 
-      <section className="panel"><h2>Compliance lift · after remediation</h2>
+      <section className="panel"><h2>Compliance lift · projected after remediation</h2>
         <div className="lift">
-          <div className="liftcol"><div className="liftnum" style={{ color: '#1F5FA8' }}>{before}</div><div className="muted">today</div></div>
+          <div className="liftcol"><div className="liftnum" style={{ color: '#1F5FA8' }}>{before}</div><div className="muted">today · measured</div></div>
           <div className="liftarrow" aria-hidden="true">→</div>
-          <div className="liftcol"><div className="liftnum" style={{ color: '#3B6D11' }}>{after}</div><div className="muted">after queued fixes</div></div>
+          <div className="liftcol"><div className="liftnum" style={{ color: '#3B6D11' }}>{after}</div><div className="muted">after queued fixes <span style={{ fontSize: 10, opacity: 0.7 }}>(projected)</span></div></div>
           <div className="liftgain">+{after - before} pts</div>
         </div>
-        <p className="muted">Projected estate score once the queued remediation is approved and re-validated.</p>
+        <p className="muted">Projected estate score assuming all queued remediations are approved and pass re-validation — actual results may vary.</p>
       </section>
       </div>
 

@@ -155,6 +155,7 @@ button.small { padding: 6px 12px; font-size: 13px; }
 .runinfo-ago { font-size: 13px; font-weight: 500; color: var(--ink); }
 .runinfo-abs { color: var(--muted); }
 .runinfo-source { padding: 1px 7px; border-radius: 20px; background: #e6f1fb; color: #185fa5; font-size: 11px; font-weight: 500; }
+.runinfo-build { margin-left: auto; font-size: 11px; color: var(--muted); font-family: var(--mono, monospace); }
 
 /* keyboard focus — this is an accessibility product; it should be accessible */
 button:focus-visible, a:focus-visible, .tab:focus-visible, .fchip:focus-visible,
