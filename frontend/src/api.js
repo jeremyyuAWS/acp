@@ -60,9 +60,9 @@ export const startScanQueued = (source = 'local', folder = null, aiEnabled = tru
   ? sim({ scan_id: 'sim-scan', job_id: 'sim-job', queued: true, workers: 4 })
   : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}&pii=${pii}&queue=true&fanout=true`, { method: 'POST', headers: headers() }).then(j))
 // Async server-side remediation: one remediate_file job per HTML file in the scan.
-export const remediateScan = (scanId) => (SIM
-  ? sim({ scan_id: scanId, enqueued: 3, job_ids: ['a', 'b', 'c'], workers: 4 })
-  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediate`, { method: 'POST', headers: headers() }).then(j))
+export const remediateScan = (scanId, scope) => (SIM
+  ? sim({ scan_id: scanId, enqueued: scope ? scope.length : 3, job_ids: ['a', 'b', 'c'], workers: 4 })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediate`, { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify(scope ? { scope } : {}) }).then(j))
 // Access allow-list (who can use the app) — managed from Settings.
 export const getAllowlist = () => (SIM
   ? sim({ emails: ['demo@sim'], owner: 'demo@sim', domains: [] })

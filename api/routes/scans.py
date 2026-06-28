@@ -90,15 +90,29 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
 
 
 @router.post("/scans/{sid}/remediate")
-def remediate_scan(sid: str, request: Request):
+async def remediate_scan(sid: str, request: Request):
     """Async server-side remediation (ADR 0005): enqueue a remediate_file job per
     HTML file in the scan that came from Drive. The worker fixes it and writes the
-    corrected copy back to a Remediated/ folder. Needs ACP_WORKERS>0."""
+    corrected copy back to a Remediated/ folder. Needs ACP_WORKERS>0.
+
+    Optional body: {"scope": ["file1.html", "file2.pdf", ...]} — when provided,
+    only the listed filenames are enqueued (respects the triage decisions made in
+    the UI). Omit or pass an empty body to remediate all eligible files."""
     res = core.store.get_scan(sid)
     if res is None:
         raise HTTPException(404, "scan not found")
     token = request.headers.get("x-drive-token")
     core.register_scan_tokens(sid, drive=token)  # in-memory only
+
+    # Parse optional scope list from request body.
+    scope_set = None
+    try:
+        body = await request.json()
+        if isinstance(body.get("scope"), list):
+            scope_set = set(body["scope"])
+    except Exception:
+        pass  # missing or non-JSON body — treat as no scope filter
+
     # Create the single 'Remediated' folder ONCE here (single-threaded), then pass
     # its id to every job — avoids concurrent workers each creating their own.
     remediated_folder_id = None
@@ -110,6 +124,9 @@ def remediate_scan(sid: str, request: Request):
             remediated_folder_id = None   # jobs fall back to find-or-create
     enqueued = []
     for f in res["files"]:
+        # Honour the triage scope: skip files the user marked N/A or deferred.
+        if scope_set is not None and f["file"] not in scope_set:
+            continue
         # Server-side deterministic remediators (ADR 0005 step 4): HTML (in-repo),
         # PDF (vendored engine), and Office docx/pptx/xlsx (core-properties fixer).
         if not f["file"].lower().endswith((".html", ".htm", ".pdf", ".docx", ".pptx", ".xlsx")):

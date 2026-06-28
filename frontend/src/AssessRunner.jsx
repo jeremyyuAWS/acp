@@ -59,6 +59,9 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   const [currentFile, setCurrentFile] = useState(null)
   const [currentPhase, setCurrentPhase] = useState('')
   const [result, setResult] = useState(saved?.result || null)
+  // Track whether the current result came from a previous session (cached) or was
+  // computed in this session — so we can label cached results clearly.
+  const [resultFromCache, setResultFromCache] = useState(saved?.phase === 'done' && !!saved?.result)
   const timer = useRef(null)
   const phaseTimer = useRef(null)
   useEffect(() => () => { clearInterval(timer.current); clearTimeout(phaseTimer.current) }, [])
@@ -66,7 +69,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   const docs = files.filter((f) => f.score != null)
   const reset = () => {
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
-    setPhase('idle'); setResult(null); setProgress(0); setCurrentFile(null); setCurrentPhase('')
+    setPhase('idle'); setResult(null); setResultFromCache(false); setProgress(0); setCurrentFile(null); setCurrentPhase('')
     try { sessionStorage.removeItem(SKEY(runId)) } catch { /* ignore */ }
   }
 
@@ -119,7 +122,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     if (runId) { assessScan(runId, level).catch(() => {}); onAssessed?.() }
     const startedAt = Date.now()
     save({ phase: 'running', startedAt, level, result: computed })
-    setPhase('running'); setResult(null); setProgress(0)
+    setPhase('running'); setResult(null); setResultFromCache(false); setProgress(0)
     runTicker(startedAt, level, computed)
   }
 
@@ -150,7 +153,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
       <div className="assesshd">
         <div>
           <h2 style={{ margin: 0 }}>Assess the estate against WCAG 2.1</h2>
-          <p className="muted" style={{ margin: '3px 0 0' }}>Run all {docs.length.toLocaleString()} readable documents against the success criteria at your target conformance level.</p>
+          <p className="muted" style={{ margin: '3px 0 0' }}>Run all {docs.length.toLocaleString()} readable documents against the success criteria at your target conformance level.{files.length > docs.length ? ` ${(files.length - docs.length).toLocaleString()} unanalysable file${files.length - docs.length !== 1 ? 's' : ''} excluded — could not be parsed during scan.` : ''}</p>
           {scanBusy && <p style={{ margin: '6px 0 0', fontSize: 13, color: '#854F0B' }}>⏳ A scan is still running — assessment will be available once it finishes.</p>}
         </div>
         <button className="assessbtn" onClick={assess} disabled={phase === 'running' || !docs.length || scanBusy}
@@ -188,6 +191,11 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
         )}
         {phase === 'done' && result && (
           <div className="assessres">
+            {resultFromCache && (
+              <p className="muted" style={{ fontSize: 12, margin: '0 0 8px', fontStyle: 'italic' }}>
+                Showing results from a previous assessment — click Assess to run again.
+              </p>
+            )}
             <p className="sronly">Assessment complete: {result.conformant} of {result.total} documents conformant at WCAG 2.1 {result.level} ({result.pct}%); {result.applicable} findings apply.</p>
             <div className="assesstiles">
               <div className="atile"><b style={{ color: '#3B6D11' }}>{result.conformant.toLocaleString()}</b><span>conformant at {result.level}</span></div>

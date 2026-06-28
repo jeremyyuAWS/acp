@@ -111,7 +111,7 @@ function FixCarousel() {
   return (
     <section className="panel" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}>
       <div className="fixhd">
-        <h2 style={{ margin: 0 }}>AI remediation · live <span className="livedot" aria-hidden="true" /></h2>
+        <h2 style={{ margin: 0 }}>AI remediation · last {FIX_EXAMPLES.length} completed <span className="livedot" aria-hidden="true" title="Connected — receiving updates in real time" /></h2>
         <span className="muted" style={{ fontSize: 12 }}>{idx + 1} / {FIX_EXAMPLES.length}</span>
       </div>
       <div className="fixcard" key={idx}>
@@ -168,11 +168,12 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const pollRef = useRef(null)
   useEffect(() => () => clearInterval(pollRef.current), [])
 
-  const runServerRemediation = async () => {
+  const runServerRemediation = async (scopeFiles) => {
     if (!runId || remBusy) return
     setRemBusy(true); setRemMsg(''); setRemProg(null)
+    const scope = scopeFiles?.map((f) => f.file)
     try {
-      const r = await remediateScan(runId)
+      const r = await remediateScan(runId, scope)
       if (!r.enqueued) { setRemMsg('Nothing to remediate — no eligible files with issues.'); setRemBusy(false); return }
       if (!r.workers) { setRemMsg(`Enqueued ${r.enqueued}, but no workers are running. Add some in the Monitor tab.`); setRemBusy(false); return }
       const total = r.enqueued
@@ -253,7 +254,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   return (
     <>
       <div className="metrics">
-        <div className="metric"><span>auto-fixed issues</span><b style={{ color: '#3B6D11' }}>{autoFixed}</b></div>
+        <div className="metric" title="Issues fixed automatically by the server-side remediation engine after the batch ran"><span>auto-fixed issues</span><b style={{ color: '#3B6D11' }}>{autoFixed}</b></div>
         <div className="metric"><span>HITL queue</span><b style={{ color: queue.length ? '#854F0B' : '#3B6D11' }}>{queue.length} remaining</b>{totalHitl > 0 && <span className="muted" style={{ fontSize: 11 }}> · {hitlProgress}% done</span>}</div>
         <div className="metric"><span>approved</span><b>{acted.approved}</b></div>
         <div className="metric"><span>deferred</span><b style={{ color: '#1F5FA8' }}>{acted.deferred}</b></div>
@@ -261,7 +262,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', margin: '4px 0 12px' }}>
-        <button disabled={remBusy || !runId} onClick={runServerRemediation}
+        <button disabled={remBusy || !runId} onClick={() => runServerRemediation(remediable)}
                 title="Run deterministic HTML remediation server-side, in the durable worker queue. Fixed copies are written to a Remediated/ folder; results trace to Langfuse.">
           {remBusy ? 'Enqueueing…' : '⚡ Remediate all (server-side)'}
         </button>
@@ -348,7 +349,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
             {junkCount > 0 && (
               <div className="junkbanner">
-                ⚑ <b>{junkCount} file{junkCount !== 1 ? 's' : ''} auto-flagged</b> — name patterns or score ≥ 90 with no critical/serious findings
+                ⚑ <b>{junkCount} file{junkCount !== 1 ? 's' : ''} auto-flagged</b> — name patterns or score ≥ 90 with no critical/serious findings · suggested N/A or archive, not queued for remediation
                 <button className="ghost small" style={{ marginLeft: 10 }} onClick={() => triageBulk(triageFiles.filter(isAutoJunk), 'na')}>Mark all N/A</button>
                 <button className="ghost small" style={{ marginLeft: 6 }} onClick={() => triageBulk(triageFiles.filter(isAutoJunk), 'defer')}>Defer all</button>
               </div>
@@ -438,7 +439,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             </div>
             <div className="plandec">
               <span className="muted">{dcount('accepted')} accepted · {dcount('override')} modified · {dcount('rejected')} rejected · {pending} pending</span>
-              {autoFiles.length > 0 && <button className="batchbtn" onClick={batchAutoRemediate}>⚡ Run batch · {autoFiles.length} auto-fixable</button>}
+              {autoFiles.length > 0 && <button className="batchbtn" onClick={batchAutoRemediate} title="Accept all fully-automatic files — fixes will run when you click Remediate all (server-side)">⚡ Accept batch · {autoFiles.length} auto-remediable</button>}
               <button disabled={!pending} onClick={acceptAll}>✓ Accept all</button>
             </div>
           </div>
@@ -544,7 +545,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           )}
         </div>
         {queue.length === 0 ? (
-          <p className="muted">Queue cleared — {acted.approved} approved, {acted.rejected} rejected{acted.deferred ? `, ${acted.deferred} deferred to next cycle` : ''}. Re-validation runs on the approved fixes.</p>
+          <p className="muted">{totalHitl === 0
+            ? 'No files require human review for this run — all remediations were fully automatic. Files needing AI-assisted fixes or human sign-off will appear here in future runs.'
+            : `Queue cleared — ${acted.approved} approved, ${acted.rejected} rejected${acted.deferred ? `, ${acted.deferred} deferred to next cycle` : ''}. Re-validation runs on the approved fixes.`
+          }</p>
         ) : (
           <div className="queue">
             {queue.map((q) => (

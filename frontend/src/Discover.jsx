@@ -219,7 +219,12 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
           </div>
           <div className="chartrow">
             <section className="panel"><h2>By exposure &amp; risk <span className="muted" style={{ fontWeight: 400 }}>· expand internal to see its risk flags</span></h2>
-              <ExposureRisk pub={exposurePub} internal={exposureInternal} internalRisk={internalRisk} />
+              <ExposureRisk pub={exposurePub} internal={exposureInternal} internalRisk={internalRisk} onPick={(tag) => {
+                const filtered = tag === 'public-facing'
+                  ? visibleFiles.filter((f) => tagsOf(f).includes('public-facing'))
+                  : visibleFiles.filter((f) => !tagsOf(f).includes('public-facing') && (tag === 'internal' || tagsOf(f).includes(tag)))
+                setSeg({ title: `${tag} documents`, subtitle: `${filtered.length} file${filtered.length !== 1 ? 's' : ''}`, files: filtered })
+              }} />
               <p className="muted ppfoot">Public-facing pages (also your high-traffic content) are the top legal-exposure surface under ADA / EAA. The {exposureInternal.value} internal documents carry the PII &amp; legal-hold content that matters most if mishandled.</p>
             </section>
             <section className="panel"><h2>By document type</h2><Bars items={byType} cols="70px 1fr 30px" /></section>

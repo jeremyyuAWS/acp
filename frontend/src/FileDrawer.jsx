@@ -135,17 +135,22 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   issues.forEach((i) => { byCrit[i.wcag] = (byCrit[i.wcag] || 0) + 1 })
   const states = journeyStates(st)
 
+  const hasAnyMeta = file.modifiedAge || file.lastAccessed || file.views90d != null || file.sizeKB || file.duration || file.pages || file.sheets || file.owner || overrideOwner
   const metaBlock = (
     <>
       <h4 className="drawerh">Document metadata</h4>
-      <div className="metagrid">
-        <div><span className="muted">Last modified</span><b>{file.modifiedAge || '—'}</b></div>
-        <div><span className="muted">Last accessed</span><b>{file.lastAccessed || '—'}</b></div>
-        <div><span className="muted">Views · 90d</span><b>{file.views90d != null ? file.views90d.toLocaleString() : '—'}</b></div>
-        <div><span className="muted">Size</span><b>{file.sizeKB ? (file.sizeKB >= 1024 ? `${(file.sizeKB / 1024).toFixed(1)} MB` : `${file.sizeKB} KB`) : '—'}</b></div>
-        <div><span className="muted">{file.duration ? 'Duration' : file.sheets ? 'Sheets' : 'Pages'}</span><b>{file.duration || file.pages || file.sheets || '—'}</b></div>
-        <div><span className="muted">Owner</span><b>{overrideOwner || file.owner || '—'}{delegatedFrom && <span className="badge" style={{ marginLeft: 6, background: '#E7F0DC', color: '#3B6D11', fontSize: 10, fontWeight: 400 }}>delegated from {delegatedFrom}</span>}</b></div>
-      </div>
+      {hasAnyMeta ? (
+        <div className="metagrid">
+          <div><span className="muted">Last modified</span><b>{file.modifiedAge || '—'}</b></div>
+          <div><span className="muted">Last accessed</span><b>{file.lastAccessed || '—'}</b></div>
+          <div><span className="muted">Views · 90d</span><b>{file.views90d != null ? file.views90d.toLocaleString() : '—'}</b></div>
+          <div><span className="muted">Size</span><b>{file.sizeKB ? (file.sizeKB >= 1024 ? `${(file.sizeKB / 1024).toFixed(1)} MB` : `${file.sizeKB} KB`) : '—'}</b></div>
+          <div><span className="muted">{file.duration ? 'Duration' : file.sheets ? 'Sheets' : 'Pages'}</span><b>{file.duration || file.pages || file.sheets || '—'}</b></div>
+          <div><span className="muted">Owner</span><b>{overrideOwner || file.owner || '—'}{delegatedFrom && <span className="badge" style={{ marginLeft: 6, background: '#E7F0DC', color: '#3B6D11', fontSize: 10, fontWeight: 400 }}>delegated from {delegatedFrom}</span>}</b></div>
+        </div>
+      ) : (
+        <p className="muted" style={{ fontSize: 13, margin: '4px 0 0' }}>Metadata unavailable for this source — the file system or Drive API did not return details for this document.</p>
+      )}
     </>
   )
   const ontBlock = file.ont && (
