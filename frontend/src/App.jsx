@@ -1,5 +1,5 @@
-import { useEffect, useState, useMemo, useCallback } from 'react'
-import { getSources, getRubric, listScans, getScan, getActiveScan, startScan, startScanQueued, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens } from './api'
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
+import { getSources, getRubric, listScans, getScan, getActiveScan, startScan, startScanQueued, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens, getDecisions, saveDecisionsBatch } from './api'
 import { SIM } from './sim.js'
 import { setPersona } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -135,6 +135,9 @@ export default function App() {
   const [view, setView] = useState('overview')
   const [assess, setAssess] = useState('results')
   const [decisions, setDecisions] = useState({})
+  const [triage, setTriage] = useState({})              // per-scan triage, lifted from Remediate for time-travel
+  const savedDecRef = useRef({ scanId: null, decisions: {}, triage: {} })  // last-persisted snapshot
+  const hydratingRef = useRef(false)                    // suppress the save effect during hydration
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [scanList, setScanList] = useState([])
   const [delta, setDelta] = useState(null)
@@ -310,6 +313,47 @@ export default function App() {
   }
 
   const run = scan?.run
+
+  // Time-travel: when the active scan changes, hydrate THAT scan's saved decisions.
+  useEffect(() => {
+    const sid = scan?.run?.id
+    if (!sid || sid === savedDecRef.current.scanId) return
+    let cancelled = false
+    getDecisions(sid).then((d) => {
+      if (cancelled) return
+      const dec = {}, tri = {}
+      Object.entries(d || {}).forEach(([file, m]) => {
+        if (m.action) { try { dec[file] = JSON.parse(m.action) } catch { /* ignore */ } }
+        if (m.triage) tri[file] = m.triage
+      })
+      hydratingRef.current = true
+      savedDecRef.current = { scanId: sid, decisions: dec, triage: tri }
+      setDecisions(dec); setTriage(tri)
+    }).catch(() => {
+      hydratingRef.current = true
+      savedDecRef.current = { scanId: sid, decisions: {}, triage: {} }
+      setDecisions({}); setTriage({})
+    })
+    return () => { cancelled = true }
+  }, [scan?.run?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist decision/triage changes to the active scan (skips hydration writes).
+  useEffect(() => {
+    if (hydratingRef.current) { hydratingRef.current = false; return }
+    const sid = savedDecRef.current.scanId
+    if (!sid || sid !== scan?.run?.id) return
+    const prev = savedDecRef.current
+    const items = []
+    new Set([...Object.keys(prev.decisions), ...Object.keys(decisions)]).forEach((f) => {
+      if (JSON.stringify(prev.decisions[f]) !== JSON.stringify(decisions[f])) items.push({ file: f, kind: 'action', value: decisions[f] ?? null })
+    })
+    new Set([...Object.keys(prev.triage), ...Object.keys(triage)]).forEach((f) => {
+      if (prev.triage[f] !== triage[f]) items.push({ file: f, kind: 'triage', value: triage[f] ?? null })
+    })
+    if (items.length) saveDecisionsBatch(sid, items).catch(() => {})
+    savedDecRef.current = { scanId: sid, decisions: { ...decisions }, triage: { ...triage } }
+  }, [decisions, triage]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const trendData = [...scanList].reverse().filter((s) => s.avg_score != null)
     .map((s) => ({ score: s.avg_score, label: s.completed_at ? new Date(s.completed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '' }))
   const trend = trendData.map((d) => d.score)
@@ -411,6 +455,13 @@ export default function App() {
           )}
       </div>
 
+      {run && scanList.length > 1 && scanList[0]?.id !== run.id && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: '#F4EEFC', border: '1px solid #D9CCF2', borderRadius: 8, padding: '8px 14px', margin: '8px 0' }}>
+          <span style={{ fontSize: 13 }}>🕐 <b>Time-travel</b> — viewing the scan from {fmtStamp(run.completed_at)}. Every tab, dashboard and your saved decisions reflect this past scan.</span>
+          <button className="ghost small" style={{ marginLeft: 'auto' }} onClick={() => switchScan(scanList[0].id)}>↩ Back to latest</button>
+        </div>
+      )}
+
       {err && <div className="err" role="alert">{err}</div>}
       {busy && progress && (
         <div className="scanprog" role="status" aria-live="polite">
@@ -446,7 +497,7 @@ export default function App() {
           </>
         )}
 
-        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} aiEnabled={aiEnabled} onRefresh={() => getScan(run.id).then(setScan).catch(() => {})} /> : placeholder)}
+        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} aiEnabled={aiEnabled} onRefresh={() => getScan(run.id).then(setScan).catch(() => {})} /> : placeholder)}
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} onPublish={(file) => setPublishedFiles((s) => [...s, file])} /> : placeholder)}
 

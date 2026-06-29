@@ -78,6 +78,10 @@ export const saveDecision = (scanId, file, kind, value) => (SIM
   ? sim({ ok: true })
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/decisions/${encodeURIComponent(file)}?kind=${kind}`,
           { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ value }) }).then(j))
+export const saveDecisionsBatch = (scanId, items) => (SIM
+  ? sim({ ok: true })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/decisions`,
+          { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ items }) }).then(j))
 // Run the WCAG assessment into Langfuse on demand (separate from the scan trace).
 export const assessScan = (scanId, level = 'AA') => (SIM
   ? sim({ ok: true })

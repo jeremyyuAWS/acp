@@ -134,7 +134,7 @@ function FixCarousel() {
   )
 }
 
-export default function Remediate({ run, files = [], decisions = {}, setDecisions, aiEnabled = true, onRefresh }) {
+export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, aiEnabled = true, onRefresh }) {
   const [queue, setQueue] = useState(() => buildHumanQueue(files, {}))
   const [acted, setActed] = useState({ approved: 0, rejected: 0, deferred: 0 })
   const [deferredItems, setDeferredItems] = useState([])
@@ -164,7 +164,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [seg, setSeg] = useState(null)
   const [editing, setEditing] = useState(null)
   const [sub, setSub] = useState('triage')
-  const [triage, setTriage] = useState({})
   const [triageSel, setTriageSel] = useState(new Set())
   const [remBusy, setRemBusy] = useState(false)
   const [remMsg, setRemMsg] = useState('')

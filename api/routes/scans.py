@@ -199,6 +199,30 @@ def get_decisions(sid: str, request: Request):
     return core.store.get_decisions(sid, owner=owner)
 
 
+@router.put("/scans/{sid}/decisions")
+def put_decisions_batch(sid: str, request: Request, body: dict):
+    """Batch upsert/delete decisions — body {items: [{file, kind, value}]} (value=null deletes).
+    Used by the save effect so a bulk triage is one request, not one-per-file."""
+    import datetime as _dt
+    import json as _json
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    when = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    n = 0
+    for it in (body.get("items") or []):
+        file, kind, value = it.get("file"), it.get("kind"), it.get("value")
+        if not file or kind not in ("triage", "action"):
+            continue
+        if value is None:
+            core.store.delete_decision(sid, file, kind)
+        else:
+            core.store.save_decision(sid, file, kind,
+                                     value if isinstance(value, str) else _json.dumps(value), owner, when)
+        n += 1
+    return {"ok": True, "saved": n}
+
+
 @router.put("/scans/{sid}/decisions/{filename:path}")
 def put_decision(sid: str, filename: str, request: Request, body: dict,
                  kind: str = Query("triage", pattern="^(triage|action)$")):
