@@ -41,6 +41,34 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
   const [groupDupes, setGroupDupes] = useState(true)
   const rows = groupDupes ? groupDuplicates(files) : files
   const dupeCount = files.length - groupDuplicates(files).length
+
+  // ── File-inventory navigation: search + status/type filters + sort + paged render ──
+  const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [sortBy, setSortBy] = useState('file')
+  const [sortDir, setSortDir] = useState('asc')
+  const [limit, setLimit] = useState(300)          // render incrementally so huge libraries stay fast
+  const extOf = (f) => (f.file.includes('.') ? f.file.split('.').pop().toLowerCase() : '')
+  const statusCounts = rows.reduce((a, f) => { const s = statusOf(f); a[s] = (a[s] || 0) + 1; return a }, {})
+  const typeList = [...new Set(rows.map(extOf))].filter(Boolean).sort()
+  const q = query.trim().toLowerCase()
+  const reset = () => setLimit(300)                // a new query/filter starts from the top
+  const filtered = rows.filter((f) =>
+    (!q || (groupDupes && f._copies > 1 ? baseName(f.file) : f.file).toLowerCase().includes(q)) &&
+    (statusFilter === 'all' || statusOf(f) === statusFilter) &&
+    (typeFilter === 'all' || extOf(f) === typeFilter))
+  const sorted = [...filtered].sort((a, b) => {
+    let r = 0
+    if (sortBy === 'file') r = a.file.localeCompare(b.file)
+    else if (sortBy === 'score') r = (a.score ?? -1) - (b.score ?? -1)
+    else if (sortBy === 'findings') r = (a.issues?.length || 0) - (b.issues?.length || 0)
+    else if (sortBy === 'status') r = statusOf(a).localeCompare(statusOf(b))
+    return sortDir === 'asc' ? r : -r
+  })
+  const shown = sorted.slice(0, limit)
+  const sortClick = (col) => { if (sortBy === col) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc')); else { setSortBy(col); setSortDir(col === 'file' ? 'asc' : 'desc') } }
+  const arrow = (col) => (sortBy === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '')
   const pickStatus = (s) => { const fs = files.filter((f) => statusOf(f) === s.label); setSeg({ title: `${s.label} documents`, subtitle: `${fs.length} of ${files.length}`, files: fs }) }
   const pickSeverity = (it) => { const sev = it.label.toUpperCase(); const fs = files.filter((f) => (f.issues || []).some((i) => i.severity === sev)); setSeg({ title: `${it.label} findings`, subtitle: `${fs.length} document(s) affected`, files: fs }) }
   const pickCrit = (c) => { const fs = files.filter((f) => (f.issues || []).some((i) => i.wcag === c)); setSeg({ title: `${critLabel(c)}`, subtitle: `${fs.length} document(s) failing this criterion`, files: fs }) }
@@ -104,9 +132,7 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
       <section className="panel">
         <h2 style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
           <span>File inventory · <span style={{ fontWeight: 400 }}>
-            {groupDupes && dupeCount > 0
-              ? `${rows.length} document${rows.length === 1 ? '' : 's'} · click a row for details`
-              : 'click a row for details'}</span></span>
+            {sorted.length === rows.length ? `${rows.length.toLocaleString()} document${rows.length === 1 ? '' : 's'}` : `${sorted.length.toLocaleString()} of ${rows.length.toLocaleString()}`} · click a row for details</span></span>
           {dupeCount > 0 && (
             <label className="muted" style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 400, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
               <input type="checkbox" checked={groupDupes} onChange={(e) => setGroupDupes(e.target.checked)} />
@@ -114,10 +140,37 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
             </label>
           )}
         </h2>
+        {/* Navigation toolbar: search · status chips · type filter */}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '2px 0 12px' }}>
+          <input value={query} onChange={(e) => { setQuery(e.target.value); reset() }} placeholder="🔍 Search files…"
+            aria-label="Search files by name"
+            style={{ flex: '1 1 200px', minWidth: 180, padding: '7px 11px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'inherit', fontSize: 13 }} />
+          {['all', 'certifiable', 'issues', 'uncertain', 'unanalysable'].filter((s) => s === 'all' || statusCounts[s]).map((s) => (
+            <button key={s} type="button" onClick={() => { setStatusFilter(s); reset() }}
+              className={statusFilter === s ? 'fchip on' : 'fchip'} style={{ fontSize: 12, textTransform: 'capitalize' }}>
+              {s === 'all' ? 'All' : s}{s !== 'all' && <span style={{ opacity: 0.65, marginLeft: 5 }}>{statusCounts[s]}</span>}
+            </button>
+          ))}
+          {typeList.length > 1 && (
+            <select value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); reset() }} aria-label="Filter by file type"
+              style={{ fontSize: 12, padding: '6px 9px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'inherit', cursor: 'pointer' }}>
+              <option value="all">All types</option>
+              {typeList.map((t) => <option key={t} value={t}>{t.toUpperCase()}</option>)}
+            </select>
+          )}
+        </div>
         <div className="tablewrap"><table>
-          <thead><tr><th>file</th><th>status</th><th>score</th><th>findings</th></tr></thead>
+          <thead><tr>
+            {[['file', 'file'], ['status', 'status'], ['score', 'score'], ['findings', 'findings']].map(([col, label]) => (
+              <th key={col} onClick={() => sortClick(col)} style={{ cursor: 'pointer', userSelect: 'none' }}
+                  title="Click to sort">{label}<span style={{ color: '#6D28D9' }}>{arrow(col)}</span></th>
+            ))}
+          </tr></thead>
           <tbody>
-            {rows.map((f) => {
+            {shown.length === 0 && (
+              <tr><td colSpan={4} className="muted" style={{ textAlign: 'center', padding: '24px' }}>No files match your search or filters.</td></tr>
+            )}
+            {shown.map((f) => {
               const st = statusOf(f); const [bg, fg] = BADGE[st]
               return (
                 <tr key={f.file} className="filerow" role="button" tabIndex={0}
@@ -147,6 +200,13 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
             })}
           </tbody>
         </table></div>
+        {sorted.length > limit && (
+          <div style={{ textAlign: 'center', marginTop: 12 }}>
+            <button className="ghost" onClick={() => setLimit((n) => n + 300)}>
+              Show 300 more <span className="muted">· {(sorted.length - limit).toLocaleString()} remaining</span>
+            </button>
+          </div>
+        )}
       </section>
       {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
       {sel && <FileDrawer file={sel} onClose={() => setSel(null)} />}
