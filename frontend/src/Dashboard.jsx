@@ -35,7 +35,7 @@ function groupDuplicates(files) {
   return [...map.values()].map((g) => ({ ...g.rep, _copies: g.copies, _names: g.names }))
 }
 
-export default function Dashboard({ run, files, trend, delta, deltaKey }) {
+export default function Dashboard({ run, files, trend, delta, deltaKey, scanList = [], onPickScan }) {
   const [sel, setSel] = useState(null)
   const [seg, setSeg] = useState(null)
   const [groupDupes, setGroupDupes] = useState(true)
@@ -87,13 +87,23 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
     wcag: topCrit ? `${CRIT[topCrit[0]] ?? topCrit[0]} fails in the most files (${topCrit[1]}). It's a single, largely automatable fix class — a strong first remediation target.` : '',
   }
 
+  // Master score = the latest run; the scan history below tracks it over time.
+  const isLatest = !scanList.length || scanList[0]?.id === run.id
+  const fmtDate = (iso) => (iso ? new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—')
+
   return (
     <>
       <div className="dashtoolbar">
         <a className="exportbtn" href={reportUrl(run.id)} target="_blank" rel="noreferrer">⤓ Export PDF report</a>
       </div>
       <section className="hero">
-        <ScoreRing score={run.avg_score} delta={delta} deltaKey={deltaKey} />
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.6, color: '#6B7280', textTransform: 'uppercase', marginBottom: 6 }}>Master score</div>
+          <ScoreRing score={run.avg_score} delta={delta} deltaKey={deltaKey} />
+          <div className="muted" style={{ fontSize: 11, marginTop: 6, whiteSpace: 'nowrap' }}>
+            {isLatest ? '★ latest scan' : 'selected scan'}{run.completed_at ? ` · ${fmtDate(run.completed_at)}` : ''}
+          </div>
+        </div>
         <div className="heroright">
           <div className="herostats">
             <div className="herostat"><b style={{ color: '#3B6D11' }}>{run.certifiable}</b><span>certifiable</span></div>
@@ -109,6 +119,36 @@ export default function Dashboard({ run, files, trend, delta, deltaKey }) {
           )}
         </div>
       </section>
+      {scanList.length > 0 && (
+        <section className="panel">
+          <h2>Scan history <span className="muted" style={{ fontWeight: 400 }}>· master score = latest run · click a row to view it</span></h2>
+          <div className="tablewrap"><table>
+            <thead><tr><th></th><th>scan</th><th>score</th><th>change</th><th>certifiable</th><th>source</th></tr></thead>
+            <tbody>
+              {scanList.map((s, i) => {
+                const prev = scanList[i + 1]
+                const d = (prev?.avg_score != null && s.avg_score != null) ? s.avg_score - prev.avg_score : null
+                const isCurrent = s.id === run.id
+                return (
+                  <tr key={s.id} className="filerow" role="button" tabIndex={0}
+                    onClick={() => onPickScan?.(s.id)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPickScan?.(s.id) } }}
+                    style={isCurrent ? { background: '#F4EEFC' } : undefined}>
+                    <td>{i === 0 && <span className="badge" style={{ background: '#EDE7FB', color: '#6D28D9' }}>★ master</span>}</td>
+                    <td>{fmtDate(s.completed_at)}{isCurrent && <span className="muted"> · viewing</span>}</td>
+                    <td className="scorecell"><b>{s.avg_score ?? 'n/a'}</b><span className="muted">/100</span></td>
+                    <td>{d == null ? <span className="muted">—</span> : (
+                      <span style={{ color: d > 0 ? '#3B6D11' : d < 0 ? '#B43A2A' : '#6B7280', fontWeight: 600, fontSize: 12 }}>
+                        {d > 0 ? `▲ +${d}` : d < 0 ? `▼ ${d}` : '±0'}</span>)}</td>
+                    <td className="muted">{s.certifiable ?? '—'} / {(s.files ?? 0).toLocaleString()}</td>
+                    <td className="muted">{s.source}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table></div>
+        </section>
+      )}
       <div className="chartrow">
         <section className="panel"><h2>Compliance status <span className="muted" style={{ fontWeight: 400 }}>· click to drill in</span></h2><Donut segments={statusSegments(run)} caption="documents" onPick={pickStatus} /><Insight text={INS.status} /></section>
         <section className="panel"><h2>Findings by severity <span className="muted" style={{ fontWeight: 400 }}>· click to drill in</span></h2>
