@@ -11,14 +11,15 @@ export default function Publish({ run, files = [], certified = [], onPublish }) 
   const publish = (file) => { setDone((d) => (d[file] ? d : { ...d, [file]: true })); onPublish?.(file) }
   const publishAll = () => { setDone(() => Object.fromEntries(ready.map((f) => [f.file, true]))); ready.forEach((f) => onPublish?.(f.file)) }
   const publishedCount = Object.keys(done).length + certified.length
+  const pubStarted = Object.keys(done).length > 0   // zero the outcome cards until the user publishes
 
   return (
     <>
       <div className="metrics">
         <div className="metric"><span>ready to publish</span><b>{ready.length}</b></div>
-        <div className="metric"><span>published</span><b style={{ color: '#3B6D11' }}>{publishedCount}</b></div>
-        <div className="metric"><span>replaced in place</span><b>{Object.keys(done).length}</b></div>
-        <div className="metric"><span>owners notified</span><b>{Object.keys(done).length + certified.length}</b></div>
+        <div className="metric"><span>published</span><b style={{ color: pubStarted ? '#3B6D11' : '#9AA1B4' }}>{pubStarted ? publishedCount : 0}</b></div>
+        <div className="metric"><span>replaced in place</span><b style={{ color: pubStarted ? undefined : '#9AA1B4' }}>{Object.keys(done).length}</b></div>
+        <div className="metric"><span>owners notified</span><b style={{ color: pubStarted ? undefined : '#9AA1B4' }}>{pubStarted ? Object.keys(done).length + certified.length : 0}</b></div>
       </div>
 
       <section className="panel">

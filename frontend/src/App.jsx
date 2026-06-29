@@ -453,6 +453,12 @@ export default function App() {
               {scanLoading && <span className="spinner" />}
             </label>
           )}
+          {run && (Object.keys(decisions).length + Object.keys(triage).length) > 0 && (
+            <span className="muted" style={{ marginLeft: 12, fontSize: 12, color: '#3B6D11', whiteSpace: 'nowrap' }}
+                  title="Your triage + remediation decisions are saved to this scan and restored when you time-travel back to it">
+              ✓ {Object.keys(decisions).length + Object.keys(triage).length} decision{(Object.keys(decisions).length + Object.keys(triage).length) !== 1 ? 's' : ''} saved
+            </span>
+          )}
       </div>
 
       {run && scanList.length > 1 && scanList[0]?.id !== run.id && (

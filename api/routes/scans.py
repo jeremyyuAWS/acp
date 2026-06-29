@@ -250,28 +250,28 @@ def remediation_status(sid: str):
 
 
 @router.get("/scans/{sid}/traces")
-def scan_traces(sid: str, file: str | None = None):
+def scan_traces(sid: str, request: Request, file: str | None = None):
     """Per-rule trace for a scan. Returns one row per (file, rule) pair showing
     PASS/FAIL/SKIP and the finding count. Optionally filter to a single file."""
-    if core.store.get_scan(sid) is None:
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
         raise HTTPException(404, "scan not found")
     return core.store.get_scan_traces(sid, file=file)
 
 
 @router.get("/scans/{sid}/pii")
-def scan_pii(sid: str):
+def scan_pii(sid: str, request: Request):
     """Sensitive-data (PII) findings for a scan (ADR 0006).
 
     Returns a rollup (documents affected, total items, per-type counts) plus the
     per-document detail. All samples are MASKED — raw PII is never stored or
     returned."""
-    if core.store.get_scan(sid) is None:
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
         raise HTTPException(404, "scan not found")
     return {"summary": core.store.pii_summary(sid), "files": core.store.list_pii(sid)}
 
 
 @router.get("/scans/{sid}/manifest")
-def scan_manifest(sid: str):
+def scan_manifest(sid: str, request: Request):
     """Rule-execution manifest for a scan.
 
     Returns per-file completeness: how many rules were expected to run (based on
@@ -280,14 +280,14 @@ def scan_manifest(sid: str):
     rules_errored_total == 0. Use this to detect partial assessments before acting
     on a score.
     """
-    if core.store.get_scan(sid) is None:
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
         raise HTTPException(404, "scan not found")
     return core.store.get_scan_manifest(sid)
 
 
 @router.get("/scans/{sid}/report.pdf")
-def report_pdf(sid: str):
-    res = core.store.get_scan(sid)
+def report_pdf(sid: str, request: Request):
+    res = core.store.get_scan(sid, owner=_owner(request))
     if res is None:
         raise HTTPException(404, "scan not found")
     rb = core.active_rubric()

@@ -65,7 +65,14 @@ find "$VEND" -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null ||
 echo "   vendored $(find "$VEND" -name '*.py' | wc -l | tr -d ' ') engine modules"
 
 echo "== 2/5 build image in ACR (remote; no local docker) =="
-az acr build -r "$ACR" -t "$IMAGE" -f deploy/public/Dockerfile . -o none
+# Build provenance (ADR: CalVer-style) baked into the image → surfaced in /healthz +
+# the hub footer + the app header. Computed here so every deploy stamps a fresh version
+# (.git is excluded from the build context, so the image can't derive it itself).
+BUILD_VERSION="$(date -u +%Y).$(( 10#$(date -u +%m) )).$(( 10#$(date -u +%d) ))"
+BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "   version $BUILD_VERSION · built $BUILD_TIME"
+az acr build -r "$ACR" -t "$IMAGE" -f deploy/public/Dockerfile \
+  --build-arg BUILD_VERSION="$BUILD_VERSION" --build-arg BUILD_TIME="$BUILD_TIME" . -o none
 
 echo "== 3/5 registry creds =="
 ACRSERVER="$(az acr show -n "$ACR" --query loginServer -o tsv)"
