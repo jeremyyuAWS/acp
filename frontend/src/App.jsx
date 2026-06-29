@@ -372,8 +372,8 @@ export default function App() {
           ))}
         </div>
       </nav>
-      {scanList.length > 0 && (
-        <div className="runinfo">
+      <div className="runinfo">
+        {scanList.length > 0 && (
           <div className="runinfo-stamp">
             <span className="runinfo-ago" title={fmtStamp(run?.completed_at)}>
               {void tick /* re-render every minute */}
@@ -383,8 +383,13 @@ export default function App() {
             {run?.source && <span className="runinfo-source">{run.source}</span>}
             {run?.files != null && <span className="muted">{run.files.toLocaleString()} documents</span>}
           </div>
-          <span className="runinfo-build" title={`Built ${fmtStamp(__BUILD_TIME__)}`}>v{__BUILD_VERSION__}</span>
-          {scanList.length > 1 && (
+        )}
+        <span className="runinfo-build" title={`Built ${fmtStamp(__BUILD_TIME__)}`}>
+          v{__BUILD_VERSION__}
+          <span className="muted" style={{ marginLeft: 5, fontWeight: 400 }}>· {fmtStamp(__BUILD_TIME__)}</span>
+          <span className="muted" style={{ marginLeft: 5, fontWeight: 400 }}>· {timeAgo(__BUILD_TIME__)}</span>
+        </span>
+        {scanList.length > 1 && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
               <span className="muted">switch scan:</span>
               <select
@@ -404,8 +409,7 @@ export default function App() {
               {scanLoading && <span className="spinner" />}
             </label>
           )}
-        </div>
-      )}
+      </div>
 
       {err && <div className="err" role="alert">{err}</div>}
       {busy && progress && (

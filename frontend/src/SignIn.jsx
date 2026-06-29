@@ -5,6 +5,40 @@ import Logo from './Logo.jsx'
 
 const initials = (n) => n.split(' ').map((x) => x[0]).join('').slice(0, 2)
 
+function timeAgoShort(iso) {
+  if (!iso) return null
+  const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+  if (secs < 60) return 'just now'
+  const mins = Math.floor(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  return `${days}d ago`
+}
+
+function BuildStamp() {
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 60_000)
+    return () => clearInterval(id)
+  }, [])
+  const iso = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : null
+  const ver = typeof __BUILD_VERSION__ !== 'undefined' ? __BUILD_VERSION__ : null
+  if (!ver && !iso) return null
+  const stamp = iso ? new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : null
+  return (
+    <p style={{ margin: '10px 0 0', fontSize: 11, color: '#b0a8b4', textAlign: 'center', letterSpacing: 0.2 }}
+       title={stamp ? `Built ${stamp}` : undefined}>
+      {ver && <span>v{ver}</span>}
+      {ver && iso && <span style={{ margin: '0 5px' }}>·</span>}
+      {iso && <span>{stamp}</span>}
+      {iso && <span style={{ margin: '0 5px' }}>·</span>}
+      {iso && <span>{timeAgoShort(iso)}</span>}
+    </p>
+  )
+}
+
 function GoogleIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
@@ -98,6 +132,7 @@ export default function SignIn({ onSignedIn }) {
           <p className="muted signin-foot" style={{ marginTop: 20 }}>
             Authorized accounts only · documents never retained
           </p>
+          <BuildStamp />
         </div>
       </div>
     )
@@ -133,6 +168,7 @@ export default function SignIn({ onSignedIn }) {
         </div>
 
         <p className="muted signin-foot">SSO &amp; role-based access · scans run read-only · documents never retained</p>
+        <BuildStamp />
       </div>
     </div>
   )
