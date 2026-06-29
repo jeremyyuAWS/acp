@@ -230,6 +230,49 @@ export default function App() {
       if (priv) setMe((m) => ({ ...m, ...priv, email, sso: 'Microsoft', scope: priv.scope?.label }))
     }
   }
+
+  // Time-travel: when the active scan changes, hydrate THAT scan's saved decisions.
+  // These hooks MUST sit above the `!me` early return — React requires every hook to
+  // run unconditionally on every render, or the hook count changes and the tree crashes.
+  useEffect(() => {
+    const sid = scan?.run?.id
+    if (!sid || sid === savedDecRef.current.scanId) return
+    let cancelled = false
+    getDecisions(sid).then((d) => {
+      if (cancelled) return
+      const dec = {}, tri = {}
+      Object.entries(d || {}).forEach(([file, m]) => {
+        if (m.action) { try { dec[file] = JSON.parse(m.action) } catch { /* ignore */ } }
+        if (m.triage) tri[file] = m.triage
+      })
+      hydratingRef.current = true
+      savedDecRef.current = { scanId: sid, decisions: dec, triage: tri }
+      setDecisions(dec); setTriage(tri)
+    }).catch(() => {
+      hydratingRef.current = true
+      savedDecRef.current = { scanId: sid, decisions: {}, triage: {} }
+      setDecisions({}); setTriage({})
+    })
+    return () => { cancelled = true }
+  }, [scan?.run?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist decision/triage changes to the active scan (skips hydration writes).
+  useEffect(() => {
+    if (hydratingRef.current) { hydratingRef.current = false; return }
+    const sid = savedDecRef.current.scanId
+    if (!sid || sid !== scan?.run?.id) return
+    const prev = savedDecRef.current
+    const items = []
+    new Set([...Object.keys(prev.decisions), ...Object.keys(decisions)]).forEach((f) => {
+      if (JSON.stringify(prev.decisions[f]) !== JSON.stringify(decisions[f])) items.push({ file: f, kind: 'action', value: decisions[f] ?? null })
+    })
+    new Set([...Object.keys(prev.triage), ...Object.keys(triage)]).forEach((f) => {
+      if (prev.triage[f] !== triage[f]) items.push({ file: f, kind: 'triage', value: triage[f] ?? null })
+    })
+    if (items.length) saveDecisionsBatch(sid, items).catch(() => {})
+    savedDecRef.current = { scanId: sid, decisions: { ...decisions }, triage: { ...triage } }
+  }, [decisions, triage]) // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!me) return <SignIn onSignedIn={signIn} />
 
   const switchScan = async (id) => {
@@ -313,46 +356,6 @@ export default function App() {
   }
 
   const run = scan?.run
-
-  // Time-travel: when the active scan changes, hydrate THAT scan's saved decisions.
-  useEffect(() => {
-    const sid = scan?.run?.id
-    if (!sid || sid === savedDecRef.current.scanId) return
-    let cancelled = false
-    getDecisions(sid).then((d) => {
-      if (cancelled) return
-      const dec = {}, tri = {}
-      Object.entries(d || {}).forEach(([file, m]) => {
-        if (m.action) { try { dec[file] = JSON.parse(m.action) } catch { /* ignore */ } }
-        if (m.triage) tri[file] = m.triage
-      })
-      hydratingRef.current = true
-      savedDecRef.current = { scanId: sid, decisions: dec, triage: tri }
-      setDecisions(dec); setTriage(tri)
-    }).catch(() => {
-      hydratingRef.current = true
-      savedDecRef.current = { scanId: sid, decisions: {}, triage: {} }
-      setDecisions({}); setTriage({})
-    })
-    return () => { cancelled = true }
-  }, [scan?.run?.id]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Persist decision/triage changes to the active scan (skips hydration writes).
-  useEffect(() => {
-    if (hydratingRef.current) { hydratingRef.current = false; return }
-    const sid = savedDecRef.current.scanId
-    if (!sid || sid !== scan?.run?.id) return
-    const prev = savedDecRef.current
-    const items = []
-    new Set([...Object.keys(prev.decisions), ...Object.keys(decisions)]).forEach((f) => {
-      if (JSON.stringify(prev.decisions[f]) !== JSON.stringify(decisions[f])) items.push({ file: f, kind: 'action', value: decisions[f] ?? null })
-    })
-    new Set([...Object.keys(prev.triage), ...Object.keys(triage)]).forEach((f) => {
-      if (prev.triage[f] !== triage[f]) items.push({ file: f, kind: 'triage', value: triage[f] ?? null })
-    })
-    if (items.length) saveDecisionsBatch(sid, items).catch(() => {})
-    savedDecRef.current = { scanId: sid, decisions: { ...decisions }, triage: { ...triage } }
-  }, [decisions, triage]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const trendData = [...scanList].reverse().filter((s) => s.avg_score != null)
     .map((s) => ({ score: s.avg_score, label: s.completed_at ? new Date(s.completed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '' }))
