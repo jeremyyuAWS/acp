@@ -48,12 +48,12 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
   const [typeFilter, setTypeFilter] = useState('all')
   const [sortBy, setSortBy] = useState('file')
   const [sortDir, setSortDir] = useState('asc')
-  const [limit, setLimit] = useState(300)          // render incrementally so huge libraries stay fast
+  const [limit, setLimit] = useState(1000)         // render budget — most narrowed views fit; "show more" beyond
   const extOf = (f) => (f.file.includes('.') ? f.file.split('.').pop().toLowerCase() : '')
   const statusCounts = rows.reduce((a, f) => { const s = statusOf(f); a[s] = (a[s] || 0) + 1; return a }, {})
   const typeList = [...new Set(rows.map(extOf))].filter(Boolean).sort()
   const q = query.trim().toLowerCase()
-  const reset = () => setLimit(300)                // a new query/filter starts from the top
+  const reset = () => setLimit(1000)               // a new query/filter starts from the top
   const filtered = rows.filter((f) =>
     (!q || (groupDupes && f._copies > 1 ? baseName(f.file) : f.file).toLowerCase().includes(q)) &&
     (statusFilter === 'all' || statusOf(f) === statusFilter) &&
@@ -242,8 +242,8 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
         </table></div>
         {sorted.length > limit && (
           <div style={{ textAlign: 'center', marginTop: 12 }}>
-            <button className="ghost" onClick={() => setLimit((n) => n + 300)}>
-              Show 300 more <span className="muted">· {(sorted.length - limit).toLocaleString()} remaining</span>
+            <button className="ghost" onClick={() => setLimit((n) => n + 1000)}>
+              Show 1,000 more <span className="muted">· {(sorted.length - limit).toLocaleString()} remaining</span>
             </button>
           </div>
         )}
