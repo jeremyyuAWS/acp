@@ -28,6 +28,10 @@ _DEMO_FOLDER = os.environ.get("ACP_DRIVE_FOLDER") or "1W27ULZsstP7gYGzgKKBId0qEf
 # Fan-out discovery cap (ADR 0007): each file is its own durable job, so the
 # whole estate need not fit one box — bound only against a runaway listing.
 FANOUT_MAX_FILES = int(os.environ.get("ACP_FANOUT_MAX_FILES", "50000"))
+# ADR 0008 — batch fan-out. Files per scan_batch job (capped ≤200 so job payloads stay
+# bounded); estates with ≥ THRESHOLD files auto-use the batch path. Both env-tunable.
+SCAN_BATCH_SIZE = max(1, min(200, int(os.environ.get("ACP_SCAN_BATCH_SIZE", "50"))))
+SCAN_BATCH_THRESHOLD = int(os.environ.get("ACP_SCAN_BATCH_THRESHOLD", "2000"))
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 sys.path.insert(0, str(ACP / "scripts"))

@@ -1,7 +1,8 @@
 # ADR 0008 — Per-batch scan jobs for very large estates
 
-Status: **Proposed** · Supersedes nothing · Extends [ADR 0007](0007-fan-out-scan-pipeline.md)
-· Date: 2026-06-29
+Status: **Accepted** · Supersedes nothing · Extends [ADR 0007](0007-fan-out-scan-pipeline.md)
+· Date: 2026-06-29 · Implemented 2026-06-29 (`scan_batch` handler, opt-in `batch=true`,
+auto above `ACP_SCAN_BATCH_THRESHOLD`)
 
 ## Context
 ADR 0007 made scans a durable fan-out: `scan_discover` → **one `scan_file` job per

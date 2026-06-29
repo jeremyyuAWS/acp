@@ -183,7 +183,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
     Langfuse trace, and enqueue one scan_file job per file."""
     import lf as _lf
     from rubric import Rubric
-    from scanner import _list, _drive_service, ACP, FANOUT_MAX_FILES
+    from scanner import _list, _drive_service, ACP, FANOUT_MAX_FILES, SCAN_BATCH_SIZE, SCAN_BATCH_THRESHOLD
     scan_id = payload.get("scan_id") or job.get("scan_id")
     source = payload.get("source", "drive")
     ai = bool(payload.get("ai", True)) and core.store.get_ai_enabled()
@@ -203,11 +203,97 @@ def _scan_discover(payload: dict, job: dict) -> None:
         core.store.enqueue_job("scan_finalize",
                                {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)
         return
+    # ADR 0008: very large estates fan out as batches (N files / job) instead of one job
+    # per file — far less queue churn + claim contention. Per-file stays the proven default
+    # below the threshold; an explicit batch=true forces the batch path. The persisted
+    # results and Langfuse spans are identical either way — only job granularity changes.
+    use_batch = bool(payload.get("batch")) or len(items) >= SCAN_BATCH_THRESHOLD
+    if use_batch:
+        for i in range(0, len(items), SCAN_BATCH_SIZE):
+            chunk = items[i:i + SCAN_BATCH_SIZE]
+            core.store.enqueue_job("scan_batch", {
+                "scan_id": scan_id, "source": source, "ai": ai, "pii": pii, "user": user,
+                "items": [{"file": it["name"], "drive_file_id": it.get("id"),
+                           "mime": it.get("mime"), "path": it.get("path")} for it in chunk],
+            }, scan_id=scan_id)
+    else:
+        for it in items:
+            core.store.enqueue_job("scan_file", {
+                "scan_id": scan_id, "source": source, "file": it["name"],
+                "drive_file_id": it.get("id"), "mime": it.get("mime"), "path": it.get("path"),
+                "ai": ai, "pii": pii, "user": user}, scan_id=scan_id)
+
+
+def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf) -> None:
+    """Download + analyse + assess + persist ONE file and emit its Langfuse spans (deep
+    scan only). Shared by scan_file (per-file fan-out) and scan_batch (ADR 0008). A
+    fetch/analyse failure is recorded as an 'error' file so the scan still finalizes."""
+    from scanner import _download, analyse_and_assess
+    name = item["file"]
+    tmp = _Path(_tempfile.mkdtemp(prefix="acp-scanone-"))
+    fdict = pinfo = None
+    try:
+        try:
+            it = {"name": name, "id": item.get("drive_file_id")}
+            if item.get("mime"):
+                it["mime"] = item["mime"]
+            if item.get("path"):                       # local source — read from disk
+                it["path"] = item["path"]
+            _download(it, tmp, svc, sp_token=toks.get("sp"))
+            fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii)
+        except Exception as e:
+            core.store.log_decision("system", "scan.file_error", scan_id=scan_id, file=name,
+                                    detail=f"{type(e).__name__}: {e}"[:200])
+        if fdict is None:                              # fetch/analyse failed → error record
+            fdict = {"file": name, "engine": "n/a", "status": "error", "score": None,
+                     "compliant": 0, "skipped_rules": 0, "issues": []}
+        fdict["drive_file_id"] = item.get("drive_file_id")
+        if pinfo:
+            fdict["pii"] = pinfo
+        core.store.save_file_result(scan_id, fdict, now)
+        # Per-file Langfuse spans only when Deep scan is on — see scan_file's note.
+        if pii:
+            fspan = _lf.file_span_for(scan_id, name, fdict["engine"])
+            if pinfo and pinfo.get("total"):
+                _lf.pii_span(fspan, pinfo, filename=name)
+            fspan.end(output={"engine": fdict["engine"], "sensitive_data": (pinfo or {}).get("total", 0)})
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _make_svc(source, toks):
+    """Build the Drive client once per job, resiliently — a build failure degrades to
+    None (downloads then fail per-file into 'error' records) rather than killing the job."""
+    from scanner import _drive_service
+    if source in ("local", "sharepoint"):
+        return None
+    try:
+        return _drive_service(toks.get("drive"))
+    except Exception:
+        return None
+
+
+@handler("scan_batch")
+def _scan_batch(payload: dict, job: dict) -> None:
+    """Analyse + persist a CHUNK of files in one durable job (ADR 0008), then bump the
+    done counter ONCE by the chunk size. Cuts queue churn ~SCAN_BATCH_SIZE× on large
+    estates; the job that completes the count enqueues finalize (same trigger as scan_file).
+    Idempotent on retry — save_file_result replaces per file, so re-running a chunk is safe."""
+    import lf as _lf
+    scan_id = payload["scan_id"]
+    source = payload.get("source", "drive")
+    pii = bool(payload.get("pii", True))
+    items = payload.get("items", [])
+    toks = core.get_scan_tokens(scan_id)
+    now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    svc = _make_svc(source, toks)
     for it in items:
-        core.store.enqueue_job("scan_file", {
-            "scan_id": scan_id, "source": source, "file": it["name"],
-            "drive_file_id": it.get("id"), "mime": it.get("mime"), "path": it.get("path"),
-            "ai": ai, "pii": pii, "user": user}, scan_id=scan_id)
+        _analyse_and_persist_one(scan_id, it, source, pii, svc, toks, now, _lf)
+    done, total = core.store.bump_files_done(scan_id, len(items))
+    if done >= total > 0:
+        core.store.enqueue_job("scan_finalize",
+                               {"scan_id": scan_id, "source": source,
+                                "ai": bool(payload.get("ai", True)), "pii": pii}, scan_id=scan_id)
 
 
 @handler("scan_file")
@@ -217,47 +303,13 @@ def _scan_file(payload: dict, job: dict) -> None:
     Resilient: a fetch/analyse failure is recorded as an 'error' file so the counter
     always advances and the scan can finalize."""
     import lf as _lf
-    from scanner import _download, _drive_service, analyse_and_assess
-    from store import RULE_CATALOG, _extract_sc
     scan_id = payload["scan_id"]
-    name = payload["file"]
     source = payload.get("source", "drive")
     pii = bool(payload.get("pii", True))
     toks = core.get_scan_tokens(scan_id)
     now = _dt.datetime.now(_dt.timezone.utc).isoformat()
-    tmp = _Path(_tempfile.mkdtemp(prefix="acp-scanone-"))
-    fdict = pinfo = None
-    try:
-        try:
-            svc = None if source in ("local", "sharepoint") else _drive_service(toks.get("drive"))
-            item = {"name": name, "id": payload.get("drive_file_id")}
-            if payload.get("mime"):
-                item["mime"] = payload["mime"]
-            if payload.get("path"):                 # local source — read from disk
-                item["path"] = payload["path"]
-            _download(item, tmp, svc, sp_token=toks.get("sp"))
-            fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii)
-        except Exception as e:
-            core.store.log_decision("system", "scan.file_error", scan_id=scan_id, file=name,
-                                    detail=f"{type(e).__name__}: {e}"[:200])
-        if fdict is None:                              # fetch/analyse failed → error record
-            fdict = {"file": name, "engine": "n/a", "status": "error", "score": None,
-                     "compliant": 0, "skipped_rules": 0, "issues": []}
-        fdict["drive_file_id"] = payload.get("drive_file_id")
-        if pinfo:
-            fdict["pii"] = pinfo
-        core.store.save_file_result(scan_id, fdict, now)
-        # Per-file Langfuse spans are written ONLY when Deep scan is on — that's the
-        # per-document processing worth tracing. A plain discover (deep scan off) leaves
-        # Langfuse with just the discovery summary, no per-file noise. The per-WCAG-rule
-        # assessment is a separate trace, written only when the user runs Assess.
-        if pii:
-            fspan = _lf.file_span_for(scan_id, name, fdict["engine"])
-            if pinfo and pinfo.get("total"):
-                _lf.pii_span(fspan, pinfo, filename=name)
-            fspan.end(output={"engine": fdict["engine"], "sensitive_data": (pinfo or {}).get("total", 0)})
-    finally:
-        _shutil.rmtree(tmp, ignore_errors=True)
+    svc = _make_svc(source, toks)
+    _analyse_and_persist_one(scan_id, payload, source, pii, svc, toks, now, _lf)
     done, total = core.store.bump_files_done(scan_id)
     if done >= total > 0:
         core.store.enqueue_job("scan_finalize",

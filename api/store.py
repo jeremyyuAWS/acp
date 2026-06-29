@@ -436,12 +436,13 @@ class Store:
             self._db.execute(cur, _UPSERT_INV,
                 (f["file"], completed_at, completed_at, f["status"], f["score"]))
 
-    def bump_files_done(self, scan_id: str) -> tuple[int, int]:
-        """Atomically increment the done counter; returns (done, total enqueued)."""
+    def bump_files_done(self, scan_id: str, n: int = 1) -> tuple[int, int]:
+        """Atomically increment the done counter by n (default 1; a scan_batch bumps by
+        its chunk size — ADR 0008); returns (done, total enqueued)."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "UPDATE scan_runs SET files_done=COALESCE(files_done,0)+1 WHERE id=%s "
-                "RETURNING files_done, files", (scan_id,))
+                "UPDATE scan_runs SET files_done=COALESCE(files_done,0)+%s WHERE id=%s "
+                "RETURNING files_done, files", (n, scan_id))
             row = self._db.fetchone(cur)
         return (row["files_done"], row["files"]) if row else (0, 0)
 
