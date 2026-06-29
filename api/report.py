@@ -32,7 +32,7 @@ def _status(f):
     return "unanalysable" if f["status"] == "error" else ("certifiable" if f["compliant"] else "issues")
 
 
-def build_report(run: dict, files: list, meta: dict) -> bytes:
+def build_report(run: dict, files: list, meta: dict, decisions: dict | None = None) -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=LETTER, title=f"acp report {run['id']}",
                             topMargin=0.7 * inch, bottomMargin=0.6 * inch,
@@ -95,6 +95,32 @@ def build_report(run: dict, files: list, meta: dict) -> bytes:
     ft = Table(rows, colWidths=[3.0 * inch, 1.1 * inch, 0.7 * inch, 1.55 * inch], repeatRows=1)
     ft.setStyle(TableStyle(style))
     el.append(ft)
+
+    # Triage & remediation decisions (time-travel snapshot) — the operator's audit trail.
+    if decisions:
+        tri = {"inscope": 0, "na": 0, "defer": 0}
+        actions = 0
+        for m in decisions.values():
+            if m.get("triage") in tri:
+                tri[m["triage"]] += 1
+            if m.get("action"):
+                actions += 1
+        if tri["inscope"] or tri["na"] or tri["defer"] or actions:
+            el.append(Paragraph("Triage &amp; remediation decisions", h2))
+            drows = [["In scope", "N/A", "Deferred", "Remediation decisions"],
+                     [tri["inscope"], tri["na"], tri["defer"], actions]]
+            dt = Table(drows, colWidths=[1.6 * inch] * 4)
+            dt.setStyle(TableStyle([
+                ("FONTSIZE", (0, 0), (-1, 0), 9),
+                ("TEXTCOLOR", (0, 0), (-1, 0), MUTED),
+                ("FONTSIZE", (0, 1), (-1, 1), 14),
+                ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"),
+                ("TEXTCOLOR", (0, 1), (0, 1), GREEN),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ("LINEBELOW", (0, 0), (-1, 0), 0.5, MUTED),
+            ]))
+            el.append(dt)
 
     el.append(Spacer(1, 16))
     el.append(Paragraph(
