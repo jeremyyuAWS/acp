@@ -98,15 +98,21 @@ def set_workers(count: int = Query(..., ge=0, le=16)):
 
 @router.get("/healthz")
 def healthz():
-    return {"ok": True, "service": "acp", "rubric_hash": core.active_rubric().hash}
+    import os
+    return {"ok": True, "service": "acp", "rubric_hash": core.active_rubric().hash,
+            "version": os.environ.get("ACP_BUILD_VERSION", "dev"),
+            "built_at": os.environ.get("ACP_BUILD_TIME") or None}
 
 
 @router.get("/config")
 def config():
     """Tells the SPA how to authenticate: GIS per-user (client id present) vs demo."""
+    import os
     return {"google_client_id": core.GOOGLE_CLIENT_ID,
             "drive_scope": core.DRIVE_SCOPES[0],
-            "auth": "gis" if core.GOOGLE_CLIENT_ID else "demo"}
+            "auth": "gis" if core.GOOGLE_CLIENT_ID else "demo",
+            "version": os.environ.get("ACP_BUILD_VERSION", "dev"),
+            "built_at": os.environ.get("ACP_BUILD_TIME") or None}
 
 
 class ScheduleUpdate(BaseModel):

@@ -60,6 +60,11 @@ ENV ACP_DOTNET=/usr/local/bin/dotnet \
     DOTNET_NOLOGO=1 \
     PORT=8077
 EXPOSE 8077
+# Build provenance — passed by deploy.sh / az acr build; surfaced in /healthz and the UI.
+ARG BUILD_VERSION=dev
+ARG BUILD_TIME=
+ENV ACP_BUILD_VERSION=$BUILD_VERSION \
+    ACP_BUILD_TIME=$BUILD_TIME
 WORKDIR /app/api
 # Materialize the Drive ADC secret (if provided) to a file google-auth can read,
 # then start the server.

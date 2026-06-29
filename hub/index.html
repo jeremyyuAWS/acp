@@ -142,25 +142,31 @@
 </div>
 <script>
   (function() {
-    // document.lastModified reflects the file's actual modification time from the server —
-    // updates automatically on every deploy without any manual timestamp management.
-    var d = new Date(document.lastModified);
-    var calver = d.getFullYear() + '.' + (d.getMonth()+1) + '.' + d.getDate();
+    // Real build provenance baked into the image at deploy (CalVer + ISO timestamp),
+    // exposed by /healthz — accurate, unlike document.lastModified on a dynamic response.
+    var el = document.getElementById('build-stamp');
     function ago(date) {
       var secs = Math.floor((Date.now() - date.getTime()) / 1000);
       if (secs < 60) return 'just now';
-      var mins = Math.floor(secs / 60);
-      if (mins < 60) return mins + 'm ago';
-      var hrs = Math.floor(mins / 60);
-      if (hrs < 24) return hrs + 'h ago';
+      var mins = Math.floor(secs / 60); if (mins < 60) return mins + 'm ago';
+      var hrs = Math.floor(mins / 60); if (hrs < 24) return hrs + 'h ago';
       return Math.floor(hrs / 24) + 'd ago';
     }
-    var abs = d.toLocaleString('en-US', {month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});
-    function render() {
-      document.getElementById('build-stamp').textContent = 'v' + calver + ' · updated ' + abs + ' · ' + ago(d);
+    function render(version, builtAt) {
+      var txt = 'v' + version;
+      if (builtAt) {
+        var d = new Date(builtAt);
+        var abs = d.toLocaleString('en-US', {month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});
+        txt += ' · updated ' + abs + ' · ' + ago(d);
+      }
+      el.textContent = txt;
     }
-    render();
-    setInterval(render, 60000);
+    fetch('/healthz').then(function(r){ return r.json(); }).then(function(d){
+      if (d && d.version && d.version !== 'dev') {
+        render(d.version, d.built_at);
+        if (d.built_at) setInterval(function(){ render(d.version, d.built_at); }, 60000);
+      }
+    }).catch(function(){ /* leave blank if health is unreachable */ });
   })();
 </script>
 </body>

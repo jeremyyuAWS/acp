@@ -334,7 +334,12 @@ export default function App() {
     <div className="app">
       <a className="skiplink" href="#main-content">Skip to main content</a>
       <header>
-        <div className="brand"><Logo /><h1 className="sub">Accessibility Platform</h1></div>
+        <div className="brand"><Logo /><h1 className="sub">Accessibility Platform</h1>
+          <span className="muted" title={`Built ${fmtStamp(__BUILD_TIME__)}`}
+                style={{ fontSize: 11, marginLeft: 10, fontFamily: 'ui-monospace, monospace', whiteSpace: 'nowrap' }}>
+            {void tick}v{__BUILD_VERSION__} · updated {timeAgo(__BUILD_TIME__)}
+          </span>
+        </div>
         <div className="userbox">
           {me.role && <span className="chip" title={me.scope}>{me.role}</span>}
           {rubric && me.allow?.includes('settings') && <span className="chip">{rubric.target} · rubric {rubric.hash.slice(0, 8)}</span>}
@@ -384,11 +389,6 @@ export default function App() {
             {run?.files != null && <span className="muted">{run.files.toLocaleString()} documents</span>}
           </div>
         )}
-        <span className="runinfo-build" title={`Built ${fmtStamp(__BUILD_TIME__)}`}>
-          v{__BUILD_VERSION__}
-          <span className="muted" style={{ marginLeft: 5, fontWeight: 400 }}>· {fmtStamp(__BUILD_TIME__)}</span>
-          <span className="muted" style={{ marginLeft: 5, fontWeight: 400 }}>· {timeAgo(__BUILD_TIME__)}</span>
-        </span>
         {scanList.length > 1 && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
               <span className="muted">switch scan:</span>
