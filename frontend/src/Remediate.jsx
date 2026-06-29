@@ -227,6 +227,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const pendingHitlFiles = new Set(queue.map((q) => q.file))
   const totalHitl = queue.length + acted.approved + acted.rejected + acted.deferred + self.length
   const hitlProgress = totalHitl > 0 ? Math.round(((totalHitl - queue.length) / totalHitl) * 100) : 0
+  // Don't surface remediation numbers until the user has actually started remediating
+  // (ran "Remediate all" or acted on a review item) — pre-engagement estimates read as
+  // in-progress work and confuse first-time users. Until then the cards show zeros.
+  const remStarted = remProg != null || remBusy || (acted.approved + acted.rejected + acted.deferred + self.length) > 0
 
   // --- remediation plan + decisions (moved from Discover) ---
   const plan = files.length ? recommendationSummary(files) : null
@@ -270,8 +274,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   return (
     <>
       <div className="metrics">
-        <div className="metric" title="Estimated number of issues that can be fixed automatically — actual count updates after remediation runs"><span>auto-fixable (est.)</span><b style={{ color: '#3B6D11' }}>{autoFixed}</b></div>
-        <div className="metric"><span>HITL queue</span><b style={{ color: queue.length ? '#854F0B' : '#3B6D11' }}>{totalHitl === 0 ? 'no items' : `${queue.length} remaining`}</b>{totalHitl > 0 && <span className="muted" style={{ fontSize: 11 }}> · {hitlProgress}% done</span>}</div>
+        <div className="metric" title="Estimated number of issues that can be fixed automatically — populates once you run remediation"><span>auto-fixable (est.)</span><b style={{ color: remStarted ? '#3B6D11' : '#9AA1B4' }}>{remStarted ? autoFixed : 0}</b></div>
+        <div className="metric"><span>HITL queue</span>{remStarted
+          ? <><b style={{ color: queue.length ? '#854F0B' : '#3B6D11' }}>{totalHitl === 0 ? 'no items' : `${queue.length} remaining`}</b>{totalHitl > 0 && <span className="muted" style={{ fontSize: 11 }}> · {hitlProgress}% done</span>}</>
+          : <b style={{ color: '#9AA1B4' }}>—</b>}</div>
         <div className="metric"><span>approved</span><b>{acted.approved}</b></div>
         <div className="metric"><span>deferred</span><b style={{ color: '#1F5FA8' }}>{acted.deferred}</b></div>
         <div className="metric"><span>re-verified</span><b style={{ color: '#3B6D11' }}>{verified}</b></div>
