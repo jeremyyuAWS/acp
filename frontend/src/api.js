@@ -70,6 +70,14 @@ export const getAllowlist = () => (SIM
 export const setAllowlist = (emails) => (SIM
   ? sim({ emails })
   : fetch(`${BASE}/admin/allowlist`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ emails }) }).then(j))
+// Per-scan decision snapshots (PRD: time-travel) — restore/persist triage + action decisions.
+export const getDecisions = (scanId) => (SIM
+  ? sim({})
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/decisions`, { headers: headers() }).then(j))
+export const saveDecision = (scanId, file, kind, value) => (SIM
+  ? sim({ ok: true })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/decisions/${encodeURIComponent(file)}?kind=${kind}`,
+          { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ value }) }).then(j))
 // Run the WCAG assessment into Langfuse on demand (separate from the scan trace).
 export const assessScan = (scanId, level = 'AA') => (SIM
   ? sim({ ok: true })

@@ -33,6 +33,13 @@ _SCHEMA = [
       acp_stamped TEXT,
       PRIMARY KEY (scan_id, file)
     )""",
+    # Per-scan decision snapshots (PRD: time-travel). kind='triage' (value inscope|na|defer)
+    # or 'action' (value = JSON {state, action}). Owner-scoped, one row per (scan,file,kind).
+    """CREATE TABLE IF NOT EXISTS scan_decisions (
+      scan_id TEXT, file TEXT, kind TEXT, value TEXT,
+      owner_email TEXT, updated_at TEXT,
+      PRIMARY KEY (scan_id, file, kind)
+    )""",
     # Fan-out scan pipeline (ADR 0007): scan_runs is created at 'discover' with
     # status=running + a files_done counter, then finalized once all per-file jobs land.
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS status TEXT",
@@ -520,6 +527,35 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur, "UPDATE scan_runs SET assessed_at=%s WHERE id=%s AND assessed_at IS NULL",
                              (when, scan_id))
+
+    # ── Per-scan decision snapshots (PRD: time-travel) ──
+    def get_decisions(self, scan_id: str, owner: str | None = None) -> dict:
+        """All decisions for a scan as {file: {kind: value}} (kind = 'triage' | 'action').
+        Owner-scoped to match the scan's per-user isolation."""
+        where, params = "scan_id=%s", [scan_id]
+        if owner:
+            where += " AND owner_email=%s"; params.append(owner)
+        with self._db.cursor() as cur:
+            self._db.execute(cur, f"SELECT file,kind,value FROM scan_decisions WHERE {where}", tuple(params))
+            rows = self._db.fetchall(cur)
+        out: dict = {}
+        for r in rows:
+            out.setdefault(r["file"], {})[r["kind"]] = r["value"]
+        return out
+
+    def save_decision(self, scan_id: str, file: str, kind: str, value: str,
+                      owner: str | None, when: str) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO scan_decisions(scan_id,file,kind,value,owner_email,updated_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(scan_id,file,kind) DO UPDATE SET value=EXCLUDED.value, updated_at=EXCLUDED.updated_at",
+                (scan_id, file, kind, value, owner, when))
+
+    def delete_decision(self, scan_id: str, file: str, kind: str) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "DELETE FROM scan_decisions WHERE scan_id=%s AND file=%s AND kind=%s",
+                             (scan_id, file, kind))
 
     def active_scan(self, owner: str | None = None) -> dict | None:
         """The most recent in-flight scan (for reconnecting after a page reload), or None.

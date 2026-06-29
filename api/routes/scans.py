@@ -189,6 +189,36 @@ def assess(sid: str, request: Request, level: str = Query("AA")):
     return {"scan_id": sid, "level": level, "job_id": jid, "workers": core.WORKERS}
 
 
+# ── Per-scan decision snapshots (PRD: time-travel) ────────────────────────────
+@router.get("/scans/{sid}/decisions")
+def get_decisions(sid: str, request: Request):
+    """All persisted decisions for a scan — used to restore state on time-travel."""
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    return core.store.get_decisions(sid, owner=owner)
+
+
+@router.put("/scans/{sid}/decisions/{filename:path}")
+def put_decision(sid: str, filename: str, request: Request, body: dict,
+                 kind: str = Query("triage", pattern="^(triage|action)$")):
+    """Upsert one decision for a file on this scan. body {value}: a string (triage:
+    inscope|na|defer) or an object (action: {state, action}); value=null deletes it."""
+    import datetime as _dt
+    import json as _json
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    value = body.get("value")
+    if value is None:
+        core.store.delete_decision(sid, filename, kind)
+        return {"ok": True, "deleted": True}
+    val = value if isinstance(value, str) else _json.dumps(value)
+    core.store.save_decision(sid, filename, kind, val, owner,
+                             _dt.datetime.now(_dt.timezone.utc).isoformat())
+    return {"ok": True}
+
+
 @router.get("/scans/{sid}/remediation-status")
 def remediation_status(sid: str):
     """Live remediation progress (in-flight jobs + latest fixed file) for the bar."""
