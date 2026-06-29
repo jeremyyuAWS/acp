@@ -151,7 +151,7 @@ export default function App() {
   const [ontology, setOntology] = useState(loadPublished)
   const [aiEnabled, setAiEnabled] = useState(true)
   const [queuedScan, setQueuedScan] = useState(true)   // durable fan-out queue by default; "This session" is the opt-out
-  const [deepScan, setDeepScan] = useState(true)       // PII/sensitive-data detection on/off
+  const [deepScan, setDeepScan] = useState(false)      // off by default → Fast scan; opt in to PII scan via the switch
   const [tick, setTick] = useState(0)                  // bumped every minute to keep timeAgo labels fresh
 
   useEffect(() => {

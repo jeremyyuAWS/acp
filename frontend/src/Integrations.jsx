@@ -9,6 +9,23 @@ const AZURE_TENANT     = import.meta.env.VITE_AZURE_TENANT_ID  || 'common'
 const GD_SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file'
 const SP_SCOPES = ['Files.Read', 'Files.ReadWrite', 'User.Read']
 
+// iOS-style switch for the scan-time options (PII scan, Durable scan).
+function ScanSwitch({ on, onToggle, label, title }) {
+  return (
+    <button type="button" role="switch" aria-checked={on} aria-label={label} onClick={onToggle} title={title}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 9, cursor: 'pointer', font: 'inherit',
+               border: '1px solid var(--line)', background: 'var(--surface)', color: 'inherit',
+               borderRadius: 999, padding: '5px 13px 5px 7px' }}>
+      <span aria-hidden="true" style={{ position: 'relative', width: 36, height: 20, borderRadius: 10,
+            background: on ? '#6D28D9' : '#c6c6cf', transition: 'background .15s', flexShrink: 0 }}>
+        <span style={{ position: 'absolute', top: 2, left: on ? 18 : 2, width: 16, height: 16, borderRadius: '50%',
+              background: '#fff', transition: 'left .15s', boxShadow: '0 1px 2px rgba(0,0,0,.35)' }} />
+      </span>
+      <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>{label}</span>
+    </button>
+  )
+}
+
 function GoogleG() {
   return (
     <svg width="15" height="15" viewBox="0 0 48 48" aria-hidden="true" style={{ flexShrink: 0 }}>
@@ -315,22 +332,16 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
           {/* Scan-time options — they configure the NEXT scan, so they live here next
               to the Scan button (not in the global header). */}
           {setDeepScan && (
-            <button type="button" className={`ai-toggle${deepScan ? ' ai-toggle--on' : ''}`}
-              onClick={() => setDeepScan(v => !v)} aria-pressed={deepScan}
+            <ScanSwitch on={deepScan} onToggle={() => setDeepScan(v => !v)} label="PII scan"
               title={deepScan
-                ? 'Deep scan also looks for sensitive data (SSNs, credit cards, emails) in your documents. A bit slower on large PDF sets. Click for a faster accessibility-only scan.'
-                : 'Fast scan checks accessibility only — no sensitive-data detection. Click to also scan for sensitive data.'}>
-              {deepScan ? '🔍 Deep scan' : '◻ Fast scan'}
-            </button>
+                ? 'PII scan also looks for sensitive data (SSNs, credit cards, emails) in your documents — a bit slower on large PDF sets. Turn off for a fast, accessibility-only scan.'
+                : 'Off — Fast scan (accessibility only). Turn on to also detect sensitive data (PII).'} />
           )}
           {setQueuedScan && (
-            <button type="button" className={`ai-toggle${queuedScan ? ' ai-toggle--on' : ''}`}
-              onClick={() => setQueuedScan(v => !v)} aria-pressed={queuedScan}
+            <ScanSwitch on={queuedScan} onToggle={() => setQueuedScan(v => !v)} label="Durable scan"
               title={queuedScan
-                ? 'Durable scan — runs in the background queue: keeps going if you close the tab AND survives server restarts, with parallel downloads for large libraries (recommended). Click for a quick one-off scan in this browser session.'
-                : 'Quick scan — runs right here in your browser session: starts instantly with no queue wait, streams live per-file progress so you watch it work, and is the lightest way to spot-check a few files or re-run a scan you are watching now. Trade-off: it stops if the server restarts and is slower on very large libraries — use Durable scan for those. Click to switch to a durable scan.'}>
-              {queuedScan ? '⚡ Durable scan' : '◻ Quick scan'}
-            </button>
+                ? 'Durable scan — runs in the background queue: keeps going if you close the tab AND survives server restarts, with parallel downloads for large libraries (recommended). Turn off for a quick one-off scan in this browser session.'
+                : 'Off — Quick scan in this browser session: starts instantly, streams live per-file progress, best for spot-checking a few files. Turn on for a durable background scan that survives restarts and handles very large libraries.'} />
           )}
           <button disabled={busy || !canScanAll} onClick={() => {
             if (SIM) { onScan('all'); return }
