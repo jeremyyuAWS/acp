@@ -286,8 +286,10 @@ def scan_manifest(sid: str, request: Request):
 
 
 @router.get("/scans/{sid}/report.pdf")
-def report_pdf(sid: str, request: Request):
-    res = core.store.get_scan(sid, owner=_owner(request))
+def report_pdf(sid: str):
+    # NOTE: opened via a plain <a href> (new tab) which can't send the Bearer token, so
+    # this stays un-owner-scoped — proper scoping needs a signed/expiring URL (follow-up).
+    res = core.store.get_scan(sid)
     if res is None:
         raise HTTPException(404, "scan not found")
     rb = core.active_rubric()
