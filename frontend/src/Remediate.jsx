@@ -75,9 +75,13 @@ const ITEM_BA = {
   '2.4.4': { meta: 'link text — needs human rewrite', before: (d) => d || 'non-descriptive link text ("click here")', after: () => 'Link text rewritten — review in context before certifying' },
 }
 const SEV_RANK = { CRITICAL: 0, SERIOUS: 1, MODERATE: 2, MINOR: 3 }
-function buildHumanQueue(files) {
-  const assisted = files.filter((f) => f.rec?.action === 'assisted' && (f.issues || []).length > 0)
-  const pool = assisted.length >= 3 ? assisted : [...assisted, ...files.filter((f) => f.rec?.action === 'review' && (f.issues || []).length > 0)].slice(0, 8)
+function buildHumanQueue(files, triage = {}) {
+  const hasInscope = Object.values(triage).some((v) => v === 'inscope')
+  const candidates = hasInscope ? files.filter((f) => triage[f.file] === 'inscope') : files
+  const assisted = candidates.filter((f) => (f.rec?.action === 'assisted' || f.rec?.action === 'review') && (f.issues || []).length > 0)
+  // fallback: any inscope/active file with issues that isn't fully auto-fixable
+  const fallback = candidates.filter((f) => (f.issues || []).length > 0 && f.rec?.action !== 'auto' && !assisted.find((a) => a.file === f.file))
+  const pool = assisted.length >= 3 ? assisted : [...assisted, ...fallback].slice(0, 8)
   return pool.slice(0, 8).map((f, idx) => {
     const issue = [...(f.issues || [])].sort((a, b) => (SEV_RANK[a.severity] || 3) - (SEV_RANK[b.severity] || 3))[0]
     if (!issue) return null
@@ -111,7 +115,7 @@ function FixCarousel() {
   return (
     <section className="panel" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}>
       <div className="fixhd">
-        <h2 style={{ margin: 0 }}>AI remediation · last {FIX_EXAMPLES.length} completed <span className="livedot" aria-hidden="true" title="Connected — receiving updates in real time" /></h2>
+        <h2 style={{ margin: 0 }}>AI remediation · example fixes <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>· how the engine works</span></h2>
         <span className="muted" style={{ fontSize: 12 }}>{idx + 1} / {FIX_EXAMPLES.length}</span>
       </div>
       <div className="fixcard" key={idx}>
@@ -131,11 +135,11 @@ function FixCarousel() {
 }
 
 export default function Remediate({ run, files = [], decisions = {}, setDecisions, aiEnabled = true, onRefresh }) {
-  const [queue, setQueue] = useState(() => buildHumanQueue(files))
+  const [queue, setQueue] = useState(() => buildHumanQueue(files, {}))
   const [acted, setActed] = useState({ approved: 0, rejected: 0, deferred: 0 })
   const [deferredItems, setDeferredItems] = useState([])
   const runId = run?.id
-  useEffect(() => { setQueue(buildHumanQueue(files)); setActed({ approved: 0, rejected: 0, deferred: 0 }); setDeferredItems([]) }, [runId]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setQueue(buildHumanQueue(files, {})); setActed({ approved: 0, rejected: 0, deferred: 0 }); setDeferredItems([]) }, [runId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Derive fix-type breakdown from auto-action files in the corpus
   const fixTypesDisplay = useMemo(() => {
@@ -167,6 +171,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [remProg, setRemProg] = useState(null)   // { total, done, latest, failed }
   const pollRef = useRef(null)
   useEffect(() => () => clearInterval(pollRef.current), [])
+  // Rebuild the human review queue whenever triage decisions change so inscope-only
+  // selections are reflected when the user navigates to the Human review tab.
+  useEffect(() => {
+    setQueue(buildHumanQueue(files, triage))
+  }, [triage]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const runServerRemediation = async (scopeFiles) => {
     if (!runId || remBusy) return
@@ -225,7 +234,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // Published business ontology takes precedence in the queue order (Critical → Low),
   // then the AI risk triage breaks ties.
   const ontRank = (f) => f.ont?.priority ? PRI_RANK[f.ont.priority] : 9
-  const remediable = files.filter((f) => f.rec && REM_ACTIONS.includes(f.rec.action) && triage[f.file] !== 'na' && triage[f.file] !== 'defer').sort((a, b) => (ontRank(a) - ontRank(b)) || (priority(b) - priority(a)))
+  const hasInscopeSelections = Object.values(triage).some((v) => v === 'inscope')
+  const remediable = files.filter((f) => {
+    if (!f.rec || !REM_ACTIONS.includes(f.rec.action)) return false
+    if (triage[f.file] === 'na' || triage[f.file] === 'defer') return false
+    // If the user has explicitly marked any files inscope, only remediate those files.
+    if (hasInscopeSelections && triage[f.file] !== 'inscope') return false
+    return true
+  }).sort((a, b) => (ontRank(a) - ontRank(b)) || (priority(b) - priority(a)))
   const ontCount = remediable.filter((f) => f.ont).length
   const autoFiles = remediable.filter((f) => {
     const eff = decisions[f.file]?.state === 'override' ? decisions[f.file].action : f.rec?.action
@@ -254,7 +270,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   return (
     <>
       <div className="metrics">
-        <div className="metric" title="Issues fixed automatically by the server-side remediation engine after the batch ran"><span>auto-fixed issues</span><b style={{ color: '#3B6D11' }}>{autoFixed}</b></div>
+        <div className="metric" title="Estimated number of issues that can be fixed automatically — actual count updates after remediation runs"><span>auto-fixable (est.)</span><b style={{ color: '#3B6D11' }}>{autoFixed}</b></div>
         <div className="metric"><span>HITL queue</span><b style={{ color: queue.length ? '#854F0B' : '#3B6D11' }}>{totalHitl === 0 ? 'no items' : `${queue.length} remaining`}</b>{totalHitl > 0 && <span className="muted" style={{ fontSize: 11 }}> · {hitlProgress}% done</span>}</div>
         <div className="metric"><span>approved</span><b>{acted.approved}</b></div>
         <div className="metric"><span>deferred</span><b style={{ color: '#1F5FA8' }}>{acted.deferred}</b></div>
@@ -277,7 +293,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                         background: '#BF8C00', transition: 'width .35s' }} />
           </div>
           <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
-            ⚡ Remediating {remProg.done.toLocaleString()} of {remProg.total.toLocaleString()}
+            ⚡ <b>Live</b> · remediating {remProg.done.toLocaleString()} of {remProg.total.toLocaleString()} files in real time
             {remProg.latest ? <> · last fixed <span className="fname">{remProg.latest}</span></> : '…'}
             {remProg.failed ? ` · ${remProg.failed} failed` : ''}
           </div>
@@ -349,7 +365,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
             {junkCount > 0 && (
               <div className="junkbanner">
-                ⚑ <b>{junkCount} file{junkCount !== 1 ? 's' : ''} auto-flagged</b> — name patterns or score ≥ 90 with no critical/serious findings · suggested N/A or archive (counted within the {undecided} undecided above), not queued for remediation
+                ⚑ <b>{junkCount} file{junkCount !== 1 ? 's' : ''} suggested as low-priority</b> — draft/backup name patterns, or score ≥ 90 with no critical/serious findings · the agent recommends N/A or archive (these are FILES, counted within the {undecided} undecided above). Not automatically excluded — you decide.
                 <button className="ghost small" style={{ marginLeft: 10 }} onClick={() => triageBulk(triageFiles.filter(isAutoJunk), 'na')}>Mark all N/A</button>
                 <button className="ghost small" style={{ marginLeft: 6 }} onClick={() => triageBulk(triageFiles.filter(isAutoJunk), 'defer')}>Defer all</button>
               </div>

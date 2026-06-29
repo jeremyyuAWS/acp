@@ -67,6 +67,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   useEffect(() => () => { clearInterval(timer.current); clearTimeout(phaseTimer.current) }, [])
 
   const docs = files.filter((f) => f.score != null)
+  const excludedCount = files.length - docs.length
   const reset = () => {
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
     setPhase('idle'); setResult(null); setResultFromCache(false); setProgress(0); setCurrentFile(null); setCurrentPhase('')
@@ -88,9 +89,8 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
              pct: Math.round((conformant / total) * 100) }
   }
 
-  // Time-based cosmetic pass (~600ms/doc). Driven by wall-clock since startedAt so it
-  // resumes correctly after a tab switch / reload — like the Scan progress bar.
-  const DURATION = Math.max(1, docs.length) * 600
+  // Time-based cosmetic pass. Cap at 6s so the animation doesn't drag on large estates.
+  const DURATION = Math.min(Math.max(1, docs.length) * 80, 6000)
 
   const save = (obj) => { try { sessionStorage.setItem(SKEY(runId), JSON.stringify(obj)) } catch { /* ignore */ } }
 
@@ -138,7 +138,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [docs.length])
 
   const note = result && (result.level === 'A'
     ? 'Level A is the floor — only must-have criteria block conformance.'
@@ -153,7 +153,12 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
       <div className="assesshd">
         <div>
           <h2 style={{ margin: 0 }}>Assess the estate against WCAG 2.1</h2>
-          <p className="muted" style={{ margin: '3px 0 0' }}>Run all {docs.length.toLocaleString()} readable documents against the success criteria at your target conformance level.{files.length > docs.length ? ` ${(files.length - docs.length).toLocaleString()} unanalysable file${files.length - docs.length !== 1 ? 's' : ''} excluded — could not be parsed during scan.` : ''}</p>
+          <p className="muted" style={{ margin: '3px 0 0' }}>Run all {docs.length.toLocaleString()} readable documents against the success criteria at your target conformance level.</p>
+          {excludedCount > 0 && (
+            <p style={{ margin: '5px 0 0', fontSize: 12.5, color: '#854F0B', background: '#FAEEDA', border: '1px solid #E8C98A', borderRadius: 6, padding: '5px 10px', display: 'inline-block' }}>
+              ⚠ {excludedCount} of {files.length} files excluded — could not be parsed during scan (password-protected, unsupported format, or corrupt). Only {docs.length} parsable files are assessed.
+            </p>
+          )}
           {scanBusy && <p style={{ margin: '6px 0 0', fontSize: 13, color: '#854F0B' }}>⏳ A scan is still running — assessment will be available once it finishes.</p>}
         </div>
         <button className="assessbtn" onClick={assess} disabled={phase === 'running' || !docs.length || scanBusy}
@@ -169,6 +174,9 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
           </button>
         ))}
       </div>
+      <p className="muted" style={{ fontSize: 12, margin: '4px 0 0', lineHeight: 1.5 }}>
+        The level controls <b>which WCAG success criteria count as blocking</b> — not which files are scanned. All {docs.length} parsable files are always assessed; at <b>A</b> only Level A findings block conformance, at <b>AA</b> both A + AA findings count (the legal target for ADA / EAA), and at <b>AAA</b> all findings count. Changing the level resets the result so you can re-run at the new target.
+      </p>
 
       <div role="status" aria-live="polite">
         {phase === 'running' && (

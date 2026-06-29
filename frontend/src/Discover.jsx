@@ -24,11 +24,13 @@ const OVERRIDE_ACTIONS = ['keep', 'archive', 'retain', 'delete']
 function ExposureRisk({ pub, internal, internalRisk, onPick }) {
   const [open, setOpen] = useState(false)
   const mx = Math.max(1, pub.value, internal.value)
-  const row = (label, value, color, mxx, { indent = false, chev = null, onClick } = {}) => {
+  const row = (label, value, color, mxx, { indent = false, chev = null, onClick, onPickCount } = {}) => {
     const inner = (<>
       <span className="critlabel" style={{ fontSize: 13, textAlign: 'left', paddingLeft: indent ? 18 : 0 }}>{chev && <span className="expchev" aria-hidden="true">{chev}</span>}{label}</span>
       <span className="track"><i style={{ width: `${(value / mxx) * 100}%`, background: color, transition: 'width .9s ease' }} /></span>
-      <span className="critn">{value}</span>
+      {onPickCount
+        ? <button className="critn" style={{ cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted', background: 'none', border: 'none', padding: 0, font: 'inherit', color: 'inherit' }} onClick={(e) => { e.stopPropagation(); onPickCount() }} title="View these files">{value}</button>
+        : <span className="critn">{value}</span>}
     </>)
     return onClick
       ? <button className="critrow pickrow" style={{ gridTemplateColumns: '150px 1fr 34px', width: '100%' }} onClick={onClick} aria-expanded={chev ? open : undefined}>{inner}</button>
@@ -36,8 +38,8 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
   }
   return (
     <div>
-      {row(pub.label, pub.value, pub.color, mx, { onClick: () => onPick?.('public-facing') })}
-      {row(internal.label, internal.value, internal.color, mx, { chev: open ? '▾' : '▸', onClick: () => setOpen((o) => !o) })}
+      {row(pub.label, pub.value, pub.color, mx, { onClick: () => onPick?.('public-facing'), onPickCount: () => onPick?.('public-facing') })}
+      {row(internal.label, internal.value, internal.color, mx, { chev: open ? '▾' : '▸', onClick: () => setOpen((o) => !o), onPickCount: () => onPick?.('internal') })}
       {open && internalRisk.map((r) => <div key={r.label}>{row(r.label, r.value, r.color, internal.value, { indent: true, onClick: () => onPick?.(r.label) })}</div>)}
     </div>
   )
@@ -222,7 +224,9 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
               <ExposureRisk pub={exposurePub} internal={exposureInternal} internalRisk={internalRisk} onPick={(tag) => {
                 const filtered = tag === 'public-facing'
                   ? visibleFiles.filter((f) => tagsOf(f).includes('public-facing'))
-                  : visibleFiles.filter((f) => !tagsOf(f).includes('public-facing') && (tag === 'internal' || tagsOf(f).includes(tag)))
+                  : tag === 'internal'
+                    ? visibleFiles.filter((f) => !tagsOf(f).includes('public-facing'))
+                    : visibleFiles.filter((f) => !tagsOf(f).includes('public-facing') && tagsOf(f).includes(tag))
                 setSeg({ title: `${tag} documents`, subtitle: `${filtered.length} file${filtered.length !== 1 ? 's' : ''}`, files: filtered })
               }} />
               <p className="muted ppfoot">Public-facing pages (also your high-traffic content) are the top legal-exposure surface under ADA / EAA. The {exposureInternal.value} internal documents carry the PII &amp; legal-hold content that matters most if mishandled.</p>
