@@ -359,7 +359,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             <div className="triagehd">
               <div>
                 <b>File triage</b>
-                <span className="muted"> · {triageFiles.length} files · classify before remediation</span>
+                <span className="muted"> · {triageFiles.length} files · decide which to remediate</span>
+                <div className="muted" style={{ fontSize: 12, marginTop: 3, lineHeight: 1.5, maxWidth: 760 }}>
+                  Tick files (or the header checkbox) then set a decision for all of them — or use the buttons on each row:
+                  <b style={{ color: '#3B6D11' }}> ✓ In scope</b> = remediate it · <b> N/A</b> = skip, not relevant · <b style={{ color: '#1F5FA8' }}> ⏸ Defer</b> = decide later. Only <b>in-scope</b> files are remediated.
+                </div>
               </div>
               <div className="triagesum">
                 <span className="trstatchip inscope">{inscopeCount} in scope</span>
@@ -379,11 +383,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
             {triageSel.size > 0 && (
               <div className="triagetools">
-                <span className="muted" style={{ fontSize: 13 }}>{triageSel.size} selected ·</span>
-                <button className="ghost small" onClick={() => triageBulk(selFiles, 'inscope')}>✓ In scope</button>
-                <button className="ghost small" onClick={() => triageBulk(selFiles, 'na')}>N/A</button>
-                <button className="ghost small" onClick={() => triageBulk(selFiles, 'defer')}>⏸ Defer</button>
-                <button className="ghost small" style={{ color: 'var(--muted)' }} onClick={() => setTriageSel(new Set())}>clear</button>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>{triageSel.size} file{triageSel.size !== 1 ? 's' : ''} selected — set a decision:</span>
+                <button className="ghost small" title="Mark these files in scope — they'll be remediated" onClick={() => triageBulk(selFiles, 'inscope')}>✓ In scope</button>
+                <button className="ghost small" title="Mark N/A — skip these, not relevant to remediate" onClick={() => triageBulk(selFiles, 'na')}>N/A</button>
+                <button className="ghost small" title="Defer — decide on these later" onClick={() => triageBulk(selFiles, 'defer')}>⏸ Defer</button>
+                <button className="ghost small" style={{ color: 'var(--muted)' }} title="Clear the selection" onClick={() => setTriageSel(new Set())}>clear selection</button>
               </div>
             )}
 

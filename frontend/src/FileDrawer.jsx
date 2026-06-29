@@ -352,9 +352,9 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
               Rule coverage · {allRules.length} checks
               <span className="covstat pass">{passCount} pass</span>
               {failCount > 0 && <span className="covstat fail">{failCount} fail</span>}
-              {skipCount > 0 && <span className="covstat skip">{skipCount} skip</span>}
+              {skipCount > 0 && <span className="covstat skip">{skipCount} N/A</span>}
             </summary>
-            <div className="covmanifest-note muted">Every WCAG rule checked by this engine, with its outcome for this file.</div>
+            <div className="covmanifest-note muted">HTML files are checked against every rule; PDF/Office engines check the subset they can evaluate. <b>N/A</b> = this criterion isn’t covered by the {file.engine || 'engine'} for this file type — it’s not an error or a failure.</div>
             <table className="covtable">
               <thead><tr><th>SC</th><th>Name</th><th>Lvl</th><th>Fix</th><th>Outcome</th></tr></thead>
               <tbody>
@@ -367,9 +367,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                         <td>{r.plain}<div className="muted" style={{ fontSize: 11 }}>{r.name}</div></td>
                         <td className="muted">{r.level}</td>
                         <td className="muted">{r.fixMode === 'auto' ? '⚡ auto' : r.fixMode === 'ai-assisted' ? '✎ AI' : '✋ human'}</td>
-                        <td className={`covoutcome ${r.outcome.toLowerCase()}`}>
-                          {r.outcome === 'PASS' ? '✓' : r.outcome === 'FAIL' ? `✕ ${r.count}` : '–'}
-                          <span className="covouttxt">{r.outcome === 'PASS' ? 'pass' : r.outcome === 'FAIL' ? 'fail' : 'skip'}</span>
+                        <td className={`covoutcome ${r.outcome.toLowerCase()}`}
+                          title={r.outcome === 'SKIP' ? `N/A — this criterion isn’t checked by the ${file.engine || 'engine'} for this file type (not an error)` : undefined}>
+                          {r.outcome === 'PASS' ? '✓' : r.outcome === 'FAIL' ? `✕ ${r.count}` : 'N/A'}
+                          <span className="covouttxt">{r.outcome === 'PASS' ? 'pass' : r.outcome === 'FAIL' ? 'fail' : 'not applicable'}</span>
                           {r.outcome === 'FAIL' && scanId && !exp && (
                             <button className="explain-btn" onClick={() => fetchExplanation(r.id)} title="Get AI explanation">Why?</button>
                           )}

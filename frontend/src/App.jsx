@@ -391,7 +391,7 @@ export default function App() {
         )}
         {scanList.length > 1 && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-              <span className="muted">switch scan:</span>
+              <span className="muted" title="Time-travel — pick any past scan and every tab, dashboard and score reflects that point in time">🕐 Time-travel:</span>
               <select
                 value={scan?.run?.id || ''}
                 onChange={(e) => switchScan(e.target.value)}
