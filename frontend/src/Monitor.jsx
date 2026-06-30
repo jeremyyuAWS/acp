@@ -118,12 +118,12 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
       await exportEvidenceReport({
         org: IDENTITY.org,
         date: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
-        summary: `Watching ${m.watchedSources} sources and ${m.watchedDocs.toLocaleString()} documents. Re-scans ${m.cadence}; last ${m.lastRescan}, next ${m.nextRescan}. ${m.coveragePct}% re-scan coverage over 7 days, ${m.slaPct}% within SLA.`,
+        summary: `${prog.total.toLocaleString()} documents in the remediation plan across ${prog.batches.length} batches; ${prog.batches.reduce((a, b) => a + b.done, 0).toLocaleString()} of ${prog.batches.reduce((a, b) => a + b.count, 0).toLocaleString()} resolved. Evidence below is the live audit trail of decisions and re-validations recorded for this estate.`,
         metrics: [
-          { label: 'Documents watched', value: m.watchedDocs.toLocaleString() },
-          { label: 'Sources', value: m.watchedSources },
-          { label: 'Re-scan coverage · 7d', value: m.coveragePct + '%', color: '#3B6D11' },
-          { label: 'Open alerts', value: m.alerts.length, color: '#1F5FA8' },
+          { label: 'Documents in scope', value: files.length.toLocaleString() },
+          { label: 'In remediation plan', value: prog.total.toLocaleString() },
+          { label: 'Resolved', value: prog.batches.reduce((a, b) => a + b.done, 0).toLocaleString(), color: '#3B6D11' },
+          { label: 'Sources', value: new Set(files.map((f) => f.sourceName).filter(Boolean)).size || 1 },
         ],
         events: realAuditSrc.map(([action, change, document]) => ({ action, actor: ACTOR[action] || 'mova engine', change, document })),
       })
@@ -154,9 +154,7 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
       const eff = dec.state === 'override' ? dec.action : dec.state === 'rejected' ? 'archive' : f.rec?.action || 'review'
       return [DEC_ACT[eff] || 'review', (DEC_WHAT[eff] || 'decision recorded') + ' · ' + f.file, f.file]
     })
-    const combined = [...fromPub, ...fromDec]
-    const pad = BASELINE_AUDIT.slice(0, Math.max(2, 4 - combined.length))
-    return [...combined, ...pad].slice(0, 6)
+    return [...fromPub, ...fromDec].slice(0, 6)   // REAL events only — no baseline padding
   }, [decisions, files, publishedFiles])
   const auditSrcRef = useRef(realAuditSrc)
   auditSrcRef.current = realAuditSrc
@@ -179,25 +177,9 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
     }).catch(() => {})
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    if (paused || prefersReducedMotion()) return
-    const t = setInterval(() => push(POOL[next.current % POOL.length]), 4200)
-    const a = setInterval(() => {
-      const src = auditSrcRef.current
-      setAudit((f) => [{ e: src[auditNext.current % src.length], id: auditNext.current++ }, ...f].slice(0, 6))
-    }, 2600)
-    return () => { clearInterval(t); clearInterval(a) }
-  }, [paused]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>
-      <div className="estatebar" style={{ marginTop: 6 }}>
-        <div>
-          <span className="monlive"><span className="livedot" aria-hidden="true" /> Continuous monitoring · ON<SampleTag /></span>
-          <div className="muted" style={{ marginTop: 3 }}>watching {m.watchedSources} sources · {m.watchedDocs} documents · re-scans {m.cadence} · last {m.lastRescan} · next {m.nextRescan}</div>
-        </div>
-        <button className={paused ? '' : 'ghost'} onClick={() => setPaused((p) => !p)}>{paused ? '▶ Resume live feed' : '⏸ Pause live feed'}</button>
-      </div>
 
       {/* All behaviour settings (AI mode, scan triggers, schedule) collapsed into one
           panel at the top, so the tab leads with live status. Collapsed by default. */}
@@ -313,18 +295,10 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
       </section>
 
       <div className="moncards">
-        <div className="moncard"><span className="muted">Documents watched</span><b>{m.watchedDocs}</b><span className="muted">{m.watchedSources} sources</span></div>
-        <div className="moncard moncard-sample"><span className="muted">Re-scan coverage · 7d</span><b style={{ color: '#3B6D11', opacity: SIM ? 1 : 0.45 }}>{m.coveragePct}%</b><span className="muted">{m.slaPct}% within SLA{!SIM && <SampleTag />}</span></div>
-        <div className="moncard moncard-sample"><span className="muted">New / changed · 7d</span><b style={{ opacity: SIM ? 1 : 0.45 }}>{watch.reduce((a, w) => a + w.newFiles, 0)} / {watch.reduce((a, w) => a + w.changed, 0)}</b><span className="muted">detected &amp; re-assessed{!SIM && <SampleTag />}</span></div>
-        <div className="moncard moncard-sample"><span className="muted">Remediation backlog</span><b style={{ opacity: SIM ? 1 : 0.45 }}>{hrs(m.backlogMin)}</b><span className="muted">{m.autoPct}% automatic{!SIM && <SampleTag />}</span></div>
-        <div className="moncard"><span className="muted">Open alerts · 7d</span><b style={{ color: '#1F5FA8' }}>{m.alerts.length}</b><span className="muted">drift &amp; regressions</span></div>
+        <div className="moncard"><span className="muted">Documents in scope</span><b>{files.length.toLocaleString()}</b><span className="muted">{new Set(files.map((f) => f.sourceName).filter(Boolean)).size || 1} source{(new Set(files.map((f) => f.sourceName).filter(Boolean)).size || 1) !== 1 ? 's' : ''}</span></div>
+        <div className="moncard"><span className="muted">In remediation plan</span><b>{prog.total.toLocaleString()}</b><span className="muted">across {prog.batches.length} batches</span></div>
+        <div className="moncard"><span className="muted">Resolved</span><b style={{ color: '#3B6D11' }}>{prog.batches.reduce((a, b) => a + b.done, 0).toLocaleString()}</b><span className="muted">of {prog.batches.reduce((a, b) => a + b.count, 0).toLocaleString()}</span></div>
       </div>
-      {!SIM && (
-        <div className="muted" style={{ fontSize: 11.5, margin: '-6px 0 14px' }}>
-          <SampleTag /> Re-scan coverage, new/changed, backlog &amp; open alerts are projected — continuous monitoring not yet wired.
-          <b> Documents watched</b>, the <b>job queue</b>, and the <b>remediation program</b> are live from your scans.
-        </div>
-      )}
 
       {slaItems.length > 0 && (
         <section className="panel" style={{ marginBottom: 14 }}>
@@ -352,91 +326,29 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
       )}
 
       <section className="panel" style={{ marginBottom: 14 }}>
-        <h2>Watched sources <span className="muted">· polled continuously for new files &amp; edits</span><SampleTag /></h2>
-        <div className="watchgrid">
-          {watch.map((w) => (
-            <div className="watchcard" key={w.id}>
-              <div className="watchtop">
-                <span className="watchico" aria-hidden="true">{SRC_ICON[w.kind] || '📁'}</span>
-                <div className="watchname">{w.name}<div className="muted" style={{ fontSize: 11 }}>{w.docs} docs</div></div>
-                <span className="watchpulse" title="watching"><span className="livedot" aria-hidden="true" /></span>
-              </div>
-              <div className="watchmeta">
-                <span className="muted">polled {w.polled}</span>
-                <label htmlFor={`cad-${w.id}`} className="cadsel">scan
-                  <select id={`cad-${w.id}`} value={cad[w.id]} onChange={(e) => setCad((c) => ({ ...c, [w.id]: e.target.value }))}>
-                    {['live', 'hourly', 'daily', 'weekly', 'off'].map((v) => <option key={v} value={v}>{v}</option>)}
-                  </select>
-                </label>
-              </div>
-              <div className="watchchips">
-                {cad[w.id] === 'off' ? <span className="wchip off">paused</span> : (<>
-                  {w.newFiles ? <span className="wchip new">+{w.newFiles} new</span> : null}
-                  {w.changed ? <span className="wchip chg">{w.changed} changed</span> : null}
-                  {!w.newFiles && !w.changed ? <span className="wchip ok">in sync</span> : null}
-                </>)}
-              </div>
-            </div>
-          ))}
+        <div className="proghd">
+          <h2 style={{ margin: 0 }}>Scheduled re-scans <span className="muted">· automatic re-scan of your estate</span></h2>
+          {schedNext && (Object.values(cad)[0] || 'off') !== 'off' && (
+            <span className="trstatchip pending" style={{ fontSize: 12 }}>next {new Date(schedNext).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+          )}
+        </div>
+        <div className="muted" style={{ fontSize: 13, margin: '6px 0 10px' }}>
+          {(Object.values(cad)[0] || 'off') === 'off'
+            ? 'No schedule set — the estate is re-scanned only when you trigger one manually.'
+            : `Re-scanning ${Object.values(cad)[0]}. The scheduled sweep runs server-side and writes results back to your scans + Langfuse.`}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span className="muted" style={{ fontSize: 13 }}>Cadence:</span>
+          {['live', 'hourly', 'daily', 'weekly', 'off'].map((v) => {
+            const on = (Object.values(cad)[0] || 'off') === v
+            return (
+              <button key={v} onClick={() => setAllCad(v)}
+                style={{ fontSize: 12, padding: '4px 11px', borderRadius: 6, cursor: 'pointer', fontWeight: on ? 600 : 400,
+                  border: '1px solid ' + (on ? '#7C3AED' : 'var(--line)'), background: on ? '#7C3AED' : '#fff', color: on ? '#fff' : 'var(--ink)' }}>{v}</button>
+            )
+          })}
         </div>
       </section>
-
-      <div className="monsplit">
-        <section className="panel">
-          <div className="monfeedhd">
-            <h2 style={{ margin: 0 }}>Live monitoring feed {SIM && <span className="livedot" aria-hidden="true" />}<SampleTag /></h2>
-            {SIM && (
-              <div className="simbtns">
-                <button className="ghost small" onClick={() => push(POOL[0])}>＋ Simulate new file</button>
-                <button className="ghost small" onClick={() => push(POOL[2])}>✎ Simulate an edit</button>
-              </div>
-            )}
-          </div>
-          <div className="monfeed" style={{ marginTop: 10 }} role="log" aria-live="polite" aria-label="Live monitoring feed">
-            {events.map((e) => {
-              const [glyph, fg, bg, label] = KIND[e.kind] || KIND.clean
-              return (
-                <div className="monrow" key={e.id}>
-                  <span className="monicon" style={{ color: fg, background: bg }} aria-hidden="true">{glyph}</span>
-                  <div className="monmain">
-                    <div>{e.text}</div>
-                    <div className="muted" style={{ fontSize: 12 }}><span className="evkind" style={{ color: fg }}>{label}</span> · {e.src} · <span className="fname">{e.doc}</span> · {e.when}</div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </section>
-
-        <div>
-          <section className="panel" style={{ marginBottom: 14 }}>
-            <h2>Scheduled re-scans <SampleTag /></h2>
-            <div className="schedlist">
-              {watch.slice(0, 6).map((w) => {
-                const thisCad = SIM ? w.cadence : (cad[w.id] || 'off')
-                const nextAt = SIM ? w.next : (schedNext && thisCad !== 'off'
-                  ? new Date(schedNext).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                  : null)
-                return (
-                  <div className="schedrow" key={w.id}>
-                    <span className="schedname">{w.name}</span>
-                    <span className="schedcad muted">{thisCad}</span>
-                    {nextAt
-                      ? <span className="schednext">{nextAt}</span>
-                      : <span className="schednext muted" style={{ fontStyle: 'italic' }}>paused — enable a cadence to schedule</span>}
-                  </div>
-                )
-              })}
-            </div>
-          </section>
-          <section className="panel">
-            <h2>Active monitoring rules <SampleTag /></h2>
-            <ul className="monrules">
-              {m.rules.map((r) => <li key={r}><span className="ruledot" aria-hidden="true" />{r}</li>)}
-            </ul>
-          </section>
-        </div>
-      </div>
 
       <section className="panel" style={{ marginTop: 14 }} ref={evidenceRef}>
         <div className="monfeedhd">
@@ -461,6 +373,9 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
               </div>
             )
           })}
+          {!audit.length && !(ratified && ratified.total > 0) && (
+            <p className="muted" style={{ fontSize: 13, padding: '4px 2px' }}>No activity yet — decisions, auto-fixes, re-validations and publishes appear here as you work.</p>
+          )}
         </div>
         <p className="muted" style={{ marginTop: 10 }}>Immutable who / when / what / which-engine log — your ADA &amp; EAA evidence trail.</p>
       </section>
