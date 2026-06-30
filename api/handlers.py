@@ -200,6 +200,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
     started = _dt.datetime.now(_dt.timezone.utc).isoformat()
     core.store.init_scan_run(scan_id, source, len(items), started, rb.name, rb.hash, owner=user)
     _lf.scan_trace(scan_id, source, len(items), ai_enabled=ai, user=user, deep_scan=pii)
+    _lf.flush()  # ensure the trace header lands in Langfuse before discover job exits
     if not items:
         core.store.enqueue_job("scan_finalize",
                                {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)
@@ -295,6 +296,7 @@ def _scan_batch(payload: dict, job: dict) -> None:
     svc = _make_svc(source, toks)
     for it in items:
         _analyse_and_persist_one(scan_id, it, source, pii, svc, toks, now, _lf)
+    _lf.flush()  # send any file spans before the batch job exits
     done, total = core.store.bump_files_done(scan_id, len(items))
     if done >= total > 0:
         core.store.enqueue_job("scan_finalize",
@@ -316,6 +318,7 @@ def _scan_file(payload: dict, job: dict) -> None:
     now = _dt.datetime.now(_dt.timezone.utc).isoformat()
     svc = _make_svc(source, toks)
     _analyse_and_persist_one(scan_id, payload, source, pii, svc, toks, now, _lf)
+    _lf.flush()  # send file span before this per-file job exits
     done, total = core.store.bump_files_done(scan_id)
     if done >= total > 0:
         core.store.enqueue_job("scan_finalize",
