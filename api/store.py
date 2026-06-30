@@ -16,6 +16,11 @@ from pathlib import Path
 _DATABASE_URL = os.environ.get("DATABASE_URL")
 _SQLITE_PATH = Path(__file__).resolve().parent.parent / "acp.db"
 
+# Friendly source labels for the "By source system" breakdown (get_scan). Mirrors
+# lf._SOURCE_LABEL; duplicated rather than imported to avoid store.py depending on lf.py
+# for 3 strings.
+_SOURCE_LABEL = {"drive": "Google Drive", "sharepoint": "SharePoint / OneDrive", "local": "Local upload"}
+
 # Schema is identical between SQLite and Postgres (UPSERT syntax is the same).
 _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS scan_runs (
@@ -584,7 +589,14 @@ class Store:
                 "SELECT file,engine,status,score,compliant,skipped_rules,remediated_at,drive_write_url,acp_stamped "
                 "FROM file_records WHERE scan_id=%s ORDER BY file", (sid,))
             files = self._db.fetchall(cur)
+            # file_records has no per-file source column (every file in one scan shares the
+            # scan's single source) — derive the friendly sourceName here, at the single read
+            # path, so every consumer (Overview/Dashboard/FileDrawer/Monitor/Publish/...) gets
+            # it without a schema change. Was previously unset on real scans (SIM-only field),
+            # which silently blanked any "by source" chart.
+            src_label = _SOURCE_LABEL.get(run.get("source"), run.get("source"))
             for f in files:
+                f["sourceName"] = src_label
                 self._db.execute(cur,
                     "SELECT rule_id,wcag,severity FROM issue_records WHERE scan_id=%s AND file=%s",
                     (sid, f["file"]))
