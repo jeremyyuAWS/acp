@@ -2,6 +2,13 @@ import { useState, useEffect } from 'react'
 import { getScanDiff } from './api.js'
 import { TraceChip } from './Transparency.jsx'
 
+// Mirrors FileDrawer's SEV map (not exported there) — same severity → color
+// convention across the app.
+const SEV = {
+  CRITICAL: ['#E2EDFB', '#1F5FA8'], SERIOUS: ['#E6EFFB', '#2A5E9E'],
+  MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'],
+}
+
 // Real drift detection (ADR 0009) — diffs the viewed scan against the prior one and surfaces
 // documents that regressed (with the exact WCAG criterion that flipped pass→fail) or improved.
 // No continuous-monitoring webhooks needed — it's computed from scan history we already store.
@@ -50,7 +57,19 @@ export default function RegressionRadar({ run, scanList = [] }) {
             <div className="radarrow" key={r.file}>
               <div className="radarfile">
                 <span className="fname">{r.file}</span>
-                {r.broke?.length ? <div className="muted" style={{ fontSize: 11.5 }}>now failing: {r.broke.map((b) => `${b.sc} ${b.name}`).join(' · ')}</div> : null}
+                {r.broke?.length ? (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 3 }}>
+                    {r.broke.map((b) => {
+                      const [bg, fg] = SEV[b.severity] || SEV.MINOR
+                      return (
+                        <span key={b.sc} title={b.severity ? b.severity[0] + b.severity.slice(1).toLowerCase() : undefined}
+                              style={{ fontSize: 11, padding: '1px 6px', borderRadius: 999, background: bg, color: fg, whiteSpace: 'nowrap' }}>
+                          {b.sc} {b.name}
+                        </span>
+                      )
+                    })}
+                  </div>
+                ) : null}
               </div>
               <span className="radardelta down">{r.prev}&nbsp;→&nbsp;{r.cur} <b>▼{Math.abs(r.delta)}</b></span>
               <TraceChip scanId={diff.cur_id} kind="file" file={r.file} label="trace" />

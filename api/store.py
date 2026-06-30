@@ -25,6 +25,11 @@ _SOURCE_LABEL = {"drive": "Google Drive", "sharepoint": "SharePoint / OneDrive",
 # find_by_checksum needs it to recompute the rolled-up severity for a copied PII summary.
 _PII_SEV_RANK = {"critical": 3, "moderate": 2, "low": 1}
 
+# WCAG issue severity (issue_records.severity / config/rule-catalog.json) — a DIFFERENT
+# vocabulary from the PII one above (these are uppercase, PII's are lowercase). Used by
+# get_scan_diff to pick the worst severity when a SC's findings are mixed.
+_ISSUE_SEV_RANK = {"CRITICAL": 4, "SERIOUS": 3, "MODERATE": 2, "MINOR": 1}
+
 # Schema is identical between SQLite and Postgres (UPSERT syntax is the same).
 _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS scan_runs (
@@ -681,8 +686,27 @@ class Store:
                     out.setdefault(r["file"], {})[r["rule_id"]] = (str(r["outcome"]).upper(), r["plain_name"])
                 return out
 
+            def _severities(sid):
+                # scan_rule_traces has no severity column (it's an SC-level rollup); the
+                # real per-finding severity lives on issue_records, keyed by the raw
+                # ruleId. Roll up to (file, SC) → worst severity, since a "broke" entry
+                # is reported at the SC level and a SC can carry findings of mixed
+                # severity (rare, but the regression card should show the worst case).
+                self._db.execute(cur, "SELECT file, wcag, severity FROM issue_records WHERE scan_id=%s", (sid,))
+                out: dict = {}
+                for r in self._db.fetchall(cur):
+                    sc = _extract_sc(r.get("wcag", ""))
+                    if not sc:
+                        continue
+                    cell = out.setdefault(r["file"], {})
+                    sev = r.get("severity")
+                    if sev and _ISSUE_SEV_RANK.get(sev, 0) > _ISSUE_SEV_RANK.get(cell.get(sc), 0):
+                        cell[sc] = sev
+                return out
+
             fp, fc = _files(prev_id), _files(cur_id)
             tp, tc = _traces(prev_id), _traces(cur_id)
+            sevs = _severities(cur_id)
 
         regressed, improved, new, removed = [], [], [], []
         for f, cs in fc.items():
@@ -693,9 +717,10 @@ class Store:
                 continue
             delta = cs - ps
             if delta < 0:
-                broke = [{"sc": rid, "name": name}
+                broke = [{"sc": rid, "name": name, "severity": sevs.get(f, {}).get(rid)}
                          for rid, (outcome, name) in tc.get(f, {}).items()
                          if outcome == "FAIL" and tp.get(f, {}).get(rid, ("",))[0] == "PASS"]
+                broke.sort(key=lambda b: -_ISSUE_SEV_RANK.get(b["severity"], 0))
                 regressed.append({"file": f, "prev": ps, "cur": cs, "delta": delta, "broke": broke[:6]})
             elif delta > 0:
                 improved.append({"file": f, "prev": ps, "cur": cs, "delta": delta})
