@@ -21,6 +21,10 @@ _SQLITE_PATH = Path(__file__).resolve().parent.parent / "acp.db"
 # for 3 strings.
 _SOURCE_LABEL = {"drive": "Google Drive", "sharepoint": "SharePoint / OneDrive", "local": "Local upload"}
 
+# Mirrors pii._SEV_RANK; duplicated (not imported) for the same reason as _SOURCE_LABEL —
+# find_by_checksum needs it to recompute the rolled-up severity for a copied PII summary.
+_PII_SEV_RANK = {"critical": 3, "moderate": 2, "low": 1}
+
 # Schema is identical between SQLite and Postgres (UPSERT syntax is the same).
 _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS scan_runs (
@@ -36,6 +40,7 @@ _SCHEMA = [
       remediated_at TEXT,
       drive_write_url TEXT,
       acp_stamped TEXT,
+      checksum TEXT,
       PRIMARY KEY (scan_id, file)
     )""",
     # Per-scan decision snapshots (PRD: time-travel). kind='triage' (value inscope|na|defer)
@@ -58,6 +63,12 @@ _SCHEMA = [
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS remediated_at TEXT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS drive_write_url TEXT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS acp_stamped TEXT",
+    # Drive's md5Checksum (free in the same files().list() call) — lets a scan recognize
+    # byte-identical duplicates uploaded under different names/folders and skip re-running
+    # the (expensive) engine analysis + PII extraction for the 2nd+ copy. Scoped to ONE
+    # scan only (find_by_checksum filters on scan_id) — reusing analysis ACROSS scans is
+    # the bigger incremental-fingerprinting feature, not this.
+    "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS checksum TEXT",
     """CREATE TABLE IF NOT EXISTS issue_records (
       scan_id TEXT, file TEXT, rule_id TEXT, wcag TEXT, severity TEXT
     )""",
@@ -347,10 +358,11 @@ class Store:
                  report.get("owner")))
             for f in report["files"]:
                 self._db.execute(cur,
-                    "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped,checksum) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     (sid, f["file"], f["engine"], f["status"], f["score"],
-                     int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id"), f.get("acp_stamped")))
+                     int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id"), f.get("acp_stamped"),
+                     f.get("checksum")))
                 for i in f["issues"]:
                     self._db.execute(cur,
                         "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity) "
@@ -404,13 +416,14 @@ class Store:
             (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text())
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
+                "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped,checksum) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
                 "engine=EXCLUDED.engine,status=EXCLUDED.status,score=EXCLUDED.score,"
                 "compliant=EXCLUDED.compliant,skipped_rules=EXCLUDED.skipped_rules,"
-                "drive_file_id=EXCLUDED.drive_file_id,acp_stamped=EXCLUDED.acp_stamped",
+                "drive_file_id=EXCLUDED.drive_file_id,acp_stamped=EXCLUDED.acp_stamped,checksum=EXCLUDED.checksum",
                 (scan_id, f["file"], f["engine"], f["status"], f["score"],
-                 int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id"), f.get("acp_stamped")))
+                 int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id"), f.get("acp_stamped"),
+                 f.get("checksum")))
             self._db.execute(cur, "DELETE FROM issue_records WHERE scan_id=%s AND file=%s", (scan_id, f["file"]))
             for i in f.get("issues", []):
                 self._db.execute(cur,
@@ -440,6 +453,49 @@ class Store:
                      _json.dumps(pf["samples"])))
             self._db.execute(cur, _UPSERT_INV,
                 (f["file"], completed_at, completed_at, f["status"], f["score"]))
+
+    def find_by_checksum(self, scan_id: str, checksum: str) -> dict | None:
+        """Look up an already-analysed file in THIS scan with the same Drive md5Checksum —
+        i.e. a byte-identical duplicate uploaded under a different name/folder. Returns a
+        dict shaped for save_file_result (ruleId-keyed issues, pii in detect_file's shape)
+        so the caller can copy it forward under the new file's name instead of re-running
+        the engine + PII extraction. None if no match (first occurrence, or checksum-less
+        source like SharePoint/local)."""
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT file,engine,status,score,compliant,skipped_rules,acp_stamped "
+                "FROM file_records WHERE scan_id=%s AND checksum=%s LIMIT 1",
+                (scan_id, checksum))
+            row = self._db.fetchone(cur)
+            if not row:
+                return None
+            self._db.execute(cur,
+                "SELECT rule_id,wcag,severity FROM issue_records WHERE scan_id=%s AND file=%s",
+                (scan_id, row["file"]))
+            issues = [{"ruleId": r["rule_id"], "wcag": r["wcag"], "severity": r["severity"]}
+                      for r in self._db.fetchall(cur)]
+            self._db.execute(cur,
+                "SELECT pii_type,label,count,severity,samples FROM pii_findings "
+                "WHERE scan_id=%s AND file=%s", (scan_id, row["file"]))
+            pii_rows = self._db.fetchall(cur)
+        pii = None
+        if pii_rows:
+            findings = [{"type": p["pii_type"], "label": p["label"], "count": p["count"],
+                        "severity": p["severity"],
+                        "samples": _json.loads(p["samples"]) if p.get("samples") else []}
+                       for p in pii_rows]
+            total = sum(p["count"] for p in findings)
+            sev = None
+            for p in findings:
+                if sev is None or _PII_SEV_RANK.get(p["severity"], 0) > _PII_SEV_RANK.get(sev, 0):
+                    sev = p["severity"]
+            pii = {"types": {p["type"]: p["count"] for p in findings}, "total": total,
+                  "severity": sev, "findings": findings}
+        return {"engine": row["engine"], "status": row["status"], "score": row["score"],
+               "compliant": row["compliant"], "skipped_rules": row["skipped_rules"],
+               "acp_stamped": row["acp_stamped"], "issues": issues, "pii": pii,
+               "dedup_of": row["file"]}
 
     def bump_files_done(self, scan_id: str, n: int = 1) -> tuple[int, int]:
         """Atomically increment the done counter by n (default 1; a scan_batch bumps by

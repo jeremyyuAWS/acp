@@ -217,13 +217,15 @@ def _scan_discover(payload: dict, job: dict) -> None:
             core.store.enqueue_job("scan_batch", {
                 "scan_id": scan_id, "source": source, "ai": ai, "pii": pii, "user": user,
                 "items": [{"file": it["name"], "drive_file_id": it.get("id"),
-                           "mime": it.get("mime"), "path": it.get("path")} for it in chunk],
+                           "mime": it.get("mime"), "path": it.get("path"),
+                           "checksum": it.get("checksum")} for it in chunk],
             }, scan_id=scan_id)
     else:
         for it in items:
             core.store.enqueue_job("scan_file", {
                 "scan_id": scan_id, "source": source, "file": it["name"],
                 "drive_file_id": it.get("id"), "mime": it.get("mime"), "path": it.get("path"),
+                "checksum": it.get("checksum"),
                 "ai": ai, "pii": pii, "user": user}, scan_id=scan_id)
 
 
@@ -234,24 +236,38 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
     fetch/analyse failure is recorded as an 'error' file so the scan still finalizes."""
     from scanner import _download, analyse_and_assess
     name = item["file"]
+    checksum = item.get("checksum")
+    dedup_of = None
+    # Checksum dedup: a byte-identical copy of a file already analysed earlier in THIS
+    # scan (e.g. the same PDF uploaded to two folders under different names) — skip the
+    # download + engine analysis + PII extraction entirely and copy the prior result
+    # forward under this file's own name/id. Scoped to one scan_id only; reusing analysis
+    # ACROSS scans is the separate, bigger incremental-fingerprinting feature.
+    dedup = core.store.find_by_checksum(scan_id, checksum) if checksum else None
     tmp = _Path(_tempfile.mkdtemp(prefix="acp-scanone-"))
     fdict = pinfo = None
     try:
-        try:
-            it = {"name": name, "id": item.get("drive_file_id")}
-            if item.get("mime"):
-                it["mime"] = item["mime"]
-            if item.get("path"):                       # local source — read from disk
-                it["path"] = item["path"]
-            _download(it, tmp, svc, sp_token=toks.get("sp"))
-            fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii)
-        except Exception as e:
-            core.store.log_decision("system", "scan.file_error", scan_id=scan_id, file=name,
-                                    detail=f"{type(e).__name__}: {e}"[:200])
+        if dedup:
+            dedup_of = dedup.pop("dedup_of")
+            pinfo = dedup.pop("pii")
+            fdict = {"file": name, **dedup}
+        else:
+            try:
+                it = {"name": name, "id": item.get("drive_file_id")}
+                if item.get("mime"):
+                    it["mime"] = item["mime"]
+                if item.get("path"):                       # local source — read from disk
+                    it["path"] = item["path"]
+                _download(it, tmp, svc, sp_token=toks.get("sp"))
+                fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii)
+            except Exception as e:
+                core.store.log_decision("system", "scan.file_error", scan_id=scan_id, file=name,
+                                        detail=f"{type(e).__name__}: {e}"[:200])
         if fdict is None:                              # fetch/analyse failed → error record
             fdict = {"file": name, "engine": "n/a", "status": "error", "score": None,
                      "compliant": 0, "skipped_rules": 0, "issues": []}
         fdict["drive_file_id"] = item.get("drive_file_id")
+        fdict["checksum"] = checksum
         if pinfo:
             fdict["pii"] = pinfo
         core.store.save_file_result(scan_id, fdict, now)
@@ -262,7 +278,8 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
         dspan = _lf.discover_span(ftrace, fdict["engine"])
         if pii and pinfo and pinfo.get("total"):
             _lf.pii_span(dspan, pinfo, filename=name)
-        dspan.end(output={"engine": fdict["engine"], "sensitive_data": (pinfo or {}).get("total", 0)})
+        dspan.end(output={"engine": fdict["engine"], "sensitive_data": (pinfo or {}).get("total", 0),
+                          **({"duplicate_of": dedup_of} if dedup_of else {})})
     finally:
         _shutil.rmtree(tmp, ignore_errors=True)
 

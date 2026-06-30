@@ -121,7 +121,12 @@ def _normalize(files: list[dict]) -> list[dict]:
             unique = f"{stem} ({n}){suffix}"
             n += 1
         seen.add(unique)
-        result.append({"name": unique, "id": f["id"], **({"mime": mime} if mime in EXPORT_MAP else {})})
+        # md5Checksum is absent for native Google Workspace files (Docs/Sheets/Slides
+        # have no fixed byte representation — exported on each request) so it's only
+        # ever present for real binary uploads, which is exactly the case checksum
+        # dedup cares about.
+        result.append({"name": unique, "id": f["id"], "checksum": f.get("md5Checksum"),
+                       **({"mime": mime} if mime in EXPORT_MAP else {})})
     return result
 
 
@@ -132,7 +137,7 @@ def _search_drive(svc, max_files: int = 500) -> list[dict]:
     while len(files) < max_files:
         resp = svc.files().list(
             q=f"({_DRIVE_MIME_Q}) and trashed=false",
-            fields="nextPageToken,files(id,name,mimeType)",
+            fields="nextPageToken,files(id,name,mimeType,md5Checksum)",
             pageSize=200,
             orderBy="name",
             pageToken=page_token,
@@ -160,7 +165,7 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000) -> list[dict]:
         while True:
             resp = svc.files().list(
                 q=f"'{fid}' in parents and trashed=false",
-                fields="nextPageToken,files(id,name,mimeType)",
+                fields="nextPageToken,files(id,name,mimeType,md5Checksum)",
                 pageSize=200,
                 pageToken=page_token,
             ).execute()
@@ -250,7 +255,7 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
     else:
         # ADC/demo mode with a pinned folder
         resp = svc.files().list(q=f"'{_DEMO_FOLDER}' in parents and trashed=false",
-                                fields="files(id,name,mimeType)", pageSize=200,
+                                fields="files(id,name,mimeType,md5Checksum)", pageSize=200,
                                 orderBy="name").execute()
         result = _normalize(resp.get("files", []))
     return _dedupe_names(result)

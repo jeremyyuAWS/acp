@@ -23,7 +23,7 @@ const priority = (f) => {
     + (f.issues || []).filter((i) => i.severity === 'CRITICAL').length * 2 + (f.issues || []).filter((i) => i.severity === 'SERIOUS').length
 }
 
-export default function KnowledgeGraph({ files }) {
+export default function KnowledgeGraph({ files, scanId = null }) {
   const ref = useRef(null)
   const [detail, setDetail] = useState(null)
   const [dept, setDept] = useState('')
@@ -188,7 +188,7 @@ export default function KnowledgeGraph({ files }) {
             <span className="muted">{detail.fns.join(', ')}{detail.count > 30 ? ' …' : ''}</span></span>
         )}
       </div>
-      {selFile && <FileDrawer file={selFile} onClose={() => setSelFile(null)} />}
+      {selFile && <FileDrawer file={selFile} onClose={() => setSelFile(null)} scanId={scanId} />}
     </div>
   )
 }

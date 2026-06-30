@@ -47,7 +47,7 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
   )
 }
 
-export default function Discover({ sources, files, busy, onScan, delegations = {}, fileTypeConfig = {}, onAdvance, progress = null, scanPct = 0, scanStatus = '' }) {
+export default function Discover({ sources, files, busy, onScan, delegations = {}, fileTypeConfig = {}, onAdvance, progress = null, scanPct = 0, scanStatus = '', scanId = null }) {
   const [sub, setSub] = useState('inventory')
   const [sel, setSel] = useState(null)
   const [open, setOpen] = useState(() => new Set())
@@ -327,7 +327,7 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
         )
       })()}
       {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
-      {sel && <FileDrawer file={sel} context="discover" onClose={() => setSel(null)} overrideOwner={ownerOf(sel)} delegatedFrom={isDelegated(sel) ? sel.owner : null} />}
+      {sel && <FileDrawer file={sel} context="discover" onClose={() => setSel(null)} overrideOwner={ownerOf(sel)} delegatedFrom={isDelegated(sel) ? sel.owner : null} scanId={scanId} />}
     </>
   )
 }

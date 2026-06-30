@@ -232,7 +232,7 @@ function lastScanLabel(scans, type) {
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function Integrations({ sources, files = [], scans = [], onScan, busy, hasDriveToken, hasSPToken, onConnect,
-                                       deepScan = true, setDeepScan, queuedScan = false, setQueuedScan }) {
+                                       deepScan = true, setDeepScan, queuedScan = false, setQueuedScan, scanId = null }) {
   const [selSrc,      setSelSrc]      = useState(null)
   const [selFile,     setSelFile]     = useState(null)
   const [pickerSrc,   setPickerSrc]   = useState(null)
@@ -431,7 +431,7 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
 
       {selSrc  && <SourceDrawer source={selSrc}  files={files.filter((f) => f.source === selSrc.id)}
                                 onClose={() => setSelSrc(null)}  onPickFile={setSelFile} />}
-      {selFile && <FileDrawer   file={selFile}   onClose={() => setSelFile(null)} />}
+      {selFile && <FileDrawer   file={selFile}   onClose={() => setSelFile(null)} scanId={scanId} />}
     </>
   )
 }

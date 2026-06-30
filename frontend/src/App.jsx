@@ -552,9 +552,9 @@ export default function App() {
         {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} /> : assessGate) : placeholder)}
 
         {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
-          deepScan={deepScan} setDeepScan={setDeepScan} queuedScan={queuedScan} setQueuedScan={setQueuedScan} />}
+          deepScan={deepScan} setDeepScan={setDeepScan} queuedScan={queuedScan} setQueuedScan={setQueuedScan} scanId={run?.id} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? statusMsg(progress.elapsed || 0, deepScan) : ''} />}
+        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? statusMsg(progress.elapsed || 0, deepScan) : ''} scanId={run?.id} />}
 
         {view === 'assess' && (
           <>
@@ -567,7 +567,7 @@ export default function App() {
                 from already-scanned files with no fetch/await, so they were rendering
                 instantly even if the user had never clicked "Assess". Matching Overview's
                 gate makes step 5 genuinely downstream of step 4, not just numbered that way. */}
-            {(assess === 'graph' || assess === 'rubric' || assess === 'coverage') && (run ? (assessed ? <><RiskScore run={run} files={files} /><KnowledgeGraph files={files} /></> : assessGate) : placeholder)}
+            {(assess === 'graph' || assess === 'rubric' || assess === 'coverage') && (run ? (assessed ? <><RiskScore run={run} files={files} /><KnowledgeGraph files={files} scanId={run.id} /></> : assessGate) : placeholder)}
           </>
         )}
 
