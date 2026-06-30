@@ -78,7 +78,8 @@ const ITEM_BA = {
 const SEV_RANK = { CRITICAL: 0, SERIOUS: 1, MODERATE: 2, MINOR: 3 }
 function buildHumanQueue(files, triage = {}) {
   const hasInscope = Object.values(triage).some((v) => v === 'inscope')
-  const candidates = hasInscope ? files.filter((f) => triage[f.file] === 'inscope') : files
+  const active = files.filter((f) => !(f.remediated_at || f.drive_write_url))  // exclude already-fixed
+  const candidates = hasInscope ? active.filter((f) => triage[f.file] === 'inscope') : active
   const assisted = candidates.filter((f) => (f.rec?.action === 'assisted' || f.rec?.action === 'review') && (f.issues || []).length > 0)
   // fallback: any inscope/active file with issues that isn't fully auto-fixable
   const fallback = candidates.filter((f) => (f.issues || []).length > 0 && f.rec?.action !== 'auto' && !assisted.find((a) => a.file === f.file))
@@ -270,6 +271,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const ontRank = (f) => f.ont?.priority ? PRI_RANK[f.ont.priority] : 9
   const hasInscopeSelections = Object.values(triage).some((v) => v === 'inscope')
   const remediable = files.filter((f) => {
+    if (f.remediated_at || f.drive_write_url) return false  // already fixed — don't re-offer it
     if (!f.rec || !REM_ACTIONS.includes(f.rec.action)) return false
     if (triage[f.file] === 'na' || triage[f.file] === 'defer') return false
     // If the user has explicitly marked any files inscope, only remediate those files.
@@ -375,7 +377,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         const scoreColor = (s) => s >= 80 ? '#3B6D11' : s >= 60 ? '#854F0B' : '#7B1D1D'
         const SEV_C = { CRITICAL: '#7B1D1D', SERIOUS: '#854F0B', MODERATE: '#1F5FA8', MINOR: '#9a948f' }
         const topSev = (f) => { for (const s of ['CRITICAL', 'SERIOUS', 'MODERATE', 'MINOR']) if ((f.issues || []).some((i) => i.severity === s)) return s; return null }
-        const triageFiles = [...files].sort((a, b) => {
+        // Already-remediated files are done — drop them from triage so they
+        // don't linger as "undecided". The green write-back banner above is the
+        // record of what's been fixed.
+        const remediatedFiles = files.filter((f) => f.remediated_at || f.drive_write_url)
+        const triageFiles = files.filter((f) => !(f.remediated_at || f.drive_write_url)).sort((a, b) => {
           const aDec = triage[a.file], bDec = triage[b.file]
           const aJ = isAutoJunk(a), bJ = isAutoJunk(b)
           if (!aDec && !bDec) return (bJ ? 1 : 0) - (aJ ? 1 : 0) || ((a.score ?? 50) - (b.score ?? 50))
@@ -393,7 +399,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             <div className="triagehd">
               <div>
                 <b>File triage</b>
-                <span className="muted"> · {triageFiles.length} files · decide which to remediate</span>
+                <span className="muted"> · {triageFiles.length} file{triageFiles.length !== 1 ? 's' : ''} to decide{remediatedFiles.length > 0 ? ` · ${remediatedFiles.length} already remediated (cleared)` : ''}</span>
                 <div className="muted" style={{ fontSize: 12, marginTop: 3, lineHeight: 1.5, maxWidth: 760 }}>
                   Tick files (or the header checkbox) then set a decision for all of them — or use the buttons on each row:
                   <b style={{ color: '#3B6D11' }}> ✓ In scope</b> = remediate it · <b> N/A</b> = skip, not relevant · <b style={{ color: '#1F5FA8' }}> ⏸ Defer</b> = decide later. Only <b>in-scope</b> files are remediated.
@@ -425,6 +431,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               </div>
             )}
 
+            {triageFiles.length > 0 ? (
             <div className="trlist">
               <div className="trheader">
                 <input type="checkbox" checked={allSel} onChange={() => setTriageSel(allSel ? new Set() : new Set(triageFiles.map((f) => f.file)))} aria-label="Select all" />
@@ -476,6 +483,12 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 )
               })}
             </div>
+            ) : (
+              <div className="triagecta">
+                <b>✓ All scanned files remediated</b> — every file has been fixed and written back. Nothing left to triage{remediatedFiles.length > 0 ? ` · ${remediatedFiles.length} fixed` : ''}.
+                <button className="decbtn ok" style={{ marginLeft: 14 }} onClick={() => setSub('revalidate')}>→ Re-validate</button>
+              </div>
+            )}
 
             {undecided === 0 && triageFiles.length > 0 && (
               <div className="triagecta">
