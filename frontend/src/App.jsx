@@ -563,7 +563,11 @@ export default function App() {
               <button role="tab" aria-selected={assess === 'graph'} aria-current={assess === 'graph' ? 'step' : undefined} className={`fchip${assess === 'graph' ? ' on' : assessed ? ' done' : ''}`} onClick={() => setAssess('graph')}>{assessed && assess !== 'graph' && <span className="tabok" aria-hidden="true">✓ </span>}5 · Risk &amp; findings</button>
             </div>
             {assess === 'results' && (run ? <><AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy} onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase} />{assessPhase === 'done' && <><RuleBreakdown scanId={run.id} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}</> : placeholder)}
-            {(assess === 'graph' || assess === 'rubric' || assess === 'coverage') && (run ? <><RiskScore run={run} files={files} /><KnowledgeGraph files={files} /></> : placeholder)}
+            {/* Gated on `assessed` (not just `run`) — these numbers are aggregated straight
+                from already-scanned files with no fetch/await, so they were rendering
+                instantly even if the user had never clicked "Assess". Matching Overview's
+                gate makes step 5 genuinely downstream of step 4, not just numbered that way. */}
+            {(assess === 'graph' || assess === 'rubric' || assess === 'coverage') && (run ? (assessed ? <><RiskScore run={run} files={files} /><KnowledgeGraph files={files} /></> : assessGate) : placeholder)}
           </>
         )}
 
