@@ -379,7 +379,12 @@ export function simStartScan(sourceId) {
   return { job_id: jid }
 }
 export const simGetJob = (jid) => JOBS[jid]
-export const simGetScan = (sid) => SCANS[sid] || buildScan('all', scoped())
+export const simGetScan = (sid) => {
+  const s = SCANS[sid] || buildScan('all', scoped())
+  // Round-trip the requested id so time-travel works in SIM like it does for real
+  // (real getScan(id) returns run.id === id; without this the replay logic never clears).
+  return { ...s, run: { ...s.run, id: sid } }
+}
 export const simListScans = () => {
   const cur = buildScan('all', scoped()).run
   const n = scoped().length

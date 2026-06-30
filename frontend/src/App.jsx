@@ -377,10 +377,13 @@ export default function App() {
   // is persisted on the scan (assessed_at); justAssessed gives an immediate optimistic flip.
   const assessed = !!run?.assessed_at || justAssessed === run?.id
   const assessGate = <AssessGate onGo={() => { setAssess('results'); setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
+  // Time-travel = viewing any scan other than the latest. Drives the replay banner + the
+  // app-wide "replaymode" tint so it's unmistakable you're looking at a past point in time.
+  const isTimeTravel = !!(run && scanList.length > 1 && scanList[0]?.id !== run.id)
 
 
   return (
-    <div className="app">
+    <div className={`app${isTimeTravel ? ' replaymode' : ''}`}>
       <a className="skiplink" href="#main-content">Skip to main content</a>
       <header>
         <div className="brand"><Logo /><h1 className="sub">Accessibility Platform</h1>
@@ -448,10 +451,11 @@ export default function App() {
                 aria-label="Select scan run"
                 style={{ fontSize: 12, padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--surface)', color: 'inherit', cursor: 'pointer' }}
               >
-                {scanList.map((s) => (
+                {scanList.map((s, i) => (
                   <option key={s.id} value={s.id}>
-                    {new Date(s.completed_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
-                    {' · '}{s.source}{' · '}{(s.files ?? 0).toLocaleString()} documents
+                    {i === 0 ? '★ ' : ''}{new Date(s.completed_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                    {s.avg_score != null ? ` · ${s.avg_score}/100` : ''}
+                    {' · '}{timeAgo(s.completed_at)}{i === 0 ? ' · latest' : ''}
                   </option>
                 ))}
               </select>
@@ -466,10 +470,10 @@ export default function App() {
           )}
       </div>
 
-      {run && scanList.length > 1 && scanList[0]?.id !== run.id && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: '#F4EEFC', border: '1px solid #D9CCF2', borderRadius: 8, padding: '8px 14px', margin: '8px 0' }}>
-          <span style={{ fontSize: 13 }}>🕐 <b>Time-travel</b> — viewing the scan from {fmtStamp(run.completed_at)}. Every tab, dashboard and your saved decisions reflect this past scan.</span>
-          <button className="ghost small" style={{ marginLeft: 'auto' }} onClick={() => switchScan(scanList[0].id)}>↩ Back to latest</button>
+      {isTimeTravel && (
+        <div className="ttbanner" role="status">
+          <span style={{ fontSize: 13.5 }}>🕐 <b>Time-travel replay</b> — viewing the scan from <b>{fmtStamp(run.completed_at)}</b>{run.avg_score != null ? ` · ${run.avg_score}/100` : ''}. Every tab, the dashboard and your saved decisions reflect this past scan.</span>
+          <button className="ttexit" onClick={() => switchScan(scanList[0].id)}>↩ Back to latest</button>
         </div>
       )}
 
