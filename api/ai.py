@@ -89,6 +89,32 @@ def _parse(text: str) -> dict[str, str]:
     return {"why": why, "fix": fix}
 
 
+def _claude_complete(system: str, user: str, max_tokens: int = 300) -> tuple[str, str] | None:
+    """One-shot Claude text completion via the Anthropic SDK. Returns (text, model), or None
+    when ANTHROPIC_API_KEY is unset or the call fails. Model: claude-opus-4-8 (ANTHROPIC_MODEL
+    override). Shared by the compliance digest and per-finding explanations."""
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        return None
+    model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
+    try:
+        from anthropic import Anthropic
+        msg = Anthropic(api_key=key).messages.create(
+            model=model, max_tokens=max_tokens, system=system,
+            messages=[{"role": "user", "content": user}])
+        text = "".join(getattr(b, "text", "") for b in msg.content if getattr(b, "type", "") == "text").strip()
+        return (text, model) if text else None
+    except Exception:
+        return None
+
+
+_EXPLAIN_SYSTEM = (
+    "You are an accessibility compliance assistant. Reply with exactly two labeled lines — "
+    "WHY: (which users are blocked and how) and FIX: (one concrete action or minimal snippet) "
+    "— under 55 words total, specific to the file type. Use only the finding details given."
+)
+
+
 def explain_finding(
     rule_id: str,
     rule_name: str,
@@ -98,16 +124,19 @@ def explain_finding(
     severity: str,
     engine_rule_ids: list[str],
 ) -> dict | None:
-    """Call Ollama to explain a WCAG finding. Returns None on any error."""
-    import httpx
+    """Explain a WCAG finding. Prefers Claude (when ANTHROPIC_API_KEY is set) → local Ollama.
+    Returns None when neither is available / on error."""
     prompt = _prompt(rule_id, rule_name, level, filename, finding_count, severity, engine_rule_ids)
+    res = _claude_complete(_EXPLAIN_SYSTEM, prompt, max_tokens=200)
+    if res:
+        return {**_parse(res[0]), "model": res[1], "raw": res[0]}
     try:
+        import httpx
         r = httpx.post(
             f"{OLLAMA_BASE_URL}/api/generate",
             json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
                   "options": {"temperature": 0.3, "num_predict": 120}},
-            # CPU inference of a 3B model: the first call loads the model into RAM
-            # (~15s) then generates (~30-60s). Generous timeout so it doesn't fail.
+            # CPU inference of a 3B model: first call loads the model (~15s) then generates.
             timeout=150,
         )
         r.raise_for_status()
@@ -190,21 +219,9 @@ _DIGEST_SYSTEM = (
 
 
 def _claude_narrative(facts: dict) -> tuple[str, str] | None:
-    """Best-quality narrative via the Anthropic SDK — used only when ANTHROPIC_API_KEY is
-    set. Model is claude-opus-4-8 (override with ANTHROPIC_MODEL). Returns (text, model)."""
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
-        return None
-    model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
-    try:
-        from anthropic import Anthropic
-        msg = Anthropic(api_key=key).messages.create(
-            model=model, max_tokens=400, system=_DIGEST_SYSTEM,
-            messages=[{"role": "user", "content": _digest_prompt(facts)}])
-        text = "".join(getattr(b, "text", "") for b in msg.content if getattr(b, "type", "") == "text").strip()
-        return (text, model) if text and len(text) > 40 else None
-    except Exception:
-        return None
+    """Best-quality digest narrative via Claude (only when ANTHROPIC_API_KEY is set)."""
+    res = _claude_complete(_DIGEST_SYSTEM, _digest_prompt(facts), max_tokens=400)
+    return res if (res and len(res[0]) > 40) else None
 
 
 def _ollama_narrative(facts: dict) -> tuple[str, str] | None:

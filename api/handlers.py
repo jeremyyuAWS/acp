@@ -373,7 +373,12 @@ def _assess_trace(payload: dict, job: dict) -> None:
     res = core.store.get_scan(scan_id)
     owner = (res or {}).get("run", {}).get("owner_email")
     trace = _lf.open_assess_trace(scan_id, level, total, user=owner)
-    for fname, sc_counts in by_file.items():
+    # Cap per-document spans (one file span × its rule sub-spans) so a large assessment
+    # trace stays openable in the Langfuse OSS detail view — same cap as the Scan trace.
+    from scanner import SCAN_TRACE_SPAN_CAP
+    for i, (fname, sc_counts) in enumerate(by_file.items()):
+        if i >= SCAN_TRACE_SPAN_CAP:
+            break
         fspan = trace.span(name=fname, input={"document": fname})
         _lf.rule_spans(fspan, sc_counts, RULE_CATALOG, filename=fname)
         fspan.end(output={"failing_criteria": len(sc_counts)})
