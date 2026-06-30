@@ -132,7 +132,12 @@ export const getRemediationStatus = (scanId) => {
 }
 // Queue state: depth by status + recent jobs (drives the in-app queue panel).
 export const getJobs = (status = null) => (SIM
-  ? sim({ workers: 4, stats: { done: 12, running: 1, queued: 3 }, jobs: [] })
+  ? sim({ workers: 4, stats: { done: 12, running: 1, queued: 3 }, dead_letters: { by_type: {}, top_errors: [] }, jobs: [
+    { id: 'j1a2', type: 'remediate_file', status: 'running', scan_id: 'sim-all', payload: '{"file":"cardiology-policy.html"}', created_at: '2026-06-29T17:05:01Z', updated_at: '2026-06-29T17:05:04Z' },
+    { id: 'j1a3', type: 'scan_file', status: 'done', scan_id: 'sim-all', payload: '{"file":"patient-intake-form.pdf"}', created_at: '2026-06-29T17:04:40Z', updated_at: '2026-06-29T17:04:43Z' },
+    { id: 'j1a4', type: 'assess_trace', status: 'done', scan_id: 'sim-all', payload: '{}', created_at: '2026-06-29T17:04:10Z', updated_at: '2026-06-29T17:04:12Z' },
+    { id: 'j1a5', type: 'scan_batch', status: 'queued', scan_id: 'sim-all', payload: '{"items":[]}', created_at: '2026-06-29T17:05:05Z', updated_at: '2026-06-29T17:05:05Z' },
+  ] })
   : fetch(`${BASE}/jobs${status ? `?status=${status}` : ''}`, { headers: headers() }).then(j))
 // Delete unrecoverable dead-lettered jobs (signed-in admins only).
 export const clearDeadJobs = () => (SIM

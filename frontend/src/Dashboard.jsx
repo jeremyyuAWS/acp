@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { openReport } from './api'
 import { ScoreRing, Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
+import { TraceChip } from './Transparency.jsx'
 import FileDrawer, { critLabel } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import Tag from './Tag.jsx'
@@ -123,7 +124,7 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
         <section className="panel">
           <h2>Scan history <span className="muted" style={{ fontWeight: 400 }}>· master score = latest run · click a row to view it</span></h2>
           <div className="tablewrap"><table>
-            <thead><tr><th></th><th>scan</th><th>score</th><th>change</th><th>certifiable</th><th>source</th></tr></thead>
+            <thead><tr><th></th><th>scan</th><th>score</th><th>change</th><th>certifiable</th><th>source</th><th></th></tr></thead>
             <tbody>
               {scanList.map((s, i) => {
                 const prev = scanList[i + 1]
@@ -142,6 +143,7 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
                         {d > 0 ? `▲ +${d}` : d < 0 ? `▼ ${d}` : '±0'}</span>)}</td>
                     <td className="muted">{s.certifiable ?? '—'} / {(s.files ?? 0).toLocaleString()}</td>
                     <td className="muted">{s.source}</td>
+                    <td onClick={(e) => e.stopPropagation()}><TraceChip traceId={s.id} label="trace" /></td>
                   </tr>
                 )
               })}

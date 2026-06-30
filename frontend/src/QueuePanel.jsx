@@ -1,5 +1,14 @@
 import { useEffect, useState } from 'react'
 import { getJobs, setWorkers, clearDeadJobs } from './api.js'
+import { TraceChip } from './Transparency.jsx'
+
+// Job-type → short human label for the recent-jobs cards.
+const JOBLABEL = {
+  scan_discover: 'discover', scan_file: 'scan file', scan_batch: 'scan batch',
+  scan_finalize: 'finalize', remediate_file: 'remediate', assess_trace: 'assess', scan: 'scan',
+}
+const fmtDur = (s) => (s == null ? '' : s < 1 ? '<1s' : s < 60 ? `${Math.round(s)}s` : `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`)
+const jobFile = (payload) => { try { return JSON.parse(payload || '{}').file || null } catch { return null } }
 
 // Live view of the durable async job queue (ADR 0004). Polls /jobs and shows
 // queue depth by status. The same data Grafana's queue panel renders.
@@ -151,6 +160,36 @@ export default function QueuePanel() {
                   title="Remove these terminal-failure jobs from the queue">
             Clear dead-letters
           </button>
+        </div>
+      )}
+
+      {/* Recent jobs — your own (the queue is owner-scoped), so you can see exactly which
+          document each worker is processing right now and how long each step took. */}
+      {q?.jobs?.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <div className="muted" style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>
+            Recent jobs <span style={{ fontWeight: 400, textTransform: 'none' }}>· your most recent {Math.min(q.jobs.length, 8)}</span>
+          </div>
+          <div className="jobcards">
+            {q.jobs.slice(0, 8).map((jb) => {
+              const file = jobFile(jb.payload)
+              const dur = jb.created_at && jb.updated_at ? Math.max(0, (new Date(jb.updated_at) - new Date(jb.created_at)) / 1000) : null
+              const [fg, bg] = STATUS[jb.status] || ['#555', '#eee']
+              return (
+                <div className="jobcard" key={jb.id}>
+                  <span className="jobtype">{JOBLABEL[jb.type] || jb.type}</span>
+                  <span className="jobfile" title={file || jb.scan_id || jb.id}>
+                    {file || (jb.scan_id ? `scan ${String(jb.scan_id).slice(0, 8)}` : String(jb.id).slice(0, 8))}
+                  </span>
+                  <span className="jobstatus" style={{ color: fg, background: bg }}>
+                    {jb.status === 'running' && <span className="livedot" aria-hidden="true" />}{jb.status}
+                  </span>
+                  {dur != null && <span className="muted jobdur">{fmtDur(dur)}</span>}
+                  {jb.scan_id && <TraceChip traceId={jb.scan_id} label="trace" />}
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
     </section>
