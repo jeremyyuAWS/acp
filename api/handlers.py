@@ -183,7 +183,8 @@ def _scan_discover(payload: dict, job: dict) -> None:
     Langfuse trace, and enqueue one scan_file job per file."""
     import lf as _lf
     from rubric import Rubric
-    from scanner import _list, _drive_service, ACP, FANOUT_MAX_FILES, SCAN_BATCH_SIZE, SCAN_BATCH_THRESHOLD
+    from scanner import (_list, _drive_service, ACP, FANOUT_MAX_FILES, SCAN_BATCH_SIZE,
+                         SCAN_BATCH_THRESHOLD, SCAN_TRACE_SPAN_CAP)
     scan_id = payload.get("scan_id") or job.get("scan_id")
     source = payload.get("source", "drive")
     ai = bool(payload.get("ai", True)) and core.store.get_ai_enabled()
@@ -208,20 +209,24 @@ def _scan_discover(payload: dict, job: dict) -> None:
     # below the threshold; an explicit batch=true forces the batch path. The persisted
     # results and Langfuse spans are identical either way — only job granularity changes.
     use_batch = bool(payload.get("batch")) or len(items) >= SCAN_BATCH_THRESHOLD
+    # lf_span caps per-document spans on the Scan trace: only the first SCAN_TRACE_SPAN_CAP
+    # files (by discovery order) write a span, so the trace stays openable on big estates.
     if use_batch:
         for i in range(0, len(items), SCAN_BATCH_SIZE):
             chunk = items[i:i + SCAN_BATCH_SIZE]
             core.store.enqueue_job("scan_batch", {
                 "scan_id": scan_id, "source": source, "ai": ai, "pii": pii, "user": user,
                 "items": [{"file": it["name"], "drive_file_id": it.get("id"),
-                           "mime": it.get("mime"), "path": it.get("path")} for it in chunk],
+                           "mime": it.get("mime"), "path": it.get("path"),
+                           "lf_span": (i + j) < SCAN_TRACE_SPAN_CAP} for j, it in enumerate(chunk)],
             }, scan_id=scan_id)
     else:
-        for it in items:
+        for idx, it in enumerate(items):
             core.store.enqueue_job("scan_file", {
                 "scan_id": scan_id, "source": source, "file": it["name"],
                 "drive_file_id": it.get("id"), "mime": it.get("mime"), "path": it.get("path"),
-                "ai": ai, "pii": pii, "user": user}, scan_id=scan_id)
+                "ai": ai, "pii": pii, "user": user,
+                "lf_span": idx < SCAN_TRACE_SPAN_CAP}, scan_id=scan_id)
 
 
 def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf) -> None:
@@ -251,8 +256,9 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf) ->
         if pinfo:
             fdict["pii"] = pinfo
         core.store.save_file_result(scan_id, fdict, now)
-        # Per-file Langfuse spans only when Deep scan is on — see scan_file's note.
-        if pii:
+        # Per-file Langfuse spans only when Deep scan is on (and under the trace span cap,
+        # set per file at enqueue time) — see scan_file's note.
+        if pii and item.get("lf_span", True):
             fspan = _lf.file_span_for(scan_id, name, fdict["engine"])
             if pinfo and pinfo.get("total"):
                 _lf.pii_span(fspan, pinfo, filename=name)

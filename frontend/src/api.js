@@ -39,15 +39,10 @@ export const getConfig = () => (SIM ? sim({ google_client_id: null, auth: 'demo'
 // Langfuse deep-link base (from /config) → "📊 View trace" chips. traceUrl(null) when unset.
 let lfTraceBase = null
 export const setLangfuseBase = (b) => { lfTraceBase = b || null }
-// Scan traces (a bare scan id) can hold thousands of spans and the Langfuse OSS single-trace
-// detail query (traces.byIdWithObservationsAndScores) errors on very large traces, so those
-// open the always-loadable project traces LIST (clearly named per user/step). The smaller,
-// bounded Assess / Remediate traces deep-link directly.
-export const traceUrl = (traceId) => {
-  if (!lfTraceBase || !traceId) return null
-  if (/-assess$|-remediate$/.test(traceId)) return `${lfTraceBase}/${encodeURIComponent(traceId)}`
-  return lfTraceBase
-}
+// Direct deep-link to the trace. Safe now that the backend caps per-document spans on the
+// Scan trace (ACP_SCAN_TRACE_SPAN_CAP), so traces stay small enough for the Langfuse detail
+// view to load even on large estates.
+export const traceUrl = (traceId) => (lfTraceBase && traceId ? `${lfTraceBase}/${encodeURIComponent(traceId)}` : null)
 // AI Compliance Digest (bundle #2) — exec paragraph grounded in real scan data + the facts.
 export const getDigest = (scanId, refresh = false) => (SIM
   ? sim({

@@ -32,6 +32,10 @@ FANOUT_MAX_FILES = int(os.environ.get("ACP_FANOUT_MAX_FILES", "50000"))
 # bounded); estates with ≥ THRESHOLD files auto-use the batch path. Both env-tunable.
 SCAN_BATCH_SIZE = max(1, min(200, int(os.environ.get("ACP_SCAN_BATCH_SIZE", "50"))))
 SCAN_BATCH_THRESHOLD = int(os.environ.get("ACP_SCAN_BATCH_THRESHOLD", "2000"))
+# Max per-document spans written to a single Scan trace. Beyond this the deep-scan trace
+# stops adding file spans (a summary span notes the remainder), so the trace stays small
+# enough for the Langfuse detail view to load — large estates otherwise made it un-openable.
+SCAN_TRACE_SPAN_CAP = int(os.environ.get("ACP_SCAN_TRACE_SPAN_CAP", "500"))
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 sys.path.insert(0, str(ACP / "scripts"))
