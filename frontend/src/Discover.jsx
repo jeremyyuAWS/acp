@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import ScanTheater from './ScanTheater.jsx'
 import FileDrawer, { retentionOf } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { Bars } from './charts.jsx'
@@ -45,7 +46,7 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
   )
 }
 
-export default function Discover({ sources, files, busy, onScan, delegations = {}, fileTypeConfig = {}, onAdvance }) {
+export default function Discover({ sources, files, busy, onScan, delegations = {}, fileTypeConfig = {}, onAdvance, progress = null, scanPct = 0, scanStatus = '' }) {
   const [sub, setSub] = useState('inventory')
   const [sel, setSel] = useState(null)
   const [open, setOpen] = useState(() => new Set())
@@ -203,6 +204,9 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
         </div>
         <button disabled={busy} onClick={() => onScan('all')}>{busy ? 'scanning…' : 'Re-scan all sources'}</button>
       </div>
+
+      {/* Live scan theater — watch discovery happen here, where it belongs (was in Monitor). */}
+      <ScanTheater busy={busy} progress={progress} pct={scanPct} status={scanStatus} />
 
       <div className="subtabs" role="tablist" aria-label="Discover steps">
         {SUBS.map(([k, label], i) => {

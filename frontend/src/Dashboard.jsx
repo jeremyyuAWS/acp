@@ -1,17 +1,9 @@
 import { useState } from 'react'
 import { openReport } from './api'
-import { ScoreRing, Sparkline } from './ScoreRing.jsx'
-import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
-import { TraceChip } from './Transparency.jsx'
-import FileDrawer, { critLabel } from './FileDrawer.jsx'
-import SegmentDrawer from './SegmentDrawer.jsx'
+import { ScoreRing } from './ScoreRing.jsx'
+import FileDrawer from './FileDrawer.jsx'
 import Tag from './Tag.jsx'
-import Insight from './Insight.jsx'
 
-const CRIT = {
-  SC_1_1_1: '1.1.1 non-text', SC_1_3_1: '1.3.1 structure', SC_2_4_2: '2.4.2 page titled',
-  SC_2_4_4: '2.4.4 link purpose', SC_3_1_1: '3.1.1 language',
-}
 const scoreColor = (s) => (s >= 90 ? '#639922' : s >= 50 ? '#BF8C00' : '#2E72C9')
 const statusOf = (f) => (f.status === 'error' ? 'unanalysable' : f.status === 'uncertain' ? 'uncertain' : f.compliant ? 'certifiable' : 'issues')
 const BADGE = {
@@ -38,7 +30,6 @@ function groupDuplicates(files) {
 
 export default function Dashboard({ run, files, trend, delta, deltaKey, scanList = [], onPickScan }) {
   const [sel, setSel] = useState(null)
-  const [seg, setSeg] = useState(null)
   const [groupDupes, setGroupDupes] = useState(true)
   const rows = groupDupes ? groupDuplicates(files) : files
   const dupeCount = files.length - groupDuplicates(files).length
@@ -70,25 +61,7 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
   const shown = sorted.slice(0, limit)
   const sortClick = (col) => { if (sortBy === col) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc')); else { setSortBy(col); setSortDir(col === 'file' ? 'asc' : 'desc') } }
   const arrow = (col) => (sortBy === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '')
-  const pickStatus = (s) => { const fs = files.filter((f) => statusOf(f) === s.label); setSeg({ title: `${s.label} documents`, subtitle: `${fs.length} of ${files.length}`, files: fs }) }
-  const pickSeverity = (it) => { const sev = it.label.toUpperCase(); const fs = files.filter((f) => (f.issues || []).some((i) => i.severity === sev)); setSeg({ title: `${it.label} findings`, subtitle: `${fs.length} document(s) affected`, files: fs }) }
-  const pickCrit = (c) => { const fs = files.filter((f) => (f.issues || []).some((i) => i.wcag === c)); setSeg({ title: `${critLabel(c)}`, subtitle: `${fs.length} document(s) failing this criterion`, files: fs }) }
-  const critFails = {}
-  files.forEach((f) => new Set(f.issues.map((i) => i.wcag)).forEach((c) => { critFails[c] = (critFails[c] || 0) + 1 }))
-  const maxFail = Math.max(1, ...Object.values(critFails))
-
-  const pctOf = (a, b) => (b ? Math.round((a / b) * 100) : 0)
-  const sevList = severityItems(files)
-  const sevTotal = sevList.reduce((a, s) => a + s.value, 0)
-  const sevHigh = sevList.filter((s) => s.label === 'critical' || s.label === 'serious').reduce((a, s) => a + s.value, 0)
-  const topCrit = Object.entries(critFails).sort((a, b) => b[1] - a[1])[0]
-  const INS = {
-    status: `${pctOf(run.certifiable, run.files)}% of documents are certifiable. The ${run.uncertain} 'uncertain' docs had a rule that couldn't be evaluated — re-scanning with full access usually clears most; the rest are largely auto-fixable.`,
-    severity: sevTotal ? `Critical & serious make up ${pctOf(sevHigh, sevTotal)}% of findings — ${pctOf(sevHigh, sevTotal) > 40 ? 'above' : 'near'} the ~40% norm. Front-load alt-text and tagging fixes for the biggest risk reduction.` : 'No open findings.',
-    wcag: topCrit ? `${CRIT[topCrit[0]] ?? topCrit[0]} fails in the most files (${topCrit[1]}). It's a single, largely automatable fix class — a strong first remediation target.` : '',
-  }
-
-  // Master score = the latest run; the scan history below tracks it over time.
+  // Master score = the latest run; the file inventory below is this assessment's per-document result.
   const isLatest = !scanList.length || scanList[0]?.id === run.id
   const fmtDate = (iso) => (iso ? new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—')
 
@@ -193,7 +166,6 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
           </div>
         )}
       </section>
-      {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
       {sel && <FileDrawer file={sel} onClose={() => setSel(null)} />}
     </>
   )

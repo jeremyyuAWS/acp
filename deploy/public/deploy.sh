@@ -34,7 +34,7 @@ CODE="${ACP_ACCESS_CODE:-$(openssl rand -hex 6)}"
 CLIENT_ID="${ACP_GOOGLE_CLIENT_ID:-}"   # set => per-user GIS sign-in, passcode gate off
 DATABASE_URL="${ACP_DATABASE_URL:-}"    # set => Postgres backend; unset => SQLite (single-instance only)
 LF_HOST="${LANGFUSE_HOST:-https://acp-langfuse.greenwater-4bf2c997.eastus2.azurecontainerapps.io}"
-LF_PK="${LANGFUSE_PUBLIC_KEY:-pk-lf-af957ed5-23b2-4429-ab13-3189475f0eb9}"  # ACP Demo (Google Drive) project (pairs with sk-lf-2d657c87…)
+LF_PK="${LANGFUSE_PUBLIC_KEY:-pk-lf-655083d12dacf12febf1f1e8d2293905}"  # acp-compliance project — the one the demo VIEWS (must match LANGFUSE_INIT_PROJECT_* on acp-langfuse, pairs with sk-lf-d1cd10699…). Override via env if needed.
 LF_SK="${LANGFUSE_SECRET_KEY:-}"       # secret — must be passed via env; not baked in
 HITL_WEBHOOK="${HITL_WEBHOOK_URL:-}"   # set => POST to this URL when HITL items are queued
 DEMO_DRIVE_KEY="${ACP_DEMO_DRIVE_KEY:-}"  # set => enables server-side ADC Drive scan for E2E tests
