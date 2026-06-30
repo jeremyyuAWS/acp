@@ -1,34 +1,17 @@
-import { useState, useEffect } from ‘react’
-import { openTraceUrl, getTraceStatus, getScanTraces } from ‘./api.js’
+import { useState, useEffect } from 'react'
+import { openTraceUrl, getScanTraces } from './api.js'
 
 // "📊 View trace" link to the relevant Langfuse trace. Routes through the backend
 // redirect endpoint (openTraceUrl), which ensures the trace exists before sending you to
 // Langfuse — so the chip never lands on a "Not Found". Renders nothing when Langfuse
-// isn’t configured. The three lifecycle traces use deterministic ids:
+// isn't configured. The three lifecycle traces use deterministic ids:
 //   scan: {scanId} · assess: {scanId}-assess · remediate: {scanId}-remediate
-// Greys out (non-clickable) when the trace doesn’t exist in Langfuse yet.
-export function TraceChip({ traceId, label = ‘View trace’, title }) {
+export function TraceChip({ traceId, label = 'View trace', title }) {
   const url = openTraceUrl(traceId)
-  const [available, setAvailable] = useState(null) // null = checking
-  useEffect(() => {
-    if (!url) return
-    let cancelled = false
-    getTraceStatus(traceId)
-      .then(r => { if (!cancelled) setAvailable(!!r?.available) })
-      .catch(() => { if (!cancelled) setAvailable(false) })
-    return () => { cancelled = true }
-  }, [traceId, url])
-
   if (!url) return null
-  if (available === false) return (
-    <span className="tracechip tracechip--unavailable"
-          title="Trace not available — this scan predates observability wiring">
-      📊 {label}
-    </span>
-  )
   return (
     <a className="tracechip" href={url} target="_blank" rel="noopener noreferrer"
-       title={title || ‘Open this step\’s trace in Langfuse (observability)’}>
+       title={title || 'Open this step’s trace in Langfuse (observability)'}>
       📊 {label}
     </a>
   )

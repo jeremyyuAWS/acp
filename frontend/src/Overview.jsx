@@ -9,6 +9,7 @@ import { loadPublished } from './ontology.js'
 import WordCloud from './WordCloud.jsx'
 import Insight from './Insight.jsx'
 import { TraceChip } from './Transparency.jsx'
+import PiiPanel from './PiiPanel.jsx'
 
 // The estate dashboard — doubles as the exportable compliance report.
 export default function Overview({ run, files, trend, trendDates, onGo, scanList = [], onPickScan }) {
@@ -202,6 +203,8 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           </table></div>
         </section>
       )}
+
+      <PiiPanel scanId={run.id} />
 
       <div className="chartrow">
         <section className="panel"><h2>Compliance status <span className="muted" style={{ fontWeight: 400 }}>· click to drill in</span></h2><Donut segments={statusSegments(run)} caption="documents" onPick={pickStatus} /><Insight text={INS.status} /></section>

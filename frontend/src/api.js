@@ -65,6 +65,15 @@ export const getTraceStatus = (traceId) => {
   else if (traceId.endsWith('-remediate')) { kind = 'remediate'; sid = traceId.slice(0, -10) }
   return fetch(`${BASE}/scans/${encodeURIComponent(sid)}/trace/${kind}/exists`).then(j).catch(() => ({ available: false }))
 }
+// Sensitive-data (PII) findings for a scan (ADR 0006) — rollup + per-type counts (masked).
+export const getScanPii = (scanId) => (SIM
+  ? sim({ summary: { documents: 6, items: 23, by_type: [
+      { pii_type: 'ssn', label: 'US SSN', count: 9, docs: 4 },
+      { pii_type: 'credit_card', label: 'Credit card', count: 7, docs: 3 },
+      { pii_type: 'email', label: 'Email address', count: 5, docs: 5 },
+      { pii_type: 'phone', label: 'Phone number', count: 2, docs: 2 },
+    ] }, files: [] })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/pii`, { headers: headers() }).then(j).catch(() => null))
 // AI Compliance Digest (bundle #2) — exec paragraph grounded in real scan data + the facts.
 export const getDigest = (scanId, refresh = false) => (SIM
   ? sim({
