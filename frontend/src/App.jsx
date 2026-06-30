@@ -547,7 +547,7 @@ export default function App() {
 
       <main id="main-content" tabIndex={-1}>
       <ErrorBoundary key={view}>
-        {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} /> : assessGate) : placeholder)}
+        {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} /> : assessGate) : placeholder)}
 
         {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
           deepScan={deepScan} setDeepScan={setDeepScan} queuedScan={queuedScan} setQueuedScan={setQueuedScan} />}

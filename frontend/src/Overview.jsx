@@ -8,9 +8,10 @@ import { openReport } from './api.js'
 import { loadPublished } from './ontology.js'
 import WordCloud from './WordCloud.jsx'
 import Insight from './Insight.jsx'
+import { TraceChip } from './Transparency.jsx'
 
 // The estate dashboard — doubles as the exportable compliance report.
-export default function Overview({ run, files, trend, trendDates, onGo }) {
+export default function Overview({ run, files, trend, trendDates, onGo, scanList = [], onPickScan }) {
   const [on, setOn] = useState(false)
   const [seg, setSeg] = useState(null)
   const [selFile, setSelFile] = useState(null)
@@ -167,6 +168,39 @@ export default function Overview({ run, files, trend, trendDates, onGo }) {
           <span className="ontovtag">⬆ Business ontology{ontVer ? ` v${ontVer}` : ''} active</span>
           <span className="ontovtext"><b>{ontDocs.length}</b> of {n.toLocaleString()} documents classified by your rules — <b style={{ color: '#1F5FA8' }}>{ontCrit} Critical</b> · <b style={{ color: '#854F0B' }}>{ontHigh} High</b> by business priority</span>
         </div>
+      )}
+
+      {scanList.length > 0 && (
+        <section className="panel">
+          <h2>Scan history <span className="muted" style={{ fontWeight: 400 }}>· master score = latest run · click a row to view it</span></h2>
+          <div className="tablewrap"><table>
+            <thead><tr><th></th><th>scan</th><th>score</th><th>change</th><th>certifiable</th><th>source</th><th></th></tr></thead>
+            <tbody>
+              {scanList.map((s, i) => {
+                const prev = scanList[i + 1]
+                const d = (prev?.avg_score != null && s.avg_score != null) ? s.avg_score - prev.avg_score : null
+                const isCurrent = s.id === run.id
+                const dt = s.completed_at ? new Date(s.completed_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'
+                return (
+                  <tr key={s.id} className="filerow" role="button" tabIndex={0}
+                    onClick={() => onPickScan?.(s.id)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPickScan?.(s.id) } }}
+                    style={isCurrent ? { background: '#F4EEFC' } : undefined}>
+                    <td>{i === 0 && <span className="badge" style={{ background: '#EDE7FB', color: '#6D28D9' }}>★ master</span>}</td>
+                    <td>{dt}{isCurrent && <span className="muted"> · viewing</span>}</td>
+                    <td className="scorecell"><b>{s.avg_score ?? 'n/a'}</b><span className="muted">/100</span></td>
+                    <td>{d == null ? <span className="muted">—</span> : (
+                      <span style={{ color: d > 0 ? '#3B6D11' : d < 0 ? '#B43A2A' : '#6B7280', fontWeight: 600, fontSize: 12 }}>
+                        {d > 0 ? `▲ +${d}` : d < 0 ? `▼ ${d}` : '±0'}</span>)}</td>
+                    <td className="muted">{s.certifiable ?? '—'} / {(s.files ?? 0).toLocaleString()}</td>
+                    <td className="muted">{s.source}</td>
+                    <td onClick={(e) => e.stopPropagation()}><TraceChip traceId={s.id} label="trace" /></td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table></div>
+        </section>
       )}
 
       <div className="chartrow">
