@@ -1,5 +1,9 @@
 import { useState } from 'react'
 import FileDrawer from './FileDrawer.jsx'
+import { openReport } from './api.js'
+import { IDENTITY } from './sim.js'
+
+const scoreColor = (s) => (s >= 80 ? '#3B6D11' : s >= 50 ? '#854F0B' : '#7B1D1D')
 
 // Step 9 · Publish / Replace / Archive. Re-validated documents are published back
 // to their source — replaced in place, the prior version archived, metadata
@@ -12,9 +16,37 @@ export default function Publish({ run, files = [], certified = [], onPublish }) 
   const publishAll = () => { setDone(() => Object.fromEntries(ready.map((f) => [f.file, true]))); ready.forEach((f) => onPublish?.(f.file)) }
   const publishedCount = Object.keys(done).length + certified.length
   const pubStarted = Object.keys(done).length > 0   // zero the outcome cards until the user publishes
+  const pct = run?.files ? Math.round((run.certifiable / run.files) * 100) : 0
+  const onTrack = pct >= 80 || (run?.avg_score ?? 0) >= 80
+  const reportDate = new Date(run?.completed_at || Date.now()).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+  const publishedList = [...Object.keys(done), ...certified.map((c) => c.file)]
 
   return (
     <>
+      {/* The deliverable: a conformance-report header a compliance officer hands to legal. */}
+      <section className="panel" style={{ borderLeft: '4px solid #3B6D11' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 18, flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 340px' }}>
+            <h2 style={{ margin: 0 }}>📜 Conformance Report</h2>
+            <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+              {IDENTITY.org} · WCAG 2.1 Level AA · generated {reportDate}
+            </div>
+            <p style={{ fontSize: 13.5, lineHeight: 1.6, margin: '12px 0 0', maxWidth: 620 }}>
+              This document estate was assessed against <b>WCAG 2.1 Level AA</b> — the ADA Title II, EAA, and Section 508 legal target.
+              <b style={{ color: '#3B6D11' }}> {run?.certifiable ?? 0}</b> of <b>{(run?.files ?? 0).toLocaleString()}</b> documents are certifiable as conformant today ({pct}%){run?.error ? <> · {run.error} could not be analysed</> : null}.
+            </p>
+          </div>
+          <div style={{ textAlign: 'center', minWidth: 124 }}>
+            <div style={{ fontSize: 42, fontWeight: 800, color: scoreColor(run?.avg_score ?? 0), lineHeight: 1 }}>{run?.avg_score ?? '—'}</div>
+            <div className="muted" style={{ fontSize: 11 }}>estate score / 100</div>
+            <span className="badge" style={{ marginTop: 9, display: 'inline-block', background: onTrack ? '#E7F0DC' : '#FAEEDA', color: onTrack ? '#2F5310' : '#854F0B' }}>{onTrack ? '✓ On track to conformant' : '⚠ Action required'}</span>
+          </div>
+        </div>
+        <div style={{ marginTop: 16 }}>
+          <button className="exportbtn" onClick={() => run?.id && openReport(run.id)}>⤓ Download full conformance report (PDF)</button>
+        </div>
+      </section>
+
       <div className="metrics">
         <div className="metric"><span>ready to publish</span><b>{ready.length}</b></div>
         <div className="metric"><span>published</span><b style={{ color: pubStarted ? '#3B6D11' : '#9AA1B4' }}>{pubStarted ? publishedCount : 0}</b></div>
@@ -50,7 +82,19 @@ export default function Publish({ run, files = [], certified = [], onPublish }) 
             ))}
           </div>
         )}
-        <p className="muted" style={{ marginTop: 12 }}>Publishing writes the conformance status back to the source and records the change in the audit trail (see Overview).</p>
+        {publishedList.length > 0 ? (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>📋 Audit trail · {publishedList.length} published</div>
+            {publishedList.slice(0, 8).map((fname) => (
+              <div key={fname} style={{ fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
+                ✓ <b>{fname}</b> <span className="muted">· replaced in place · prior version archived · owner notified · {reportDate}</span>
+              </div>
+            ))}
+            {publishedList.length > 8 && <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>+{publishedList.length - 8} more</div>}
+          </div>
+        ) : (
+          <p className="muted" style={{ marginTop: 12 }}>Publishing writes the conformance status back to the source and records each change in the audit trail here.</p>
+        )}
       </section>
       {sel && <FileDrawer file={sel} onClose={() => setSel(null)} />}
     </>
