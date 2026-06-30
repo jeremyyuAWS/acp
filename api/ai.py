@@ -182,23 +182,53 @@ def _digest_fallback_narrative(facts: dict) -> str:
     return " ".join(parts)
 
 
+_DIGEST_SYSTEM = (
+    "You are an accessibility compliance analyst writing for a compliance officer. Use ONLY "
+    "the facts provided; never invent numbers, file names, or success criteria. Output a "
+    "single plain-English paragraph (2-3 sentences), no markdown, no preamble, no bullet points."
+)
+
+
+def _claude_narrative(facts: dict) -> tuple[str, str] | None:
+    """Best-quality narrative via the Anthropic SDK — used only when ANTHROPIC_API_KEY is
+    set. Model is claude-opus-4-8 (override with ANTHROPIC_MODEL). Returns (text, model)."""
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        return None
+    model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
+    try:
+        from anthropic import Anthropic
+        msg = Anthropic(api_key=key).messages.create(
+            model=model, max_tokens=400, system=_DIGEST_SYSTEM,
+            messages=[{"role": "user", "content": _digest_prompt(facts)}])
+        text = "".join(getattr(b, "text", "") for b in msg.content if getattr(b, "type", "") == "text").strip()
+        return (text, model) if text and len(text) > 40 else None
+    except Exception:
+        return None
+
+
+def _ollama_narrative(facts: dict) -> tuple[str, str] | None:
+    """Local fallback narrative via the deployed Ollama backend. Returns (text, model)."""
+    try:
+        import httpx
+        r = httpx.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={"model": OLLAMA_MODEL, "prompt": _digest_prompt(facts), "stream": False,
+                  "options": {"temperature": 0.4, "num_predict": 200}}, timeout=150)
+        r.raise_for_status()
+        raw = r.json().get("response", "").strip()
+        return (raw, OLLAMA_MODEL) if raw and len(raw) > 40 else None
+    except Exception:
+        return None
+
+
 def compliance_digest(d: dict, ai_enabled: bool = True) -> dict:
-    """Executive digest from real scan data. Returns deterministic facts + a narrative
-    (AI-written when available, else a grounded deterministic paragraph)."""
+    """Executive digest from real scan data — deterministic facts + a narrative. Narrative
+    preference: Claude (when ANTHROPIC_API_KEY is set) → local Ollama → deterministic prose."""
     facts = _digest_facts(d)
     narrative, ai, model = _digest_fallback_narrative(facts), False, "deterministic"
     if ai_enabled:
-        try:
-            import httpx
-            r = httpx.post(
-                f"{OLLAMA_BASE_URL}/api/generate",
-                json={"model": OLLAMA_MODEL, "prompt": _digest_prompt(facts), "stream": False,
-                      "options": {"temperature": 0.4, "num_predict": 200}},
-                timeout=150)
-            r.raise_for_status()
-            raw = r.json().get("response", "").strip()
-            if raw and len(raw) > 40:
-                narrative, ai, model = raw, True, OLLAMA_MODEL
-        except Exception:
-            pass
+        res = _claude_narrative(facts) or _ollama_narrative(facts)
+        if res:
+            narrative, model, ai = res[0], res[1], True
     return {**facts, "narrative": narrative, "ai": ai, "model": model}
