@@ -201,10 +201,16 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                 Showing results from a previous assessment — click Assess to run again.
               </p>
             )}
-            <p className="sronly">Assessment complete: {result.conformant} of {result.total} documents conformant at WCAG 2.1 {result.level} ({result.pct}%); {result.applicable} findings apply.</p>
+            {/* conformant + failing is ALREADY a strict partition (failing = total - conformant,
+                see computeResult above) — the only gap was that `total` was never shown to a
+                sighted user, so the two tiles below never visibly summed to anything. This line
+                makes that sum explicit instead of leaving it implicit / sr-only. */}
+            <p className="assesssummary" style={{ fontSize: 13.5, margin: '0 0 10px' }}>
+              <b>{result.total.toLocaleString()}</b> documents assessed at WCAG 2.1 {result.level} → <b style={{ color: '#3B6D11' }}>{result.conformant.toLocaleString()} conformant</b> + <b style={{ color: '#854F0B' }}>{result.failing.toLocaleString()} with blocking findings</b>.
+            </p>
             <div className="assesstiles">
-              <div className="atile"><b style={{ color: '#3B6D11' }}>{result.conformant.toLocaleString()}</b><span>conformant at {result.level}</span></div>
-              <div className="atile"><b style={{ color: '#854F0B' }}>{result.failing.toLocaleString()}</b><span>with blocking findings</span></div>
+              <div className="atile"><b style={{ color: '#3B6D11' }}>{result.conformant.toLocaleString()}</b><span>conformant at {result.level} <span className="muted">· of {result.total.toLocaleString()}</span></span></div>
+              <div className="atile"><b style={{ color: '#854F0B' }}>{result.failing.toLocaleString()}</b><span>with blocking findings <span className="muted">· of {result.total.toLocaleString()}</span></span></div>
               <div className="atile"><b style={{ color: '#1F5FA8' }}>{result.pct}%</b><span>estate conformant</span></div>
               <div className="atile"><b>{result.applicable.toLocaleString()}</b><span>findings apply · {result.autoFix.toLocaleString()} auto-fixable</span></div>
             </div>

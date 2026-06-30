@@ -33,6 +33,10 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
   const [groupDupes, setGroupDupes] = useState(true)
   const rows = groupDupes ? groupDuplicates(files) : files
   const dupeCount = files.length - groupDuplicates(files).length
+  // run.certifiable/uncertain/error are server-side aggregates over this scan's RAW (un-
+  // grouped) file_records; derive "issues" the same way (subtraction, not a re-count) so
+  // the four herostat numbers are guaranteed to sum to run.files exactly, by construction.
+  const issuesCount = run.files - run.certifiable - run.uncertain - run.error
 
   // ── Net-new / changed only ── reuses the ADR 0009 scan-diff (already computed for
   // Regression Radar) so re-scanning a stable estate doesn't dump the FULL inventory
@@ -105,11 +109,20 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
           </div>
         </div>
         <div className="heroright">
+          {/* These 4 categories are a STRICT partition of every file (statusOf() in the File
+              Inventory below classifies every doc into exactly one of them) — "issues" was
+              previously missing here entirely, which is why the visible numbers never summed
+              to "files". Colors now match the File Inventory's own status badges (BADGE
+              above) instead of an inconsistent ad-hoc palette, and "= files" is marked
+              visually as the SUM, not a 5th independent count. */}
           <div className="herostats">
             <div className="herostat"><b style={{ color: '#3B6D11' }}>{run.certifiable}</b><span>certifiable</span></div>
-            <div className="herostat"><b style={{ color: '#854F0B' }}>{run.uncertain}</b><span>uncertain</span></div>
-            <div className="herostat"><b style={{ color: '#1F5FA8' }}>{run.error}</b><span>unanalysable</span></div>
-            <div className="herostat"><b>{run.files}</b><span>files</span></div>
+            <div className="herostat"><b style={{ color: '#854F0B' }}>{issuesCount}</b><span>issues</span></div>
+            <div className="herostat"><b style={{ color: '#2A5E9E' }}>{run.uncertain}</b><span>uncertain</span></div>
+            <div className="herostat"><b style={{ color: '#5F5E5A' }}>{run.error}</b><span>unanalysable</span></div>
+            <div className="herostat" style={{ borderLeft: '1px dashed var(--line)', paddingLeft: 14, marginLeft: 4 }} title="The sum of the four categories to the left">
+              <b>= {run.files}</b><span>files</span>
+            </div>
           </div>
         </div>
       </section>
