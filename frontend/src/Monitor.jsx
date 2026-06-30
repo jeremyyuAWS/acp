@@ -5,6 +5,7 @@ import { prefersReducedMotion } from './a11y.js'
 import QueuePanel from './QueuePanel.jsx'
 import RegressionRadar from './RegressionRadar.jsx'
 import ComplianceDigest from './ComplianceDigest.jsx'
+import ScanTheater from './ScanTheater.jsx'
 
 // Step 10 · Monitor — the always-on surface. Shows every connected source being
 // continuously watched for new files and changes, a live event stream (with demo
@@ -78,7 +79,7 @@ function useProgramBatches(files, decisions) {
   }
 }
 
-export default function Monitor({ run, scanList = [], sources = [], files = [], ratified, decisions = {}, publishedFiles = [], aiEnabled = true, onAiToggle }) {
+export default function Monitor({ run, scanList = [], sources = [], files = [], ratified, decisions = {}, publishedFiles = [], aiEnabled = true, onAiToggle, busy = false, progress = null, scanPct = 0, scanStatus = '' }) {
   const m = monitoringState(files)
   const watch = sourceWatch(sources, files)
   const prog = useProgramBatches(files, decisions)
@@ -260,6 +261,8 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
           </div>
         )}
       </section>
+
+      <ScanTheater busy={busy} progress={progress} pct={scanPct} status={scanStatus} />
 
       <ComplianceDigest run={run} />
 
