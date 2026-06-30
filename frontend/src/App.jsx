@@ -96,7 +96,12 @@ const STATUS_LINES = [
   'Scoring each document against WCAG 2.1 AA…',
   'Aggregating results and compliance scores…',
 ]
-function statusMsg(elapsed) { return STATUS_LINES[Math.floor(elapsed / 5) % STATUS_LINES.length] }
+// When PII (deep) scan is off, drop the PII line so the progress narration never claims
+// work that isn't actually running — the rest of the lines are checks every scan does.
+function statusMsg(elapsed, deepScan = false) {
+  const lines = deepScan ? STATUS_LINES : STATUS_LINES.filter((l) => !/sensitive data \(PII\)/i.test(l))
+  return lines[Math.floor(elapsed / 5) % lines.length]
+}
 
 function progressPct(p) {
   if (!p) return 0
@@ -516,7 +521,7 @@ export default function App() {
           </div>
           <div className="track"><i style={{ width: `${progressPct(progress)}%`, background: '#BF8C00', transition: 'width .3s' }} /></div>
           {progress.elapsed != null && (
-            <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>{statusMsg(progress.elapsed)}</div>
+            <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>{statusMsg(progress.elapsed, deepScan)}</div>
           )}
         </div>
       )}
@@ -545,7 +550,7 @@ export default function App() {
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} onPublish={(file) => setPublishedFiles((s) => [...s, file])} /> : placeholder)}
 
-        {view === 'monitor' && (run ? (assessed ? <Monitor run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? statusMsg(progress.elapsed || 0) : ''} /> : assessGate) : placeholder)}
+        {view === 'monitor' && (run ? (assessed ? <Monitor run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? statusMsg(progress.elapsed || 0, deepScan) : ''} /> : assessGate) : placeholder)}
 
         {view === 'upload' && <Upload onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
 
