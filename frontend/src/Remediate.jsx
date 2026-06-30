@@ -289,6 +289,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const acceptAll = () => setDecisions?.((s) => { const n = { ...s }; remediable.forEach((f) => { if (!n[f.file]) n[f.file] = { state: 'accepted' } }); return n })
   const dcount = (st) => remediable.filter((f) => decisions[f.file]?.state === st).length
   const pending = remediable.length - dcount('accepted') - dcount('override') - dcount('rejected')
+  const humanCount = pending - autoFiles.length   // pending files NOT auto — the gap between the two plan buttons
 
   // business priority (findings-based)
   const flagged = files.filter((f) => (f.issues || []).length)
@@ -544,8 +545,21 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             </div>
             <div className="plandec">
               <span className="muted">{dcount('accepted')} accepted · {dcount('override')} modified · {dcount('rejected')} rejected · {pending} pending</span>
-              {autoFiles.length > 0 && <button className="batchbtn" onClick={batchAutoRemediate} title="Accept ONLY the fully-automatic files — the engine fixes these deterministically when you click Remediate all (no human work).">⚡ Auto-fix {autoFiles.length} automatic file{autoFiles.length !== 1 ? 's' : ''}</button>}
-              <button disabled={!pending} onClick={acceptAll} title="Accept the WHOLE plan — every remediable file, INCLUDING any that need assisted or manual work.">✓ Accept full plan · {pending}</button>
+              {/* The gap between these two used to require mental subtraction (482 - 408 = 74,
+                  with no on-screen cue that 408 is a SUBSET of 482). Both numbers now appear
+                  literally, and the icon/copy pairs "no review needed" against "needs a person"
+                  so the choice reads at a glance instead of requiring the two buttons to be
+                  compared. */}
+              {autoFiles.length > 0 && (
+                <button className="batchbtn" onClick={batchAutoRemediate}
+                        title="Accept ONLY the fully-automatic files — the engine fixes these deterministically when you click Remediate all. No human review involved.">
+                  ⚡ Auto-fix {autoFiles.length} file{autoFiles.length !== 1 ? 's' : ''} <span style={{ opacity: 0.85, fontWeight: 400 }}>· no review needed</span>
+                </button>
+              )}
+              <button className="acceptfullbtn" disabled={!pending} onClick={acceptAll}
+                      title="Accept the WHOLE plan — every remediable file, including the ones below that need assisted or manual work from a person.">
+                👥 Accept full plan · {pending}{humanCount > 0 && <span style={{ opacity: 0.85, fontWeight: 400 }}> · +{humanCount} need a person</span>}
+              </button>
             </div>
           </div>
           <div className="plancards">

@@ -1293,6 +1293,13 @@ input:focus-visible, [role="tab"]:focus-visible {
 .triagecta { margin-top: 12px; padding: 10px 14px; background: #f7fcf2; border: 1px solid #b8dfa0; border-radius: 8px; font-size: 14px; color: #3B6D11; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .batchbtn { background: #1F5FA8; color: #fff; border: none; border-radius: 8px; padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .batchbtn:hover { opacity: 0.88; }
+/* Amber (the app's existing "needs review/attention" accent — matches SERIOUS severity)
+   so the two plan buttons read as different RISK TIERS at a glance, not just two
+   same-weight options: blue auto-fix = mechanical/safe, amber accept-full = includes
+   human judgment. */
+.acceptfullbtn { background: #A56814; color: #fff; border: none; border-radius: 8px; padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.acceptfullbtn:hover { opacity: 0.88; }
+.acceptfullbtn:disabled { background: #C7B79A; opacity: 0.6; cursor: default; }
 .hitlbadge { margin-left: 8px; font-size: 11px; font-weight: 500; color: #854F0B; background: #faeeda; padding: 1px 7px; border-radius: 999px; vertical-align: middle; }
 /* remediation programs */
 .proghd { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
