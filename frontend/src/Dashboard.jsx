@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { openReport } from './api'
+import { useState, useEffect } from 'react'
+import { openReport, getScanDiff } from './api'
 import { ScoreRing } from './ScoreRing.jsx'
 import FileDrawer from './FileDrawer.jsx'
 import Tag from './Tag.jsx'
@@ -34,6 +34,31 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
   const rows = groupDupes ? groupDuplicates(files) : files
   const dupeCount = files.length - groupDuplicates(files).length
 
+  // ── Net-new / changed only ── reuses the ADR 0009 scan-diff (already computed for
+  // Regression Radar) so re-scanning a stable estate doesn't dump the FULL inventory
+  // back in your face every time — by default, only show what's actually new or whose
+  // score changed since the immediately-prior scan. undefined = not checked yet,
+  // null = no usable prior scan to diff against (first scan ever, or fetch failed) —
+  // in both those cases the filter never applies, so this can't hide everything.
+  const curIdx = scanList.findIndex((s) => s.id === run.id)
+  const prevId = curIdx > -1 ? scanList[curIdx + 1]?.id : undefined
+  const [diff, setDiff] = useState(undefined)
+  const [onlyChanged, setOnlyChanged] = useState(true)
+  useEffect(() => {
+    setDiff(undefined)
+    if (!prevId) { setDiff(null); return undefined }
+    let alive = true
+    getScanDiff(run.id, prevId).then((d) => { if (alive) setDiff(d || null) }).catch(() => { if (alive) setDiff(null) })
+    return () => { alive = false }
+  }, [run.id, prevId])
+  const changedNames = diff ? new Set([
+    ...(diff.new || []).map((f) => f.file),
+    ...(diff.regressed || []).map((f) => f.file),
+    ...(diff.improved || []).map((f) => f.file),
+  ]) : null
+  const namesOf = (f) => f._names || [f.file]
+  const unchangedCount = changedNames ? rows.filter((f) => !namesOf(f).some((n) => changedNames.has(n))).length : 0
+
   // ── File-inventory navigation: search + status/type filters + sort + paged render ──
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -49,7 +74,8 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
   const filtered = rows.filter((f) =>
     (!q || (groupDupes && f._copies > 1 ? baseName(f.file) : f.file).toLowerCase().includes(q)) &&
     (statusFilter === 'all' || statusOf(f) === statusFilter) &&
-    (typeFilter === 'all' || extOf(f) === typeFilter))
+    (typeFilter === 'all' || extOf(f) === typeFilter) &&
+    (!onlyChanged || !changedNames || namesOf(f).some((n) => changedNames.has(n))))
   const sorted = [...filtered].sort((a, b) => {
     let r = 0
     if (sortBy === 'file') r = a.file.localeCompare(b.file)
@@ -91,11 +117,22 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
         <h2 style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
           <span>File inventory · <span style={{ fontWeight: 400 }}>
             {sorted.length === rows.length ? `${rows.length.toLocaleString()} document${rows.length === 1 ? '' : 's'}` : `${sorted.length.toLocaleString()} of ${rows.length.toLocaleString()}`} · click a row for details</span></span>
-          {dupeCount > 0 && (
-            <label className="muted" style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 400, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={groupDupes} onChange={(e) => setGroupDupes(e.target.checked)} />
-              Group duplicate uploads <span style={{ opacity: 0.7 }}>({dupeCount} copies)</span>
-            </label>
+          {(changedNames || dupeCount > 0) && (
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+              {changedNames && (
+                <label className="muted" style={{ fontSize: 12, fontWeight: 400, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                       title={`Compares this scan against the immediately-prior one — only documents that are new or whose score changed are shown by default. ${unchangedCount} unchanged document${unchangedCount !== 1 ? 's are' : ' is'} hidden.`}>
+                  <input type="checkbox" checked={onlyChanged} onChange={(e) => setOnlyChanged(e.target.checked)} />
+                  Only new/changed <span style={{ opacity: 0.7 }}>({unchangedCount} unchanged hidden)</span>
+                </label>
+              )}
+              {dupeCount > 0 && (
+                <label className="muted" style={{ fontSize: 12, fontWeight: 400, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input type="checkbox" checked={groupDupes} onChange={(e) => setGroupDupes(e.target.checked)} />
+                  Group duplicate uploads <span style={{ opacity: 0.7 }}>({dupeCount} copies)</span>
+                </label>
+              )}
+            </div>
           )}
         </h2>
         {/* Navigation toolbar: search · status chips · type filter */}
@@ -126,7 +163,11 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
           </tr></thead>
           <tbody>
             {shown.length === 0 && (
-              <tr><td colSpan={4} className="muted" style={{ textAlign: 'center', padding: '24px' }}>No files match your search or filters.</td></tr>
+              <tr><td colSpan={4} className="muted" style={{ textAlign: 'center', padding: '24px' }}>
+                {onlyChanged && changedNames && !q && statusFilter === 'all' && typeFilter === 'all'
+                  ? <>✓ Nothing new or changed since the last scan — all {rows.length.toLocaleString()} documents are stable. <button className="ghost small" onClick={() => setOnlyChanged(false)}>Show all</button></>
+                  : 'No files match your search or filters.'}
+              </td></tr>
             )}
             {shown.map((f) => {
               const st = statusOf(f); const [bg, fg] = BADGE[st]
