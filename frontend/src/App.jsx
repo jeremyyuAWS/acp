@@ -54,7 +54,9 @@ function timeAgo(iso) {
 
 function fmtStamp(iso) {
   if (!iso) return null
-  return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+  // timeZoneName: 'short' stamps the viewer's zone (e.g. "PDT" / "CDT") so cross-timezone
+  // viewers (you in PT, Deva in CT) can tell at a glance it's THEIR local time.
+  return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })
 }
 
 function progressText(p) {
