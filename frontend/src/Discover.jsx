@@ -205,7 +205,10 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
       </div>
 
       <div className="subtabs" role="tablist" aria-label="Discover steps">
-        {SUBS.map(([k, label]) => <button key={k} role="tab" aria-selected={sub === k} className={sub === k ? 'fchip on' : 'fchip'} onClick={() => setSub(k)}>{label}</button>)}
+        {SUBS.map(([k, label], i) => {
+          const done = i < SUBS.findIndex(([kk]) => kk === sub)   // passed-step: green ✓ once you've moved past it
+          return <button key={k} role="tab" aria-selected={sub === k} aria-current={sub === k ? 'step' : undefined} className={`fchip${sub === k ? ' on' : ''}${done ? ' done' : ''}`} onClick={() => setSub(k)}>{done && <span className="tabok" aria-hidden="true">✓ </span>}{label}{done && <span className="vh"> completed</span>}</button>
+        })}
       </div>
 
       {files.length === 0 ? <p className="muted">No documents yet — run a scan from Integrations.</p> : sub === 'classify' ? (

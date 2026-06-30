@@ -343,7 +343,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       )}
 
       <div className="subtabs" role="tablist" aria-label="Remediate steps">
-        {SUBS.map(([k, label]) => <button key={k} role="tab" aria-selected={sub === k} className={sub === k ? 'fchip on' : 'fchip'} onClick={() => setSub(k)}>{label}</button>)}
+        {SUBS.map(([k, label], i) => {
+          const done = i < SUBS.findIndex(([kk]) => kk === sub)   // passed-step: green ✓ once you've moved past it
+          return <button key={k} role="tab" aria-selected={sub === k} aria-current={sub === k ? 'step' : undefined} className={`fchip${sub === k ? ' on' : ''}${done ? ' done' : ''}`} onClick={() => setSub(k)}>{done && <span className="tabok" aria-hidden="true">✓ </span>}{label}{done && <span className="vh"> completed</span>}</button>
+        })}
       </div>
 
       {/* Write-back results — proof the fixed copies landed in Drive. Surfaces the
@@ -387,19 +390,23 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           if (!aDec && !bDec) return (bJ ? 1 : 0) - (aJ ? 1 : 0) || ((a.score ?? 50) - (b.score ?? 50))
           if (!aDec) return -1; if (!bDec) return 1; return 0
         })
-        const junkCount = triageFiles.filter(isAutoJunk).length
+        // Drain model: the worklist shows only files still to decide; decided files move
+        // to a collapsible group so the list shrinks as you go (and feels "done" at 0).
+        const undecidedFiles = triageFiles.filter((f) => !triage[f.file])
+        const decidedFiles = triageFiles.filter((f) => triage[f.file])
+        const undecidedJunk = undecidedFiles.filter(isAutoJunk)
         const naCount = triageFiles.filter((f) => triage[f.file] === 'na').length
         const deferCount = triageFiles.filter((f) => triage[f.file] === 'defer').length
         const inscopeCount = triageFiles.filter((f) => triage[f.file] === 'inscope').length
-        const undecided = triageFiles.filter((f) => !triage[f.file]).length
+        const undecided = undecidedFiles.length
         const selFiles = triageFiles.filter((f) => triageSel.has(f.file))
-        const allSel = triageSel.size === triageFiles.length && triageFiles.length > 0
+        const allSel = undecidedFiles.length > 0 && undecidedFiles.every((f) => triageSel.has(f.file))
         return (
           <section className="panel" key="triage">
             <div className="triagehd">
               <div>
                 <b>File triage</b>
-                <span className="muted"> · {triageFiles.length} file{triageFiles.length !== 1 ? 's' : ''} to decide{remediatedFiles.length > 0 ? ` · ${remediatedFiles.length} already remediated (cleared)` : ''}</span>
+                <span className="muted"> · {undecidedFiles.length} to decide · {decidedFiles.length} decided{remediatedFiles.length > 0 ? ` · ${remediatedFiles.length} cleared` : ''}</span>
                 <div className="muted" style={{ fontSize: 12, marginTop: 3, lineHeight: 1.5, maxWidth: 760 }}>
                   Tick files (or the header checkbox) then set a decision for all of them — or use the buttons on each row:
                   <b style={{ color: '#3B6D11' }}> ✓ In scope</b> = remediate it · <b> N/A</b> = skip, not relevant · <b style={{ color: '#1F5FA8' }}> ⏸ Defer</b> = decide later. Only <b>in-scope</b> files are remediated.
@@ -413,11 +420,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               </div>
             </div>
 
-            {junkCount > 0 && (
+            {undecidedJunk.length > 0 && (
               <div className="junkbanner">
-                ⚑ <b>{junkCount} file{junkCount !== 1 ? 's' : ''} suggested as low-priority</b> — draft/backup name patterns, or score ≥ 90 with no critical/serious findings · the agent recommends N/A or archive (these are FILES, counted within the {undecided} undecided above). Not automatically excluded — you decide.
-                <button className="ghost small" style={{ marginLeft: 10 }} onClick={() => triageBulk(triageFiles.filter(isAutoJunk), 'na')}>Mark all N/A</button>
-                <button className="ghost small" style={{ marginLeft: 6 }} onClick={() => triageBulk(triageFiles.filter(isAutoJunk), 'defer')}>Defer all</button>
+                ⚑ <b>{undecidedJunk.length} undecided file{undecidedJunk.length !== 1 ? 's' : ''} suggested as low-priority</b> — draft/backup name patterns, or score ≥ 90 with no critical/serious findings · the agent recommends N/A or archive. Not automatically excluded — you decide.
+                <button className="ghost small" style={{ marginLeft: 10 }} onClick={() => triageBulk(undecidedJunk, 'na')}>Mark all N/A</button>
+                <button className="ghost small" style={{ marginLeft: 6 }} onClick={() => triageBulk(undecidedJunk, 'defer')}>Defer all</button>
               </div>
             )}
 
@@ -432,15 +439,17 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             )}
 
             {triageFiles.length > 0 ? (
+            <>
+            {undecidedFiles.length > 0 && (
             <div className="trlist">
               <div className="trheader">
-                <input type="checkbox" checked={allSel} onChange={() => setTriageSel(allSel ? new Set() : new Set(triageFiles.map((f) => f.file)))} aria-label="Select all" />
+                <input type="checkbox" checked={allSel} onChange={() => setTriageSel(allSel ? new Set() : new Set(undecidedFiles.map((f) => f.file)))} aria-label="Select all undecided" />
                 <span>File</span>
                 <span style={{ textAlign: 'right' }}>Score</span>
                 <span>Issues</span>
                 <span>Decision</span>
               </div>
-              {triageFiles.map((f) => {
+              {undecidedFiles.map((f) => {
                 const dec = triage[f.file]
                 const junk = isAutoJunk(f)
                 const sev = topSev(f)
@@ -483,6 +492,22 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 )
               })}
             </div>
+            )}
+            {decidedFiles.length > 0 && (
+              <details className="decidedwrap" style={{ marginTop: 12 }}>
+                <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 13, color: 'var(--muted)', padding: '6px 0' }}>✓ {decidedFiles.length} decided · {inscopeCount} in scope · {naCount} N/A · {deferCount} deferred <span style={{ fontWeight: 400 }}>· click to review / change</span></summary>
+                <div style={{ marginTop: 4 }}>
+                  {decidedFiles.map((f) => (
+                    <div key={f.file} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 2px', borderBottom: '1px solid var(--line)' }}>
+                      <button className="remname" style={{ flex: 1, textAlign: 'left' }} onClick={() => setSel(f)}>{f.file}</button>
+                      <span className={`trstatchip ${triage[f.file]}`}>{triage[f.file] === 'inscope' ? '✓ in scope' : triage[f.file] === 'na' ? 'N/A' : '⏸ deferred'}</span>
+                      <button className="ghost small" onClick={() => triageFile(f.file, null)} title="Undo this decision">↺</button>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+            </>
             ) : (
               <div className="triagecta">
                 <b>✓ All scanned files remediated</b> — every file has been fixed and written back. Nothing left to triage{remediatedFiles.length > 0 ? ` · ${remediatedFiles.length} fixed` : ''}.
@@ -512,8 +537,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             </div>
             <div className="plandec">
               <span className="muted">{dcount('accepted')} accepted · {dcount('override')} modified · {dcount('rejected')} rejected · {pending} pending</span>
-              {autoFiles.length > 0 && <button className="batchbtn" onClick={batchAutoRemediate} title="Accept all fully-automatic files — fixes will run when you click Remediate all (server-side)">⚡ Accept batch · {autoFiles.length} auto-remediable</button>}
-              <button disabled={!pending} onClick={acceptAll}>✓ Accept all</button>
+              {autoFiles.length > 0 && <button className="batchbtn" onClick={batchAutoRemediate} title="Accept ONLY the fully-automatic files — the engine fixes these deterministically when you click Remediate all (no human work).">⚡ Auto-fix {autoFiles.length} automatic file{autoFiles.length !== 1 ? 's' : ''}</button>}
+              <button disabled={!pending} onClick={acceptAll} title="Accept the WHOLE plan — every remediable file, INCLUDING any that need assisted or manual work.">✓ Accept full plan · {pending}</button>
             </div>
           </div>
           <div className="plancards">
