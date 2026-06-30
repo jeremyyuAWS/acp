@@ -559,8 +559,8 @@ export default function App() {
         {view === 'assess' && (
           <>
             <div className="subtabs" role="tablist" aria-label="Assessment views">
-              <button role="tab" aria-selected={assess === 'results'} aria-current={assess === 'results' ? 'step' : undefined} className={`fchip${assess === 'results' ? ' on' : ' done'}`} onClick={() => setAssess('results')}>{assess !== 'results' && <span className="tabok" aria-hidden="true">✓ </span>}4 · Assess</button>
-              <button role="tab" aria-selected={assess === 'graph'} className={assess === 'graph' ? 'fchip on' : 'fchip'} onClick={() => setAssess('graph')}>5 · Risk &amp; findings</button>
+              <button role="tab" aria-selected={assess === 'results'} aria-current={assess === 'results' ? 'step' : undefined} className={`fchip${assess === 'results' ? ' on' : assessed ? ' done' : ''}`} onClick={() => setAssess('results')}>{assessed && assess !== 'results' && <span className="tabok" aria-hidden="true">✓ </span>}4 · Assess</button>
+              <button role="tab" aria-selected={assess === 'graph'} aria-current={assess === 'graph' ? 'step' : undefined} className={`fchip${assess === 'graph' ? ' on' : assessed ? ' done' : ''}`} onClick={() => setAssess('graph')}>{assessed && assess !== 'graph' && <span className="tabok" aria-hidden="true">✓ </span>}5 · Risk &amp; findings</button>
             </div>
             {assess === 'results' && (run ? <><AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy} onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase} />{assessPhase === 'done' && <><RuleBreakdown scanId={run.id} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}</> : placeholder)}
             {(assess === 'graph' || assess === 'rubric' || assess === 'coverage') && (run ? <><RiskScore run={run} files={files} /><KnowledgeGraph files={files} /></> : placeholder)}

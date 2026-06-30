@@ -344,7 +344,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
       <div className="subtabs" role="tablist" aria-label="Remediate steps">
         {SUBS.map(([k, label], i) => {
-          const done = i < SUBS.findIndex(([kk]) => kk === sub)   // passed-step: green ✓ once you've moved past it
+          // Real completion signal per sub-step (stays ✓ even when you navigate away).
+          const subDone = {
+            triage: files.length > 0 && files.filter((f) => !(f.remediated_at || f.drive_write_url) && !triage[f.file]).length === 0,
+            auto: remediable.length > 0 && pending === 0,
+            review: (totalHitl > 0 && queue.length === 0) || serverFixed > 0,
+            revalidate: reVerified > 0,
+          }
+          const done = !!subDone[k] && sub !== k
           return <button key={k} role="tab" aria-selected={sub === k} aria-current={sub === k ? 'step' : undefined} className={`fchip${sub === k ? ' on' : ''}${done ? ' done' : ''}`} onClick={() => setSub(k)}>{done && <span className="tabok" aria-hidden="true">✓ </span>}{label}{done && <span className="vh"> completed</span>}</button>
         })}
       </div>
