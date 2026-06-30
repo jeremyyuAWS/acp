@@ -3,29 +3,13 @@ import { openReport, getScanDiff } from './api'
 import { ScoreRing } from './ScoreRing.jsx'
 import FileDrawer from './FileDrawer.jsx'
 import Tag from './Tag.jsx'
+import { baseName, groupDuplicates } from './dedupe.js'
 
 const scoreColor = (s) => (s >= 90 ? '#639922' : s >= 50 ? '#BF8C00' : '#2E72C9')
 const statusOf = (f) => (f.status === 'error' ? 'unanalysable' : f.status === 'uncertain' ? 'uncertain' : f.compliant ? 'certifiable' : 'issues')
 const BADGE = {
   certifiable: ['#E7F0DC', '#3B6D11'], issues: ['#FAEEDA', '#854F0B'],
   uncertain: ['#E6EFFB', '#2A5E9E'], unanalysable: ['#EEEDEA', '#5F5E5A'],
-}
-
-// Google Drive appends " (1)", " (2)"… when the same file is uploaded more than
-// once. Strip the suffix to recover the logical document name.
-const baseName = (name) => name.replace(/ \(\d+\)(\.[^.]+)$/, '$1')
-
-// Collapse duplicate uploads into one representative row per logical document,
-// carrying a copy count + the list of actual file names.
-function groupDuplicates(files) {
-  const map = new Map()
-  for (const f of files) {
-    const k = baseName(f.file)
-    const g = map.get(k)
-    if (!g) { map.set(k, { rep: f, copies: 1, names: [f.file] }) }
-    else { g.copies += 1; g.names.push(f.file); if (f.file === k) g.rep = f }
-  }
-  return [...map.values()].map((g) => ({ ...g.rep, _copies: g.copies, _names: g.names }))
 }
 
 export default function Dashboard({ run, files, trend, delta, deltaKey, scanList = [], onPickScan }) {

@@ -4,6 +4,7 @@ import FileDrawer, { retentionOf } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
+import { dupeCountOf, duplicateFiles } from './dedupe.js'
 
 // Steps 1–3 isolated as sub-steps: 1 Inventory · 2 Classify (HITL: confirm/correct the
 // agent's classification) · 3 Actions (HITL: accept/override the lifecycle action).
@@ -85,6 +86,17 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
   const toggleTag = (f, t) => setClassState((s) => { const cur = s[f.file]?.tags ?? tagsOf(f); const next = cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]; return { ...s, [f.file]: { tags: next, confirmed: false } } })
   const confirmClass = (f) => setClassState((s) => ({ ...s, [f.file]: { tags: tagsOf(f), confirmed: true } }))
   const classConfirmed = files.filter(isConfirmed).length
+
+  // ---- "Already known" summary — what's already true about this estate BEFORE you start
+  // classifying, so you know what's worth your attention vs. already handled. ----
+  const dupeCount = dupeCountOf(files)
+  // f.score is only set when the scan's own rubric pass actually scored the file (null for
+  // uncertain/unparseable docs) — i.e. files that already have a real result, independent of
+  // whether the separate "Assess" WCAG-level step has been clicked yet.
+  const alreadyScored = files.filter((f) => f.score != null).length
+  // remediated_at/drive_write_url = fixed THIS scan; acp_stamped = carries a provenance
+  // stamp from a PRIOR remediation pass (embedded in the file itself) — either counts.
+  const alreadyRemediated = files.filter((f) => f.remediated_at || f.drive_write_url || f.acp_stamped).length
 
   // ---- Actions HITL ----
   const actionable = files.filter((f) => !f.locked)
@@ -231,6 +243,32 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
             (e.g. <code>HR-</code>, <code>Legal-</code>, <code>Finance-</code>, <code>public-</code>, <code>-hold</code>) ·
             <strong> sensitive-data</strong> flags come from the scan (Deep scan). Confirm or correct any tag below —
             your edits win over the agent’s guess.
+          </div>
+          {/* What's already known about this estate before you start classifying — so it's
+              clear what's worth your attention vs. already handled (duplicate copies to
+              clean up, files already scored by the scan, files already remediated in a
+              prior pass — independent of whether the separate Assess step has run yet). */}
+          <div className="metrics" style={{ margin: '0 0 14px' }}>
+            {/* The global `button{}` rule sets color:#fff — .metric overrides background/
+                border/padding (class beats element) but NOT color, since .metric never sets
+                it. Every text node here needs an explicit color or it renders white-on-card
+                (invisible) — hence color set on the button itself as a base, not left to
+                inherit. */}
+            <button className="metric" style={{ textAlign: 'left', color: 'var(--ink)', cursor: dupeCount ? 'pointer' : 'default' }}
+                    disabled={!dupeCount}
+                    onClick={() => setSeg({ title: 'Duplicate uploads', subtitle: `${dupeCount} of ${files.length} files are extra copies of another document`, files: duplicateFiles(files) })}>
+              <span>duplicate files</span><b style={{ color: dupeCount ? '#854F0B' : 'var(--ink)' }}>{dupeCount}</b>
+            </button>
+            <button className="metric" style={{ textAlign: 'left', color: 'var(--ink)', cursor: alreadyScored ? 'pointer' : 'default' }}
+                    disabled={!alreadyScored}
+                    onClick={() => setSeg({ title: 'Already scored', subtitle: `${alreadyScored} of ${files.length} files have a result from the scan`, files: files.filter((f) => f.score != null) })}>
+              <span>already assessed</span><b style={{ color: '#2A5E9E' }}>{alreadyScored}</b>
+            </button>
+            <button className="metric" style={{ textAlign: 'left', color: 'var(--ink)', cursor: alreadyRemediated ? 'pointer' : 'default' }}
+                    disabled={!alreadyRemediated}
+                    onClick={() => setSeg({ title: 'Already remediated', subtitle: `${alreadyRemediated} of ${files.length} files were fixed (this scan or a prior pass)`, files: files.filter((f) => f.remediated_at || f.drive_write_url || f.acp_stamped) })}>
+              <span>already remediated</span><b style={{ color: '#3B6D11' }}>{alreadyRemediated}</b>
+            </button>
           </div>
           <div className="chartrow">
             <section className="panel"><h2>By exposure &amp; risk <span className="muted" style={{ fontWeight: 400 }}>· expand internal to see its risk flags</span></h2>
