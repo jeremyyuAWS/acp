@@ -124,6 +124,17 @@ function AssessGate({ onGo }) {
   )
 }
 
+// Per-user/per-session "fresh start": wipe activity caches so no scan results, published
+// files, assess/remediation progress, scores, or upload history from a prior session or
+// user survive. Config (roles, file-types, delegations) is intentionally left alone.
+const ACTIVITY_LS = ['mova_ontology_v1', 'mova_drive_scores', 'mova_drive_archive', 'mova_upload_history']
+function clearActivityStorage() {
+  try {
+    Object.keys(sessionStorage).filter((k) => k.startsWith('acp-')).forEach((k) => sessionStorage.removeItem(k))
+    ACTIVITY_LS.forEach((k) => localStorage.removeItem(k))
+  } catch { /* storage unavailable — ignore */ }
+}
+
 export default function App() {
   const [me, setMe] = useState(null)
   const [rubric, setRubric] = useState(null)
@@ -205,6 +216,14 @@ export default function App() {
   const PRIVILEGED = { 'jeremyyu.movate@gmail.com': PRIV_PROFILE }
 
   const signIn = (p) => {
+    // Fresh per user: if a DIFFERENT user signs in (or first sign-in), wipe activity caches
+    // so nothing — published files, assess/remediation results, scores — carries over.
+    try {
+      if (localStorage.getItem('mova_last_user') !== p.email) {
+        clearActivityStorage()
+        localStorage.setItem('mova_last_user', p.email || '')
+      }
+    } catch { /* ignore */ }
     if (p.token) {
       setGoogleToken(p.token)   // API Bearer auth
       setDriveToken(p.token)    // Same token has Drive scopes — no separate connect needed
@@ -215,7 +234,14 @@ export default function App() {
     }
     const sp = sessionStorage.getItem('sp_token')
     if (sp) { setSPToken(sp); setHasSPToken(true) }
-    setPersona(p); setScan(null); setScanList([]); setLoaded(false); setDecisions({}); setCertifiedDocs([]); setPublishedFiles([]); setSettingsOpen(false); setView((p.allow || ['overview'])[0]); setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label, allow: p.allow || [] })
+    // Reset ALL downstream state so the new session starts blank — including the pieces the
+    // old reset missed (triage, the assess-completion phase, the optimistic-assess flag, and
+    // the localStorage-backed published/ontology), so no tab shows legacy data on first view.
+    setPersona(p); setScan(null); setScanList([]); setLoaded(false)
+    setDecisions({}); setTriage({}); setAssessPhase('idle'); setJustAssessed(null)
+    setOntology(loadPublished()); setCertifiedDocs([]); setPublishedFiles([])
+    setSettingsOpen(false); setView((p.allow || ['overview'])[0])
+    setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label, allow: p.allow || [] })
   }
 
   // Called from Integrations when a source OAuth succeeds
@@ -410,11 +436,11 @@ export default function App() {
           {me.allow?.includes('settings') && <button className="cogbtn" aria-label="Platform settings" title="Platform settings" onClick={() => setSettingsOpen(true)}>⚙</button>}
           <button className="ghost small" onClick={() => {
             clearAllTokens()
-            sessionStorage.removeItem('gd_token')
-            sessionStorage.removeItem('sp_token')
-            setHasDriveToken(false)
-            setHasSPToken(false)
-            setMe(null)
+            clearActivityStorage()
+            // Hard reload guarantees a 100% fresh in-memory state for whoever signs in next
+            // on this browser — no scan, decisions, assess phase, or files survive.
+            try { sessionStorage.clear() } catch { /* ignore */ }
+            window.location.reload()
           }}>sign out</button>
         </div>
       </header>
