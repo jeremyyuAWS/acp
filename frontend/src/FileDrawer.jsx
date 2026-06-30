@@ -324,10 +324,15 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         </div>
       )}
 
-      {context === 'remediate' && (() => {
+      {(() => {
         // Cross-reference the rule manifest against this file's actual issues to
         // produce a per-rule outcome row: PASS (no findings) / FAIL (N findings) /
-        // SKIP (rule not applicable to this file type).
+        // SKIP (rule not applicable to this file type). Was gated to context==='remediate'
+        // only — but allRules is a static import (./rules/index.js, no remediate-specific
+        // state) and aiEnabled defaults to true, so there was no real dependency forcing
+        // this to one context. The Assess tab (context='full', the default) is arguably
+        // where you want this MOST — it's exactly where "why did this score what it did,
+        // per WCAG rule" is the question being asked.
         const isHtmlFile = /\.html?$/i.test(file.file || '')
         const issuesBySc = {}
         ;(file.issues || []).forEach((i) => {
