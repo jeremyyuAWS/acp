@@ -26,7 +26,7 @@ function BuildStamp() {
   const iso = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : null
   const ver = typeof __BUILD_VERSION__ !== 'undefined' ? __BUILD_VERSION__ : null
   if (!ver && !iso) return null
-  const stamp = iso ? new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : null
+  const stamp = iso ? new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }) : null
   return (
     <p style={{ margin: '10px 0 0', fontSize: 11, color: '#b0a8b4', textAlign: 'center', letterSpacing: 0.2 }}
        title={stamp ? `Built ${stamp}` : undefined}>
