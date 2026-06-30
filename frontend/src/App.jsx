@@ -129,6 +129,7 @@ export default function App() {
   const [sources, setSources] = useState([])
   const [scan, setScan] = useState(null)
   const [justAssessed, setJustAssessed] = useState(null) // scan id assessed this session (optimistic)
+  const [assessPhase, setAssessPhase] = useState('idle') // AssessRunner phase: idle | running | done
   const [scanLoading, setScanLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
@@ -501,7 +502,7 @@ export default function App() {
               <button role="tab" aria-selected={assess === 'results'} className={assess === 'results' ? 'fchip on' : 'fchip'} onClick={() => setAssess('results')}>4 · Assess</button>
               <button role="tab" aria-selected={assess === 'graph'} className={assess === 'graph' ? 'fchip on' : 'fchip'} onClick={() => setAssess('graph')}>5 · Risk &amp; findings</button>
             </div>
-            {assess === 'results' && (run ? <><AssessRunner files={files} runId={run.id} scanBusy={busy} onAssessed={() => setJustAssessed(run.id)} />{assessed && <Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} />}</> : placeholder)}
+            {assess === 'results' && (run ? <><AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy} onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase} />{assessPhase === 'done' && <Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} />}</> : placeholder)}
             {(assess === 'graph' || assess === 'rubric' || assess === 'coverage') && (run ? <><RiskScore run={run} files={files} /><KnowledgeGraph files={files} /></> : placeholder)}
           </>
         )}

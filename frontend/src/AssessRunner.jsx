@@ -51,7 +51,7 @@ const phaseFor = (name = '') => {
 const SKEY = (id) => `acp-assess-${id || 'none'}`
 const loadSaved = (id) => { try { return JSON.parse(sessionStorage.getItem(SKEY(id)) || 'null') } catch { return null } }
 
-export default function AssessRunner({ files = [], runId, scanBusy = false, onAssessed }) {
+export default function AssessRunner({ files = [], runId, scanBusy = false, onAssessed, onPhase }) {
   const saved = loadSaved(runId)
   const [level, setLevel] = useState(saved?.level || 'AA')
   const [phase, setPhase] = useState(saved?.phase || 'idle') // idle | running | done
@@ -65,6 +65,9 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   const timer = useRef(null)
   const phaseTimer = useRef(null)
   useEffect(() => () => { clearInterval(timer.current); clearTimeout(phaseTimer.current) }, [])
+  // Report the phase up so the parent gates the Master Score on completion — it must not
+  // appear until the assessment has actually run over all parsable files (phase 'done').
+  useEffect(() => { onPhase?.(phase) }, [phase]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const docs = files.filter((f) => f.score != null)
   const excludedCount = files.length - docs.length
