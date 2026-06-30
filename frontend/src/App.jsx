@@ -456,11 +456,30 @@ export default function App() {
 
       <nav aria-label="Compliance workflow">
         <div className="tabs" role="tablist" aria-label="Compliance workflow">
-          {TABS.filter(([k]) => !me.allow || me.allow.includes(k)).map(([k, label, rg]) => (
-            <button key={k} role="tab" aria-selected={view === k} className={view === k ? 'tab on' : 'tab'} onClick={() => setView(k)}>
-              {label}<span className="rg">{rg}</span>
-            </button>
-          ))}
+          {TABS.filter(([k]) => !me.allow || me.allow.includes(k)).map(([k, label, rg]) => {
+            // Stepper: a workflow tab (Discover→Assess→Remediate→Publish→Monitor) shows
+            // "done" once its stage is complete for the scan IN VIEW — so it works in
+            // time-travel too (run/assessed/files/publishedFiles reflect the selected
+            // scan). Non-workflow tabs (overview/integrations/upload) have no stage and
+            // never show done. The active tab shows as current, never done.
+            const stageDone = {
+              discover: !!run,
+              assess: assessed,
+              remediate: files.some((f) => f.remediated_at || f.drive_write_url),
+              publish: (publishedFiles?.length || 0) > 0,
+              monitor: (publishedFiles?.length || 0) > 0,
+            }
+            const done = !!stageDone[k] && view !== k
+            return (
+              <button key={k} role="tab" aria-selected={view === k}
+                      aria-current={view === k ? 'step' : undefined}
+                      className={`tab${view === k ? ' on' : ''}${done ? ' done' : ''}`}
+                      onClick={() => setView(k)}>
+                <span className="tablbl">{done && <span className="tabok" aria-hidden="true">✓ </span>}{label}{done && <span className="vh"> completed</span>}</span>
+                <span className="rg">{rg}</span>
+              </button>
+            )
+          })}
         </div>
       </nav>
       <div className="runinfo">
