@@ -60,9 +60,13 @@ export const startScanQueued = (source = 'local', folder = null, aiEnabled = tru
   ? sim({ scan_id: 'sim-scan', job_id: 'sim-job', queued: true, workers: 4 })
   : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}&pii=${pii}&queue=true&fanout=true`, { method: 'POST', headers: headers() }).then(j))
 // Async server-side remediation: one remediate_file job per HTML file in the scan.
-export const remediateScan = (scanId, scope) => (SIM
-  ? sim({ scan_id: scanId, enqueued: scope ? scope.length : 3, job_ids: ['a', 'b', 'c'], workers: 4 })
-  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediate`, { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify(scope ? { scope } : {}) }).then(j))
+// SIM keeps a tiny drain state so getRemediationStatus ticks down over a few polls —
+// the demo then shows the live KPI / progress-bar updates instead of finishing instantly.
+let _simRemed = { remaining: 0, total: 0 }
+export const remediateScan = (scanId, scope) => {
+  if (SIM) { const n = scope ? scope.length : 3; _simRemed = { remaining: n, total: n }; return sim({ scan_id: scanId, enqueued: n, job_ids: ['a', 'b', 'c'], workers: 4 }) }
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediate`, { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify(scope ? { scope } : {}) }).then(j)
+}
 // Access allow-list (who can use the app) — managed from Settings.
 export const getAllowlist = () => (SIM
   ? sim({ emails: ['demo@sim'], owner: 'demo@sim', domains: [] })
@@ -88,9 +92,16 @@ export const assessScan = (scanId, level = 'AA') => (SIM
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/assess?level=${encodeURIComponent(level)}`,
           { method: 'POST', headers: headers() }).then(j))
 // Live remediation progress: in-flight jobs + latest fixed file (drives the Remediate bar).
-export const getRemediationStatus = (scanId) => (SIM
-  ? sim({ in_flight: 0, failed: 0, latest_file: null })
-  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation-status`, { headers: headers() }).then(j))
+export const getRemediationStatus = (scanId) => {
+  if (SIM) {
+    const step = Math.max(1, Math.ceil(_simRemed.total / 4))   // drain over ~4 polls
+    _simRemed.remaining = Math.max(0, _simRemed.remaining - step)
+    const fixedSoFar = _simRemed.total - _simRemed.remaining
+    return sim({ in_flight: _simRemed.remaining, failed: 0,
+                 latest_file: _simRemed.remaining ? `report-${fixedSoFar}.html` : `report-${_simRemed.total}.html` }, 120)
+  }
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation-status`, { headers: headers() }).then(j)
+}
 // Queue state: depth by status + recent jobs (drives the in-app queue panel).
 export const getJobs = (status = null) => (SIM
   ? sim({ workers: 4, stats: { done: 12, running: 1, queued: 3 }, jobs: [] })

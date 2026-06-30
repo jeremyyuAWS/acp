@@ -139,7 +139,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [acted, setActed] = useState({ approved: 0, rejected: 0, deferred: 0 })
   const [deferredItems, setDeferredItems] = useState([])
   const runId = run?.id
-  useEffect(() => { setQueue(buildHumanQueue(files, {})); setActed({ approved: 0, rejected: 0, deferred: 0 }); setDeferredItems([]) }, [runId]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setQueue(buildHumanQueue(files, {})); setActed({ approved: 0, rejected: 0, deferred: 0 }); setDeferredItems([])
+    clearInterval(pollRef.current); setRemProg(null); setRemBusy(false); setServerFixed(0); setRemMsg('')
+  }, [runId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Derive fix-type breakdown from auto-action files in the corpus
   const fixTypesDisplay = useMemo(() => {
@@ -168,8 +171,43 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [remBusy, setRemBusy] = useState(false)
   const [remMsg, setRemMsg] = useState('')
   const [remProg, setRemProg] = useState(null)   // { total, done, latest, failed }
+  const [serverFixed, setServerFixed] = useState(0)  // files fixed server-side this scan (persists after each batch)
   const pollRef = useRef(null)
   useEffect(() => () => clearInterval(pollRef.current), [])
+  const REMKEY = (id) => `acp-remed-${id || 'none'}`
+
+  // One poll loop, shared by a fresh run and by resume-after-navigation. Ticks the live
+  // counters every 1.5s off the worker queue; on drain it banks the fixed count + clears.
+  const startPoll = (total) => {
+    clearInterval(pollRef.current)
+    pollRef.current = setInterval(async () => {
+      try {
+        const s = await getRemediationStatus(runId)
+        const done = Math.max(0, total - (s.in_flight || 0))
+        setRemProg({ total, done, latest: s.latest_file, failed: s.failed || 0 })
+        if (!s.in_flight) {                         // queue drained — batch complete
+          clearInterval(pollRef.current)
+          setRemProg(null); setRemBusy(false)
+          const ok = Math.max(0, total - (s.failed || 0))
+          setServerFixed((n) => n + ok)             // bank the fixes so the KPI holds after
+          setRemMsg(`✓ Remediation complete — ${ok} document${ok === 1 ? '' : 's'} fixed${s.failed ? `, ${s.failed} failed` : ''}.`)
+          try { sessionStorage.removeItem(REMKEY(runId)) } catch { /* ignore */ }
+          onRefresh?.()                             // refresh scan so the write-back banner updates
+        }
+      } catch { /* transient — keep polling */ }
+    }, 1500)
+  }
+
+  // Resume the live view across tab switches / reloads: the poll lives in this component, so
+  // without this, navigating away mid-run and back would freeze the cards. The denominator is
+  // restored from sessionStorage (written when the run starts).
+  useEffect(() => {
+    if (!runId) return
+    let saved = null
+    try { saved = JSON.parse(sessionStorage.getItem(REMKEY(runId)) || 'null') } catch { /* ignore */ }
+    if (saved?.total) { setRemBusy(true); setRemProg({ total: saved.total, done: 0, latest: null, failed: 0 }); startPoll(saved.total) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId])
   // Rebuild the human review queue whenever triage decisions change so inscope-only
   // selections are reflected when the user navigates to the Human review tab.
   useEffect(() => {
@@ -186,21 +224,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       if (!r.workers) { setRemMsg(`Enqueued ${r.enqueued}, but no workers are running. Add some in the Monitor tab.`); setRemBusy(false); return }
       const total = r.enqueued
       setRemProg({ total, done: 0, latest: null, failed: 0 })
-      clearInterval(pollRef.current)
-      pollRef.current = setInterval(async () => {
-        try {
-          const s = await getRemediationStatus(runId)
-          const done = Math.max(0, total - (s.in_flight || 0))
-          setRemProg({ total, done, latest: s.latest_file, failed: s.failed || 0 })
-          if (!s.in_flight) {                       // queue drained — batch complete
-            clearInterval(pollRef.current)
-            setRemProg(null); setRemBusy(false)
-            const ok = total - (s.failed || 0)
-            setRemMsg(`✓ Remediation complete — ${ok} document${ok === 1 ? '' : 's'} fixed${s.failed ? `, ${s.failed} failed` : ''}.`)
-            onRefresh?.()                            // refresh scan so the write-back banner updates
-          }
-        } catch { /* transient — keep polling */ }
-      }, 1500)
+      try { sessionStorage.setItem(REMKEY(runId), JSON.stringify({ total })) } catch { /* ignore */ }
+      startPoll(total)
     } catch (e) {
       setRemMsg(`Could not enqueue: ${e.message || e}`); setRemBusy(false)
     }
@@ -223,6 +248,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     setTimeout(() => setSelf((s) => s.map((x) => x.id === id ? { ...x, status: 'verified' } : x)), 1700)
   }
   const verified = self.filter((x) => x.status === 'verified').length
+  // Live re-verified KPI = manual self-fixes + banked server fixes + the in-flight batch's
+  // completions (ticks every poll), so the card moves in real time with the worker queue.
+  const liveFixed = remProg ? Math.max(0, remProg.done - (remProg.failed || 0)) : 0
+  const reVerified = verified + serverFixed + liveFixed
+  const remLive = !!remProg || remBusy
   const pendingHitlFiles = new Set(queue.map((q) => q.file))
   const totalHitl = queue.length + acted.approved + acted.rejected + acted.deferred + self.length
   const hitlProgress = totalHitl > 0 ? Math.round(((totalHitl - queue.length) / totalHitl) * 100) : 0
@@ -273,13 +303,16 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   return (
     <>
       <div className="metrics">
-        <div className="metric" title="Estimated number of issues that can be fixed automatically — populates once you run remediation"><span>auto-fixable (est.)</span><b style={{ color: remStarted ? '#3B6D11' : '#9AA1B4' }}>{remStarted ? autoFixed : 0}</b></div>
+        <div className={`metric${remLive ? ' livecard' : ''}`} title="Estimated number of issues that can be fixed automatically — populates once you run remediation"><span>auto-fixable (est.)</span><b style={{ color: remStarted ? '#3B6D11' : '#9AA1B4' }}>{remStarted ? autoFixed : 0}</b></div>
         <div className="metric"><span>HITL queue</span>{remStarted
           ? <><b style={{ color: queue.length ? '#854F0B' : '#3B6D11' }}>{totalHitl === 0 ? 'no items' : `${queue.length} remaining`}</b>{totalHitl > 0 && <span className="muted" style={{ fontSize: 11 }}> · {hitlProgress}% done</span>}</>
           : <b style={{ color: '#9AA1B4' }}>—</b>}</div>
-        <div className="metric"><span>approved</span><b>{acted.approved}</b></div>
-        <div className="metric"><span>deferred</span><b style={{ color: '#1F5FA8' }}>{acted.deferred}</b></div>
-        <div className="metric"><span>re-verified</span><b style={{ color: '#3B6D11' }}>{verified}</b></div>
+        <div className="metric"><span>approved</span><b key={acted.approved} className={acted.approved ? 'tick' : undefined}>{acted.approved}</b></div>
+        <div className="metric"><span>deferred</span><b key={acted.deferred} className={acted.deferred ? 'tick' : undefined} style={{ color: '#1F5FA8' }}>{acted.deferred}</b></div>
+        <div className={`metric${remLive ? ' livecard' : ''}`} title="Documents fixed and re-validated against all engines — ticks in real time as the worker queue completes each file">
+          <span>re-verified{remLive && <span className="livedot">live</span>}</span>
+          <b key={reVerified} className={reVerified ? 'tick' : undefined} style={{ color: '#3B6D11' }}>{reVerified.toLocaleString()}</b>
+        </div>
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', margin: '4px 0 12px' }}>
