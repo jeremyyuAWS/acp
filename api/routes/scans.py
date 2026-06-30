@@ -245,8 +245,11 @@ def put_decision(sid: str, filename: str, request: Request, body: dict,
 
 
 @router.get("/scans/{sid}/remediation-status")
-def remediation_status(sid: str):
-    """Live remediation progress (in-flight jobs + latest fixed file) for the bar."""
+def remediation_status(sid: str, request: Request):
+    """Live remediation progress (in-flight jobs + latest fixed file) for the bar.
+    Owner-scoped — latest_file could otherwise leak another user's filename by scan id."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
     return core.store.remediation_status(sid)
 
 
@@ -287,10 +290,11 @@ def scan_manifest(sid: str, request: Request):
 
 
 @router.get("/scans/{sid}/report.pdf")
-def report_pdf(sid: str):
-    # NOTE: opened via a plain <a href> (new tab) which can't send the Bearer token, so
-    # this stays un-owner-scoped — proper scoping needs a signed/expiring URL (follow-up).
-    res = core.store.get_scan(sid)
+def report_pdf(sid: str, request: Request):
+    # Owner-scoped. The frontend fetches this WITH the Bearer token (XHR → blob → open),
+    # so a plain tokenless <a href> no longer works — that's intentional: it stops anyone
+    # pulling another user's full report by guessing/replaying a scan id.
+    res = core.store.get_scan(sid, owner=_owner(request))
     if res is None:
         raise HTTPException(404, "scan not found")
     rb = core.active_rubric()

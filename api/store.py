@@ -976,25 +976,32 @@ class Store:
                 "UPDATE jobs SET status='done', updated_at=%s, last_error=NULL WHERE id=%s",
                 (self._now(), job_id))
 
-    def dead_letter_breakdown(self) -> dict:
-        """Diagnostic: dead-lettered jobs grouped by type + the most common errors."""
+    def dead_letter_breakdown(self, owner: str | None = None) -> dict:
+        """Diagnostic: dead-lettered jobs grouped by type + the most common errors.
+        owner scopes to the caller's own jobs so error text (which can name a file)
+        never leaks across tenants."""
+        scope = " AND scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)" if owner else ""
+        sp = (owner,) if owner else ()
         out: dict = {}
         with self._db.cursor() as cur:
-            self._db.execute(cur, "SELECT type, COUNT(*) AS n FROM jobs WHERE status='dead' GROUP BY type")
+            self._db.execute(cur, "SELECT type, COUNT(*) AS n FROM jobs WHERE status='dead'" + scope + " GROUP BY type", sp)
             out["by_type"] = {r["type"]: r["n"] for r in self._db.fetchall(cur)}
             self._db.execute(cur,
                 "SELECT type, SUBSTR(last_error,1,200) AS err, COUNT(*) AS n FROM jobs "
-                "WHERE status='dead' GROUP BY type, SUBSTR(last_error,1,200) ORDER BY n DESC LIMIT 15")
+                "WHERE status='dead'" + scope + " GROUP BY type, SUBSTR(last_error,1,200) ORDER BY n DESC LIMIT 15", sp)
             out["top_errors"] = [{"type": r["type"], "n": r["n"], "error": r["err"]}
                                  for r in self._db.fetchall(cur)]
         return out
 
-    def purge_dead_jobs(self) -> int:
-        """Delete dead-lettered jobs (unrecoverable). Returns how many were removed."""
+    def purge_dead_jobs(self, owner: str | None = None) -> int:
+        """Delete dead-lettered jobs (unrecoverable). owner scopes the purge to the
+        caller's own jobs so one tenant can't clear another's. Returns how many removed."""
+        scope = " AND scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)" if owner else ""
+        sp = (owner,) if owner else ()
         with self._db.cursor() as cur:
-            self._db.execute(cur, "SELECT COUNT(*) AS n FROM jobs WHERE status='dead'")
+            self._db.execute(cur, "SELECT COUNT(*) AS n FROM jobs WHERE status='dead'" + scope, sp)
             n = self._db.fetchone(cur)["n"]
-            self._db.execute(cur, "DELETE FROM jobs WHERE status='dead'")
+            self._db.execute(cur, "DELETE FROM jobs WHERE status='dead'" + scope, sp)
         return n
 
     def touch_job(self, job_id: str) -> None:
@@ -1041,18 +1048,23 @@ class Store:
                 (self._now(), cutoff))
             return getattr(cur, "rowcount", 0) or 0
 
-    def job_stats(self) -> dict:
+    def job_stats(self, owner: str | None = None) -> dict:
+        # owner → only this user's jobs (scoped via their scans), so the queue view
+        # doesn't leak other tenants' activity. None = global (operator/admin context).
+        scope = " WHERE scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)" if owner else ""
         with self._db.cursor() as cur:
-            self._db.execute(cur, "SELECT status, COUNT(*) AS n FROM jobs GROUP BY status")
+            self._db.execute(cur, "SELECT status, COUNT(*) AS n FROM jobs" + scope + " GROUP BY status",
+                             (owner,) if owner else ())
             return {r["status"]: r["n"] for r in self._db.fetchall(cur)}
 
-    def list_jobs(self, status: str | None = None, limit: int = 200) -> list[dict]:
+    def list_jobs(self, status: str | None = None, limit: int = 200, owner: str | None = None) -> list[dict]:
+        clauses, params = [], []
+        if status:
+            clauses.append("status=%s"); params.append(status)
+        if owner:                                      # scope to the caller's own jobs
+            clauses.append("scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)"); params.append(owner)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
         with self._db.cursor() as cur:
-            if status:
-                self._db.execute(cur,
-                    "SELECT * FROM jobs WHERE status=%s ORDER BY updated_at DESC LIMIT %s",
-                    (status, limit))
-            else:
-                self._db.execute(cur,
-                    "SELECT * FROM jobs ORDER BY updated_at DESC LIMIT %s", (limit,))
+            self._db.execute(cur, "SELECT * FROM jobs" + where + " ORDER BY updated_at DESC LIMIT %s", tuple(params))
             return self._db.fetchall(cur)

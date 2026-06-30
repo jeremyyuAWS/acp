@@ -65,6 +65,20 @@ export const getActiveScan = () => (SIM ? sim({}) : fetch(`${BASE}/scans/active`
 export const getScan = (id) => (SIM ? sim(simGetScan(id)) : fetch(`${BASE}/scans/${id}`, { headers: headers() }).then(j))
 export const getInventory = () => (SIM ? sim([]) : fetch(`${BASE}/inventory`, { headers: headers() }).then(j))
 export const reportUrl = (id) => (SIM ? '#' : `${BASE}/scans/${id}/report.pdf`)
+// Fetch the report WITH the auth header (owner-scoped) → blob → download. Replaces the
+// old tokenless <a href>, which let anyone pull another user's report by scan id.
+export const openReport = (id, filename) => {
+  if (SIM) return Promise.resolve()
+  return fetch(`${BASE}/scans/${encodeURIComponent(id)}/report.pdf`, { headers: headers() })
+    .then((r) => { if (!r.ok) throw new Error(`report ${r.status}`); return r.blob() })
+    .then((blob) => {
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = filename || `acp-report-${id}.pdf`
+      document.body.appendChild(a); a.click(); a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+    })
+}
 export const startScan = (source = 'local', folder = null, aiEnabled = true, pii = true) => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}&pii=${pii}`, { method: 'POST', headers: headers() }).then(j))
 export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/scans/jobs/${id}`, { headers: headers() }).then(j))
 

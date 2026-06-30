@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { reportUrl } from './api'
+import { openReport } from './api'
 import { ScoreRing, Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import FileDrawer, { critLabel } from './FileDrawer.jsx'
@@ -94,7 +94,7 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
   return (
     <>
       <div className="dashtoolbar">
-        <a className="exportbtn" href={reportUrl(run.id)} target="_blank" rel="noreferrer">⤓ Export PDF report</a>
+        <button className="exportbtn" onClick={() => openReport(run.id)}>⤓ Export PDF report</button>
       </div>
       <section className="hero">
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>

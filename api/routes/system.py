@@ -185,18 +185,21 @@ def decisions(scan_id: str | None = None, limit: int = 500):
 
 
 @router.get("/jobs")
-def jobs(status: str | None = None, limit: int = 100):
+def jobs(request: Request, status: str | None = None, limit: int = 100):
     """Async job-queue visibility (ADR 0004): queue depth by status + recent jobs.
-    Feeds the Grafana queue panel and live UI."""
+    Owner-scoped — a user sees only their OWN jobs (stats, list, dead-letters), so
+    filenames in job payloads / error text never leak across tenants. The worker
+    count is global (shared infra, not sensitive)."""
+    owner = getattr(request.state, "user_email", None) or "demo"
     return {"workers": core.WORKERS,
-            "stats": core.store.job_stats(),
-            "dead_letters": core.store.dead_letter_breakdown(),
-            "jobs": core.store.list_jobs(status=status, limit=limit)}
+            "stats": core.store.job_stats(owner=owner),
+            "dead_letters": core.store.dead_letter_breakdown(owner=owner),
+            "jobs": core.store.list_jobs(status=status, limit=limit, owner=owner)}
 
 
 @router.post("/admin/jobs/clear-dead")
-def clear_dead_jobs():
-    """Delete unrecoverable dead-lettered jobs (gated — signed-in admins only).
-    Dead-letters are terminal failures; clearing them just removes the noise from
-    the queue. Re-run the originating action (e.g. remediate) to retry the work."""
-    return {"purged": core.store.purge_dead_jobs()}
+def clear_dead_jobs(request: Request):
+    """Delete the caller's OWN unrecoverable dead-lettered jobs. Owner-scoped so a
+    user can't purge another tenant's queue. Re-run the originating action to retry."""
+    owner = getattr(request.state, "user_email", None) or "demo"
+    return {"purged": core.store.purge_dead_jobs(owner=owner)}
