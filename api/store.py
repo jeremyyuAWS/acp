@@ -591,6 +591,56 @@ class Store:
                 f["issues"] = self._db.fetchall(cur)
             return {"run": run, "files": files}
 
+    def get_scan_diff(self, cur_id: str, prev_id: str, owner: str | None = None) -> dict | None:
+        """Diff two scans (ADR 0009) → per-file score regressions / improvements + the WCAG
+        criteria that flipped pass→fail. Owner-scoped: both scans must belong to the caller."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT id, owner_email, completed_at FROM scan_runs WHERE id IN (%s,%s)", (cur_id, prev_id))
+            runs = {r["id"]: r for r in self._db.fetchall(cur)}
+            if cur_id not in runs or prev_id not in runs:
+                return None
+            if owner is not None and (runs[cur_id].get("owner_email") != owner or runs[prev_id].get("owner_email") != owner):
+                return None
+
+            def _files(sid):
+                self._db.execute(cur, "SELECT file, score FROM file_records WHERE scan_id=%s", (sid,))
+                return {r["file"]: r.get("score") for r in self._db.fetchall(cur)}
+
+            def _traces(sid):
+                self._db.execute(cur, "SELECT file, rule_id, plain_name, outcome FROM scan_rule_traces WHERE scan_id=%s", (sid,))
+                out: dict = {}
+                for r in self._db.fetchall(cur):
+                    out.setdefault(r["file"], {})[r["rule_id"]] = (str(r["outcome"]).upper(), r["plain_name"])
+                return out
+
+            fp, fc = _files(prev_id), _files(cur_id)
+            tp, tc = _traces(prev_id), _traces(cur_id)
+
+        regressed, improved, new, removed = [], [], [], []
+        for f, cs in fc.items():
+            if f not in fp:
+                new.append({"file": f, "score": cs}); continue
+            ps = fp[f]
+            if ps is None or cs is None:
+                continue
+            delta = cs - ps
+            if delta < 0:
+                broke = [{"sc": rid, "name": name}
+                         for rid, (outcome, name) in tc.get(f, {}).items()
+                         if outcome == "FAIL" and tp.get(f, {}).get(rid, ("",))[0] == "PASS"]
+                regressed.append({"file": f, "prev": ps, "cur": cs, "delta": delta, "broke": broke[:6]})
+            elif delta > 0:
+                improved.append({"file": f, "prev": ps, "cur": cs, "delta": delta})
+        removed = [{"file": f, "score": fp[f]} for f in fp if f not in fc]
+        regressed.sort(key=lambda x: x["delta"])          # worst (most negative) first
+        improved.sort(key=lambda x: -x["delta"])
+        return {
+            "cur_id": cur_id, "prev_id": prev_id,
+            "cur_at": runs[cur_id].get("completed_at"), "prev_at": runs[prev_id].get("completed_at"),
+            "summary": {"regressed": len(regressed), "improved": len(improved), "new": len(new), "removed": len(removed)},
+            "regressed": regressed[:50], "improved": improved[:50], "new": new[:50], "removed": removed[:50],
+        }
+
     def inventory(self) -> list[dict]:
         with self._db.cursor() as cur:
             self._db.execute(cur,

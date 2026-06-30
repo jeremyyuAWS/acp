@@ -3,6 +3,7 @@ import { monitoringState, sourceWatch, IDENTITY, SIM } from './sim.js'
 import { getSchedule, putSchedule } from './api.js'
 import { prefersReducedMotion } from './a11y.js'
 import QueuePanel from './QueuePanel.jsx'
+import RegressionRadar from './RegressionRadar.jsx'
 
 // Step 10 · Monitor — the always-on surface. Shows every connected source being
 // continuously watched for new files and changes, a live event stream (with demo
@@ -76,7 +77,7 @@ function useProgramBatches(files, decisions) {
   }
 }
 
-export default function Monitor({ sources = [], files = [], ratified, decisions = {}, publishedFiles = [], aiEnabled = true, onAiToggle }) {
+export default function Monitor({ run, scanList = [], sources = [], files = [], ratified, decisions = {}, publishedFiles = [], aiEnabled = true, onAiToggle }) {
   const m = monitoringState(files)
   const watch = sourceWatch(sources, files)
   const prog = useProgramBatches(files, decisions)
@@ -260,6 +261,8 @@ export default function Monitor({ sources = [], files = [], ratified, decisions 
       </section>
 
       <QueuePanel />
+
+      <RegressionRadar run={run} scanList={scanList} />
 
       <section className="panel" style={{ marginBottom: 14 }}>
         <div className="proghd">

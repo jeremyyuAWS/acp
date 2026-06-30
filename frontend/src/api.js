@@ -40,6 +40,25 @@ export const getConfig = () => (SIM ? sim({ google_client_id: null, auth: 'demo'
 let lfTraceBase = null
 export const setLangfuseBase = (b) => { lfTraceBase = b || null }
 export const traceUrl = (traceId) => (lfTraceBase && traceId ? `${lfTraceBase}/${encodeURIComponent(traceId)}` : null)
+// Regression diff vs a prior scan (ADR 0009) — which docs got worse/better + criteria that broke.
+export const getScanDiff = (scanId, vs = null) => {
+  if (SIM) return sim({
+    cur_id: scanId, prev_id: 'h3', cur_at: '2026-06-29T17:00:00Z', prev_at: '2026-06-22T09:00:00Z',
+    summary: { regressed: 3, improved: 9, new: 2, removed: 1 },
+    regressed: [
+      { file: 'marketing-public-landing-page.html', prev: 100, cur: 82, delta: -18, broke: [{ sc: '1.4.3', name: 'Contrast (minimum)' }] },
+      { file: 'cardiology-patient-handbook.pdf', prev: 91, cur: 78, delta: -13, broke: [{ sc: '1.1.1', name: 'Images have alt text' }, { sc: '2.4.6', name: 'Headings & labels' }] },
+      { file: 'q3-board-deck.pptx', prev: 88, cur: 84, delta: -4, broke: [] },
+    ],
+    improved: [
+      { file: 'onboarding.pdf', prev: 72, cur: 100, delta: 28 },
+      { file: 'benefits-guide.pdf', prev: 80, cur: 96, delta: 16 },
+    ],
+    new: [{ file: 'hr-policy-2026.docx', score: 64 }, { file: 'patient-intake-form-v2.pdf', score: 88 }],
+    removed: [{ file: 'legacy-archive-page.html', score: 55 }],
+  }, 220)
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/diff${vs ? `?vs=${encodeURIComponent(vs)}` : ''}`, { headers: headers() }).then(j)
+}
 // Per-WCAG-rule outcomes for a scan (PASS/FAIL/SKIP + finding counts), one row per file×rule.
 export const getScanTraces = (scanId) => {
   if (SIM) {

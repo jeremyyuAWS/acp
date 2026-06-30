@@ -262,6 +262,27 @@ def scan_traces(sid: str, request: Request, file: str | None = None):
     return core.store.get_scan_traces(sid, file=file)
 
 
+@router.get("/scans/{sid}/diff")
+def scan_diff(sid: str, request: Request, vs: str | None = Query(None)):
+    """Regression diff (ADR 0009): which documents got worse / better vs a prior scan, and
+    the WCAG criteria that flipped pass→fail. Owner-scoped. `vs` defaults to the caller's
+    immediately-prior scan."""
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    if not vs:                                          # default baseline = the prior scan
+        ids = [s["id"] for s in core.store.list_scans(owner=owner)]
+        i = ids.index(sid) if sid in ids else -1
+        vs = ids[i + 1] if 0 <= i and i + 1 < len(ids) else None
+    if not vs:
+        return {"summary": {"regressed": 0, "improved": 0, "new": 0, "removed": 0},
+                "regressed": [], "improved": [], "new": [], "removed": [], "no_baseline": True}
+    diff = core.store.get_scan_diff(sid, vs, owner=owner)
+    if diff is None:
+        raise HTTPException(404, "scan not found")
+    return diff
+
+
 @router.get("/scans/{sid}/pii")
 def scan_pii(sid: str, request: Request):
     """Sensitive-data (PII) findings for a scan (ADR 0006).

@@ -542,7 +542,7 @@ export default function App() {
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} onPublish={(file) => setPublishedFiles((s) => [...s, file])} /> : placeholder)}
 
-        {view === 'monitor' && (run ? (assessed ? <Monitor sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} /> : assessGate) : placeholder)}
+        {view === 'monitor' && (run ? (assessed ? <Monitor run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} /> : assessGate) : placeholder)}
 
         {view === 'upload' && <Upload onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
 
