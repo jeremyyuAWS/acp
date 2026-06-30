@@ -519,14 +519,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             ) : (
               <div className="triagecta">
                 <b>✓ All scanned files remediated</b> — every file has been fixed and written back. Nothing left to triage{remediatedFiles.length > 0 ? ` · ${remediatedFiles.length} fixed` : ''}.
-                <button className="decbtn ok" style={{ marginLeft: 14 }} onClick={() => setSub('revalidate')}>→ Re-validate</button>
+                <button className="ctago" style={{ marginLeft: 14 }} onClick={() => setSub('revalidate')}>→ Re-validate</button>
               </div>
             )}
 
             {undecided === 0 && triageFiles.length > 0 && (
               <div className="triagecta">
                 <b>✓ Triage complete</b> — {inscopeCount} file{inscopeCount !== 1 ? 's' : ''} in scope · {naCount} N/A · {deferCount} deferred
-                <button className="decbtn ok" style={{ marginLeft: 14 }} onClick={() => setSub('auto')}>→ Go to remediation plan</button>
+                <button className="ctago" style={{ marginLeft: 14 }} onClick={() => setSub('auto')}>→ Go to remediation plan</button>
               </div>
             )}
           </section>

@@ -1291,6 +1291,11 @@ input:focus-visible, [role="tab"]:focus-visible {
 .trbtn.defer   { color: #1F5FA8; border-color: #a8c8f0; }
 .junkflag { margin-left: 8px; font-size: 11px; color: #854F0B; background: #faeeda; padding: 1px 7px; border-radius: 999px; }
 .triagecta { margin-top: 12px; padding: 10px 14px; background: #f7fcf2; border: 1px solid #b8dfa0; border-radius: 8px; font-size: 14px; color: #3B6D11; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+/* "Go forward" CTA inside .triagecta (e.g. "→ Go to remediation plan") — was reusing
+   .decbtn, a 25x25px icon-only button meant for single characters like "✓"; long text
+   wrapped vertically inside the tiny fixed box. This sizes to its content instead. */
+.ctago { width: auto; height: auto; white-space: nowrap; padding: 6px 14px; border-radius: 7px; font-size: 13px; font-weight: 600; background: #3B6D11; color: #fff; border: 1px solid #3B6D11; cursor: pointer; }
+.ctago:hover { opacity: 0.88; }
 .batchbtn { background: #1F5FA8; color: #fff; border: none; border-radius: 8px; padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .batchbtn:hover { opacity: 0.88; }
 /* Amber (the app's existing "needs review/attention" accent — matches SERIOUS severity)
