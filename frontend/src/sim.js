@@ -172,7 +172,14 @@ function recommendFor(f) {
     return { action: 'manual', mode: 'manual', confidence: null, etaMin: eta, manualMin: eta, rationale: 'File is unreadable — the engine can’t parse it. A human must re-author or re-export the source before it can be assessed.' }
   }
 
-  if (f.status === 'certifiable') {
+  // f.status is one of the backend's actual values (analysed/uncertain/error) — never the
+  // literal string "certifiable" (that's purely a derived label, e.g. statusOf() in
+  // Dashboard.jsx). Checking it directly meant this branch NEVER matched on real scan
+  // data, so every successfully-analysed file — even fully clean ones — fell through to
+  // the remediation branches below and got an auto/assisted/review/manual action instead
+  // of 'keep'. f.compliant is the actual boolean (set correctly by both the real backend
+  // and SIM's genCorpus) and is what statusOf() itself derives "certifiable" from.
+  if (f.compliant) {
     if (f.superseded || (stale && lowTraffic))
       return { action: 'archive', mode: 'auto', confidence: 84, etaMin: 2, rationale: `Compliant, but ${f.superseded ? 'a newer version exists' : `last edited ${fmtAge(f.ageDays)} with ${f.views90d} views/90d`} — archive to shrink the audited estate.` }
     return { action: 'keep', mode: 'monitor', confidence: 99, etaMin: 0, rationale: `Certifiable at ${f.score}/100 with ${f.views90d} views/90d. Keep published under continuous monitoring for drift.` }

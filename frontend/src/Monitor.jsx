@@ -95,7 +95,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
 
   // event pool grounded in real corpus docs
   const pub = files.find((f) => (f.tags || []).includes('public-facing'))?.file || 'public-page.html'
-  const cert = files.find((f) => f.status === 'certifiable')?.file || 'onboarding.pdf'
+  const cert = files.find((f) => f.compliant)?.file || 'onboarding.pdf'
   const iss = files.find((f) => (f.issues || []).length)?.file || 'care-pathway.pdf'
   const POOL = [
     { kind: 'new', src: 'SharePoint · HR', doc: 'hr-policy-2026.docx', text: 'New file landed — auto-queued for scan' },
