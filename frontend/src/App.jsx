@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { getSources, getRubric, listScans, getScan, getActiveScan, startScan, startScanQueued, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens, getDecisions, saveDecisionsBatch } from './api'
 import { SIM } from './sim.js'
-import { setPersona } from './sim.js'
+import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
 import { loadRolePrivileges } from './RolePrivilege.jsx'
 import { loadFileTypeConfig } from './FileTypeConfig.jsx'
@@ -205,7 +205,10 @@ export default function App() {
   // Annotate the corpus with the published business ontology (adds `.ont`: label,
   // priority, matched rule, weighted score) so the live workflow is ontology-aware.
   // Kept above the early return below to satisfy the rules of hooks.
-  const files = useMemo(() => annotate(scan?.files ?? [], ontology), [scan, ontology])
+  // Attach the per-file remediation recommendation. In SIM the sim builder already sets it;
+  // for a REAL backend scan the files arrive without it, so compute it here — otherwise
+  // `remediable` is empty and server-side remediation finds nothing to do.
+  const files = useMemo(() => annotate(scan?.files ?? [], ontology).map((f) => (f.rec ? f : { ...f, rec: recommendFor(f) })), [scan, ontology])
 
   // Real accounts that get elevated privileges on source connect (never shown in demo list)
   const PRIV_PROFILE = {
