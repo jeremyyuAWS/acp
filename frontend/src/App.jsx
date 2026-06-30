@@ -6,6 +6,7 @@ import { loadDelegations } from './OwnerDelegate.jsx'
 import { loadRolePrivileges } from './RolePrivilege.jsx'
 import { loadFileTypeConfig } from './FileTypeConfig.jsx'
 import { annotate, loadPublished } from './ontology.js'
+import { RuleBreakdown } from './Transparency.jsx'
 import Logo from './Logo.jsx'
 import ChatWidget from './ChatWidget.jsx'
 import KnowledgeGraph from './KnowledgeGraph.jsx'
@@ -502,7 +503,7 @@ export default function App() {
               <button role="tab" aria-selected={assess === 'results'} className={assess === 'results' ? 'fchip on' : 'fchip'} onClick={() => setAssess('results')}>4 · Assess</button>
               <button role="tab" aria-selected={assess === 'graph'} className={assess === 'graph' ? 'fchip on' : 'fchip'} onClick={() => setAssess('graph')}>5 · Risk &amp; findings</button>
             </div>
-            {assess === 'results' && (run ? <><AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy} onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase} />{assessPhase === 'done' && <Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} />}</> : placeholder)}
+            {assess === 'results' && (run ? <><AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy} onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase} />{assessPhase === 'done' && <><RuleBreakdown scanId={run.id} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}</> : placeholder)}
             {(assess === 'graph' || assess === 'rubric' || assess === 'coverage') && (run ? <><RiskScore run={run} files={files} /><KnowledgeGraph files={files} /></> : placeholder)}
           </>
         )}

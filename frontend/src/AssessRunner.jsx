@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { allRules } from './rules'
 import { assessScan } from './api.js'
+import { TraceChip } from './Transparency.jsx'
 
 // Re-assess the whole estate against a chosen WCAG 2.1 conformance level. A finding blocks
 // conformance when its level is at or below the target (A ⊆ AA ⊆ AAA), so the numbers
@@ -208,6 +209,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               <div className="atile"><b>{result.applicable.toLocaleString()}</b><span>findings apply · {result.autoFix.toLocaleString()} auto-fixable</span></div>
             </div>
             <p className="muted assessnote">{note}</p>
+            <div style={{ marginTop: 8 }}><TraceChip traceId={`${runId}-assess`} label="View assessment trace in Langfuse" /></div>
           </div>
         )}
       </div>

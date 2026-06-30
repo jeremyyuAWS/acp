@@ -108,11 +108,17 @@ def healthz():
 def config():
     """Tells the SPA how to authenticate: GIS per-user (client id present) vs demo."""
     import os
+    # Public Langfuse trace base, so the SPA can deep-link "📊 View trace" chips straight
+    # to the relevant trace (deterministic ids: {scan}, {scan}-assess, {scan}-remediate).
+    # Null when Langfuse isn't configured → the frontend simply omits the chips.
+    lf_host = os.environ.get("LANGFUSE_HOST", "").rstrip("/")
+    lf_project = os.environ.get("LANGFUSE_DEFAULT_PROJECT_ID", "acp-compliance")
     return {"google_client_id": core.GOOGLE_CLIENT_ID,
             "drive_scope": core.DRIVE_SCOPES[0],
             "auth": "gis" if core.GOOGLE_CLIENT_ID else "demo",
             "version": os.environ.get("ACP_BUILD_VERSION", "dev"),
-            "built_at": os.environ.get("ACP_BUILD_TIME") or None}
+            "built_at": os.environ.get("ACP_BUILD_TIME") or None,
+            "langfuse_trace_base": (f"{lf_host}/project/{lf_project}/traces" if lf_host else None)}
 
 
 class ScheduleUpdate(BaseModel):

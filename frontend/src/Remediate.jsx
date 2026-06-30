@@ -7,6 +7,7 @@ import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './s
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
 import { prefersReducedMotion } from './a11y.js'
 import { remediateScan, getRemediationStatus } from './api.js'
+import { TraceChip } from './Transparency.jsx'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
 // (what to fix, prioritized, accept/reject/modify), the HITL queue, and self-remediation.
@@ -321,6 +322,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           {remBusy ? 'Enqueueing…' : '⚡ Remediate all (server-side)'}
         </button>
         {remMsg && <span className="muted" role="status" aria-live="polite" style={{ fontSize: 13 }}>{remMsg}</span>}
+        {(serverFixed > 0 || remProg) && <TraceChip traceId={`${runId}-remediate`} label="View remediation trace" />}
       </div>
 
       {remProg && (

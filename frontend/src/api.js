@@ -35,7 +35,21 @@ const j = async (r) => {
 }
 const sim = (value, ms = 220) => new Promise((res) => setTimeout(() => res(value), ms))
 
-export const getConfig = () => (SIM ? sim({ google_client_id: null, auth: 'demo', sim: true }) : fetch(`${BASE}/config`).then(j))
+export const getConfig = () => (SIM ? sim({ google_client_id: null, auth: 'demo', sim: true, langfuse_trace_base: 'https://acp-langfuse.demo/project/acp-compliance/traces' }) : fetch(`${BASE}/config`).then(j))
+// Langfuse deep-link base (from /config) → "📊 View trace" chips. traceUrl(null) when unset.
+let lfTraceBase = null
+export const setLangfuseBase = (b) => { lfTraceBase = b || null }
+export const traceUrl = (traceId) => (lfTraceBase && traceId ? `${lfTraceBase}/${encodeURIComponent(traceId)}` : null)
+// Per-WCAG-rule outcomes for a scan (PASS/FAIL/SKIP + finding counts), one row per file×rule.
+export const getScanTraces = (scanId) => {
+  if (SIM) {
+    const SCS = [['1.1.1', 'Images have alt text', 'A'], ['1.3.1', 'Info & relationships', 'A'], ['1.4.3', 'Contrast (minimum)', 'AA'], ['2.4.4', 'Link purpose', 'A'], ['2.4.6', 'Headings & labels', 'AA'], ['3.1.1', 'Language of page', 'A'], ['1.2.2', 'Captions', 'A'], ['4.1.2', 'Name, role, value', 'A'], ['2.4.7', 'Focus visible', 'AA'], ['1.4.11', 'Non-text contrast', 'AA'], ['3.3.2', 'Labels or instructions', 'A'], ['2.1.1', 'Keyboard', 'A']]
+    const rows = []
+    SCS.forEach(([id, name, level], k) => { for (let f = 0; f < 25; f++) { const r = (f * 7 + k * 3) % 10; const outcome = r < 2 ? 'SKIP' : (r < 5 ? 'FAIL' : 'PASS'); rows.push({ file: `doc-${f}.html`, rule_id: id, plain_name: name, level, outcome, finding_count: outcome === 'FAIL' ? r : 0 }) } })
+    return sim(rows, 150)
+  }
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/traces`, { headers: headers() }).then(j)
+}
 export const getMe = () => (SIM ? sim(simIdentity()) : fetch(`${BASE}/me`, { headers: headers() }).then(j))
 export const getSources = () => (SIM ? sim(simGetSources()) : fetch(`${BASE}/sources`, { headers: headers() }).then(j))
 export const getRubric = () => (SIM

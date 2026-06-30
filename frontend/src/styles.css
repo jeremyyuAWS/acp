@@ -239,6 +239,21 @@ input:focus-visible, [role="tab"]:focus-visible {
 .metric.livecard { box-shadow: 0 0 0 1.5px #E6C461 inset; transition: box-shadow .3s; }
 .metric b.tick { animation: tickflash .6s ease; border-radius: 4px; }
 @keyframes tickflash { 0% { background: #FBF0CF; } 100% { background: transparent; } }
+/* Transparency — Langfuse trace chip + per-criterion breakdown */
+.tracechip { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 600; color: var(--plum); background: #F4EEFC; border: 1px solid #D9CCF2; border-radius: 999px; padding: 2px 9px; text-decoration: none; white-space: nowrap; }
+.tracechip:hover { background: #EBE0FA; }
+.rulebreak .rulerows { display: flex; flex-direction: column; gap: 7px; margin-top: 6px; }
+.rulerow { display: grid; grid-template-columns: minmax(170px, 1.3fr) 2fr minmax(135px, auto); align-items: center; gap: 12px; }
+.rulemeta { font-size: 12.5px; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.rulemeta b { color: var(--plum); }
+.rulemeta > span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.lvlpill { font-size: 10px; font-weight: 700; background: #ECE7F4; color: #5B4B86; border-radius: 4px; padding: 1px 5px; }
+.rulebar { display: flex; height: 9px; border-radius: 5px; overflow: hidden; background: var(--line); }
+.rulebar i { display: block; height: 100%; }
+.rb-pass { background: #5FA83C; } .rb-fail { background: #C9742B; } .rb-skip { background: #C7CCD6; }
+.rulecounts { display: flex; gap: 8px; font-size: 11.5px; justify-content: flex-end; }
+.rc-pass { color: #3B6D11; } .rc-fail { color: #854F0B; } .rc-skip { color: var(--muted); }
+@media (max-width: 720px) { .rulerow { grid-template-columns: 1fr; gap: 4px; } .rulecounts { justify-content: flex-start; } }
 
 /* phase tabs (step ranges under the label) */
 .tab { display: flex; flex-direction: column; line-height: 1.25; text-align: left; }

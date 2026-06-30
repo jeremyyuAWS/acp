@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getConfig } from './api.js'
+import { getConfig, setLangfuseBase } from './api.js'
 import { PERSONAS } from './sim.js'
 import Logo from './Logo.jsx'
 
@@ -66,7 +66,7 @@ export default function SignIn({ onSignedIn }) {
   const [err, setErr] = useState('')
 
   useEffect(() => {
-    getConfig().then(setCfg).catch(() => setCfg({ auth: 'demo' }))
+    getConfig().then((c) => { setCfg(c); setLangfuseBase(c?.langfuse_trace_base) }).catch(() => setCfg({ auth: 'demo' }))
   }, [])
 
   const signInWithGoogle = () => {
