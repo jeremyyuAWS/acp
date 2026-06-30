@@ -4,6 +4,7 @@ import { getSchedule, putSchedule } from './api.js'
 import { prefersReducedMotion } from './a11y.js'
 import QueuePanel from './QueuePanel.jsx'
 import RegressionRadar from './RegressionRadar.jsx'
+import ComplianceDigest from './ComplianceDigest.jsx'
 
 // Step 10 · Monitor — the always-on surface. Shows every connected source being
 // continuously watched for new files and changes, a live event stream (with demo
@@ -259,6 +260,8 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
           </div>
         )}
       </section>
+
+      <ComplianceDigest run={run} />
 
       <QueuePanel />
 

@@ -125,3 +125,80 @@ def is_available() -> bool:
         return True
     except Exception:
         return False
+
+
+# ── Compliance digest (ADR 0009 follow-on) ────────────────────────────────────
+# Deterministic facts (always reliable, grounded in real numbers) + an AI-written
+# executive narrative on top, with a deterministic-prose fallback. The model only
+# writes free prose from the supplied facts — it never invents numbers.
+def _digest_facts(d: dict) -> dict:
+    score, total, cert = d.get("avg_score"), d.get("total", 0), d.get("certifiable", 0)
+    reg, improved, top = d.get("regressed", []), d.get("improved_count", 0), d.get("top_issues", [])
+    pii_docs, delta = d.get("pii_docs", 0), d.get("score_delta")
+    pl = lambda n: "" if n == 1 else "s"  # noqa: E731
+    changed = []
+    if delta is not None and delta != 0:
+        changed.append(f"Estate score {'rose' if delta > 0 else 'fell'} {abs(delta)} point{pl(abs(delta))} to {score}/100 since the last scan.")
+    if reg:
+        w = reg[0]
+        changed.append(f"{len(reg)} document{pl(len(reg))} regressed — worst: {w['file']} ({w['prev']}→{w['cur']}).")
+    if improved:
+        changed.append(f"{improved} document{pl(improved)} improved.")
+    if pii_docs:
+        changed.append(f"{pii_docs} document{pl(pii_docs)} contain sensitive data flagged for review.")
+    top_issue = (f"{top[0]['name']} ({top[0]['sc']}) fails on {top[0]['fail']} document{pl(top[0]['fail'])} — the biggest systemic gap." if top else None)
+    if top:
+        next_action = f"Fix {top[0]['name']} across the estate — it clears the most documents toward AA."
+    elif cert < total:
+        next_action = f"Remediate the {total - cert} non-conformant document{pl(total - cert)} to reach full coverage."
+    else:
+        next_action = "Maintain coverage — schedule periodic re-scans to catch regressions."
+    return {"headline": f"{cert} of {total} documents conformant ({score}/100 average).",
+            "score": score, "changed": changed, "top_issue": top_issue, "next_action": next_action}
+
+
+def _digest_prompt(facts: dict) -> str:
+    bullets = "\n".join(f"- {c}" for c in facts["changed"]) or "- No notable changes since the last scan."
+    return (
+        "You are an accessibility compliance analyst. Write ONE short executive paragraph "
+        "(2-3 sentences, plain English, no markdown, no preamble, no bullet points) "
+        "summarising a document estate's WCAG 2.1 accessibility compliance for a compliance "
+        "officer. Use ONLY these facts; never invent numbers.\n\n"
+        f"Headline: {facts['headline']}\n"
+        f"Changes since last scan:\n{bullets}\n"
+        f"Biggest systemic issue: {facts['top_issue'] or 'none identified'}\n"
+        f"Recommended next action: {facts['next_action'] or 'maintain current coverage'}\n\nParagraph:"
+    )
+
+
+def _digest_fallback_narrative(facts: dict) -> str:
+    parts = [facts["headline"]]
+    if facts["changed"]:
+        parts.append(" ".join(facts["changed"]))
+    if facts["top_issue"]:
+        parts.append(facts["top_issue"][0].upper() + facts["top_issue"][1:])
+    if facts["next_action"]:
+        parts.append("Recommended: " + facts["next_action"])
+    return " ".join(parts)
+
+
+def compliance_digest(d: dict, ai_enabled: bool = True) -> dict:
+    """Executive digest from real scan data. Returns deterministic facts + a narrative
+    (AI-written when available, else a grounded deterministic paragraph)."""
+    facts = _digest_facts(d)
+    narrative, ai, model = _digest_fallback_narrative(facts), False, "deterministic"
+    if ai_enabled:
+        try:
+            import httpx
+            r = httpx.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={"model": OLLAMA_MODEL, "prompt": _digest_prompt(facts), "stream": False,
+                      "options": {"temperature": 0.4, "num_predict": 200}},
+                timeout=150)
+            r.raise_for_status()
+            raw = r.json().get("response", "").strip()
+            if raw and len(raw) > 40:
+                narrative, ai, model = raw, True, OLLAMA_MODEL
+        except Exception:
+            pass
+    return {**facts, "narrative": narrative, "ai": ai, "model": model}

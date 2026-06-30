@@ -40,6 +40,17 @@ export const getConfig = () => (SIM ? sim({ google_client_id: null, auth: 'demo'
 let lfTraceBase = null
 export const setLangfuseBase = (b) => { lfTraceBase = b || null }
 export const traceUrl = (traceId) => (lfTraceBase && traceId ? `${lfTraceBase}/${encodeURIComponent(traceId)}` : null)
+// AI Compliance Digest (bundle #2) — exec paragraph grounded in real scan data + the facts.
+export const getDigest = (scanId, refresh = false) => (SIM
+  ? sim({
+    headline: '52 of 175 documents conformant (79/100 average).', score: 79,
+    narrative: 'Your estate sits at 79/100 with 52 of 175 documents fully conformant. Since the last scan the score rose 4 points, though 3 documents regressed after edits — most notably the public landing page, which lost contrast compliance. The single biggest systemic gap is missing alt text, failing on 89 documents; fixing it would move the most documents toward AA. Recommended: prioritise alt-text remediation across the estate and re-validate the three regressions.',
+    changed: ['Estate score rose 4 points to 79/100 since the last scan.', '3 documents regressed — worst: marketing-public-landing-page.html (100→82).', '9 documents improved.', '6 documents contain sensitive data flagged for review.'],
+    top_issue: 'Images have alt text (1.1.1) fails on 89 documents — the biggest systemic gap.',
+    next_action: 'Fix Images have alt text across the estate — it clears the most documents toward AA.',
+    ai: true, model: 'llama3.2',
+  }, 1500)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/digest${refresh ? '?refresh=true' : ''}`, { headers: headers() }).then(j))
 // Regression diff vs a prior scan (ADR 0009) — which docs got worse/better + criteria that broke.
 export const getScanDiff = (scanId, vs = null) => {
   if (SIM) return sim({

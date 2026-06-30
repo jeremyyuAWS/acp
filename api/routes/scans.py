@@ -283,6 +283,58 @@ def scan_diff(sid: str, request: Request, vs: str | None = Query(None)):
     return diff
 
 
+_digest_cache: dict = {}
+
+
+@router.get("/scans/{sid}/digest")
+def scan_digest(sid: str, request: Request, refresh: bool = Query(False)):
+    """AI Compliance Digest (bundle #2): an executive paragraph grounded in REAL scan data —
+    score, regressions vs the prior scan, the top systemic issue, and a recommended action.
+    Deterministic facts + an AI-written narrative (fallback prose if the model is off/down).
+    Owner-scoped; cached per scan (the model call is slow)."""
+    import ai as _ai
+    owner = _owner(request)
+    res = core.store.get_scan(sid, owner=owner)
+    if res is None:
+        raise HTTPException(404, "scan not found")
+    if not refresh and sid in _digest_cache:
+        return _digest_cache[sid]
+    run, files = res["run"], res["files"]
+    total = len(files)
+    certifiable = sum(1 for f in files if f.get("compliant"))
+    # Drift vs the prior scan (reuses the ADR 0009 diff) + the score delta.
+    ids = [s["id"] for s in core.store.list_scans(owner=owner)]
+    i = ids.index(sid) if sid in ids else -1
+    prev_id = ids[i + 1] if 0 <= i and i + 1 < len(ids) else None
+    regressed, improved_count, score_delta = [], 0, None
+    if prev_id:
+        diff = core.store.get_scan_diff(sid, prev_id, owner=owner)
+        if diff:
+            regressed = diff.get("regressed", [])
+            improved_count = diff.get("summary", {}).get("improved", 0)
+            prev = core.store.get_scan(prev_id, owner=owner)
+            if prev and prev["run"].get("avg_score") is not None and run.get("avg_score") is not None:
+                score_delta = run["avg_score"] - prev["run"]["avg_score"]
+    # Top systemic issues — criteria failing on the most documents (from per-rule traces).
+    fail_by_rule: dict = {}
+    for r in core.store.get_scan_traces(sid):
+        if str(r.get("outcome", "")).upper() == "FAIL":
+            k = r["rule_id"]
+            fb = fail_by_rule.setdefault(k, {"sc": k, "name": r.get("plain_name") or r.get("rule_name"), "files": set()})
+            fb["files"].add(r["file"])
+    top_issues = sorted(
+        ({"sc": v["sc"], "name": v["name"], "fail": len(v["files"])} for v in fail_by_rule.values()),
+        key=lambda x: -x["fail"])[:3]
+    pii = core.store.pii_summary(sid)
+    data = {"avg_score": run.get("avg_score"), "total": total, "certifiable": certifiable,
+            "regressed": regressed, "improved_count": improved_count, "score_delta": score_delta,
+            "top_issues": top_issues, "pii_docs": (pii or {}).get("documents", 0)}
+    digest = _ai.compliance_digest(data, ai_enabled=core.store.get_ai_enabled())
+    digest["generated_at"] = run.get("completed_at")
+    _digest_cache[sid] = digest
+    return digest
+
+
 @router.get("/scans/{sid}/pii")
 def scan_pii(sid: str, request: Request):
     """Sensitive-data (PII) findings for a scan (ADR 0006).
