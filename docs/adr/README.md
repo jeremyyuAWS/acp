@@ -9,3 +9,5 @@ header). Match the structure of the latest ADR when adding a new one.
 - [0003 — Document lifecycle data model](0003-document-lifecycle-model.md) — **Proposed** (2026-06-25)
 - [0004 — Durable orchestration via a Postgres job queue](0004-postgres-job-queue.md) — **Proposed** (2026-06-25)
 - [0005 — Server-side remediation engine](0005-server-side-remediation.md) — **Accepted** (2026-06-25)
+- [0010 — Azure Blob as the remediated-output store (Drive write becomes opt-in)](0010-remediated-output-object-store.md) — **Proposed** (2026-06-30)
+- [0011 — Incremental scans: skip unchanged files across scan runs](0011-incremental-scan-fingerprinting.md) — **Proposed** (2026-06-30)
