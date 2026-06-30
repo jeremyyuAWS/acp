@@ -229,7 +229,7 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
           </div>
         )}
       </section>
-      {sel && <FileDrawer file={sel} onClose={() => setSel(null)} />}
+      {sel && <FileDrawer file={sel} scanId={run.id} onClose={() => setSel(null)} />}
     </>
   )
 }

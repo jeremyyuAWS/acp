@@ -179,12 +179,12 @@ from pathlib import Path as _Path
 
 @handler("scan_discover")
 def _scan_discover(payload: dict, job: dict) -> None:
-    """List the source (paginated, no cap), create the scan_runs row, open the
-    Langfuse trace, and enqueue one scan_file job per file."""
-    import lf as _lf
+    """List the source (paginated, no cap), create the scan_runs row, and enqueue one
+    scan_file job per file. Each file's Langfuse trace is opened later, per file, by
+    _analyse_and_persist_one — not here."""
     from rubric import Rubric
     from scanner import (_list, _drive_service, ACP, FANOUT_MAX_FILES, SCAN_BATCH_SIZE,
-                         SCAN_BATCH_THRESHOLD, SCAN_TRACE_SPAN_CAP)
+                         SCAN_BATCH_THRESHOLD)
     scan_id = payload.get("scan_id") or job.get("scan_id")
     source = payload.get("source", "drive")
     ai = bool(payload.get("ai", True)) and core.store.get_ai_enabled()
@@ -199,8 +199,6 @@ def _scan_discover(payload: dict, job: dict) -> None:
                   max_files=FANOUT_MAX_FILES)
     started = _dt.datetime.now(_dt.timezone.utc).isoformat()
     core.store.init_scan_run(scan_id, source, len(items), started, rb.name, rb.hash, owner=user)
-    _lf.scan_trace(scan_id, source, len(items), ai_enabled=ai, user=user, deep_scan=pii)
-    _lf.flush()  # ensure the trace header lands in Langfuse before discover job exits
     if not items:
         core.store.enqueue_job("scan_finalize",
                                {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)
@@ -208,31 +206,31 @@ def _scan_discover(payload: dict, job: dict) -> None:
     # ADR 0008: very large estates fan out as batches (N files / job) instead of one job
     # per file — far less queue churn + claim contention. Per-file stays the proven default
     # below the threshold; an explicit batch=true forces the batch path. The persisted
-    # results and Langfuse spans are identical either way — only job granularity changes.
+    # results and Langfuse traces are identical either way — only job granularity changes.
+    # No more per-document span cap here: file-centric tracing (lf.file_trace) gives every
+    # file its OWN trace, so there's no single big trace whose span count could break the
+    # Langfuse OSS detail view — the old SCAN_TRACE_SPAN_CAP problem this guarded against.
     use_batch = bool(payload.get("batch")) or len(items) >= SCAN_BATCH_THRESHOLD
-    # lf_span caps per-document spans on the Scan trace: only the first SCAN_TRACE_SPAN_CAP
-    # files (by discovery order) write a span, so the trace stays openable on big estates.
     if use_batch:
         for i in range(0, len(items), SCAN_BATCH_SIZE):
             chunk = items[i:i + SCAN_BATCH_SIZE]
             core.store.enqueue_job("scan_batch", {
                 "scan_id": scan_id, "source": source, "ai": ai, "pii": pii, "user": user,
                 "items": [{"file": it["name"], "drive_file_id": it.get("id"),
-                           "mime": it.get("mime"), "path": it.get("path"),
-                           "lf_span": (i + j) < SCAN_TRACE_SPAN_CAP} for j, it in enumerate(chunk)],
+                           "mime": it.get("mime"), "path": it.get("path")} for it in chunk],
             }, scan_id=scan_id)
     else:
-        for idx, it in enumerate(items):
+        for it in items:
             core.store.enqueue_job("scan_file", {
                 "scan_id": scan_id, "source": source, "file": it["name"],
                 "drive_file_id": it.get("id"), "mime": it.get("mime"), "path": it.get("path"),
-                "ai": ai, "pii": pii, "user": user,
-                "lf_span": idx < SCAN_TRACE_SPAN_CAP}, scan_id=scan_id)
+                "ai": ai, "pii": pii, "user": user}, scan_id=scan_id)
 
 
-def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf) -> None:
-    """Download + analyse + assess + persist ONE file and emit its Langfuse spans (deep
-    scan only). Shared by scan_file (per-file fan-out) and scan_batch (ADR 0008). A
+def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, user=None) -> None:
+    """Download + analyse + assess + persist ONE file and emit its Discover span on that
+    file's own Langfuse trace. Shared by scan_file (per-file fan-out) and scan_batch
+    (ADR 0008). A
     fetch/analyse failure is recorded as an 'error' file so the scan still finalizes."""
     from scanner import _download, analyse_and_assess
     name = item["file"]
@@ -257,13 +255,14 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf) ->
         if pinfo:
             fdict["pii"] = pinfo
         core.store.save_file_result(scan_id, fdict, now)
-        # Per-file Langfuse spans only when Deep scan is on (and under the trace span cap,
-        # set per file at enqueue time) — see scan_file's note.
-        if pii and item.get("lf_span", True):
-            fspan = _lf.file_span_for(scan_id, name, fdict["engine"])
-            if pinfo and pinfo.get("total"):
-                _lf.pii_span(fspan, pinfo, filename=name)
-            fspan.end(output={"engine": fdict["engine"], "sensitive_data": (pinfo or {}).get("total", 0)})
+        # File-centric tracing (see lf.file_trace): each file gets its own trace, so unlike
+        # the old shared-trace model there's no "too many spans on one trace" risk to cap —
+        # always emit, regardless of deep-scan setting (the PII sub-span stays conditional).
+        ftrace = _lf.file_trace(scan_id, name, user=user)
+        dspan = _lf.discover_span(ftrace, fdict["engine"])
+        if pii and pinfo and pinfo.get("total"):
+            _lf.pii_span(dspan, pinfo, filename=name)
+        dspan.end(output={"engine": fdict["engine"], "sensitive_data": (pinfo or {}).get("total", 0)})
     finally:
         _shutil.rmtree(tmp, ignore_errors=True)
 
@@ -290,12 +289,13 @@ def _scan_batch(payload: dict, job: dict) -> None:
     scan_id = payload["scan_id"]
     source = payload.get("source", "drive")
     pii = bool(payload.get("pii", True))
+    user = payload.get("user")
     items = payload.get("items", [])
     toks = core.get_scan_tokens(scan_id)
     now = _dt.datetime.now(_dt.timezone.utc).isoformat()
     svc = _make_svc(source, toks)
     for it in items:
-        _analyse_and_persist_one(scan_id, it, source, pii, svc, toks, now, _lf)
+        _analyse_and_persist_one(scan_id, it, source, pii, svc, toks, now, _lf, user=user)
     _lf.flush()  # send any file spans before the batch job exits
     done, total = core.store.bump_files_done(scan_id, len(items))
     if done >= total > 0:
@@ -314,10 +314,11 @@ def _scan_file(payload: dict, job: dict) -> None:
     scan_id = payload["scan_id"]
     source = payload.get("source", "drive")
     pii = bool(payload.get("pii", True))
+    user = payload.get("user")
     toks = core.get_scan_tokens(scan_id)
     now = _dt.datetime.now(_dt.timezone.utc).isoformat()
     svc = _make_svc(source, toks)
-    _analyse_and_persist_one(scan_id, payload, source, pii, svc, toks, now, _lf)
+    _analyse_and_persist_one(scan_id, payload, source, pii, svc, toks, now, _lf, user=user)
     _lf.flush()  # send file span before this per-file job exits
     done, total = core.store.bump_files_done(scan_id)
     if done >= total > 0:
@@ -328,28 +329,29 @@ def _scan_file(payload: dict, job: dict) -> None:
 
 @handler("scan_finalize")
 def _scan_finalize(payload: dict, job: dict) -> None:
-    """Aggregate the per-file results into the scan summary, finish the Langfuse
-    trace, and run the shared post-scan step (HITL routing + audit)."""
+    """Aggregate the per-file results into the scan summary and run the shared post-scan
+    step (HITL routing + audit). No scan-wide Langfuse trace to finish anymore — file-
+    centric tracing (lf.file_trace) already wrote each file's Discover span as it was
+    analysed; this just flushes anything still pending."""
     import lf as _lf
     scan_id = payload["scan_id"]
     source = payload.get("source", "drive")
     ai = bool(payload.get("ai", True)) and core.store.get_ai_enabled()
     now = _dt.datetime.now(_dt.timezone.utc).isoformat()
-    summary = core.store.finalize_scan_run(scan_id, now)
-    roll = core.store.pii_summary(scan_id)
-    _lf.finish_scan_trace_by_id(scan_id, summary, source=source, ai_enabled=ai,
-                                pii_docs=roll.get("documents", 0), pii_total=roll.get("items", 0))
+    core.store.finalize_scan_run(scan_id, now)
     _lf.flush()
     core.finalize_scan(scan_id, ai, source)
     core.clear_scan_tokens(scan_id)
 
 
 def ensure_assess_trace(scan_id: str, level: str = "AA") -> None:
-    """Create (idempotently) + flush the WCAG assessment trace for a scan. Safe to
-    call repeatedly — Langfuse upserts by id. ALWAYS emits a trace, even when no
-    per-rule rows were recorded (e.g. an older scan), so the 'View assessment trace'
-    link never 404s. The per-rule ✓/✗ data comes from scan_rule_traces (recorded at
-    scan time). Shared by the worker job AND the /scans/{sid}/trace/assess endpoint."""
+    """Write the WCAG assessment to each file's OWN Langfuse trace (file-centric tracing —
+    see lf.file_trace): an 'Assess' span per file, with that file's per-rule ✓/✗ outcomes
+    as children when scan_rule_traces has them (recorded at scan time), plus the file's own
+    compliance score. Idempotent — safe to call repeatedly, Langfuse upserts a trace by id.
+    Always emits something for every file (falls back to its stored issues when there's no
+    per-rule data, e.g. an older scan) so a 'View trace' chip never 404s. Shared by the
+    worker job AND the /scans/{sid}/trace/file/{file} endpoint."""
     import lf as _lf
     from store import RULE_CATALOG
     rows = core.store.get_scan_traces(scan_id)                 # per file + rule
@@ -368,39 +370,18 @@ def ensure_assess_trace(scan_id: str, level: str = "AA") -> None:
                 blocking_files.add(f)
     res = core.store.get_scan(scan_id)
     owner = (res or {}).get("run", {}).get("owner_email")
-    if not by_file:
-        # No per-rule data — still emit a summary trace from the file scores so the
-        # link resolves and the demo shows something real (instead of a 404).
-        files = (res or {}).get("files", [])
-        total = len(files)
-        conformant = sum(1 for f in files if not (f.get("issues") or []))
-        pct = round(conformant / total * 100) if total else 0
-        trace = _lf.open_assess_trace(scan_id, level, total, user=owner)
-        _lf.finish_assess_trace(trace, {
-            "level": level, "documents": total, "conformant": conformant,
-            "with_blocking_findings": total - conformant, "estate_conformant_pct": pct,
-            "note": "summary only — no per-rule trace data recorded for this scan",
-        }, scan_id=scan_id, score=pct)
-        _lf.flush()
-        return
-    total = len(by_file)
-    failing = len(blocking_files)
-    conformant = total - failing
-    pct = round(conformant / total * 100) if total else 0
-    trace = _lf.open_assess_trace(scan_id, level, total, user=owner)
-    # Cap per-document spans (one file span × its rule sub-spans) so a large assessment
-    # trace stays openable in the Langfuse OSS detail view — same cap as the Scan trace.
-    from scanner import SCAN_TRACE_SPAN_CAP
-    for i, (fname, sc_counts) in enumerate(by_file.items()):
-        if i >= SCAN_TRACE_SPAN_CAP:
-            break
-        fspan = trace.span(name=fname, input={"document": fname})
-        _lf.rule_spans(fspan, sc_counts, RULE_CATALOG, filename=fname)
-        fspan.end(output={"failing_criteria": len(sc_counts)})
-    _lf.finish_assess_trace(trace, {
-        "level": level, "documents": total, "conformant": conformant,
-        "with_blocking_findings": failing, "estate_conformant_pct": pct,
-    }, scan_id=scan_id, score=pct)
+    for f in (res or {}).get("files", []):
+        fname = f["file"]
+        ftrace = _lf.file_trace(scan_id, fname, user=owner)
+        aspan = _lf.assess_span(ftrace, level)
+        sc_counts = by_file.get(fname)
+        if sc_counts:
+            _lf.rule_spans(aspan, sc_counts, RULE_CATALOG, filename=fname)
+            conformant = fname not in blocking_files
+        else:
+            conformant = not bool(f.get("issues"))
+        aspan.end(output={"conformant": conformant, "failing_criteria": len(sc_counts or {})})
+        _lf.file_score(scan_id, fname, f.get("score"))
     _lf.flush()
 
 

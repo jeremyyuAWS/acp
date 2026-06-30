@@ -32,10 +32,9 @@ FANOUT_MAX_FILES = int(os.environ.get("ACP_FANOUT_MAX_FILES", "50000"))
 # bounded); estates with ≥ THRESHOLD files auto-use the batch path. Both env-tunable.
 SCAN_BATCH_SIZE = max(1, min(200, int(os.environ.get("ACP_SCAN_BATCH_SIZE", "50"))))
 SCAN_BATCH_THRESHOLD = int(os.environ.get("ACP_SCAN_BATCH_THRESHOLD", "2000"))
-# Max per-document spans written to a single Scan trace. Beyond this the deep-scan trace
-# stops adding file spans (a summary span notes the remainder), so the trace stays small
-# enough for the Langfuse detail view to load — large estates otherwise made it un-openable.
-SCAN_TRACE_SPAN_CAP = int(os.environ.get("ACP_SCAN_TRACE_SPAN_CAP", "500"))
+# No more SCAN_TRACE_SPAN_CAP — file-centric tracing (lf.file_trace) gives every file its
+# own trace, so there's no single big trace whose span count could make the Langfuse OSS
+# detail view un-openable (the problem that constant used to guard against).
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 sys.path.insert(0, str(ACP / "scripts"))
@@ -469,10 +468,6 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
 
         office = _analyse_office(tmp)
 
-        # One Langfuse trace covers the full scan. Per-file spans only when Deep scan is on.
-        trace = _lf_mod.scan_trace(scan_id, source, n, ai_enabled=ai_enabled, user=user,
-                                   deep_scan=detect_pii)
-
         import pii as _pii_mod  # sensitive-data detection dimension (ADR 0006)
         pii_by_file: dict[str, dict] = {}
         raw: dict[str, dict] = {}
@@ -508,14 +503,16 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             if detect_pii and pinfo is not None:
                 pii_by_file[name] = pinfo
                 pii_total = pinfo.get("total", 0)
-            # Per-file Langfuse spans ONLY when Deep scan is on — a plain discover leaves
-            # Langfuse with just the discovery summary, no per-file noise. The per-WCAG-rule
-            # assessment is a separate trace, written only when the user runs Assess.
-            if detect_pii:
-                fspan = _lf_mod.file_span(trace, name, engine)
-                if pii_total:
-                    _lf_mod.pii_span(fspan, pinfo, filename=name)
-                fspan.end(output={"engine": engine, "sensitive_data": pii_total})
+            # File-centric tracing: each file gets its OWN Langfuse trace (Discover here;
+            # Assess/Remediate spans land on this same trace later, when those phases run),
+            # grouped into a session keyed by scan_id. Always emitted — unlike the old
+            # deep-scan-only gate — so every file has a trace to open from FileDrawer
+            # regardless of whether the deep scan ran; the PII sub-span stays conditional.
+            ftrace = _lf_mod.file_trace(scan_id, name, user=user)
+            dspan = _lf_mod.discover_span(ftrace, engine)
+            if detect_pii and pii_total:
+                _lf_mod.pii_span(dspan, pinfo, filename=name)
+            dspan.end(output={"engine": engine, "sensitive_data": pii_total})
 
         progress({"phase": "scoring", "files_found": n, "files_done": n, "current": None})
         for r in raw.values():
@@ -523,10 +520,6 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             r["errors"] = [e for e in r["errors"] if (e.get("rule") if isinstance(e, dict) else None) not in rb.disabled]
         assessed = {k: rb.assess(r["succeeded"], r["issues"], r["errors"]) for k, r in raw.items()}
         summary = rb.aggregate(assessed)
-        pii_docs = sum(1 for p in pii_by_file.values() if p.get("total"))
-        pii_total = sum(p.get("total", 0) for p in pii_by_file.values())
-        _lf_mod.finish_scan_trace(trace, scan_id, summary, source=source, ai_enabled=ai_enabled,
-                                  pii_docs=pii_docs, pii_total=pii_total)
         _lf_mod.flush()
 
         # Build name → Drive file id map so write-back can reference the original.

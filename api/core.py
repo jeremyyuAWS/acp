@@ -194,26 +194,15 @@ def fire_webhook(items: list[dict]) -> None:
 
 # ── Langfuse remediation span ─────────────────────────────────────────────────
 def emit_remediation_span(scan_id: str, filename: str, drive_write_url: str | None):
-    """Emit a Langfuse span for the remediation write-back (Step 6) on its OWN trace —
-    keyed off the scan id with a '-remediate' suffix, so it never muddies the Step 1–2
-    scan trace. One span per fixed document; the trace accumulates them."""
+    """Emit a 'Remediate' span on this file's OWN Langfuse trace (file-centric tracing —
+    see lf.file_trace): the same trace that already carries its Discover and (if run)
+    Assess spans, so the file's full lifecycle lives in one place."""
     try:
         import lf as _lf
-        lf = _lf.client()
-        if lf is None:
-            return
-        trace = lf.trace(
-            id=f"{scan_id}-remediate",
-            name="Remediate",
-            tags=["accessibility-remediation"],
-            metadata={"scan_id": scan_id},
-        )
-        trace.span(
-            name=filename,
-            input={"file": filename},
-            output={"drive_write_url": drive_write_url, "written_to_drive": drive_write_url is not None},
-        )
-        lf.flush()
+        owner = (store.get_scan(scan_id) or {}).get("run", {}).get("owner_email")
+        trace = _lf.file_trace(scan_id, filename, user=owner)
+        _lf.remediate_span(trace, drive_write_url)
+        _lf.flush()
     except Exception:
         pass
 

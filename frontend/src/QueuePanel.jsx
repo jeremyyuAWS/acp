@@ -185,7 +185,7 @@ export default function QueuePanel() {
                     {jb.status === 'running' && <span className="livedot" aria-hidden="true" />}{jb.status}
                   </span>
                   {dur != null && <span className="muted jobdur">{fmtDur(dur)}</span>}
-                  {jb.scan_id && <TraceChip traceId={jb.scan_id} label="trace" />}
+                  {jb.scan_id && <TraceChip scanId={jb.scan_id} kind="session" label="trace" />}
                 </div>
               )
             })}

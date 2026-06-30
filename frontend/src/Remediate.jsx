@@ -325,7 +325,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           {remBusy ? 'Enqueueing…' : '⚡ Remediate all (server-side)'}
         </button>
         {remMsg && <span className="muted" role="status" aria-live="polite" style={{ fontSize: 13 }}>{remMsg}</span>}
-        {(serverFixed > 0 || remProg) && <TraceChip traceId={`${runId}-remediate`} label="View remediation trace" />}
+        {(serverFixed > 0 || remProg) && <TraceChip scanId={runId} kind="session" label="View this scan's traces in Langfuse" />}
       </div>
 
       {remProg && (

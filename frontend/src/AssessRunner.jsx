@@ -215,7 +215,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               <div className="atile"><b>{result.applicable.toLocaleString()}</b><span>findings apply · {result.autoFix.toLocaleString()} auto-fixable</span></div>
             </div>
             <p className="muted assessnote">{note}</p>
-            <div style={{ marginTop: 8 }}><TraceChip traceId={`${runId}-assess`} label="View assessment trace in Langfuse" /></div>
+            <div style={{ marginTop: 8 }}><TraceChip scanId={runId} kind="session" label="View this scan's traces in Langfuse" /></div>
           </div>
         )}
       </div>

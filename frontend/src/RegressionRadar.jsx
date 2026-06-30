@@ -53,7 +53,7 @@ export default function RegressionRadar({ run, scanList = [] }) {
                 {r.broke?.length ? <div className="muted" style={{ fontSize: 11.5 }}>now failing: {r.broke.map((b) => `${b.sc} ${b.name}`).join(' · ')}</div> : null}
               </div>
               <span className="radardelta down">{r.prev}&nbsp;→&nbsp;{r.cur} <b>▼{Math.abs(r.delta)}</b></span>
-              <TraceChip traceId={diff.cur_id} label="trace" />
+              <TraceChip scanId={diff.cur_id} kind="file" file={r.file} label="trace" />
             </div>
           ))}
         </div>

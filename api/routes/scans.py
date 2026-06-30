@@ -190,6 +190,25 @@ def assess(sid: str, request: Request, level: str = Query("AA")):
     return {"scan_id": sid, "level": level, "job_id": jid, "workers": core.WORKERS}
 
 
+@router.get("/scans/{sid}/trace/session")
+def open_session(sid: str):
+    """'View this scan' target under file-centric tracing (see lf.file_trace): every file
+    in this scan shares a Langfuse SESSION keyed by the scan id, so this is the
+    replacement for the old single scan/assess/remediate trace chips. No ensure-exists
+    polling needed — an empty/not-yet-ingested session renders as 'no traces yet' in
+    Langfuse, not a 404, so this redirects immediately. Public — see core.is_public.
+    Registered BEFORE /trace/{kind} below — that's a single-path-segment wildcard that
+    would otherwise shadow this literal "session" path (FastAPI matches routes in
+    registration order; the more specific route must come first)."""
+    import lf as _lf
+    if core.store.get_scan(sid) is None:
+        raise HTTPException(404, "scan not found")
+    link = _lf.session_deep_link(sid)
+    if not link:
+        raise HTTPException(404, "tracing is not configured")
+    return RedirectResponse(link, status_code=302)
+
+
 @router.get("/scans/{sid}/trace/{kind}")
 def open_trace(sid: str, request: Request, kind: str, level: str = Query("AA")):
     """Reliable 'View trace' target. Ensures the {kind} Langfuse trace for this scan
@@ -231,12 +250,51 @@ def open_trace(sid: str, request: Request, kind: str, level: str = Query("AA")):
 def trace_exists(sid: str, kind: str):
     """Returns {available: bool} — whether the Langfuse trace for this scan exists.
     Used by the UI to grey out the trace chip for scans that have no trace yet
-    (e.g. scans from before tracing was wired up). Public — no auth needed."""
+    (e.g. scans from before tracing was wired up). Public — no auth needed.
+    Historical (kind-based) traces only — see /trace/file/{file} for the current,
+    file-centric model."""
     import lf as _lf
     if kind not in ("scan", "assess", "remediate"):
         return {"available": False}
     trace_id = sid if kind == "scan" else f"{sid}-{kind}"
     return {"available": _lf.trace_exists(trace_id)}
+
+
+@router.get("/scans/{sid}/trace/file/{filename:path}")
+def open_file_trace(sid: str, filename: str, level: str = Query("AA")):
+    """Reliable 'View trace' target for ONE file — its Discover/Assess/Remediate spans
+    all live on this single trace (file-centric tracing). Ensures it exists (re-running
+    the Assess write for this file if Langfuse doesn't have it yet — the same
+    synchronous-rebuild approach as the old per-scan endpoint) then 302s to its deep
+    link. Public — see core.is_public."""
+    import time
+
+    import lf as _lf
+    if core.store.get_scan(sid) is None:
+        raise HTTPException(404, "scan not found")
+    trace_id = f"{sid}::{filename}"
+    link = _lf.trace_deep_link(trace_id)
+    if not link:
+        raise HTTPException(404, "tracing is not configured")
+    if not _lf.trace_exists(trace_id):
+        try:
+            from handlers import ensure_assess_trace
+            ensure_assess_trace(sid, level)
+        except Exception:
+            pass
+    for _ in range(8):
+        if _lf.trace_exists(trace_id):
+            break
+        time.sleep(0.6)
+    return RedirectResponse(link, status_code=302)
+
+
+@router.get("/scans/{sid}/trace/file/{filename:path}/exists")
+def file_trace_exists(sid: str, filename: str):
+    """Returns {available: bool} for one file's trace — the file-centric counterpart to
+    /trace/{kind}/exists above. Public — no auth needed."""
+    import lf as _lf
+    return {"available": _lf.trace_exists(f"{sid}::{filename}")}
 
 
 # ── Per-scan decision snapshots (PRD: time-travel) ────────────────────────────

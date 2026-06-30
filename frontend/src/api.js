@@ -43,27 +43,29 @@ export const setLangfuseBase = (b) => { lfTraceBase = b || null }
 // Scan trace (ACP_SCAN_TRACE_SPAN_CAP), so traces stay small enough for the Langfuse detail
 // view to load even on large estates.
 export const traceUrl = (traceId) => (lfTraceBase && traceId ? `${lfTraceBase}/${encodeURIComponent(traceId)}` : null)
-// Reliable trace link: route the chip through the backend redirect endpoint, which
-// ENSURES the trace exists in Langfuse (creating the assess trace on the spot if it's
-// missing) before 302-ing to the deep link — so a click never lands on "Not Found".
-// Returns null when tracing isn't configured (no chip), matching traceUrl. SIM keeps the
-// direct deep-link (no backend). Trace ids: {sid} · {sid}-assess · {sid}-remediate.
-export const openTraceUrl = (traceId) => {
-  if (!traceId) return null
-  if (SIM) return traceUrl(traceId)
+// Reliable trace link: route the chip through the backend redirect endpoint. File-centric
+// tracing (backend: lf.file_trace) — every file gets its OWN Langfuse trace, with Discover/
+// Assess/Remediate as spans inside it, grouped into a session keyed by scan_id:
+//   kind='file'    — scanId + file → that ONE file's full Discover→Assess→Remediate trace.
+//                     Ensures it exists before 302-ing, so a click never lands on "Not Found".
+//   kind='session' — scanId only   → the Langfuse session for the whole scan (every one of
+//                     its file traces) — the "view this scan" replacement for the old single
+//                     scan/assess/remediate trace. Never 404s, even before any file ran.
+// Returns null when tracing isn't configured (no chip). SIM keeps a direct deep-link (no backend).
+export const openTraceUrl = (scanId, kind = 'session', file = null) => {
+  if (!scanId) return null
+  if (SIM) return traceUrl(kind === 'file' && file ? `${scanId}::${file}` : scanId)
   if (!lfTraceBase) return null
-  let kind = 'scan', sid = traceId
-  if (traceId.endsWith('-assess')) { kind = 'assess'; sid = traceId.slice(0, -7) }
-  else if (traceId.endsWith('-remediate')) { kind = 'remediate'; sid = traceId.slice(0, -10) }
-  return `${BASE}/scans/${encodeURIComponent(sid)}/trace/${kind}`
+  if (kind === 'file' && file) return `${BASE}/scans/${encodeURIComponent(scanId)}/trace/file/${encodeURIComponent(file)}`
+  return `${BASE}/scans/${encodeURIComponent(scanId)}/trace/session`
 }
-export const getTraceStatus = (traceId) => {
-  if (!traceId || SIM) return Promise.resolve({ available: !!traceId })
+export const getTraceStatus = (scanId, kind = 'session', file = null) => {
+  if (!scanId || SIM) return Promise.resolve({ available: !!scanId })
   if (!lfTraceBase) return Promise.resolve({ available: false })
-  let kind = 'scan', sid = traceId
-  if (traceId.endsWith('-assess')) { kind = 'assess'; sid = traceId.slice(0, -7) }
-  else if (traceId.endsWith('-remediate')) { kind = 'remediate'; sid = traceId.slice(0, -10) }
-  return fetch(`${BASE}/scans/${encodeURIComponent(sid)}/trace/${kind}/exists`).then(j).catch(() => ({ available: false }))
+  // Sessions never 404 (an empty/not-yet-ingested one just renders "no traces yet" in
+  // Langfuse), so there's nothing to poll for — always available once configured.
+  if (kind === 'session' || !file) return Promise.resolve({ available: true })
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/trace/file/${encodeURIComponent(file)}/exists`).then(j).catch(() => ({ available: false }))
 }
 // Sensitive-data (PII) findings for a scan (ADR 0006) — rollup + per-type counts (masked).
 export const getScanPii = (scanId) => (SIM

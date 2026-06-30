@@ -1,22 +1,27 @@
 import { useState, useEffect } from 'react'
 import { openTraceUrl, getTraceStatus, getScanTraces } from './api.js'
 
-// "📊 View trace" link to the relevant Langfuse trace. Routes through the backend
-// redirect endpoint (openTraceUrl), which ensures the trace exists before sending you to
-// Langfuse — so the chip never lands on a "Not Found". Renders nothing when Langfuse
-// isn't configured. The three lifecycle traces use deterministic ids:
-//   scan: {scanId} · assess: {scanId}-assess · remediate: {scanId}-remediate
-export function TraceChip({ traceId, label = 'View trace', title }) {
-  const url = openTraceUrl(traceId)
+// "📊 View trace" link. File-centric tracing (backend: lf.file_trace) — every file has
+// its OWN Langfuse trace (Discover/Assess/Remediate as spans inside it), grouped into a
+// session keyed by scan_id:
+//   kind='file'    (scanId + file) — that ONE file's full lifecycle trace.
+//   kind='session' (scanId only)   — the whole scan's session (every file's trace) — the
+//                                     "view this scan" replacement for the old single
+//                                     scan/assess/remediate trace.
+// Routes through the backend redirect endpoint, which ensures a file trace exists before
+// sending you to Langfuse (sessions never need this — they don't 404 when empty).
+// Renders nothing when Langfuse isn't configured.
+export function TraceChip({ scanId, kind = 'session', file = null, label = 'View trace', title }) {
+  const url = openTraceUrl(scanId, kind, file)
   const [available, setAvailable] = useState(null)
   useEffect(() => {
     if (!url) return
     let cancelled = false
-    getTraceStatus(traceId)
+    getTraceStatus(scanId, kind, file)
       .then(r => { if (!cancelled) setAvailable(!!r?.available) })
       .catch(() => { if (!cancelled) setAvailable(false) })
     return () => { cancelled = true }
-  }, [traceId, url])
+  }, [scanId, kind, file, url])
 
   if (!url) return null
   if (available === false) return (

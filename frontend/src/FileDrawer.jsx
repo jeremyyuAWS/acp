@@ -5,6 +5,7 @@ import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
 import { explainFinding, getFileContent, uploadToDrive, markRemediated } from './api.js'
+import { TraceChip } from './Transparency.jsx'
 
 // Prescriptive-action styling, shared with the Discover inventory.
 // Distinct hue per action so a long list scans at a glance. The human-touch
@@ -193,6 +194,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
       <Drawer title={file.file} subtitle={`${file.sourceName ? `${file.sourceName} · ${file.dept} · ` : ''}${(file.type || '').toUpperCase()}`} onClose={onClose}>
         {file.locked && <div className="lockbanner">🔒 Could not open — <b>{file.openIssue}</b>. Discovered from its metadata, but the content couldn’t be read.</div>}
         {provBlock}
+        {scanId && <div style={{ margin: '0 0 12px' }}><TraceChip scanId={scanId} kind="file" file={file.file} label="View this document's trace" /></div>}
         {tagBlock}
         {ontBlock}
         {metaBlock}
@@ -210,6 +212,11 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   return (
     <Drawer title={file.file} subtitle={`${file.sourceName ? `${file.sourceName} · ${file.dept} · ` : ''}${file.engine}`} onClose={onClose}>
       {provBlock}
+      {/* This document's full Discover→Assess→Remediate trace, all on one Langfuse trace
+          (file-centric tracing — lf.file_trace). Needs scanId, which not every FileDrawer
+          caller passes yet (Discover/Integrations/KnowledgeGraph don't) — renders nothing
+          when absent, same as before this existed. */}
+      {scanId && <div style={{ margin: '0 0 12px' }}><TraceChip scanId={scanId} kind="file" file={file.file} label="View this document's trace" /></div>}
       <div className="drawerstats">
         <span className="badge" style={{ background: sbg, color: sfg }}>{st}</span>
         <span className="drawerscore">{file.score === null ? 'n/a' : `${st === 'uncertain' ? '≤' : ''}${file.score}`}<span className="muted"> / 100</span></span>

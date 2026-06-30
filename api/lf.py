@@ -282,6 +282,99 @@ def trace_deep_link(trace_id: str) -> str | None:
     return f"{_HOST.rstrip('/')}/project/{project}/traces/{trace_id}"
 
 
+def session_deep_link(scan_id: str) -> str | None:
+    """Public Langfuse URL for a scan's SESSION — groups every one of that scan's
+    per-file traces (see file_trace below). Unlike trace_deep_link, no 'exists' check is
+    needed: an empty/not-yet-ingested session renders as 'no traces yet' in Langfuse, not
+    a 404, so this is safe to link to immediately."""
+    if not _HOST:
+        return None
+    project = os.environ.get("LANGFUSE_DEFAULT_PROJECT_ID", "acp-compliance")
+    return f"{_HOST.rstrip('/')}/project/{project}/sessions/{scan_id}"
+
+
+# ── Per-file trace (file-centric tracing) ──────────────────────────────────────
+# One trace PER FILE per scan, id=f"{scan_id}::{file}", grouped into a Langfuse SESSION
+# keyed by scan_id (session_deep_link above) so "view this whole scan" = browse its
+# session instead of one giant trace. Discover / Assess / Remediate are SPANS within that
+# one file trace, written as each phase happens — potentially far apart in time (Discover
+# at scan time; Assess only if/when the user clicks Assess; Remediate only for files
+# actually fixed). Langfuse upserts a trace by id, so re-opening it for a later phase
+# updates the SAME trace rather than creating a new one.
+#
+# Defensively wrapped (unlike the legacy scan/assess/remediate-trace functions above,
+# kept only for historical scans created before this model) — a Langfuse SDK surprise
+# here must never break the actual scan/assess/remediate pipeline, only lose tracing for
+# that call.
+def file_trace(scan_id: str, file: str, user: str | None = None):
+    """Open or update the per-file trace. Call this at the start of EACH phase
+    (Discover/Assess/Remediate) for that file — safe to call repeatedly."""
+    lf = _lf()
+    if lf is None:
+        return _Noop()
+    try:
+        who = user or "demo"
+        return lf.trace(
+            id=f"{scan_id}::{file}",
+            session_id=scan_id,
+            name=f"{who} · {file}",
+            user_id=who,
+            tags=["accessibility-file", f"user:{who}"],
+            metadata={"scan_id": scan_id, "file": file},
+        )
+    except Exception:
+        return _Noop()
+
+
+def discover_span(trace, engine: str):
+    """The Discover phase span on a file's trace."""
+    if isinstance(trace, _Noop):
+        return _Noop()
+    try:
+        return trace.span(name="Discover", input={"checked_with": engine})
+    except Exception:
+        return _Noop()
+
+
+def assess_span(trace, level: str):
+    """The Assess phase span on a file's trace — rule_spans (above) attach as its
+    children, exactly as they did on the old per-document span."""
+    if isinstance(trace, _Noop):
+        return _Noop()
+    try:
+        return trace.span(name=f"Assess · WCAG 2.1 {level}")
+    except Exception:
+        return _Noop()
+
+
+def remediate_span(trace, drive_write_url: str | None):
+    """The Remediate phase span on a file's trace."""
+    if isinstance(trace, _Noop):
+        return
+    try:
+        s = trace.span(name="Remediate",
+                       output={"drive_write_url": drive_write_url,
+                               "written_to_drive": drive_write_url is not None})
+        s.end()
+    except Exception:
+        pass
+
+
+def file_score(scan_id: str, file: str, score: float | None) -> None:
+    """Attach this file's own compliance score to its trace — replaces the old scan-wide
+    aggregate score (finish_assess_trace's lf.score call), which has no natural home once
+    there's no single Assess trace; a per-file score is arguably more useful anyway."""
+    if score is None:
+        return
+    lf = _lf()
+    if lf is None:
+        return
+    try:
+        lf.score(trace_id=f"{scan_id}::{file}", name="compliance_score", value=float(score))
+    except Exception:
+        pass
+
+
 def trace_exists(trace_id: str) -> bool:
     """Best-effort: is this trace queryable in Langfuse yet? Ingestion is async after
     flush(), so the detail view can 404 for a beat. Polls the public API; any error

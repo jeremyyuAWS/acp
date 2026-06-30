@@ -96,7 +96,7 @@ export default function Publish({ run, files = [], certified = [], onPublish }) 
           <p className="muted" style={{ marginTop: 12 }}>Publishing writes the conformance status back to the source and records each change in the audit trail here.</p>
         )}
       </section>
-      {sel && <FileDrawer file={sel} onClose={() => setSel(null)} />}
+      {sel && <FileDrawer file={sel} scanId={run.id} onClose={() => setSel(null)} />}
     </>
   )
 }

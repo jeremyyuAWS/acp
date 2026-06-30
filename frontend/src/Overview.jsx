@@ -195,7 +195,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
                         {d > 0 ? `▲ +${d}` : d < 0 ? `▼ ${d}` : '±0'}</span>)}</td>
                     <td className="muted">{s.certifiable ?? '—'} / {(s.files ?? 0).toLocaleString()}</td>
                     <td className="muted">{s.source}</td>
-                    <td onClick={(e) => e.stopPropagation()}><TraceChip traceId={s.id} label="trace" /></td>
+                    <td onClick={(e) => e.stopPropagation()}><TraceChip scanId={s.id} kind="session" label="trace" /></td>
                   </tr>
                 )
               })}
@@ -264,7 +264,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       </div>
 
       {seg &&<SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={setSelFile} />}
-      {selFile && <FileDrawer file={selFile} onClose={() => setSelFile(null)} />}
+      {selFile && <FileDrawer file={selFile} scanId={run.id} onClose={() => setSelFile(null)} />}
     </>
   )
 }
