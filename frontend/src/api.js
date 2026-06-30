@@ -145,14 +145,14 @@ export const openReport = (id, filename) => {
       setTimeout(() => URL.revokeObjectURL(url), 60000)
     })
 }
-export const startScan = (source = 'local', folder = null, aiEnabled = true, pii = true) => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}&pii=${pii}`, { method: 'POST', headers: headers() }).then(j))
+export const startScan = (source = 'local', folder = null, aiEnabled = true, pii = true, excludeRemediated = false) => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}`, { method: 'POST', headers: headers() }).then(j))
 export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/scans/jobs/${id}`, { headers: headers() }).then(j))
 
 // ── Durable async queue (ADR 0004/0005) ───────────────────────────────────────
 // Queued scan: runs in the worker pool, survives restarts, shows in /jobs + Grafana.
-export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = true) => (SIM
+export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = true, excludeRemediated = false) => (SIM
   ? sim({ scan_id: 'sim-scan', job_id: 'sim-job', queued: true, workers: 4 })
-  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}&pii=${pii}&queue=true&fanout=true`, { method: 'POST', headers: headers() }).then(j))
+  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&queue=true&fanout=true`, { method: 'POST', headers: headers() }).then(j))
 // Async server-side remediation: one remediate_file job per HTML file in the scan.
 // SIM keeps a tiny drain state so getRemediationStatus ticks down over a few polls —
 // the demo then shows the live KPI / progress-bar updates instead of finishing instantly.

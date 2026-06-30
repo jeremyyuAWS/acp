@@ -71,6 +71,7 @@ def _scan(payload: dict, job: dict) -> None:
         scan_id=scan_id,
         user=payload.get("user"),
         detect_pii=payload.get("pii", True),
+        exclude_remediated=bool(payload.get("exclude_remediated", False)),
     )
     core.store.save_scan(report)
     core.finalize_scan(scan_id, effective_ai, source)
@@ -196,7 +197,8 @@ def _scan_discover(payload: dict, job: dict) -> None:
     svc = None if source in ("local", "sharepoint") else _drive_service(toks.get("drive"))
     effective_folder = folder if folder else ("root" if toks.get("drive") else None)
     items = _list(source, svc, folder=effective_folder, sp_token=toks.get("sp"),
-                  max_files=FANOUT_MAX_FILES)
+                  max_files=FANOUT_MAX_FILES,
+                  exclude_remediated=bool(payload.get("exclude_remediated", False)))
     started = _dt.datetime.now(_dt.timezone.utc).isoformat()
     core.store.init_scan_run(scan_id, source, len(items), started, rb.name, rb.hash, owner=user)
     if not items:

@@ -175,6 +175,7 @@ export default function App() {
   const [aiEnabled, setAiEnabled] = useState(true)
   const [queuedScan, setQueuedScan] = useState(true)   // durable fan-out queue by default; "This session" is the opt-out
   const [deepScan, setDeepScan] = useState(false)      // off by default → Fast scan; opt in to PII scan via the switch
+  const [excludeRemediated, setExcludeRemediated] = useState(true)  // on by default — skip re-discovering ACP's own Remediated/ output
   const [tick, setTick] = useState(0)                  // bumped every minute to keep timeAgo labels fresh
 
   useEffect(() => {
@@ -340,7 +341,7 @@ export default function App() {
       let fresh
       if (queuedScan) {
         // Durable path: enqueue a scan job, then poll until the scan is persisted.
-        const { scan_id, workers } = await startScanQueued(apiSource, folder, aiEnabled, deepScan)
+        const { scan_id, workers } = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated)
         if (!SIM && !workers) throw new Error('no workers running — start some in Monitor (or set ACP_WORKERS)')
         const t0 = Date.now()
         for (let i = 0; i < 600 && !fresh; i++) {        // up to ~10 min for large estates
@@ -355,7 +356,7 @@ export default function App() {
         }
         if (!fresh) throw new Error('scan still processing — watch it finish in the Monitor queue')
       } else {
-        const { job_id } = await startScan(apiSource, folder, aiEnabled, deepScan)
+        const { job_id } = await startScan(apiSource, folder, aiEnabled, deepScan, excludeRemediated)
         let job
         do {
           await new Promise((r) => setTimeout(r, 350))
@@ -552,7 +553,8 @@ export default function App() {
         {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} /> : assessGate) : placeholder)}
 
         {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
-          deepScan={deepScan} setDeepScan={setDeepScan} queuedScan={queuedScan} setQueuedScan={setQueuedScan} scanId={run?.id} />}
+          deepScan={deepScan} setDeepScan={setDeepScan} queuedScan={queuedScan} setQueuedScan={setQueuedScan}
+          excludeRemediated={excludeRemediated} setExcludeRemediated={setExcludeRemediated} scanId={run?.id} />}
 
         {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? statusMsg(progress.elapsed || 0, deepScan) : ''} scanId={run?.id} />}
 

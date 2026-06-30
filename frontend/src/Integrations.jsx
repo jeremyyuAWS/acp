@@ -232,7 +232,8 @@ function lastScanLabel(scans, type) {
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function Integrations({ sources, files = [], scans = [], onScan, busy, hasDriveToken, hasSPToken, onConnect,
-                                       deepScan = true, setDeepScan, queuedScan = false, setQueuedScan, scanId = null }) {
+                                       deepScan = true, setDeepScan, queuedScan = false, setQueuedScan,
+                                       excludeRemediated = true, setExcludeRemediated, scanId = null }) {
   const [selSrc,      setSelSrc]      = useState(null)
   const [selFile,     setSelFile]     = useState(null)
   const [pickerSrc,   setPickerSrc]   = useState(null)
@@ -342,6 +343,12 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
               title={queuedScan
                 ? 'Durable scan — runs in the background queue: keeps going if you close the tab AND survives server restarts, with parallel downloads for large libraries (recommended). Turn off for a quick one-off scan in this browser session.'
                 : 'Off — Quick scan in this browser session: starts instantly, streams live per-file progress, best for spot-checking a few files. Turn on for a durable background scan that survives restarts and handles very large libraries.'} />
+          )}
+          {setExcludeRemediated && (
+            <ScanSwitch on={excludeRemediated} onToggle={() => setExcludeRemediated(v => !v)} label="Skip Remediated/"
+              title={excludeRemediated
+                ? 'On — skips the Remediated/ folder ACP writes fixed copies to, so they don’t get re-discovered and flagged as new documents needing attention. Turn off to also audit that folder.'
+                : 'Off — the Remediated/ folder (ACP’s own output) is scanned like any other folder. Turn on to skip it and avoid a re-discovery feedback loop.'} />
           )}
           <button disabled={busy || !canScanAll} onClick={() => {
             if (SIM) { onScan('all'); return }

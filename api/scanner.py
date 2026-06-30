@@ -130,13 +130,31 @@ def _normalize(files: list[dict]) -> list[dict]:
     return result
 
 
-def _search_drive(svc, max_files: int = 500) -> list[dict]:
+def _find_remediated_folder_id(svc) -> str | None:
+    """Look up the 'Remediated' Drive folder WITHOUT creating it (unlike
+    handlers.ensure_remediated_folder) — a discovery-time exclusion check
+    shouldn't spuriously create the folder for a user who's never remediated
+    anything. Returns None if it doesn't exist yet."""
+    q = "name='Remediated' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    folders = svc.files().list(q=q, fields="files(id)", orderBy="createdTime",
+                               pageSize=1).execute().get("files", [])
+    return folders[0]["id"] if folders else None
+
+
+def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False) -> list[dict]:
     """Whole-Drive search — returns all scannable files regardless of folder."""
+    excl_id = _find_remediated_folder_id(svc) if exclude_remediated else None
+    q = f"({_DRIVE_MIME_Q}) and trashed=false"
+    if excl_id:
+        # Drive query syntax — files NOT in that folder. A file can have multiple
+        # parents, so this only excludes files whose ACP-remediated copy is their
+        # sole/primary location, which matches the actual upload behavior.
+        q += f" and not '{excl_id}' in parents"
     files: list[dict] = []
     page_token = None
     while len(files) < max_files:
         resp = svc.files().list(
-            q=f"({_DRIVE_MIME_Q}) and trashed=false",
+            q=q,
             fields="nextPageToken,files(id,name,mimeType,md5Checksum)",
             pageSize=200,
             orderBy="name",
@@ -149,10 +167,15 @@ def _search_drive(svc, max_files: int = 500) -> list[dict]:
     return _normalize(files[:max_files])
 
 
-def _search_folder(svc, folder_id: str, max_files: int = 1000) -> list[dict]:
+def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediated: bool = False) -> list[dict]:
     """BFS over a folder subtree — returns all scannable files in the folder AND
     every nested subfolder. Bounded by max_files (newest folders may be skipped
-    once the cap is hit) and a cycle guard, so a huge tree can't run unbounded."""
+    once the cap is hit) and a cycle guard, so a huge tree can't run unbounded.
+
+    exclude_remediated: don't recurse into a subfolder literally named
+    'Remediated' — cheaper than tracking each file's parent-folder lineage, and
+    sufficient since ACP only ever writes remediated output to that one
+    well-known folder name (handlers.ensure_remediated_folder)."""
     queue = [folder_id]
     seen_folders: set[str] = set()
     raw: list[dict] = []
@@ -171,6 +194,8 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000) -> list[dict]:
             ).execute()
             for f in resp.get("files", []):
                 if f["mimeType"] == "application/vnd.google-apps.folder":
+                    if exclude_remediated and f["name"] == "Remediated":
+                        continue
                     queue.append(f["id"])
                 else:
                     raw.append(f)
@@ -238,7 +263,7 @@ def _dedupe_names(items: list[dict]) -> list[dict]:
 
 
 def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None = None,
-          max_files: int | None = None) -> list[dict]:
+          max_files: int | None = None, exclude_remediated: bool = False) -> list[dict]:
     # The monolithic scan keeps conservative caps (one box's disk holds every file);
     # the fan-out path (ADR 0007) passes a high cap since each file is its own job.
     if source == "local":
@@ -248,10 +273,10 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         result = _sp_list(sp_token, max_files or 200)
     elif folder and folder != "root":
         # Specific folder: recursive BFS
-        result = _search_folder(svc, folder, max_files or 1000)
+        result = _search_folder(svc, folder, max_files or 1000, exclude_remediated=exclude_remediated)
     elif folder == "root" or folder is None:
         # No specific folder chosen: search the whole Drive
-        result = _search_drive(svc, max_files or 500)
+        result = _search_drive(svc, max_files or 500, exclude_remediated=exclude_remediated)
     else:
         # ADC/demo mode with a pinned folder
         resp = svc.files().list(q=f"'{_DEMO_FOLDER}' in parents and trashed=false",
@@ -452,7 +477,8 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = True):
 def run_scan(source: str = "local", progress=_noop, drive_token: str | None = None,
              folder: str | None = None, sp_token: str | None = None,
              ai_enabled: bool = True, scan_id: str | None = None,
-             user: str | None = None, detect_pii: bool = True) -> dict:
+             user: str | None = None, detect_pii: bool = True,
+             exclude_remediated: bool = False) -> dict:
     from store import RULE_CATALOG, _extract_sc  # import here to avoid circular at module load
     rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
@@ -463,7 +489,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
     try:
         progress({"phase": "connecting", "files_found": 0, "files_done": 0, "current": None})
         svc = None if source in ("local", "sharepoint") else _drive_service(drive_token)
-        items = _list(source, svc, folder=effective_folder, sp_token=sp_token)
+        items = _list(source, svc, folder=effective_folder, sp_token=sp_token,
+                     exclude_remediated=exclude_remediated)
         n = len(items)
         progress({"phase": "discovering", "files_found": n, "files_done": 0, "current": None})
 
