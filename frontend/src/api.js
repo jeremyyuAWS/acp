@@ -57,6 +57,14 @@ export const openTraceUrl = (traceId) => {
   else if (traceId.endsWith('-remediate')) { kind = 'remediate'; sid = traceId.slice(0, -10) }
   return `${BASE}/scans/${encodeURIComponent(sid)}/trace/${kind}`
 }
+export const getTraceStatus = (traceId) => {
+  if (!traceId || SIM) return Promise.resolve({ available: !!traceId })
+  if (!lfTraceBase) return Promise.resolve({ available: false })
+  let kind = 'scan', sid = traceId
+  if (traceId.endsWith('-assess')) { kind = 'assess'; sid = traceId.slice(0, -7) }
+  else if (traceId.endsWith('-remediate')) { kind = 'remediate'; sid = traceId.slice(0, -10) }
+  return fetch(`${BASE}/scans/${encodeURIComponent(sid)}/trace/${kind}/exists`).then(j).catch(() => ({ available: false }))
+}
 // AI Compliance Digest (bundle #2) — exec paragraph grounded in real scan data + the facts.
 export const getDigest = (scanId, refresh = false) => (SIM
   ? sim({

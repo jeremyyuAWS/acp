@@ -227,6 +227,18 @@ def open_trace(sid: str, request: Request, kind: str, level: str = Query("AA")):
     return RedirectResponse(link, status_code=302)
 
 
+@router.get("/scans/{sid}/trace/{kind}/exists")
+def trace_exists(sid: str, kind: str):
+    """Returns {available: bool} — whether the Langfuse trace for this scan exists.
+    Used by the UI to grey out the trace chip for scans that have no trace yet
+    (e.g. scans from before tracing was wired up). Public — no auth needed."""
+    import lf as _lf
+    if kind not in ("scan", "assess", "remediate"):
+        return {"available": False}
+    trace_id = sid if kind == "scan" else f"{sid}-{kind}"
+    return {"available": _lf.trace_exists(trace_id)}
+
+
 # ── Per-scan decision snapshots (PRD: time-travel) ────────────────────────────
 @router.get("/scans/{sid}/decisions")
 def get_decisions(sid: str, request: Request):
