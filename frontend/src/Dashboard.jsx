@@ -3,7 +3,7 @@ import { openReport, getScanDiff } from './api'
 import { ScoreRing } from './ScoreRing.jsx'
 import FileDrawer from './FileDrawer.jsx'
 import Tag from './Tag.jsx'
-import { baseName, groupDuplicates } from './dedupe.js'
+import { baseName, groupDuplicates, duplicateFiles } from './dedupe.js'
 
 const scoreColor = (s) => (s >= 90 ? '#639922' : s >= 50 ? '#BF8C00' : '#2E72C9')
 const statusOf = (f) => (f.status === 'error' ? 'unanalysable' : f.status === 'uncertain' ? 'uncertain' : f.compliant ? 'certifiable' : 'issues')
@@ -46,11 +46,20 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
   ]) : null
   const namesOf = (f) => f._names || [f.file]
   const unchangedCount = changedNames ? rows.filter((f) => !namesOf(f).some((n) => changedNames.has(n))).length : 0
+  // "Previously scanned" = present in the prior scan too (i.e. NOT new this time) — the
+  // complement of diff.new, regardless of whether its score changed.
+  const newNamesOnly = diff ? new Set((diff.new || []).map((f) => f.file)) : null
+  const prevScannedCount = diff ? rows.filter((f) => !namesOf(f).some((n) => newNamesOnly.has(n))).length : 0
+  // Duplicate-name files — same set the Classify panel (Discover.jsx) drills into.
+  const duplicateNameSet = new Set(duplicateFiles(files).map((f) => f.file))
+  const dupesOnlyCount = rows.filter((f) => namesOf(f).some((n) => duplicateNameSet.has(n))).length
 
   // ── File-inventory navigation: search + status/type filters + sort + paged render ──
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [typeFilter, setTypeFilter] = useState('all')
+  const [dupesOnlyFilter, setDupesOnlyFilter] = useState(false)
+  const [prevScannedOnlyFilter, setPrevScannedOnlyFilter] = useState(false)
   const [sortBy, setSortBy] = useState('file')
   const [sortDir, setSortDir] = useState('asc')
   const [limit, setLimit] = useState(1000)         // render budget — most narrowed views fit; "show more" beyond
@@ -63,7 +72,9 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
     (!q || (groupDupes && f._copies > 1 ? baseName(f.file) : f.file).toLowerCase().includes(q)) &&
     (statusFilter === 'all' || statusOf(f) === statusFilter) &&
     (typeFilter === 'all' || extOf(f) === typeFilter) &&
-    (!onlyChanged || !changedNames || namesOf(f).some((n) => changedNames.has(n))))
+    (!onlyChanged || !changedNames || namesOf(f).some((n) => changedNames.has(n))) &&
+    (!dupesOnlyFilter || namesOf(f).some((n) => duplicateNameSet.has(n))) &&
+    (!prevScannedOnlyFilter || !diff || !namesOf(f).some((n) => newNamesOnly.has(n))))
   const sorted = [...filtered].sort((a, b) => {
     let r = 0
     if (sortBy === 'file') r = a.file.localeCompare(b.file)
@@ -123,10 +134,24 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
                   Only new/changed <span style={{ opacity: 0.7 }}>({unchangedCount} unchanged hidden)</span>
                 </label>
               )}
+              {diff && (
+                <label className="muted" style={{ fontSize: 12, fontWeight: 400, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                       title="Filter to files that already appeared in the prior scan (i.e. NOT new this time) — useful for auditing what's being carried forward rather than freshly discovered.">
+                  <input type="checkbox" checked={prevScannedOnlyFilter} onChange={(e) => setPrevScannedOnlyFilter(e.target.checked)} />
+                  Previously scanned only <span style={{ opacity: 0.7 }}>({prevScannedCount})</span>
+                </label>
+              )}
               {dupeCount > 0 && (
                 <label className="muted" style={{ fontSize: 12, fontWeight: 400, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
                   <input type="checkbox" checked={groupDupes} onChange={(e) => setGroupDupes(e.target.checked)} />
                   Group duplicate uploads <span style={{ opacity: 0.7 }}>({dupeCount} copies)</span>
+                </label>
+              )}
+              {dupesOnlyCount > 0 && (
+                <label className="muted" style={{ fontSize: 12, fontWeight: 400, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                       title="Filter to ONLY files that share a name with another file — the set worth reviewing for accidental duplicate uploads.">
+                  <input type="checkbox" checked={dupesOnlyFilter} onChange={(e) => setDupesOnlyFilter(e.target.checked)} />
+                  Duplicates only <span style={{ opacity: 0.7 }}>({dupesOnlyCount})</span>
                 </label>
               )}
             </div>
