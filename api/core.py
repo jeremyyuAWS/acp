@@ -142,6 +142,11 @@ API_PREFIXES = (
 def is_public(path: str) -> bool:
     if path in ALWAYS_PUBLIC:
         return True
+    # The trace-redirect endpoint (/scans/{sid}/trace/{kind}) is a plain <a> navigation
+    # target — no auth header — so it must be public; it only 302s to a Langfuse deep
+    # link. Matches singular "/trace/", NOT the authed "/traces" JSON endpoint.
+    if path.startswith("/scans/") and "/trace/" in path:
+        return True
     if any(path == p or path.startswith(p + "/") for p in API_PREFIXES):
         return False
     return True

@@ -43,6 +43,20 @@ export const setLangfuseBase = (b) => { lfTraceBase = b || null }
 // Scan trace (ACP_SCAN_TRACE_SPAN_CAP), so traces stay small enough for the Langfuse detail
 // view to load even on large estates.
 export const traceUrl = (traceId) => (lfTraceBase && traceId ? `${lfTraceBase}/${encodeURIComponent(traceId)}` : null)
+// Reliable trace link: route the chip through the backend redirect endpoint, which
+// ENSURES the trace exists in Langfuse (creating the assess trace on the spot if it's
+// missing) before 302-ing to the deep link — so a click never lands on "Not Found".
+// Returns null when tracing isn't configured (no chip), matching traceUrl. SIM keeps the
+// direct deep-link (no backend). Trace ids: {sid} · {sid}-assess · {sid}-remediate.
+export const openTraceUrl = (traceId) => {
+  if (!traceId) return null
+  if (SIM) return traceUrl(traceId)
+  if (!lfTraceBase) return null
+  let kind = 'scan', sid = traceId
+  if (traceId.endsWith('-assess')) { kind = 'assess'; sid = traceId.slice(0, -7) }
+  else if (traceId.endsWith('-remediate')) { kind = 'remediate'; sid = traceId.slice(0, -10) }
+  return `${BASE}/scans/${encodeURIComponent(sid)}/trace/${kind}`
+}
 // AI Compliance Digest (bundle #2) — exec paragraph grounded in real scan data + the facts.
 export const getDigest = (scanId, refresh = false) => (SIM
   ? sim({

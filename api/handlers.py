@@ -341,15 +341,14 @@ def _scan_finalize(payload: dict, job: dict) -> None:
     core.clear_scan_tokens(scan_id)
 
 
-@handler("assess_trace")
-def _assess_trace(payload: dict, job: dict) -> None:
-    """Emit the WCAG rule assessment to Langfuse — runs ONLY when the user clicks Assess,
-    not during the scan. The per-rule ✓/✗ data comes from scan_rule_traces (recorded at
-    scan time); this turns it into a separate, on-demand 'assessment' trace."""
+def ensure_assess_trace(scan_id: str, level: str = "AA") -> None:
+    """Create (idempotently) + flush the WCAG assessment trace for a scan. Safe to
+    call repeatedly — Langfuse upserts by id. ALWAYS emits a trace, even when no
+    per-rule rows were recorded (e.g. an older scan), so the 'View assessment trace'
+    link never 404s. The per-rule ✓/✗ data comes from scan_rule_traces (recorded at
+    scan time). Shared by the worker job AND the /scans/{sid}/trace/assess endpoint."""
     import lf as _lf
     from store import RULE_CATALOG
-    scan_id = payload["scan_id"]
-    level = payload.get("level", "AA")
     rows = core.store.get_scan_traces(scan_id)                 # per file + rule
     # A finding blocks conformance when its WCAG level is at or below the target
     # (A ⊆ AA ⊆ AAA), so the score is level-aware — matching the Assess tab.
@@ -364,14 +363,27 @@ def _assess_trace(payload: dict, job: dict) -> None:
             by_file[f][r["rule_id"]] = r.get("finding_count") or 1
             if RANK.get((r.get("level") or "A").upper(), 1) <= target:
                 blocking_files.add(f)
+    res = core.store.get_scan(scan_id)
+    owner = (res or {}).get("run", {}).get("owner_email")
     if not by_file:
+        # No per-rule data — still emit a summary trace from the file scores so the
+        # link resolves and the demo shows something real (instead of a 404).
+        files = (res or {}).get("files", [])
+        total = len(files)
+        conformant = sum(1 for f in files if not (f.get("issues") or []))
+        pct = round(conformant / total * 100) if total else 0
+        trace = _lf.open_assess_trace(scan_id, level, total, user=owner)
+        _lf.finish_assess_trace(trace, {
+            "level": level, "documents": total, "conformant": conformant,
+            "with_blocking_findings": total - conformant, "estate_conformant_pct": pct,
+            "note": "summary only — no per-rule trace data recorded for this scan",
+        }, scan_id=scan_id, score=pct)
+        _lf.flush()
         return
     total = len(by_file)
     failing = len(blocking_files)
     conformant = total - failing
     pct = round(conformant / total * 100) if total else 0
-    res = core.store.get_scan(scan_id)
-    owner = (res or {}).get("run", {}).get("owner_email")
     trace = _lf.open_assess_trace(scan_id, level, total, user=owner)
     # Cap per-document spans (one file span × its rule sub-spans) so a large assessment
     # trace stays openable in the Langfuse OSS detail view — same cap as the Scan trace.
@@ -387,3 +399,10 @@ def _assess_trace(payload: dict, job: dict) -> None:
         "with_blocking_findings": failing, "estate_conformant_pct": pct,
     }, scan_id=scan_id, score=pct)
     _lf.flush()
+
+
+@handler("assess_trace")
+def _assess_trace(payload: dict, job: dict) -> None:
+    """Worker path for the on-demand assessment trace — delegates to the shared
+    ensure_assess_trace so the job and the trace-redirect endpoint stay in agreement."""
+    ensure_assess_trace(payload["scan_id"], payload.get("level", "AA"))

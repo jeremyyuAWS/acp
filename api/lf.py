@@ -271,3 +271,27 @@ def flush():
     lf = _lf()
     if lf:
         lf.flush()
+
+
+def trace_deep_link(trace_id: str) -> str | None:
+    """Public Langfuse URL for a trace — the same shape /config exposes to the SPA.
+    Returns None when tracing isn't configured (no LANGFUSE_HOST)."""
+    if not _HOST:
+        return None
+    project = os.environ.get("LANGFUSE_DEFAULT_PROJECT_ID", "acp-compliance")
+    return f"{_HOST.rstrip('/')}/project/{project}/traces/{trace_id}"
+
+
+def trace_exists(trace_id: str) -> bool:
+    """Best-effort: is this trace queryable in Langfuse yet? Ingestion is async after
+    flush(), so the detail view can 404 for a beat. Polls the public API; any error
+    (not-configured, network, not-yet-ingested) → False."""
+    if not _ENABLED:
+        return False
+    try:
+        import httpx
+        r = httpx.get(f"{_HOST.rstrip('/')}/api/public/traces/{trace_id}",
+                      auth=(_PK, _SK), timeout=4.0)
+        return r.status_code == 200
+    except Exception:
+        return False

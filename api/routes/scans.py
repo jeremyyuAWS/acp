@@ -6,7 +6,7 @@ import threading
 import uuid
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 
 import core
 from scanner import run_scan
@@ -188,6 +188,43 @@ def assess(sid: str, request: Request, level: str = Query("AA")):
     core.store.mark_assessed(sid, _dt.datetime.now(_dt.timezone.utc).isoformat())
     jid = core.store.enqueue_job("assess_trace", {"scan_id": sid, "level": level}, scan_id=sid)
     return {"scan_id": sid, "level": level, "job_id": jid, "workers": core.WORKERS}
+
+
+@router.get("/scans/{sid}/trace/{kind}")
+def open_trace(sid: str, request: Request, kind: str, level: str = Query("AA")):
+    """Reliable 'View trace' target. Ensures the {kind} Langfuse trace for this scan
+    exists, then 302s to its deep link — so the chips never land on a Not-Found. The
+    assess trace is (re)built SYNCHRONOUSLY here on the API image when missing, which
+    removes the async-job / worker-drift / early-return / ingestion-lag failure modes
+    that made the direct deep-links flaky. Public (a plain <a> navigation target that
+    only redirects to a Langfuse URL — see core.is_public)."""
+    import time
+
+    import lf as _lf
+    if kind not in ("scan", "assess", "remediate"):
+        raise HTTPException(404, "unknown trace kind")
+    if core.store.get_scan(sid) is None:
+        raise HTTPException(404, "scan not found")
+    trace_id = sid if kind == "scan" else f"{sid}-{kind}"
+    link = _lf.trace_deep_link(trace_id)
+    if not link:
+        raise HTTPException(404, "tracing is not configured")
+    # Create the assess trace on the spot if Langfuse doesn't have it yet. (The scan and
+    # remediate traces are written at their own lifecycle stage and can't be rebuilt
+    # here, but the wait below still covers their ingestion lag.)
+    if kind == "assess" and not _lf.trace_exists(trace_id):
+        try:
+            from handlers import ensure_assess_trace
+            ensure_assess_trace(sid, level)
+        except Exception:
+            pass
+    # Wait briefly for Langfuse ingestion (async after flush) so the detail view doesn't
+    # 404 the instant we land on it — best-effort; redirect anyway after ~5s.
+    for _ in range(8):
+        if _lf.trace_exists(trace_id):
+            break
+        time.sleep(0.6)
+    return RedirectResponse(link, status_code=302)
 
 
 # ── Per-scan decision snapshots (PRD: time-travel) ────────────────────────────

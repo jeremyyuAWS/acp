@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
-import { traceUrl, getScanTraces } from './api.js'
+import { openTraceUrl, getScanTraces } from './api.js'
 
-// "📊 View trace" deep-link to the relevant Langfuse trace. Renders nothing when Langfuse
-// isn't configured (traceUrl → null). The three lifecycle traces use deterministic ids:
+// "📊 View trace" link to the relevant Langfuse trace. Routes through the backend
+// redirect endpoint (openTraceUrl), which ensures the trace exists before sending you to
+// Langfuse — so the chip never lands on a "Not Found". Renders nothing when Langfuse
+// isn't configured. The three lifecycle traces use deterministic ids:
 //   scan: {scanId} · assess: {scanId}-assess · remediate: {scanId}-remediate
 export function TraceChip({ traceId, label = 'View trace', title }) {
-  const url = traceUrl(traceId)
+  const url = openTraceUrl(traceId)
   if (!url) return null
   return (
     <a className="tracechip" href={url} target="_blank" rel="noopener noreferrer"

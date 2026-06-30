@@ -113,14 +113,28 @@ else
     echo "   db = SQLite (no DATABASE_URL set or inherited — single-instance only)"
   fi
 fi
-# Langfuse observability (optional — no-ops when absent).
+# Langfuse observability (optional — no-ops when absent). A bare redeploy (LF_SK not
+# passed) must NOT silently DISABLE Langfuse — that breaks every "View trace" link. So
+# when LANGFUSE_SECRET_KEY isn't provided we INHERIT the already-configured secretrefs +
+# host, mirroring the DATABASE_URL guard above. Only set fresh when LF_SK is passed.
 if [ -n "$LF_SK" ]; then
   SECRETS+=("langfuse-pk=$LF_PK" "langfuse-sk=$LF_SK")
   LF_ENV="LANGFUSE_HOST=$LF_HOST LANGFUSE_PUBLIC_KEY=secretref:langfuse-pk LANGFUSE_SECRET_KEY=secretref:langfuse-sk"
   echo "   langfuse = enabled ($LF_HOST)"
 else
-  LF_ENV=""
-  echo "   langfuse = disabled (LANGFUSE_SECRET_KEY not set)"
+  EXISTING_LF_SK="$(az containerapp show -g "$RG" -n "$APP" \
+    --query "properties.template.containers[0].env[?name=='LANGFUSE_SECRET_KEY'].secretRef | [0]" -o tsv 2>/dev/null || echo "")"
+  EXISTING_LF_PK="$(az containerapp show -g "$RG" -n "$APP" \
+    --query "properties.template.containers[0].env[?name=='LANGFUSE_PUBLIC_KEY'].secretRef | [0]" -o tsv 2>/dev/null || echo "")"
+  EXISTING_LF_HOST="$(az containerapp show -g "$RG" -n "$APP" \
+    --query "properties.template.containers[0].env[?name=='LANGFUSE_HOST'].value | [0]" -o tsv 2>/dev/null || echo "")"
+  if [ -n "$EXISTING_LF_SK" ]; then
+    LF_ENV="LANGFUSE_HOST=${EXISTING_LF_HOST:-$LF_HOST} LANGFUSE_PUBLIC_KEY=secretref:$EXISTING_LF_PK LANGFUSE_SECRET_KEY=secretref:$EXISTING_LF_SK"
+    echo "   langfuse = inherited from existing deployment"
+  else
+    LF_ENV=""
+    echo "   langfuse = disabled (LANGFUSE_SECRET_KEY not set or inherited)"
+  fi
 fi
 # HITL webhook (optional — no-ops when absent).
 if [ -n "$HITL_WEBHOOK" ]; then
