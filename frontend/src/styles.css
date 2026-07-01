@@ -626,12 +626,16 @@ input:focus-visible, [role="tab"]:focus-visible {
 .dectag.ok { color: #3B6D11; background: #E7F0DC; }
 .dectag.ov { color: #3C3489; background: #EEEDFE; }
 .dectag.rj { color: #1F5FA8; background: #E2EDFB; }
-.decctl { display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle; }
-.decbtn { width: 25px; height: 25px; border: 1px solid var(--line); background: #fff; border-radius: 7px; cursor: pointer; font-size: 12px; line-height: 1; color: var(--muted); padding: 0; }
+.decctl { display: inline-flex; gap: 6px; margin-left: 8px; vertical-align: middle; }
+.decbtn { width: 32px; height: 32px; border: 1px solid var(--line); background: #fff; border-radius: 8px; cursor: pointer; font-size: 14px; line-height: 1; color: var(--muted); padding: 0; }
 .decbtn:hover { background: var(--bg); }
 .decbtn.ok:hover { color: #3B6D11; border-color: #cfe3bd; }
 .decbtn.rj:hover { color: #1F5FA8; border-color: #f0cfcf; }
 .decbtn.ed:hover { color: #3C3489; border-color: #d6d2f3; }
+/* Multi-word labels ("accept both", "tags ✓") don't fit the fixed icon square above
+   (they wrapped mid-word) — size to content instead, with room to breathe since the
+   row usually has plenty of trailing whitespace after the retention badge. */
+.decbtn.wide { width: auto; height: auto; white-space: nowrap; padding: 8px 14px; font-size: 13px; font-weight: 600; }
 .modchips { display: inline-flex; flex-wrap: wrap; gap: 5px; margin-left: 8px; vertical-align: middle; }
 .modchip { font-size: 11px; font-weight: 600; border: 1px solid var(--line); background: #fff; border-radius: 7px; padding: 3px 8px; cursor: pointer; }
 .modchip:hover { background: var(--bg); }

@@ -182,10 +182,10 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
                           ) : !dec ? (
                             <span className="decctl">
                               {bothPending
-                                ? <button className="decbtn ok" title="Confirm classification & accept action" onClick={() => { confirmClass(f); decide(f, { state: 'accepted' }) }}>✓ accept both</button>
+                                ? <button className="decbtn ok wide" title="Confirm classification & accept action" onClick={() => { confirmClass(f); decide(f, { state: 'accepted' }) }}>✓ accept both</button>
                                 : <button className="decbtn ok" title="Accept recommendation" onClick={() => decide(f, { state: 'accepted' })}>✓</button>}
                               <button className="decbtn ed" title="Change action" onClick={() => setEditAct(f.file)}>✎</button>
-                              {!isConfirmed(f) && !bothPending && <button className="decbtn ok" title="Confirm classification" onClick={() => confirmClass(f)}>tags ✓</button>}
+                              {!isConfirmed(f) && !bothPending && <button className="decbtn ok wide" title="Confirm classification" onClick={() => confirmClass(f)}>tags ✓</button>}
                             </span>
                           ) : <button className="decbtn undo" title="Undo action" onClick={() => undoDec(f)}>↺</button>}
                         </div>
