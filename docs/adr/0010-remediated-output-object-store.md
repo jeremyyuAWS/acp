@@ -1,6 +1,6 @@
 # ADR 0010 — Azure Blob as the remediated-output store (Drive write becomes opt-in)
 
-Status: **Proposed** · Date: 2026-06-30 · Related: [ADR 0005](0005-server-side-remediation.md)
+Status: **Accepted** · Date: 2026-06-30 · Accepted: 2026-07-01 · Related: [ADR 0005](0005-server-side-remediation.md)
 
 ## Context
 Server-side remediation (ADR 0005) writes the corrected copy back to the user's Drive, into
@@ -77,8 +77,12 @@ Add **Azure Blob Storage** as the primary remediated-output store; Drive write-b
 - Cross-region replication / lifecycle tiering — single-region, standard tier, matches the
   rest of ACP's current Azure footprint.
 
-## Open questions for review
-- Container naming / RBAC scope: one shared container path-prefixed by owner (as drafted), or
-  one container per environment (dev/demo/prod) — affects the `deploy.sh` provisioning step.
-- Should the Drive mirror upload move to a background job (so it can't slow down the
-  user-facing remediation response) now that it's no longer the source of truth?
+## Decisions on review (2026-07-01)
+- **Container layout: one container per environment** (dev/demo/prod), not one shared
+  container path-prefixed by owner — cleaner RBAC isolation, consistent with how secrets are
+  already separated by environment. `deploy.sh` provisions/derives the container name from the
+  existing environment context rather than a single hardcoded `remediated`.
+- **Drive mirror upload moves to a background job.** Now that Blob is the source of truth and
+  Drive is best-effort, the synchronous Drive write no longer has a correctness reason to block
+  the remediation response — it's queued through the existing durable job queue (ADR 0004)
+  instead.

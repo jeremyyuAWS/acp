@@ -1,6 +1,6 @@
 # ADR 0011 — Incremental scans: skip unchanged files across scan runs
 
-Status: **Proposed** · Date: 2026-06-30 · Builds on [ADR 0007](0007-fan-out-scan-pipeline.md),
+Status: **Accepted** · Date: 2026-06-30 · Accepted: 2026-07-01 · Builds on [ADR 0007](0007-fan-out-scan-pipeline.md),
 extends the checksum dedup shipped alongside this ADR (`file_records.checksum`,
 `store.find_by_checksum`)
 
@@ -76,9 +76,11 @@ Add a cross-scan fingerprint lookup, gated on the **same owner** and the **same 
 - Retroactively backfilling fingerprints for scans that predate this ADR — `checksum` is NULL
   on old rows, so they simply never match and always re-analyse on the next scan (safe default).
 
-## Open questions for review
-- Should "Fresh scan" (the override) also be schedulable, so a recurring job can force a full
-  re-analysis on a cadence (e.g. monthly) independent of rubric changes, as a trust-but-verify
-  backstop against an undetected cache-correctness bug?
-- Does copying forward PII findings need its own audit-log entry (`decision_log`), given PII
-  detection results carry more sensitivity than a WCAG score?
+## Decisions on review (2026-07-01)
+- **Fresh scan is schedulable, as a trust-but-verify backstop.** Cheap insurance against an
+  undetected cache-correctness bug: a recurring scan can force a full re-analysis on a cadence
+  (e.g. monthly) independent of rubric changes, not just on manual override.
+- **Copying forward PII findings gets its own `decision_log` entry.** PII detection results
+  carry more sensitivity than a WCAG score, so silently copying them forward without an audit
+  trail entry isn't acceptable — an explicit `pii.copied_forward` decision is logged alongside
+  the existing `duplicate_of`/`reused_from_scan` markers.
