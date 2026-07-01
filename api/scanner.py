@@ -131,11 +131,14 @@ def _normalize(files: list[dict]) -> list[dict]:
 
 
 def _find_remediated_folder_id(svc) -> str | None:
-    """Look up the 'Remediated' Drive folder WITHOUT creating it (unlike
-    handlers.ensure_remediated_folder) — a discovery-time exclusion check
-    shouldn't spuriously create the folder for a user who's never remediated
-    anything. Returns None if it doesn't exist yet."""
-    q = "name='Remediated' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    """Look up the configured Drive mirror folder (default 'Remediated') WITHOUT
+    creating it (unlike handlers.ensure_remediated_folder) — a discovery-time
+    exclusion check shouldn't spuriously create the folder for a user who's never
+    remediated anything. Returns None if it doesn't exist yet."""
+    import core
+    name = core.store.get_drive_mirror_folder()
+    safe = name.replace("\\", "\\\\").replace("'", "\\'")
+    q = f"name='{safe}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
     folders = svc.files().list(q=q, fields="files(id)", orderBy="createdTime",
                                pageSize=1).execute().get("files", [])
     return folders[0]["id"] if folders else None
@@ -172,10 +175,14 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
     every nested subfolder. Bounded by max_files (newest folders may be skipped
     once the cap is hit) and a cycle guard, so a huge tree can't run unbounded.
 
-    exclude_remediated: don't recurse into a subfolder literally named
-    'Remediated' — cheaper than tracking each file's parent-folder lineage, and
-    sufficient since ACP only ever writes remediated output to that one
-    well-known folder name (handlers.ensure_remediated_folder)."""
+    exclude_remediated: don't recurse into the configured Drive mirror folder
+    (default 'Remediated', admin-configurable) — cheaper than tracking each file's
+    parent-folder lineage, and sufficient since ACP only ever writes remediated
+    output to that one well-known folder (handlers.ensure_remediated_folder)."""
+    remediated_folder_name = None
+    if exclude_remediated:
+        import core
+        remediated_folder_name = core.store.get_drive_mirror_folder()
     queue = [folder_id]
     seen_folders: set[str] = set()
     raw: list[dict] = []
@@ -194,7 +201,7 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
             ).execute()
             for f in resp.get("files", []):
                 if f["mimeType"] == "application/vnd.google-apps.folder":
-                    if exclude_remediated and f["name"] == "Remediated":
+                    if exclude_remediated and f["name"] == remediated_folder_name:
                         continue
                     queue.append(f["id"])
                 else:

@@ -203,6 +203,17 @@ export const getFileRemediationState = (scanId, file) => (SIM
   ? sim([])
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/remediation-state`,
           { headers: headers() }).then(j))
+// Platform settings (admin) — includes ADR 0010's Drive-mirror on/off + folder name.
+export const getSettings = () => (SIM
+  ? sim({ ai_enabled: true, drive_mirror_enabled: true, drive_mirror_folder: 'Remediated' })
+  : fetch(`${BASE}/settings`, { headers: headers() }).then(j))
+export const updateSettings = (patch) => (SIM
+  ? sim({ ai_enabled: true, drive_mirror_enabled: true, drive_mirror_folder: 'Remediated', ...patch })
+  : fetch(`${BASE}/settings`, {
+      method: 'PUT',
+      headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(patch),
+    }).then(j))
 // ── Phased remediation campaigns (ADR 0003 Phase 4) ─────────────────────────────
 export const createCampaign = (scanId, name, deadline = null) => (SIM
   ? sim({ campaign_id: 'sim-campaign', name, status: 'active', batches: [] }, 200)

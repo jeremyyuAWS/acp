@@ -157,18 +157,34 @@ def hub():
 
 class SettingsUpdate(BaseModel):
     ai_enabled: bool | None = None
+    drive_mirror_enabled: bool | None = None
+    drive_mirror_folder: str | None = None
 
 
 @router.get("/settings")
 def get_settings():
     """Platform settings. ai_enabled=false → deterministic-only mode platform-wide
-    (overrides per-scan ?ai=true and blocks /ai/explain)."""
-    return {"ai_enabled": core.store.get_ai_enabled()}
+    (overrides per-scan ?ai=true and blocks /ai/explain). drive_mirror_enabled=false
+    (ADR 0010) → remediated fixes stay Blob-only, no automatic Drive copy."""
+    return {"ai_enabled": core.store.get_ai_enabled(),
+            "drive_mirror_enabled": core.store.get_drive_mirror_enabled(),
+            "drive_mirror_folder": core.store.get_drive_mirror_folder()}
 
 
 @router.put("/settings")
 def update_settings(body: SettingsUpdate):
     """Admin: set platform settings. Persisted across restarts. Audited."""
+    if body.drive_mirror_enabled is not None:
+        core.store.set_drive_mirror_enabled(body.drive_mirror_enabled)
+        core.store.log_decision(
+            "admin", "settings.drive_mirror_enabled",
+            detail=f"drive_mirror_enabled set to {body.drive_mirror_enabled}")
+    if body.drive_mirror_folder is not None:
+        folder = body.drive_mirror_folder.strip() or "Remediated"
+        core.store.set_drive_mirror_folder(folder)
+        core.store.log_decision(
+            "admin", "settings.drive_mirror_folder",
+            detail=f"drive_mirror_folder set to {folder}")
     if body.ai_enabled is not None:
         core.store.set_ai_enabled(body.ai_enabled)
         core.store.log_decision(

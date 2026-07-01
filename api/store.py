@@ -1144,6 +1144,24 @@ class Store:
     def set_ai_enabled(self, enabled: bool) -> None:
         self.set_setting("ai_enabled", "true" if enabled else "false")
 
+    def get_drive_mirror_enabled(self) -> bool:
+        """ADR 0010: whether a successful Blob remediation is also auto-mirrored to
+        Drive. Defaults to enabled (the original ADR 0010 behavior). Off = Blob-only;
+        a Drive copy can still be produced on demand elsewhere (e.g. FileDrawer's own
+        upload-to-drive action), just not automatically after every remediation."""
+        return self.get_setting("drive_mirror_enabled", "true") != "false"
+
+    def set_drive_mirror_enabled(self, enabled: bool) -> None:
+        self.set_setting("drive_mirror_enabled", "true" if enabled else "false")
+
+    def get_drive_mirror_folder(self) -> str:
+        """Drive folder name remediated copies are mirrored into. Defaults to the
+        original hardcoded 'Remediated'."""
+        return self.get_setting("drive_mirror_folder", "Remediated")
+
+    def set_drive_mirror_folder(self, folder: str) -> None:
+        self.set_setting("drive_mirror_folder", folder)
+
     # ── Immutable decision audit log ──────────────────────────────────────────
     def log_decision(self, actor: str, action: str, *, scan_id: str | None = None,
                      file: str | None = None, rule_id: str | None = None,

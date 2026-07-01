@@ -33,17 +33,20 @@ def _drive_client(token: str):
 
 
 def ensure_remediated_folder(svc) -> str:
-    """Find-or-create the single 'Remediated' Drive folder. If legacy duplicates
-    exist, picks the oldest deterministically. Call this ONCE per remediate batch
-    (in the request handler) and pass the id to the jobs — calling it concurrently
-    from many workers is what created duplicate folders."""
-    q = "name='Remediated' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    """Find-or-create the configured Drive mirror folder (default 'Remediated',
+    admin-configurable — see core.store.get_drive_mirror_folder). If legacy
+    duplicates exist, picks the oldest deterministically. Call this ONCE per
+    remediate batch (in the request handler) and pass the id to the jobs — calling
+    it concurrently from many workers is what created duplicate folders."""
+    name = core.store.get_drive_mirror_folder()
+    safe = name.replace("\\", "\\\\").replace("'", "\\'")
+    q = f"name='{safe}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
     folders = svc.files().list(q=q, fields="files(id)", orderBy="createdTime",
                                pageSize=1).execute().get("files", [])
     if folders:
         return folders[0]["id"]
     return svc.files().create(
-        body={"name": "Remediated", "mimeType": "application/vnd.google-apps.folder"},
+        body={"name": name, "mimeType": "application/vnd.google-apps.folder"},
         fields="id").execute()["id"]
 
 
@@ -143,39 +146,40 @@ def _remediate_file(payload: dict, job: dict) -> None:
     owner = (core.store.get_scan(scan_id) or {}).get("run", {}).get("owner_email")
     blob_url = _blob.upload_remediated(owner, scan_id, filename, fixed_bytes, mimetype)
 
-    import io
-    from googleapiclient.http import MediaIoBaseUpload
-    from googleapiclient.errors import HttpError
     web_url = None
-    try:
-        # Folder id is created once per batch in the endpoint and passed in, so
-        # concurrent workers don't each create their own 'Remediated' folder.
-        # Fall back to find-or-create for a standalone job.
-        folder_id = payload.get("remediated_folder_id") or ensure_remediated_folder(svc)
-        media = MediaIoBaseUpload(io.BytesIO(fixed_bytes), mimetype=mimetype, resumable=False)
-        # Upsert: update an existing fixed copy rather than piling up duplicates on re-run.
-        safe = filename.replace("\\", "\\\\").replace("'", "\\'")
-        existing = svc.files().list(
-            q=f"name='{safe}' and '{folder_id}' in parents and trashed=false",
-            fields="files(id)", pageSize=1).execute().get("files", [])
-        if existing:
-            result = svc.files().update(fileId=existing[0]["id"], media_body=media,
-                                        fields="id,webViewLink").execute()
-        else:
-            result = svc.files().create(body={"name": filename, "parents": [folder_id]},
-                                        media_body=media, fields="id,webViewLink").execute()
-        web_url = result.get("webViewLink", "")
-    except HttpError as e:
-        # A 403 here means the user's Drive grant lacks write access (drive.file) --
-        # no longer fatal now that Blob has the durable copy; log and move on.
-        reason = ("Drive write denied (403) — the signed-in user hasn't granted write "
-                 "access (drive.file)." if getattr(e, "resp", None) is not None and e.resp.status == 403
-                 else f"Drive mirror failed: {type(e).__name__}: {e}")
-        core.store.log_decision("system", "remediate.drive_mirror_failed", scan_id=scan_id,
-                                file=filename, detail=reason[:200])
-    except Exception as e:
-        core.store.log_decision("system", "remediate.drive_mirror_failed", scan_id=scan_id,
-                                file=filename, detail=f"{type(e).__name__}: {e}"[:200])
+    if core.store.get_drive_mirror_enabled():
+        import io
+        from googleapiclient.http import MediaIoBaseUpload
+        from googleapiclient.errors import HttpError
+        try:
+            # Folder id is created once per batch in the endpoint and passed in, so
+            # concurrent workers don't each create their own mirror folder.
+            # Fall back to find-or-create for a standalone job.
+            folder_id = payload.get("remediated_folder_id") or ensure_remediated_folder(svc)
+            media = MediaIoBaseUpload(io.BytesIO(fixed_bytes), mimetype=mimetype, resumable=False)
+            # Upsert: update an existing fixed copy rather than piling up duplicates on re-run.
+            safe = filename.replace("\\", "\\\\").replace("'", "\\'")
+            existing = svc.files().list(
+                q=f"name='{safe}' and '{folder_id}' in parents and trashed=false",
+                fields="files(id)", pageSize=1).execute().get("files", [])
+            if existing:
+                result = svc.files().update(fileId=existing[0]["id"], media_body=media,
+                                            fields="id,webViewLink").execute()
+            else:
+                result = svc.files().create(body={"name": filename, "parents": [folder_id]},
+                                            media_body=media, fields="id,webViewLink").execute()
+            web_url = result.get("webViewLink", "")
+        except HttpError as e:
+            # A 403 here means the user's Drive grant lacks write access (drive.file) --
+            # no longer fatal now that Blob has the durable copy; log and move on.
+            reason = ("Drive write denied (403) — the signed-in user hasn't granted write "
+                     "access (drive.file)." if getattr(e, "resp", None) is not None and e.resp.status == 403
+                     else f"Drive mirror failed: {type(e).__name__}: {e}")
+            core.store.log_decision("system", "remediate.drive_mirror_failed", scan_id=scan_id,
+                                    file=filename, detail=reason[:200])
+        except Exception as e:
+            core.store.log_decision("system", "remediate.drive_mirror_failed", scan_id=scan_id,
+                                    file=filename, detail=f"{type(e).__name__}: {e}"[:200])
 
     core.store.record_remediation(scan_id, filename, drive_write_url=web_url, blob_url=blob_url)
     core.emit_remediation_span(scan_id, filename, drive_write_url=web_url)

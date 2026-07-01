@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { resetDemoData, getAllowlist, setAllowlist } from './api.js'
+import { resetDemoData, getAllowlist, setAllowlist, getSettings, updateSettings } from './api.js'
 
 // Danger zone — wipe scan results (Grafana + in-app charts) and/or Langfuse
 // traces so the dashboards start fresh. Settings are preserved. Typed-confirm.
@@ -57,6 +57,71 @@ function ResetData() {
         </p>
       )}
       {err && <p style={{ marginTop: 12, fontSize: 13, color: '#A32D2D' }}>⚠ {err}</p>}
+    </div>
+  )
+}
+
+// ADR 0010: Blob is always the primary, must-succeed write for a remediated file.
+// This controls whether it's ALSO auto-mirrored to Drive right after, and which
+// Drive folder that mirror lands in.
+function DriveMirror() {
+  const [settings, setSettings] = useState(null)
+  const [folder, setFolder] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+  useEffect(() => {
+    getSettings().then((s) => { setSettings(s); setFolder(s.drive_mirror_folder || 'Remediated') }).catch(() => {})
+  }, [])
+  const toggle = () => {
+    if (!settings || busy) return
+    setBusy(true); setMsg('')
+    updateSettings({ drive_mirror_enabled: !settings.drive_mirror_enabled })
+      .then(setSettings)
+      .catch((e) => setMsg(e.message || 'update failed'))
+      .finally(() => setBusy(false))
+  }
+  const saveFolder = () => {
+    setBusy(true); setMsg('')
+    updateSettings({ drive_mirror_folder: folder })
+      .then((s) => { setSettings(s); setMsg('✓ saved') })
+      .catch((e) => setMsg(e.message || 'update failed'))
+      .finally(() => setBusy(false))
+  }
+  if (!settings) return <p className="muted">Loading…</p>
+  return (
+    <div style={{ maxWidth: 560 }}>
+      <h3 style={{ marginTop: 0 }}>Remediated-file storage</h3>
+      <p className="muted" style={{ fontSize: 13 }}>
+        A remediated file's fixed copy is always written to Azure Blob first — the durable,
+        must-succeed copy (ADR 0010). This controls whether it's <b>also</b> mirrored to Google
+        Drive automatically right after, and which folder that mirror lands in.
+      </p>
+      <label style={{ display: 'flex', gap: 10, alignItems: 'center', cursor: busy ? 'default' : 'pointer', margin: '16px 0' }}>
+        <input type="checkbox" checked={settings.drive_mirror_enabled} onChange={toggle} disabled={busy} />
+        <span>
+          <b>Auto-mirror to Drive</b><br />
+          <span className="muted" style={{ fontSize: 12 }}>
+            {settings.drive_mirror_enabled
+              ? 'On — every successful Blob remediation also tries to write a copy to Drive.'
+              : 'Off — remediated files stay Blob-only. No automatic Drive write.'}
+          </span>
+        </span>
+      </label>
+      <label style={{ fontSize: 13, display: 'block' }}>Drive folder name
+        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+          <input value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="Remediated"
+                 disabled={busy || !settings.drive_mirror_enabled}
+                 style={{ padding: '4px 8px', border: '1px solid var(--line)', borderRadius: 6, flex: 1 }} />
+          <button className="ghost small" onClick={saveFolder}
+                  disabled={busy || !folder.trim() || !settings.drive_mirror_enabled || folder.trim() === settings.drive_mirror_folder}>
+            Save
+          </button>
+        </div>
+        <span className="muted" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+          Files already mirrored under a previous folder name aren't moved — only new remediations use the updated folder.
+        </span>
+      </label>
+      {msg && <p style={{ marginTop: 12, fontSize: 13, color: msg.startsWith('✓') ? '#3B6D11' : '#A32D2D' }}>{msg}</p>}
     </div>
   )
 }
@@ -205,6 +270,7 @@ export default function Settings({ onClose, onRubricSaved, files = [], onOntolog
           <button role="tab" aria-selected={tab === 'permissions'} className={tab === 'permissions' ? 'fchip on' : 'fchip'} onClick={() => setTab('permissions')}>Permissions</button>
           <button role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'fchip on' : 'fchip'} onClick={() => setTab('users')}>Users</button>
           <button role="tab" aria-selected={tab === 'access'} className={tab === 'access' ? 'fchip on' : 'fchip'} onClick={() => setTab('access')}>Test users</button>
+          <button role="tab" aria-selected={tab === 'drivemirror'} className={tab === 'drivemirror' ? 'fchip on' : 'fchip'} onClick={() => setTab('drivemirror')}>Remediated storage</button>
           <button role="tab" aria-selected={tab === 'data'} className={tab === 'data' ? 'fchip on' : 'fchip'} onClick={() => setTab('data')}>Data</button>
         </div>
         <div className="setbody">
@@ -216,6 +282,7 @@ export default function Settings({ onClose, onRubricSaved, files = [], onOntolog
           {tab === 'permissions' && <RolePrivilege onChanged={onPrivilegeChange} />}
           {tab === 'users' && <UserManagement />}
           {tab === 'access' && <AllowList />}
+          {tab === 'drivemirror' && <DriveMirror />}
           {tab === 'data' && <ResetData />}
         </div>
       </div>
