@@ -545,6 +545,59 @@ class Store:
                "acp_stamped": row["acp_stamped"], "issues": issues, "pii": pii,
                "dedup_of": row["file"]}
 
+    def find_prior_analysis(self, owner: str | None, drive_file_id: str | None,
+                            checksum: str | None, rubric_hash: str | None) -> dict | None:
+        """ADR 0011: reuse a file's analysis from an EARLIER scan (not just this one --
+        see find_by_checksum above for the narrower within-scan version). Gated on the
+        SAME owner + SAME drive_file_id (stable Drive identity, survives rename) + SAME
+        checksum (byte-identical) + SAME rubric_hash -- the last one is the correctness-
+        critical piece: a stale analysis under an old rubric is not valid evidence once
+        the rule set has changed, so a rubric_hash mismatch always falls through to a
+        real re-analysis. Returns the most recently completed match, same shape as
+        find_by_checksum (ruleId-keyed issues, pii in detect_file's shape)."""
+        if not (owner and drive_file_id and checksum and rubric_hash):
+            return None
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT fr.scan_id, fr.file, fr.engine, fr.status, fr.score, fr.compliant, "
+                "fr.skipped_rules, fr.acp_stamped FROM file_records fr "
+                "JOIN scan_runs sr ON sr.id = fr.scan_id "
+                "WHERE sr.owner_email=%s AND fr.drive_file_id=%s AND fr.checksum=%s "
+                "AND sr.rubric_hash=%s AND sr.completed_at IS NOT NULL "
+                "ORDER BY sr.completed_at DESC LIMIT 1",
+                (owner, drive_file_id, checksum, rubric_hash))
+            row = self._db.fetchone(cur)
+            if not row:
+                return None
+            prior_scan_id = row["scan_id"]
+            self._db.execute(cur,
+                "SELECT rule_id,wcag,severity FROM issue_records WHERE scan_id=%s AND file=%s",
+                (prior_scan_id, row["file"]))
+            issues = [{"ruleId": r["rule_id"], "wcag": r["wcag"], "severity": r["severity"]}
+                      for r in self._db.fetchall(cur)]
+            self._db.execute(cur,
+                "SELECT pii_type,label,count,severity,samples FROM pii_findings "
+                "WHERE scan_id=%s AND file=%s", (prior_scan_id, row["file"]))
+            pii_rows = self._db.fetchall(cur)
+        pii = None
+        if pii_rows:
+            findings = [{"type": p["pii_type"], "label": p["label"], "count": p["count"],
+                        "severity": p["severity"],
+                        "samples": _json.loads(p["samples"]) if p.get("samples") else []}
+                       for p in pii_rows]
+            total = sum(p["count"] for p in findings)
+            sev = None
+            for p in findings:
+                if sev is None or _PII_SEV_RANK.get(p["severity"], 0) > _PII_SEV_RANK.get(sev, 0):
+                    sev = p["severity"]
+            pii = {"types": {p["type"]: p["count"] for p in findings}, "total": total,
+                  "severity": sev, "findings": findings}
+        return {"engine": row["engine"], "status": row["status"], "score": row["score"],
+               "compliant": row["compliant"], "skipped_rules": row["skipped_rules"],
+               "acp_stamped": row["acp_stamped"], "issues": issues, "pii": pii,
+               "reused_from_scan": prior_scan_id}
+
     def bump_files_done(self, scan_id: str, n: int = 1) -> tuple[int, int]:
         """Atomically increment the done counter by n (default 1; a scan_batch bumps by
         its chunk size — ADR 0008); returns (done, total enqueued)."""
