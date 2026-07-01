@@ -150,6 +150,15 @@ _SCHEMA = [
       usage_signal INT, regulatory_tags TEXT, business_criticality TEXT,
       triage_score INT, triage_rationale TEXT
     )""",
+    # Per-violation remediation state machine (ADR 0003, Phase 2). Keyed by
+    # (doc_id, rule_id) so "3 of 5 violations fixed" is first-class -- supersedes the
+    # binary file_records.remediated_at as the governing truth (file_records stays the
+    # per-scan snapshot; this is the long-lived state). hitl_queue remains the work-list;
+    # this is the state hitl_queue resolution (and auto-remediation) write into.
+    """CREATE TABLE IF NOT EXISTS remediation_state (
+      doc_id TEXT, rule_id TEXT, state TEXT, updated_at TEXT, last_scan_id TEXT,
+      PRIMARY KEY (doc_id, rule_id)
+    )""",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -1243,3 +1252,51 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT * FROM documents WHERE doc_id=%s", (doc_id,))
             return self._db.fetchone(cur)
+
+    # ── Per-violation remediation state (ADR 0003, Phase 2) ────────────────────
+    def list_file_identities(self, scan_id: str) -> list[dict]:
+        """{file, drive_file_id, checksum} for every file in a scan -- the inputs
+        resolve_doc_id needs, kept as its own narrow query so get_scan's broader
+        (widely-called) SELECT doesn't grow just for this."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT file, drive_file_id, checksum FROM file_records WHERE scan_id=%s",
+                (scan_id,))
+            return self._db.fetchall(cur)
+
+    def seed_remediation_state(self, doc_id: str, rule_id: str, scan_id: str) -> None:
+        """Create a 'not_started' row for a newly-seen violation. Never overwrites an
+        existing row -- state only ever moves forward via an explicit transition
+        (upsert_remediation_state), so a violation still failing on a later scan doesn't
+        get silently reset if it had already progressed."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO remediation_state(doc_id,rule_id,state,updated_at,last_scan_id) "
+                "VALUES(%s,%s,'not_started',%s,%s) ON CONFLICT(doc_id,rule_id) DO NOTHING",
+                (doc_id, rule_id, self._now(), scan_id))
+
+    def upsert_remediation_state(self, doc_id: str, rule_id: str, state: str, scan_id: str) -> None:
+        """Explicit forward transition (HITL resolution, auto-remediation applied)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO remediation_state(doc_id,rule_id,state,updated_at,last_scan_id) "
+                "VALUES(%s,%s,%s,%s,%s) ON CONFLICT(doc_id,rule_id) DO UPDATE SET "
+                "state=EXCLUDED.state, updated_at=EXCLUDED.updated_at, last_scan_id=EXCLUDED.last_scan_id",
+                (doc_id, rule_id, state, self._now(), scan_id))
+
+    def get_remediation_state(self, doc_id: str) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT rule_id, state, updated_at, last_scan_id FROM remediation_state "
+                "WHERE doc_id=%s ORDER BY rule_id", (doc_id,))
+            return self._db.fetchall(cur)
+
+    def list_auto_fail_rules(self, scan_id: str, file: str) -> list[str]:
+        """rule_ids that FAILed for this file and are deterministically auto-fixable --
+        what a successful remediate_file run actually addresses."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT rule_id FROM scan_rule_traces "
+                "WHERE scan_id=%s AND file=%s AND fix_mode='auto' AND outcome='FAIL'",
+                (scan_id, file))
+            return [r["rule_id"] for r in self._db.fetchall(cur)]
