@@ -241,7 +241,8 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 "ai": ai, "pii": pii, "user": user}, scan_id=scan_id)
 
 
-def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, user=None) -> None:
+def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, user=None,
+                             rubric_hash=None, incremental=True) -> None:
     """Download + analyse + assess + persist ONE file and emit its Discover span on that
     file's own Langfuse trace. Shared by scan_file (per-file fan-out) and scan_batch
     (ADR 0008). A
@@ -249,20 +250,31 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
     from scanner import _download, analyse_and_assess
     name = item["file"]
     checksum = item.get("checksum")
+    drive_file_id = item.get("drive_file_id")
     dedup_of = None
+    reused_from_scan = None
     # Checksum dedup: a byte-identical copy of a file already analysed earlier in THIS
     # scan (e.g. the same PDF uploaded to two folders under different names) — skip the
     # download + engine analysis + PII extraction entirely and copy the prior result
-    # forward under this file's own name/id. Scoped to one scan_id only; reusing analysis
-    # ACROSS scans is the separate, bigger incremental-fingerprinting feature.
+    # forward under this file's own name/id. Scoped to one scan_id only.
     dedup = core.store.find_by_checksum(scan_id, checksum) if checksum else None
+    # ADR 0011: reuse ACROSS scans when within-scan dedup didn't match. Gated on the
+    # same owner + drive_file_id + checksum + rubric_hash (see find_prior_analysis).
+    if not dedup and incremental:
+        dedup = core.store.find_prior_analysis(user, drive_file_id, checksum, rubric_hash)
     tmp = _Path(_tempfile.mkdtemp(prefix="acp-scanone-"))
     fdict = pinfo = None
     try:
         if dedup:
-            dedup_of = dedup.pop("dedup_of")
+            dedup_of = dedup.pop("dedup_of", None)
+            reused_from_scan = dedup.pop("reused_from_scan", None)
             pinfo = dedup.pop("pii")
             fdict = {"file": name, **dedup}
+            if reused_from_scan and pinfo and pinfo.get("total"):
+                # PII carries more sensitivity than a WCAG score -- copying it forward
+                # gets its own audit entry rather than a silent inherit (ADR 0011).
+                core.store.log_decision("system", "pii.copied_forward", scan_id=scan_id, file=name,
+                                        detail=f"from scan {reused_from_scan}: {pinfo['total']} item(s)")
         else:
             try:
                 it = {"name": name, "id": item.get("drive_file_id")}
@@ -311,7 +323,8 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
         if pii and pinfo and pinfo.get("total"):
             _lf.pii_span(dspan, pinfo, filename=name)
         dspan.end(output={"engine": fdict["engine"], "sensitive_data": (pinfo or {}).get("total", 0),
-                          **({"duplicate_of": dedup_of} if dedup_of else {})})
+                          **({"duplicate_of": dedup_of} if dedup_of else {}),
+                          **({"reused_from_scan": reused_from_scan} if reused_from_scan else {})})
     finally:
         _shutil.rmtree(tmp, ignore_errors=True)
 
@@ -343,8 +356,11 @@ def _scan_batch(payload: dict, job: dict) -> None:
     toks = core.get_scan_tokens(scan_id)
     now = _dt.datetime.now(_dt.timezone.utc).isoformat()
     svc = _make_svc(source, toks)
+    rubric_hash = core.active_rubric().hash
+    incremental = bool(payload.get("incremental", True))
     for it in items:
-        _analyse_and_persist_one(scan_id, it, source, pii, svc, toks, now, _lf, user=user)
+        _analyse_and_persist_one(scan_id, it, source, pii, svc, toks, now, _lf, user=user,
+                                 rubric_hash=rubric_hash, incremental=incremental)
     _lf.flush()  # send any file spans before the batch job exits
     done, total = core.store.bump_files_done(scan_id, len(items))
     if done >= total > 0:
@@ -367,7 +383,9 @@ def _scan_file(payload: dict, job: dict) -> None:
     toks = core.get_scan_tokens(scan_id)
     now = _dt.datetime.now(_dt.timezone.utc).isoformat()
     svc = _make_svc(source, toks)
-    _analyse_and_persist_one(scan_id, payload, source, pii, svc, toks, now, _lf, user=user)
+    _analyse_and_persist_one(scan_id, payload, source, pii, svc, toks, now, _lf, user=user,
+                             rubric_hash=core.active_rubric().hash,
+                             incremental=bool(payload.get("incremental", True)))
     _lf.flush()  # send file span before this per-file job exits
     done, total = core.store.bump_files_done(scan_id)
     if done >= total > 0:
