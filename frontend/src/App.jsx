@@ -558,7 +558,7 @@ export default function App() {
           excludeRemediated={excludeRemediated} setExcludeRemediated={setExcludeRemediated}
           incremental={incremental} setIncremental={setIncremental} scanId={run?.id} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? statusMsg(progress.elapsed || 0, deepScan) : ''} scanId={run?.id} />}
+        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? statusMsg(progress.elapsed || 0, deepScan) : ''} scanId={run?.id} decisions={decisions} setDecisions={setDecisions} />}
 
         {view === 'assess' && (run ? (
           <>
