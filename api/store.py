@@ -945,6 +945,14 @@ class Store:
                     (now, drive_write_url, scan_id, file))
         return now
 
+    def get_remediation_urls(self, scan_id: str, file: str) -> dict | None:
+        """blob_url + drive_write_url for a remediated file's download route."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT blob_url, drive_write_url FROM file_records WHERE scan_id=%s AND file=%s",
+                (scan_id, file))
+            return self._db.fetchone(cur)
+
     def _full_catalog_rules(self) -> dict[str, list[dict]]:
         """Load rule-catalog.json grouped by engine (docx/pptx/xlsx/pdf/html)."""
         import json as _json
