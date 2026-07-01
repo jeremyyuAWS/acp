@@ -74,6 +74,9 @@ _SCHEMA = [
     # scan only (find_by_checksum filters on scan_id) — reusing analysis ACROSS scans is
     # the bigger incremental-fingerprinting feature, not this.
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS checksum TEXT",
+    # ADR 0010 — the remediated output's durable Blob URL, additive alongside
+    # drive_write_url (a file can carry both; Drive is now a best-effort mirror).
+    "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS blob_url TEXT",
     """CREATE TABLE IF NOT EXISTS issue_records (
       scan_id TEXT, file TEXT, rule_id TEXT, wcag TEXT, severity TEXT
     )""",
@@ -923,14 +926,23 @@ class Store:
             row = self._db.fetchone(cur)
         return row["drive_file_id"] if row else None
 
-    def record_remediation(self, scan_id: str, file: str, drive_write_url: str | None = None) -> str:
+    def record_remediation(self, scan_id: str, file: str, drive_write_url: str | None = None,
+                           blob_url: str | None = None) -> str:
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         with self._db.cursor() as cur:
-            self._db.execute(cur,
-                "UPDATE file_records SET remediated_at=%s, drive_write_url=%s "
-                "WHERE scan_id=%s AND file=%s",
-                (now, drive_write_url, scan_id, file))
+            if blob_url is not None:
+                self._db.execute(cur,
+                    "UPDATE file_records SET remediated_at=%s, drive_write_url=%s, blob_url=%s "
+                    "WHERE scan_id=%s AND file=%s",
+                    (now, drive_write_url, blob_url, scan_id, file))
+            else:
+                # Blob not configured (e.g. local dev) — leave blob_url untouched rather
+                # than clobbering a prior value with NULL.
+                self._db.execute(cur,
+                    "UPDATE file_records SET remediated_at=%s, drive_write_url=%s "
+                    "WHERE scan_id=%s AND file=%s",
+                    (now, drive_write_url, scan_id, file))
         return now
 
     def _full_catalog_rules(self) -> dict[str, list[dict]]:
