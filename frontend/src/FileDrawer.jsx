@@ -320,7 +320,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                   </div>
                 )}
                 {remNow?.done && (
-                  <span style={{ color: '#3B6D11', fontWeight: 600 }}>✓ Remediated — fixed copy saved to Drive</span>
+                  <span className="dectag ok" style={{ fontSize: 12, padding: '3px 10px' }}>✓ Remediated — fixed copy saved to Drive</span>
                 )}
                 {remNow === 'error' && (
                   <span style={{ color: '#B43A2A' }}>
