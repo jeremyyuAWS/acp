@@ -195,6 +195,27 @@ export const getRemediationStatus = (scanId) => {
   }
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation-status`, { headers: headers() }).then(j)
 }
+// ── Phased remediation campaigns (ADR 0003 Phase 4) ─────────────────────────────
+export const createCampaign = (scanId, name, deadline = null) => (SIM
+  ? sim({ campaign_id: 'sim-campaign', name, status: 'active', batches: [] }, 200)
+  : fetch(`${BASE}/campaigns`, {
+      method: 'POST',
+      headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ scan_id: scanId, name, deadline }),
+    }).then(j))
+export const listCampaigns = (scanId) => (SIM
+  ? sim([])
+  : fetch(`${BASE}/campaigns?scan_id=${encodeURIComponent(scanId)}`, { headers: headers() }).then(j))
+export const getCampaign = (campaignId) => (SIM
+  ? sim(null)
+  : fetch(`${BASE}/campaigns/${encodeURIComponent(campaignId)}`, { headers: headers() }).then(j))
+export const setCampaignStatus = (campaignId, status) => (SIM
+  ? sim({ campaign_id: campaignId, status })
+  : fetch(`${BASE}/campaigns/${encodeURIComponent(campaignId)}/status`, {
+      method: 'PUT',
+      headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ status }),
+    }).then(j))
 // Queue state: depth by status + recent jobs (drives the in-app queue panel).
 export const getJobs = (status = null) => (SIM
   ? sim({ workers: 4, stats: { done: 12, running: 1, queued: 3 }, dead_letters: { by_type: {}, top_errors: [] }, jobs: [
