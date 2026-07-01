@@ -228,6 +228,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
             chunk = items[i:i + SCAN_BATCH_SIZE]
             core.store.enqueue_job("scan_batch", {
                 "scan_id": scan_id, "source": source, "ai": ai, "pii": pii, "user": user,
+                "incremental": bool(payload.get("incremental", True)),
                 "items": [{"file": it["name"], "drive_file_id": it.get("id"),
                            "mime": it.get("mime"), "path": it.get("path"),
                            "checksum": it.get("checksum")} for it in chunk],
@@ -238,7 +239,8 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 "scan_id": scan_id, "source": source, "file": it["name"],
                 "drive_file_id": it.get("id"), "mime": it.get("mime"), "path": it.get("path"),
                 "checksum": it.get("checksum"),
-                "ai": ai, "pii": pii, "user": user}, scan_id=scan_id)
+                "ai": ai, "pii": pii, "user": user,
+                "incremental": bool(payload.get("incremental", True))}, scan_id=scan_id)
 
 
 def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, user=None,
