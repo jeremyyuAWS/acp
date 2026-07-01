@@ -74,6 +74,7 @@ _SCHEMA = [
     # scan only (find_by_checksum filters on scan_id) — reusing analysis ACROSS scans is
     # the bigger incremental-fingerprinting feature, not this.
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS checksum TEXT",
+    "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS published_at TEXT",
     # ADR 0010 — the remediated output's durable Blob URL, additive alongside
     # drive_write_url (a file can carry both; Drive is now a best-effort mirror).
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS blob_url TEXT",
@@ -746,7 +747,7 @@ class Store:
             if owner is not None and run.get("owner_email") != owner:
                 return None
             self._db.execute(cur,
-                "SELECT file,engine,status,score,compliant,skipped_rules,remediated_at,drive_write_url,acp_stamped "
+                "SELECT file,engine,status,score,compliant,skipped_rules,remediated_at,drive_write_url,acp_stamped,published_at "
                 "FROM file_records WHERE scan_id=%s ORDER BY file", (sid,))
             files = self._db.fetchall(cur)
             # file_records has no per-file source column (every file in one scan shares the
