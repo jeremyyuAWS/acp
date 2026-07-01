@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { monitoringState, sourceWatch, IDENTITY, SIM } from './sim.js'
-import { getSchedule, putSchedule } from './api.js'
+import { getSchedule, putSchedule, listCampaigns, createCampaign, setCampaignStatus } from './api.js'
 import { prefersReducedMotion } from './a11y.js'
 import QueuePanel from './QueuePanel.jsx'
 import RegressionRadar from './RegressionRadar.jsx'
@@ -81,7 +81,50 @@ function useProgramBatches(files, decisions) {
 export default function Monitor({ run, scanList = [], sources = [], files = [], ratified, decisions = {}, publishedFiles = [], aiEnabled = true, onAiToggle, busy = false, progress = null, scanPct = 0, scanStatus = '' }) {
   const m = monitoringState(files)
   const watch = sourceWatch(sources, files)
-  const prog = useProgramBatches(files, decisions)
+  const derivedProg = useProgramBatches(files, decisions)
+
+  // ADR 0003 Phase 4: the program below was purely client-derived (recomputed from
+  // files/decisions on every render, nothing survived a reload). If a real campaign
+  // has been persisted for this scan, its batch counts win; the derived view is only
+  // the illustrative fallback until one exists.
+  const [campaign, setCampaign] = useState(null)
+  const [campaignBusy, setCampaignBusy] = useState(false)
+  useEffect(() => {
+    if (!run?.id) { setCampaign(null); return }
+    let live = true
+    listCampaigns(run.id).then((cs) => { if (live) setCampaign(cs?.[0] || null) }).catch(() => {})
+    return () => { live = false }
+  }, [run?.id])
+  const BUCKET_ORDER = ['critical', 'serious', 'moderate', 'na']
+  const prog = useMemo(() => {
+    if (!campaign?.batches?.length) return derivedProg
+    const byBucket = Object.fromEntries(campaign.batches.map((b) => [b.bucket, b]))
+    return { ...derivedProg, batches: derivedProg.batches.map((b, i) => {
+      const real = byBucket[BUCKET_ORDER[i]]
+      return real ? { ...b, count: real.count, done: real.done } : b
+    }) }
+  }, [derivedProg, campaign])
+  const persistProgram = async () => {
+    if (!run?.id || campaignBusy) return
+    setCampaignBusy(true)
+    try {
+      const c = await createCampaign(run.id, 'Remediation Program — 2026 ADA Title II Compliance', prog.deadline)
+      setCampaign(c)
+    } finally {
+      setCampaignBusy(false)
+    }
+  }
+  const toggleCampaignPause = async () => {
+    if (!campaign || campaignBusy) return
+    setCampaignBusy(true)
+    try {
+      const next = campaign.status === 'paused' ? 'active' : 'paused'
+      const c = await setCampaignStatus(campaign.campaign_id, next)
+      setCampaign(c)
+    } finally {
+      setCampaignBusy(false)
+    }
+  }
 
   // SLA enforcement — uses f.age (days since last edit) as elapsed time proxy.
   const daysInQueue = (f) => Math.floor((f.age || 30) * 0.4)
@@ -272,9 +315,24 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
           <div>
             <b>Remediation program &mdash; 2026 ADA Title II Compliance</b>
             <span className="muted" style={{ marginLeft: 10, fontSize: 12 }}>Deadline: {prog.deadline} &nbsp;&middot;&nbsp; {prog.total} files in scope</span>
+            {!campaign && <SampleTag />}
           </div>
-          <span className="trstatchip pending" style={{ fontSize: 12 }}>
-            {prog.batches.reduce((a, b) => a + b.done, 0)} / {prog.batches.reduce((a, b) => a + b.count, 0)} resolved
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            {campaign ? (
+              <>
+                <span className={`trstatchip ${campaign.status === 'paused' ? 'defer' : 'inscope'}`} style={{ fontSize: 12 }}>{campaign.status}</span>
+                <button className="ghost small" disabled={campaignBusy} onClick={toggleCampaignPause}>
+                  {campaign.status === 'paused' ? '▶ resume' : '⏸ pause'}
+                </button>
+              </>
+            ) : run?.id && (
+              <button className="ghost small" disabled={campaignBusy} onClick={persistProgram} title="Save this program so pause/resume and progress survive a reload">
+                {campaignBusy ? 'saving…' : '💾 persist this program'}
+              </button>
+            )}
+            <span className="trstatchip pending" style={{ fontSize: 12 }}>
+              {prog.batches.reduce((a, b) => a + b.done, 0)} / {prog.batches.reduce((a, b) => a + b.count, 0)} resolved
+            </span>
           </span>
         </div>
         <div className="progbatches">
