@@ -233,7 +233,8 @@ function lastScanLabel(scans, type) {
 
 export default function Integrations({ sources, files = [], scans = [], onScan, busy, hasDriveToken, hasSPToken, onConnect,
                                        deepScan = true, setDeepScan, queuedScan = false, setQueuedScan,
-                                       excludeRemediated = true, setExcludeRemediated, scanId = null }) {
+                                       excludeRemediated = true, setExcludeRemediated,
+                                       incremental = true, setIncremental, scanId = null }) {
   const [selSrc,      setSelSrc]      = useState(null)
   const [selFile,     setSelFile]     = useState(null)
   const [pickerSrc,   setPickerSrc]   = useState(null)
@@ -349,6 +350,12 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
               title={excludeRemediated
                 ? 'On — skips the Remediated/ folder ACP writes fixed copies to, so they don’t get re-discovered and flagged as new documents needing attention. Turn off to also audit that folder.'
                 : 'Off — the Remediated/ folder (ACP’s own output) is scanned like any other folder. Turn on to skip it and avoid a re-discovery feedback loop.'} />
+          )}
+          {setIncremental && (
+            <ScanSwitch on={incremental} onToggle={() => setIncremental(v => !v)} label="Incremental scan"
+              title={incremental
+                ? 'On — a file byte-identical to one already scored under the current rubric is copied forward instead of re-analysed (ADR 0011). Turn off to force a fresh re-analysis of every file (e.g. after a manual rubric edit, or if you don’t trust the cache).'
+                : 'Off — Fresh scan: every file is re-downloaded and re-analysed, even ones that haven’t changed. Turn on for the normal, much faster incremental behavior.'} />
           )}
           <button disabled={busy || !canScanAll} onClick={() => {
             if (SIM) { onScan('all'); return }
