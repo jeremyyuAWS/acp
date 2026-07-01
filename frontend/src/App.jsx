@@ -560,8 +560,14 @@ export default function App() {
         {view === 'assess' && (run ? (
           <>
             <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy} onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase} />
-            {assessed && <><RuleBreakdown scanId={run.id} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
-            {assessed && <><RiskScore run={run} files={files} /><KnowledgeGraph files={files} scanId={run.id} /></>}
+            {/* Gated on assessPhase === 'done', not just `assessed` — `assessed` flips true the
+                instant Assess is clicked (before AssessRunner's own progress animation even
+                starts), so the results below were popping in fully-populated while the bar
+                above still pretended to be working. assessPhase tracks AssessRunner's actual
+                idle/running/done state (via onPhase), so results now appear exactly when the
+                animation finishes — same instant a real assessment would land. */}
+            {assessed && assessPhase === 'done' && <><RuleBreakdown scanId={run.id} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
+            {assessed && assessPhase === 'done' && <><RiskScore run={run} files={files} /><KnowledgeGraph files={files} scanId={run.id} /></>}
           </>
         ) : placeholder)}
 

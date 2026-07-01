@@ -93,8 +93,10 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
              pct: Math.round((conformant / total) * 100) }
   }
 
-  // Time-based cosmetic pass. Cap at 6s so the animation doesn't drag on large estates.
-  const DURATION = Math.min(Math.max(1, docs.length) * 80, 6000)
+  // Time-based cosmetic pass. Floor at 1.5s so even a handful of files still reads as real
+  // work happening (80ms/doc alone was as little as 80-800ms for small estates — gone before
+  // a person can register the bar moving); capped at 6s so it doesn't drag on large ones.
+  const DURATION = Math.min(Math.max(1500, docs.length * 80), 6000)
 
   const save = (obj) => { try { sessionStorage.setItem(SKEY(runId), JSON.stringify(obj)) } catch { /* ignore */ } }
 
