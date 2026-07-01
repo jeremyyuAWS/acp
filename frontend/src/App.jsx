@@ -600,11 +600,23 @@ export default function App() {
           for (let j = flow.indexOf(view) + 1; j < flow.length; j++) {
             if (!me.allow || me.allow.includes(flow[j])) { nxt = flow[j]; break }
           }
+          // Same "is this tab's task done" signal the tab stepper uses — the CTA can't
+          // advance until the current tab's own work is actually finished.
+          const taskDone = {
+            integrations: !!run,
+            assess: assessed,
+            remediate: files.some((f) => f.remediated_at || f.drive_write_url),
+            publish: (publishedFiles?.length || 0) > 0,
+          }[view]
           return nxt ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12,
                           margin: '20px 0 4px', paddingTop: 14, borderTop: '1px solid var(--line)' }}>
-              <span className="muted" style={{ fontSize: 13 }}>Done here? Continue →</span>
-              <button onClick={() => { setView(nxt); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>{label[nxt]} →</button>
+              <span className="muted" style={{ fontSize: 13 }}>
+                {taskDone ? 'Done here? Continue →' : 'Finish this step to continue →'}
+              </span>
+              <button disabled={!taskDone}
+                      title={taskDone ? undefined : "Complete this tab's task before moving on"}
+                      onClick={() => { setView(nxt); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>{label[nxt]} →</button>
             </div>
           ) : null
         })()}
