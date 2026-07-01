@@ -2,7 +2,22 @@
   "__inputs": [],
   "__requires": [],
   "annotations": {
-    "list": []
+    "list": [
+      {
+        "name": "Scan completed",
+        "enable": true,
+        "iconColor": "#5794F2",
+        "datasource": {
+          "type": "postgres",
+          "uid": "acp_pg"
+        },
+        "target": {
+          "refId": "Anno",
+          "format": "table",
+          "query": "SELECT completed_at AS time, ('Scan completed · ' || source || ' · ' || files || ' docs · ' || COALESCE(avg_score,0) || '/100') AS text FROM scan_runs WHERE completed_at IS NOT NULL ORDER BY 1"
+        }
+      }
+    ]
   },
   "description": "ACP — Accessibility Compliance Platform: live compliance posture, findings, remediation, async queue, and audit trail (from Postgres).",
   "editable": true,
@@ -2097,6 +2112,238 @@
           "rawSql": "SELECT (level || ' · ' || COALESCE(NULLIF(plain_name,''), rule_name)) AS metric, SUM(finding_count) AS value FROM scan_rule_traces WHERE outcome='FAIL' AND scan_id='${scan}' GROUP BY 1 ORDER BY value DESC LIMIT 10"
         }
       ]
+    },
+    {
+      "type": "row",
+      "id": 109,
+      "title": "Per-file rule detail",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 90
+      }
+    },
+    {
+      "type": "table",
+      "id": 80,
+      "title": "Rule outcomes for the selected file",
+      "description": "Every WCAG rule checked against the file selected in the File dropdown above — pass/fail, level, and how it's fixed. Change the File variable to inspect a different document.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 91
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "outcome"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "PASS": {
+                        "color": "#3D9E3D",
+                        "index": 0
+                      },
+                      "FAIL": {
+                        "color": "#CC3333",
+                        "index": 1
+                      },
+                      "ERROR": {
+                        "color": "#D68A0C",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "rule_id",
+            "desc": false
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT rule_id, COALESCE(NULLIF(plain_name,''), rule_name) AS rule, level, fix_mode, outcome, finding_count FROM scan_rule_traces WHERE scan_id='${scan}' AND file='${file}' ORDER BY rule_id"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 110,
+      "title": "Remediation funnel & alert response",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 100
+      }
+    },
+    {
+      "type": "bargauge",
+      "id": 81,
+      "title": "Remediation funnel (selected scan)",
+      "description": "How far documents from the selected scan have moved through the pipeline: scanned → flagged non-compliant → auto-remediated → reviewed by a human (HITL) → published.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 101
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "color": {
+            "mode": "continuous-BlPu"
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "SELECT 'Scanned' AS metric, COUNT(*) AS value, 1 AS ord FROM file_records WHERE scan_id='${scan}' UNION ALL SELECT 'Flagged (non-compliant)', COUNT(*), 2 FROM file_records WHERE scan_id='${scan}' AND compliant=0 UNION ALL SELECT 'Auto-remediated', COUNT(*), 3 FROM file_records WHERE scan_id='${scan}' AND remediated_at IS NOT NULL UNION ALL SELECT 'HITL-reviewed', COUNT(DISTINCT file), 4 FROM hitl_queue WHERE scan_id='${scan}' AND status IN ('approved','rejected','skipped') UNION ALL SELECT 'Published', COUNT(*), 5 FROM file_records WHERE scan_id='${scan}' AND published_at IS NOT NULL ORDER BY ord"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 82,
+      "title": "Alert-to-resolution latency",
+      "description": "Time between a Grafana alert firing and it resolving, computed from the immutable decision log (every alert.firing/alert.resolved delivered via the ACP webhook). Helps gauge how quickly an ops lead actually responds.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "acp_pg"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 101
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "minutes_to_resolve"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "m"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#3D9E3D",
+                      "value": null
+                    },
+                    {
+                      "color": "#D68A0C",
+                      "value": 15
+                    },
+                    {
+                      "color": "#CC3333",
+                      "value": 60
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "resolved_at",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "acp_pg"
+          },
+          "format": "table",
+          "refId": "A",
+          "rawSql": "WITH ev AS ( SELECT ts, action, split_part(detail, ':', 1) AS alert_name, LAG(ts) OVER (PARTITION BY split_part(detail, ':', 1) ORDER BY ts) AS prev_ts, LAG(action) OVER (PARTITION BY split_part(detail, ':', 1) ORDER BY ts) AS prev_action FROM decision_log WHERE actor='grafana' AND action IN ('alert.firing','alert.resolved')) SELECT alert_name, prev_ts AS fired_at, ts AS resolved_at, ROUND(EXTRACT(EPOCH FROM (ts::timestamptz - prev_ts::timestamptz))/60) AS minutes_to_resolve FROM ev WHERE action='alert.resolved' AND prev_action='alert.firing' ORDER BY ts DESC LIMIT 20"
+        }
+      ]
     }
   ],
   "templating": {
@@ -2130,6 +2377,21 @@
         "query": "SELECT (completed_at || ' · ' || source || ' · ' || files || ' docs · ' || COALESCE(avg_score,0) || '/100') AS __text, id AS __value FROM scan_runs WHERE completed_at IS NOT NULL AND source LIKE '${source}' ORDER BY completed_at DESC",
         "refresh": 2,
         "sort": 0,
+        "includeAll": false,
+        "multi": false,
+        "current": {}
+      },
+      {
+        "name": "file",
+        "label": "File",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "acp_pg"
+        },
+        "query": "SELECT DISTINCT file AS __text, file AS __value FROM file_records WHERE scan_id='${scan}' ORDER BY 1",
+        "refresh": 2,
+        "sort": 1,
         "includeAll": false,
         "multi": false,
         "current": {}
