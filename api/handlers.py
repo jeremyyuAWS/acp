@@ -135,17 +135,26 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 return
             fixed_bytes = _Path(out_path).read_bytes()
 
+    # ADR 0010: Blob is now the PRIMARY, must-succeed write -- no per-user token needed
+    # (managed identity), so this no longer hard-fails for orgs that only granted
+    # read-only Drive access. Drive becomes a best-effort MIRROR below: failure there no
+    # longer fails the whole remediation, since Blob already has the durable copy.
+    import blob as _blob
+    owner = (core.store.get_scan(scan_id) or {}).get("run", {}).get("owner_email")
+    blob_url = _blob.upload_remediated(owner, scan_id, filename, fixed_bytes, mimetype)
+
     import io
     from googleapiclient.http import MediaIoBaseUpload
     from googleapiclient.errors import HttpError
-    # Folder id is created once per batch in the endpoint and passed in, so
-    # concurrent workers don't each create their own 'Remediated' folder.
-    # Fall back to find-or-create for a standalone job.
-    folder_id = payload.get("remediated_folder_id") or ensure_remediated_folder(svc)
-    media = MediaIoBaseUpload(io.BytesIO(fixed_bytes), mimetype=mimetype, resumable=False)
-    # Upsert: update an existing fixed copy rather than piling up duplicates on re-run.
-    safe = filename.replace("\\", "\\\\").replace("'", "\\'")
+    web_url = None
     try:
+        # Folder id is created once per batch in the endpoint and passed in, so
+        # concurrent workers don't each create their own 'Remediated' folder.
+        # Fall back to find-or-create for a standalone job.
+        folder_id = payload.get("remediated_folder_id") or ensure_remediated_folder(svc)
+        media = MediaIoBaseUpload(io.BytesIO(fixed_bytes), mimetype=mimetype, resumable=False)
+        # Upsert: update an existing fixed copy rather than piling up duplicates on re-run.
+        safe = filename.replace("\\", "\\\\").replace("'", "\\'")
         existing = svc.files().list(
             q=f"name='{safe}' and '{folder_id}' in parents and trashed=false",
             fields="files(id)", pageSize=1).execute().get("files", [])
@@ -155,17 +164,20 @@ def _remediate_file(payload: dict, job: dict) -> None:
         else:
             result = svc.files().create(body={"name": filename, "parents": [folder_id]},
                                         media_body=media, fields="id,webViewLink").execute()
+        web_url = result.get("webViewLink", "")
     except HttpError as e:
-        # A 403 here means the user's Drive grant lacks write access (drive.file) —
-        # retrying won't help, so dead-letter with a clear, actionable reason.
-        if getattr(e, "resp", None) is not None and e.resp.status == 403:
-            raise FatalJobError(
-                "Drive write denied (403) — the signed-in user must grant write access "
-                "(drive.file). Re-connect Drive (re-consent) and re-run remediation.")
-        raise
-    web_url = result.get("webViewLink", "")
+        # A 403 here means the user's Drive grant lacks write access (drive.file) --
+        # no longer fatal now that Blob has the durable copy; log and move on.
+        reason = ("Drive write denied (403) — the signed-in user hasn't granted write "
+                 "access (drive.file)." if getattr(e, "resp", None) is not None and e.resp.status == 403
+                 else f"Drive mirror failed: {type(e).__name__}: {e}")
+        core.store.log_decision("system", "remediate.drive_mirror_failed", scan_id=scan_id,
+                                file=filename, detail=reason[:200])
+    except Exception as e:
+        core.store.log_decision("system", "remediate.drive_mirror_failed", scan_id=scan_id,
+                                file=filename, detail=f"{type(e).__name__}: {e}"[:200])
 
-    core.store.record_remediation(scan_id, filename, drive_write_url=web_url)
+    core.store.record_remediation(scan_id, filename, drive_write_url=web_url, blob_url=blob_url)
     core.emit_remediation_span(scan_id, filename, drive_write_url=web_url)
     core.store.log_decision("system", "remediate.applied", scan_id=scan_id, file=filename,
                             detail="; ".join(applied) or "no auto fixes needed")
