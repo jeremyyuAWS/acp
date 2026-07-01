@@ -61,11 +61,19 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
   )
 }
 
-export default function Discover({ sources, files, busy, onScan, delegations = {}, fileTypeConfig = {}, onAdvance, progress = null, scanPct = 0, scanStatus = '', scanId = null }) {
+// decisions/setDecisions default to a local, throwaway useState when the caller doesn't
+// pass them (matches every other optional-prop default in this file) -- App.jsx DOES pass
+// its own persisted decisions state (time-travel's save/hydrate effects), which is what
+// makes decide()/undoDec() below actually survive a reload instead of resetting on every
+// visit to this tab, and is also what feeds the campaign "resolved" counts (ADR 0003
+// Phase 4) real data instead of always reading 0.
+export default function Discover({ sources, files, busy, onScan, delegations = {}, fileTypeConfig = {}, onAdvance, progress = null, scanPct = 0, scanStatus = '', scanId = null, decisions: decisionsProp, setDecisions: setDecisionsProp }) {
   const [sel, setSel] = useState(null)
   const [open, setOpen] = useState(() => new Set())
   const toggle = (d) => setOpen((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n })
-  const [decisions, setDecisions] = useState({})
+  const [localDecisions, setLocalDecisions] = useState({})
+  const decisions = decisionsProp ?? localDecisions
+  const setDecisions = setDecisionsProp ?? setLocalDecisions
   const [classState, setClassState] = useState({})
   const [editAct, setEditAct] = useState(null)
   const [seg, setSeg] = useState(null)
