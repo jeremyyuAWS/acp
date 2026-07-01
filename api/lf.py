@@ -375,6 +375,20 @@ def file_score(scan_id: str, file: str, score: float | None) -> None:
         pass
 
 
+def session_exists(scan_id: str) -> bool:
+    """Best-effort: does a Langfuse session with this scan_id exist?
+    Older scans (before file-centric tracing) have no session — this lets the UI grey them out."""
+    if not _ENABLED:
+        return False
+    try:
+        import httpx
+        r = httpx.get(f"{_HOST.rstrip('/')}/api/public/sessions/{scan_id}",
+                      auth=(_PK, _SK), timeout=4.0)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
 def trace_exists(trace_id: str) -> bool:
     """Best-effort: is this trace queryable in Langfuse yet? Ingestion is async after
     flush(), so the detail view can 404 for a beat. Polls the public API; any error

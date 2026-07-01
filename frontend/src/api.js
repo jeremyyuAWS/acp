@@ -62,10 +62,9 @@ export const openTraceUrl = (scanId, kind = 'session', file = null) => {
 export const getTraceStatus = (scanId, kind = 'session', file = null) => {
   if (!scanId || SIM) return Promise.resolve({ available: !!scanId })
   if (!lfTraceBase) return Promise.resolve({ available: false })
-  // Sessions never 404 (an empty/not-yet-ingested one just renders "no traces yet" in
-  // Langfuse), so there's nothing to poll for — always available once configured.
-  if (kind === 'session' || !file) return Promise.resolve({ available: true })
-  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/trace/file/${encodeURIComponent(file)}/exists`).then(j).catch(() => ({ available: false }))
+  if (kind === 'file' && file)
+    return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/trace/file/${encodeURIComponent(file)}/exists`).then(j).catch(() => ({ available: false }))
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/trace/${kind}/exists`).then(j).catch(() => ({ available: false }))
 }
 // Sensitive-data (PII) findings for a scan (ADR 0006) — rollup + per-type counts (masked).
 export const getScanPii = (scanId) => (SIM

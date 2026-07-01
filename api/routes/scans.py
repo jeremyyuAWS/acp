@@ -257,6 +257,8 @@ def trace_exists(sid: str, kind: str):
     Historical (kind-based) traces only — see /trace/file/{file} for the current,
     file-centric model."""
     import lf as _lf
+    if kind == "session":
+        return {"available": _lf.session_exists(sid)}
     if kind not in ("scan", "assess", "remediate"):
         return {"available": False}
     trace_id = sid if kind == "scan" else f"{sid}-{kind}"
