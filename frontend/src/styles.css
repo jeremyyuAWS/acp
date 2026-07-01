@@ -259,6 +259,16 @@ input:focus-visible, [role="tab"]:focus-visible {
 .rulecounts { display: flex; gap: 8px; font-size: 11.5px; justify-content: flex-end; }
 .rc-pass { color: #3B6D11; } .rc-fail { color: #854F0B; } .rc-skip { color: var(--muted); }
 @media (max-width: 720px) { .rulerow { grid-template-columns: 1fr; gap: 4px; } .rulecounts { justify-content: flex-start; } }
+/* WCAG failure heatmap — top failing rules × department (Assess tab) */
+.heatmaptitle { font-size: 13px; font-weight: 600; margin: 16px 0 6px; color: var(--ink); }
+.heatmap { display: flex; flex-direction: column; overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+.heatrow { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(64px, 1fr); align-items: center; }
+.heatrow.heathdr { background: var(--bg); border-bottom: 1px solid var(--line); font-size: 11px; font-weight: 600; color: var(--muted); }
+.heatlabel { grid-column: 1; min-width: 220px; padding: 6px 10px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; position: sticky; left: 0; background: #fff; border-right: 1px solid var(--line); }
+.heathdr .heatlabel { background: var(--bg); }
+.heatcol { padding: 6px 8px; text-align: center; }
+.heatcell { padding: 6px 8px; text-align: center; font-size: 11.5px; font-weight: 600; color: #6b3d17; border-left: 1px solid var(--line); min-height: 26px; }
+.heatrow:not(.heathdr) { border-top: 1px solid var(--line); }
 /* Recent-jobs cards (Monitor queue) — owner-scoped per-job visibility */
 .jobcards { display: flex; flex-direction: column; gap: 5px; }
 .jobcard { display: grid; grid-template-columns: 82px minmax(0, 1fr) auto auto auto; align-items: center; gap: 10px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12.5px; }

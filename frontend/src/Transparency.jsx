@@ -38,10 +38,58 @@ export function TraceChip({ scanId, kind = 'session', file = null, label = 'View
   )
 }
 
+// WCAG failure heatmap: top failing rules × department, so a reviewer sees at a glance
+// WHERE the biggest problems concentrate, not just which rules fail most overall.
+// Color intensity = fail count (darker = worse), same orange family as rb-fail.
+function FailureHeatmap({ rows, files, topRules }) {
+  const deptOf = {}
+  ;(files || []).forEach((f) => { deptOf[f.file] = f.department || f.dept || 'Unassigned' })
+  if (!Object.keys(deptOf).length) return null   // no department data available — skip silently
+
+  const ruleIds = new Set(topRules.map((r) => r.id))
+  const depts = new Set()
+  const cell = {}   // `${ruleId}::${dept}` -> fail count
+  rows.forEach((r) => {
+    if (!ruleIds.has(r.rule_id) || String(r.outcome || '').toUpperCase() !== 'FAIL') return
+    const d = deptOf[r.file] || 'Unassigned'
+    depts.add(d)
+    const k = `${r.rule_id}::${d}`
+    cell[k] = (cell[k] || 0) + 1
+  })
+  if (!depts.size) return null
+  const deptList = [...depts].sort()
+  const max = Math.max(1, ...Object.values(cell))
+
+  return (
+    <div className="heatmap" role="table" aria-label="WCAG failures by rule and department">
+      <div className="heatrow heathdr" role="row">
+        <span className="heatlabel" role="columnheader">Rule</span>
+        {deptList.map((d) => <span className="heatcol" role="columnheader" key={d}>{d}</span>)}
+      </div>
+      {topRules.map((r) => (
+        <div className="heatrow" role="row" key={r.id}>
+          <span className="heatlabel" role="rowheader" title={r.name}><b>{r.id}</b> {r.name}</span>
+          {deptList.map((d) => {
+            const n = cell[`${r.id}::${d}`] || 0
+            const alpha = n ? 0.15 + 0.85 * (n / max) : 0
+            return (
+              <span className="heatcell" role="cell" key={d}
+                    style={{ background: n ? `rgba(201,116,43,${alpha.toFixed(2)})` : 'transparent' }}
+                    title={`${r.id} × ${d}: ${n} failing document${n === 1 ? '' : 's'}`}>
+                {n || ''}
+              </span>
+            )
+          })}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // "By WCAG criterion" breakdown — aggregates the authoritative per-rule outcomes
 // (PASS / FAIL / SKIP) the scanner recorded into scan_rule_traces, so users see exactly
 // what each check did across the estate instead of only the summary tiles.
-export function RuleBreakdown({ scanId }) {
+export function RuleBreakdown({ scanId, files }) {
   const [rows, setRows] = useState(null)
   const [open, setOpen] = useState(false)
   useEffect(() => {
@@ -67,12 +115,13 @@ export function RuleBreakdown({ scanId }) {
   const rules = Object.values(byRule).sort((a, b) => b.fail - a.fail || a.id.localeCompare(b.id))
   if (!rules.length) return null
   const shown = open ? rules : rules.slice(0, 6)
-  const files = new Set((rows || []).map((r) => r.file)).size
+  const fileCount = new Set((rows || []).map((r) => r.file)).size
+  const failingRules = rules.filter((r) => r.fail > 0).slice(0, 8)
 
   return (
     <section className="panel rulebreak">
       <div className="rubrichdr">
-        <h2 style={{ margin: 0 }}>By WCAG criterion <span className="muted">· what each check found across {files.toLocaleString()} documents</span></h2>
+        <h2 style={{ margin: 0 }}>By WCAG criterion <span className="muted">· what each check found across {fileCount.toLocaleString()} documents</span></h2>
         <span className="muted" style={{ fontSize: 12 }}>{rules.length} criteria evaluated</span>
       </div>
       <div className="rulerows">
@@ -96,6 +145,12 @@ export function RuleBreakdown({ scanId }) {
         })}
       </div>
       {rules.length > 6 && <button className="ghost small" style={{ marginTop: 10 }} onClick={() => setOpen(!open)}>{open ? 'Show less' : `Show all ${rules.length} criteria`}</button>}
+      {failingRules.length > 0 && (
+        <>
+          <h3 className="heatmaptitle">Where failures concentrate <span className="muted">· top {failingRules.length} failing criteria by department</span></h3>
+          <FailureHeatmap rows={rows || []} files={files} topRules={failingRules} />
+        </>
+      )}
     </section>
   )
 }

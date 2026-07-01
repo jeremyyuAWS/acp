@@ -569,7 +569,7 @@ export default function App() {
                 above still pretended to be working. assessPhase tracks AssessRunner's actual
                 idle/running/done state (via onPhase), so results now appear exactly when the
                 animation finishes — same instant a real assessment would land. */}
-            {assessed && assessPhase === 'done' && <><RuleBreakdown scanId={run.id} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
+            {assessed && assessPhase === 'done' && <><RuleBreakdown scanId={run.id} files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
             {assessed && assessPhase === 'done' && <RiskScore run={run} files={files} />}
           </>
         ) : placeholder)}
