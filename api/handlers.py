@@ -395,7 +395,7 @@ def ensure_assess_trace(scan_id: str, level: str = "AA") -> None:
         aspan = _lf.assess_span(ftrace, level)
         sc_counts = by_file.get(fname)
         if sc_counts:
-            _lf.rule_spans(aspan, sc_counts, RULE_CATALOG, filename=fname)
+            _lf.rule_spans(aspan, sc_counts, RULE_CATALOG, filename=fname, scan_id=scan_id, user=owner)
             conformant = fname not in blocking_files
         else:
             conformant = not bool(f.get("issues"))

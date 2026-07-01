@@ -25,6 +25,12 @@ _client = None
 _SOURCE_LABEL = {"drive": "Google Drive", "sharepoint": "SharePoint / OneDrive", "local": "local corpus"}
 
 
+def _file_tags(file: str, user: str | None) -> list[str]:
+    """Base tag set for a file's trace — shared so a later tag-only update (e.g.
+    appending rule-fail tags after Assess) doesn't clobber the tags file_trace set."""
+    return ["accessibility-file", f"user:{user or 'demo'}", f"file:{file}"]
+
+
 def _lf():
     global _client
     if not _ENABLED:
@@ -104,16 +110,22 @@ def _level_for(outcome: str, severity: str) -> str:
 
 
 def rule_spans(file_span_, sc_counts: dict[str, int], rule_catalog: list[dict],
-               severity_map: dict[str, str] | None = None, filename: str | None = None):
+               severity_map: dict[str, str] | None = None, filename: str | None = None,
+               scan_id: str | None = None, user: str | None = None):
     """One child span per WCAG rule for a document, in plain language.
 
     Pass → "✓ Non-text Content (1.1.1)".  Fail → "✗ Non-text Content (1.1.1) —
     3 issues", flagged WARNING (or ERROR for critical) so it's visibly highlighted.
     The document name rides on every span (name + input) so an individual rule span
     is associable with its file even outside the trace tree.
+
+    When scan_id is also given, the failing rule ids are appended as tags
+    (rule-fail:{id}) on the file's own trace — lets a Langfuse viewer filter across
+    every file that failed a given rule, not just search within one file's trace.
     """
     if isinstance(file_span_, _Noop):
         return
+    failing_ids: list[str] = []
     for rule in rule_catalog:
         rid = rule["id"]
         count = sc_counts.get(rid, 0)
@@ -124,6 +136,7 @@ def rule_spans(file_span_, sc_counts: dict[str, int], rule_catalog: list[dict],
         if outcome == "FAIL":
             label = f"✗ {plain} ({rid}) — {count} issue{'s' if count != 1 else ''}"
             status = f"{count} document issue{'s' if count != 1 else ''} ({(severity or 'finding').lower()})"
+            failing_ids.append(rid)
         else:
             label = f"✓ {plain} ({rid})"
             status = "No issues"
@@ -141,6 +154,14 @@ def rule_spans(file_span_, sc_counts: dict[str, int], rule_catalog: list[dict],
             },
         )
         s.end(output={"document": filename, "result": status, "outcome": outcome, "issues": count})
+    if scan_id and filename and failing_ids:
+        lf = _lf()
+        if lf:
+            try:
+                lf.trace(id=f"{scan_id}::{filename}").update(
+                    tags=_file_tags(filename, user) + [f"rule-fail:{rid}" for rid in failing_ids])
+            except Exception:
+                pass
 
 
 def pii_span(file_span_, pinfo: dict, filename: str | None = None):
@@ -319,7 +340,7 @@ def file_trace(scan_id: str, file: str, user: str | None = None):
             session_id=scan_id,
             name=f"{who} · {file}",
             user_id=who,
-            tags=["accessibility-file", f"user:{who}"],
+            tags=_file_tags(file, who),
             metadata={"scan_id": scan_id, "file": file},
         )
     except Exception:
