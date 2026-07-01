@@ -259,7 +259,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // Don't surface remediation numbers until the user has actually started remediating
   // (ran "Remediate all" or acted on a review item) — pre-engagement estimates read as
   // in-progress work and confuse first-time users. Until then the cards show zeros.
-  const remStarted = remProg != null || remBusy || (acted.approved + acted.rejected + acted.deferred + self.length) > 0
+  const remStarted = remProg != null || remBusy || serverFixed > 0 || (acted.approved + acted.rejected + acted.deferred + self.length) > 0
 
   // --- remediation plan + decisions (moved from Discover) ---
   const plan = files.length ? recommendationSummary(files) : null
@@ -301,6 +301,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const pubCrit = flagged.filter((f) => (f.tags || []).includes('public-facing') && (f.issues || []).some((i) => i.severity === 'CRITICAL')).length
   const execFlagged = flagged.filter((f) => f.seniority === 'Executive').length
   const drill = (title, sub, pred) => setSeg({ title, subtitle: sub, files: flagged.filter(pred) })
+  const written = files.filter((f) => f.drive_write_url).length
+  // Once remediation has run, an empty HITL queue means every fix went through the
+  // automated path — approved/deferred (HITL decision counts) are meaningless there,
+  // so swap them for the KPI that actually reflects what happened: writes to Drive.
+  const pureAutomated = remStarted && totalHitl === 0
 
   return (
     <>
@@ -309,8 +314,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         <div className="metric"><span>HITL queue</span>{remStarted
           ? <><b style={{ color: queue.length ? '#854F0B' : '#3B6D11' }}>{totalHitl === 0 ? 'no items' : `${queue.length} remaining`}</b>{totalHitl > 0 && <span className="muted" style={{ fontSize: 11 }}> · {hitlProgress}% done</span>}</>
           : <b style={{ color: '#9AA1B4' }}>—</b>}</div>
-        <div className="metric"><span>approved</span><b key={acted.approved} className={acted.approved ? 'tick' : undefined}>{acted.approved}</b></div>
-        <div className="metric"><span>deferred</span><b key={acted.deferred} className={acted.deferred ? 'tick' : undefined} style={{ color: '#1F5FA8' }}>{acted.deferred}</b></div>
+        {pureAutomated ? (
+          <div className="metric" title="Fixed copies written back to the source Drive folder"><span>written to Drive</span><b key={written} className={written ? 'tick' : undefined} style={{ color: '#3B6D11' }}>{written}</b></div>
+        ) : (
+          <>
+            <div className="metric"><span>approved</span><b key={acted.approved} className={acted.approved ? 'tick' : undefined}>{acted.approved}</b></div>
+            <div className="metric"><span>deferred</span><b key={acted.deferred} className={acted.deferred ? 'tick' : undefined} style={{ color: '#1F5FA8' }}>{acted.deferred}</b></div>
+          </>
+        )}
         <div className={`metric${remLive ? ' livecard' : ''}`} title="Documents fixed and re-validated against all engines — ticks in real time as the worker queue completes each file">
           <span>re-verified{remLive && <span className="livedot">live</span>}</span>
           <b key={reVerified} className={reVerified ? 'tick' : undefined} style={{ color: '#3B6D11' }}>{reVerified.toLocaleString()}</b>
