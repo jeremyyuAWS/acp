@@ -159,6 +159,19 @@ _SCHEMA = [
       doc_id TEXT, rule_id TEXT, state TEXT, updated_at TEXT, last_scan_id TEXT,
       PRIMARY KEY (doc_id, rule_id)
     )""",
+    # Configurable file disposition (ADR 0003, Phase 3). PREVIEW ONLY as of this
+    # migration -- api/disposition.py's matches() tells you which documents a policy
+    # would select; nothing executes a real move/rename/archive/delete yet. That
+    # execution path (gated on requires_approval + this audit table) is a deliberately
+    # separate, later decision, not bundled with the schema.
+    """CREATE TABLE IF NOT EXISTS disposition_policy (
+      policy_id TEXT PRIMARY KEY, name TEXT, match TEXT, action TEXT,
+      action_config TEXT, requires_approval INT, enabled INT
+    )""",
+    """CREATE TABLE IF NOT EXISTS disposition_audit (
+      id TEXT PRIMARY KEY, ts TEXT, doc_id TEXT, policy_id TEXT,
+      action TEXT, result TEXT, detail TEXT
+    )""",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -1300,3 +1313,34 @@ class Store:
                 "WHERE scan_id=%s AND file=%s AND fix_mode='auto' AND outcome='FAIL'",
                 (scan_id, file))
             return [r["rule_id"] for r in self._db.fetchall(cur)]
+
+    # ── Configurable disposition (ADR 0003, Phase 3 — preview only) ────────────
+    def create_disposition_policy(self, policy_id: str, *, name: str, match: str, action: str,
+                                  action_config: str, requires_approval: bool, enabled: bool) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO disposition_policy(policy_id,name,match,action,action_config,"
+                "requires_approval,enabled) VALUES(%s,%s,%s,%s,%s,%s,%s)",
+                (policy_id, name, match, action, action_config, int(requires_approval), int(enabled)))
+
+    def list_disposition_policies(self) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM disposition_policy ORDER BY name")
+            return self._db.fetchall(cur)
+
+    def get_disposition_policy(self, policy_id: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM disposition_policy WHERE policy_id=%s", (policy_id,))
+            return self._db.fetchone(cur)
+
+    def set_disposition_policy_enabled(self, policy_id: str, enabled: bool) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "UPDATE disposition_policy SET enabled=%s WHERE policy_id=%s",
+                             (int(enabled), policy_id))
+
+    def list_all_documents(self) -> list[dict]:
+        """Every document row -- used only by the disposition preview evaluator, which
+        needs the full set to run a predicate in Python (see api/disposition.py)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM documents")
+            return self._db.fetchall(cur)
