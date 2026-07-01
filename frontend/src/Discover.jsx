@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import ScanTheater from './ScanTheater.jsx'
 import FileDrawer, { retentionOf } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
@@ -18,8 +18,34 @@ const CLASS_TAGS = ['PII', 'legal-hold', 'public-facing', 'high-traffic']
 const CLASS_COLOR = { PII: '#1F5FA8', 'legal-hold': '#854F0B', 'public-facing': '#D85A30', 'high-traffic': '#A56814' }
 const OVERRIDE_ACTIONS = ['keep', 'archive', 'retain', 'delete']
 
-const SH = ({ n, label, desc }) => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '28px 0 10px', paddingTop: 16, borderTop: '1px solid var(--line)' }}>
+function StickyNav({ sections }) {
+  const [active, setActive] = useState(sections[0]?.id || '')
+  useEffect(() => {
+    const io = new IntersectionObserver(
+      (entries) => {
+        const vis = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)
+        if (vis.length) setActive(vis[0].target.id)
+      },
+      { rootMargin: '-56px 0px -65% 0px', threshold: 0 }
+    )
+    sections.forEach(({ id }) => { const el = document.getElementById(id); if (el) io.observe(el) })
+    return () => io.disconnect()
+  }, [sections]) // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <nav className="stickynav" aria-label="Page sections">
+      <span className="snavlabel">Jump to</span>
+      {sections.map(({ id, label }) => (
+        <button key={id} className={`snavbtn${active === id ? ' on' : ''}`}
+          onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+          {label}
+        </button>
+      ))}
+    </nav>
+  )
+}
+
+const SH = ({ n, label, desc, id }) => (
+  <div id={id} style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '28px 0 10px', paddingTop: 16, borderTop: '1px solid var(--line)' }}>
     <b style={{ fontSize: 13.5, color: 'var(--ink)', whiteSpace: 'nowrap' }}>{n} · {label}</b>
     {desc && <span className="muted" style={{ fontSize: 12 }}>{desc}</span>}
   </div>
@@ -103,15 +129,19 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
       const segs = Object.entries(m).sort((a, b) => b[1] - a[1])
       return <span className="deptbar" aria-hidden="true">{segs.map(([k, n]) => <i key={k} style={{ width: `${(n / fs.length) * 100}%`, background: TYPE_COLOR[k] || PLUM }} title={`${n} ${k}`} />)}</span>
     }
-    if (mode === 'retain') {
+    if (mode === 'combined') {
       const c = { keep: 0, archive: 0, retain: 0 }; fs.forEach((f) => { const a = effAction(f); if (c[a] != null) c[a] += 1 })
       return <span className="deptbar" aria-hidden="true">{RET_ORDER.map((k) => c[k] ? <i key={k} style={{ width: `${(c[k] / fs.length) * 100}%`, background: RET_COLOR[k] }} title={`${c[k]} ${k}`} /> : null)}</span>
     }
     return null
   }
   const deptNote = (fs, mode) => {
-    if (mode === 'classify') { const done = fs.filter(isConfirmed).length; return `${done}/${fs.length} confirmed` }
-    if (mode === 'retain') { const done = fs.filter((f) => decisions[f.file] && !f.locked).length; const tot = fs.filter((f) => !f.locked).length; return `${done}/${tot} decided` }
+    if (mode === 'combined') {
+      const tot = fs.filter((f) => !f.locked).length
+      const classified = fs.filter(isConfirmed).length
+      const decided = fs.filter((f) => decisions[f.file] && !f.locked).length
+      return `${classified}/${tot} classified · ${decided}/${tot} decided`
+    }
     return `${fs.length} document${fs.length === 1 ? '' : 's'}`
   }
 
@@ -144,45 +174,44 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
                   <div className="dmain">
                     <button className="remname" onClick={() => setSel(f)}>{f.file}</button>
                     {meta}
-                    {mode === 'retain' && !f.locked && (
-                      <div className="drowtags">
-                        {tagsOf(f).length === 0 ? <span className="muted" style={{ fontSize: 12 }}>internal · no risk flags</span>
-                          : tagsOf(f).map((t) => <span key={t} className="classchip on" style={{ background: CLASS_COLOR[t] + '22', color: CLASS_COLOR[t], borderColor: CLASS_COLOR[t] + '55', cursor: 'default' }}>{t}</span>)}
-                        {f.superseded && <span className="classchip on" style={{ background: '#EEEDFE', color: '#3C3489', borderColor: '#cdc9f0', cursor: 'default' }}>superseded</span>}
-                      </div>
-                    )}
                   </div>
-                  {mode === 'classify' && !f.locked && (
-                    <div className="classctl">
-                      <span className="classchips">
-                        {CLASS_TAGS.map((t) => { const on = tagsOf(f).includes(t); return (
-                          <button key={t} className={on ? 'classchip on' : 'classchip'} style={on ? { background: CLASS_COLOR[t] + '22', color: CLASS_COLOR[t], borderColor: CLASS_COLOR[t] + '55' } : undefined} aria-pressed={on} onClick={() => toggleTag(f, t)} title={on ? `Remove ${t}` : `Add ${t}`}>{on ? '✓ ' : '+ '}{t}</button>
-                        ) })}
-                      </span>
-                      {isConfirmed(f)
-                        ? <span className="dectag ok">✓ confirmed</span>
-                        : <button className="decbtn ok" title="Confirm classification" onClick={() => confirmClass(f)}>✓</button>}
-                    </div>
-                  )}
-                  {mode === 'retain' && (() => {
-                    if (f.locked) { const [l, bg, fg] = RET_BADGE.locked; return <span className="badge" style={{ background: bg, color: fg }}>{l}</span> }
+                  {mode === 'combined' && f.locked && (() => {
+                    const [l, bg, fg] = RET_BADGE.locked
+                    return <span className="badge" style={{ background: bg, color: fg }}>{l}</span>
+                  })()}
+                  {mode === 'combined' && !f.locked && (() => {
                     const a = effAction(f); const [l, bg, fg] = RET_BADGE[a]; const dec = decisions[f.file]
+                    const bothPending = !isConfirmed(f) && !dec
                     return (
-                      <div className="actctl">
-                        <span className="badge" style={{ background: bg, color: fg, borderLeft: `3px solid ${RET_COLOR[a]}` }} title={f.rec?.rationale || ''}>{l}</span>
-                        {dec?.state === 'accepted' && <span className="dectag ok">✓ accepted</span>}
-                        {dec?.state === 'override' && <span className="dectag ov">changed</span>}
-                        {editAct === f.file ? (
-                          <span className="modchips">
-                            {OVERRIDE_ACTIONS.map((a2) => <button key={a2} className="modchip" style={{ color: RET_COLOR[a2] }} onClick={() => decide(f, a2 === RET_BUCKET(f) ? { state: 'accepted' } : { state: 'override', action: a2 })}>{RET_BADGE[a2][0]}</button>)}
-                            <button className="modchip cancel" onClick={() => setEditAct(null)}>cancel</button>
+                      <div className="drowdecide">
+                        <div className="classctl">
+                          <span className="classchips">
+                            {CLASS_TAGS.map((t) => { const on = tagsOf(f).includes(t); return (
+                              <button key={t} className={on ? 'classchip on' : 'classchip'} style={on ? { background: CLASS_COLOR[t] + '22', color: CLASS_COLOR[t], borderColor: CLASS_COLOR[t] + '55' } : undefined} aria-pressed={on} onClick={() => toggleTag(f, t)} title={on ? `Remove ${t}` : `Add ${t}`}>{on ? '✓ ' : '+ '}{t}</button>
+                            ) })}
+                            {f.superseded && <span className="classchip on" style={{ background: '#EEEDFE', color: '#3C3489', borderColor: '#cdc9f0', cursor: 'default' }}>superseded</span>}
                           </span>
-                        ) : !dec ? (
-                          <span className="decctl">
-                            <button className="decbtn ok" title="Accept recommendation" onClick={() => decide(f, { state: 'accepted' })}>✓</button>
-                            <button className="decbtn ed" title="Change action" onClick={() => setEditAct(f.file)}>✎</button>
-                          </span>
-                        ) : <button className="decbtn undo" title="Undo" onClick={() => undoDec(f)}>↺</button>}
+                          {isConfirmed(f) && <span className="dectag ok">✓ classified</span>}
+                        </div>
+                        <div className="actctl">
+                          <span className="badge" style={{ background: bg, color: fg, borderLeft: `3px solid ${RET_COLOR[a]}` }} title={f.rec?.rationale || ''}>{l}</span>
+                          {dec?.state === 'accepted' && <span className="dectag ok">✓ accepted</span>}
+                          {dec?.state === 'override' && <span className="dectag ov">changed</span>}
+                          {editAct === f.file ? (
+                            <span className="modchips">
+                              {OVERRIDE_ACTIONS.map((a2) => <button key={a2} className="modchip" style={{ color: RET_COLOR[a2] }} onClick={() => decide(f, a2 === RET_BUCKET(f) ? { state: 'accepted' } : { state: 'override', action: a2 })}>{RET_BADGE[a2][0]}</button>)}
+                              <button className="modchip cancel" onClick={() => setEditAct(null)}>cancel</button>
+                            </span>
+                          ) : !dec ? (
+                            <span className="decctl">
+                              {bothPending
+                                ? <button className="decbtn ok" title="Confirm classification & accept action" onClick={() => { confirmClass(f); decide(f, { state: 'accepted' }) }}>✓ accept both</button>
+                                : <button className="decbtn ok" title="Accept recommendation" onClick={() => decide(f, { state: 'accepted' })}>✓</button>}
+                              <button className="decbtn ed" title="Change action" onClick={() => setEditAct(f.file)}>✎</button>
+                              {!isConfirmed(f) && !bothPending && <button className="decbtn ok" title="Confirm classification" onClick={() => confirmClass(f)}>tags ✓</button>}
+                            </span>
+                          ) : <button className="decbtn undo" title="Undo action" onClick={() => undoDec(f)}>↺</button>}
+                        </div>
                       </div>
                     )
                   })()}
@@ -194,6 +223,11 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
       </div>
     )
   })
+
+  const DISC_SECTIONS = files.length > 0 ? [
+    { id: 'disc-inventory', label: '1 · Inventory' },
+    { id: 'disc-classify',  label: '2 · Classify & decide' },
+  ] : []
 
   return (
     <>
@@ -207,8 +241,10 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
 
       <ScanTheater busy={busy} progress={progress} pct={scanPct} status={scanStatus} />
 
+      {DISC_SECTIONS.length > 0 && <StickyNav sections={DISC_SECTIONS} />}
+
       {/* ── 1 · Inventory ── */}
-      <SH n="1" label="Inventory" desc="inventory by department · click to expand · the bar shows the file-type mix" />
+      <SH id="disc-inventory" n="1" label="Inventory" desc="inventory by department · click to expand · the bar shows the file-type mix" />
       {files.length === 0 ? (
         <p className="muted">No documents yet — run a scan from Integrations.</p>
       ) : (
@@ -225,34 +261,67 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
         </>
       )}
 
-      {/* ── 2 · Classify ── */}
-      {files.length > 0 && (
+      {/* ── 2 · Classify & decide ── */}
+      {files.length > 0 && (() => {
+        const needsAssessment = files.filter((f) => !f.locked && !f.remediated_at && !f.drive_write_url && !f.acp_stamped && f.score == null).length
+        const totalWidth = files.length || 1
+        return (
         <>
-          <SH n="2" label="Classify" desc="how the agent classifies the estate by content & risk — confirm or correct each document's tags" />
+          <SH id="disc-classify" n="2" label="Classify & decide" desc="review each document's content & risk tags, then accept or override its lifecycle action — right in the same row" />
+
+          {/* File breakdown — how total sums across categories */}
+          <div className="filesplit" role="region" aria-label="File breakdown">
+            <div className="filesplit-item">
+              <span className="filesplit-n" style={{ color: 'var(--ink)' }}>{files.length}</span>
+              <span className="filesplit-lbl">total scanned</span>
+              <div className="filesplit-bar"><i style={{ width: '100%', background: '#7a5c8e' }} /></div>
+            </div>
+            <button className="filesplit-item" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: alreadyRemediated ? 'pointer' : 'default' }}
+                    disabled={!alreadyRemediated}
+                    onClick={() => alreadyRemediated && setSeg({ title: 'Already remediated', subtitle: `${alreadyRemediated} files fixed in a prior or current pass`, files: files.filter((f) => f.remediated_at || f.drive_write_url || f.acp_stamped) })}>
+              <span className="filesplit-n" style={{ color: '#3B6D11' }}>{alreadyRemediated}</span>
+              <span className="filesplit-lbl">remediated ✓</span>
+              <div className="filesplit-bar"><i style={{ width: `${(alreadyRemediated / totalWidth) * 100}%`, background: '#3B6D11' }} /></div>
+            </button>
+            <button className="filesplit-item" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: alreadyScored && !alreadyRemediated ? 'pointer' : 'default' }}
+                    disabled={!alreadyScored}
+                    onClick={() => alreadyScored && setSeg({ title: 'Already assessed', subtitle: `${alreadyScored} files have a WCAG score from the scan`, files: files.filter((f) => f.score != null) })}>
+              <span className="filesplit-n" style={{ color: '#2A5E9E' }}>{alreadyScored}</span>
+              <span className="filesplit-lbl">assessed</span>
+              <div className="filesplit-bar"><i style={{ width: `${(alreadyScored / totalWidth) * 100}%`, background: '#2A5E9E' }} /></div>
+            </button>
+            <button className="filesplit-item" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: dupeCount ? 'pointer' : 'default' }}
+                    disabled={!dupeCount}
+                    onClick={() => dupeCount && setSeg({ title: 'Duplicate uploads', subtitle: `${dupeCount} extra copies of another document`, files: duplicateFiles(files) })}>
+              <span className="filesplit-n" style={{ color: '#854F0B' }}>{dupeCount}</span>
+              <span className="filesplit-lbl">duplicates</span>
+              <div className="filesplit-bar"><i style={{ width: `${(dupeCount / totalWidth) * 100}%`, background: '#854F0B' }} /></div>
+            </button>
+            <button className="filesplit-item" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: lockedCount ? 'pointer' : 'default' }}
+                    disabled={!lockedCount}
+                    onClick={() => lockedCount && setSeg({ title: 'Password-protected / unreadable', subtitle: `${lockedCount} files the engine could not open`, files: files.filter((f) => f.locked) })}>
+              <span className="filesplit-n" style={{ color: '#9a948f' }}>{lockedCount}</span>
+              <span className="filesplit-lbl">🔒 locked</span>
+              <div className="filesplit-bar"><i style={{ width: `${(lockedCount / totalWidth) * 100}%`, background: '#9a948f' }} /></div>
+            </button>
+            <button className="filesplit-item" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: needsAssessment ? 'pointer' : 'default' }}
+                    disabled={!needsAssessment}
+                    onClick={() => needsAssessment && setSeg({ title: 'Needs assessment', subtitle: `${needsAssessment} files not yet scored`, files: files.filter((f) => !f.locked && !f.remediated_at && !f.drive_write_url && !f.acp_stamped && f.score == null) })}>
+              <span className="filesplit-n" style={{ color: '#1F5FA8' }}>{needsAssessment}</span>
+              <span className="filesplit-lbl">need assessment</span>
+              <div className="filesplit-bar"><i style={{ width: `${(needsAssessment / totalWidth) * 100}%`, background: '#1F5FA8' }} /></div>
+            </button>
+          </div>
+
           <div style={{ fontSize: 12.5, color: 'var(--ink)', background: '#F1EFF3', border: '1px solid var(--line)',
                         borderRadius: 8, padding: '9px 12px', margin: '0 0 12px', lineHeight: 1.5 }}>
-            <b>How classification works:</b> <strong>document type</strong> comes from the file format ·
+            <b>How this works:</b> <strong>document type</strong> comes from the file format ·
             <strong> department</strong> &amp; <strong>exposure</strong> are inferred from the file name
             (e.g. <code>HR-</code>, <code>Legal-</code>, <code>Finance-</code>, <code>public-</code>, <code>-hold</code>) ·
-            <strong> sensitive-data</strong> flags come from the scan (Deep scan). Confirm or correct any tag below —
-            your edits win over the agent's guess.
-          </div>
-          <div className="metrics" style={{ margin: '0 0 14px' }}>
-            <button className="metric" style={{ textAlign: 'left', color: 'var(--ink)', cursor: dupeCount ? 'pointer' : 'default' }}
-                    disabled={!dupeCount}
-                    onClick={() => setSeg({ title: 'Duplicate uploads', subtitle: `${dupeCount} of ${files.length} files are extra copies of another document`, files: duplicateFiles(files) })}>
-              <span>duplicate files</span><b style={{ color: dupeCount ? '#854F0B' : 'var(--ink)' }}>{dupeCount}</b>
-            </button>
-            <button className="metric" style={{ textAlign: 'left', color: 'var(--ink)', cursor: alreadyScored ? 'pointer' : 'default' }}
-                    disabled={!alreadyScored}
-                    onClick={() => setSeg({ title: 'Already scored', subtitle: `${alreadyScored} of ${files.length} files have a result from the scan`, files: files.filter((f) => f.score != null) })}>
-              <span>already assessed</span><b style={{ color: '#2A5E9E' }}>{alreadyScored}</b>
-            </button>
-            <button className="metric" style={{ textAlign: 'left', color: 'var(--ink)', cursor: alreadyRemediated ? 'pointer' : 'default' }}
-                    disabled={!alreadyRemediated}
-                    onClick={() => setSeg({ title: 'Already remediated', subtitle: `${alreadyRemediated} of ${files.length} files were fixed (this scan or a prior pass)`, files: files.filter((f) => f.remediated_at || f.drive_write_url || f.acp_stamped) })}>
-              <span>already remediated</span><b style={{ color: '#3B6D11' }}>{alreadyRemediated}</b>
-            </button>
+            <strong> sensitive-data</strong> flags come from the scan (Deep scan) — confirm or correct any tag below,
+            your edits win over the agent's guess. Each row also carries the agent's recommended{' '}
+            <strong>lifecycle action</strong> (keep / archive / retain / delete) — accept it, override it, or use
+            <strong> ✓ accept both</strong> to sign off on the tags &amp; the action in one click.
           </div>
           <div className="chartrow">
             <section className="panel"><h2>By exposure &amp; risk <span className="muted" style={{ fontWeight: 400 }}>· expand internal to see its risk flags</span></h2>
@@ -269,24 +338,16 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
             <section className="panel"><h2>By document type</h2><Bars items={byType} cols="70px 1fr 30px" /></section>
           </div>
           <div className="hitlbar">
-            <span className="muted">Human-in-the-loop · <b style={{ color: 'var(--ink)' }}>{classConfirmed}</b> of {files.length} classifications confirmed</span>
-            <span className="muted">expand a department below to review →</span>
-          </div>
-          {deptList('classify')}
-        </>
-      )}
-
-      {/* ── 3 · Actions ── */}
-      {files.length > 0 && (
-        <>
-          <SH n="3" label="Actions" desc="lifecycle action per document — accept the recommendation or override" />
-          <div className="hitlbar">
-            <span className="muted"><b style={{ color: 'var(--ink)' }}>{dcount('accepted')}</b> accepted · <b style={{ color: 'var(--ink)' }}>{dcount('override')}</b> changed · {pendingActions} pending</span>
+            <span className="muted">Human-in-the-loop ·{' '}
+              <b style={{ color: 'var(--ink)' }}>{classConfirmed}</b> of {files.length} classified ·{' '}
+              <b style={{ color: 'var(--ink)' }}>{dcount('accepted')}</b> accepted · <b style={{ color: 'var(--ink)' }}>{dcount('override')}</b> changed · {pendingActions} action{pendingActions === 1 ? '' : 's'} pending
+            </span>
             <button disabled={!pendingActions} onClick={acceptAll}>✓ Accept all recommendations</button>
           </div>
-          {deptList('retain')}
+          {deptList('combined')}
         </>
-      )}
+        )
+      })()}
 
       {files.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12,

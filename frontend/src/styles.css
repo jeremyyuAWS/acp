@@ -307,12 +307,54 @@ input:focus-visible, [role="tab"]:focus-visible {
 .tab { display: flex; flex-direction: column; line-height: 1.25; text-align: left; }
 .tab .rg { font-size: 11px; color: var(--muted); }
 .tab.on .rg { color: rgba(255, 255, 255, 0.88); }
-/* Stepper "done" state — a completed workflow stage. Soft green (reusing the success
-   palette), distinct from the dark active tab; never color-only — paired with a ✓ and a
-   visually-hidden "completed" for screen readers (WCAG 1.4.1). */
+/* Stepper "done" state — a completed workflow stage. */
 .tab.done { background: #E7F0DC; border-color: #C5DBA8; color: #2F5310; }
 .tab.done .rg { color: #4A6A2A; }
 .tab.done .tabok { font-weight: 800; margin-right: 1px; }
+/* Workflow step number badge in the tab */
+.tab.stepTab { position: relative; padding-left: 36px; }
+.stepnum { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); width: 19px; height: 19px; border-radius: 50%; background: var(--line); color: var(--muted); font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; line-height: 1; }
+.tab.on .stepnum { background: rgba(255,255,255,0.25); color: #fff; }
+.tab.done .stepnum { background: #C5DBA8; color: #2F5310; }
+
+/* Sticky section nav (Discover + Remediate long-page helper) */
+.stickynav { position: sticky; top: 0; z-index: 80; display: flex; align-items: center; gap: 6px; background: var(--bg); border-bottom: 1px solid var(--line); padding: 7px 0 8px; margin: 0 0 4px; overflow-x: auto; }
+.snavbtn { background: none; border: 1px solid transparent; border-radius: 20px; padding: 4px 12px; font-size: 12.5px; font-weight: 500; color: var(--muted); cursor: pointer; white-space: nowrap; transition: background .12s, color .12s; }
+.snavbtn:hover { background: var(--card); border-color: var(--line); color: var(--ink); }
+.snavbtn.on { background: var(--plum); color: #fff; border-color: var(--plum); }
+.snavlabel { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; font-weight: 600; padding: 0 4px; }
+
+/* Section locked until prerequisite done */
+.section-locked { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 0; margin: 14px 0; overflow: hidden; }
+.section-locked-sum { display: flex; align-items: center; gap: 10px; padding: 14px 18px; cursor: pointer; list-style: none; font-size: 14px; font-weight: 600; }
+.section-locked-sum::-webkit-details-marker { display: none; }
+.section-locked-sum::marker { display: none; }
+.section-locked-msg { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 4px; }
+.section-locked-body { padding: 0 18px 16px; }
+
+/* File breakdown summary in Classify */
+.filesplit { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px; margin: 0 0 14px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.filesplit-item { display: flex; flex-direction: column; gap: 2px; }
+.filesplit-n { font-size: 22px; font-weight: 600; line-height: 1; }
+.filesplit-lbl { font-size: 11px; color: var(--muted); }
+.filesplit-bar { height: 3px; border-radius: 2px; margin-top: 4px; background: var(--line); }
+.filesplit-bar i { display: block; height: 100%; border-radius: 2px; }
+
+/* Score benchmark context */
+.score-benchmark { display: flex; gap: 14px; font-size: 11.5px; color: var(--muted); margin-top: 5px; flex-wrap: wrap; justify-content: center; }
+.score-benchmark b { color: var(--ink); }
+
+/* Remediate action bar */
+.remcta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 4px 0 16px; padding: 12px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+.remcta-label { font-size: 13px; color: var(--muted); flex: 1 1 auto; min-width: 0; }
+
+/* Onboarding 3-step strip */
+.onboarding-steps { display: flex; gap: 0; margin: 20px 0 24px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--card); }
+.onboarding-step { flex: 1; padding: 16px 18px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.onboarding-step:last-child { border-right: none; }
+.onboarding-step-n { width: 26px; height: 26px; border-radius: 50%; background: var(--plum); color: #fff; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.onboarding-step-title { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.onboarding-step-desc { font-size: 12px; color: var(--muted); line-height: 1.4; }
 .vh { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 /* not-yet-live tabs */
@@ -596,17 +638,20 @@ input:focus-visible, [role="tab"]:focus-visible {
 .modchip.cancel { color: var(--muted); font-weight: 500; }
 .decbtn.undo:hover { color: var(--plum); border-color: #d6d2f3; }
 
-/* Discover — three-mode department list (inventory / classify HITL / actions HITL) */
+/* Discover — two-mode department list (inventory / combined classify+decide HITL) */
 .depttable { display: flex; flex-direction: column; }
 .drow { display: flex; align-items: center; gap: 12px; padding: 9px 16px; border-top: 1px solid var(--line); flex-wrap: wrap; }
 .drow:first-child { border-top: none; }
 .dmain { min-width: 0; flex: 1 1 220px; }
-.classctl, .actctl { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+/* Combined row: name+meta on its own line, then classify (left) + act (right)
+   controls together on a second line — one glance covers both decisions. */
+.drowdecide { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; flex: 1 1 100%; padding-left: 2px; }
+.classctl { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.actctl { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: auto; }
 .classchips { display: inline-flex; gap: 5px; flex-wrap: wrap; }
 .classchip { font-size: 11px; font-weight: 600; border: 1px solid var(--line); background: #fff; color: var(--muted); border-radius: 999px; padding: 3px 9px; cursor: pointer; line-height: 1.4; }
 .classchip:hover { background: var(--bg); }
 .classchip.on { border-width: 1px; }
-.drowtags { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
 .typelegend { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 12px; }
 .typekey { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 4px 10px; cursor: pointer; color: var(--ink); }
 .typekey:hover { background: var(--bg); border-color: var(--plum); }
