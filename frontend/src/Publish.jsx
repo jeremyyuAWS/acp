@@ -19,7 +19,20 @@ export default function Publish({ run, files = [], certified = [], onPublish }) 
   const pct = run?.files ? Math.round((run.certifiable / run.files) * 100) : 0
   const onTrack = pct >= 80 || (run?.avg_score ?? 0) >= 80
   const reportDate = new Date(run?.completed_at || Date.now()).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
-  const publishedList = [...Object.keys(done), ...certified.map((c) => c.file)]
+  // Real publish history: files carry their own published_at once the scan is re-fetched
+  // (persisted server-side by POST /scans/{sid}/publish) -- this replaces a client-derived
+  // list that showed the SAME date for every entry and reset on reload. Falls back to
+  // "just now" for a file published THIS session, before the next refetch catches up.
+  const publishedAtByFile = {}
+  files.forEach((f) => { if (f.published_at) publishedAtByFile[f.file] = f.published_at })
+  const publishedEntries = [
+    ...Object.keys(done).map((file) => ({ file, publishedAt: publishedAtByFile[file] || null })),
+    ...certified.filter((c) => !done[c.file]).map((c) => ({ file: c.file, publishedAt: null, external: true })),
+  ].sort((a, b) => (b.publishedAt || '').localeCompare(a.publishedAt || ''))
+  const fmtPublished = (e) => e.publishedAt
+    ? new Date(e.publishedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : e.external ? 'via Upload' : 'just now'
+  const publishedList = publishedEntries.map((e) => e.file)
 
   return (
     <>
@@ -84,13 +97,13 @@ export default function Publish({ run, files = [], certified = [], onPublish }) 
         )}
         {publishedList.length > 0 ? (
           <div style={{ marginTop: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>📋 Audit trail · {publishedList.length} published</div>
-            {publishedList.slice(0, 8).map((fname) => (
-              <div key={fname} style={{ fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
-                ✓ <b>{fname}</b> <span className="muted">· replaced in place · prior version archived · owner notified · {reportDate}</span>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>📋 Audit trail · {publishedEntries.length} published</div>
+            {publishedEntries.slice(0, 8).map((e) => (
+              <div key={e.file} style={{ fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
+                ✓ <b>{e.file}</b> <span className="muted">· replaced in place · prior version archived · owner notified · {fmtPublished(e)}</span>
               </div>
             ))}
-            {publishedList.length > 8 && <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>+{publishedList.length - 8} more</div>}
+            {publishedEntries.length > 8 && <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>+{publishedEntries.length - 8} more</div>}
           </div>
         ) : (
           <p className="muted" style={{ marginTop: 12 }}>Publishing writes the conformance status back to the source and records each change in the audit trail here.</p>
