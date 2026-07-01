@@ -195,6 +195,14 @@ export const getRemediationStatus = (scanId) => {
   }
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation-status`, { headers: headers() }).then(j)
 }
+// Per-violation remediation state (ADR 0003 Phase 2) for one file — which rule_ids were
+// actually auto-fixed, so the rule coverage table can say "pass — remediated" instead of
+// just "pass" for a criterion that used to fail. SIM has no per-violation state to draw
+// on, so it returns nothing rather than fabricate it.
+export const getFileRemediationState = (scanId, file) => (SIM
+  ? sim([])
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/remediation-state`,
+          { headers: headers() }).then(j))
 // ── Phased remediation campaigns (ADR 0003 Phase 4) ─────────────────────────────
 export const createCampaign = (scanId, name, deadline = null) => (SIM
   ? sim({ campaign_id: 'sim-campaign', name, status: 'active', batches: [] }, 200)

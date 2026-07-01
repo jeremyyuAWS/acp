@@ -1390,6 +1390,14 @@ class Store:
                 "WHERE doc_id=%s ORDER BY rule_id", (doc_id,))
             return self._db.fetchall(cur)
 
+    def get_remediation_state_for_file(self, scan_id: str, file: str) -> list[dict]:
+        """Same as get_remediation_state, but keyed by (scan_id, file) — what the UI
+        actually has on hand — instead of doc_id, which it doesn't."""
+        from documents import resolve_doc_id
+        drive_file_id = self.get_file_drive_id(scan_id, file)
+        doc_id = resolve_doc_id("drive", drive_file_id, file, None)
+        return self.get_remediation_state(doc_id)
+
     def list_auto_fail_rules(self, scan_id: str, file: str) -> list[str]:
         """rule_ids that FAILed for this file and are deterministically auto-fixable --
         what a successful remediate_file run actually addresses."""

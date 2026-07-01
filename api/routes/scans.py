@@ -366,6 +366,16 @@ def remediation_status(sid: str, request: Request):
     return core.store.remediation_status(sid)
 
 
+@router.get("/scans/{sid}/files/{filename:path}/remediation-state")
+def file_remediation_state(sid: str, filename: str, request: Request):
+    """Per-violation remediation state (ADR 0003 Phase 2) for one file — which specific
+    WCAG rules were auto-fixed vs. still open, so the UI can distinguish a criterion that
+    always passed from one that passes because remediation fixed it."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    return core.store.get_remediation_state_for_file(sid, filename)
+
+
 @router.get("/scans/{sid}/traces")
 def scan_traces(sid: str, request: Request, file: str | None = None):
     """Per-rule trace for a scan. Returns one row per (file, rule) pair showing

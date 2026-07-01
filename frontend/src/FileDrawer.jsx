@@ -1,10 +1,10 @@
-import { useState, Fragment } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import Drawer from './Drawer.jsx'
 import Tag from './Tag.jsx'
 import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
-import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getRemediationStatus } from './api.js'
+import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getRemediationStatus, getFileRemediationState } from './api.js'
 import { TraceChip } from './Transparency.jsx'
 
 // Prescriptive-action styling, shared with the Discover inventory.
@@ -21,6 +21,18 @@ export const REC_STYLE = {
 }
 export const fmtEffort = (m) => m == null ? '—' : m === 0 ? 'no work' : m >= 90 ? `~${(m / 60).toFixed(1)} hrs` : `~${Math.round(m)} min`
 const MODE_LABEL = { auto: 'fully automatic', assisted: 'AI + human review', manual: 'manual', monitor: 'monitor only' }
+
+// Single-file remediation narration — mirrors the real pipeline order in
+// api/handlers.py's _remediate_file: deterministic fix -> Blob (primary, must-succeed)
+// -> Drive mirror (best-effort) -> record + re-verify. Staged by elapsed progress since
+// the backend doesn't expose per-substep granularity for a single-file job.
+const REM_STAGE_LINES = [
+  'Applying deterministic fixes (alt text, headings, language)…',
+  'Writing the fixed copy to Blob storage…',
+  'Mirroring to Drive (best-effort)…',
+  'Verifying the fix and updating records…',
+]
+const remStageLine = (pct) => REM_STAGE_LINES[Math.min(REM_STAGE_LINES.length - 1, Math.floor(pct / (100 / REM_STAGE_LINES.length)))]
 
 // Where the document actually lives — so a reviewer can open it to remediate manually,
 // or open a superseded doc to compare/replace. In the demo the link opens the source
@@ -162,6 +174,20 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
     }
   }
 
+  // ADR 0003 Phase 2: which specific WCAG rules were actually auto-fixed (vs. always
+  // having passed) — so the coverage table below can say "pass — remediated" instead of
+  // a plain "pass" for a criterion that only passes because remediation fixed it.
+  // Re-fetches once remNow?.done flips true, so a same-session fix shows up immediately.
+  const [remediatedRuleIds, setRemediatedRuleIds] = useState(new Set())
+  useEffect(() => {
+    if (!scanId || !file?.file) { setRemediatedRuleIds(new Set()); return }
+    let cancelled = false
+    getFileRemediationState(scanId, file.file)
+      .then((rows) => { if (!cancelled) setRemediatedRuleIds(new Set((rows || []).filter((r) => r.state === 'complete').map((r) => r.rule_id))) })
+      .catch(() => { if (!cancelled) setRemediatedRuleIds(new Set()) })
+    return () => { cancelled = true }
+  }, [scanId, file?.file, remNow?.done])
+
   if (!file) return null
   const st = statusOf(file)
   const [sbg, sfg] = STATUS_BADGE[st]
@@ -272,7 +298,6 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
             <div className="recmeta">
               <span><b>{MODE_LABEL[r.mode] || r.mode}</b><span className="muted"> mode</span></span>
               {r.confidence != null && <span><b>{r.confidence}%</b><span className="muted"> confidence</span></span>}
-              {r.savingsPct != null && r.savingsPct > 0 && <span style={{ color: '#3B6D11' }}><b>{r.savingsPct}%</b><span className="muted"> faster than manual</span></span>}
             </div>
             {scanId && r.mode !== 'manual' && r.mode !== 'monitor' && (
               <div style={{ marginTop: 10 }}>
@@ -280,13 +305,18 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                   <button className="ctago" onClick={remediateNow}>⚡ Remediate this file now</button>
                 )}
                 {remNow === 'queued' && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span className="muted" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, flex: '0 0 auto' }}>
-                      <span className="spinner" /> Remediating…
-                    </span>
-                    <span className="track" style={{ width: 120 }}>
-                      <i style={{ width: `${remProgress}%`, background: 'var(--plum)', transition: 'width .4s linear' }} />
-                    </span>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span className="muted" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, flex: '0 0 auto' }}>
+                        <span className="spinner" /> Remediating…
+                      </span>
+                      <span className="track" style={{ width: 120 }}>
+                        <i style={{ width: `${remProgress}%`, background: 'var(--plum)', transition: 'width .4s linear' }} />
+                      </span>
+                    </div>
+                    <div className="muted" style={{ fontSize: 12, marginTop: 5 }} role="status" aria-live="polite">
+                      {remStageLine(remProgress)}
+                    </div>
                   </div>
                 )}
                 {remNow?.done && (
@@ -442,7 +472,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                         <td className={`covoutcome ${r.outcome.toLowerCase()}`}
                           title={r.outcome === 'SKIP' ? `N/A — this criterion isn’t checked by the ${file.engine || 'engine'} for this file type (not an error)` : undefined}>
                           {r.outcome === 'PASS' ? '✓' : r.outcome === 'FAIL' ? `✕ ${r.count}` : 'N/A'}
-                          <span className="covouttxt">{r.outcome === 'PASS' ? 'pass' : r.outcome === 'FAIL' ? 'fail' : 'not applicable'}</span>
+                          <span className="covouttxt">{r.outcome === 'PASS' ? (remediatedRuleIds.has(r.id) ? 'pass — remediated' : 'pass') : r.outcome === 'FAIL' ? 'fail' : 'not applicable'}</span>
                           {r.outcome === 'FAIL' && scanId && !exp && (
                             <button className="explain-btn" onClick={() => fetchExplanation(r.id)} title="Get AI explanation">Why?</button>
                           )}
