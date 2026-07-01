@@ -4,7 +4,7 @@ import Tag from './Tag.jsx'
 import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
-import { explainFinding, getFileContent, uploadToDrive, markRemediated } from './api.js'
+import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getRemediationStatus } from './api.js'
 import { TraceChip } from './Transparency.jsx'
 
 // Prescriptive-action styling, shared with the Discover inventory.
@@ -128,6 +128,31 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
       setDriveRem({ status: 'error', error: e.message || 'Upload failed' })
     }
   }
+
+  // One-click remediation right from the file detail, for any file type — not just the
+  // HTML client-side path above (drive-rem-panel, Remediate-tab only). Goes through the
+  // same async remediate_file job the bulk Remediate flow uses (server-side HTML/PDF/
+  // Office remediators — ADR 0005 step 4), scoped to just this one file, so a reviewer
+  // looking at a single document's recommendation can see it acted on immediately instead
+  // of having to switch to Remediate and run/filter the whole-estate flow.
+  const [remNow, setRemNow] = useState(null) // null | 'queued' | 'error' | {done: true, url?}
+  const remediateNow = async () => {
+    if (!scanId || remNow === 'queued') return
+    setRemNow('queued')
+    try {
+      await remediateScan(scanId, [file.file])
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 1000))
+        const s = await getRemediationStatus(scanId).catch(() => null)
+        if (!s || s.in_flight === 0) break
+      }
+      await markRemediated(scanId, file.file).catch(() => {})
+      setRemNow({ done: true })
+    } catch (e) {
+      setRemNow('error')
+    }
+  }
+
   if (!file) return null
   const st = statusOf(file)
   const [sbg, sfg] = STATUS_BADGE[st]
@@ -239,6 +264,26 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
               {r.confidence != null && <span><b>{r.confidence}%</b><span className="muted"> confidence</span></span>}
               {r.savingsPct != null && r.savingsPct > 0 && <span style={{ color: '#3B6D11' }}><b>{r.savingsPct}%</b><span className="muted"> faster than manual</span></span>}
             </div>
+            {scanId && r.mode !== 'manual' && r.mode !== 'monitor' && (
+              <div style={{ marginTop: 10 }}>
+                {remNow === null && (
+                  <button className="ctago" onClick={remediateNow}>⚡ Remediate this file now</button>
+                )}
+                {remNow === 'queued' && (
+                  <span className="muted" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                    <span className="spinner" /> Remediating…
+                  </span>
+                )}
+                {remNow?.done && (
+                  <span style={{ color: '#3B6D11', fontWeight: 600 }}>✓ Remediated — fixed copy saved to Drive</span>
+                )}
+                {remNow === 'error' && (
+                  <span style={{ color: '#B43A2A' }}>
+                    Couldn't remediate this file — <button className="ghost small" onClick={remediateNow}>try again</button>
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )
       })()}
