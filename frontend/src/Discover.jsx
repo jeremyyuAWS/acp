@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import ScanTheater from './ScanTheater.jsx'
 import FileDrawer, { retentionOf } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
@@ -18,35 +18,9 @@ const CLASS_TAGS = ['PII', 'legal-hold', 'public-facing', 'high-traffic']
 const CLASS_COLOR = { PII: '#1F5FA8', 'legal-hold': '#854F0B', 'public-facing': '#D85A30', 'high-traffic': '#A56814' }
 const OVERRIDE_ACTIONS = ['keep', 'archive', 'retain', 'delete']
 
-function StickyNav({ sections }) {
-  const [active, setActive] = useState(sections[0]?.id || '')
-  useEffect(() => {
-    const io = new IntersectionObserver(
-      (entries) => {
-        const vis = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)
-        if (vis.length) setActive(vis[0].target.id)
-      },
-      { rootMargin: '-56px 0px -65% 0px', threshold: 0 }
-    )
-    sections.forEach(({ id }) => { const el = document.getElementById(id); if (el) io.observe(el) })
-    return () => io.disconnect()
-  }, [sections]) // eslint-disable-line react-hooks/exhaustive-deps
-  return (
-    <nav className="stickynav" aria-label="Page sections">
-      <span className="snavlabel">Jump to</span>
-      {sections.map(({ id, label }) => (
-        <button key={id} className={`snavbtn${active === id ? ' on' : ''}`}
-          onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
-          {label}
-        </button>
-      ))}
-    </nav>
-  )
-}
-
 const SH = ({ n, label, desc, id }) => (
   <div id={id} style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '28px 0 10px', paddingTop: 16, borderTop: '1px solid var(--line)' }}>
-    <b style={{ fontSize: 13.5, color: 'var(--ink)', whiteSpace: 'nowrap' }}>{n} · {label}</b>
+    <b style={{ fontSize: 13.5, color: 'var(--ink)', whiteSpace: 'nowrap' }}>{n ? `${n} · ` : ''}{label}</b>
     {desc && <span className="muted" style={{ fontSize: 12 }}>{desc}</span>}
   </div>
 )
@@ -65,7 +39,17 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
         : <span className="critn">{value}</span>}
     </>)
     return onClick
-      ? <button className="critrow pickrow" style={{ gridTemplateColumns: '150px 1fr 34px', width: '100%' }} onClick={onClick} aria-expanded={chev ? open : undefined}>{inner}</button>
+      ? (
+        <div
+          className="critrow pickrow"
+          style={{ gridTemplateColumns: '150px 1fr 34px', width: '100%' }}
+          role="button"
+          tabIndex={0}
+          onClick={onClick}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e) } }}
+          aria-expanded={chev ? open : undefined}
+        >{inner}</div>
+      )
       : <div className="critrow" style={{ gridTemplateColumns: '150px 1fr 34px' }}>{inner}</div>
   }
   return (
@@ -123,29 +107,22 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
   const pendingActions = actionable.length - dcount('accepted') - dcount('override')
   const acceptAll = () => setDecisions((s) => { const n = { ...s }; actionable.forEach((f) => { if (!n[f.file]) n[f.file] = { state: 'accepted' } }); return n })
 
-  const compBar = (fs, mode) => {
-    if (mode === 'inventory') {
-      const m = {}; fs.forEach((f) => { const k = (f.type || '').toUpperCase(); m[k] = (m[k] || 0) + 1 })
-      const segs = Object.entries(m).sort((a, b) => b[1] - a[1])
-      return <span className="deptbar" aria-hidden="true">{segs.map(([k, n]) => <i key={k} style={{ width: `${(n / fs.length) * 100}%`, background: TYPE_COLOR[k] || PLUM }} title={`${n} ${k}`} />)}</span>
-    }
-    if (mode === 'combined') {
-      const c = { keep: 0, archive: 0, retain: 0 }; fs.forEach((f) => { const a = effAction(f); if (c[a] != null) c[a] += 1 })
-      return <span className="deptbar" aria-hidden="true">{RET_ORDER.map((k) => c[k] ? <i key={k} style={{ width: `${(c[k] / fs.length) * 100}%`, background: RET_COLOR[k] }} title={`${c[k]} ${k}`} /> : null)}</span>
-    }
-    return null
+  // Inventory/Classify/Action are no longer formally separated tabs — one dept-grouped
+  // list shows the file, its classification tags (colorful pills), and its lifecycle
+  // action together, so a reviewer tags AND decides in the same row instead of hopping
+  // between sections.
+  const compBar = (fs) => {
+    const c = { keep: 0, archive: 0, retain: 0 }; fs.forEach((f) => { const a = effAction(f); if (c[a] != null) c[a] += 1 })
+    return <span className="deptbar" aria-hidden="true">{RET_ORDER.map((k) => c[k] ? <i key={k} style={{ width: `${(c[k] / fs.length) * 100}%`, background: RET_COLOR[k] }} title={`${c[k]} ${k}`} /> : null)}</span>
   }
-  const deptNote = (fs, mode) => {
-    if (mode === 'combined') {
-      const tot = fs.filter((f) => !f.locked).length
-      const classified = fs.filter(isConfirmed).length
-      const decided = fs.filter((f) => decisions[f.file] && !f.locked).length
-      return `${classified}/${tot} classified · ${decided}/${tot} decided`
-    }
-    return `${fs.length} document${fs.length === 1 ? '' : 's'}`
+  const deptNote = (fs) => {
+    const tot = fs.filter((f) => !f.locked).length
+    const classified = fs.filter(isConfirmed).length
+    const decided = fs.filter((f) => decisions[f.file] && !f.locked).length
+    return `${classified}/${tot} classified · ${decided}/${tot} decided`
   }
 
-  const deptList = (mode) => deptOrder.map((d) => {
+  const deptList = () => deptOrder.map((d) => {
     const fs = groups[d]
     const isOpen = open.has(d)
     return (
@@ -153,8 +130,8 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
         <button className="deptheader" onClick={() => toggle(d)} aria-expanded={isOpen}>
           <span className="deptchev" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
           <span className="deptname">{d}</span>
-          <span className="muted deptcount">{mode === 'inventory' ? `${fs.length} document${fs.length === 1 ? '' : 's'}` : <>{fs.length} docs · <b style={{ color: 'var(--ink)', fontWeight: 500 }}>{deptNote(fs, mode)}</b></>}</span>
-          {compBar(fs, mode)}
+          <span className="muted deptcount">{fs.length} docs · <b style={{ color: 'var(--ink)', fontWeight: 500 }}>{deptNote(fs)}</b></span>
+          {compBar(fs)}
         </button>
         {isOpen && (
           <div className="depttable">
@@ -175,11 +152,11 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
                     <button className="remname" onClick={() => setSel(f)}>{f.file}</button>
                     {meta}
                   </div>
-                  {mode === 'combined' && f.locked && (() => {
+                  {f.locked && (() => {
                     const [l, bg, fg] = RET_BADGE.locked
                     return <span className="badge" style={{ background: bg, color: fg }}>{l}</span>
                   })()}
-                  {mode === 'combined' && !f.locked && (() => {
+                  {!f.locked && (() => {
                     const a = effAction(f); const [l, bg, fg] = RET_BADGE[a]; const dec = decisions[f.file]
                     const bothPending = !isConfirmed(f) && !dec
                     return (
@@ -224,11 +201,6 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
     )
   })
 
-  const DISC_SECTIONS = files.length > 0 ? [
-    { id: 'disc-inventory', label: '1 · Inventory' },
-    { id: 'disc-classify',  label: '2 · Classify & decide' },
-  ] : []
-
   return (
     <>
       <div className="estatebar">
@@ -241,14 +213,15 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
 
       <ScanTheater busy={busy} progress={progress} pct={scanPct} status={scanStatus} />
 
-      {DISC_SECTIONS.length > 0 && <StickyNav sections={DISC_SECTIONS} />}
-
-      {/* ── 1 · Inventory ── */}
-      <SH id="disc-inventory" n="1" label="Inventory" desc="inventory by department · click to expand · the bar shows the file-type mix" />
       {files.length === 0 ? (
-        <p className="muted">No documents yet — run a scan from Integrations.</p>
-      ) : (
+        <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Integrations.</p>
+      ) : (() => {
+        const needsAssessment = files.filter((f) => !f.locked && !f.remediated_at && !f.drive_write_url && !f.acp_stamped && f.score == null).length
+        const totalWidth = files.length || 1
+        return (
         <>
+          <SH id="disc-documents" label="Documents" desc="grouped by department · click to expand · tag &amp; decide right in the row" />
+
           <div className="typelegend">
             <span className="muted" style={{ fontSize: 12, marginRight: 2 }}>document types · click to view:</span>
             {byType.map((t) => (
@@ -257,17 +230,6 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
               </button>
             ))}
           </div>
-          {deptList('inventory')}
-        </>
-      )}
-
-      {/* ── 2 · Classify & decide ── */}
-      {files.length > 0 && (() => {
-        const needsAssessment = files.filter((f) => !f.locked && !f.remediated_at && !f.drive_write_url && !f.acp_stamped && f.score == null).length
-        const totalWidth = files.length || 1
-        return (
-        <>
-          <SH id="disc-classify" n="2" label="Classify & decide" desc="review each document's content & risk tags, then accept or override its lifecycle action — right in the same row" />
 
           {/* File breakdown — how total sums across categories */}
           <div className="filesplit" role="region" aria-label="File breakdown">
@@ -344,7 +306,7 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
             </span>
             <button disabled={!pendingActions} onClick={acceptAll}>✓ Accept all recommendations</button>
           </div>
-          {deptList('combined')}
+          {deptList()}
         </>
         )
       })()}
