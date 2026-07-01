@@ -251,9 +251,44 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         </div>
       </section>
 
-      {trend.length > 1 && new Set(trend).size > 1 && (
-        <section className="panel"><h2>Compliance trend · {trend.length} scans</h2><Sparkline points={trend} labels={trendDates} width={620} height={104} /></section>
-      )}
+      {trend.length > 1 && new Set(trend).size > 1 && (() => {
+        // Compliance velocity: points/week from the FIRST to the LATEST scored scan,
+        // using scanList's real completed_at (trend/trendDates above only carry a
+        // display label, not a parseable date). A single outlier scan can't compute a
+        // rate, so this only renders once there's a genuine time span to measure across.
+        const scored = [...scanList].filter((s) => s.completed_at && s.avg_score != null)
+          .sort((a, b) => a.completed_at.localeCompare(b.completed_at))
+        let velocity = null, etaLabel = null
+        if (scored.length >= 2) {
+          const first = scored[0], last = scored[scored.length - 1]
+          const days = (new Date(last.completed_at) - new Date(first.completed_at)) / 86400000
+          if (days >= 1) {
+            velocity = ((last.avg_score - first.avg_score) / days) * 7
+            if (velocity > 0.05 && last.avg_score < 90) {
+              const weeksToTarget = (90 - last.avg_score) / velocity
+              const eta = new Date(Date.now() + weeksToTarget * 7 * 86400000)
+              etaLabel = eta.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+            }
+          }
+        }
+        return (
+          <section className="panel">
+            <h2>Compliance trend <span className="muted">· {trend.length} scans</span></h2>
+            <Sparkline points={trend} labels={trendDates} width={620} height={104} />
+            {velocity != null && (
+              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span className="badge" style={{ background: velocity > 0 ? '#E7F0DC' : velocity < 0 ? '#FCEBEB' : '#EEEDEA',
+                                                  color: velocity > 0 ? '#3B6D11' : velocity < 0 ? '#A32D2D' : 'var(--muted)' }}>
+                  {velocity > 0 ? '↑' : velocity < 0 ? '↓' : '→'} {Math.abs(velocity).toFixed(1)} pts/week
+                </span>
+                <span className="muted" style={{ fontSize: 12.5 }}>
+                  {etaLabel ? `at this pace, on track for 90/100 by ${etaLabel}` : velocity <= 0 ? 'flat or regressing — no projected path to 90/100 at this pace' : 'already at or above 90/100'}
+                </span>
+              </div>
+            )}
+          </section>
+        )
+      })()}
 
       <section className="panel"><h2>Compliance lift · projected after remediation</h2>
         <div className="lift">
