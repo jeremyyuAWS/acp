@@ -71,6 +71,11 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
   const [sel, setSel] = useState(null)
   const [open, setOpen] = useState(() => new Set())
   const toggle = (d) => setOpen((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n })
+  // Cross-department search — a filename match auto-expands ITS department (search
+  // intent implies "show me", not "let me click to reveal") without disturbing which
+  // departments the user had manually opened/closed before typing.
+  const [search, setSearch] = useState('')
+  const searchQuery = search.trim().toLowerCase()
   const [localDecisions, setLocalDecisions] = useState({})
   const decisions = decisionsProp ?? localDecisions
   const setDecisions = setDecisionsProp ?? setLocalDecisions
@@ -131,15 +136,20 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
   }
 
   const deptList = () => deptOrder.map((d) => {
-    const fs = groups[d]
-    const isOpen = open.has(d)
+    const deptFiles = groups[d]
+    const fs = searchQuery ? deptFiles.filter((f) => f.file.toLowerCase().includes(searchQuery)) : deptFiles
+    if (searchQuery && !fs.length) return null   // hide departments with no match while searching
+    const isOpen = searchQuery ? true : open.has(d)
     return (
       <div className="deptcard" key={d}>
-        <button className="deptheader" onClick={() => toggle(d)} aria-expanded={isOpen}>
+        <button className="deptheader" onClick={() => toggle(d)} aria-expanded={isOpen} disabled={!!searchQuery}>
           <span className="deptchev" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
           <span className="deptname">{d}</span>
-          <span className="muted deptcount">{fs.length} docs · <b style={{ color: 'var(--ink)', fontWeight: 500 }}>{deptNote(fs)}</b></span>
-          {compBar(fs)}
+          <span className="muted deptcount">
+            {searchQuery ? `${fs.length} of ${deptFiles.length} match` : `${fs.length} docs · `}
+            {!searchQuery && <b style={{ color: 'var(--ink)', fontWeight: 500 }}>{deptNote(fs)}</b>}
+          </span>
+          {!searchQuery && compBar(fs)}
         </button>
         {isOpen && (
           <div className="depttable">
@@ -229,6 +239,21 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
         return (
         <>
           <SH id="disc-documents" label="Documents" desc="grouped by department · click to expand · tag &amp; decide right in the row" />
+
+          <div className="docsearch">
+            <input type="search" className="docsearch-input" placeholder="Search all departments by filename…"
+                  value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search documents across all departments" />
+            {searchQuery && (() => {
+              const matches = files.filter((f) => f.file.toLowerCase().includes(searchQuery))
+              const deptHit = new Set(matches.map((f) => f.department || 'Unassigned')).size
+              return (
+                <span className="muted docsearch-count">
+                  {matches.length} result{matches.length === 1 ? '' : 's'} across {deptHit} department{deptHit === 1 ? '' : 's'}
+                  {matches.length > 0 && <button className="ghost small" style={{ marginLeft: 8 }} onClick={() => setSearch('')}>clear</button>}
+                </span>
+              )
+            })()}
+          </div>
 
           <div className="typelegend">
             <span className="muted" style={{ fontSize: 12, marginRight: 2 }}>document types · click to view:</span>

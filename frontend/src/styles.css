@@ -666,6 +666,10 @@ input:focus-visible, [role="tab"]:focus-visible {
 .classchip { font-size: 11px; font-weight: 600; border: 1px solid var(--line); background: #fff; color: var(--muted); border-radius: 999px; padding: 3px 9px; cursor: pointer; line-height: 1.4; }
 .classchip:hover { background: var(--bg); }
 .classchip.on { border-width: 1px; }
+.docsearch { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
+.docsearch-input { flex: 1 1 280px; max-width: 420px; font-size: 13px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); }
+.docsearch-input:focus { outline: none; border-color: var(--plum); }
+.docsearch-count { font-size: 12px; display: inline-flex; align-items: center; }
 .typelegend { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 12px; }
 .typekey { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 4px 10px; cursor: pointer; color: var(--ink); }
 .typekey:hover { background: var(--bg); border-color: var(--plum); }
