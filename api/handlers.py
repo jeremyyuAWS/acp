@@ -273,6 +273,26 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
         if pinfo:
             fdict["pii"] = pinfo
         core.store.save_file_result(scan_id, fdict, now)
+        # Document-centric layer (ADR 0003, Phase 1): every scan upserts the long-lived
+        # document row (api/documents.py), independent of file_records' per-scan snapshot.
+        # Defensively wrapped -- must never break the scan pipeline itself, only lose this
+        # layer for that one file (same posture as the file-centric tracing right below).
+        try:
+            from documents import resolve_doc_id, compute_triage_score
+            doc_id = resolve_doc_id(source, item.get("drive_file_id"), name, checksum)
+            prior = core.store.get_document(doc_id)
+            created_at = (prior or {}).get("created_at") or now
+            age_days = ((_dt.datetime.fromisoformat(now) - _dt.datetime.fromisoformat(created_at)).days
+                       if prior and prior.get("created_at") else None)
+            tscore, rationale = compute_triage_score(
+                compliance_score=fdict.get("score"), pii_severity=(pinfo or {}).get("severity"),
+                pii_total=(pinfo or {}).get("total", 0), age_days=age_days,
+                skipped_rules=fdict.get("skipped_rules", 0))
+            core.store.upsert_document(doc_id, source=source, path=name, content_hash=checksum,
+                                       owner=user, created_at=created_at, last_seen=now,
+                                       triage_score=tscore, triage_rationale=rationale)
+        except Exception:
+            pass
         # File-centric tracing (see lf.file_trace): each file gets its own trace, so unlike
         # the old shared-trace model there's no "too many spans on one trace" risk to cap —
         # always emit, regardless of deep-scan setting (the PII sub-span stays conditional).
