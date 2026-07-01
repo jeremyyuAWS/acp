@@ -335,9 +335,8 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
           <div className="hitlbar">
             <span className="muted">Human-in-the-loop ·{' '}
               <b style={{ color: 'var(--ink)' }}>{classConfirmed}</b> of {files.length} classified ·{' '}
-              <b style={{ color: 'var(--ink)' }}>{dcount('accepted')}</b> accepted · <b style={{ color: 'var(--ink)' }}>{dcount('override')}</b> changed · {pendingActions} action{pendingActions === 1 ? '' : 's'} pending
+              <b style={{ color: 'var(--ink)' }}>{dcount('accepted')}</b> accepted · <b style={{ color: 'var(--ink)' }}>{dcount('override')}</b> changed
             </span>
-            <button disabled={!pendingActions} onClick={acceptAll}>✓ Accept all recommendations</button>
           </div>
           {deptList()}
         </>
@@ -347,8 +346,18 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
       {files.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12,
                       margin: '20px 0 4px', paddingTop: 14, borderTop: '1px solid var(--line)' }}>
-          <span className="muted" style={{ fontSize: 13 }}>Done here? Continue →</span>
-          <button onClick={() => onAdvance?.()}>Assess — score vs WCAG →</button>
+          {pendingActions > 0 ? (
+            <>
+              <span className="muted" style={{ fontSize: 13 }}>{pendingActions} action{pendingActions === 1 ? '' : 's'} pending</span>
+              <button className="ghost" onClick={acceptAll}>✓ Accept all recommendations</button>
+            </>
+          ) : (
+            <span className="muted" style={{ fontSize: 13, color: '#3B6D11' }}>✓ All recommendations decided — done here? Continue →</span>
+          )}
+          <button onClick={() => onAdvance?.()} disabled={pendingActions > 0}
+                  title={pendingActions > 0 ? `${pendingActions} action${pendingActions === 1 ? '' : 's'} still pending — accept or override each row, or use "Accept all recommendations"` : undefined}>
+            Assess — score vs WCAG →
+          </button>
         </div>
       )}
 
