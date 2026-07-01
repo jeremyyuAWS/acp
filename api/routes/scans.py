@@ -26,7 +26,8 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
                sync: bool = False, folder: str | None = Query(None),
                ai: bool = Query(True), queue: bool = Query(False),
                pii: bool = Query(True), fanout: bool = Query(False),
-               batch: bool = Query(False), exclude_remediated: bool = Query(False)):
+               batch: bool = Query(False), exclude_remediated: bool = Query(False),
+               incremental: bool = Query(True)):
     token = request.headers.get("x-drive-token")      # per-user Drive token (GIS)
     sp_token = request.headers.get("x-sp-token")      # per-user MS Graph token (MSAL)
     # ACP_DEMO_DRIVE_KEY lets the E2E test and demo scripts trigger a server-side
@@ -58,7 +59,7 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
         job_id = core.store.enqueue_job(
             jtype, {"source": source, "scan_id": scan_id, "folder": folder, "ai": ai,
                     "user": user, "pii": pii, "batch": batch,
-                    "exclude_remediated": exclude_remediated},
+                    "exclude_remediated": exclude_remediated, "incremental": incremental},
             scan_id=scan_id)
         return {"scan_id": scan_id, "job_id": job_id, "queued": True,
                 "fanout": fanout, "batch": batch, "workers": core.WORKERS}
