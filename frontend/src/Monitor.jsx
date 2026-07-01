@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { monitoringState, sourceWatch, IDENTITY, SIM } from './sim.js'
-import { getSchedule, putSchedule, listCampaigns, createCampaign, setCampaignStatus } from './api.js'
+import { getSchedule, putSchedule, listCampaigns, createCampaign, setCampaignStatus, getScanDiff } from './api.js'
 import { prefersReducedMotion } from './a11y.js'
 import QueuePanel from './QueuePanel.jsx'
 import RegressionRadar from './RegressionRadar.jsx'
@@ -51,6 +51,47 @@ const SampleTag = () => SIM ? null : (
                  background: '#F3ECD7', border: '1px solid #E3D3A8', borderRadius: 6,
                  padding: '1px 7px', marginLeft: 8, verticalAlign: 'middle' }}>SAMPLE</span>
 )
+
+// Published-doc watchdog: a regression on any document is worth knowing about, but a
+// regression on one that's already PUBLISHED (live, certified) is a different order of
+// urgency -- it means a document currently presented as compliant no longer is. Reuses
+// the same scan-diff data RegressionRadar computes (ADR 0009), filtered to publishedFiles.
+function PublishedWatchdog({ run, scanList, publishedFiles }) {
+  const [diff, setDiff] = useState(null)
+  const runId = run?.id
+  useEffect(() => {
+    if (!runId || !publishedFiles.length) { setDiff(null); return }
+    let cancelled = false
+    getScanDiff(runId).then((d) => { if (!cancelled) setDiff(d) }).catch(() => { if (!cancelled) setDiff(null) })
+    return () => { cancelled = true }
+  }, [runId, publishedFiles.length])
+
+  if (!runId || !publishedFiles.length || scanList.length < 2 || !diff || diff.no_baseline) return null
+  const published = new Set(publishedFiles)
+  const atRisk = (diff.regressed || []).filter((r) => published.has(r.file))
+  if (!atRisk.length) return null
+
+  return (
+    <div style={{ margin: '0 0 14px', padding: '12px 14px', borderRadius: 9,
+                  background: '#FCEBEB', border: '1px solid #F3C9C9' }}>
+      <b style={{ color: '#7A2020', fontSize: 13.5 }}>
+        ⚠ {atRisk.length} published document{atRisk.length !== 1 ? 's' : ''} regressed since certification
+      </b>
+      <div className="muted" style={{ fontSize: 12, margin: '3px 0 8px' }}>
+        These are live and presented as compliant, but the last scan found they no longer are.
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {atRisk.map((r) => (
+          <div key={r.file} style={{ fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontWeight: 600 }}>{r.file}</span>
+            <span className="muted">{r.prev} → {r.cur} ({r.delta})</span>
+            {r.broke?.length ? <span className="muted">· broke {r.broke.map((b) => b.sc).join(', ')}</span> : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 // Derive program phase data from the live corpus + decisions
 function useProgramBatches(files, decisions) {
@@ -307,6 +348,8 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
       <ComplianceDigest run={run} />
 
       <QueuePanel />
+
+      <PublishedWatchdog run={run} scanList={scanList} publishedFiles={publishedFiles} />
 
       <RegressionRadar run={run} scanList={scanList} />
 

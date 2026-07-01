@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { getJobs, setWorkers, clearDeadJobs } from './api.js'
 import { TraceChip } from './Transparency.jsx'
 
@@ -30,11 +30,28 @@ export default function QueuePanel() {
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
+  // Throughput meter: a rolling window of {t, done} samples from each poll -- no backend
+  // change needed, "done" is already the cumulative completed-jobs counter getJobs()
+  // returns. Rate = delta(done) / delta(t) over the oldest-vs-newest sample in the window.
+  const historyRef = useRef([])
+  const [throughput, setThroughput] = useState(null)   // jobs/min, or null until 2+ samples
 
   useEffect(() => {
     let on = true
     const load = () => getJobs()
-      .then((d) => { if (on) { setQ(d); setErr('') } })
+      .then((d) => {
+        if (!on) return
+        setQ(d); setErr('')
+        const now = Date.now()
+        const done = d?.stats?.done ?? 0
+        const hist = [...historyRef.current, { t: now, done }].filter((s) => now - s.t <= 5 * 60 * 1000)
+        historyRef.current = hist
+        if (hist.length >= 2) {
+          const first = hist[0]
+          const elapsedMin = (now - first.t) / 60000
+          setThroughput(elapsedMin > 0 ? Math.max(0, (done - first.done) / elapsedMin) : null)
+        }
+      })
       .catch((e) => { if (on) setErr(e.message || 'unavailable') })
     load()
     const t = setInterval(load, 4000)
@@ -125,6 +142,7 @@ export default function QueuePanel() {
           </span>
         </span>
         <Stat label="total jobs" value={total} />
+        {throughput != null && <Stat label="throughput" value={`${throughput < 10 ? throughput.toFixed(1) : Math.round(throughput)}/min`} />}
         {shown.length === 0 && !err && (
           <span className="muted" style={{ fontSize: 13 }}>queue empty — nothing in flight</span>
         )}
