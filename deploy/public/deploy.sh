@@ -39,6 +39,10 @@ LF_SK="${LANGFUSE_SECRET_KEY:-}"       # secret — must be passed via env; not 
 HITL_WEBHOOK="${HITL_WEBHOOK_URL:-}"   # set => POST to this URL when HITL items are queued
 DEMO_DRIVE_KEY="${ACP_DEMO_DRIVE_KEY:-}"  # set => enables server-side ADC Drive scan for E2E tests
 E2E_KEY="${ACP_E2E_KEY:-}"                # set => X-E2E-Key bypass for smoke tests; leave unset in prod if unused
+# Remediated-output Blob store (ADR 0010) — managed identity auth, no key. The account +
+# container + acp-app's system-assigned identity + Storage Blob Data Contributor role
+# grant are one-time infra setup (not this script's job); this just points the app at it.
+BLOB_ACCOUNT="${ACP_BLOB_ACCOUNT:-acpremediatedstore}"
 
 echo "== 0/5 preflight =="
 # Inherit ACP_GOOGLE_CLIENT_ID from the existing ACA if not provided locally, so a plain
@@ -178,22 +182,24 @@ _inherit_env() {  # $1 = var name → echoes "NAME=value" if currently set, else
 }
 WORKERS_ENV="${ACP_WORKERS:+ACP_WORKERS=$ACP_WORKERS}"; [ -z "$WORKERS_ENV" ] && WORKERS_ENV="$(_inherit_env ACP_WORKERS)"
 EMAILS_ENV="${ACP_ALLOWED_EMAILS:+ACP_ALLOWED_EMAILS=$ACP_ALLOWED_EMAILS}"; [ -z "$EMAILS_ENV" ] && EMAILS_ENV="$(_inherit_env ACP_ALLOWED_EMAILS)"
+BLOB_ENV="ACP_BLOB_ACCOUNT=$BLOB_ACCOUNT"
 echo "   workers = ${ACP_WORKERS:-${WORKERS_ENV:+inherited}}${WORKERS_ENV:+}"
 echo "   allowed emails = ${ACP_ALLOWED_EMAILS:-${EMAILS_ENV:+inherited}}"
+echo "   blob account = $BLOB_ACCOUNT"
 if az containerapp show -g "$RG" -n "$APP" -o none 2>/dev/null; then
   _retry az containerapp secret set -g "$RG" -n "$APP" \
     --secrets "${SECRETS[@]}" -o none
   _retry az containerapp registry set -g "$RG" -n "$APP" \
     --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
   _retry az containerapp update -g "$RG" -n "$APP" --image "$ACRSERVER/$IMAGE" \
-    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV -o none
+    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV -o none
 else
   az containerapp create -g "$RG" -n "$APP" --environment "$ENVNAME" \
     --image "$ACRSERVER/$IMAGE" \
     --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
     --target-port 8077 --ingress external \
     --secrets "${SECRETS[@]}" \
-    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV \
+    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV \
     --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 1 -o none
 fi
 
