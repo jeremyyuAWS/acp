@@ -6,20 +6,24 @@ import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
 import { dupeCountOf, duplicateFiles } from './dedupe.js'
 
-// Steps 1–3 isolated as sub-steps: 1 Inventory · 2 Classify (HITL: confirm/correct the
-// agent's classification) · 3 Actions (HITL: accept/override the lifecycle action).
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
 const RET_BUCKET = (f) => { if (f.locked) return 'locked'; const l = retentionOf(f).label; return l.startsWith('Retain') ? 'retain' : l.startsWith('Archive') ? 'archive' : 'keep' }
 const RET_COLOR = { keep: '#639922', archive: '#7a5c8e', retain: '#D85A30', locked: '#9a948f', delete: '#1F5FA8' }
 const RET_ORDER = ['keep', 'archive', 'retain']
 const RET_BADGE = { keep: ['Keep', '#E7F0DC', '#3B6D11'], archive: ['Archive', '#EEEDFE', '#3C3489'], retain: ['Retain · legal hold', '#FAEEDA', '#854F0B'], locked: ['🔒 Could not open', '#EEEDEA', '#5F5E5A'], delete: ['Delete', '#E2EDFB', '#1F5FA8'] }
-const SUBS = [['inventory', '1 · Inventory'], ['classify', '2 · Classify'], ['retain', '3 · Actions']]
 const RISK_COLOR = { PII: '#1F5FA8', 'legal-hold': '#854F0B', 'high-traffic': '#A56814' }
 const TYPE_COLOR = { PDF: '#C2410C', DOCX: '#2563EB', PPTX: '#D97706', XLSX: '#15803D', HTML: '#7A5C8E', VIDEO: '#9333EA', AUDIO: '#0891B2' }
 const CLASS_TAGS = ['PII', 'legal-hold', 'public-facing', 'high-traffic']
 const CLASS_COLOR = { PII: '#1F5FA8', 'legal-hold': '#854F0B', 'public-facing': '#D85A30', 'high-traffic': '#A56814' }
 const OVERRIDE_ACTIONS = ['keep', 'archive', 'retain', 'delete']
+
+const SH = ({ n, label, desc }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '28px 0 10px', paddingTop: 16, borderTop: '1px solid var(--line)' }}>
+    <b style={{ fontSize: 13.5, color: 'var(--ink)', whiteSpace: 'nowrap' }}>{n} · {label}</b>
+    {desc && <span className="muted" style={{ fontSize: 12 }}>{desc}</span>}
+  </div>
+)
 
 // Combined exposure + risk chart: top-level exposure (public-facing vs internal),
 // with "internal" expandable to reveal the sensitive-content flags it carries.
@@ -48,21 +52,18 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 }
 
 export default function Discover({ sources, files, busy, onScan, delegations = {}, fileTypeConfig = {}, onAdvance, progress = null, scanPct = 0, scanStatus = '', scanId = null }) {
-  const [sub, setSub] = useState('inventory')
   const [sel, setSel] = useState(null)
   const [open, setOpen] = useState(() => new Set())
   const toggle = (d) => setOpen((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n })
-  const [decisions, setDecisions] = useState({}) // Actions HITL: file -> { state:'accepted'|'override', action? }
-  const [classState, setClassState] = useState({}) // Classify HITL: file -> { tags:[...], confirmed:bool }
-  const [editAct, setEditAct] = useState(null) // file currently choosing an override action
-  const [seg, setSeg] = useState(null) // category drill-down drawer (by document type)
+  const [decisions, setDecisions] = useState({})
+  const [classState, setClassState] = useState({})
+  const [editAct, setEditAct] = useState(null)
+  const [seg, setSeg] = useState(null)
 
-  // Apply file-type exclusions — disabled types are excluded from inventory/scoring
   const visibleFiles = Object.keys(fileTypeConfig).length
     ? files.filter((f) => fileTypeConfig[f.type] !== false)
     : files
   const excludedCount = files.length - visibleFiles.length
-  // Effective owner after delegation (departed owners reassigned to new person)
   const ownerOf = (f) => delegations[f.owner] || f.owner
   const isDelegated = (f) => !!delegations[f.owner]
 
@@ -72,8 +73,6 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
   const lockedCount = visibleFiles.filter((f) => f.locked).length
 
   const PLUM = '#7a5c8e'
-  // Effective tags = the agent's guess unless a human has edited them (classState), so
-  // manually marking a file "public-facing" below flows straight into the exposure chart.
   const tagsOf = (f) => classState[f.file]?.tags ?? classTags(f).filter((t) => CLASS_TAGS.includes(t))
   const byType = Object.entries(visibleFiles.reduce((m, f) => { const k = (f.type || '').toUpperCase(); m[k] = (m[k] || 0) + 1; return m }, {})).sort((a, b) => b[1] - a[1]).map(([label, value]) => ({ label, value, color: TYPE_COLOR[label] || PLUM }))
   const internalDocs = visibleFiles.filter((f) => !tagsOf(f).includes('public-facing'))
@@ -81,24 +80,15 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
   const exposureInternal = { label: 'internal', value: internalDocs.length, color: '#9a948f' }
   const internalRisk = ['PII', 'legal-hold', 'high-traffic'].map((t) => ({ label: t, value: internalDocs.filter((f) => tagsOf(f).includes(t)).length, color: RISK_COLOR[t] })).filter((d) => d.value)
 
-  // ---- Classify HITL ----
   const isConfirmed = (f) => !!classState[f.file]?.confirmed
   const toggleTag = (f, t) => setClassState((s) => { const cur = s[f.file]?.tags ?? tagsOf(f); const next = cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]; return { ...s, [f.file]: { tags: next, confirmed: false } } })
   const confirmClass = (f) => setClassState((s) => ({ ...s, [f.file]: { tags: tagsOf(f), confirmed: true } }))
   const classConfirmed = files.filter(isConfirmed).length
 
-  // ---- "Already known" summary — what's already true about this estate BEFORE you start
-  // classifying, so you know what's worth your attention vs. already handled. ----
   const dupeCount = dupeCountOf(files)
-  // f.score is only set when the scan's own rubric pass actually scored the file (null for
-  // uncertain/unparseable docs) — i.e. files that already have a real result, independent of
-  // whether the separate "Assess" WCAG-level step has been clicked yet.
   const alreadyScored = files.filter((f) => f.score != null).length
-  // remediated_at/drive_write_url = fixed THIS scan; acp_stamped = carries a provenance
-  // stamp from a PRIOR remediation pass (embedded in the file itself) — either counts.
   const alreadyRemediated = files.filter((f) => f.remediated_at || f.drive_write_url || f.acp_stamped).length
 
-  // ---- Actions HITL ----
   const actionable = files.filter((f) => !f.locked)
   const effAction = (f) => { const d = decisions[f.file]; return d?.state === 'override' ? d.action : RET_BUCKET(f) }
   const decide = (f, dec) => { setDecisions((s) => ({ ...s, [f.file]: dec })); setEditAct(null) }
@@ -107,7 +97,6 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
   const pendingActions = actionable.length - dcount('accepted') - dcount('override')
   const acceptAll = () => setDecisions((s) => { const n = { ...s }; actionable.forEach((f) => { if (!n[f.file]) n[f.file] = { state: 'accepted' } }); return n })
 
-  // Per-department mini composition bar for the collapsed header.
   const compBar = (fs, mode) => {
     if (mode === 'inventory') {
       const m = {}; fs.forEach((f) => { const k = (f.type || '').toUpperCase(); m[k] = (m[k] || 0) + 1 })
@@ -120,7 +109,6 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
     }
     return null
   }
-  // Per-department secondary count for the header (HITL progress, no risk numbers).
   const deptNote = (fs, mode) => {
     if (mode === 'classify') { const done = fs.filter(isConfirmed).length; return `${done}/${fs.length} confirmed` }
     if (mode === 'retain') { const done = fs.filter((f) => decisions[f.file] && !f.locked).length; const tot = fs.filter((f) => !f.locked).length; return `${done}/${tot} decided` }
@@ -217,43 +205,39 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
         <button disabled={busy} onClick={() => onScan('all')}>{busy ? 'scanning…' : 'Re-scan all sources'}</button>
       </div>
 
-      {/* Live scan theater — watch discovery happen here, where it belongs (was in Monitor). */}
       <ScanTheater busy={busy} progress={progress} pct={scanPct} status={scanStatus} />
 
-      <div className="subtabs" role="tablist" aria-label="Discover steps">
-        {SUBS.map(([k, label], i) => {
-          // Real completion signal per sub-step (stays ✓ even when you navigate away).
-          const subDone = {
-            inventory: files.length > 0,
-            classify: files.length > 0 && files.filter(isConfirmed).length === files.length,
-            retain: actionable.length > 0 && pendingActions === 0,
-          }
-          const done = !!subDone[k] && sub !== k
-          return <button key={k} role="tab" aria-selected={sub === k} aria-current={sub === k ? 'step' : undefined} className={`fchip${sub === k ? ' on' : ''}${done ? ' done' : ''}`} onClick={() => setSub(k)}>{done && <span className="tabok" aria-hidden="true">✓ </span>}{label}{done && <span className="vh"> completed</span>}</button>
-        })}
-      </div>
-
-      {files.length === 0 ? <p className="muted">No documents yet — run a scan from Integrations.</p> : sub === 'classify' ? (
+      {/* ── 1 · Inventory ── */}
+      <SH n="1" label="Inventory" desc="inventory by department · click to expand · the bar shows the file-type mix" />
+      {files.length === 0 ? (
+        <p className="muted">No documents yet — run a scan from Integrations.</p>
+      ) : (
         <>
-          <div className="muted" style={{ margin: '4px 0 10px' }}>Step 2 · how the agent classifies the estate by content &amp; risk — expand a department to <b>confirm or correct</b> each document’s tags</div>
+          <div className="typelegend">
+            <span className="muted" style={{ fontSize: 12, marginRight: 2 }}>document types · click to view:</span>
+            {byType.map((t) => (
+              <button key={t.label} className="typekey" onClick={() => setSeg({ title: `${t.label} documents`, subtitle: `${t.value} of ${files.length} · across all departments`, files: files.filter((f) => (f.type || '').toUpperCase() === t.label) })}>
+                <i style={{ background: t.color }} aria-hidden="true" />{t.label}<span className="muted"> · {t.value}</span>
+              </button>
+            ))}
+          </div>
+          {deptList('inventory')}
+        </>
+      )}
+
+      {/* ── 2 · Classify ── */}
+      {files.length > 0 && (
+        <>
+          <SH n="2" label="Classify" desc="how the agent classifies the estate by content & risk — confirm or correct each document's tags" />
           <div style={{ fontSize: 12.5, color: 'var(--ink)', background: '#F1EFF3', border: '1px solid var(--line)',
                         borderRadius: 8, padding: '9px 12px', margin: '0 0 12px', lineHeight: 1.5 }}>
             <b>How classification works:</b> <strong>document type</strong> comes from the file format ·
             <strong> department</strong> &amp; <strong>exposure</strong> are inferred from the file name
             (e.g. <code>HR-</code>, <code>Legal-</code>, <code>Finance-</code>, <code>public-</code>, <code>-hold</code>) ·
             <strong> sensitive-data</strong> flags come from the scan (Deep scan). Confirm or correct any tag below —
-            your edits win over the agent’s guess.
+            your edits win over the agent's guess.
           </div>
-          {/* What's already known about this estate before you start classifying — so it's
-              clear what's worth your attention vs. already handled (duplicate copies to
-              clean up, files already scored by the scan, files already remediated in a
-              prior pass — independent of whether the separate Assess step has run yet). */}
           <div className="metrics" style={{ margin: '0 0 14px' }}>
-            {/* The global `button{}` rule sets color:#fff — .metric overrides background/
-                border/padding (class beats element) but NOT color, since .metric never sets
-                it. Every text node here needs an explicit color or it renders white-on-card
-                (invisible) — hence color set on the button itself as a base, not left to
-                inherit. */}
             <button className="metric" style={{ textAlign: 'left', color: 'var(--ink)', cursor: dupeCount ? 'pointer' : 'default' }}
                     disabled={!dupeCount}
                     onClick={() => setSeg({ title: 'Duplicate uploads', subtitle: `${dupeCount} of ${files.length} files are extra copies of another document`, files: duplicateFiles(files) })}>
@@ -290,42 +274,28 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
           </div>
           {deptList('classify')}
         </>
-      ) : (
+      )}
+
+      {/* ── 3 · Actions ── */}
+      {files.length > 0 && (
         <>
-          {sub === 'retain' && (
-            <div className="hitlbar">
-              <span className="muted"><b style={{ color: 'var(--ink)' }}>{dcount('accepted')}</b> accepted · <b style={{ color: 'var(--ink)' }}>{dcount('override')}</b> changed · {pendingActions} pending</span>
-              <button disabled={!pendingActions} onClick={acceptAll}>✓ Accept all recommendations</button>
-            </div>
-          )}
-          <div className="muted" style={{ margin: '4px 0 8px' }}>{sub === 'retain' ? 'Step 3 · Actions · the lifecycle action the agent recommends per document — the pills show the classification it’s based on; accept it or change it to keep / archive / retain / delete' : 'Step 1 · inventory by department · click a department to expand · the bar shows its document-type mix'}</div>
-          {sub !== 'retain' && (
-            <div className="typelegend">
-              <span className="muted" style={{ fontSize: 12, marginRight: 2 }}>document types · click to view:</span>
-              {byType.map((t) => (
-                <button key={t.label} className="typekey" onClick={() => setSeg({ title: `${t.label} documents`, subtitle: `${t.value} of ${files.length} · across all departments`, files: files.filter((f) => (f.type || '').toUpperCase() === t.label) })}>
-                  <i style={{ background: t.color }} aria-hidden="true" />{t.label}<span className="muted"> · {t.value}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          {deptList(sub === 'retain' ? 'retain' : 'inventory')}
+          <SH n="3" label="Actions" desc="lifecycle action per document — accept the recommendation or override" />
+          <div className="hitlbar">
+            <span className="muted"><b style={{ color: 'var(--ink)' }}>{dcount('accepted')}</b> accepted · <b style={{ color: 'var(--ink)' }}>{dcount('override')}</b> changed · {pendingActions} pending</span>
+            <button disabled={!pendingActions} onClick={acceptAll}>✓ Accept all recommendations</button>
+          </div>
+          {deptList('retain')}
         </>
       )}
-      {/* Sub-step CTA: walk Inventory → Classify → Actions, then hand off to Assess. */}
-      {files.length > 0 && (() => {
-        const idx = SUBS.findIndex(([k]) => k === sub)
-        const next = SUBS[idx + 1]
-        return (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12,
-                        margin: '20px 0 4px', paddingTop: 14, borderTop: '1px solid var(--line)' }}>
-            <span className="muted" style={{ fontSize: 13 }}>Done here? Continue →</span>
-            {next
-              ? <button onClick={() => { setSub(next[0]); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>{next[1]} →</button>
-              : <button onClick={() => onAdvance?.()}>Assess — score vs WCAG →</button>}
-          </div>
-        )
-      })()}
+
+      {files.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12,
+                      margin: '20px 0 4px', paddingTop: 14, borderTop: '1px solid var(--line)' }}>
+          <span className="muted" style={{ fontSize: 13 }}>Done here? Continue →</span>
+          <button onClick={() => onAdvance?.()}>Assess — score vs WCAG →</button>
+        </div>
+      )}
+
       {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
       {sel && <FileDrawer file={sel} context="discover" onClose={() => setSel(null)} overrideOwner={ownerOf(sel)} delegatedFrom={isDelegated(sel) ? sel.owner : null} scanId={scanId} />}
     </>

@@ -12,7 +12,6 @@ import { TraceChip } from './Transparency.jsx'
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
 // (what to fix, prioritized, accept/reject/modify), the HITL queue, and self-remediation.
 const REM_ACTIONS = REMEDIATION_ACTIONS
-const SUBS = [['triage', '5 · Triage'], ['auto', '6 · Auto-remediate'], ['review', '7 · Human review'], ['revalidate', '8 · Re-validate']]
 const JUNK_PATTERNS = ['_draft', '_old', '_v1', '_backup', '~$', '.tmp', '_temp', '_copy', '_archive', '_test', '_sample', ' copy', '(1)', '(2)']
 const isAutoJunk = (f) => {
   const name = (f.file || '').toLowerCase()
@@ -168,7 +167,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [sel, setSel] = useState(null)
   const [seg, setSeg] = useState(null)
   const [editing, setEditing] = useState(null)
-  const [sub, setSub] = useState('triage')
   const [triageSel, setTriageSel] = useState(new Set())
   const [remBusy, setRemBusy] = useState(false)
   const [remMsg, setRemMsg] = useState('')
@@ -343,19 +341,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         </div>
       )}
 
-      <div className="subtabs" role="tablist" aria-label="Remediate steps">
-        {SUBS.map(([k, label], i) => {
-          // Real completion signal per sub-step (stays ✓ even when you navigate away).
-          const subDone = {
-            triage: files.length > 0 && files.filter((f) => !(f.remediated_at || f.drive_write_url) && !triage[f.file]).length === 0,
-            auto: remediable.length > 0 && pending === 0,
-            review: (totalHitl > 0 && queue.length === 0) || serverFixed > 0,
-            revalidate: reVerified > 0,
-          }
-          const done = !!subDone[k] && sub !== k
-          return <button key={k} role="tab" aria-selected={sub === k} aria-current={sub === k ? 'step' : undefined} className={`fchip${sub === k ? ' on' : ''}${done ? ' done' : ''}`} onClick={() => setSub(k)}>{done && <span className="tabok" aria-hidden="true">✓ </span>}{label}{done && <span className="vh"> completed</span>}</button>
-        })}
-      </div>
 
       {/* Write-back results — proof the fixed copies landed in Drive. Surfaces the
           drive_write_url recorded server-side, so a successful remediation is visible. */}
@@ -384,7 +369,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         )
       })()}
 
-      {sub === 'triage' && (() => {
+      {/* ── Triage ── */}
+      {(() => {
         const scoreColor = (s) => s >= 80 ? '#3B6D11' : s >= 60 ? '#854F0B' : '#7B1D1D'
         const SEV_C = { CRITICAL: '#7B1D1D', SERIOUS: '#854F0B', MODERATE: '#1F5FA8', MINOR: '#9a948f' }
         const topSev = (f) => { for (const s of ['CRITICAL', 'SERIOUS', 'MODERATE', 'MINOR']) if ((f.issues || []).some((i) => i.severity === s)) return s; return null }
@@ -410,7 +396,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         const selFiles = triageFiles.filter((f) => triageSel.has(f.file))
         const allSel = undecidedFiles.length > 0 && undecidedFiles.every((f) => triageSel.has(f.file))
         return (
-          <section className="panel" key="triage">
+          <section className="panel" id="rem-triage" key="triage">
             <div className="triagehd">
               <div>
                 <b>File triage</b>
@@ -519,21 +505,22 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             ) : (
               <div className="triagecta">
                 <b>✓ All scanned files remediated</b> — every file has been fixed and written back. Nothing left to triage{remediatedFiles.length > 0 ? ` · ${remediatedFiles.length} fixed` : ''}.
-                <button className="ctago" style={{ marginLeft: 14 }} onClick={() => setSub('revalidate')}>→ Re-validate</button>
+                <button className="ctago" style={{ marginLeft: 14 }} onClick={() => document.getElementById('rem-revalidate')?.scrollIntoView({ behavior: 'smooth' })}>→ Re-validate</button>
               </div>
             )}
 
             {undecided === 0 && triageFiles.length > 0 && (
               <div className="triagecta">
                 <b>✓ Triage complete</b> — {inscopeCount} file{inscopeCount !== 1 ? 's' : ''} in scope · {naCount} N/A · {deferCount} deferred
-                <button className="ctago" style={{ marginLeft: 14 }} onClick={() => setSub('auto')}>→ Go to remediation plan</button>
+                <button className="ctago" style={{ marginLeft: 14 }} onClick={() => document.getElementById('rem-auto')?.scrollIntoView({ behavior: 'smooth' })}>→ Go to remediation plan</button>
               </div>
             )}
           </section>
         )
       })()}
 
-      {sub === 'auto' && (<>
+      {/* ── Auto-remediate ── */}
+      <div id="rem-auto" />
       {plan && (
         <div className="planband">
           <div className="planhead">
@@ -649,9 +636,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         <section className="panel"><h2>Automated fixes applied · by type</h2><Bars items={fixTypesDisplay} cols="140px 1fr 30px" /></section>
         <FixCarousel />
       </div>
-      </>)}
 
-      {sub === 'review' && (<>
+      {/* ── Human review ── */}
+      <div id="rem-review" />
       <section className="panel">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
           <h2 style={{ margin: 0 }}>Human-in-the-loop review queue {queue.length === 0 && <span className="muted">· all clear</span>}</h2>
@@ -741,10 +728,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           <p className="muted" style={{ marginTop: 12 }}>When you remediate a document yourself, the agent re-runs every engine to independently confirm the fix before it’s certified — no manual sign-off taken on trust.</p>
         </section>
       )}
-      </>)}
 
-      {sub === 'revalidate' && (
-        <>
+      {/* ── Re-validate ── */}
+      <div id="rem-revalidate" />
           <section className="panel"><h2>Re-validate &amp; verify</h2>
             {(() => {
               const SEV_PEN = { CRITICAL: 16, SERIOUS: 11, MODERATE: 5, MINOR: 2 }
@@ -795,8 +781,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               </div>
             )}
           </section>
-        </>
-      )}
 
       {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
       {sel && <FileDrawer file={sel} context="remediate" aiEnabled={aiEnabled} scanId={run?.id} onClose={() => setSel(null)} />}

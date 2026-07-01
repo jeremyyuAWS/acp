@@ -153,7 +153,6 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
   const [view, setView] = useState('overview')
-  const [assess, setAssess] = useState('results')
   const [decisions, setDecisions] = useState({})
   const [triage, setTriage] = useState({})              // per-scan triage, lifted from Remediate for time-travel
   const savedDecRef = useRef({ scanId: null, decisions: {}, triage: {} })  // last-persisted snapshot
@@ -413,7 +412,7 @@ export default function App() {
   // Presentation decouple: results views stay blank until the user runs Assess. The flag
   // is persisted on the scan (assessed_at); justAssessed gives an immediate optimistic flip.
   const assessed = !!run?.assessed_at || justAssessed === run?.id
-  const assessGate = <AssessGate onGo={() => { setAssess('results'); setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
+  const assessGate = <AssessGate onGo={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
   // Time-travel = viewing any scan other than the latest. Drives the replay banner + the
   // app-wide "replaymode" tint so it's unmistakable you're looking at a past point in time.
   const isTimeTravel = !!(run && scanList.length > 1 && scanList[0]?.id !== run.id)
@@ -558,20 +557,13 @@ export default function App() {
 
         {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? statusMsg(progress.elapsed || 0, deepScan) : ''} scanId={run?.id} />}
 
-        {view === 'assess' && (
+        {view === 'assess' && (run ? (
           <>
-            <div className="subtabs" role="tablist" aria-label="Assessment views">
-              <button role="tab" aria-selected={assess === 'results'} aria-current={assess === 'results' ? 'step' : undefined} className={`fchip${assess === 'results' ? ' on' : assessed ? ' done' : ''}`} onClick={() => setAssess('results')}>{assessed && assess !== 'results' && <span className="tabok" aria-hidden="true">✓ </span>}4 · Assess</button>
-              <button role="tab" aria-selected={assess === 'graph'} aria-current={assess === 'graph' ? 'step' : undefined} className={`fchip${assess === 'graph' ? ' on' : assessed ? ' done' : ''}`} onClick={() => setAssess('graph')}>{assessed && assess !== 'graph' && <span className="tabok" aria-hidden="true">✓ </span>}5 · Risk &amp; findings</button>
-            </div>
-            {assess === 'results' && (run ? <><AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy} onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase} />{assessPhase === 'done' && <><RuleBreakdown scanId={run.id} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}</> : placeholder)}
-            {/* Gated on `assessed` (not just `run`) — these numbers are aggregated straight
-                from already-scanned files with no fetch/await, so they were rendering
-                instantly even if the user had never clicked "Assess". Matching Overview's
-                gate makes step 5 genuinely downstream of step 4, not just numbered that way. */}
-            {(assess === 'graph' || assess === 'rubric' || assess === 'coverage') && (run ? (assessed ? <><RiskScore run={run} files={files} /><KnowledgeGraph files={files} scanId={run.id} /></> : assessGate) : placeholder)}
+            <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy} onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase} />
+            {assessed && <><RuleBreakdown scanId={run.id} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
+            {assessed && <><RiskScore run={run} files={files} /><KnowledgeGraph files={files} scanId={run.id} /></>}
           </>
-        )}
+        ) : placeholder)}
 
         {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} aiEnabled={aiEnabled} onRefresh={() => getScan(run.id).then(setScan).catch(() => {})} /> : placeholder)}
 
