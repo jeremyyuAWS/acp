@@ -229,6 +229,32 @@ function lastScanLabel(scans, type) {
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
 
+// Per-source health: this source's own recent scan history (up to its last 5 completed
+// scans) — error rate (files the engine couldn't open/parse) + avg compliance score.
+// A source with a rising error rate usually means a connector/permissions problem, not
+// a document problem — worth surfacing separately from the per-file "could not open" flags.
+function sourceHealth(scans, type) {
+  const src = type === 'google_drive' ? 'drive' : type === 'onedrive' ? 'sharepoint' : null
+  if (!src) return null
+  const recent = (scans || [])
+    .filter((s) => s.source === src && s.completed_at)
+    .sort((a, b) => (b.completed_at > a.completed_at ? 1 : -1))
+    .slice(0, 5)
+  if (!recent.length) return null
+  const totalFiles = recent.reduce((a, s) => a + (s.files || 0), 0)
+  const totalErr = recent.reduce((a, s) => a + (s.error || 0), 0)
+  const scored = recent.filter((s) => s.avg_score != null)
+  const avgScore = scored.length ? Math.round(scored.reduce((a, s) => a + s.avg_score, 0) / scored.length) : null
+  const errRate = totalFiles ? totalErr / totalFiles : 0
+  const status = errRate >= 0.15 ? 'unhealthy' : errRate > 0 ? 'degraded' : 'healthy'
+  return { status, errRate, totalErr, totalFiles, avgScore, scansCounted: recent.length }
+}
+const HEALTH_BADGE = {
+  healthy:   ['✓ healthy', '#3B6D11', '#E7F0DC'],
+  degraded:  ['◐ degraded', '#854F0B', '#FAEEDA'],
+  unhealthy: ['⚠ unhealthy', '#A32D2D', '#FCEBEB'],
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function Integrations({ sources, files = [], scans = [], onScan, busy, hasDriveToken, hasSPToken, onConnect,
@@ -379,6 +405,7 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
             ? 'Scan Google Drive files for WCAG accessibility issues'
             : 'Scan OneDrive & SharePoint for accessibility issues'
           const lastScan     = lastScanLabel(scans, s.type)
+          const health       = sourceHealth(scans, s.type)
 
           return (
             <div className={`srccard${connected ? ' srccard--on' : ''}`} key={s.id}>
@@ -396,6 +423,12 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                     <span className="srccard-badge">
                       <span className="livedot" aria-hidden="true" />connected · read-only
                     </span>
+                    {health && (() => {
+                      const [label, fg, bg] = HEALTH_BADGE[health.status]
+                      const title = `${health.totalErr} of ${health.totalFiles} files failed to open across the last ${health.scansCounted} scan${health.scansCounted !== 1 ? 's' : ''}`
+                        + (health.avgScore != null ? ` · avg compliance ${health.avgScore}/100` : '')
+                      return <span className="srccard-badge" style={{ background: bg, color: fg, padding: '2px 8px', borderRadius: 999, fontSize: 11.5 }} title={title}>{label}</span>
+                    })()}
                   </div>
                 ) : (
                   <div className="srccard-desc">{desc}</div>
