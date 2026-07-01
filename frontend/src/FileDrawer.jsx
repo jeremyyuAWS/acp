@@ -79,10 +79,15 @@ export function retentionOf(f) {
 }
 
 const STEPS = ['Discover', 'Classify', 'Retain', 'Assess', 'Risk score', 'Remediate', 'Human review', 'Re-validate', 'Publish', 'Monitor']
-function journeyStates(st) {
+function journeyStates(st, remNow) {
   if (st === 'unanalysable') return ['done', 'done', 'done', 'blocked', 'blocked', 'blocked', 'blocked', 'blocked', 'blocked', 'blocked']
   const base = ['done', 'done', 'done', 'done', 'done']
   if (st === 'certifiable') return [...base, 'remediated', 'reviewed', 'done', 'proj', 'proj']
+  // `st` is derived from the file prop, which the parent doesn't refresh after a
+  // remediate-now run completes -- so without this, the journey stays stuck on
+  // "Remediate · in progress" even once the job is done. remNow is this component's
+  // own live state for that run, so it's the one source of truth we DO have fresh.
+  if (remNow?.done) return [...base, 'remediated', 'proj', 'proj', 'proj', 'proj']
   return [...base, 'current', 'proj', 'proj', 'proj', 'proj'] // issues / uncertain
 }
 const STATE = {
@@ -136,13 +141,17 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   // looking at a single document's recommendation can see it acted on immediately instead
   // of having to switch to Remediate and run/filter the whole-estate flow.
   const [remNow, setRemNow] = useState(null) // null | 'queued' | 'error' | {done: true, url?}
+  const REM_POLL_MAX = 30 // matches the ~1 min ETA shown on the recommendation card
+  const [remProgress, setRemProgress] = useState(0)
   const remediateNow = async () => {
     if (!scanId || remNow === 'queued') return
     setRemNow('queued')
+    setRemProgress(0)
     try {
       await remediateScan(scanId, [file.file])
-      for (let i = 0; i < 30; i++) {
+      for (let i = 0; i < REM_POLL_MAX; i++) {
         await new Promise((r) => setTimeout(r, 1000))
+        setRemProgress(Math.round(((i + 1) / REM_POLL_MAX) * 100))
         const s = await getRemediationStatus(scanId).catch(() => null)
         if (!s || s.in_flight === 0) break
       }
@@ -159,7 +168,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   const issues = file.issues || []
   const byCrit = {}
   issues.forEach((i) => { byCrit[i.wcag] = (byCrit[i.wcag] || 0) + 1 })
-  const states = journeyStates(st)
+  const states = journeyStates(st, remNow)
 
   const hasAnyMeta = file.modifiedAge || file.lastAccessed || file.views90d != null || file.sizeKB || file.duration || file.pages || file.sheets || file.owner || overrideOwner
   const metaBlock = (
@@ -270,9 +279,14 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                   <button className="ctago" onClick={remediateNow}>⚡ Remediate this file now</button>
                 )}
                 {remNow === 'queued' && (
-                  <span className="muted" style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-                    <span className="spinner" /> Remediating…
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span className="muted" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, flex: '0 0 auto' }}>
+                      <span className="spinner" /> Remediating…
+                    </span>
+                    <span className="track" style={{ width: 120 }}>
+                      <i style={{ width: `${remProgress}%`, background: 'var(--plum)', transition: 'width .4s linear' }} />
+                    </span>
+                  </div>
                 )}
                 {remNow?.done && (
                   <span style={{ color: '#3B6D11', fontWeight: 600 }}>✓ Remediated — fixed copy saved to Drive</span>
