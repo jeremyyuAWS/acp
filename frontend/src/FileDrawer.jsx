@@ -169,6 +169,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   const byCrit = {}
   issues.forEach((i) => { byCrit[i.wcag] = (byCrit[i.wcag] || 0) + 1 })
   const states = journeyStates(st, remNow)
+  const isRemediated = !!(file.acp_stamped || file.remediated_at || file.drive_write_url || remNow?.done)
 
   const hasAnyMeta = file.modifiedAge || file.lastAccessed || file.views90d != null || file.sizeKB || file.duration || file.pages || file.sheets || file.owner || overrideOwner
   const metaBlock = (
@@ -319,7 +320,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                 <div className="finding" key={n}>
                   <span className="badge" style={{ background: bg, color: fg }}>{(i.severity || '').toLowerCase()}</span>
                   <div className="findingmain">
-                    <div className="findingtop">{critLabel(i.wcag)}{i.level && <span className="lvlchip">Level {i.level}</span>}</div>
+                    <div className="findingtop">{critLabel(i.wcag)}{i.level && <span className="lvlchip">Level {i.level}</span>}{isRemediated && <span className="dectag ok">✓ remediated</span>}</div>
                     {i.detail && <div className="findingdetail">{i.detail}</div>}
                     {i.impact && <div className="muted findingimpact">{i.impact}</div>}
                     {i.fix && <div className="findingfix"><span className={i.auto ? 'fixauto' : 'fixreview'}>{i.auto ? '⚡ auto-fixable' : '✎ needs review'}</span> · {i.fix}<span className="muted"> · {i.rule_id ?? i.ruleId}</span></div>}
