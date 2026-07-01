@@ -169,6 +169,16 @@ def _remediate_file(payload: dict, job: dict) -> None:
     core.emit_remediation_span(scan_id, filename, drive_write_url=web_url)
     core.store.log_decision("system", "remediate.applied", scan_id=scan_id, file=filename,
                             detail="; ".join(applied) or "no auto fixes needed")
+    # ADR 0003 Phase 2: mark this file's deterministically-auto-fixable violations
+    # complete. This handler only ever runs against Drive files (get_media above is a
+    # Drive-only call), so source is fixed -- no lookup needed to resolve doc_id.
+    try:
+        from documents import resolve_doc_id
+        doc_id = resolve_doc_id("drive", drive_file_id, filename, None)
+        for rule_id in core.store.list_auto_fail_rules(scan_id, filename):
+            core.store.upsert_remediation_state(doc_id, rule_id, "complete", scan_id)
+    except Exception:
+        pass
 
 
 # ── Fan-out scan pipeline (ADR 0007): discover → scan_file → finalize ─────────
@@ -409,6 +419,12 @@ def ensure_assess_trace(scan_id: str, level: str = "AA") -> None:
                 blocking_files.add(f)
     res = core.store.get_scan(scan_id)
     owner = (res or {}).get("run", {}).get("owner_email")
+    source = (res or {}).get("run", {}).get("source")
+    # ADR 0003 Phase 2: seed a 'not_started' remediation_state row for every violation
+    # newly seen at Assess time. Only inserts (never overwrites), so a rule still failing
+    # on a later scan doesn't reset any progress already made on it.
+    from documents import resolve_doc_id
+    identities = {r["file"]: r for r in core.store.list_file_identities(scan_id)}
     for f in (res or {}).get("files", []):
         fname = f["file"]
         ftrace = _lf.file_trace(scan_id, fname, user=owner)
@@ -417,6 +433,13 @@ def ensure_assess_trace(scan_id: str, level: str = "AA") -> None:
         if sc_counts:
             _lf.rule_spans(aspan, sc_counts, RULE_CATALOG, filename=fname, scan_id=scan_id, user=owner)
             conformant = fname not in blocking_files
+            ident = identities.get(fname) or {}
+            try:
+                doc_id = resolve_doc_id(source, ident.get("drive_file_id"), fname, ident.get("checksum"))
+                for rule_id in sc_counts:
+                    core.store.seed_remediation_state(doc_id, rule_id, scan_id)
+            except Exception:
+                pass
         else:
             conformant = not bool(f.get("issues"))
         aspan.end(output={"conformant": conformant, "failing_criteria": len(sc_counts or {})})
