@@ -141,6 +141,15 @@ _SCHEMA = [
       count INT, severity TEXT, samples TEXT,
       PRIMARY KEY (scan_id, file, pii_type)
     )""",
+    # Document-centric layer (ADR 0003, Phase 1): a long-lived governed object a scan
+    # upserts into, distinct from file_records (a per-scan snapshot). doc_id is stable
+    # across renames/scans (see api/documents.py:resolve_doc_id).
+    """CREATE TABLE IF NOT EXISTS documents (
+      doc_id TEXT PRIMARY KEY, source TEXT, path TEXT, content_hash TEXT,
+      owner TEXT, department TEXT, created_at TEXT, last_seen TEXT,
+      usage_signal INT, regulatory_tags TEXT, business_criticality TEXT,
+      triage_score INT, triage_rationale TEXT
+    )""",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -1211,3 +1220,26 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT * FROM jobs" + where + " ORDER BY updated_at DESC LIMIT %s", tuple(params))
             return self._db.fetchall(cur)
+
+    # ── Document-centric layer (ADR 0003, Phase 1) ─────────────────────────────
+    def upsert_document(self, doc_id: str, *, source: str, path: str, content_hash: str | None,
+                        owner: str | None, created_at: str, last_seen: str,
+                        triage_score: int, triage_rationale: str) -> None:
+        """Upsert a document's scan-derived fields. department/regulatory_tags/
+        business_criticality/usage_signal aren't set here (no real-scan source for them
+        yet — ADR 0003's own noted gap) and are left for an admin/connector to populate
+        later; the ON CONFLICT clause deliberately doesn't touch those columns."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO documents(doc_id,source,path,content_hash,owner,created_at,"
+                "last_seen,triage_score,triage_rationale) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(doc_id) DO UPDATE SET path=EXCLUDED.path, "
+                "content_hash=EXCLUDED.content_hash, last_seen=EXCLUDED.last_seen, "
+                "triage_score=EXCLUDED.triage_score, triage_rationale=EXCLUDED.triage_rationale",
+                (doc_id, source, path, content_hash, owner, created_at, last_seen,
+                 triage_score, triage_rationale))
+
+    def get_document(self, doc_id: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM documents WHERE doc_id=%s", (doc_id,))
+            return self._db.fetchone(cur)
