@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import { openTraceUrl, getTraceStatus, getScanTraces } from './api.js'
+import SegmentDrawer from './SegmentDrawer.jsx'
+import FileDrawer from './FileDrawer.jsx'
 
 // "📊 View trace" link. File-centric tracing (backend: lf.file_trace) — every file has
 // its OWN Langfuse trace (Discover/Assess/Remediate as spans inside it), grouped into a
@@ -41,20 +43,24 @@ export function TraceChip({ scanId, kind = 'session', file = null, label = 'View
 // WCAG failure heatmap: top failing rules × department, so a reviewer sees at a glance
 // WHERE the biggest problems concentrate, not just which rules fail most overall.
 // Color intensity = fail count (darker = worse), same orange family as rb-fail.
-function FailureHeatmap({ rows, files, topRules }) {
+function FailureHeatmap({ rows, files, topRules, onCellClick }) {
+  const fileByName = {}
+  ;(files || []).forEach((f) => { fileByName[f.file] = f })
   const deptOf = {}
   ;(files || []).forEach((f) => { deptOf[f.file] = f.department || f.dept || 'Unassigned' })
   if (!Object.keys(deptOf).length) return null   // no department data available — skip silently
 
   const ruleIds = new Set(topRules.map((r) => r.id))
   const depts = new Set()
-  const cell = {}   // `${ruleId}::${dept}` -> fail count
+  const cell = {}       // `${ruleId}::${dept}` -> fail count
+  const cellFiles = {}  // `${ruleId}::${dept}` -> failing file objects
   rows.forEach((r) => {
     if (!ruleIds.has(r.rule_id) || String(r.outcome || '').toUpperCase() !== 'FAIL') return
     const d = deptOf[r.file] || 'Unassigned'
     depts.add(d)
     const k = `${r.rule_id}::${d}`
     cell[k] = (cell[k] || 0) + 1
+    ;(cellFiles[k] ||= []).push(fileByName[r.file] || { file: r.file, score: null })
   })
   if (!depts.size) return null
   const deptList = [...depts].sort()
@@ -70,14 +76,17 @@ function FailureHeatmap({ rows, files, topRules }) {
         <div className="heatrow" role="row" key={r.id}>
           <span className="heatlabel" role="rowheader" title={r.name}><b>{r.id}</b> {r.name}</span>
           {deptList.map((d) => {
-            const n = cell[`${r.id}::${d}`] || 0
+            const k = `${r.id}::${d}`
+            const n = cell[k] || 0
             const alpha = n ? 0.15 + 0.85 * (n / max) : 0
             return (
-              <span className="heatcell" role="cell" key={d}
-                    style={{ background: n ? `rgba(201,116,43,${alpha.toFixed(2)})` : 'transparent' }}
-                    title={`${r.id} × ${d}: ${n} failing document${n === 1 ? '' : 's'}`}>
+              <button type="button" className="heatcell" role="cell" key={d} disabled={!n}
+                    style={{ background: n ? `rgba(201,116,43,${alpha.toFixed(2)})` : 'transparent',
+                             cursor: n ? 'pointer' : 'default' }}
+                    title={n ? `${r.id} × ${d}: ${n} failing document${n === 1 ? '' : 's'} — click to view` : `${r.id} × ${d}: no failures`}
+                    onClick={() => n && onCellClick(r, d, cellFiles[k])}>
                 {n || ''}
-              </span>
+              </button>
             )
           })}
         </div>
@@ -92,6 +101,8 @@ function FailureHeatmap({ rows, files, topRules }) {
 export function RuleBreakdown({ scanId, files }) {
   const [rows, setRows] = useState(null)
   const [open, setOpen] = useState(false)
+  const [seg, setSeg] = useState(null)
+  const [sel, setSel] = useState(null)
   useEffect(() => {
     if (!scanId) { setRows(null); return }
     let cancelled = false
@@ -148,9 +159,16 @@ export function RuleBreakdown({ scanId, files }) {
       {failingRules.length > 0 && (
         <>
           <h3 className="heatmaptitle">Where failures concentrate <span className="muted">· top {failingRules.length} failing criteria by department</span></h3>
-          <FailureHeatmap rows={rows || []} files={files} topRules={failingRules} />
+          <FailureHeatmap rows={rows || []} files={files} topRules={failingRules}
+                           onCellClick={(rule, dept, cellFiles) => setSeg({
+                             title: `${rule.id} · ${dept}`,
+                             subtitle: `${cellFiles.length} document${cellFiles.length === 1 ? '' : 's'} failing "${rule.name}"`,
+                             files: cellFiles,
+                           })} />
         </>
       )}
+      {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
+      {sel && <FileDrawer file={sel} scanId={scanId} onClose={() => setSel(null)} />}
     </section>
   )
 }

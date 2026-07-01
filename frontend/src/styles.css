@@ -267,7 +267,10 @@ input:focus-visible, [role="tab"]:focus-visible {
 .heatlabel { grid-column: 1; min-width: 220px; padding: 6px 10px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; position: sticky; left: 0; background: #fff; border-right: 1px solid var(--line); }
 .heathdr .heatlabel { background: var(--bg); }
 .heatcol { padding: 6px 8px; text-align: center; }
-.heatcell { padding: 6px 8px; text-align: center; font-size: 11.5px; font-weight: 600; color: #6b3d17; border-left: 1px solid var(--line); min-height: 26px; }
+.heatcell { display: block; width: 100%; padding: 6px 8px; text-align: center; font: inherit; font-size: 11.5px; font-weight: 600; color: #6b3d17; border: none; border-left: 1px solid var(--line); border-radius: 0; min-height: 26px; }
+.heatcell:not(:disabled) { cursor: pointer; }
+.heatcell:not(:disabled):hover { outline: 2px solid var(--accent, #C9742B); outline-offset: -2px; }
+.heatcell:disabled { color: var(--muted); }
 .heatrow:not(.heathdr) { border-top: 1px solid var(--line); }
 /* Recent-jobs cards (Monitor queue) — owner-scoped per-job visibility */
 .jobcards { display: flex; flex-direction: column; gap: 5px; }
