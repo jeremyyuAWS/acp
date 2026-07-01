@@ -172,6 +172,18 @@ _SCHEMA = [
       id TEXT PRIMARY KEY, ts TEXT, doc_id TEXT, policy_id TEXT,
       action TEXT, result TEXT, detail TEXT
     )""",
+    # Phased remediation campaigns (ADR 0003, Phase 4). "Remediation Programs" existed
+    # only as a client-derived view (Monitor.jsx useProgramBatches, computed fresh from
+    # files/decisions props on every render, nothing persisted) -- these tables make a
+    # campaign a real, durable object: pause/resume survives a reload, and batch
+    # membership is a snapshot taken at creation time, not silently recomputed.
+    """CREATE TABLE IF NOT EXISTS campaign (
+      campaign_id TEXT PRIMARY KEY, name TEXT, status TEXT, scope TEXT, created_at TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS campaign_batch (
+      batch_id TEXT PRIMARY KEY, campaign_id TEXT, seq INT, status TEXT,
+      filter TEXT, deadline TEXT
+    )""",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -1343,4 +1355,57 @@ class Store:
         needs the full set to run a predicate in Python (see api/disposition.py)."""
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT * FROM documents")
+            return self._db.fetchall(cur)
+
+    # ── Phased remediation campaigns (ADR 0003, Phase 4) ────────────────────────
+    def create_campaign(self, campaign_id: str, *, name: str, status: str, scope: str) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO campaign(campaign_id,name,status,scope,created_at) VALUES(%s,%s,%s,%s,%s)",
+                (campaign_id, name, status, scope, self._now()))
+
+    def list_campaigns(self, scan_id: str | None = None) -> list[dict]:
+        """scan_id filters in Python (scope is opaque JSON) -- campaign counts are
+        small, not worth a JSON-path query across the sqlite/postgres split."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM campaign ORDER BY created_at DESC")
+            rows = self._db.fetchall(cur)
+        if scan_id is None:
+            return rows
+        import json as _json
+        return [r for r in rows if _json.loads(r["scope"] or "{}").get("scan_id") == scan_id]
+
+    def get_campaign(self, campaign_id: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM campaign WHERE campaign_id=%s", (campaign_id,))
+            return self._db.fetchone(cur)
+
+    def update_campaign_status(self, campaign_id: str, status: str) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "UPDATE campaign SET status=%s WHERE campaign_id=%s", (status, campaign_id))
+
+    def create_campaign_batch(self, batch_id: str, *, campaign_id: str, seq: int, status: str,
+                              filter: str, deadline: str | None) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO campaign_batch(batch_id,campaign_id,seq,status,filter,deadline) "
+                "VALUES(%s,%s,%s,%s,%s,%s)",
+                (batch_id, campaign_id, seq, status, filter, deadline))
+
+    def list_campaign_batches(self, campaign_id: str) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM campaign_batch WHERE campaign_id=%s ORDER BY seq", (campaign_id,))
+            return self._db.fetchall(cur)
+
+    def update_campaign_batch_status(self, batch_id: str, status: str) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "UPDATE campaign_batch SET status=%s WHERE batch_id=%s", (status, batch_id))
+
+    def list_scan_severities(self, scan_id: str) -> list[dict]:
+        """{file, severity} for every finding in a scan -- the input compute_batches
+        (api/campaigns.py) buckets by, kept as its own narrow query like
+        list_file_identities (Phase 2) rather than widening get_scan's SELECT."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT file, severity FROM issue_records WHERE scan_id=%s", (scan_id,))
             return self._db.fetchall(cur)
