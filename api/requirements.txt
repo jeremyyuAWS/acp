@@ -20,6 +20,10 @@ google-api-python-client==2.197.0
 google-auth==2.55.0
 googleapis-common-protos==1.75.0
 
+# --- Azure Blob remediated-output store (ADR 0010) — managed-identity auth, no key ---
+azure-storage-blob==12.24.0
+azure-identity==1.19.0
+
 # --- PDF analyser engine ---
 pikepdf==10.8.0
 pdfplumber==0.11.10
