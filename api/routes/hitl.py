@@ -49,4 +49,19 @@ def hitl_update(item_id: str, body: HitlUpdate):
         "reviewer", f"hitl.{body.status}",
         scan_id=item.get("scan_id"), file=item.get("file"), rule_id=item.get("rule_id"),
         detail=body.reviewer_note or None)
+    # ADR 0003 Phase 2: HITL resolution is an explicit remediation_state transition.
+    # approved (AI draft accepted) -> complete; rejected (a human said it's wrong, still
+    # needs work) -> in_progress; skipped (deferred, still needs attention) -> unchanged
+    # (stays awaiting_review) -- pending doesn't transition anything.
+    _STATE_FOR = {"approved": "complete", "rejected": "in_progress", "skipped": "awaiting_review"}
+    if body.status in _STATE_FOR and item.get("scan_id") and item.get("file") and item.get("rule_id"):
+        try:
+            from documents import resolve_doc_id
+            scan_id, file = item["scan_id"], item["file"]
+            source = (core.store.get_scan(scan_id) or {}).get("run", {}).get("source")
+            ident = next((i for i in core.store.list_file_identities(scan_id) if i["file"] == file), {})
+            doc_id = resolve_doc_id(source, ident.get("drive_file_id"), file, ident.get("checksum"))
+            core.store.upsert_remediation_state(doc_id, item["rule_id"], _STATE_FOR[body.status], scan_id)
+        except Exception:
+            pass
     return updated
