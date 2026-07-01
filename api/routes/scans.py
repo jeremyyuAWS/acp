@@ -506,6 +506,30 @@ def mark_remediated(scan_id: str, filename: str):
     return {"remediated_at": now}
 
 
+@router.get("/scans/{scan_id}/files/{filename:path}/remediated")
+def get_remediated_file(scan_id: str, filename: str, request: Request):
+    """Stream a remediated file's fixed bytes (ADR 0010): Blob first (the durable source
+    of truth), falling back to a redirect to the Drive mirror copy for a pre-ADR-0010
+    remediation that only ever wrote there. 404 if neither exists."""
+    import blob as _blob
+    urls = core.store.get_remediation_urls(scan_id, filename)
+    if not urls or not (urls.get("blob_url") or urls.get("drive_write_url")):
+        raise HTTPException(404, "no remediated copy recorded for this file")
+    owner = _owner(request)
+    data = _blob.download_remediated(owner, scan_id, filename)
+    if data is not None:
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
+        mime_map = {"html": "text/html", "htm": "text/html", "pdf": "application/pdf",
+                    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation"}
+        return Response(data, media_type=mime_map.get(ext, "application/octet-stream"))
+    if urls.get("drive_write_url"):
+        return RedirectResponse(urls["drive_write_url"])
+    raise HTTPException(404, "remediated copy recorded but not retrievable "
+                             "(Blob not configured and no Drive mirror)")
+
+
 @router.get("/scans/{scan_id}/files/{filename:path}/content")
 def get_file_content(scan_id: str, filename: str, request: Request):
     """Fetch the original file bytes from Drive using the stored drive_file_id.
