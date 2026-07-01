@@ -38,6 +38,7 @@ const TABS = [
   ['publish', 'Publish', 'step 9'],
   ['monitor', 'Monitor', 'step 10'],
   ['upload', 'Upload', 'try it live'],
+  ['graph', 'Knowledge Graph', 'explore findings'],
 ]
 
 function timeAgo(iso) {
@@ -567,7 +568,7 @@ export default function App() {
                 idle/running/done state (via onPhase), so results now appear exactly when the
                 animation finishes — same instant a real assessment would land. */}
             {assessed && assessPhase === 'done' && <><RuleBreakdown scanId={run.id} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
-            {assessed && assessPhase === 'done' && <><RiskScore run={run} files={files} /><KnowledgeGraph files={files} scanId={run.id} /></>}
+            {assessed && assessPhase === 'done' && <RiskScore run={run} files={files} />}
           </>
         ) : placeholder)}
 
@@ -578,6 +579,13 @@ export default function App() {
         {view === 'monitor' && (run ? (assessed ? <Monitor run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? statusMsg(progress.elapsed || 0, deepScan) : ''} /> : assessGate) : placeholder)}
 
         {view === 'upload' && <Upload onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
+
+        {/* Standalone Knowledge Graph — was nested inside Assess (findable only after
+            scrolling past the score/dashboard); now its own tab so it's directly
+            reachable for open-ended exploration, same as Upload. Still needs an
+            assessed scan (the graph visualizes WCAG findings), so it shares Monitor's
+            gate: assessGate when a scan exists but hasn't been assessed yet. */}
+        {view === 'graph' && (run ? (assessed ? <KnowledgeGraph files={files} scanId={run.id} /> : assessGate) : placeholder)}
 
         {/* Guided workflow: a "next step" CTA on each workflow tab once a scan exists.
             'discover' is excluded — it owns a sub-step CTA (Inventory → Classify → Actions → Assess). */}
