@@ -290,7 +290,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
       <Drawer title={file.file} subtitle={`${file.sourceName ? `${file.sourceName} · ${file.dept || file.department || '—'} · ` : ''}${(file.type || '').toUpperCase()}`} onClose={onClose}>
         {file.locked && <div className="lockbanner">🔒 Could not open — <b>{file.openIssue}</b>. Discovered from its metadata, but the content couldn’t be read.</div>}
         {provBlock}
-        {scanId && <div style={{ margin: '0 0 12px' }}><TraceChip scanId={scanId} kind="file" file={file.file} label="View this document's trace" /></div>}
+        {scanId && <div style={{ margin: '0 0 12px' }}><TraceChip scanId={scanId} kind="file" file={file.file} label="View this document's trace" refreshKey={remNow?.done ? 1 : 0} /></div>}
         {tagBlock}
         {ontBlock}
         {metaBlock}
@@ -312,7 +312,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           (file-centric tracing — lf.file_trace). Needs scanId, which not every FileDrawer
           caller passes yet (Discover/Integrations/KnowledgeGraph don't) — renders nothing
           when absent, same as before this existed. */}
-      {scanId && <div style={{ margin: '0 0 12px' }}><TraceChip scanId={scanId} kind="file" file={file.file} label="View this document's trace" /></div>}
+      {scanId && <div style={{ margin: '0 0 12px' }}><TraceChip scanId={scanId} kind="file" file={file.file} label="View this document's trace" refreshKey={remNow?.done ? 1 : 0} /></div>}
       <div className="drawerstats">
         <span className="badge" style={{ background: sbg, color: sfg }}>{st}</span>
         <span className="drawerscore">{file.score === null ? 'n/a' : `${st === 'uncertain' ? '≤' : ''}${file.score}`}<span className="muted"> / 100</span></span>

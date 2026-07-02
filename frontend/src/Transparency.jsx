@@ -13,17 +13,27 @@ import FileDrawer from './FileDrawer.jsx'
 // Routes through the backend redirect endpoint, which ensures a file trace exists before
 // sending you to Langfuse (sessions never need this — they don't 404 when empty).
 // Renders nothing when Langfuse isn't configured.
-export function TraceChip({ scanId, kind = 'session', file = null, label = 'View trace', title }) {
+export function TraceChip({ scanId, kind = 'session', file = null, label = 'View trace', title, refreshKey = 0 }) {
   const url = openTraceUrl(scanId, kind, file)
   const [available, setAvailable] = useState(null)
   useEffect(() => {
     if (!url) return
     let cancelled = false
-    getTraceStatus(scanId, kind, file)
-      .then(r => { if (!cancelled) setAvailable(!!r?.available) })
+    // refreshKey re-checks availability after an event that may have CREATED the
+    // trace (e.g. remediate-now just wrote a Remediate span) — with retries to ride
+    // out Langfuse's async ingestion, instead of the chip staying greyed until the
+    // drawer is closed and reopened.
+    const attempt = (retries) => getTraceStatus(scanId, kind, file)
+      .then((r) => {
+        if (cancelled) return
+        if (r?.available) { setAvailable(true); return }
+        if (retries > 0) setTimeout(() => { if (!cancelled) attempt(retries - 1) }, 2500)
+        else setAvailable(false)
+      })
       .catch(() => { if (!cancelled) setAvailable(false) })
+    attempt(refreshKey > 0 ? 3 : 0)
     return () => { cancelled = true }
-  }, [scanId, kind, file, url])
+  }, [scanId, kind, file, url, refreshKey])
 
   if (!url) return null
   if (available === false) return (
