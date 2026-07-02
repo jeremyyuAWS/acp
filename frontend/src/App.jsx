@@ -213,6 +213,19 @@ export default function App() {
     return () => window.removeEventListener('acp:file-remediated', onFileRemediated)
   }, [scan?.run?.id])
 
+  // Publish writes back per file; refetching once per click would fire dozens of
+  // times on "Publish all", so debounce — one getScan after the burst settles
+  // makes published_at the durable source of the checkmarks (they survive tab
+  // switches instead of living only in Publish's local state).
+  const pubRefetchTimer = useRef(null)
+  const schedulePublishRefetch = () => {
+    clearTimeout(pubRefetchTimer.current)
+    pubRefetchTimer.current = setTimeout(() => {
+      const sid = scan?.run?.id
+      if (sid) getScan(sid).then(setScan).catch(() => {})
+    }, 800)
+  }
+
   useEffect(() => {
     if (!me) return
     getRubric().then(setRubric).catch(() => {})
@@ -592,7 +605,7 @@ export default function App() {
 
         {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id).then(setScan).catch(() => {})} /> : placeholder)}
 
-        {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} onPublish={(file) => setPublishedFiles((s) => [...s, file])} /> : placeholder)}
+        {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} /> : placeholder)}
 
         {view === 'monitor' && (run ? (assessed ? <Monitor run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? statusMsg(progress.elapsed || 0, deepScan) : ''} /> : assessGate) : placeholder)}
 

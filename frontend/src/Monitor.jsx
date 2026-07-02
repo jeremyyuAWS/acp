@@ -257,14 +257,17 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
   }, [decisions, files, publishedFiles])
   const auditSrcRef = useRef(realAuditSrc)
   auditSrcRef.current = realAuditSrc
-  const [audit, setAudit] = useState(() => realAuditSrc.slice(0, 4).map((e, i) => ({ e, id: -i })))
+  // Show everything realAuditSrc holds (max 6) — the screen used to cap at 4 while
+  // the exported evidence carried 6, so the export could contain events the
+  // operator never saw on screen.
+  const [audit, setAudit] = useState(() => realAuditSrc.map((e, i) => ({ e, id: -i })))
   const auditNext = useRef(1)
 
   // When decisions or published files change, refresh the visible audit trail.
   useEffect(() => {
     const decided = files.filter((f) => decisions[f.file])
     if (!decided.length && !publishedFiles.length) return
-    setAudit(realAuditSrc.slice(0, 4).map((e, i) => ({ e, id: -(i + 100) })))
+    setAudit(realAuditSrc.map((e, i) => ({ e, id: -(i + 100) })))
   }, [decisions, publishedFiles]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
