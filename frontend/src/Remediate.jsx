@@ -156,14 +156,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       const m = FIX_WCAG_LABELS[i.wcag]; if (m) counts[m.label] = (counts[m.label] || { value: 0, color: m.color, order: Object.keys(FIX_WCAG_LABELS).indexOf(i.wcag) })
       if (m) counts[m.label].value++
     }))
-    const items = Object.entries(counts).map(([label, { value, color }]) => ({ label, value, color })).sort((a, b) => b.value - a.value).slice(0, 5)
-    return items.length ? items : [
-      { label: 'alt-text generated', value: 38, color: '#639922' },
-      { label: 'reading order fixed', value: 21, color: '#157A56' },
-      { label: 'headings / titles tagged', value: 14, color: '#378ADD' },
-      { label: 'language set', value: 9, color: '#726BC6' },
-      { label: 'table headers', value: 6, color: '#A56814' },
-    ]
+    // No fabricated fallback: an estate with zero auto-fixable files shows an
+    // honest 0 and hides the breakdown, never invented counts.
+    return Object.entries(counts).map(([label, { value, color }]) => ({ label, value, color })).sort((a, b) => b.value - a.value).slice(0, 5)
   }, [files])
   const autoFixed = fixTypesDisplay.reduce((a, f) => a + f.value, 0)
   const [selItem, setSelItem] = useState(null)
@@ -178,6 +173,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [remProg, setRemProg] = useState(null)   // { total, done, latest, failed }
   const [serverFixed, setServerFixed] = useState(0)  // files fixed server-side this scan (persists after each batch)
   const pollRef = useRef(null)
+  const remStartRef = useRef(false)   // synchronous guard — remBusy is state, two clicks in one frame both read false
   useEffect(() => () => clearInterval(pollRef.current), [])
   const REMKEY = (id) => `acp-remed-${id || 'none'}`
 
@@ -185,9 +181,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // counters every 1.5s off the worker queue; on drain it banks the fixed count + clears.
   const startPoll = (total) => {
     clearInterval(pollRef.current)
+    let pollFails = 0
     pollRef.current = setInterval(async () => {
       try {
         const s = await getRemediationStatus(runId)
+        pollFails = 0
         const done = Math.max(0, total - (s.in_flight || 0))
         setRemProg({ total, done, latest: s.latest_file, failed: s.failed || 0 })
         if (!s.in_flight) {                         // queue drained — batch complete
@@ -199,7 +197,16 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           try { sessionStorage.removeItem(REMKEY(runId)) } catch { /* ignore */ }
           onRefresh?.()                             // refresh scan so the write-back banner updates
         }
-      } catch { /* transient — keep polling */ }
+      } catch {
+        // Transient errors retry, but not forever: ~30s of consecutive misses means
+        // the API is unreachable — stop and say so instead of spinning silently.
+        // The sessionStorage denominator survives, so a reload resumes watching.
+        if (++pollFails >= 20) {
+          clearInterval(pollRef.current)
+          setRemBusy(false); setRemProg(null)
+          setRemMsg('Lost contact with the job queue — the batch may still be running server-side. Reload to resume watching.')
+        }
+      }
     }, 1500)
   }
 
@@ -220,7 +227,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   }, [triage]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const runServerRemediation = async (scopeFiles) => {
-    if (!runId || remBusy) return
+    if (!runId || remBusy || remStartRef.current) return
+    remStartRef.current = true
     setRemBusy(true); setRemMsg(''); setRemProg(null)
     const scope = scopeFiles?.map((f) => f.file)
     try {
@@ -233,6 +241,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       startPoll(total)
     } catch (e) {
       setRemMsg(`Could not enqueue: ${e.message || e}`); setRemBusy(false)
+    } finally {
+      remStartRef.current = false
     }
   }
   const triageFile = (file, st) => { setTriage((t) => { const n = { ...t }; if (st == null) delete n[file]; else n[file] = st; return n }); setTriageSel((s) => { const n = new Set(s); n.delete(file); return n }) }
@@ -674,7 +684,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       )}
 
       <div className="chartrow">
-        <section className="panel"><h2>Automated fixes applied · by type</h2><Bars items={fixTypesDisplay} cols="140px 1fr 30px" /></section>
+        {fixTypesDisplay.length > 0 && <section className="panel"><h2>Automated fixes applied · by type</h2><Bars items={fixTypesDisplay} cols="140px 1fr 30px" /></section>}
         <FixCarousel />
       </div>
 
@@ -797,15 +807,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             <p className="muted">Every approved or self-applied fix is re-run against all engines. Only documents that re-pass advance to Publish — no fix is taken on trust.</p>
             {dcount('accepted') + dcount('override') > 0 && (
               <div className="outpanel" style={{ marginTop: 14 }}>
-                <div className="muted" style={{ fontSize: 13, marginBottom: 8 }}><b>Output settings</b> — where should remediated files go?</div>
-                <div className="outmodes">
-                  {[['download','⤓ Download'], ['drive','☁ Save to Drive'], ['archive','⊡ Archive original']].map(([k, l]) => (
-                    <button key={k} className={k === 'download' ? 'outmode on' : 'outmode'} onClick={() => {}}>{l}</button>
-                  ))}
-                </div>
+                <div className="muted" style={{ fontSize: 13, marginBottom: 8 }}><b>Where fixed copies go</b> — automatic, no per-run choice needed:</div>
                 <div className="outact" style={{ marginTop: 8 }}>
                   <span className="muted" style={{ fontSize: 12 }}>Remediated files are stamped <b>_a11y-certified-{new Date().toISOString().split('T')[0]}</b> · originals kept for audit trail</span>
-                  <span className="muted" style={{ fontSize: 12, marginLeft: 12 }}>Drive &amp; archive options: connect via Settings &rarr; Integrations</span>
+                  <span className="muted" style={{ fontSize: 12, marginLeft: 12 }}>Always written to <b>Azure Blob</b> (download from each file's drawer) · auto-mirror to Drive: Settings &rarr; Remediated storage</span>
                 </div>
               </div>
             )}
