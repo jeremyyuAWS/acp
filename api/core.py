@@ -136,7 +136,13 @@ API_PREFIXES = (
     "/scans", "/rubric", "/rules", "/inventory", "/schedule",
     "/me", "/sources", "/folders", "/drive", "/hitl", "/ai",
     "/settings", "/decisions", "/jobs", "/workers", "/admin",
+    "/campaigns", "/disposition",
 )
+# ^ Default-open gate: any route group NOT listed here is served without auth
+# (that's how the SPA's client routes fall through). Every new APIRouter MUST be
+# added — /campaigns and /disposition shipped unauthenticated because they
+# weren't. tests/test_auth_route_coverage.py now fails the suite when a
+# registered API route falls outside this tuple.
 
 
 def is_public(path: str) -> bool:
