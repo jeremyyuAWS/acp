@@ -1,4 +1,5 @@
 import Drawer from './Drawer.jsx'
+import WindowedRows from './WindowedRows.jsx'
 import { statusOf, STATUS_BADGE } from './FileDrawer.jsx'
 
 export default function SegmentDrawer({ title, subtitle, files, onClose, onPickFile }) {
@@ -6,7 +7,7 @@ export default function SegmentDrawer({ title, subtitle, files, onClose, onPickF
     <Drawer title={title} subtitle={subtitle} onClose={onClose}>
       {files.length === 0 ? <p className="muted" style={{ marginTop: 10 }}>No documents.</p> : (
         <div className="findings" style={{ marginTop: 10 }}>
-          {files.map((f) => {
+          <WindowedRows items={files} renderRow={(f) => {
             const st = statusOf(f); const [bg, fg] = STATUS_BADGE[st]
             return (
               <button className="filelistrow" key={f.file} onClick={() => onPickFile(f)}>
@@ -16,7 +17,7 @@ export default function SegmentDrawer({ title, subtitle, files, onClose, onPickF
                 <span className="muted">{f.score == null ? 'n/a' : f.score}</span>
               </button>
             )
-          })}
+          }} />
         </div>
       )}
     </Drawer>
