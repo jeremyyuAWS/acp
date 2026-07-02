@@ -119,11 +119,14 @@ const STATE_NOTE = {
 export default function FileDrawer({ file, onClose, context = 'full', overrideOwner = null, delegatedFrom = null, decision = null, aiEnabled = true, scanId = null, readOnly = false }) {
   const [explanations, setExplanations] = useState({})
   const fetchExplanation = (ruleId) => {
-    if (!scanId || explanations[ruleId]) return
+    if (!scanId || explanations[ruleId]?.loading) return   // error/stale results are retryable
     setExplanations((e) => ({ ...e, [ruleId]: { loading: true } }))
-    explainFinding(scanId, file.file, ruleId)
+    // Bound the wait client-side too: a wedged Ollama used to leave "thinking…"
+    // up for minutes with no way out. 45s covers a cold model load + generation.
+    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 45000))
+    Promise.race([explainFinding(scanId, file.file, ruleId), timeout])
       .then((res) => setExplanations((e) => ({ ...e, [ruleId]: res })))
-      .catch(() => setExplanations((e) => ({ ...e, [ruleId]: { error: true } })))
+      .catch((err) => setExplanations((e) => ({ ...e, [ruleId]: { error: true, detail: err?.message } })))
   }
 
   const [driveRem, setDriveRem] = useState(null) // {status, url, error}
@@ -218,12 +221,18 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   const st = statusOf(file)
   const [sbg, sfg] = STATUS_BADGE[st]
   const issues = file.issues || []
-  const byCrit = {}
-  issues.forEach((i) => { byCrit[i.wcag] = (byCrit[i.wcag] || 0) + 1 })
-  const states = journeyStates(st, remNow)
   const isRemediated = !!(file.acp_stamped || file.remediated_at || file.drive_write_url || remNow?.done)
+  // remediation_state can know the file is fixed before the files prop refreshes
+  // (the fix ran in an earlier session / another tab): when every failing criterion
+  // has a completed remediation row, the file IS remediated — the drawer must not
+  // keep offering "Remediate this file now" while the coverage table below says
+  // "pass — remediated".
+  const allFailingFixed = issues.length > 0 && issues.every((i) => remediatedRuleIds.has(scOf(i.wcag)))
+  const effectiveRemediated = isRemediated || allFailingFixed
+  const states = journeyStates(st, effectiveRemediated ? { done: true } : remNow)
 
-  const hasAnyMeta = file.modifiedAge || file.lastAccessed || file.views90d != null || file.sizeKB || file.duration || file.pages || file.sheets || file.owner || overrideOwner
+  const sizeKB = file.sizeKB ?? file.size_kb   // SIM uses sizeKB; real scans store size_kb
+  const hasAnyMeta = file.modifiedAge || file.lastAccessed || file.views90d != null || sizeKB || file.duration || file.pages || file.sheets || file.owner || overrideOwner
   const metaBlock = (
     <>
       <h4 className="drawerh">Document metadata</h4>
@@ -236,7 +245,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           <div><span className="muted">Last modified</span><b>{file.modifiedAge || '—'}</b></div>
           <div><span className="muted">Last accessed</span><b>{file.lastAccessed || '—'}</b></div>
           <div><span className="muted">Views · 90d</span><b>{file.views90d != null ? file.views90d.toLocaleString() : '—'}</b></div>
-          <div><span className="muted">Size</span><b>{file.sizeKB ? (file.sizeKB >= 1024 ? `${(file.sizeKB / 1024).toFixed(1)} MB` : `${file.sizeKB} KB`) : '—'}</b></div>
+          <div><span className="muted">Size</span><b>{sizeKB ? (sizeKB >= 1024 ? `${(sizeKB / 1024).toFixed(1)} MB` : `${sizeKB} KB`) : '—'}</b></div>
           <div><span className="muted">{file.duration ? 'Duration' : file.sheets ? 'Sheets' : 'Pages'}</span><b>{file.duration || file.pages || file.sheets || '—'}</b></div>
           <div><span className="muted">Owner</span><b>{overrideOwner || file.owner || '—'}{delegatedFrom && <span className="badge" style={{ marginLeft: 6, background: '#E7F0DC', color: '#3B6D11', fontSize: 10, fontWeight: 400 }}>delegated from {delegatedFrom}</span>}</b></div>
         </>) : (
@@ -308,6 +317,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         <span className="badge" style={{ background: sbg, color: sfg }}>{st}</span>
         <span className="drawerscore">{file.score === null ? 'n/a' : `${st === 'uncertain' ? '≤' : ''}${file.score}`}<span className="muted"> / 100</span></span>
         {st === 'uncertain' && <span className="muted">{file.skipped_rules} rule(s) skipped — score is an upper bound</span>}
+        {effectiveRemediated && st === 'issues' && <span className="muted">score reflects the original scan — the fixed copy is stored; re-validate to refresh</span>}
       </div>
 
       {ontBlock}
@@ -328,7 +338,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
             {scanId && r.mode !== 'manual' && r.mode !== 'monitor' && (
               <div style={{ marginTop: 10 }}>
                 {remNow === null && (
-                  <button className="ctago" disabled={readOnly} title={readOnly ? 'Time-travel replay — switch to the latest scan to remediate' : undefined} onClick={remediateNow}>⚡ Remediate this file now</button>
+                  <button className="ctago" disabled={readOnly || effectiveRemediated}
+                          title={readOnly ? 'Time-travel replay — switch to the latest scan to remediate'
+                                 : effectiveRemediated ? 'Already remediated — the fixed copy is stored; re-validate to refresh the score' : undefined}
+                          onClick={remediateNow}>{effectiveRemediated ? '✓ Remediated — fixed copy stored' : '⚡ Remediate this file now'}</button>
                 )}
                 {remNow === 'queued' && (
                   <div>
@@ -348,7 +361,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                 {remNow?.done && (
                   <span className="dectag ok" style={{ fontSize: 12, padding: '3px 10px' }}>✓ Remediated — fixed copy stored{hitlQueued ? ' · queued for human review' : ''}</span>
                 )}
-                {(remNow?.done || file.remediated_at) && (
+                {(remNow?.done || effectiveRemediated) && (
                   <button className="ghost small" style={{ marginLeft: 8 }} disabled={remNow === 'queued'}
                           title={remNow === 'queued' ? 'Available once this remediation finishes' : 'Download the fixed copy (Blob primary, Drive-mirror fallback)'}
                           onClick={() => downloadRemediated(scanId, file.file)}>
@@ -383,7 +396,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                 <div className="finding" key={n}>
                   <span className="badge" style={{ background: bg, color: fg }}>{(i.severity || '').toLowerCase()}</span>
                   <div className="findingmain">
-                    <div className="findingtop">{critLabel(i.wcag)}{i.level && <span className="lvlchip">Level {i.level}</span>}{isRemediated && <span className="dectag ok">✓ remediated</span>}</div>
+                    <div className="findingtop">{critLabel(i.wcag)}{i.level && <span className="lvlchip">Level {i.level}</span>}{(isRemediated || remediatedRuleIds.has(scOf(i.wcag))) && <span className="dectag ok">✓ remediated</span>}</div>
                     {i.detail && <div className="findingdetail">{i.detail}</div>}
                     {i.impact && <div className="muted findingimpact">{i.impact}</div>}
                     {i.fix && <div className="findingfix"><span className={i.auto ? 'fixauto' : 'fixreview'}>{i.auto ? '⚡ auto-fixable' : '✎ needs review'}</span> · {i.fix}<span className="muted"> · {i.rule_id ?? i.ruleId}</span></div>}
@@ -413,17 +426,6 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
               </div>
             ))}
           </details>
-        </>
-      )}
-
-      {Object.keys(byCrit).length > 0 && (
-        <>
-          <h4 className="drawerh">WCAG criteria failing</h4>
-          <div className="critlist">
-            {Object.entries(byCrit).sort((a, b) => b[1] - a[1]).map(([w, n]) => (
-              <div className="critlistrow" key={w}><span>{critLabel(w)}</span><b>{n}</b></div>
-            ))}
-          </div>
         </>
       )}
 
@@ -515,7 +517,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                         <tr className="covrow-explain">
                           <td colSpan={5}>
                             {exp.loading && <span className="explain-loading">⏳ thinking…</span>}
-                            {exp.error && <span className="explain-error muted">AI explanation unavailable — is Ollama running?</span>}
+                            {exp.error && <span className="explain-error muted">AI explanation unavailable{exp.detail === 'timeout' ? ' — timed out after 45s' : ''} — is Ollama running? <button className="explain-btn" onClick={() => fetchExplanation(r.id)}>retry</button></span>}
                             {exp.why && (
                               <div className="explain-body">
                                 <div className="explain-why"><b>Why it matters:</b> {exp.why}</div>

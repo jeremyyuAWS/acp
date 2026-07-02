@@ -136,8 +136,10 @@ def explain_finding(
             f"{OLLAMA_BASE_URL}/api/generate",
             json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
                   "options": {"temperature": 0.3, "num_predict": 120}},
-            # CPU inference of a 3B model: first call loads the model (~15s) then generates.
-            timeout=150,
+            # CPU inference of a 3B model: first call loads the model (~15s) then
+            # generates. 90s bounds the worst cold-start; the old 150s left the UI's
+            # "thinking…" spinner hanging for 2.5 minutes when Ollama was wedged.
+            timeout=90,
         )
         r.raise_for_status()
         raw = r.json().get("response", "").strip()
