@@ -455,6 +455,33 @@ def detect_acp_stamp(path: Path, ext: str) -> str | None:
     return None
 
 
+def _file_extent(path: Path, ext: str) -> dict:
+    """Cheap physical metadata for the file drawer: size always; page count for
+    PDF (pikepdf — already a scan dependency), slide/sheet counts read straight
+    from the OOXML zip directory. Never raises — metadata must never fail a scan."""
+    out: dict = {}
+    try:
+        out["size_kb"] = max(1, round(path.stat().st_size / 1024))
+    except Exception:
+        return out
+    try:
+        if ext == ".pdf":
+            import pikepdf
+            with pikepdf.open(str(path)) as pdf:
+                out["pages"] = len(pdf.pages)
+        elif ext == ".pptx":
+            with zipfile.ZipFile(path) as z:
+                out["pages"] = sum(1 for n in z.namelist()
+                                   if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)) or None
+        elif ext == ".xlsx":
+            with zipfile.ZipFile(path) as z:
+                out["sheets"] = sum(1 for n in z.namelist()
+                                    if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", n)) or None
+    except Exception:
+        pass
+    return {k: v for k, v in out.items() if v is not None}
+
+
 def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = True):
     """Analyse + rubric-assess ONE already-downloaded file (fan-out path, ADR 0007).
     `tmp` is a directory containing `name`. Returns (assessed_file_dict, pii_info),
@@ -477,7 +504,8 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = True):
                      if (e.get("rule") if isinstance(e, dict) else None) not in rb.disabled]
     assessed = rb.assess(raw["succeeded"], raw["issues"], raw["errors"])
     fdict = {"file": name, "engine": raw["engine"], **assessed, "issues": raw["issues"],
-             "acp_stamped": detect_acp_stamp(tmp / name, ext)}
+             "acp_stamped": detect_acp_stamp(tmp / name, ext),
+             **_file_extent(tmp / name, ext)}
     pinfo = None
     if detect_pii:
         import pii as _pii_mod
@@ -579,7 +607,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
 
             "files": [{"file": k, "engine": raw[k]["engine"], **assessed[k], "issues": raw[k]["issues"],
                        "drive_file_id": drive_id_map.get(k), "pii": pii_by_file.get(k),
-                       "acp_stamped": detect_acp_stamp(tmp / k, Path(k).suffix.lower())}
+                       "acp_stamped": detect_acp_stamp(tmp / k, Path(k).suffix.lower()),
+                       **_file_extent(tmp / k, Path(k).suffix.lower())}
                       for k in sorted(raw)],
         }
     finally:

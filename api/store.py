@@ -48,6 +48,9 @@ _SCHEMA = [
       checksum TEXT,
       published_at TEXT,
       blob_url TEXT,
+      size_kb INT,
+      pages INT,
+      sheets INT,
       PRIMARY KEY (scan_id, file)
     )""",
     # Per-scan decision snapshots (PRD: time-travel). kind='triage' (value inscope|na|defer)
@@ -65,6 +68,9 @@ _SCHEMA = [
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS owner_email TEXT",
     # Presentation decouple: set when the user runs Assess — results views gate on it.
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS assessed_at TEXT",
+    "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS size_kb INT",
+    "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS pages INT",
+    "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS sheets INT",
     # Migrations for existing deployments
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS drive_file_id TEXT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS remediated_at TEXT",
@@ -423,11 +429,11 @@ class Store:
                  report.get("owner")))
             for f in report["files"]:
                 self._db.execute(cur,
-                    "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped,checksum) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped,checksum,size_kb,pages,sheets) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     (sid, f["file"], f["engine"], f["status"], f["score"],
                      int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id"), f.get("acp_stamped"),
-                     f.get("checksum")))
+                     f.get("checksum"), f.get("size_kb"), f.get("pages"), f.get("sheets")))
                 for i in f["issues"]:
                     self._db.execute(cur,
                         "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity) "
@@ -481,14 +487,15 @@ class Store:
             (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text())
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped,checksum) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
+                "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped,checksum,size_kb,pages,sheets) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
                 "engine=EXCLUDED.engine,status=EXCLUDED.status,score=EXCLUDED.score,"
                 "compliant=EXCLUDED.compliant,skipped_rules=EXCLUDED.skipped_rules,"
-                "drive_file_id=EXCLUDED.drive_file_id,acp_stamped=EXCLUDED.acp_stamped,checksum=EXCLUDED.checksum",
+                "drive_file_id=EXCLUDED.drive_file_id,acp_stamped=EXCLUDED.acp_stamped,checksum=EXCLUDED.checksum,"
+                "size_kb=EXCLUDED.size_kb,pages=EXCLUDED.pages,sheets=EXCLUDED.sheets",
                 (scan_id, f["file"], f["engine"], f["status"], f["score"],
                  int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id"), f.get("acp_stamped"),
-                 f.get("checksum")))
+                 f.get("checksum"), f.get("size_kb"), f.get("pages"), f.get("sheets")))
             self._db.execute(cur, "DELETE FROM issue_records WHERE scan_id=%s AND file=%s", (scan_id, f["file"]))
             for i in f.get("issues", []):
                 self._db.execute(cur,
@@ -760,7 +767,7 @@ class Store:
             if owner is not None and run.get("owner_email") != owner:
                 return None
             self._db.execute(cur,
-                "SELECT file,engine,status,score,compliant,skipped_rules,remediated_at,drive_write_url,acp_stamped,published_at "
+                "SELECT file,engine,status,score,compliant,skipped_rules,remediated_at,drive_write_url,acp_stamped,published_at,size_kb,pages,sheets "
                 "FROM file_records WHERE scan_id=%s ORDER BY file", (sid,))
             files = self._db.fetchall(cur)
             # file_records has no per-file source column (every file in one scan shares the
