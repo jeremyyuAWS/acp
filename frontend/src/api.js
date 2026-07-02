@@ -241,6 +241,12 @@ export const getQueueJob = (jobId) => {
   }
   return fetch(`${BASE}/jobs/${encodeURIComponent(jobId)}`, { headers: headers() }).then(j)
 }
+// Send this scan's review-needing findings to the server HITL queue (idempotent
+// POST /hitl/queue/{sid}/auto) — called after a single-file remediate-now so an
+// AI-assisted fix still gets human sign-off instead of silently skipping review.
+export const queueHitlReview = (scanId) => (SIM
+  ? sim({ queued: 1 })
+  : fetch(`${BASE}/hitl/queue/${encodeURIComponent(scanId)}/auto`, { method: 'POST', headers: headers() }).then(j))
 // ── Phased remediation campaigns (ADR 0003 Phase 4) ─────────────────────────────
 export const createCampaign = (scanId, name, deadline = null) => (SIM
   ? sim({ campaign_id: 'sim-campaign', name, status: 'active', batches: [] }, 200)

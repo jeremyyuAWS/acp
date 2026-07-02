@@ -4,7 +4,7 @@ import Tag from './Tag.jsx'
 import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
-import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, getFileRemediationState, downloadRemediated } from './api.js'
+import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, getFileRemediationState, downloadRemediated } from './api.js'
 import { TraceChip } from './Transparency.jsx'
 
 // Prescriptive-action styling, shared with the Discover inventory.
@@ -156,9 +156,20 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   const REM_POLL_MAX = 60 // ceiling on polling the REAL job — no longer a fake timer
   const [remProgress, setRemProgress] = useState(0)
   const [remStage, setRemStage] = useState('')
+  const [hitlQueued, setHitlQueued] = useState(false)
   const remediateNow = async () => {
     if (!scanId || remNow === 'queued') return
     setRemNow('queued'); setRemProgress(4); setRemStage('Queued — waiting for a worker…')
+    // An AI-assisted fix still needs human sign-off — remediate-now must not let a
+    // file skip the review the batch flow would route it through. The server-side
+    // auto-queue is idempotent, so repeat clicks never duplicate queue items.
+    const finish = () => {
+      if (['assisted', 'review'].includes(file.rec?.action) || (file.issues || []).some((i) => i.auto === false)) {
+        queueHitlReview(scanId).catch(() => {})
+        setHitlQueued(true)
+      }
+      setRemProgress(100); setRemNow({ done: true })
+    }
     try {
       const res = await remediateScan(scanId, [file.file])
       const jid = res?.job_ids?.[0]
@@ -166,7 +177,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         // Nothing eligible for the server-side queue (no findings / no Drive id) —
         // record the remediation directly, as the old flow did.
         await markRemediated(scanId, file.file).catch(() => {})
-        setRemProgress(100); setRemNow({ done: true }); return
+        finish(); return
       }
       // Poll the actual job (queued → running → done/dead): the bar only advances
       // while a worker is really on it, and completion means the fix really landed —
@@ -175,7 +186,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
       for (let i = 0; i < REM_POLL_MAX; i++) {
         await new Promise((r) => setTimeout(r, 1000))
         const jb = await getQueueJob(jid).catch(() => null)
-        if (jb?.status === 'done') { setRemProgress(100); setRemNow({ done: true }); return }
+        if (jb?.status === 'done') { finish(); return }
         if (jb?.status === 'dead') { setRemNow('error'); return }
         if (jb?.status === 'running') {
           running += 1
@@ -267,7 +278,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   if (context === 'discover') {
     const ret = retentionOf(file)
     return (
-      <Drawer title={file.file} subtitle={`${file.sourceName ? `${file.sourceName} · ${file.dept} · ` : ''}${(file.type || '').toUpperCase()}`} onClose={onClose}>
+      <Drawer title={file.file} subtitle={`${file.sourceName ? `${file.sourceName} · ${file.dept || file.department || '—'} · ` : ''}${(file.type || '').toUpperCase()}`} onClose={onClose}>
         {file.locked && <div className="lockbanner">🔒 Could not open — <b>{file.openIssue}</b>. Discovered from its metadata, but the content couldn’t be read.</div>}
         {provBlock}
         {scanId && <div style={{ margin: '0 0 12px' }}><TraceChip scanId={scanId} kind="file" file={file.file} label="View this document's trace" /></div>}
@@ -286,7 +297,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   }
 
   return (
-    <Drawer title={file.file} subtitle={`${file.sourceName ? `${file.sourceName} · ${file.dept} · ` : ''}${file.engine}`} onClose={onClose}>
+    <Drawer title={file.file} subtitle={`${file.sourceName ? `${file.sourceName} · ${file.dept || file.department || '—'} · ` : ''}${file.engine}`} onClose={onClose}>
       {provBlock}
       {/* This document's full Discover→Assess→Remediate trace, all on one Langfuse trace
           (file-centric tracing — lf.file_trace). Needs scanId, which not every FileDrawer
@@ -335,11 +346,11 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                   </div>
                 )}
                 {remNow?.done && (
-                  <span className="dectag ok" style={{ fontSize: 12, padding: '3px 10px' }}>✓ Remediated — fixed copy stored</span>
+                  <span className="dectag ok" style={{ fontSize: 12, padding: '3px 10px' }}>✓ Remediated — fixed copy stored{hitlQueued ? ' · queued for human review' : ''}</span>
                 )}
                 {(remNow?.done || file.remediated_at) && (
-                  <button className="ghost small" style={{ marginLeft: 8 }}
-                          title="Download the fixed copy (Blob primary, Drive-mirror fallback)"
+                  <button className="ghost small" style={{ marginLeft: 8 }} disabled={remNow === 'queued'}
+                          title={remNow === 'queued' ? 'Available once this remediation finishes' : 'Download the fixed copy (Blob primary, Drive-mirror fallback)'}
                           onClick={() => downloadRemediated(scanId, file.file)}>
                     ⤓ Download fixed copy
                   </button>
