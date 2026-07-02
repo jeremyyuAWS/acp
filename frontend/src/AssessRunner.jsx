@@ -211,10 +211,22 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               <b>{result.total.toLocaleString()}</b> documents assessed at WCAG 2.1 {result.level} → <b style={{ color: '#3B6D11' }}>{result.conformant.toLocaleString()} conformant</b> + <b style={{ color: '#854F0B' }}>{result.failing.toLocaleString()} with blocking findings</b>.
             </p>
             <div className="assesstiles">
-              <div className="atile"><b style={{ color: '#3B6D11' }}>{result.conformant.toLocaleString()}</b><span>conformant at {result.level} <span className="muted">· of {result.total.toLocaleString()}</span></span></div>
-              <div className="atile"><b style={{ color: '#854F0B' }}>{result.failing.toLocaleString()}</b><span>with blocking findings <span className="muted">· of {result.total.toLocaleString()}</span></span></div>
-              <div className="atile"><b style={{ color: '#1F5FA8' }}>{result.pct}%</b><span>estate conformant</span></div>
-              <div className="atile"><b>{result.applicable.toLocaleString()}</b><span>findings apply · {result.autoFix.toLocaleString()} auto-fixable</span></div>
+              <div className="atile" title={`Documents with zero blocking findings at WCAG 2.1 ${result.level} — they pass as-is`}>
+                <b style={{ color: '#3B6D11' }}>{result.conformant.toLocaleString()}</b>
+                <span>documents pass <span className="muted">· of {result.total.toLocaleString()}</span></span>
+              </div>
+              <div className="atile" title={`Documents with at least one finding that blocks WCAG 2.1 ${result.level} conformance — one blocking finding fails the whole document`}>
+                <b style={{ color: '#854F0B' }}>{result.failing.toLocaleString()}</b>
+                <span>documents blocked <span className="muted">· of {result.total.toLocaleString()}</span></span>
+              </div>
+              <div className="atile" title={`${result.conformant.toLocaleString()} of ${result.total.toLocaleString()} documents pass — the estate's pass rate at this level`}>
+                <b style={{ color: '#1F5FA8' }}>{result.pct}%</b>
+                <span>pass rate at {result.level}</span>
+              </div>
+              <div className="atile" title={`Individual findings that block conformance at ${result.level}, summed across every document — one document can carry many. ${result.autoFix.toLocaleString()} can be fixed automatically from the Remediate tab; the rest need a person.`}>
+                <b>{result.applicable.toLocaleString()}</b>
+                <span>blocking findings <span className="muted">· {result.autoFix.toLocaleString()} auto-fixable, {(result.applicable - result.autoFix).toLocaleString()} need review</span></span>
+              </div>
             </div>
             <p className="muted assessnote">{note}</p>
             <div style={{ marginTop: 8 }}><TraceChip scanId={runId} kind="session" label="View this scan's traces in Langfuse" /></div>
