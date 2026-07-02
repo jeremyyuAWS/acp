@@ -10,9 +10,25 @@ import core
 router = APIRouter()
 
 
+def _require_admin(request: Request) -> None:
+    """Owner-only gate for platform-mutating admin endpoints. The SPA hides these
+    behind the Platform Admin role, but the API must enforce it too — any
+    allow-listed user could otherwise flip platform settings (AI mode, Drive
+    mirror, worker pool, data reset) with a direct call. Admin = the protected
+    OWNER_EMAIL, the same identity the allowlist can never drop (anti-lockout).
+    No-op when no owner is configured (local dev without auth)."""
+    if not core.OWNER_EMAIL:
+        return
+    email = (getattr(request.state, "user_email", None) or "").lower()
+    if email != core.OWNER_EMAIL:
+        raise HTTPException(403, "admin (owner) access required")
+
+
 @router.post("/admin/reset")
-def admin_reset(scope: str = Query("all", pattern="^(all|grafana|langfuse)$"),
+def admin_reset(request: Request,
+                scope: str = Query("all", pattern="^(all|grafana|langfuse)$"),
                 confirm: bool = Query(False)):
+    _require_admin(request)
     """Reset demo data so the charts start fresh (admin, audited).
     scope=grafana → clear the ACP Postgres analytics tables (Grafana + in-app
     charts); scope=langfuse → delete the project's Langfuse traces; all → both.
@@ -73,8 +89,9 @@ def get_allowlist():
 
 
 @router.put("/admin/allowlist")
-def set_allowlist(body: dict):
+def set_allowlist(body: dict, request: Request):
     """Replace the editable test-user list. The owner is always kept (anti-lockout)."""
+    _require_admin(request)
     emails = body.get("emails", [])
     if not isinstance(emails, list):
         raise HTTPException(400, "emails must be a list of strings")
@@ -87,9 +104,10 @@ def set_allowlist(body: dict):
 
 
 @router.put("/workers")
-def set_workers(count: int = Query(..., ge=0, le=16)):
+def set_workers(request: Request, count: int = Query(..., ge=0, le=16)):
     """Admin: live-scale the in-process worker pool (0–16). Persisted + audited.
     Scaled-down workers finish their current job before exiting."""
+    _require_admin(request)
     new = core.set_worker_count(count)
     core.store.log_decision("admin", "settings.worker_count",
                             detail=f"worker pool scaled to {new}")
@@ -172,8 +190,9 @@ def get_settings():
 
 
 @router.put("/settings")
-def update_settings(body: SettingsUpdate):
+def update_settings(body: SettingsUpdate, request: Request):
     """Admin: set platform settings. Persisted across restarts. Audited."""
+    _require_admin(request)
     if body.drive_mirror_enabled is not None:
         core.store.set_drive_mirror_enabled(body.drive_mirror_enabled)
         core.store.log_decision(
