@@ -201,6 +201,19 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    // Any FileDrawer's remediate-now announces completion via this event — one
+    // refetch updates `files` for EVERY tab, so the triage worklist, write-back
+    // banner, Publish queue and Discover counts all reflect a manual remediation
+    // immediately instead of waiting for a reload.
+    const onFileRemediated = (e) => {
+      const sid = e?.detail?.scanId || scan?.run?.id
+      if (sid) getScan(sid).then(setScan).catch(() => {})
+    }
+    window.addEventListener('acp:file-remediated', onFileRemediated)
+    return () => window.removeEventListener('acp:file-remediated', onFileRemediated)
+  }, [scan?.run?.id])
+
+  useEffect(() => {
     if (!me) return
     getRubric().then(setRubric).catch(() => {})
     getSources().then(setSources).catch(() => {})

@@ -144,6 +144,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
       const up = await uploadToDrive(scanId, certName, blob, 'text/html')
       await markRemediated(scanId, file.file).catch(() => {})
       setDriveRem({ status: 'done', url: up.url, name: certName })
+      window.dispatchEvent(new CustomEvent('acp:file-remediated', { detail: { scanId, file: file.file } }))
     } catch (e) {
       setDriveRem({ status: 'error', error: e.message || 'Upload failed' })
     }
@@ -172,6 +173,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         setHitlQueued(true)
       }
       setRemProgress(100); setRemNow({ done: true })
+      // Announce completion app-wide (same event pattern as acp:session-expired):
+      // App refetches the scan, so triage/publish/discover reflect this fix
+      // without a page reload.
+      window.dispatchEvent(new CustomEvent('acp:file-remediated', { detail: { scanId, file: file.file } }))
     }
     try {
       const res = await remediateScan(scanId, [file.file])
