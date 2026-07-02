@@ -274,7 +274,11 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
     # The monolithic scan keeps conservative caps (one box's disk holds every file);
     # the fan-out path (ADR 0007) passes a high cap since each file is its own job.
     if source == "local":
-        result = [{"name": p.name, "path": str(p)} for p in sorted((ACP / "test-corpus/files").glob("*"))
+        # ACP_LOCAL_CORPUS: point local scans at a different directory — the test
+        # suite uses it to scan the frozen oracle corpus (test-corpus/oracle/)
+        # instead of the demo estate, which changes with the demo's needs.
+        corpus = Path(os.environ.get("ACP_LOCAL_CORPUS") or (ACP / "test-corpus/files"))
+        result = [{"name": p.name, "path": str(p)} for p in sorted(corpus.glob("*"))
                    if p.suffix.lower() in OFFICE + (".pdf",) + HTML_EXTS]
     elif source == "sharepoint":
         result = _sp_list(sp_token, max_files or 200)

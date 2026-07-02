@@ -1,0 +1,165 @@
+[
+  {
+    "file": "docx-empty.docx",
+    "succeeded": true,
+    "errors": [],
+    "issues": []
+  },
+  {
+    "file": "edge-pdf-as.docx",
+    "succeeded": false,
+    "errors": [
+      {
+        "Code": "OPEN_FAILED",
+        "Message": "Failed to open the Docx file.",
+        "Detail": "System.IO.FileFormatException: File contains corrupted data.\n   at System.IO.Packaging.ZipPackage..ctor(Stream s, FileMode packageFileMode, FileAccess packageFileAccess)\n   at System.IO.Packaging.Package.Open(Stream stream, FileMode packageMode, FileAccess packageAccess)\n   at DocumentFormat.OpenXml.Features.StreamPackageFeature.InitializePackage(Nullable\u00601 mode, Nullable\u00601 access)\n   at DocumentFormat.OpenXml.Features.StreamPackageFeature..ctor(Stream stream, PackageOpenMode openMode, Boolean isOwned)\n   at DocumentFormat.OpenXml.Features.FilePackageFeature..ctor(String path, PackageOpenMode mode)\n   at DocumentFormat.OpenXml.Builder.OpenXmlPackageBuilderExtensions.Open[TPackage](IPackageFactory\u00601 builder, String file, PackageOpenMode mode)\n   at DocumentFormat.OpenXml.Builder.OpenXmlPackageBuilderExtensions.Open[TPackage](IPackageFactory\u00601 builder, String file, Boolean isEditing)\n   at DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(String path, Boolean isEditable, OpenSettings openSettings)\n   at DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(String path, Boolean isEditable)\n   at DigitalA11y.Analysers.DotNet.Docx.DocxAnalyser.AnalyseAsync(String filePath, String jobId, String fileId, String fileName, IEnumerable\u00601 disabledRuleIds) in /Users/css173265/projects/_review-digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/DocxAnalyser.cs:line 61",
+        "OccurredAt": "2026-06-17T02:55:13.18014+00:00"
+      }
+    ],
+    "issues": []
+  },
+  {
+    "file": "pptx-compliant.pptx",
+    "succeeded": true,
+    "errors": [],
+    "issues": []
+  },
+  {
+    "file": "docx-compliant.docx",
+    "succeeded": true,
+    "errors": [],
+    "issues": []
+  },
+  {
+    "file": "docx-noncompliant.docx",
+    "succeeded": true,
+    "errors": [],
+    "issues": [
+      {
+        "ruleId": "DOCX-LANG-001",
+        "wcag": "SC_3_1_1",
+        "severity": "SERIOUS",
+        "title": "Document language not declared"
+      },
+      {
+        "ruleId": "DOCX-TITLE-001",
+        "wcag": "SC_2_4_2",
+        "severity": "SERIOUS",
+        "title": "Document title not set"
+      },
+      {
+        "ruleId": "DOCX-ALT-001",
+        "wcag": "SC_1_1_1",
+        "severity": "CRITICAL",
+        "title": "Image missing meaningful alt text"
+      },
+      {
+        "ruleId": "DOCX-TABLE-001",
+        "wcag": "SC_1_3_1",
+        "severity": "SERIOUS",
+        "title": "Table has no header row"
+      },
+      {
+        "ruleId": "DOCX-LINK-001",
+        "wcag": "SC_2_4_4",
+        "severity": "MODERATE",
+        "title": "Link text does not describe the link purpose"
+      }
+    ]
+  },
+  {
+    "file": "pptx-noncompliant.pptx",
+    "succeeded": true,
+    "errors": [],
+    "issues": [
+      {
+        "ruleId": "PPTX-TITLE-001",
+        "wcag": "SC_2_4_2",
+        "severity": "SERIOUS",
+        "title": "Slide is missing a title"
+      },
+      {
+        "ruleId": "PPTX-ALT-001",
+        "wcag": "SC_1_1_1",
+        "severity": "CRITICAL",
+        "title": "Image or graphic missing meaningful alt text"
+      },
+      {
+        "ruleId": "PPTX-LANG-001",
+        "wcag": "SC_3_1_1",
+        "severity": "SERIOUS",
+        "title": "Presentation language not declared"
+      }
+    ]
+  },
+  {
+    "file": "docx-moderate.docx",
+    "succeeded": true,
+    "errors": [],
+    "issues": [
+      {
+        "ruleId": "DOCX-ALT-001",
+        "wcag": "SC_1_1_1",
+        "severity": "CRITICAL",
+        "title": "Image missing meaningful alt text"
+      },
+      {
+        "ruleId": "DOCX-LINK-001",
+        "wcag": "SC_2_4_4",
+        "severity": "MODERATE",
+        "title": "Link text does not describe the link purpose"
+      }
+    ]
+  },
+  {
+    "file": "edge-plaintext.docx",
+    "succeeded": false,
+    "errors": [
+      {
+        "Code": "OPEN_FAILED",
+        "Message": "Failed to open the Docx file.",
+        "Detail": "System.IO.FileFormatException: File contains corrupted data.\n   at System.IO.Packaging.ZipPackage..ctor(Stream s, FileMode packageFileMode, FileAccess packageFileAccess)\n   at System.IO.Packaging.Package.Open(Stream stream, FileMode packageMode, FileAccess packageAccess)\n   at DocumentFormat.OpenXml.Features.StreamPackageFeature.InitializePackage(Nullable\u00601 mode, Nullable\u00601 access)\n   at DocumentFormat.OpenXml.Features.StreamPackageFeature..ctor(Stream stream, PackageOpenMode openMode, Boolean isOwned)\n   at DocumentFormat.OpenXml.Features.FilePackageFeature..ctor(String path, PackageOpenMode mode)\n   at DocumentFormat.OpenXml.Builder.OpenXmlPackageBuilderExtensions.Open[TPackage](IPackageFactory\u00601 builder, String file, PackageOpenMode mode)\n   at DocumentFormat.OpenXml.Builder.OpenXmlPackageBuilderExtensions.Open[TPackage](IPackageFactory\u00601 builder, String file, Boolean isEditing)\n   at DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(String path, Boolean isEditable, OpenSettings openSettings)\n   at DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(String path, Boolean isEditable)\n   at DigitalA11y.Analysers.DotNet.Docx.DocxAnalyser.AnalyseAsync(String filePath, String jobId, String fileId, String fileName, IEnumerable\u00601 disabledRuleIds) in /Users/css173265/projects/_review-digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/DocxAnalyser.cs:line 61",
+        "OccurredAt": "2026-06-17T02:55:13.420673+00:00"
+      }
+    ],
+    "issues": []
+  },
+  {
+    "file": "edge-corrupt.docx",
+    "succeeded": false,
+    "errors": [
+      {
+        "Code": "OPEN_FAILED",
+        "Message": "Failed to open the Docx file.",
+        "Detail": "System.IO.FileFormatException: File contains corrupted data.\n   at System.IO.Packaging.ZipPackage..ctor(Stream s, FileMode packageFileMode, FileAccess packageFileAccess)\n   at System.IO.Packaging.Package.Open(Stream stream, FileMode packageMode, FileAccess packageAccess)\n   at DocumentFormat.OpenXml.Features.StreamPackageFeature.InitializePackage(Nullable\u00601 mode, Nullable\u00601 access)\n   at DocumentFormat.OpenXml.Features.StreamPackageFeature..ctor(Stream stream, PackageOpenMode openMode, Boolean isOwned)\n   at DocumentFormat.OpenXml.Features.FilePackageFeature..ctor(String path, PackageOpenMode mode)\n   at DocumentFormat.OpenXml.Builder.OpenXmlPackageBuilderExtensions.Open[TPackage](IPackageFactory\u00601 builder, String file, PackageOpenMode mode)\n   at DocumentFormat.OpenXml.Builder.OpenXmlPackageBuilderExtensions.Open[TPackage](IPackageFactory\u00601 builder, String file, Boolean isEditing)\n   at DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(String path, Boolean isEditable, OpenSettings openSettings)\n   at DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(String path, Boolean isEditable)\n   at DigitalA11y.Analysers.DotNet.Docx.DocxAnalyser.AnalyseAsync(String filePath, String jobId, String fileId, String fileName, IEnumerable\u00601 disabledRuleIds) in /Users/css173265/projects/_review-digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/DocxAnalyser.cs:line 61",
+        "OccurredAt": "2026-06-17T02:55:13.42123+00:00"
+      }
+    ],
+    "issues": []
+  },
+  {
+    "file": "xlsx-compliant.xlsx",
+    "succeeded": true,
+    "errors": [],
+    "issues": []
+  },
+  {
+    "file": "xlsx-noncompliant.xlsx",
+    "succeeded": true,
+    "errors": [],
+    "issues": [
+      {
+        "ruleId": "XLSX-TITLE-001",
+        "wcag": "SC_2_4_2",
+        "severity": "SERIOUS",
+        "title": "Spreadsheet has no document title"
+      },
+      {
+        "ruleId": "XLSX-LANG-001",
+        "wcag": "SC_3_1_1",
+        "severity": "SERIOUS",
+        "title": "Spreadsheet language is not set"
+      }
+    ]
+  }
+]

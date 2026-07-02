@@ -12,7 +12,9 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT   = Path(__file__).resolve().parent.parent
-CORPUS = ROOT / "test-corpus/files"
+# Oracle corpus: the fixed synthetic rule-trigger set the scan regression suite
+# asserts on — kept OUT of test-corpus/files/, which holds the (changeable) demo estate.
+CORPUS = ROOT / "test-corpus/oracle"
 CORPUS.mkdir(parents=True, exist_ok=True)
 
 # ── HTML ────────────────────────────────────────────────────────────────────
