@@ -253,7 +253,18 @@ class _SQLiteAdapter:
         try:
             cur = conn.cursor()
             for stmt in _SCHEMA:
-                cur.execute(stmt)
+                # The migration ALTERs use Postgres's ADD COLUMN IF NOT EXISTS,
+                # which SQLite rejects as a syntax error — a fresh checkout could
+                # not boot in SQLite mode at all. Translate to plain ADD COLUMN
+                # and treat "duplicate column" (already migrated) as success.
+                if stmt.strip().upper().startswith("ALTER TABLE"):
+                    try:
+                        cur.execute(stmt.replace("ADD COLUMN IF NOT EXISTS", "ADD COLUMN"))
+                    except sqlite3.OperationalError as e:
+                        if "duplicate column" not in str(e).lower():
+                            raise
+                else:
+                    cur.execute(stmt)
             conn.commit()
         finally:
             conn.close()
