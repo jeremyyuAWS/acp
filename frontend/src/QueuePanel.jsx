@@ -62,7 +62,7 @@ export default function QueuePanel() {
     const cur = q?.workers ?? 0
     const n = Math.max(0, Math.min(16, next))
     if (n === cur) return
-    setBusy(true)
+    setBusy(true); setErr('')
     setNote(n > cur ? '⏳ initializing a worker…' : '⏳ retiring a worker (finishes its current job)…')
     setQ((c) => ({ ...(c || {}), workers: n }))   // optimistic
     setWorkers(n)
@@ -70,12 +70,17 @@ export default function QueuePanel() {
         setQ((c) => ({ ...(c || {}), workers: d.workers }))
         setNote(n > cur ? '✓ worker ready' : '✓ worker retired')
       })
-      .catch((e) => { setErr(e.message || 'could not change workers'); setNote('') })
+      .catch((e) => {
+        // Roll the optimistic count back so the UI never claims a pool size the
+        // server rejected (the 4s poll would fix it anyway — this fixes it NOW).
+        setQ((c) => ({ ...(c || {}), workers: cur }))
+        setErr(e.message || 'could not change workers'); setNote('')
+      })
       .finally(() => { setBusy(false); setTimeout(() => setNote(''), 2500) })
   }
 
   const clearDead = () => {
-    setBusy(true); setNote('⏳ clearing dead-letters…')
+    setBusy(true); setErr(''); setNote('⏳ clearing dead-letters…')
     clearDeadJobs()
       .then((d) => { setNote(`✓ cleared ${d.purged ?? 0} dead-letter job(s)`); return getJobs().then(setQ) })
       .catch((e) => setErr(e.message || 'could not clear dead-letters'))
@@ -115,11 +120,13 @@ export default function QueuePanel() {
         <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <button onClick={() => scaleWorkers(workers - 1)}
-                    disabled={busy || workers <= 0} aria-label="Remove a worker" title="Remove a worker"
+                    disabled={busy || workers <= 0} aria-label="Remove a worker"
+                    title={workers <= 0 ? 'Already at 0 — nothing to remove' : 'Remove a worker'}
                     style={WBTN}>−</button>
             <span style={{ fontSize: 22, fontWeight: 700, minWidth: 22, textAlign: 'center' }}>{workers}</span>
             <button onClick={() => scaleWorkers(workers + 1)}
-                    disabled={busy || workers >= 16} aria-label="Add a worker" title="Add a worker"
+                    disabled={busy || workers >= 16} aria-label="Add a worker"
+                    title={workers >= 16 ? 'Pool cap is 16 workers' : 'Add a worker'}
                     style={WBTN}>+</button>
           </span>
           <span className="muted" style={{ fontSize: 11, color: note ? '#185FA5' : undefined }}>

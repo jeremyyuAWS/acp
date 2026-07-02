@@ -119,7 +119,7 @@ function useProgramBatches(files, decisions) {
   }
 }
 
-export default function Monitor({ run, scanList = [], sources = [], files = [], ratified, decisions = {}, publishedFiles = [], aiEnabled = true, onAiToggle, busy = false, progress = null, scanPct = 0, scanStatus = '' }) {
+export default function Monitor({ run, scanList = [], sources = [], files = [], ratified, decisions = {}, publishedFiles = [], aiEnabled = true, onAiToggle, busy = false, progress = null, scanPct = 0, scanStatus = '', readOnly = false }) {
   const m = monitoringState(files)
   const watch = sourceWatch(sources, files)
   const derivedProg = useProgramBatches(files, decisions)
@@ -145,23 +145,28 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
       return real ? { ...b, count: real.count, done: real.done } : b
     }) }
   }, [derivedProg, campaign])
+  const [campaignErr, setCampaignErr] = useState('')
   const persistProgram = async () => {
-    if (!run?.id || campaignBusy) return
-    setCampaignBusy(true)
+    if (!run?.id || campaignBusy || readOnly) return
+    setCampaignBusy(true); setCampaignErr('')
     try {
       const c = await createCampaign(run.id, 'Remediation Program — 2026 ADA Title II Compliance', prog.deadline)
       setCampaign(c)
+    } catch (e) {
+      setCampaignErr(e.message || 'could not save the program — try again')
     } finally {
       setCampaignBusy(false)
     }
   }
   const toggleCampaignPause = async () => {
-    if (!campaign || campaignBusy) return
-    setCampaignBusy(true)
+    if (!campaign || campaignBusy || readOnly) return
+    setCampaignBusy(true); setCampaignErr('')
     try {
       const next = campaign.status === 'paused' ? 'active' : 'paused'
       const c = await setCampaignStatus(campaign.campaign_id, next)
       setCampaign(c)
+    } catch (e) {
+      setCampaignErr(e.message || 'could not update the program — try again')
     } finally {
       setCampaignBusy(false)
     }
@@ -192,7 +197,10 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
   const seed = [3, 2, 1, 0].map((k, i) => ({ ...POOL[k], id: -i, when: ['just now', '4m ago', '9m ago', '15m ago'][i] }))
   const [events, setEvents] = useState(seed)
   const [paused, setPaused] = useState(false)
-  const [controlsOpen, setControlsOpen] = useState(false)  // collapsible settings at top
+  // Collapsible settings at top — remembered per session so it doesn't snap shut
+  // on every tab switch once someone has opened it.
+  const [controlsOpen, setControlsOpen] = useState(() => sessionStorage.getItem('acp-mon-controls') === '1')
+  useEffect(() => { try { sessionStorage.setItem('acp-mon-controls', controlsOpen ? '1' : '0') } catch { /* ignore */ } }, [controlsOpen])
   const evidenceRef = useRef(null)
   const [exporting, setExporting] = useState(false)
   const [schedNext, setSchedNext] = useState(null)
@@ -218,13 +226,18 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
   }
   const [triggers, setTriggers] = useState({ newFile: true, onEdit: true, autoRemediate: true, alertRegression: true })
   const [cad, setCad] = useState(() => Object.fromEntries(watch.map((w) => [w.id, w.cadence])))
+  const [schedErr, setSchedErr] = useState('')
   const setAllCad = (v) => {
+    // Optimistic UI with a real rollback: if the schedule write fails, revert the
+    // chips to what the server still has instead of showing a cadence that isn't real.
+    const prev = cad
     setCad(Object.fromEntries(watch.map((w) => [w.id, v])))
+    setSchedErr('')
     if (!SIM) {
       const minMap = { live: 5, hourly: 60, daily: 1440, weekly: 10080 }
       putSchedule({ enabled: v !== 'off', interval_minutes: minMap[v] ?? 60 })
         .then((s) => setSchedNext(s.next_at))
-        .catch(() => {})
+        .catch((e) => { setCad(prev); setSchedErr(e.message || 'schedule not saved — try again') })
     }
   }
   const cadCount = (v) => Object.values(cad).filter((c) => c === v).length
@@ -338,6 +351,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
                   <div className="cadsummary">
                     {['live', 'hourly', 'daily', 'weekly', 'off'].map((v) => cadCount(v) ? <span key={v} className="cadpill">{cadCount(v)} {v}</span> : null)}
                   </div>
+                  {schedErr && <div style={{ fontSize: 12, color: '#A32D2D', marginTop: 6 }} role="alert">⚠ {schedErr}</div>}
                 </div>
               </div>
             </div>
@@ -364,15 +378,18 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
             {campaign ? (
               <>
                 <span className={`trstatchip ${campaign.status === 'paused' ? 'defer' : 'inscope'}`} style={{ fontSize: 12 }}>{campaign.status}</span>
-                <button className="ghost small" disabled={campaignBusy} onClick={toggleCampaignPause}>
+                <button className="ghost small" disabled={campaignBusy || readOnly} onClick={toggleCampaignPause}
+                        title={readOnly ? 'Time-travel replay — switch to the latest scan to manage the program' : undefined}>
                   {campaign.status === 'paused' ? '▶ resume' : '⏸ pause'}
                 </button>
               </>
             ) : run?.id && (
-              <button className="ghost small" disabled={campaignBusy} onClick={persistProgram} title="Save this program so pause/resume and progress survive a reload">
+              <button className="ghost small" disabled={campaignBusy || readOnly} onClick={persistProgram}
+                      title={readOnly ? 'Time-travel replay — switch to the latest scan to manage the program' : 'Save this program so pause/resume and progress survive a reload'}>
                 {campaignBusy ? 'saving…' : '💾 persist this program'}
               </button>
             )}
+            {campaignErr && <span style={{ fontSize: 12, color: '#A32D2D' }} role="alert">⚠ {campaignErr}</span>}
             <span className="trstatchip pending" style={{ fontSize: 12 }}>
               {prog.batches.reduce((a, b) => a + b.done, 0)} / {prog.batches.reduce((a, b) => a + b.count, 0)} resolved
             </span>
@@ -454,6 +471,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
                   border: '1px solid ' + (on ? '#7C3AED' : 'var(--line)'), background: on ? '#7C3AED' : '#fff', color: on ? '#fff' : 'var(--ink)' }}>{v}</button>
             )
           })}
+          {schedErr && <span style={{ fontSize: 12, color: '#A32D2D' }} role="alert">⚠ {schedErr}</span>}
         </div>
       </section>
 
