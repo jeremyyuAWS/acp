@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
+import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
 import FileDrawer, { REC_STYLE, fmtEffort, SOURCE_URL } from './FileDrawer.jsx'
@@ -171,6 +172,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [seg, setSeg] = useState(null)
   const [editing, setEditing] = useState(null)
   const [triageSel, setTriageSel] = useState(new Set())
+  const sfT = useSearchFilter()
   const [remBusy, setRemBusy] = useState(false)
   const [remMsg, setRemMsg] = useState('')
   const [remProg, setRemProg] = useState(null)   // { total, done, latest, failed }
@@ -410,8 +412,18 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         })
         // Drain model: the worklist shows only files still to decide; decided files move
         // to a collapsible group so the list shrinks as you go (and feels "done" at 0).
-        const undecidedFiles = triageFiles.filter((f) => !triage[f.file])
-        const decidedFiles = triageFiles.filter((f) => triage[f.file])
+        // Search + facet filters over the triage worklist. Filtering narrows what's
+        // SHOWN (and what select-all grabs — filter to "PDF, critical" then bulk-decide);
+        // the summary chips keep counting the whole scan.
+        const SFT_FACETS = [
+          { key: 'sev', label: 'Severity', get: (f) => topSev(f)?.toLowerCase() },
+          { key: 'rec', label: 'Suggested', get: (f) => f.rec?.action },
+          { key: 'type', label: 'Type', get: (f) => (f.file.split('.').pop() || '').toUpperCase() },
+          { key: 'department', label: 'Dept', get: (f) => f.department },
+        ]
+        const shownTriage = sfT.active ? triageFiles.filter(matchesFilters(sfT, SFT_FACETS, (f) => f.file)) : triageFiles
+        const undecidedFiles = shownTriage.filter((f) => !triage[f.file])
+        const decidedFiles = shownTriage.filter((f) => triage[f.file])
         const undecidedJunk = undecidedFiles.filter(isAutoJunk)
         const naCount = triageFiles.filter((f) => triage[f.file] === 'na').length
         const deferCount = triageFiles.filter((f) => triage[f.file] === 'defer').length
@@ -437,6 +449,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 {undecided > 0 && <span className="trstatchip pending">{undecided} undecided</span>}
               </div>
             </div>
+
+            {triageFiles.length > 8 && (
+              <SearchFilterBar ctl={sfT} items={triageFiles} facets={SFT_FACETS} noun="files"
+                               placeholder="Search triage by filename…" />
+            )}
 
             {undecidedJunk.length > 0 && (
               <div className="junkbanner">

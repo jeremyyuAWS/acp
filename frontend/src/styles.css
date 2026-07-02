@@ -1450,3 +1450,13 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .explain-why { line-height: 1.5; }
 .explain-fix code { background: #f0ede8; padding: 1px 5px; border-radius: 4px; font-size: 11px; word-break: break-all; }
 .explain-model { font-size: 10px; margin-top: 2px; }
+
+/* shared search + facet-filter bar (SearchFilterBar.jsx) */
+.sfbar { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 14px; }
+.sfrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sfinput { flex: 1 1 260px; max-width: 420px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: inherit; font-size: 13.5px; }
+.sfcount { font-size: 12.5px; color: var(--muted); }
+.sffacet { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sflabel { font-size: 11.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-right: 2px; min-width: 74px; }
+.sffacet .fchip { padding: 3px 10px; font-size: 12px; }
+.sfn { opacity: 0.65; font-size: 11px; margin-left: 2px; }

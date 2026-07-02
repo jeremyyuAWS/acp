@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import ScanTheater from './ScanTheater.jsx'
+import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import WindowedRows from './WindowedRows.jsx'
 import FileDrawer, { retentionOf } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
@@ -74,11 +75,10 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
   const [sel, setSel] = useState(null)
   const [open, setOpen] = useState(() => new Set())
   const toggle = (d) => setOpen((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n })
-  // Cross-department search — a filename match auto-expands ITS department (search
-  // intent implies "show me", not "let me click to reveal") without disturbing which
-  // departments the user had manually opened/closed before typing.
-  const [search, setSearch] = useState('')
-  const searchQuery = search.trim().toLowerCase()
+  // Cross-department search + facet filters — a match auto-expands ITS department
+  // (search intent implies "show me", not "let me click to reveal") without disturbing
+  // which departments the user had manually opened/closed before typing.
+  const sf = useSearchFilter()
   const [localDecisions, setLocalDecisions] = useState({})
   const decisions = decisionsProp ?? localDecisions
   const setDecisions = setDecisionsProp ?? setLocalDecisions
@@ -120,6 +120,16 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
   const decide = (f, dec) => { setDecisions((s) => ({ ...s, [f.file]: dec })); setEditAct(null) }
   const undoDec = (f) => setDecisions((s) => { const n = { ...s }; delete n[f.file]; return n })
   const dcount = (st) => actionable.filter((f) => decisions[f.file]?.state === st).length
+
+  // Facets for the shared bar. tag/status read live component state (classState,
+  // decisions), so the chips track the user's classification work as it happens.
+  const SF_FACETS = [
+    { key: 'tag', label: 'Tag', get: (f) => tagsOf(f) },
+    { key: 'type', label: 'Type', get: (f) => (f.type || '').toUpperCase() },
+    { key: 'status', label: 'Status', get: (f) => (f.locked ? ['locked'] : [isConfirmed(f) ? 'classified' : 'unclassified', decisions[f.file] ? 'decided' : 'undecided']) },
+    { key: 'source', label: 'Source', get: (f) => f.sourceName },
+  ]
+  const sfMatch = matchesFilters(sf, SF_FACETS, (f) => f.file)
   const pendingActions = actionable.length - dcount('accepted') - dcount('override')
   const acceptAll = () => setDecisions((s) => { const n = { ...s }; actionable.forEach((f) => { if (!n[f.file]) n[f.file] = { state: 'accepted' } }); return n })
 
@@ -140,19 +150,19 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
 
   const deptList = () => deptOrder.map((d) => {
     const deptFiles = groups[d]
-    const fs = searchQuery ? deptFiles.filter((f) => f.file.toLowerCase().includes(searchQuery)) : deptFiles
-    if (searchQuery && !fs.length) return null   // hide departments with no match while searching
-    const isOpen = searchQuery ? true : open.has(d)
+    const fs = sf.active ? deptFiles.filter(sfMatch) : deptFiles
+    if (sf.active && !fs.length) return null   // hide departments with no match while filtering
+    const isOpen = sf.active ? true : open.has(d)
     return (
       <div className="deptcard" key={d}>
-        <button className="deptheader" onClick={() => toggle(d)} aria-expanded={isOpen} disabled={!!searchQuery}>
+        <button className="deptheader" onClick={() => toggle(d)} aria-expanded={isOpen} disabled={sf.active}>
           <span className="deptchev" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
           <span className="deptname">{d}</span>
           <span className="muted deptcount">
-            {searchQuery ? `${fs.length} of ${deptFiles.length} match` : `${fs.length} docs · `}
-            {!searchQuery && <b style={{ color: 'var(--ink)', fontWeight: 500 }}>{deptNote(fs)}</b>}
+            {sf.active ? `${fs.length} of ${deptFiles.length} match` : `${fs.length} docs · `}
+            {!sf.active && <b style={{ color: 'var(--ink)', fontWeight: 500 }}>{deptNote(fs)}</b>}
           </span>
-          {!searchQuery && compBar(fs)}
+          {!sf.active && compBar(fs)}
         </button>
         {isOpen && (
           <div className="depttable">
@@ -243,20 +253,8 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
         <>
           <SH id="disc-documents" label="Documents" desc="grouped by department · click to expand · tag &amp; decide right in the row" />
 
-          <div className="docsearch">
-            <input type="search" className="docsearch-input" placeholder="Search all departments by filename…"
-                  value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search documents across all departments" />
-            {searchQuery && (() => {
-              const matches = files.filter((f) => f.file.toLowerCase().includes(searchQuery))
-              const deptHit = new Set(matches.map((f) => f.department || 'Unassigned')).size
-              return (
-                <span className="muted docsearch-count">
-                  {matches.length} result{matches.length === 1 ? '' : 's'} across {deptHit} department{deptHit === 1 ? '' : 's'}
-                  {matches.length > 0 && <button className="ghost small" style={{ marginLeft: 8 }} onClick={() => setSearch('')}>clear</button>}
-                </span>
-              )
-            })()}
-          </div>
+          <SearchFilterBar ctl={sf} items={visibleFiles} facets={SF_FACETS}
+                           placeholder="Search all departments by filename…" noun="documents" />
 
           <div className="typelegend">
             <span className="muted" style={{ fontSize: 12, marginRight: 2 }}>document types · click to view:</span>

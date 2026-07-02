@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import FileDrawer from './FileDrawer.jsx'
+import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import { openReport } from './api.js'
 import { IDENTITY } from './sim.js'
 
@@ -11,6 +12,13 @@ const scoreColor = (s) => (s >= 80 ? '#3B6D11' : s >= 50 ? '#854F0B' : '#7B1D1D'
 // readOnly: time-travel replay — publishing must act on the live estate, not a snapshot.
 export default function Publish({ run, files = [], certified = [], readOnly = false, onPublish }) {
   const ready = files.filter((f) => f.compliant)
+  const sfP = useSearchFilter()
+  const PUB_FACETS = [
+    { key: 'type', label: 'Type', get: (f) => (f.file.split('.').pop() || '').toUpperCase() },
+    { key: 'department', label: 'Dept', get: (f) => f.department },
+    { key: 'source', label: 'Source', get: (f) => f.sourceName },
+  ]
+  const shownReady = sfP.active ? ready.filter(matchesFilters(sfP, PUB_FACETS, (f) => f.file)) : ready
   const [done, setDone] = useState({})
   const [sel, setSel] = useState(null)
   const publish = (file) => { setDone((d) => (d[file] ? d : { ...d, [file]: true })); onPublish?.(file) }
@@ -83,9 +91,13 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <h2 style={{ margin: 0 }}>Publish queue <span className="muted">· {ready.length} re-validated &amp; certifiable</span></h2>
           <button disabled={readOnly || !ready.length || Object.keys(done).length >= ready.length} title={readOnly ? 'Time-travel replay — switch to the latest scan to publish' : undefined} onClick={publishAll}>Publish all</button>
         </div>
+        {ready.length > 8 && (
+          <SearchFilterBar ctl={sfP} items={ready} facets={PUB_FACETS} noun="files"
+                           placeholder="Search the publish queue…" />
+        )}
         {ready.length === 0 ? <p className="muted" style={{ marginTop: 10 }}>Nothing certifiable yet — re-validate fixes in Remediate first.</p> : (
           <div className="publist">
-            {ready.map((f) => (
+            {shownReady.length === 0 ? <p className="muted">No files match — <button className="ghost small" onClick={sfP.clear}>clear the filters</button></p> : shownReady.map((f) => (
               <div className={`pubrow${done[f.file] ? ' pubdone' : ''}`} key={f.file}>
                 <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span></button>
                 <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11' }}>{f.score} / 100</span>
