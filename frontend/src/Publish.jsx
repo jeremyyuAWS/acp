@@ -8,7 +8,8 @@ const scoreColor = (s) => (s >= 80 ? '#3B6D11' : s >= 50 ? '#854F0B' : '#7B1D1D'
 // Step 9 · Publish / Replace / Archive. Re-validated documents are published back
 // to their source — replaced in place, the prior version archived, metadata
 // updated, and owners notified. Simulated actions on the live certifiable set.
-export default function Publish({ run, files = [], certified = [], onPublish }) {
+// readOnly: time-travel replay — publishing must act on the live estate, not a snapshot.
+export default function Publish({ run, files = [], certified = [], readOnly = false, onPublish }) {
   const ready = files.filter((f) => f.compliant)
   const [done, setDone] = useState({})
   const [sel, setSel] = useState(null)
@@ -80,7 +81,7 @@ export default function Publish({ run, files = [], certified = [], onPublish }) 
       <section className="panel">
         <div className="rubrichdr">
           <h2 style={{ margin: 0 }}>Publish queue <span className="muted">· {ready.length} re-validated &amp; certifiable</span></h2>
-          <button disabled={!ready.length || Object.keys(done).length >= ready.length} onClick={publishAll}>Publish all</button>
+          <button disabled={readOnly || !ready.length || Object.keys(done).length >= ready.length} title={readOnly ? 'Time-travel replay — switch to the latest scan to publish' : undefined} onClick={publishAll}>Publish all</button>
         </div>
         {ready.length === 0 ? <p className="muted" style={{ marginTop: 10 }}>Nothing certifiable yet — re-validate fixes in Remediate first.</p> : (
           <div className="publist">
@@ -90,7 +91,7 @@ export default function Publish({ run, files = [], certified = [], onPublish }) 
                 <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11' }}>{f.score} / 100</span>
                 {done[f.file]
                   ? <span className="okline" style={{ fontSize: 13 }}>✓ published · replaced in place · owner notified</span>
-                  : <button className="qbtn approve" onClick={() => publish(f.file)}>↺ Replace &amp; publish</button>}
+                  : <button className="qbtn approve" disabled={readOnly} title={readOnly ? 'Time-travel replay — switch to the latest scan to publish' : undefined} onClick={() => publish(f.file)}>↺ Replace &amp; publish</button>}
               </div>
             ))}
           </div>

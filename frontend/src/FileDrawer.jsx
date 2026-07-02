@@ -116,7 +116,7 @@ const STATE_NOTE = {
   remediated: 'auto-remediated', reviewed: 'no findings — cleared',
 }
 
-export default function FileDrawer({ file, onClose, context = 'full', overrideOwner = null, delegatedFrom = null, decision = null, aiEnabled = true, scanId = null }) {
+export default function FileDrawer({ file, onClose, context = 'full', overrideOwner = null, delegatedFrom = null, decision = null, aiEnabled = true, scanId = null, readOnly = false }) {
   const [explanations, setExplanations] = useState({})
   const fetchExplanation = (ruleId) => {
     if (!scanId || explanations[ruleId]) return
@@ -328,7 +328,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
             {scanId && r.mode !== 'manual' && r.mode !== 'monitor' && (
               <div style={{ marginTop: 10 }}>
                 {remNow === null && (
-                  <button className="ctago" onClick={remediateNow}>⚡ Remediate this file now</button>
+                  <button className="ctago" disabled={readOnly} title={readOnly ? 'Time-travel replay — switch to the latest scan to remediate' : undefined} onClick={remediateNow}>⚡ Remediate this file now</button>
                 )}
                 {remNow === 'queued' && (
                   <div>

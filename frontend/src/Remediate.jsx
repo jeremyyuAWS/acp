@@ -135,7 +135,10 @@ function FixCarousel() {
   )
 }
 
-export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, aiEnabled = true, onRefresh }) {
+// readOnly: time-travel replay — historical scans are for looking, not enqueuing
+// real remediation jobs against (decisions stay editable: per-scan decision saves
+// are the time-travel feature itself).
+export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, aiEnabled = true, readOnly = false, onRefresh }) {
   const [queue, setQueue] = useState(() => buildHumanQueue(files, {}))
   const [acted, setActed] = useState({ approved: 0, rejected: 0, deferred: 0 })
   const [deferredItems, setDeferredItems] = useState([])
@@ -329,7 +332,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', margin: '4px 0 12px' }}>
-        <button disabled={remBusy || !runId} onClick={() => runServerRemediation(remediable)}
+        <button disabled={remBusy || !runId || readOnly} onClick={() => runServerRemediation(remediable)}
                 title="Run deterministic HTML remediation server-side, in the durable worker queue. Fixed copies are written to a Remediated/ folder; results trace to Langfuse.">
           {remBusy ? 'Enqueueing…' : '⚡ Remediate all (server-side)'}
         </button>
@@ -804,7 +807,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           </section>
 
       {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
-      {sel && <FileDrawer file={sel} context="remediate" aiEnabled={aiEnabled} scanId={run?.id} onClose={() => setSel(null)} />}
+      {sel && <FileDrawer file={sel} context="remediate" aiEnabled={aiEnabled} scanId={run?.id} readOnly={readOnly} onClose={() => setSel(null)} />}
       {selItem && <ReviewDrawer item={selItem} onClose={() => setSelItem(null)} onAct={act} />}
     </>
   )
