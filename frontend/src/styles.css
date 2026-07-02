@@ -1179,7 +1179,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .riskbig { font-size: 30px; font-weight: 700; line-height: 1; }
 .riskbig i { font-size: 14px; font-weight: 600; color: #6B747D; font-style: normal; }
 .risknum { font-size: 22px; font-weight: 700; line-height: 1.1; color: #2B2330; }
-.risksub { font-size: 10.5px; color: #72777E; font-style: normal; }
+.risksub { font-size: 10.5px; color: #696E75; font-style: normal; } /* ≥4.5:1 on the tile's #F7F9FB (was #72777E · 4.27) */
 .riskbreak { display: flex; flex-direction: column; gap: 3px; margin-top: 2px; }
 .riskchip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: #3a4046; }
 .riskchip i { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }

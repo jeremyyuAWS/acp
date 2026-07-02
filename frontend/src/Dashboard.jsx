@@ -131,27 +131,27 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
                 <label className="muted" style={{ fontSize: 12, fontWeight: 400, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
                        title={`Compares this scan against the immediately-prior one — only documents that are new or whose score changed are shown by default. ${unchangedCount} unchanged document${unchangedCount !== 1 ? 's are' : ' is'} hidden.`}>
                   <input type="checkbox" checked={onlyChanged} onChange={(e) => setOnlyChanged(e.target.checked)} />
-                  Only new/changed <span style={{ opacity: 0.7 }}>({unchangedCount} unchanged hidden)</span>
+                  Only new/changed <span>({unchangedCount} unchanged hidden)</span>
                 </label>
               )}
               {diff && (
                 <label className="muted" style={{ fontSize: 12, fontWeight: 400, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
                        title="Filter to files that already appeared in the prior scan (i.e. NOT new this time) — useful for auditing what's being carried forward rather than freshly discovered.">
                   <input type="checkbox" checked={prevScannedOnlyFilter} onChange={(e) => setPrevScannedOnlyFilter(e.target.checked)} />
-                  Previously scanned only <span style={{ opacity: 0.7 }}>({prevScannedCount})</span>
+                  Previously scanned only <span>({prevScannedCount})</span>
                 </label>
               )}
               {dupeCount > 0 && (
                 <label className="muted" style={{ fontSize: 12, fontWeight: 400, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
                   <input type="checkbox" checked={groupDupes} onChange={(e) => setGroupDupes(e.target.checked)} />
-                  Group duplicate uploads <span style={{ opacity: 0.7 }}>({dupeCount} copies)</span>
+                  Group duplicate uploads <span>({dupeCount} copies)</span>
                 </label>
               )}
               {dupesOnlyCount > 0 && (
                 <label className="muted" style={{ fontSize: 12, fontWeight: 400, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
                        title="Filter to ONLY files that share a name with another file — the set worth reviewing for accidental duplicate uploads.">
                   <input type="checkbox" checked={dupesOnlyFilter} onChange={(e) => setDupesOnlyFilter(e.target.checked)} />
-                  Duplicates only <span style={{ opacity: 0.7 }}>({dupesOnlyCount})</span>
+                  Duplicates only <span>({dupesOnlyCount})</span>
                 </label>
               )}
             </div>
@@ -165,7 +165,7 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
           {['all', 'certifiable', 'issues', 'uncertain', 'unanalysable'].filter((s) => s === 'all' || statusCounts[s]).map((s) => (
             <button key={s} type="button" onClick={() => { setStatusFilter(s); reset() }}
               className={statusFilter === s ? 'fchip on' : 'fchip'} style={{ fontSize: 12, textTransform: 'capitalize' }}>
-              {s === 'all' ? 'All' : s}{s !== 'all' && <span style={{ opacity: 0.65, marginLeft: 5 }}>{statusCounts[s]}</span>}
+              {s === 'all' ? 'All' : s}{s !== 'all' && <span style={{ marginLeft: 5 }}>{statusCounts[s]}</span>}
             </button>
           ))}
           {typeList.length > 1 && (

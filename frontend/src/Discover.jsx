@@ -64,26 +64,26 @@ function WindowedRows({ items, renderRow }) {
 function ExposureRisk({ pub, internal, internalRisk, onPick }) {
   const [open, setOpen] = useState(false)
   const mx = Math.max(1, pub.value, internal.value)
+  // A clickable row used to be div[role=button] wrapping the count <button> — nested
+  // interactive controls (axe: nested-interactive, WCAG 4.1.2). Now the LABEL is the
+  // real button (keyboard/AT entry point) and the row div keeps a plain onClick only
+  // as a wider mouse target — no role, so it isn't a second interactive control.
   const row = (label, value, color, mxx, { indent = false, chev = null, onClick, onPickCount } = {}) => {
+    const labelInner = <>{chev && <span className="expchev" aria-hidden="true">{chev}</span>}{label}</>
     const inner = (<>
-      <span className="critlabel" style={{ fontSize: 13, textAlign: 'left', paddingLeft: indent ? 18 : 0 }}>{chev && <span className="expchev" aria-hidden="true">{chev}</span>}{label}</span>
+      {onClick
+        ? <button className="critlabel" style={{ fontSize: 13, textAlign: 'left', paddingLeft: indent ? 18 : 0,
+                                                 background: 'none', border: 'none', font: 'inherit', color: 'inherit', cursor: 'pointer' }}
+                  onClick={(e) => { e.stopPropagation(); onClick(e) }}
+                  aria-expanded={chev ? open : undefined}>{labelInner}</button>
+        : <span className="critlabel" style={{ fontSize: 13, textAlign: 'left', paddingLeft: indent ? 18 : 0 }}>{labelInner}</span>}
       <span className="track"><i style={{ width: `${(value / mxx) * 100}%`, background: color, transition: 'width .9s ease' }} /></span>
       {onPickCount
         ? <button className="critn" style={{ cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted', background: 'none', border: 'none', padding: 0, font: 'inherit', color: 'inherit' }} onClick={(e) => { e.stopPropagation(); onPickCount() }} title="View these files">{value}</button>
         : <span className="critn">{value}</span>}
     </>)
     return onClick
-      ? (
-        <div
-          className="critrow pickrow"
-          style={{ gridTemplateColumns: '150px 1fr 34px', width: '100%' }}
-          role="button"
-          tabIndex={0}
-          onClick={onClick}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e) } }}
-          aria-expanded={chev ? open : undefined}
-        >{inner}</div>
-      )
+      ? <div className="critrow pickrow" style={{ gridTemplateColumns: '150px 1fr 34px', width: '100%' }} onClick={onClick}>{inner}</div>
       : <div className="critrow" style={{ gridTemplateColumns: '150px 1fr 34px' }}>{inner}</div>
   }
   return (
@@ -329,7 +329,7 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
             <button className="filesplit-item" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: lockedCount ? 'pointer' : 'default' }}
                     disabled={!lockedCount}
                     onClick={() => lockedCount && setSeg({ title: 'Password-protected / unreadable', subtitle: `${lockedCount} files the engine could not open`, files: files.filter((f) => f.locked) })}>
-              <span className="filesplit-n" style={{ color: '#9a948f' }}>{lockedCount}</span>
+              <span className="filesplit-n" style={{ color: '#75706A' }}>{lockedCount}</span>{/* ≥4.5:1 on white (was #9a948f · 3.0) */}
               <span className="filesplit-lbl">🔒 locked</span>
               <div className="filesplit-bar"><i style={{ width: `${(lockedCount / totalWidth) * 100}%`, background: '#9a948f' }} /></div>
             </button>

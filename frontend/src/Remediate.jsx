@@ -393,7 +393,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       {/* ── Triage ── */}
       {(() => {
         const scoreColor = (s) => s >= 80 ? '#3B6D11' : s >= 60 ? '#854F0B' : '#7B1D1D'
-        const SEV_C = { CRITICAL: '#7B1D1D', SERIOUS: '#854F0B', MODERATE: '#1F5FA8', MINOR: '#9a948f' }
+        const SEV_C = { CRITICAL: '#7B1D1D', SERIOUS: '#854F0B', MODERATE: '#1F5FA8', MINOR: '#75706A' }  // MINOR ≥4.5:1 on white (was #9a948f · 3.0)
         const topSev = (f) => { for (const s of ['CRITICAL', 'SERIOUS', 'MODERATE', 'MINOR']) if ((f.issues || []).some((i) => i.severity === s)) return s; return null }
         // Already-remediated files are done — drop them from triage so they
         // don't linger as "undecided". The green write-back banner above is the
