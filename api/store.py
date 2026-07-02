@@ -1470,6 +1470,53 @@ class Store:
             self._db.execute(cur, "SELECT * FROM documents")
             return self._db.fetchall(cur)
 
+    # ── Disposition audit (ADR 0003 Phase 3 — execute path) ─────────────────────
+    def create_disposition_audit(self, audit_id: str, *, doc_id: str, policy_id: str,
+                                 action: str, result: str, detail: str) -> None:
+        """Append-only, like decision_log: rows are inserted and their result may move
+        forward (pending_approval → applied/failed/rejected) but never deleted."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO disposition_audit(id,ts,doc_id,policy_id,action,result,detail) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s)",
+                (audit_id, self._now(), doc_id, policy_id, action, result, detail))
+
+    def get_disposition_audit(self, audit_id: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM disposition_audit WHERE id=%s", (audit_id,))
+            return self._db.fetchone(cur)
+
+    def list_disposition_audit(self, result: str | None = None,
+                               policy_id: str | None = None, limit: int = 500) -> list[dict]:
+        q, params = "SELECT * FROM disposition_audit", []
+        conds = []
+        if result:
+            conds.append("result=%s"); params.append(result)
+        if policy_id:
+            conds.append("policy_id=%s"); params.append(policy_id)
+        if conds:
+            q += " WHERE " + " AND ".join(conds)
+        q += " ORDER BY ts DESC LIMIT %s"; params.append(limit)
+        with self._db.cursor() as cur:
+            self._db.execute(cur, q, tuple(params))
+            return self._db.fetchall(cur)
+
+    def set_disposition_audit_result(self, audit_id: str, result: str, detail: str) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE disposition_audit SET result=%s, detail=%s WHERE id=%s",
+                (result, detail, audit_id))
+
+    def doc_has_disposition(self, doc_id: str, policy_id: str) -> bool:
+        """True if this policy already produced a live outcome for this doc — used to
+        make execute idempotent (rejected/failed rows don't block a re-run)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT 1 FROM disposition_audit WHERE doc_id=%s AND policy_id=%s "
+                "AND result IN ('pending_approval','applied') LIMIT 1",
+                (doc_id, policy_id))
+            return self._db.fetchone(cur) is not None
+
     # ── Phased remediation campaigns (ADR 0003, Phase 4) ────────────────────────
     def create_campaign(self, campaign_id: str, *, name: str, status: str, scope: str) -> None:
         with self._db.cursor() as cur:

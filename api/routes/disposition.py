@@ -1,25 +1,38 @@
-"""Configurable file disposition (ADR 0003, Phase 3) -- policy CRUD + preview.
+"""Configurable file disposition (ADR 0003, Phase 3) -- policy CRUD, preview,
+and the EXECUTE path (approved 2026-07-02).
 
-PREVIEW ONLY: /disposition/policies/{id}/preview reports which documents a
-policy would select. No route here moves, renames, archives, or deletes a
-file -- that execution path is a deliberately separate, later decision (see
-api/disposition.py's module docstring).
+Execution flow: /execute evaluates an ENABLED policy against the documents
+table; matches either become pending_approval rows in the append-only
+disposition_audit (requires_approval policies — the default) or are actioned
+immediately. /approvals lists the pending queue; approve performs the action,
+reject records the refusal. Every outcome lands in disposition_audit.
 
-Same access posture as the existing /admin/reset endpoint (system.py): gated
-by the app's perimeter auth only, not a per-route admin-role check -- there's
-no server-side admin role today. Worth closing before an execute path ships.
+Safety posture: all mutating routes are owner-gated via _require_admin (the
+per-route admin check this module's preview-era docstring asked for), delete
+is always Drive trash (never permanent — see disposition.execute_action), and
+a doc/policy pair with a live outcome (pending or applied) is never re-queued.
 """
 from __future__ import annotations
 import json
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 import core
 import disposition
+from .system import _require_admin
 
 router = APIRouter()
+
+
+def _drive_svc(request: Request):
+    """Drive client from the caller's token header, or None (leave-only mode)."""
+    token = request.headers.get("x-drive-token")
+    if not token:
+        return None
+    import handlers
+    return handlers._drive_client(token)
 
 
 class PolicyCreate(BaseModel):
@@ -32,7 +45,8 @@ class PolicyCreate(BaseModel):
 
 
 @router.post("/disposition/policies")
-def create_policy(body: PolicyCreate):
+def create_policy(body: PolicyCreate, request: Request):
+    _require_admin(request)
     if body.action not in disposition.ACTIONS:
         raise HTTPException(422, f"action must be one of {sorted(disposition.ACTIONS)}")
     try:
@@ -54,7 +68,8 @@ def list_policies():
 
 
 @router.put("/disposition/policies/{policy_id}/enabled")
-def set_policy_enabled(policy_id: str, enabled: bool):
+def set_policy_enabled(policy_id: str, enabled: bool, request: Request):
+    _require_admin(request)
     if core.store.get_disposition_policy(policy_id) is None:
         raise HTTPException(404, "policy not found")
     core.store.set_disposition_policy_enabled(policy_id, enabled)
@@ -75,3 +90,90 @@ def preview_policy(policy_id: str):
     selected = [d for d in docs if disposition.matches(d, match)]
     return {"policy_id": policy_id, "action": policy["action"],
            "would_match": len(selected), "documents": selected}
+
+
+@router.post("/disposition/policies/{policy_id}/execute")
+def execute_policy(policy_id: str, request: Request):
+    """Run an ENABLED policy for real. requires_approval matches queue as
+    pending_approval; the rest are actioned immediately. Idempotent per
+    (doc, policy): a pending or applied outcome is never re-queued."""
+    _require_admin(request)
+    policy = core.store.get_disposition_policy(policy_id)
+    if policy is None:
+        raise HTTPException(404, "policy not found")
+    if not policy.get("enabled"):
+        raise HTTPException(409, "policy is disabled — enable it before executing")
+    match = json.loads(policy["match"])
+    cfg = json.loads(policy.get("action_config") or "{}")
+    svc = _drive_svc(request)
+    if policy["action"] != "leave" and not policy.get("requires_approval") and svc is None:
+        raise HTTPException(400, "this policy acts on Drive files immediately — "
+                                 "connect Google Drive first")
+    summary = {"matched": 0, "pending_approval": 0, "applied": 0, "failed": 0, "skipped": 0}
+    for doc in core.store.list_all_documents():
+        if not disposition.matches(doc, match):
+            continue
+        summary["matched"] += 1
+        if core.store.doc_has_disposition(doc["doc_id"], policy_id):
+            summary["skipped"] += 1
+            continue
+        audit_id = uuid.uuid4().hex[:12]
+        if policy.get("requires_approval"):
+            core.store.create_disposition_audit(
+                audit_id, doc_id=doc["doc_id"], policy_id=policy_id,
+                action=policy["action"], result="pending_approval",
+                detail=f"queued by policy '{policy['name']}' — awaiting approval")
+            summary["pending_approval"] += 1
+        else:
+            result, detail = disposition.execute_action(doc, policy["action"], cfg, svc)
+            core.store.create_disposition_audit(
+                audit_id, doc_id=doc["doc_id"], policy_id=policy_id,
+                action=policy["action"], result=result, detail=detail)
+            summary[result] += 1
+    core.store.log_decision("admin", "disposition.policy_executed",
+                            detail=f"{policy['name']}: {summary}")
+    return {"policy_id": policy_id, **summary}
+
+
+@router.get("/disposition/approvals")
+def list_approvals(request: Request):
+    """The pending-approval queue — every doc a requires_approval policy selected
+    that no admin has decided on yet."""
+    _require_admin(request)
+    return core.store.list_disposition_audit(result="pending_approval")
+
+
+@router.post("/disposition/approvals/{audit_id}/approve")
+def approve_disposition(audit_id: str, request: Request):
+    """Perform the queued action. The audit row moves to applied or failed."""
+    _require_admin(request)
+    row = core.store.get_disposition_audit(audit_id)
+    if row is None or row["result"] != "pending_approval":
+        raise HTTPException(404, "no pending approval with that id")
+    policy = core.store.get_disposition_policy(row["policy_id"]) or {}
+    cfg = json.loads(policy.get("action_config") or "{}")
+    docs = {d["doc_id"]: d for d in core.store.list_all_documents()}
+    doc = docs.get(row["doc_id"])
+    if doc is None:
+        core.store.set_disposition_audit_result(audit_id, "failed", "document no longer exists")
+        raise HTTPException(410, "document no longer exists")
+    result, detail = disposition.execute_action(doc, row["action"], cfg, _drive_svc(request))
+    core.store.set_disposition_audit_result(audit_id, result, detail)
+    core.store.log_decision("admin", f"disposition.{result}",
+                            detail=f"{row['action']} {row['doc_id']}: {detail}"[:200])
+    return core.store.get_disposition_audit(audit_id)
+
+
+@router.post("/disposition/approvals/{audit_id}/reject")
+def reject_disposition(audit_id: str, request: Request):
+    """Decline the queued action. Recorded (result=rejected), never re-queued
+    automatically — a later execute run may propose it again only if the doc
+    still matches, since rejected rows don't block re-evaluation."""
+    _require_admin(request)
+    row = core.store.get_disposition_audit(audit_id)
+    if row is None or row["result"] != "pending_approval":
+        raise HTTPException(404, "no pending approval with that id")
+    core.store.set_disposition_audit_result(audit_id, "rejected", "declined by admin")
+    core.store.log_decision("admin", "disposition.rejected",
+                            detail=f"{row['action']} {row['doc_id']}")
+    return core.store.get_disposition_audit(audit_id)

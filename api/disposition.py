@@ -68,3 +68,75 @@ def matches(doc: dict, match: list[dict]) -> bool:
         if not _OPS[cond["op"]](values.get(cond["field"]), cond.get("value")):
             return False
     return True
+
+
+# ── Execute path (ADR 0003 Phase 3 — approved 2026-07-02) ─────────────────────
+# Performs a policy's action against the source system. Safety posture:
+#   * delete is ALWAYS Drive trash (30-day recovery) — never files().delete().
+#   * only Drive-backed documents (doc_id "drive:<fileId>") can be actioned;
+#     everything else fails cleanly rather than guessing.
+#   * callers gate on requires_approval + the append-only disposition_audit;
+#     this function only ever acts on a doc it was explicitly handed.
+
+ARCHIVE_FOLDER = "ACP Archive"
+
+
+def _drive_file_id(doc: dict) -> str | None:
+    doc_id = doc.get("doc_id") or ""
+    if doc.get("source") == "drive" and doc_id.startswith("drive:"):
+        return doc_id.split(":", 1)[1]
+    return None
+
+
+def _ensure_folder(svc, name: str) -> str:
+    """Find-or-create a Drive folder by name (oldest wins on legacy duplicates)."""
+    safe = name.replace("\\", "\\\\").replace("'", "\\'")
+    q = f"name='{safe}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    found = svc.files().list(q=q, fields="files(id)", orderBy="createdTime",
+                             pageSize=1).execute().get("files", [])
+    if found:
+        return found[0]["id"]
+    return svc.files().create(
+        body={"name": name, "mimeType": "application/vnd.google-apps.folder"},
+        fields="id").execute()["id"]
+
+
+def execute_action(doc: dict, action: str, action_config: dict | None, svc) -> tuple[str, str]:
+    """Apply `action` to `doc`. Returns (result, detail) with result applied|failed.
+
+    svc is an authenticated Drive client (may be None for 'leave'). Exceptions are
+    converted to a 'failed' result — one bad file must not abort a policy run.
+    """
+    cfg = action_config or {}
+    if action == "leave":
+        return "applied", "left in place — decision recorded"
+    fid = _drive_file_id(doc)
+    if not fid:
+        return "failed", (f"unsupported source '{doc.get('source')}' — only Drive-backed "
+                          "documents can be actioned")
+    if svc is None:
+        return "failed", "no Drive connection — connect Google Drive and retry"
+    try:
+        if action == "delete":
+            # Trash, never permanent: recoverable from Drive for ~30 days.
+            svc.files().update(fileId=fid, body={"trashed": True}).execute()
+            return "applied", "moved to Drive trash (recoverable ~30 days)"
+        if action == "rename":
+            template = cfg.get("template") or "{name} [ARCHIVED {date}]"
+            meta = svc.files().get(fileId=fid, fields="name").execute()
+            from datetime import datetime, timezone as _tz
+            new_name = (template.replace("{name}", meta.get("name", doc.get("path", "document")))
+                                .replace("{date}", datetime.now(_tz.utc).strftime("%Y-%m-%d")))
+            svc.files().update(fileId=fid, body={"name": new_name}).execute()
+            return "applied", f"renamed to '{new_name}'"
+        if action in ("archive", "move"):
+            folder_id = cfg.get("target_folder_id") or _ensure_folder(svc, ARCHIVE_FOLDER)
+            meta = svc.files().get(fileId=fid, fields="parents").execute()
+            svc.files().update(fileId=fid, addParents=folder_id,
+                               removeParents=",".join(meta.get("parents", [])),
+                               fields="id").execute()
+            dest = cfg.get("target_folder_id") and "configured folder" or f"'{ARCHIVE_FOLDER}'"
+            return "applied", f"moved to {dest} ({folder_id})"
+        return "failed", f"unknown action '{action}'"
+    except Exception as e:  # HttpError, network, permission — record, don't raise
+        return "failed", f"{type(e).__name__}: {e}"[:300]
