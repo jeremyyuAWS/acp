@@ -3,7 +3,7 @@
 **WCAG:** 1.1.1 Non-text Content (Level A)  
 **Severity:** CRITICAL  
 **Fix mode:** auto  
-**Source:** `worker-python/analysers/rules/pdf/alt_text.py`
+**Source:** `deploy/public/vendor/worker-python/analysers/rules/pdf/image_alt_text.py`
 
 ## What it checks
 

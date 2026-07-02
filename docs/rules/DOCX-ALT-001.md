@@ -3,7 +3,7 @@
 **WCAG:** 1.1.1 Non-text Content (Level A)  
 **Severity:** CRITICAL  
 **Fix mode:** auto  
-**Source:** `DigitalA11y.Analysers.DotNet/Rules/Docx/AltTextRule.cs`
+**Source:** `digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/AltTextRule.cs`
 
 ## What it checks
 

@@ -12,11 +12,11 @@
 
 | Engine | Rule ID | Severity | Fix mode | Source |
 |--------|---------|----------|----------|--------|
-| `docx` | `DOCX-TABLE-001` | SERIOUS | auto | `DigitalA11y.Analysers.DotNet/Rules/Docx/TableHeaderRule.cs` |
-| `docx` | `DOCX-HEAD-001` | MODERATE | auto | `DigitalA11y.Analysers.DotNet/Rules/Docx/HeadingOrderRule.cs` |
-| `pdf` | `pdf.tagged` | SERIOUS | human-only | `worker-python/analysers/rules/pdf/tagged.py` |
-| `pptx` | `PPTX-TABLE-001` | SERIOUS | auto | `DigitalA11y.Analysers.DotNet/Rules/Pptx/TableHeaderRule.cs` |
-| `xlsx` | `XLSX-TABLE-001` | SERIOUS | auto | `DigitalA11y.Analysers.DotNet/Rules/Xlsx/TableHeaderRule.cs` |
+| `docx` | `DOCX-TABLE-001` | SERIOUS | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/TableHeaderRule.cs` |
+| `docx` | `DOCX-HEAD-001` | MODERATE | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/HeadingStructureRule.cs` |
+| `pdf` | `pdf.tagged` | SERIOUS | human-only | `deploy/public/vendor/worker-python/analysers/rules/pdf/tagged_pdf.py` |
+| `pptx` | `PPTX-TABLE-001` | SERIOUS | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/TableHeaderRule.cs` |
+| `xlsx` | `XLSX-TABLE-001` | SERIOUS | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/TableHeaderRule.cs` |
 
 ### HTML engine (deterministic, in-app)
 

@@ -3,7 +3,7 @@
 **WCAG:** 1.3.1 Info and Relationships (Level A)  
 **Severity:** SERIOUS  
 **Fix mode:** human-only  
-**Source:** `worker-python/analysers/rules/pdf/tagged.py`
+**Source:** `deploy/public/vendor/worker-python/analysers/rules/pdf/tagged_pdf.py`
 
 ## What it checks
 
@@ -25,3 +25,18 @@ Adding a complete, semantically correct tag tree to an existing PDF requires und
 ## Failure modes
 
 - **False negative:** some PDFs mark `Marked=true` in MarkInfo but have a stub StructTreeRoot with no children. The rule checks for a non-empty tree to catch this.
+
+## Unit test recipe
+
+```python
+import pikepdf
+
+def is_tagged(path):
+    pdf = pikepdf.open(path)
+    marked = bool(pdf.Root.get("/MarkInfo", {}).get("/Marked", False))
+    tree = pdf.Root.get("/StructTreeRoot")
+    return marked and tree is not None and tree.get("/K") is not None
+
+assert not is_tagged("pdf-untagged.pdf")          # FAIL
+assert is_tagged("pdf-clean-accessible.pdf")      # PASS
+```

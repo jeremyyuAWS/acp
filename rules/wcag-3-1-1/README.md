@@ -12,11 +12,11 @@
 
 | Engine | Rule ID | Severity | Fix mode | Source |
 |--------|---------|----------|----------|--------|
-| `docx` | `DOCX-LANG-001` | SERIOUS | auto | `DigitalA11y.Analysers.DotNet/Rules/Docx/LanguageRule.cs` |
-| `docx` | `DOCX-LANGPART-001` | MODERATE | human-only | `DigitalA11y.Analysers.DotNet/Rules/Docx/LanguagePartsRule.cs` |
-| `pdf` | `pdf.document-language` | SERIOUS | auto | `worker-python/analysers/rules/pdf/document_language.py` |
-| `pptx` | `PPTX-LANG-001` | SERIOUS | auto | `DigitalA11y.Analysers.DotNet/Rules/Pptx/LanguageRule.cs` |
-| `xlsx` | `XLSX-LANG-001` | SERIOUS | auto | `DigitalA11y.Analysers.DotNet/Rules/Xlsx/LanguageRule.cs` |
+| `docx` | `DOCX-LANG-001` | SERIOUS | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/DocumentLanguageRule.cs` |
+| `docx` | `DOCX-LANGPART-001` | MODERATE | human-only | `digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/LanguageOfPartsRule.cs` |
+| `pdf` | `pdf.document-language` | SERIOUS | auto | `deploy/public/vendor/worker-python/analysers/rules/pdf/document_language.py` |
+| `pptx` | `PPTX-LANG-001` | SERIOUS | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/DocumentLanguageRule.cs` |
+| `xlsx` | `XLSX-LANG-001` | SERIOUS | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/DocumentLanguageRule.cs` |
 
 ### HTML engine (deterministic, in-app)
 

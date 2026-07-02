@@ -12,7 +12,7 @@
 
 | Engine | Rule ID | Severity | Fix mode | Source |
 |--------|---------|----------|----------|--------|
-| `pptx` | `PPTX-ANIM-001` | MODERATE | human-only | `DigitalA11y.Analysers.DotNet/Rules/Pptx/AnimationRule.cs` |
+| `pptx` | `PPTX-ANIM-001` | MODERATE | human-only | `digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/AnimationOrderRule.cs` |
 
 ### HTML engine (deterministic, in-app)
 

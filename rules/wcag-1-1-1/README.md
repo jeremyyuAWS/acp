@@ -12,10 +12,10 @@
 
 | Engine | Rule ID | Severity | Fix mode | Source |
 |--------|---------|----------|----------|--------|
-| `docx` | `DOCX-ALT-001` | CRITICAL | auto | `DigitalA11y.Analysers.DotNet/Rules/Docx/AltTextRule.cs` |
-| `pdf` | `pdf.missing-alt-text` | CRITICAL | auto | `worker-python/analysers/rules/pdf/alt_text.py` |
-| `pptx` | `PPTX-ALT-001` | CRITICAL | auto | `DigitalA11y.Analysers.DotNet/Rules/Pptx/AltTextRule.cs` |
-| `xlsx` | `XLSX-ALT-001` | CRITICAL | auto | `DigitalA11y.Analysers.DotNet/Rules/Xlsx/AltTextRule.cs` |
+| `docx` | `DOCX-ALT-001` | CRITICAL | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/AltTextRule.cs` |
+| `pdf` | `pdf.missing-alt-text` | CRITICAL | auto | `deploy/public/vendor/worker-python/analysers/rules/pdf/image_alt_text.py` |
+| `pptx` | `PPTX-ALT-001` | CRITICAL | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/AltTextRule.cs` |
+| `xlsx` | `XLSX-ALT-001` | CRITICAL | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/AltTextRule.cs` |
 
 ### HTML engine (deterministic, in-app)
 

@@ -12,10 +12,10 @@
 
 | Engine | Rule ID | Severity | Fix mode | Source |
 |--------|---------|----------|----------|--------|
-| `pdf` | `pdf.reading-order` | MODERATE | human-only | `worker-python/analysers/rules/pdf/reading_order.py` |
-| `pptx` | `PPTX-ORDER-001` | SERIOUS | human-only | `DigitalA11y.Analysers.DotNet/Rules/Pptx/ReadingOrderRule.cs` |
-| `xlsx` | `XLSX-MERGE-001` | MODERATE | human-only | `DigitalA11y.Analysers.DotNet/Rules/Xlsx/MergedCellRule.cs` |
-| `xlsx` | `XLSX-HIDDEN-001` | MODERATE | human-only | `DigitalA11y.Analysers.DotNet/Rules/Xlsx/HiddenContentRule.cs` |
+| `pdf` | `pdf.reading-order` | MODERATE | human-only | `deploy/public/vendor/worker-python/analysers/rules/pdf/reading_order.py` |
+| `pptx` | `PPTX-ORDER-001` | SERIOUS | human-only | `digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/ReadingOrderRule.cs` |
+| `xlsx` | `XLSX-MERGE-001` | MODERATE | human-only | `digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/MergedCellsRule.cs` |
+| `xlsx` | `XLSX-HIDDEN-001` | MODERATE | human-only | `digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/HiddenContentRule.cs` |
 
 ## How to change this rule
 

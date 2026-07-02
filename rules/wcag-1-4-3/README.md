@@ -12,8 +12,8 @@
 
 | Engine | Rule ID | Severity | Fix mode | Source |
 |--------|---------|----------|----------|--------|
-| `docx` | `DOCX-CONTRAST-001` | SERIOUS | human-only | `DigitalA11y.Analysers.DotNet/Rules/Docx/ContrastRule.cs` |
-| `pptx` | `PPTX-CONTRAST-001` | SERIOUS | human-only | `DigitalA11y.Analysers.DotNet/Rules/Pptx/ContrastRule.cs` |
+| `docx` | `DOCX-CONTRAST-001` | SERIOUS | human-only | `digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/ColourContrastRule.cs` |
+| `pptx` | `PPTX-CONTRAST-001` | SERIOUS | human-only | `digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/ColourContrastRule.cs` |
 
 ### HTML engine (deterministic, in-app)
 

@@ -3,7 +3,7 @@
 **WCAG:** 1.3.2 Meaningful Sequence (Level A)  
 **Severity:** MODERATE  
 **Fix mode:** human-only  
-**Source:** `DigitalA11y.Analysers.DotNet/Rules/Xlsx/MergedCellRule.cs`
+**Source:** `digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/MergedCellsRule.cs`
 
 ## What it checks
 
@@ -22,3 +22,24 @@ Screen readers navigate Excel by cell address. A merged cell spanning A1:C1 mean
 1. Select the merged cell.
 2. **Home → Merge & Center → Unmerge Cells**.
 3. Use **Center Across Selection** (Format Cells → Alignment) to achieve the same visual appearance without merging.
+
+## Unit test recipe
+
+```python
+import zipfile
+from lxml import etree
+
+def merged_ranges(path, sheet="xl/worksheets/sheet1.xml"):
+    with zipfile.ZipFile(path) as z:
+        root = etree.fromstring(z.read(sheet))
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    return [m.get("ref") for m in root.iter(f"{ns}mergeCell")]
+
+assert merged_ranges("xlsx-noncompliant.xlsx")        # FAIL: has merges
+assert not merged_ranges("xlsx-compliant.xlsx")       # PASS: none
+```
+
+## Failure modes
+
+- **False positive:** a merged title banner above (not inside) the data range is flagged even though it never intersects cell navigation of the data itself.
+- **False negative:** visually simulated merges (adjacent cells with borders removed and text overflowing) pass — no `mergeCell` entry exists to detect.

@@ -12,8 +12,8 @@
 
 | Engine | Rule ID | Severity | Fix mode | Source |
 |--------|---------|----------|----------|--------|
-| `docx` | `DOCX-LINK-001` | MODERATE | ai-assisted | `DigitalA11y.Analysers.DotNet/Rules/Docx/LinkTextRule.cs` |
-| `pptx` | `PPTX-LINK-001` | MODERATE | ai-assisted | `DigitalA11y.Analysers.DotNet/Rules/Pptx/LinkTextRule.cs` |
+| `docx` | `DOCX-LINK-001` | MODERATE | ai-assisted | `digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/LinkPurposeRule.cs` |
+| `pptx` | `PPTX-LINK-001` | MODERATE | ai-assisted | `digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/LinkPurposeRule.cs` |
 
 ### HTML engine (deterministic, in-app)
 

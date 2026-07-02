@@ -12,14 +12,14 @@
 
 | Engine | Rule ID | Severity | Fix mode | Source |
 |--------|---------|----------|----------|--------|
-| `docx` | `DOCX-TITLE-001` | SERIOUS | auto | `DigitalA11y.Analysers.DotNet/Rules/Docx/TitleRule.cs` |
-| `docx` | `DOCX-BOOKMARK-001` | MINOR | auto | `DigitalA11y.Analysers.DotNet/Rules/Docx/BookmarkRule.cs` |
-| `pdf` | `pdf.document-title` | SERIOUS | auto | `worker-python/analysers/rules/pdf/document_title.py` |
-| `pdf` | `pdf.display-doc-title` | MODERATE | auto | `worker-python/analysers/rules/pdf/display_doc_title.py` |
-| `pdf` | `pdf.missing-bookmarks` | MINOR | auto | `worker-python/analysers/rules/pdf/bookmarks.py` |
-| `pptx` | `PPTX-TITLE-001` | SERIOUS | auto | `DigitalA11y.Analysers.DotNet/Rules/Pptx/SlideTitleRule.cs` |
-| `xlsx` | `XLSX-TITLE-001` | SERIOUS | auto | `DigitalA11y.Analysers.DotNet/Rules/Xlsx/TitleRule.cs` |
-| `xlsx` | `XLSX-SHEET-001` | MODERATE | auto | `DigitalA11y.Analysers.DotNet/Rules/Xlsx/SheetNameRule.cs` |
+| `docx` | `DOCX-TITLE-001` | SERIOUS | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/DocumentTitleRule.cs` |
+| `docx` | `DOCX-BOOKMARK-001` | MINOR | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/BookmarksRule.cs` |
+| `pdf` | `pdf.document-title` | SERIOUS | auto | `deploy/public/vendor/worker-python/analysers/rules/pdf/document_title.py` |
+| `pdf` | `pdf.display-doc-title` | MODERATE | auto | `deploy/public/vendor/worker-python/analysers/rules/pdf/display_title.py` |
+| `pdf` | `pdf.missing-bookmarks` | MINOR | auto | `deploy/public/vendor/worker-python/analysers/rules/pdf/bookmarks.py` |
+| `pptx` | `PPTX-TITLE-001` | SERIOUS | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/SlideTitleRule.cs` |
+| `xlsx` | `XLSX-TITLE-001` | SERIOUS | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/DocumentTitleRule.cs` |
+| `xlsx` | `XLSX-SHEET-001` | MODERATE | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/SheetNameRule.cs` |
 
 ### HTML engine (deterministic, in-app)
 
