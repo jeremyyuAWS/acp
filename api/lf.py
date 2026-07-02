@@ -31,6 +31,16 @@ def _file_tags(file: str, user: str | None) -> list[str]:
     return ["accessibility-file", f"user:{user or 'demo'}", f"file:{file}"]
 
 
+def _det_id(*parts) -> str:
+    """Deterministic observation/score id from stable parts. Langfuse upserts
+    observations and scores by id, so re-emitting the same logical span (an Assess
+    re-run, a worker retry, a trace-chip rebuild) updates the existing one in place
+    instead of appending an identical sibling — without this, every re-run added
+    another 'Assess · WCAG 2.1 AA' span and another score row to the file's trace."""
+    import hashlib
+    return hashlib.sha1("::".join(str(p) for p in parts).encode()).hexdigest()
+
+
 def _lf():
     global _client
     if not _ENABLED:
@@ -141,6 +151,7 @@ def rule_spans(file_span_, sc_counts: dict[str, int], rule_catalog: list[dict],
             label = f"✓ {plain} ({rid})"
             status = "No issues"
         s = file_span_.span(
+            id=_det_id(getattr(file_span_, "id", ""), "rule", rid),
             name=label,
             level=_level_for(outcome, severity),
             status_message=status,
@@ -185,6 +196,7 @@ def pii_span(file_span_, pinfo: dict, filename: str | None = None):
     summary = ", ".join(parts)
     level = "ERROR" if pinfo.get("severity") == "critical" else "WARNING"
     s = file_span_.span(
+        id=_det_id(getattr(file_span_, "id", ""), "pii"),
         name=f"🔒 Sensitive data — {summary}",
         level=level,
         status_message=f"This document exposes {pinfo.get('total', 0)} sensitive item(s)",
@@ -348,22 +360,28 @@ def file_trace(scan_id: str, file: str, user: str | None = None):
 
 
 def discover_span(trace, engine: str):
-    """The Discover phase span on a file's trace."""
+    """The Discover phase span on a file's trace. Deterministic id (_det_id) —
+    a worker retry re-emits the same span instead of adding a sibling."""
     if isinstance(trace, _Noop):
         return _Noop()
     try:
-        return trace.span(name="Discover", input={"checked_with": engine})
+        return trace.span(id=_det_id(trace.id, "discover"),
+                          name="Discover", input={"checked_with": engine})
     except Exception:
         return _Noop()
 
 
 def assess_span(trace, level: str):
     """The Assess phase span on a file's trace — rule_spans (above) attach as its
-    children, exactly as they did on the old per-document span."""
+    children, exactly as they did on the old per-document span. Deterministic id
+    per (trace, level): re-running Assess (another click, a worker retry, the
+    trace-chip rebuild) upserts THIS span rather than appending an identical
+    sibling; assessing at a different WCAG level still gets its own span."""
     if isinstance(trace, _Noop):
         return _Noop()
     try:
-        return trace.span(name=f"Assess · WCAG 2.1 {level}")
+        return trace.span(id=_det_id(trace.id, "assess", level),
+                          name=f"Assess · WCAG 2.1 {level}")
     except Exception:
         return _Noop()
 
@@ -391,7 +409,10 @@ def file_score(scan_id: str, file: str, score: float | None) -> None:
     if lf is None:
         return
     try:
-        lf.score(trace_id=f"{scan_id}::{file}", name="compliance_score", value=float(score))
+        # Deterministic score id — a re-assess updates the one score instead of
+        # growing the trace's score list ("85.00, 85.00, 85.00, …").
+        lf.score(id=_det_id(scan_id, file, "compliance_score"),
+                 trace_id=f"{scan_id}::{file}", name="compliance_score", value=float(score))
     except Exception:
         pass
 
