@@ -46,6 +46,8 @@ _SCHEMA = [
       drive_write_url TEXT,
       acp_stamped TEXT,
       checksum TEXT,
+      published_at TEXT,
+      blob_url TEXT,
       PRIMARY KEY (scan_id, file)
     )""",
     # Per-scan decision snapshots (PRD: time-travel). kind='triage' (value inscope|na|defer)
