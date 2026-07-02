@@ -15,7 +15,7 @@ Screen readers (NVDA, JAWS, VoiceOver) announce the `descr` value when the user'
 
 ## How the engine fixes it (auto)
 
-The engine replaces the empty `descr` with an AI-generated caption derived from the image bytes. No layout changes occur; only the XML attribute is updated.
+The engine fills `descr` from a FAITHFUL in-document source, in priority order: the author's own Alt-Text *Title* field, an adjacent "Figure N:" caption paragraph (docx only), or a meaningful (non-generic) shape name. Bare-filename or generic `descr` values ("image.png") are treated as missing and replaced the same way. Images with no faithful source are left untouched and reported for human review — invented alt text is worse than none. (AI captioning from image bytes needs a vision model, which the deployed Ollama text model doesn't provide — this is the honest deterministic subset.) No layout changes occur; only the XML attribute is updated.
 
 ## Unit test recipe
 

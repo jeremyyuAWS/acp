@@ -15,7 +15,7 @@ Slides lean on imagery harder than any other format — often the image IS the c
 
 ## Fix mode rationale
 
-**auto** — the engine writes an AI-generated caption from the image bytes into `descr`. XML-attribute-only change; slides render identically.
+**auto** — The engine fills `descr` from a FAITHFUL in-document source, in priority order: the author's own Alt-Text *Title* field, an adjacent "Figure N:" caption paragraph (docx only), or a meaningful (non-generic) shape name. Bare-filename or generic `descr` values ("image.png") are treated as missing and replaced the same way. Images with no faithful source are left untouched and reported for human review — invented alt text is worse than none. (AI captioning from image bytes needs a vision model, which the deployed Ollama text model doesn't provide — this is the honest deterministic subset.) XML-attribute-only change; slides render identically.
 
 ## Unit test recipe
 

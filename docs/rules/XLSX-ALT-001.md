@@ -15,7 +15,7 @@ Spreadsheets embed logos, flow diagrams and screenshots; without alt text a scre
 
 ## Fix mode rationale
 
-**auto** — AI caption written into `descr`, same mechanism as the other formats.
+**auto** — The engine fills `descr` from a FAITHFUL in-document source, in priority order: the author's own Alt-Text *Title* field, an adjacent "Figure N:" caption paragraph (docx only), or a meaningful (non-generic) shape name. Bare-filename or generic `descr` values ("image.png") are treated as missing and replaced the same way. Images with no faithful source are left untouched and reported for human review — invented alt text is worse than none. (AI captioning from image bytes needs a vision model, which the deployed Ollama text model doesn't provide — this is the honest deterministic subset.)
 
 ## Unit test recipe
 
