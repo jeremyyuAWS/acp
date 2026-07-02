@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
+import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } from 'react'
 import { getSources, getRubric, listScans, getScan, getActiveScan, startScan, startScanQueued, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens, getDecisions, saveDecisionsBatch } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
@@ -9,7 +9,10 @@ import { annotate, loadPublished } from './ontology.js'
 import { RuleBreakdown } from './Transparency.jsx'
 import Logo from './Logo.jsx'
 import ChatWidget from './ChatWidget.jsx'
-import KnowledgeGraph from './KnowledgeGraph.jsx'
+// Lazy: KnowledgeGraph statically imports all of d3 (~250 kB min) — the only heavy
+// dep not already behind a dynamic import. Loading it on tab entry keeps d3 out of
+// the main chunk entirely.
+const KnowledgeGraph = lazy(() => import('./KnowledgeGraph.jsx'))
 import SignIn from './SignIn.jsx'
 import Settings from './Settings.jsx'
 import Monitor from './Monitor.jsx'
@@ -587,7 +590,7 @@ export default function App() {
             reachable for open-ended exploration, same as Upload. Still needs an
             assessed scan (the graph visualizes WCAG findings), so it shares Monitor's
             gate: assessGate when a scan exists but hasn't been assessed yet. */}
-        {view === 'graph' && (run ? (assessed ? <KnowledgeGraph files={files} scanId={run.id} /> : assessGate) : placeholder)}
+        {view === 'graph' && (run ? (assessed ? <Suspense fallback={<Loading />}><KnowledgeGraph files={files} scanId={run.id} /></Suspense> : assessGate) : placeholder)}
 
         {/* Guided workflow: a "next step" CTA on each workflow tab once a scan exists.
             'discover' is excluded — it owns a sub-step CTA (Inventory → Classify → Actions → Assess). */}

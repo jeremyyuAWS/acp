@@ -11,4 +11,11 @@ export default defineConfig({
     __BUILD_TIME__: JSON.stringify(now.toISOString()),
     __BUILD_VERSION__: JSON.stringify(calver),
   },
+  build: {
+    // Audited 2026-07: every heavy dep (axe-core, pdfjs, pdf-lib, jspdf, jszip, d3/
+    // KnowledgeGraph) is behind a dynamic import — the >500 kB chunks the default
+    // limit flags are all lazy-loaded, and the ~720 kB entry chunk is intrinsic app
+    // code. 750 keeps a tripwire for real regressions without warning on every build.
+    chunkSizeWarningLimit: 750,
+  },
 })
