@@ -126,6 +126,7 @@ function DriveMirror() {
   )
 }
 import Rubric from './Rubric.jsx'
+import Disposition from './Disposition.jsx'
 import WcagCoverage from './WcagCoverage.jsx'
 import Ontology from './Ontology.jsx'
 import OwnerDelegate from './OwnerDelegate.jsx'
@@ -271,6 +272,7 @@ export default function Settings({ onClose, onRubricSaved, files = [], onOntolog
           <button role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'fchip on' : 'fchip'} onClick={() => setTab('users')}>Users</button>
           <button role="tab" aria-selected={tab === 'access'} className={tab === 'access' ? 'fchip on' : 'fchip'} onClick={() => setTab('access')}>Test users</button>
           <button role="tab" aria-selected={tab === 'drivemirror'} className={tab === 'drivemirror' ? 'fchip on' : 'fchip'} onClick={() => setTab('drivemirror')}>Remediated storage</button>
+          <button role="tab" aria-selected={tab === 'disposition'} className={tab === 'disposition' ? 'fchip on' : 'fchip'} onClick={() => setTab('disposition')}>Disposition</button>
           <button role="tab" aria-selected={tab === 'data'} className={tab === 'data' ? 'fchip on' : 'fchip'} onClick={() => setTab('data')}>Data</button>
         </div>
         <div className="setbody">
@@ -283,6 +285,7 @@ export default function Settings({ onClose, onRubricSaved, files = [], onOntolog
           {tab === 'users' && <UserManagement />}
           {tab === 'access' && <AllowList />}
           {tab === 'drivemirror' && <DriveMirror />}
+          {tab === 'disposition' && <Disposition />}
           {tab === 'data' && <ResetData />}
         </div>
       </div>

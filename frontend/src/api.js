@@ -321,3 +321,63 @@ export const explainFinding = (scanId, file, ruleId) => (SIM
 export const getAiStatus = () => (SIM
   ? sim({ available: true, base_url: 'http://localhost:11434', model: 'llama3.2' })
   : fetch(`${BASE}/ai/status`, { headers: headers() }).then(j))
+
+// ── Disposition policies (ADR 0003 Phase 3) — admin-only lifecycle ────────────
+// Policies are created DISABLED and approval-gated by default; delete is always
+// Drive trash, never permanent. SIM keeps a tiny in-memory store so the whole
+// create → enable → execute → approve loop is drivable in the demo.
+const _simDisp = { policies: [], approvals: [], seq: 0 }
+export const listDispositionPolicies = () => (SIM
+  ? sim([..._simDisp.policies])
+  : fetch(`${BASE}/disposition/policies`, { headers: headers() }).then(j))
+export const createDispositionPolicy = (name, match, action, actionConfig = {}, requiresApproval = true) => (SIM
+  ? sim((() => {
+      const p = { policy_id: `sim-p${++_simDisp.seq}`, name, match: JSON.stringify(match), action,
+                  action_config: JSON.stringify(actionConfig), requires_approval: requiresApproval ? 1 : 0, enabled: 0 }
+      _simDisp.policies.push(p); return p
+    })())
+  : fetch(`${BASE}/disposition/policies`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ name, match, action, action_config: actionConfig, requires_approval: requiresApproval }),
+    }).then(j))
+export const setDispositionPolicyEnabled = (policyId, enabled) => (SIM
+  ? sim((() => {
+      const p = _simDisp.policies.find((x) => x.policy_id === policyId)
+      if (p) p.enabled = enabled ? 1 : 0
+      return p
+    })())
+  : fetch(`${BASE}/disposition/policies/${encodeURIComponent(policyId)}/enabled?enabled=${enabled}`, { method: 'PUT', headers: headers() }).then(j))
+export const previewDispositionPolicy = (policyId) => (SIM
+  ? sim({ policy_id: policyId, would_match: 3, documents: [
+      { doc_id: 'drive:sim1', path: 'HR Handbook 2019.pdf', department: 'HR', age_days: 1460 },
+      { doc_id: 'drive:sim2', path: 'Old Expense Policy.docx', department: 'Finance', age_days: 1220 },
+      { doc_id: 'drive:sim3', path: 'Legacy Onboarding.pptx', department: 'HR', age_days: 1105 }] })
+  : fetch(`${BASE}/disposition/policies/${encodeURIComponent(policyId)}/preview`, { method: 'POST', headers: headers() }).then(j))
+export const executeDispositionPolicy = (policyId) => {
+  if (SIM) {
+    const p = _simDisp.policies.find((x) => x.policy_id === policyId)
+    if (!p || !p.enabled) return Promise.reject(new Error('policy is disabled — enable it before executing'))
+    const already = _simDisp.approvals.filter((a) => a.policy_id === policyId && a.result !== 'rejected').length
+    let queued = 0
+    if (p.requires_approval && already === 0) {
+      ;['HR Handbook 2019.pdf', 'Old Expense Policy.docx', 'Legacy Onboarding.pptx'].forEach((f, i) => {
+        _simDisp.approvals.push({ id: `sim-a${++_simDisp.seq}`, doc_id: `drive:sim${i + 1}`, policy_id: policyId,
+                                  action: p.action, result: 'pending_approval',
+                                  detail: `queued by policy '${p.name}' — awaiting approval (${f})` })
+        queued += 1
+      })
+    }
+    return sim({ policy_id: policyId, matched: 3, pending_approval: queued,
+                 applied: 0, failed: 0, skipped: 3 - queued })
+  }
+  return fetch(`${BASE}/disposition/policies/${encodeURIComponent(policyId)}/execute`, { method: 'POST', headers: headers() }).then(j)
+}
+export const listDispositionApprovals = () => (SIM
+  ? sim(_simDisp.approvals.filter((a) => a.result === 'pending_approval'))
+  : fetch(`${BASE}/disposition/approvals`, { headers: headers() }).then(j))
+export const approveDisposition = (auditId) => (SIM
+  ? sim((() => { const a = _simDisp.approvals.find((x) => x.id === auditId); if (a) { a.result = 'applied'; a.detail = 'applied (simulated)' } return a })())
+  : fetch(`${BASE}/disposition/approvals/${encodeURIComponent(auditId)}/approve`, { method: 'POST', headers: headers() }).then(j))
+export const rejectDisposition = (auditId) => (SIM
+  ? sim((() => { const a = _simDisp.approvals.find((x) => x.id === auditId); if (a) { a.result = 'rejected'; a.detail = 'declined by admin' } return a })())
+  : fetch(`${BASE}/disposition/approvals/${encodeURIComponent(auditId)}/reject`, { method: 'POST', headers: headers() }).then(j))

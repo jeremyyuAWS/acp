@@ -414,7 +414,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .jstep.todo { background: #f3f1f5; color: var(--muted); }
 
 /* assess sub-views */
-.subtabs { display: flex; gap: 8px; margin: 18px 0 4px; }
+.subtabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 4px; }
 
 /* remediate — before/after diff + confidence */
 .diffbox { border-radius: 8px; padding: 9px 12px; margin: 6px 0; }
