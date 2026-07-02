@@ -232,6 +232,21 @@ def jobs(request: Request, status: str | None = None, limit: int = 100):
             "jobs": core.store.list_jobs(status=status, limit=limit, owner=owner)}
 
 
+@router.get("/jobs/{job_id}")
+def queue_job(job_id: str, request: Request):
+    """Status of one durable-queue job, owner-scoped via its scan — lets the UI show
+    REAL progress for a single-file remediation (queued → running → done/dead)
+    instead of a timed guess. Slim view only: payload can hold another tenant's
+    filenames, so it is never returned."""
+    j = core.store.get_job(job_id)
+    owner = getattr(request.state, "user_email", None) or "demo"
+    if j is None or not j.get("scan_id") or core.store.get_scan(j["scan_id"], owner=owner) is None:
+        raise HTTPException(404, "job not found")
+    return {"id": j["id"], "type": j["type"], "status": j["status"],
+            "attempts": j.get("attempts"), "error": j.get("last_error"),
+            "scan_id": j.get("scan_id")}
+
+
 @router.post("/admin/jobs/clear-dead")
 def clear_dead_jobs(request: Request):
     """Delete the caller's OWN unrecoverable dead-lettered jobs. Owner-scoped so a

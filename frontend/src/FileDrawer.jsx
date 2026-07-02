@@ -4,7 +4,7 @@ import Tag from './Tag.jsx'
 import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
-import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getRemediationStatus, getFileRemediationState, downloadRemediated } from './api.js'
+import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, getFileRemediationState, downloadRemediated } from './api.js'
 import { TraceChip } from './Transparency.jsx'
 
 // Prescriptive-action styling, shared with the Discover inventory.
@@ -153,22 +153,37 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   // looking at a single document's recommendation can see it acted on immediately instead
   // of having to switch to Remediate and run/filter the whole-estate flow.
   const [remNow, setRemNow] = useState(null) // null | 'queued' | 'error' | {done: true, url?}
-  const REM_POLL_MAX = 30 // matches the ~1 min ETA shown on the recommendation card
+  const REM_POLL_MAX = 60 // ceiling on polling the REAL job — no longer a fake timer
   const [remProgress, setRemProgress] = useState(0)
+  const [remStage, setRemStage] = useState('')
   const remediateNow = async () => {
     if (!scanId || remNow === 'queued') return
-    setRemNow('queued')
-    setRemProgress(0)
+    setRemNow('queued'); setRemProgress(4); setRemStage('Queued — waiting for a worker…')
     try {
-      await remediateScan(scanId, [file.file])
+      const res = await remediateScan(scanId, [file.file])
+      const jid = res?.job_ids?.[0]
+      if (!jid) {
+        // Nothing eligible for the server-side queue (no findings / no Drive id) —
+        // record the remediation directly, as the old flow did.
+        await markRemediated(scanId, file.file).catch(() => {})
+        setRemProgress(100); setRemNow({ done: true }); return
+      }
+      // Poll the actual job (queued → running → done/dead): the bar only advances
+      // while a worker is really on it, and completion means the fix really landed —
+      // the old version swept a 30s timer and declared success unconditionally.
+      let running = 0
       for (let i = 0; i < REM_POLL_MAX; i++) {
         await new Promise((r) => setTimeout(r, 1000))
-        setRemProgress(Math.round(((i + 1) / REM_POLL_MAX) * 100))
-        const s = await getRemediationStatus(scanId).catch(() => null)
-        if (!s || s.in_flight === 0) break
+        const jb = await getQueueJob(jid).catch(() => null)
+        if (jb?.status === 'done') { setRemProgress(100); setRemNow({ done: true }); return }
+        if (jb?.status === 'dead') { setRemNow('error'); return }
+        if (jb?.status === 'running') {
+          running += 1
+          const pct = Math.min(90, 10 + running * 8)
+          setRemProgress(pct); setRemStage(remStageLine(pct))
+        }
       }
-      await markRemediated(scanId, file.file).catch(() => {})
-      setRemNow({ done: true })
+      setRemNow('error')   // still not done after the ceiling — honest failure + retry
     } catch (e) {
       setRemNow('error')
     }
@@ -315,7 +330,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                       </span>
                     </div>
                     <div className="muted" style={{ fontSize: 12, marginTop: 5 }} role="status" aria-live="polite">
-                      {remStageLine(remProgress)}
+                      {remStage || remStageLine(remProgress)}
                     </div>
                   </div>
                 )}

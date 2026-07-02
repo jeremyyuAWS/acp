@@ -230,6 +230,17 @@ export const downloadRemediated = (scanId, file) => {
       setTimeout(() => URL.revokeObjectURL(url), 60000)
     })
 }
+// Status of one durable-queue job — real progress for a single-file remediation
+// (queued → running → done/dead) instead of a timed guess. SIM scripts a quick
+// two-poll running → done sequence per job id.
+const _simJobs = {}
+export const getQueueJob = (jobId) => {
+  if (SIM) {
+    _simJobs[jobId] = (_simJobs[jobId] ?? 3) - 1
+    return sim({ id: jobId, type: 'remediate_file', status: _simJobs[jobId] > 0 ? 'running' : 'done' }, 120)
+  }
+  return fetch(`${BASE}/jobs/${encodeURIComponent(jobId)}`, { headers: headers() }).then(j)
+}
 // ── Phased remediation campaigns (ADR 0003 Phase 4) ─────────────────────────────
 export const createCampaign = (scanId, name, deadline = null) => (SIM
   ? sim({ campaign_id: 'sim-campaign', name, status: 'active', batches: [] }, 200)
