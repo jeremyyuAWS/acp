@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   listDispositionPolicies, createDispositionPolicy, setDispositionPolicyEnabled,
   previewDispositionPolicy, executeDispositionPolicy,
-  listDispositionApprovals, approveDisposition, rejectDisposition,
+  listDispositionApprovals, approveDisposition, rejectDisposition, listDispositionAudit,
 } from './api.js'
 
 // ADR 0003 Phase 3 — disposition policies + the approval queue. A policy is a
@@ -134,6 +134,51 @@ function PolicyRow({ p, onChanged }) {
   )
 }
 
+const RESULT_TONE = {
+  applied: ['#EAF3EC', '#CFE5D6', '#2F6B43'],
+  pending_approval: ['#FBF1DF', '#EAD9BF', '#854F0B'],
+  rejected: ['#EEEDEA', '#DDD9D2', '#5F5E5A'],
+  failed: ['#FBE9E9', '#E5C4C4', '#A32D2D'],
+}
+
+// The visible face of the append-only disposition_audit table — every outcome,
+// newest first, so an admin can answer "what has this feature actually done?"
+// without going to the database.
+function History() {
+  const [rows, setRows] = useState(null)
+  const [err, setErr] = useState('')
+  const load = () => listDispositionAudit(100).then(setRows).catch((e) => setErr(e.message || 'could not load history'))
+  return (
+    <details style={{ marginTop: 20 }} onToggle={(e) => { if (e.target.open) load() }}>
+      <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 14 }}>
+        History <span className="muted" style={{ fontWeight: 400, fontSize: 12.5 }}>· every recorded outcome, newest first</span>
+      </summary>
+      {err && <p style={{ fontSize: 13, color: '#A32D2D' }}>⚠ {err}</p>}
+      {rows === null && !err && <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>Loading…</p>}
+      {rows !== null && rows.length === 0 && <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>No dispositions recorded yet.</p>}
+      {rows !== null && rows.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 10 }}>
+          {rows.map((r) => {
+            const tone = RESULT_TONE[r.result] || RESULT_TONE.rejected
+            return (
+              <div key={r.id} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'baseline', padding: '5px 8px', borderBottom: '1px solid var(--line)', fontSize: 12.5 }}>
+                <span className="muted" style={{ flex: '0 0 118px', fontSize: 11.5 }}>{(r.ts || '').slice(0, 16).replace('T', ' ')}</span>
+                <span style={{ fontSize: 11, fontWeight: 600, padding: '1px 8px', borderRadius: 20,
+                               background: tone[0], border: `1px solid ${tone[1]}`, color: tone[2] }}>
+                  {(r.result || '').replace('_', ' ')}
+                </span>
+                {actionBadge(r.action)}
+                <b style={{ wordBreak: 'break-all' }}>{r.doc_id}</b>
+                <span className="muted" style={{ flexBasis: '100%', fontSize: 11.5, paddingLeft: 126 }}>{r.detail}</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </details>
+  )
+}
+
 function ApprovalQueue({ items, onDecided }) {
   const [busyId, setBusyId] = useState(null)
   const [err, setErr] = useState('')
@@ -200,6 +245,7 @@ export default function Disposition() {
           <button className="ghost small" onClick={refresh}>↻ Refresh</button>
         </div>
         <ApprovalQueue items={approvals} onDecided={refresh} />
+        <History />
       </div>
     </div>
   )

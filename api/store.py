@@ -1101,6 +1101,28 @@ class Store:
                              "finding_count": c["finding_count"], "status": "pending", "created_at": now})
         return created
 
+    def queue_hitl_deferral(self, scan_id: str, file: str, note: str, count: int = 1) -> str | None:
+        """Queue ONE human-review item for a remediation deferral — e.g. Office images
+        with no faithful alt source (remediate_office). Those findings carry fix_mode
+        'auto', so queue_hitl_items' ai-assisted pull never sees them; without this
+        the deferral is reported in the job result and then silently dropped.
+        Idempotent per (scan, file, rule) like queue_hitl_items."""
+        from datetime import datetime, timezone
+        rule_id = "1.1.1/deferred"
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT 1 FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s",
+                (scan_id, file, rule_id))
+            if self._db.fetchone(cur):
+                return None
+            item_id = uuid.uuid4().hex[:12]
+            self._db.execute(cur,
+                "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending')",
+                (item_id, datetime.now(timezone.utc).isoformat(), scan_id, file, rule_id,
+                 note[:200], count))
+        return item_id
+
     def list_hitl_queue(self, status: str | None = None, scan_id: str | None = None) -> list[dict]:
         with self._db.cursor() as cur:
             if status and scan_id:

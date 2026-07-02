@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import uuid
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 import core
@@ -133,6 +133,14 @@ def execute_policy(policy_id: str, request: Request):
     core.store.log_decision("admin", "disposition.policy_executed",
                             detail=f"{policy['name']}: {summary}")
     return {"policy_id": policy_id, **summary}
+
+
+@router.get("/disposition/audit")
+def disposition_audit(request: Request, limit: int = Query(200, ge=1, le=1000)):
+    """Full disposition history, newest first — the visible face of the append-only
+    audit table (pending, applied, rejected, failed alike)."""
+    _require_admin(request)
+    return core.store.list_disposition_audit(limit=limit)
 
 
 @router.get("/disposition/approvals")

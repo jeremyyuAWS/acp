@@ -132,6 +132,20 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 from remediate_office import remediate_office
                 out_path, applied, _skipped = remediate_office(src)
                 mimetype = _OFFICE_MIME[ext]
+                # Deferred alt text (no faithful source — see remediate_office) must
+                # reach a human: those findings are fix_mode 'auto', so the ai-assisted
+                # HITL pull never sees them. Queue here — before the no-fixes early
+                # return below — or the deferral dies inside the job result.
+                for _msg in _skipped:
+                    if "faithful alt source" in _msg:
+                        try:
+                            _n = int(_msg.split(" ", 1)[0])
+                        except ValueError:
+                            _n = 1
+                        try:
+                            core.store.queue_hitl_deferral(scan_id, filename, _msg, _n)
+                        except Exception:
+                            pass
             if not out_path or not _Path(out_path).exists():
                 core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
                                         file=filename, detail=f".{ext}: no deterministic fixes applied")

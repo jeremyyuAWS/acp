@@ -79,6 +79,34 @@ def _start_job_workers():
         print(f"[acp] started {n} async job worker(s)", flush=True)
 
 
+@app.on_event("startup")
+def _ollama_prewarm():
+    """Keep the Ollama model loaded so 'Why?' explanations don't eat a cold start
+    (the model load alone is ~15s on CPU). Best-effort daemon: pings every 10 min
+    with keep_alive=30m; a missing/unreachable Ollama just makes each ping a no-op.
+    Opt out with ACP_OLLAMA_KEEPALIVE=0."""
+    if os.environ.get("ACP_OLLAMA_KEEPALIVE", "1") == "0":
+        return
+    import threading
+    import time
+
+    def _loop():
+        import httpx
+
+        import ai as _ai
+        while True:
+            try:
+                httpx.post(f"{_ai.OLLAMA_BASE_URL}/api/generate",
+                           json={"model": _ai.OLLAMA_MODEL, "prompt": " ",
+                                 "keep_alive": "30m", "options": {"num_predict": 1}},
+                           timeout=60)
+            except Exception:
+                pass
+            time.sleep(600)
+
+    threading.Thread(target=_loop, daemon=True, name="ollama-prewarm").start()
+
+
 # Serve the built React SPA same-origin in the deploy container (ACP_STATIC_DIR
 # points at the vite `dist`). Registered last so all /api routes take precedence;
 # unset locally (the SPA runs on the vite dev server instead).

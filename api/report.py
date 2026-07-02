@@ -180,6 +180,49 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     ]))
     el.append(band)
 
+    # ── Compliance velocity — trend vs the caller's previous scan ────────────
+    # Best-effort and lazy: rendering must never fail because history is absent,
+    # and build_report stays callable with plain dicts (tests, previews).
+    diff = None
+    try:
+        import core
+        owner = run.get("owner_email")
+        ids = [s["id"] for s in core.store.list_scans(owner=owner)]
+        i = ids.index(run["id"]) if run["id"] in ids else -1
+        prev = ids[i + 1] if 0 <= i and i + 1 < len(ids) else None
+        diff = core.store.get_scan_diff(run["id"], prev, owner=owner) if prev else None
+    except Exception:
+        diff = None
+    if diff:
+        s = diff["summary"]
+        el.append(Paragraph(
+            f"Compliance velocity · since the previous scan ({(diff.get('prev_at') or '')[:10]})", h2))
+        vt = Table([[f"▲ {s['improved']} improved", f"▼ {s['regressed']} regressed",
+                     f"+ {s['new']} new files", f"− {s['removed']} removed"]],
+                   colWidths=[1.85 * inch] * 4)
+        vt.setStyle(TableStyle([
+            ("FONTSIZE", (0, 0), (-1, -1), 10.5), ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+            ("TEXTCOLOR", (0, 0), (0, 0), GREEN), ("TEXTCOLOR", (1, 0), (1, 0), RED),
+            ("TEXTCOLOR", (2, 0), (2, 0), BLUE), ("TEXTCOLOR", (3, 0), (3, 0), MUTED),
+            ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("LEFTPADDING", (0, 0), (-1, -1), 12),
+            ("BACKGROUND", (0, 0), (-1, -1), CARD), ("BOX", (0, 0), (-1, -1), 0.75, LINE),
+        ]))
+        el.append(vt)
+        if diff.get("regressed"):
+            rr = [["Regressed file", "Prev", "Now", "Δ"]] + [
+                [Paragraph(x["file"], cell), x["prev"], x["cur"], x["delta"]]
+                for x in diff["regressed"][:5]]
+            rt = Table(rr, colWidths=[4.35 * inch, 0.8 * inch, 0.8 * inch, 0.8 * inch])
+            rt.setStyle(TableStyle([
+                ("FONTSIZE", (0, 0), (-1, -1), 8.5), ("TEXTCOLOR", (0, 0), (-1, 0), MUTED),
+                ("LINEBELOW", (0, 0), (-1, 0), 0.5, LINE), ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+                ("TEXTCOLOR", (3, 1), (3, -1), RED), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ZEBRA]),
+                ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+            el.append(Spacer(1, 6))
+            el.append(rt)
+
     # ── Charts row: status donut + severity split ───────────────────────────
     sev_rows = [["Severity", "Findings"]] + [
         [s.title(), n] for s, n in sorted(sev_counts.items(),

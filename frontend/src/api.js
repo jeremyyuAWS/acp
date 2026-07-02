@@ -381,3 +381,7 @@ export const approveDisposition = (auditId) => (SIM
 export const rejectDisposition = (auditId) => (SIM
   ? sim((() => { const a = _simDisp.approvals.find((x) => x.id === auditId); if (a) { a.result = 'rejected'; a.detail = 'declined by admin' } return a })())
   : fetch(`${BASE}/disposition/approvals/${encodeURIComponent(auditId)}/reject`, { method: 'POST', headers: headers() }).then(j))
+
+export const listDispositionAudit = (limit = 100) => (SIM
+  ? sim([..._simDisp.approvals].slice().reverse())
+  : fetch(`${BASE}/disposition/audit?limit=${limit}`, { headers: headers() }).then(j))
