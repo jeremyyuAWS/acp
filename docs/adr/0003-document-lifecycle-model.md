@@ -1,6 +1,8 @@
 # ADR 0003 — Document Lifecycle Data Model
 
-**Status:** PROPOSED
+**Status:** ACCEPTED — implemented 2026-07-01 (all four phases; the Phase 3
+disposition evaluator ships preview-only by explicit scope decision — no
+execute path is wired)
 **Date:** 2026-06-25
 **Authors:** ACP team
 

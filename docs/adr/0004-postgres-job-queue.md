@@ -1,6 +1,7 @@
 # ADR 0004 — Durable Orchestration via a Postgres Job Queue
 
-**Status:** PROPOSED
+**Status:** ACCEPTED — implemented (durable queue, worker pool, retry/backoff,
+dead-letter + Monitor queue view; extended by ADR 0007/0008 fan-out)
 **Date:** 2026-06-25
 **Authors:** ACP team
 
