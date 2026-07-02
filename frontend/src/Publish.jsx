@@ -12,7 +12,7 @@ const scoreColor = (s) => (s >= 80 ? '#3B6D11' : s >= 50 ? '#854F0B' : '#7B1D1D'
 // readOnly: time-travel replay — publishing must act on the live estate, not a snapshot.
 export default function Publish({ run, files = [], certified = [], readOnly = false, onPublish }) {
   const ready = files.filter((f) => f.compliant)
-  const sfP = useSearchFilter()
+  const sfP = useSearchFilter('publish')
   const PUB_FACETS = [
     { key: 'type', label: 'Type', get: (f) => (f.file.split('.').pop() || '').toUpperCase() },
     { key: 'department', label: 'Dept', get: (f) => f.department },

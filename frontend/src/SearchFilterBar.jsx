@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 // Shared search + facet-filter bar for every tab that renders a navigable file
 // list (Discover, Remediate triage, Publish queue, segment drawers). One text
@@ -11,9 +11,27 @@ import { useState } from 'react'
 // list wherever it already builds rows (including inside render IIFEs where
 // hooks can't live) via the pure predicate from matchesFilters(ctl, …).
 
-export function useSearchFilter() {
-  const [query, setQuery] = useState('')
-  const [sel, setSel] = useState({})              // { facetKey: Set(values) }
+// persistKey (optional) keeps the query + selected chips in sessionStorage so a
+// tab switch doesn't lose your filter; omit it for transient lists (drawers).
+export function useSearchFilter(persistKey = null) {
+  const SKEY = persistKey ? `acp-sf-${persistKey}` : null
+  const saved = (() => {
+    if (!SKEY) return null
+    try { return JSON.parse(sessionStorage.getItem(SKEY) || 'null') } catch { return null }
+  })()
+  const [query, setQuery] = useState(saved?.query ?? '')
+  const [sel, setSel] = useState(() => {              // { facetKey: Set(values) }
+    const out = {}
+    Object.entries(saved?.sel || {}).forEach(([k, vals]) => { out[k] = new Set(vals) })
+    return out
+  })
+  useEffect(() => {
+    if (!SKEY) return
+    try {
+      const flat = Object.fromEntries(Object.entries(sel).map(([k, s]) => [k, [...s]]))
+      sessionStorage.setItem(SKEY, JSON.stringify({ query, sel: flat }))
+    } catch { /* storage full/blocked — filters just don't persist */ }
+  }, [SKEY, query, sel])
   const q = query.trim().toLowerCase()
   const active = q !== '' || Object.values(sel).some((s) => s.size > 0)
   const toggle = (key, v) => setSel((s) => {
@@ -43,11 +61,26 @@ const MAX_OPTIONS = 7  // most-common values per facet — beyond this a chip ro
 export default function SearchFilterBar({ ctl, items = [], facets = [], text = (f) => f.file || '',
                                           placeholder = 'Search files by name…', noun = 'files' }) {
   const kept = items.filter(matchesFilters(ctl, facets, text)).length
+  // "/" focuses the search from anywhere on the page (unless already typing).
+  // With two bars mounted (tab + an open drawer) the drawer's listener runs
+  // last and wins focus — which is the bar the user is looking at.
+  const inputRef = useRef(null)
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return
+      const t = e.target
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
+      e.preventDefault()
+      inputRef.current?.focus()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   return (
     <div className="sfbar">
       <div className="sfrow">
-        <input type="search" className="sfinput" value={ctl.query} placeholder={placeholder}
-               aria-label={placeholder} onChange={(e) => ctl.setQuery(e.target.value)} />
+        <input type="search" className="sfinput" ref={inputRef} value={ctl.query} placeholder={placeholder}
+               aria-label={placeholder} title="Press / to focus" onChange={(e) => ctl.setQuery(e.target.value)} />
         {ctl.active && (
           <span className="sfcount" role="status" aria-live="polite">
             <b>{kept.toLocaleString()}</b> of {items.length.toLocaleString()} {noun}

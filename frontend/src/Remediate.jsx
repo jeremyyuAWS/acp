@@ -172,7 +172,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [seg, setSeg] = useState(null)
   const [editing, setEditing] = useState(null)
   const [triageSel, setTriageSel] = useState(new Set())
-  const sfT = useSearchFilter()
+  const sfT = useSearchFilter('remediate')
   const [remBusy, setRemBusy] = useState(false)
   const [remMsg, setRemMsg] = useState('')
   const [remProg, setRemProg] = useState(null)   // { total, done, latest, failed }

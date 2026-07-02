@@ -78,7 +78,7 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
   // Cross-department search + facet filters — a match auto-expands ITS department
   // (search intent implies "show me", not "let me click to reveal") without disturbing
   // which departments the user had manually opened/closed before typing.
-  const sf = useSearchFilter()
+  const sf = useSearchFilter('discover')
   const [localDecisions, setLocalDecisions] = useState({})
   const decisions = decisionsProp ?? localDecisions
   const setDecisions = setDecisionsProp ?? setLocalDecisions

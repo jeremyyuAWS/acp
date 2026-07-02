@@ -82,6 +82,12 @@ function CreatePolicy({ onCreated }) {
       <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
         {ACTIONS.find(([v]) => v === action)?.[2]} Policies start <b>disabled</b> — enable explicitly before executing.
       </div>
+      {field === 'department' && (
+        <div style={{ fontSize: 12, marginTop: 6, padding: '6px 10px', borderRadius: 8, background: '#FBF1DF', border: '1px solid #EAD9BF', color: '#854F0B' }}>
+          ⚠ <b>department</b> stays empty until the ontology classifies documents — on a raw estate this
+          matches nothing. Use <b>source</b>, <b>age days</b> or <b>triage score</b> instead, or classify first.
+        </div>
+      )}
       {err && <p style={{ fontSize: 13, color: '#A32D2D', marginBottom: 0 }}>⚠ {err}</p>}
     </div>
   )

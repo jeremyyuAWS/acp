@@ -467,6 +467,33 @@ class Store:
                 self._db.execute(cur, _UPSERT_INV,
                     (f["file"], report["completed_at"], report["completed_at"],
                      f["status"], f["score"]))
+        # Document-centric layer (ADR 0003 Phase 1) for the MONOLITHIC path — the
+        # fan-out path upserts per file in handlers._analyse_and_persist_one, but a
+        # plain (non-queued / non-fanout) scan used to skip the documents table
+        # entirely, leaving disposition/triage blind after a monolithic run.
+        # Defensively wrapped like its fan-out twin: never fail the scan save.
+        try:
+            import datetime as _dt
+
+            from documents import compute_triage_score, resolve_doc_id
+            now = report["completed_at"]
+            for f in report["files"]:
+                doc_id = resolve_doc_id(report["source"], f.get("drive_file_id"),
+                                        f["file"], f.get("checksum"))
+                prior = self.get_document(doc_id)
+                created_at = (prior or {}).get("created_at") or now
+                age_days = ((_dt.datetime.fromisoformat(now) - _dt.datetime.fromisoformat(created_at)).days
+                            if prior and prior.get("created_at") else None)
+                tscore, rationale = compute_triage_score(
+                    compliance_score=f.get("score"), pii_severity=(f.get("pii") or {}).get("severity"),
+                    pii_total=(f.get("pii") or {}).get("total", 0), age_days=age_days,
+                    skipped_rules=f.get("skipped_rules", 0))
+                self.upsert_document(doc_id, source=report["source"], path=f["file"],
+                                     content_hash=f.get("checksum"), owner=report.get("owner"),
+                                     created_at=created_at, last_seen=now,
+                                     triage_score=tscore, triage_rationale=rationale)
+        except Exception:
+            pass
         return sid
 
     # ── Fan-out scan pipeline (ADR 0007) ──────────────────────────────────────
