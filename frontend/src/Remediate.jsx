@@ -6,7 +6,7 @@ import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
 import { prefersReducedMotion } from './a11y.js'
-import { remediateScan, getRemediationStatus } from './api.js'
+import { remediateScan, getRemediationStatus, downloadRemediated } from './api.js'
 import { TraceChip } from './Transparency.jsx'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
@@ -367,7 +367,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               ✓ {written.length} fixed document{written.length !== 1 ? 's' : ''} written back to Drive
               {downloadOnly.length > 0 && ` · ${downloadOnly.length} remediated (no Drive write)`}
             </span>
-            <span style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
               {written.slice(0, 6).map((f) => (
                 <a key={f.file} href={f.drive_write_url} target="_blank" rel="noreferrer"
                    style={{ fontSize: 12, color: '#185FA5' }} title={`Open ${f.file} in the Remediated/ folder`}>
@@ -375,6 +375,16 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 </a>
               ))}
               {written.length > 6 && <span className="muted" style={{ fontSize: 12 }}>+{written.length - 6} more</span>}
+              {/* Blob-only copies (Drive mirror off / write denied) — downloadable via the
+                  authenticated ADR 0010 route, otherwise they'd be unreachable from the UI. */}
+              {downloadOnly.slice(0, 6).map((f) => (
+                <button key={f.file} className="ghost small" style={{ fontSize: 12 }}
+                        title={`Download the fixed copy of ${f.file} (stored in Blob)`}
+                        onClick={() => downloadRemediated(runId, f.file)}>
+                  ⤓ {f.file}
+                </button>
+              ))}
+              {downloadOnly.length > 6 && <span className="muted" style={{ fontSize: 12 }}>+{downloadOnly.length - 6} more</span>}
             </span>
           </div>
         )

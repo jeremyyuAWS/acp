@@ -214,6 +214,22 @@ export const updateSettings = (patch) => (SIM
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(patch),
     }).then(j))
+// Download a remediated file's fixed bytes (ADR 0010) — Blob primary, Drive-mirror
+// fallback server-side. Authenticated fetch → blob → download, same pattern as
+// openReport (a bare <a href> would drop the Authorization header).
+export const downloadRemediated = (scanId, file) => {
+  if (SIM) return Promise.resolve()
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/remediated`,
+               { headers: headers() })
+    .then((r) => { if (!r.ok) throw new Error(`download ${r.status}`); return r.blob() })
+    .then((blob) => {
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = file
+      document.body.appendChild(a); a.click(); a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+    })
+}
 // ── Phased remediation campaigns (ADR 0003 Phase 4) ─────────────────────────────
 export const createCampaign = (scanId, name, deadline = null) => (SIM
   ? sim({ campaign_id: 'sim-campaign', name, status: 'active', batches: [] }, 200)

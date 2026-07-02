@@ -4,7 +4,7 @@ import Tag from './Tag.jsx'
 import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
-import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getRemediationStatus, getFileRemediationState } from './api.js'
+import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getRemediationStatus, getFileRemediationState, downloadRemediated } from './api.js'
 import { TraceChip } from './Transparency.jsx'
 
 // Prescriptive-action styling, shared with the Discover inventory.
@@ -320,7 +320,14 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                   </div>
                 )}
                 {remNow?.done && (
-                  <span className="dectag ok" style={{ fontSize: 12, padding: '3px 10px' }}>✓ Remediated — fixed copy saved to Drive</span>
+                  <span className="dectag ok" style={{ fontSize: 12, padding: '3px 10px' }}>✓ Remediated — fixed copy stored</span>
+                )}
+                {(remNow?.done || file.remediated_at) && (
+                  <button className="ghost small" style={{ marginLeft: 8 }}
+                          title="Download the fixed copy (Blob primary, Drive-mirror fallback)"
+                          onClick={() => downloadRemediated(scanId, file.file)}>
+                    ⤓ Download fixed copy
+                  </button>
                 )}
                 {remNow === 'error' && (
                   <span style={{ color: '#B43A2A' }}>
