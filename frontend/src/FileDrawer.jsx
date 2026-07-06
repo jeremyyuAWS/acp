@@ -4,7 +4,7 @@ import Tag from './Tag.jsx'
 import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
-import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, getFileRemediationState, downloadRemediated } from './api.js'
+import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, downloadRemediated } from './api.js'
 import { TraceChip } from './Transparency.jsx'
 
 // Prescriptive-action styling, shared with the Discover inventory.
@@ -170,8 +170,13 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
     const finish = () => {
       if (['assisted', 'review'].includes(file.rec?.action) || (file.issues || []).some((i) => i.auto === false)) {
         queueHitlReview(scanId).catch(() => {})
-        setHitlQueued(true)
+      } else {
+        // Fully-automatic fixes get a post-fix VERIFICATION item (user decision
+        // 2026-07-02): a human spot-checks the automatic result — no unreviewed
+        // fix reaches Publish on trust alone.
+        queueHitlVerify(scanId, file.file).catch(() => {})
       }
+      setHitlQueued(true)
       setRemProgress(100); setRemNow({ done: true })
       // Announce completion app-wide (same event pattern as acp:session-expired):
       // App refetches the scan, so triage/publish/discover reflect this fix

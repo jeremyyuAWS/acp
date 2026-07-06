@@ -1128,14 +1128,14 @@ class Store:
                              "finding_count": c["finding_count"], "status": "pending", "created_at": now})
         return created
 
-    def queue_hitl_deferral(self, scan_id: str, file: str, note: str, count: int = 1) -> str | None:
+    def queue_hitl_deferral(self, scan_id: str, file: str, note: str, count: int = 1,
+                            rule_id: str = "1.1.1/deferred") -> str | None:
         """Queue ONE human-review item for a remediation deferral — e.g. Office images
         with no faithful alt source (remediate_office). Those findings carry fix_mode
         'auto', so queue_hitl_items' ai-assisted pull never sees them; without this
         the deferral is reported in the job result and then silently dropped.
         Idempotent per (scan, file, rule) like queue_hitl_items."""
         from datetime import datetime, timezone
-        rule_id = "1.1.1/deferred"
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT 1 FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s",

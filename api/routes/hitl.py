@@ -1,7 +1,7 @@
 """Human-in-the-loop review queue endpoints."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 import core
@@ -26,6 +26,23 @@ def hitl_auto_queue(scan_id: str):
     created = core.store.queue_hitl_items(scan_id)
     core.fire_webhook(created)
     return {"queued": len(created), "items": created}
+
+
+@router.post("/hitl/queue/{scan_id}/verify")
+def hitl_verify_queue(scan_id: str, file: str = Query(...)):
+    """Queue a post-fix VERIFICATION item for one fully-automatic remediation
+    (user decision 2026-07-02: automatic fixes also get human review). The
+    ai-assisted pull above never sees auto-mode rules, so this is the only
+    path that puts a fully-automatic fix in front of a person. Idempotent per
+    (scan, file) — repeat clicks of remediate-now never duplicate the item."""
+    if core.store.get_scan(scan_id) is None:
+        raise HTTPException(404, "scan not found")
+    item_id = core.store.queue_hitl_deferral(
+        scan_id, file, "Automatic fix applied — verify the result", 1, rule_id="auto/verify")
+    if item_id:
+        core.fire_webhook([{"id": item_id, "scan_id": scan_id, "file": file,
+                            "rule_id": "auto/verify", "status": "pending"}])
+    return {"queued": 0 if item_id is None else 1, "id": item_id}
 
 
 @router.get("/hitl/queue")

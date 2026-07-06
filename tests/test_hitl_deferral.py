@@ -39,6 +39,20 @@ def test_deferral_lands_in_queue_and_is_idempotent(store):
     assert len(store.list_hitl_queue(scan_id="s1")) == 2
 
 
+def test_verify_item_for_fully_automatic_fix(store):
+    # User decision 2026-07-02: fully-automatic remediate-now runs also queue a
+    # human VERIFICATION item, under its own rule id so it never collides with
+    # a deferral for the same file.
+    a = store.queue_hitl_deferral("s3", "auto.pdf", "Automatic fix applied — verify the result", 1,
+                                  rule_id="auto/verify")
+    assert a
+    assert store.queue_hitl_deferral("s3", "auto.pdf", "again", 1, rule_id="auto/verify") is None
+    b = store.queue_hitl_deferral("s3", "auto.pdf", "2 image(s) lack a faithful alt source", 2)
+    assert b                                       # distinct rule ids coexist per file
+    ids = {i["rule_id"] for i in store.list_hitl_queue(scan_id="s3")}
+    assert ids == {"auto/verify", "1.1.1/deferred"}
+
+
 def test_deferral_does_not_collide_with_ai_assisted_pull(store):
     # A real 1.1.1 ai-assisted item and a deferral for the same file coexist —
     # distinct rule ids keep queue_hitl_items' dedupe from swallowing either.

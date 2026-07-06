@@ -385,3 +385,7 @@ export const rejectDisposition = (auditId) => (SIM
 export const listDispositionAudit = (limit = 100) => (SIM
   ? sim([..._simDisp.approvals].slice().reverse())
   : fetch(`${BASE}/disposition/audit?limit=${limit}`, { headers: headers() }).then(j))
+
+export const queueHitlVerify = (scanId, file) => (SIM
+  ? sim({ queued: 1 })
+  : fetch(`${BASE}/hitl/queue/${encodeURIComponent(scanId)}/verify?file=${encodeURIComponent(file)}`, { method: 'POST', headers: headers() }).then(j))
