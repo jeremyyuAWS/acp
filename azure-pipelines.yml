@@ -46,6 +46,9 @@ steps:
       versionSpec: '22.x'
     displayName: Node 22 (pdfjs-dist requires >=22.13)
 
+  - script: npm install -g npm@11 --no-audit --no-fund
+    displayName: npm 11 (lockfile is npm-11 authored; npm 10 rejects its nested entries)
+
   - script: npm ci --no-audit --no-fund
     workingDirectory: frontend
     displayName: Install frontend dependencies
