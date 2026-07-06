@@ -362,6 +362,24 @@ def _analyse_office(dest: Path) -> dict:
 
 _VAGUE_LINK_TEXT = frozenset({"click here", "here", "read more", "more", "link", "this", "click", "learn more", "details"})
 
+# Phase 1 HTML-check helpers — patterns mirror frontend/src/rules/ modules.
+_INPUT_PURPOSE = re.compile(
+    r"e-?mail|(^|[\s_-])(tel|phone|mobile)([\s_-]|$)|(first|given)[-_ ]?name|(last|family|sur)[-_ ]?name"
+    r"|full[-_ ]?name|(^|[\s_-])(zip|postal)([-_ ]?code)?([\s_-]|$)|(^|[\s_-])country([\s_-]|$)"
+    r"|(^|[\s_-])(city|town)([\s_-]|$)|street|address|(^|[\s_-])(org|organization|company)([\s_-]|$)"
+    r"|birth[-_ ]?(date|day)|(^|[\s_-])dob([\s_-]|$)", re.I)
+_ORIENTATION_LOCK = re.compile(
+    r"@media[^{]*\(\s*orientation\s*:\s*(?:portrait|landscape)\s*\)[^{]*\{[^@]*?display\s*:\s*none", re.I)
+_INLINE_COLOR = re.compile(r"(?:^|[^-])color:\s*#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b")
+
+
+def _luma(h: str) -> float:
+    """Relative luma of a hex color (0..1); >0.45 ≈ fails the 7:1 enhanced ratio on white."""
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255
+
 
 def _analyse_html(path: Path) -> dict:
     try:
@@ -422,6 +440,69 @@ def _analyse_html(path: Path) -> dict:
         if not (inp.get("aria-label") or inp.get("aria-labelledby") or inp.get("title")):
             if inp.get("id", "") not in labelled_ids:
                 issues.append({"ruleId": "HTML_INPUT_NO_LABEL", "wcag": "4.1.2 Name, Role, Value", "severity": "CRITICAL"})
+
+    # ── Phase 1 additions — predicates mirror frontend/src/rules/wcag-*.js so a
+    # file remediated client-side re-scans clean here.
+
+    # 1.4.2 Audio Control — autoplaying media with no way to stop it
+    for m in root.iter("audio", "video"):
+        if m.get("autoplay") is not None and m.get("controls") is None:
+            issues.append({"ruleId": "HTML_AUTOPLAY_MEDIA", "wcag": "1.4.2 Audio Control", "severity": "SERIOUS"})
+
+    # 1.3.5 Identify Input Purpose — recognizable personal-data inputs without autocomplete
+    for inp in root.iter("input"):
+        if inp.get("autocomplete"):
+            continue
+        hint = f'{inp.get("name") or ""} {inp.get("id") or ""} {inp.get("placeholder") or ""}'
+        if (inp.get("type") or "").lower() in ("email", "tel") or _INPUT_PURPOSE.search(hint):
+            issues.append({"ruleId": "HTML_INPUT_NO_AUTOCOMPLETE", "wcag": "1.3.5 Identify Input Purpose", "severity": "MODERATE"})
+
+    # 2.5.3 Label in Name — accessible name omits the visible label text
+    for el in list(root.iter("a")) + list(root.iter("button")):
+        aria = re.sub(r"\s+", " ", el.get("aria-label") or "").strip().lower()
+        if not aria:
+            continue
+        visible = re.sub(r"\s+", " ", el.text_content() or "").strip().lower()[:80]
+        if visible and visible not in aria:
+            issues.append({"ruleId": "HTML_LABEL_NOT_IN_NAME", "wcag": "2.5.3 Label in Name", "severity": "SERIOUS"})
+
+    # 2.4.1 Bypass Blocks — repeated chrome (nav/header) with no skip mechanism
+    roles = {el.get("role") for el in root.iter() if callable(getattr(el, "get", None)) and el.get("role")}
+    has_chrome = (root.find(".//nav") is not None or root.find(".//header") is not None
+                  or roles & {"navigation", "banner"})
+    if has_chrome:
+        has_main = root.find(".//main") is not None or "main" in roles
+        ids = {el.get("id") for el in root.iter() if callable(getattr(el, "get", None)) and el.get("id")}
+        has_skip = any((a.get("href") or "").startswith("#") and (a.get("href") or "")[1:] in ids
+                       for a in root.iter("a"))
+        if not (has_main or has_skip):
+            issues.append({"ruleId": "HTML_NO_SKIP_LINK", "wcag": "2.4.1 Bypass Blocks", "severity": "MODERATE"})
+
+    # 3.3.2 Labels or Instructions — required field with no guidance at all
+    for tag in ("input", "select", "textarea"):
+        for inp in root.iter(tag):
+            if inp.get("required") is None:
+                continue
+            if (inp.get("aria-label") or inp.get("aria-labelledby") or inp.get("aria-describedby")
+                    or inp.get("title") or inp.get("placeholder")):
+                continue
+            if next(inp.iterancestors("label"), None) is not None or inp.get("id", "") in labelled_ids:
+                continue
+            issues.append({"ruleId": "HTML_REQUIRED_NO_GUIDANCE", "wcag": "3.3.2 Labels or Instructions", "severity": "SERIOUS"})
+
+    # 1.3.4 Orientation — content hidden in one orientation ("rotate your device" lock)
+    for st in root.iter("style"):
+        if _ORIENTATION_LOCK.search(st.text_content() or ""):
+            issues.append({"ruleId": "HTML_ORIENTATION_LOCK", "wcag": "1.3.4 Orientation", "severity": "MODERATE"})
+
+    # 1.4.6 Contrast (Enhanced, AAA) — inline colors that pass 4.5:1 but miss 7:1
+    for el in root.iter():
+        style = el.get("style") if callable(getattr(el, "get", None)) else None
+        if not style:
+            continue
+        m = _INLINE_COLOR.search(style)
+        if m and _luma(m.group(1)) > 0.45:
+            issues.append({"ruleId": "HTML_LOW_CONTRAST_AAA", "wcag": "1.4.6 Contrast (Enhanced)", "severity": "MODERATE"})
 
     return {"succeeded": True, "issues": issues, "errors": []}
 
