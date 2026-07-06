@@ -266,6 +266,8 @@ input:focus-visible, [role="tab"]:focus-visible {
 .covchip--human { background: #FBEBDD; color: #854F0B; }
 .covchip--gap { background: #E3ECF7; color: #1F5FA8; }
 .covchip--nodata { background: #EDEBEF; color: #716b76; }
+/* Collapsed duplicate findings — "× N" occurrence count in the drawer list */
+.findingcount { font-size: 10.5px; font-weight: 700; color: var(--plum); background: #EFEAF2; border-radius: 999px; padding: 1px 7px; margin-left: 6px; white-space: nowrap; }
 @media (max-width: 720px) { .rulerow { grid-template-columns: 1fr; gap: 4px; } .rulecounts { justify-content: flex-start; } .covchip { justify-self: start; } }
 /* WCAG failure heatmap — top failing rules × department (Assess tab) */
 .heatmaptitle { font-size: 13px; font-weight: 600; margin: 16px 0 6px; color: var(--ink); }

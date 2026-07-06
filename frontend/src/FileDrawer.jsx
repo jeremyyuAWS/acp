@@ -417,13 +417,24 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
       ) : (
         <>
           <div className="findings">
-            {issues.map((i, n) => {
+            {(() => {
+              // Engines emit one finding per occurrence (e.g. reading order: one
+              // per slide) with no per-occurrence context to display — collapse
+              // identical (criterion, severity, detail) rows into one with a count.
+              const groups = []
+              const byKey = {}
+              issues.forEach((i) => {
+                const k = `${scOf(i.wcag) || i.wcag}::${i.severity || ''}::${i.detail || ''}`
+                if (byKey[k] == null) { byKey[k] = groups.length; groups.push({ ...i, count: 1 }) }
+                else groups[byKey[k]].count++
+              })
+              return groups.map((i, n) => {
               const [bg, fg] = SEV[i.severity] || SEV.MINOR
               return (
                 <div className="finding" key={n}>
                   <span className="badge" style={{ background: bg, color: fg }}>{(i.severity || '').toLowerCase()}</span>
                   <div className="findingmain">
-                    <div className="findingtop">{critLabel(i.wcag)}{i.level && <span className="lvlchip">Level {i.level}</span>}{(isRemediated || remediatedRuleIds.has(scOf(i.wcag))) && <span className="dectag ok">✓ remediated</span>}</div>
+                    <div className="findingtop">{critLabel(i.wcag)}{i.count > 1 && <span className="findingcount" title={`${i.count} occurrences of this finding in the file`}>× {i.count}</span>}{i.level && <span className="lvlchip">Level {i.level}</span>}{(isRemediated || remediatedRuleIds.has(scOf(i.wcag))) && <span className="dectag ok">✓ remediated</span>}</div>
                     {i.detail && <div className="findingdetail">{i.detail}</div>}
                     {i.impact && <div className="muted findingimpact">{i.impact}</div>}
                     {i.fix && <div className="findingfix"><span className={i.auto ? 'fixauto' : 'fixreview'}>{i.auto ? '⚡ auto-fixable' : '✎ needs review'}</span> · {i.fix}<span className="muted"> · {i.rule_id ?? i.ruleId}</span></div>}
@@ -441,7 +452,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                   </div>
                 </div>
               )
-            })}
+            }) })()}
           </div>
           <details className="sevhelp">
             <summary>How is severity classified?</summary>
