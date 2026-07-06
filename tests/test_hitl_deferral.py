@@ -59,3 +59,16 @@ def test_deferral_does_not_collide_with_ai_assisted_pull(store):
     store.queue_hitl_deferral("s2", "doc.docx", "1 image(s) lack a faithful alt source", 1)
     ids = {i["rule_id"] for i in store.list_hitl_queue(scan_id="s2")}
     assert ids == {"1.1.1/deferred"}
+
+
+def test_ai_backend_ollama_pins_local(monkeypatch):
+    # ACP_AI_BACKEND=ollama must make external token spend impossible even
+    # with an Anthropic key present — _claude_complete short-circuits to None
+    # before any SDK call, so everything falls through to the local model.
+    import ai
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-would-bill-if-used")
+    monkeypatch.setenv("ACP_AI_BACKEND", "ollama")
+    assert ai._claude_complete("sys", "user") is None
+    monkeypatch.setenv("ACP_AI_BACKEND", "auto")
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    assert ai._claude_complete("sys", "user") is None   # no key → still no external call
