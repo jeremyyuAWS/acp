@@ -59,9 +59,22 @@ def test_field_values(rule):
         f"wcag {rule['wcag']} does not match wcag_sc {rule['wcag_sc']}"
 
 
+# Rule sources under these roots are PARTNER/VENDORED code, deliberately
+# gitignored (see .gitignore: DigitalA11y lives in its own repo; the vendored
+# engine ships via the deploy image, not this repo). A clean CI checkout can
+# never have them, so their existence check is local-only — everywhere a
+# developer has the partner code, the check still runs at full strength, and
+# an in-repo source path going stale still fails everywhere.
+_PARTNER_ROOTS = ("digital-accessibility/", "deploy/public/vendor/")
+
+
 @pytest.mark.parametrize("rule", RULES, ids=IDS)
 def test_source_file_exists(rule):
-    assert (ACP / rule["source"]).is_file(), \
+    path = ACP / rule["source"]
+    if not path.is_file() and rule["source"].startswith(_PARTNER_ROOTS):
+        pytest.skip(f"{rule['id']}: source is partner/vendored code "
+                    f"({rule['source']}) — not present on clean checkouts by design")
+    assert path.is_file(), \
         f"{rule['id']}: source does not resolve in-repo: {rule['source']}"
 
 
