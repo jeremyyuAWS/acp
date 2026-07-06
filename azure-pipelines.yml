@@ -43,8 +43,8 @@ steps:
 
   - task: NodeTool@0
     inputs:
-      versionSpec: '20.x'
-    displayName: Node 20
+      versionSpec: '22.x'
+    displayName: Node 22 (pdfjs-dist requires >=22.13)
 
   - script: npm ci --no-audit --no-fund
     workingDirectory: frontend
