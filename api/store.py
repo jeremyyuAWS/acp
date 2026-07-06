@@ -1375,6 +1375,9 @@ class Store:
                 self._db.execute(cur,
                     "UPDATE jobs SET status='dead', last_error=%s, updated_at=%s WHERE id=%s",
                     (error[:2000], now.isoformat(), job_id))
+            # One greppable stdout line per dead-letter — the platform alert
+            # (Log Analytics scheduled query) keys on 'job dead-lettered'.
+            print(f"[acp] job dead-lettered: id={job_id} type={job.get('type')} error={error[:160]}", flush=True)
             return "dead"
         run_after = (now + timedelta(seconds=backoff_seconds)).isoformat()
         with self._db.cursor() as cur:
