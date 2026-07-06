@@ -4,7 +4,8 @@ import Tag from './Tag.jsx'
 import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
-import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, downloadRemediated } from './api.js'
+import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, downloadRemediated, getRules } from './api.js'
+import { WCAG } from './wcagCatalog.js'
 import { TraceChip } from './Transparency.jsx'
 
 // Prescriptive-action styling, shared with the Discover inventory.
@@ -118,6 +119,15 @@ const STATE_NOTE = {
 
 export default function FileDrawer({ file, onClose, context = 'full', overrideOwner = null, delegatedFrom = null, decision = null, aiEnabled = true, scanId = null, readOnly = false }) {
   const [explanations, setExplanations] = useState({})
+  // Engine rule catalog (docx/pptx/xlsx/pdf groups) — tells the coverage table
+  // which WCAG criteria the engine ACTUALLY evaluates for this file type, so a
+  // PASS is never claimed for something that was never checked. Fetched once.
+  const [catalogRules, setCatalogRules] = useState(null)
+  useEffect(() => {
+    let on = true
+    getRules().then((r) => { if (on) setCatalogRules(r) }).catch(() => {})
+    return () => { on = false }
+  }, [])
   const fetchExplanation = (ruleId) => {
     if (!scanId || explanations[ruleId]?.loading) return   // error/stale results are retryable
     setExplanations((e) => ({ ...e, [ruleId]: { loading: true } }))
@@ -467,41 +477,60 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
       )}
 
       {(() => {
-        // Cross-reference the rule manifest against this file's actual issues to
-        // produce a per-rule outcome row: PASS (no findings) / FAIL (N findings) /
-        // SKIP (rule not applicable to this file type). Was gated to context==='remediate'
-        // only — but allRules is a static import (./rules/index.js, no remediate-specific
-        // state) and aiEnabled defaults to true, so there was no real dependency forcing
-        // this to one context. The Assess tab (context='full', the default) is arguably
-        // where you want this MOST — it's exactly where "why did this score what it did,
-        // per WCAG rule" is the question being asked.
-        const isHtmlFile = /\.html?$/i.test(file.file || '')
+        // FULL WCAG coverage (2.1 + 2.2, all 87 criteria from wcagCatalog.js) —
+        // every criterion gets an HONEST per-file status: FAIL (engine findings),
+        // PASS (the engine for this file type checked it and found nothing),
+        // HUMAN (a person must verify — HITL-tier criterion), UNCHECKED (not yet
+        // automated for this file type), or WEB (web-only criterion that cannot
+        // apply to a document). A PASS is only ever claimed for a checked rule.
+        const ext = (file.file || '').split('.').pop().toLowerCase()
+        const fmt = /^html?$/.test(ext) ? 'html' : ['pdf', 'docx', 'pptx', 'xlsx'].includes(ext) ? ext : null
+        const scFromRule = (r) => r.wcag_sc || ((r.wcag || '').startsWith('SC_') ? r.wcag.slice(3).replaceAll('_', '.') : scOf(r.wcag || ''))
+        const checkedSCs = fmt === 'html'
+          ? new Set(allRules.map((m) => m.meta.id))
+          : new Set((((catalogRules || {})[fmt]) || []).map(scFromRule).filter(Boolean))
+        const isHuman = (c) => /Human/i.test(c.approach || '') || c.source === 'MDK HITL'
+        const fixOf = (c) => {
+          if ((c.tier || '').startsWith('Tier 1')) return '⚡ auto'
+          if ((c.tier || '').startsWith('Tier 2')) return aiEnabled ? '✎ AI' : '✋ human'
+          return '✋ human'
+        }
+        const OUT_RANK = { FAIL: 0, PASS: 1, HUMAN: 2, UNCHECKED: 3, WEB: 4 }
+        const OUT_TXT = { PASS: 'pass', FAIL: 'fail', HUMAN: 'human review', UNCHECKED: 'not auto-checked', WEB: 'web-only' }
+        const OUT_TIP = {
+          HUMAN: 'This criterion needs a person to verify — it routes through the HITL workflow, not the engine',
+          UNCHECKED: 'Not yet automated for this file type — no engine rule evaluates it',
+          WEB: 'Web-page criterion — cannot apply to a document file',
+        }
+        // Issues carry wcag as either 'SC_1_3_1' (engine records) or '1.3.1 name'
+        // (axe-style) — normalize both to the bare SC id.
+        const scOfIssue = (v) => ((v || '').replace(/^SC_/, '').replace(/_/g, '.').match(/^\d+\.\d+\.\d+/) || [''])[0]
         const issuesBySc = {}
         ;(file.issues || []).forEach((i) => {
-          const sc = scOf(i.wcag)
+          const sc = scOfIssue(i.wcag)
           if (sc) issuesBySc[sc] = (issuesBySc[sc] || 0) + 1
         })
-        const rows = allRules.map((mod) => {
-          const { id, name, level, fixMode } = mod.meta
-          const effectiveFixMode = !aiEnabled && fixMode === 'ai-assisted' ? 'human-only' : fixMode
-          const count = issuesBySc[id] || 0
-          const outcome = !isHtmlFile && id !== '1.1.1' && id !== '1.3.1' && id !== '2.4.2' && id !== '3.1.1'
-            ? 'SKIP'
-            : count > 0 ? 'FAIL' : 'PASS'
-          return { id, name, plain: PLAIN_NAMES[id] || name, level, fixMode: effectiveFixMode, outcome, count }
-        })
-        const passCount = rows.filter((r) => r.outcome === 'PASS').length
-        const failCount = rows.filter((r) => r.outcome === 'FAIL').length
-        const skipCount = rows.filter((r) => r.outcome === 'SKIP').length
+        const rows = WCAG.map((c) => {
+          const count = issuesBySc[c.sc] || 0
+          const outcome = count > 0 ? 'FAIL'
+            : checkedSCs.has(c.sc) ? 'PASS'
+            : !c.docApplies ? 'WEB'
+            : isHuman(c) ? 'HUMAN'
+            : 'UNCHECKED'
+          return { id: c.sc, name: c.name, plain: PLAIN_NAMES[c.sc] || c.name, req: c.req, level: c.level, fix: fixOf(c), outcome, count }
+        }).sort((a, b) => (OUT_RANK[a.outcome] ?? 3) - (OUT_RANK[b.outcome] ?? 3))
+        const n = (o) => rows.filter((r) => r.outcome === o).length
         return (
-          <details className="covmanifest" open={failCount > 0}>
+          <details className="covmanifest" open>
             <summary className="covmanifest-sum">
-              Rule coverage · {allRules.length} checks
-              <span className="covstat pass">{passCount} pass</span>
-              {failCount > 0 && <span className="covstat fail">{failCount} fail</span>}
-              {skipCount > 0 && <span className="covstat skip">{skipCount} N/A</span>}
+              WCAG coverage · {rows.length} criteria (2.1 + 2.2)
+              <span className="covstat pass">{n('PASS')} pass</span>
+              {n('FAIL') > 0 && <span className="covstat fail">{n('FAIL')} fail</span>}
+              {n('HUMAN') > 0 && <span className="covstat skip">{n('HUMAN')} human review</span>}
+              {n('UNCHECKED') > 0 && <span className="covstat skip">{n('UNCHECKED')} not auto-checked</span>}
+              {n('WEB') > 0 && <span className="covstat skip">{n('WEB')} web-only</span>}
             </summary>
-            <div className="covmanifest-note muted">HTML files are checked against every rule; PDF/Office engines check the subset they can evaluate. <b>N/A</b> = this criterion isn’t covered by the {file.engine || 'engine'} for this file type — it’s not an error or a failure.</div>
+            <div className="covmanifest-note muted">Every WCAG 2.1 + 2.2 criterion, honestly labelled: <b>pass</b> is only claimed where the {fmt || 'file'} engine actually evaluates the criterion. <b>Human review</b> criteria route through the HITL workflow; <b>web-only</b> criteria cannot apply to documents.</div>
             <table className="covtable">
               <thead><tr><th>SC</th><th>Name</th><th>Lvl</th><th>Fix</th><th>Outcome</th></tr></thead>
               <tbody>
@@ -509,15 +538,14 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                   const exp = explanations[r.id]
                   return (
                     <Fragment key={r.id}>
-                      <tr className={`covrow ${r.outcome.toLowerCase()}`}>
+                      <tr className={`covrow ${r.outcome === 'FAIL' ? 'fail' : r.outcome === 'PASS' ? 'pass' : 'skip'}`}>
                         <td className="covsc">{r.id}</td>
-                        <td>{r.plain}<div className="muted" style={{ fontSize: 11 }}>{r.name}</div></td>
+                        <td>{r.plain}<div className="muted" style={{ fontSize: 11 }}>{r.plain === r.name ? (r.req || '').slice(0, 90) : r.name}</div></td>
                         <td className="muted">{r.level}</td>
-                        <td className="muted">{r.fixMode === 'auto' ? '⚡ auto' : r.fixMode === 'ai-assisted' ? '✎ AI' : '✋ human'}</td>
-                        <td className={`covoutcome ${r.outcome.toLowerCase()}`}
-                          title={r.outcome === 'SKIP' ? `N/A — this criterion isn’t checked by the ${file.engine || 'engine'} for this file type (not an error)` : undefined}>
-                          {r.outcome === 'PASS' ? '✓' : r.outcome === 'FAIL' ? `✕ ${r.count}` : 'N/A'}
-                          <span className="covouttxt">{r.outcome === 'PASS' ? (remediatedRuleIds.has(r.id) ? 'pass — remediated' : 'pass') : r.outcome === 'FAIL' ? 'fail' : 'not applicable'}</span>
+                        <td className="muted">{r.fix}</td>
+                        <td className={`covoutcome ${r.outcome === 'FAIL' ? 'fail' : r.outcome === 'PASS' ? 'pass' : 'skip'}`} title={OUT_TIP[r.outcome]}>
+                          {r.outcome === 'PASS' ? '✓' : r.outcome === 'FAIL' ? `✕ ${r.count}` : r.outcome === 'HUMAN' ? '👤' : '—'}
+                          <span className="covouttxt">{r.outcome === 'PASS' && remediatedRuleIds.has(r.id) ? 'pass — remediated' : OUT_TXT[r.outcome]}</span>
                           {r.outcome === 'FAIL' && scanId && !exp && (
                             <button className="explain-btn" onClick={() => fetchExplanation(r.id)} title="Get AI explanation">Why?</button>
                           )}
