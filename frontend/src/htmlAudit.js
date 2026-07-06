@@ -52,8 +52,10 @@ export async function auditHtml(html) {
     const vp = doc.querySelector('meta[name="viewport"]')
     if (vp && /user-scalable\s*=\s*(no|0)|maximum-scale\s*=\s*(0|1)(\.0+)?\b/i.test(vp.getAttribute('content') || '')) add('1.4.4', '', 'serious', 'viewport blocks zoom — text cannot be resized to 200%', 1)
     add('2.4.3', '', 'serious', 'positive tabindex overrides the natural focus order', [...doc.querySelectorAll('[tabindex]')].filter((e) => parseInt(e.getAttribute('tabindex'), 10) > 0).length)
-    add('2.1.1', '', 'critical', 'click-only element is not keyboard-operable', [...doc.querySelectorAll('[onclick]')].filter((e) => !/^(a|button|input|select|textarea|summary)$/i.test(e.tagName)).length)
-    add('1.4.1', '', 'serious', 'in-text link distinguished by colour alone', [...doc.querySelectorAll('p a, li a, td a')].filter((a) => { const s = a.getAttribute('style') || ''; return /color\s*:/i.test(s) && !/text-decoration\s*:\s*underline/i.test(s) }).length)
+    // Predicates mirror rules/wcag-2-1-1.js and rules/wcag-1-4-1.js so a
+    // remediated file re-uploaded through the pre-screen doesn't re-flag.
+    add('2.1.1', '', 'critical', 'click-only element is not keyboard-operable', [...doc.querySelectorAll('[onclick]')].filter((e) => !/^(a|button|input|select|textarea|summary)$/i.test(e.tagName) && !(e.hasAttribute('onkeydown') && e.hasAttribute('tabindex') && e.getAttribute('tabindex') !== '-1')).length)
+    add('1.4.1', '', 'serious', 'link distinguished by colour alone', [...doc.querySelectorAll('a[style]')].filter((a) => { const s = a.getAttribute('style') || ''; return /(?:^|;)\s*color\s*:/i.test(s) && !/text-decoration\s*:[^;]*underline/i.test(s) }).length)
     return mapAxe(v)
   } finally { host.remove() }
 }
