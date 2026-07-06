@@ -281,9 +281,9 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
             </button>
             <button className="filesplit-item" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: alreadyScored && !alreadyRemediated ? 'pointer' : 'default' }}
                     disabled={!alreadyScored}
-                    onClick={() => alreadyScored && setSeg({ title: 'Already assessed', subtitle: `${alreadyScored} files have a WCAG score from the scan`, files: files.filter((f) => f.score != null) })}>
+                    onClick={() => alreadyScored && setSeg({ title: 'Scored by the scan', subtitle: `${alreadyScored} files have a rubric score from the scan — WCAG conformance assessment happens in the Assess step`, files: files.filter((f) => f.score != null) })}>
               <span className="filesplit-n" style={{ color: '#2A5E9E' }}>{alreadyScored}</span>
-              <span className="filesplit-lbl">assessed</span>
+              <span className="filesplit-lbl">scored by scan</span>
               <div className="filesplit-bar"><i style={{ width: `${(alreadyScored / totalWidth) * 100}%`, background: '#2A5E9E' }} /></div>
             </button>
             <button className="filesplit-item" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: dupeCount ? 'pointer' : 'default' }}
@@ -302,9 +302,9 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
             </button>
             <button className="filesplit-item" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: needsAssessment ? 'pointer' : 'default' }}
                     disabled={!needsAssessment}
-                    onClick={() => needsAssessment && setSeg({ title: 'Needs assessment', subtitle: `${needsAssessment} files not yet scored`, files: files.filter((f) => !f.locked && !f.remediated_at && !f.drive_write_url && !f.acp_stamped && f.score == null) })}>
+                    onClick={() => needsAssessment && setSeg({ title: 'Not yet scored', subtitle: `${needsAssessment} files have no rubric score yet — re-scan to score them`, files: files.filter((f) => !f.locked && !f.remediated_at && !f.drive_write_url && !f.acp_stamped && f.score == null) })}>
               <span className="filesplit-n" style={{ color: '#1F5FA8' }}>{needsAssessment}</span>
-              <span className="filesplit-lbl">need assessment</span>
+              <span className="filesplit-lbl">not yet scored</span>
               <div className="filesplit-bar"><i style={{ width: `${(needsAssessment / totalWidth) * 100}%`, background: '#1F5FA8' }} /></div>
             </button>
           </div>
