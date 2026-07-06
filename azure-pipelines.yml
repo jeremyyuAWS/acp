@@ -17,6 +17,15 @@ pool:
   vmImage: ubuntu-latest
 
 steps:
+  - task: UseDotNet@2
+    inputs:
+      packageType: sdk
+      version: 10.x
+    displayName: .NET 10 SDK (office engine)
+
+  - script: dotnet build -c Release spike/dotnet/AcpScan.Cli/AcpScan.Cli.csproj
+    displayName: Build office engine CLI
+
   - task: UsePythonVersion@0
     inputs:
       versionSpec: '3.12'
@@ -25,7 +34,7 @@ steps:
   - script: python -m pip install --quiet -r api/requirements.txt
     displayName: Install API dependencies
 
-  - script: python -m pytest tests/ -q --junitxml=test-results.xml
+  - script: ACP_DOTNET=$(command -v dotnet) python -m pytest tests/ -q --junitxml=test-results.xml
     displayName: Backend suite (incl. auth-coverage guard)
 
   - task: PublishTestResults@2
