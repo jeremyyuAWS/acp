@@ -96,7 +96,11 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
   const groups = {}
   visibleFiles.forEach((f) => { const d = f.department || 'Unassigned'; (groups[d] = groups[d] || []).push(f) })
   const deptOrder = [...DEPARTMENTS.filter((d) => groups[d]), ...Object.keys(groups).filter((d) => !DEPARTMENTS.includes(d))]
-  const lockedCount = visibleFiles.filter((f) => f.locked).length
+  // Real scans never set f.locked (SIM-only flag) — a file the engine could not
+  // open surfaces as status 'error' with no score. Both are the same bucket to a
+  // reviewer: "we could not read this one".
+  const isUnreadable = (f) => f.locked || f.status === 'error'
+  const lockedCount = visibleFiles.filter(isUnreadable).length
 
   const PLUM = '#7a5c8e'
   const tagsOf = (f) => classState[f.file]?.tags ?? classTags(f).filter((t) => CLASS_TAGS.includes(t))
@@ -247,7 +251,7 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
       {files.length === 0 ? (
         <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Integrations.</p>
       ) : (() => {
-        const needsAssessment = files.filter((f) => !f.locked && !f.remediated_at && !f.drive_write_url && !f.acp_stamped && f.score == null).length
+        const needsAssessment = files.filter((f) => !isUnreadable(f) && !f.remediated_at && !f.drive_write_url && !f.acp_stamped && f.score == null).length
         const totalWidth = files.length || 1
         return (
         <>
@@ -295,14 +299,14 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
             </button>
             <button className="filesplit-item" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: lockedCount ? 'pointer' : 'default' }}
                     disabled={!lockedCount}
-                    onClick={() => lockedCount && setSeg({ title: 'Password-protected / unreadable', subtitle: `${lockedCount} files the engine could not open`, files: files.filter((f) => f.locked) })}>
+                    onClick={() => lockedCount && setSeg({ title: 'Password-protected / unreadable', subtitle: `${lockedCount} files the engine could not open`, files: files.filter(isUnreadable) })}>
               <span className="filesplit-n" style={{ color: '#75706A' }}>{lockedCount}</span>{/* ≥4.5:1 on white (was #9a948f · 3.0) */}
-              <span className="filesplit-lbl">🔒 locked</span>
+              <span className="filesplit-lbl">🔒 unreadable</span>
               <div className="filesplit-bar"><i style={{ width: `${(lockedCount / totalWidth) * 100}%`, background: '#9a948f' }} /></div>
             </button>
             <button className="filesplit-item" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: needsAssessment ? 'pointer' : 'default' }}
                     disabled={!needsAssessment}
-                    onClick={() => needsAssessment && setSeg({ title: 'Not yet scored', subtitle: `${needsAssessment} files have no rubric score yet — re-scan to score them`, files: files.filter((f) => !f.locked && !f.remediated_at && !f.drive_write_url && !f.acp_stamped && f.score == null) })}>
+                    onClick={() => needsAssessment && setSeg({ title: 'Not yet scored', subtitle: `${needsAssessment} files have no rubric score yet — re-scan to score them`, files: files.filter((f) => !isUnreadable(f) && !f.remediated_at && !f.drive_write_url && !f.acp_stamped && f.score == null) })}>
               <span className="filesplit-n" style={{ color: '#1F5FA8' }}>{needsAssessment}</span>
               <span className="filesplit-lbl">not yet scored</span>
               <div className="filesplit-bar"><i style={{ width: `${(needsAssessment / totalWidth) * 100}%`, background: '#1F5FA8' }} /></div>
