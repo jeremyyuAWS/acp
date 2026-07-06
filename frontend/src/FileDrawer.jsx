@@ -4,7 +4,7 @@ import Tag from './Tag.jsx'
 import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
-import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, downloadRemediated, getRules } from './api.js'
+import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, downloadRemediated, getRules, getRubric } from './api.js'
 import { WCAG } from './wcagCatalog.js'
 import { TraceChip } from './Transparency.jsx'
 
@@ -123,9 +123,16 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   // which WCAG criteria the engine ACTUALLY evaluates for this file type, so a
   // PASS is never claimed for something that was never checked. Fetched once.
   const [catalogRules, setCatalogRules] = useState(null)
+  // Conformance target (e.g. 'WCAG 2.1 AA') scopes the coverage table to the
+  // level the platform is actually certifying against — AAA rows hide at AA.
+  const [targetLevel, setTargetLevel] = useState('AA')
   useEffect(() => {
     let on = true
     getRules().then((r) => { if (on) setCatalogRules(r) }).catch(() => {})
+    getRubric().then((r) => {
+      const m = (r?.target || '').match(/\b(AAA|AA|A)\s*$/)
+      if (on && m) setTargetLevel(m[1])
+    }).catch(() => {})
     return () => { on = false }
   }, [])
   const fetchExplanation = (ruleId) => {
@@ -495,6 +502,17 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           if ((c.tier || '').startsWith('Tier 2')) return aiEnabled ? '✎ AI' : '✋ human'
           return '✋ human'
         }
+        // An unreadable file ran ZERO checks — claiming any PASS would be false.
+        if (st === 'unanalysable') {
+          return (
+            <details className="covmanifest">
+              <summary className="covmanifest-sum">WCAG coverage — file could not be analysed</summary>
+              <div className="covmanifest-note muted">The engine could not open this file (corrupt or password-protected), so no checks ran and no criterion can be claimed as passing. Fix or replace the source file, then re-scan.</div>
+            </details>
+          )
+        }
+        const LEVEL_RANK = { A: 1, AA: 2, AAA: 3 }
+        const targetRank = LEVEL_RANK[targetLevel] || 2
         const OUT_RANK = { FAIL: 0, PASS: 1, HUMAN: 2, UNCHECKED: 3, WEB: 4 }
         const OUT_TXT = { PASS: 'pass', FAIL: 'fail', HUMAN: 'human review', UNCHECKED: 'not auto-checked', WEB: 'web-only' }
         const OUT_TIP = {
@@ -510,11 +528,16 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           const sc = scOfIssue(i.wcag)
           if (sc) issuesBySc[sc] = (issuesBySc[sc] || 0) + 1
         })
-        const rows = WCAG.map((c) => {
+        // Scope: only criteria that can apply to documents, at or below the
+        // certification target. Web-only and above-target rows are counted in
+        // the footnote instead of listed — 87 rows of mostly-N/A is noise.
+        const inScope = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) <= targetRank)
+        const hiddenAboveLevel = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) > targetRank).length
+        const hiddenWebOnly = WCAG.length - inScope.length - hiddenAboveLevel
+        const rows = inScope.map((c) => {
           const count = issuesBySc[c.sc] || 0
           const outcome = count > 0 ? 'FAIL'
             : checkedSCs.has(c.sc) ? 'PASS'
-            : !c.docApplies ? 'WEB'
             : isHuman(c) ? 'HUMAN'
             : 'UNCHECKED'
           return { id: c.sc, name: c.name, plain: PLAIN_NAMES[c.sc] || c.name, req: c.req, level: c.level, fix: fixOf(c), outcome, count }
@@ -523,14 +546,13 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         return (
           <details className="covmanifest" open>
             <summary className="covmanifest-sum">
-              WCAG coverage · {rows.length} criteria (2.1 + 2.2)
+              WCAG coverage · {rows.length} criteria at {targetLevel} · documents
               <span className="covstat pass">{n('PASS')} pass</span>
               {n('FAIL') > 0 && <span className="covstat fail">{n('FAIL')} fail</span>}
               {n('HUMAN') > 0 && <span className="covstat skip">{n('HUMAN')} human review</span>}
               {n('UNCHECKED') > 0 && <span className="covstat skip">{n('UNCHECKED')} not auto-checked</span>}
-              {n('WEB') > 0 && <span className="covstat skip">{n('WEB')} web-only</span>}
             </summary>
-            <div className="covmanifest-note muted">Every WCAG 2.1 + 2.2 criterion, honestly labelled: <b>pass</b> is only claimed where the {fmt || 'file'} engine actually evaluates the criterion. <b>Human review</b> criteria route through the HITL workflow; <b>web-only</b> criteria cannot apply to documents.</div>
+            <div className="covmanifest-note muted">Criteria that apply to documents, at your {targetLevel} certification target — <b>pass</b> is only claimed where the {fmt || 'file'} engine actually evaluates the criterion; <b>human review</b> routes through the HITL workflow. Hidden: {hiddenAboveLevel} above-{targetLevel} and {hiddenWebOnly} web-only criteria.</div>
             <table className="covtable">
               <thead><tr><th>SC</th><th>Name</th><th>Lvl</th><th>Fix</th><th>Outcome</th></tr></thead>
               <tbody>
