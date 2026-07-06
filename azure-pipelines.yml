@@ -16,16 +16,13 @@ pr:
 pool:
   vmImage: ubuntu-latest
 
+# KNOWN GAP — office engine oracle tests (tests/test_scan.py, ~18 tests) skip on
+# CI: AcpScan.Cli.csproj references DigitalA11y.* projects from the SIBLING
+# _review-digital-accessibility checkout, which exists only on dev machines, and
+# the built DLL is gitignored (prod ships the laptop-built artifact via the
+# Docker context). Until the engine is vendored or published as a reproducible
+# artifact, those tests are local-only and CI says so in the skip reason.
 steps:
-  - task: UseDotNet@2
-    inputs:
-      packageType: sdk
-      version: 10.x
-    displayName: .NET 10 SDK (office engine)
-
-  - script: dotnet build -c Release spike/dotnet/AcpScan.Cli/AcpScan.Cli.csproj
-    displayName: Build office engine CLI
-
   - task: UsePythonVersion@0
     inputs:
       versionSpec: '3.12'
@@ -34,7 +31,7 @@ steps:
   - script: python -m pip install --quiet -r api/requirements.txt
     displayName: Install API dependencies
 
-  - script: ACP_DOTNET=$(command -v dotnet) python -m pytest tests/ -q --junitxml=test-results.xml
+  - script: python -m pytest tests/ -q --junitxml=test-results.xml
     displayName: Backend suite (incl. auth-coverage guard)
 
   - task: PublishTestResults@2
