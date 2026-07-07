@@ -285,7 +285,7 @@ def pptx_contrast_checks(path: Path) -> list[dict]:
     isn't reliably knowable per run (it's often inherited from the placeholder),
     so flagging only below the large-text bar guarantees every finding is a real
     failure at *any* size — a genuine result over an over-eager one."""
-    seen_aa = seen_aaa = False
+    worst = None          # (ratio, text_hex, bg_hex) of the lowest-contrast run seen
     try:
         with zipfile.ZipFile(path) as zf:
             for slide_name in sorted(n for n in zf.namelist()
@@ -307,19 +307,22 @@ def pptx_contrast_checks(path: Path) -> list[dict]:
                         if not col_m or not "".join(_AT.findall(run)).strip():
                             continue
                         ratio = _contrast_ratio(fill_m.group(1), col_m.group(1))
-                        if ratio < 4.5:
-                            seen_aaa = True
-                        if ratio < 3.0:
-                            seen_aa = True
-                if seen_aa and seen_aaa:
-                    break
+                        if ratio < 4.5 and (worst is None or ratio < worst[0]):
+                            worst = (ratio, col_m.group(1), fill_m.group(1))
     except Exception:
         return []
+    if worst is None:
+        return []
+    ratio, text_hex, bg_hex = worst
+    detail = f"Text #{text_hex} on #{bg_hex} is {ratio:.1f}:1 (needs 4.5:1)"
     findings: list[dict] = []
-    if seen_aa:
-        findings.append(_finding("PPTX_LOW_CONTRAST_AA", "1.4.3 Contrast (Minimum)", "SERIOUS"))
-    if seen_aaa:
-        findings.append(_finding("PPTX_LOW_CONTRAST_AAA", "1.4.6 Contrast (Enhanced)", "MODERATE"))
+    if ratio < 3.0:
+        f = _finding("PPTX_LOW_CONTRAST_AA", "1.4.3 Contrast (Minimum)", "SERIOUS")
+        f["detail"] = detail
+        findings.append(f)
+    f = _finding("PPTX_LOW_CONTRAST_AAA", "1.4.6 Contrast (Enhanced)", "MODERATE")
+    f["detail"] = detail
+    findings.append(f)
     return findings
 
 
