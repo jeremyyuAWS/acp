@@ -508,6 +508,12 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           ? new Set(allRules.map((m) => m.meta.id))
           : new Set((((catalogRules || {})[fmt]) || []).map(scFromRule).filter(Boolean))
         const isHuman = (c) => /Human/i.test(c.approach || '') || c.source === 'MDK HITL'
+        // Required criteria auto-detected for HTML but not (yet) for document
+        // formats — they genuinely apply to PDF/Office forms and colour-coded
+        // content, so on a document they route to human review instead of reading
+        // as 'not auto-checked'. NOT a blanket flip: web-only criteria (Resize
+        // Text, Reflow, Focus Order/Visible…) stay N-A for a static document.
+        const DOC_HUMAN_WHEN_UNCHECKED = new Set(['1.4.1', '1.3.5', '2.5.3', '4.1.2'])
         const fixOf = (c) => {
           if ((c.tier || '').startsWith('Tier 1')) return '⚡ auto'
           if ((c.tier || '').startsWith('Tier 2')) return aiEnabled ? '✎ AI' : '✋ human'
@@ -550,6 +556,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           const outcome = count > 0 ? 'FAIL'
             : checkedSCs.has(c.sc) ? 'PASS'
             : isHuman(c) ? 'HUMAN'
+            : (DOC_HUMAN_WHEN_UNCHECKED.has(c.sc) && fmt && fmt !== 'html') ? 'HUMAN'
             : 'UNCHECKED'
           return { id: c.sc, name: c.name, plain: PLAIN_NAMES[c.sc] || c.name, req: c.req, level: c.level, fix: fixOf(c), outcome, count }
         }).sort((a, b) => (OUT_RANK[a.outcome] ?? 3) - (OUT_RANK[b.outcome] ?? 3))
