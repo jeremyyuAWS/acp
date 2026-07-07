@@ -248,7 +248,10 @@ def _pptx_add_title(xml: str, text: str) -> str:
           f'<a:ext cx="8229600" cy="1000000"/></a:xfrm></p:spPr>'
           f'<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"/>'
           f'<a:t>{_xesc(text)}</a:t></a:r></a:p></p:txBody></p:sp>')
-    return re.sub(r"(</p:grpSpPr>)", r"\1" + sp, xml, count=1)
+    # grpSpPr may be a closing tag (<p:grpSpPr>…</p:grpSpPr>) or self-closing
+    # (<p:grpSpPr/>); insert the title placeholder right after it either way. A
+    # lambda replacement avoids treating the shape XML as a backreference template.
+    return re.sub(r"</p:grpSpPr>|<p:grpSpPr\s*/>", lambda m: m.group(0) + sp, xml, count=1)
 
 
 def _remediate_pptx_slides(entries: dict) -> list[str]:
