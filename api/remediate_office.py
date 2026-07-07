@@ -211,6 +211,126 @@ def _fix_image_alt(entries: dict) -> tuple[list[str], int]:
     return applied, deferred
 
 
+# ── pptx slide-level structural remediation (2.4.2 / 1.4.3 / 1.4.6 / 1.3.2) ────
+# These need the slide XML, not just OPC core-properties, and are pptx-only.
+# Each was verified against the DigitalA11y engine (re-scan clears the finding):
+#   * title   — an off-slide title placeholder (y above the canvas) is read by AT
+#               and clears "slide is missing a title" without touching the design.
+#   * contrast— an explicit low-contrast run's colour is swapped to black or white,
+#               whichever reaches >=4.5:1 on the shape's explicit fill.
+#   * reading — spTree children are sorted by visual position (y, then x). This
+#               also sets z-order (first-in-document renders lowest); top-left
+#               backgrounds (y~=0) sort first, so typical stacking is preserved.
+# Only explicit srgbClr colours on explicit solid fills are recoloured — the same
+# narrow scope office_structure.pptx_contrast_checks measures, so every recolour
+# targets a run the scanner actually flagged. All changes go in the provenance stamp.
+_PPTX_TITLE_PH = re.compile(r'<p:ph\b(?=[^>]*\btype="(?:ctrTitle|title)")')
+_A_T = re.compile(r"<a:t\b[^>]*>([^<]*)</a:t>")
+_A_R = re.compile(r"<a:r>.*?</a:r>", re.S)
+_P_SP = re.compile(r"<p:sp>.*?</p:sp>", re.S)
+
+
+def _pptx_has_title(xml: str) -> bool:
+    m = _PPTX_TITLE_PH.search(xml)
+    if not m:
+        return False
+    return bool("".join(_A_T.findall(xml[m.end():].split("</p:sp>", 1)[0])).strip())
+
+
+_title_seq = [9000]
+
+
+def _pptx_add_title(xml: str, text: str) -> str:
+    _title_seq[0] += 1
+    sp = (f'<p:sp><p:nvSpPr><p:cNvPr id="{_title_seq[0]}" name="Title {_title_seq[0]}"/>'
+          f'<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="title"/></p:nvPr>'
+          f'</p:nvSpPr><p:spPr><a:xfrm><a:off x="457200" y="-1200000"/>'
+          f'<a:ext cx="8229600" cy="1000000"/></a:xfrm></p:spPr>'
+          f'<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"/>'
+          f'<a:t>{_xesc(text)}</a:t></a:r></a:p></p:txBody></p:sp>')
+    return re.sub(r"(</p:grpSpPr>)", r"\1" + sp, xml, count=1)
+
+
+def _remediate_pptx_slides(entries: dict) -> list[str]:
+    """Mutate ppt/slides/*.xml in place; return the list of applied-fix messages."""
+    import office_structure as _osx           # contrast helpers + narrow-scope regexes
+    from xml.etree import ElementTree as ET
+    P = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+    A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    shape_tags = {P + t for t in ("sp", "pic", "graphicFrame", "grpSp", "cxnSp")}
+    slides = sorted((n for n in entries if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)),
+                    key=lambda s: int(re.search(r"(\d+)", s).group()))
+    n_title = n_recolor = n_reorder = 0
+
+    def recolor_run_in_sp(sp_match) -> str:
+        nonlocal n_recolor
+        sp = sp_match.group(0)
+        sppr = _osx._PPTX_SPPR.search(sp)
+        if not sppr:
+            return sp
+        fill = _osx._SOLID_SRGB.search(_osx._A_LN_BLOCK.sub("", sppr.group(0)))
+        if not fill:
+            return sp
+        bg = fill.group(1)
+
+        def fix_run(rm):
+            nonlocal n_recolor
+            run = rm.group(0)
+            col = _osx._SOLID_SRGB.search(run)
+            if not col or _osx._contrast_ratio(bg, col.group(1)) >= 4.5:
+                return run
+            if not "".join(_A_T.findall(run)).strip():
+                return run
+            new = "000000" if _osx._contrast_ratio(bg, "000000") >= _osx._contrast_ratio(bg, "FFFFFF") else "FFFFFF"
+            n_recolor += 1
+            return run.replace(f'srgbClr val="{col.group(1)}"', f'srgbClr val="{new}"', 1)
+
+        return _A_R.sub(fix_run, sp)
+
+    def reorder(data: bytes) -> bytes:
+        nonlocal n_reorder
+        for pfx, uri in (("p", P[1:-1]), ("a", A[1:-1]),
+                         ("r", "http://schemas.openxmlformats.org/officeDocument/2006/relationships")):
+            ET.register_namespace(pfx, uri)
+        root = ET.fromstring(data)
+        tree = root.find(f".//{P}cSld/{P}spTree")
+        if tree is None:
+            return data
+        shapes = [c for c in list(tree) if c.tag in shape_tags]
+
+        def key(el):
+            off = el.find(f".//{A}off")
+            return (int(off.get("y")), int(off.get("x"))) if off is not None and off.get("y") else (10 ** 12, 0)
+
+        ordered = sorted(shapes, key=key)
+        if ordered != shapes:
+            n_reorder += 1
+            for s in shapes:
+                tree.remove(s)
+            for s in ordered:
+                tree.append(s)
+            return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+        return data
+
+    for sn in slides:
+        xml = entries[sn].decode("utf-8")
+        if not _pptx_has_title(xml):
+            texts = [t.strip() for t in _A_T.findall(xml) if t.strip()]
+            xml = _pptx_add_title(xml, (max(texts, key=len) if texts else "Untitled slide")[:250])
+            n_title += 1
+        xml = _P_SP.sub(recolor_run_in_sp, xml)
+        entries[sn] = reorder(xml.encode("utf-8"))
+
+    applied: list[str] = []
+    if n_title:
+        applied.append(f"Added a programmatic title to {n_title} slide(s)")
+    if n_recolor:
+        applied.append(f"Raised colour contrast to ≥4.5:1 on {n_recolor} text run(s)")
+    if n_reorder:
+        applied.append(f"Set reading order (visual top-to-bottom) on {n_reorder} slide(s)")
+    return applied
+
+
 def remediate_office(path: Path, *, lang: str = "en-US"):
     """Apply deterministic Office accessibility fixes to a copy of the file.
 
@@ -250,6 +370,13 @@ def remediate_office(path: Path, *, lang: str = "en-US"):
     if alt_deferred:
         skipped.append(f"{alt_deferred} image(s) lack a faithful alt source — "
                        "needs human alt text (routed to review)")
+
+    # pptx-only structural fixes that need the slide XML (title / contrast / reading order).
+    if path.suffix.lower() == ".pptx":
+        try:
+            applied.extend(_remediate_pptx_slides(entries))
+        except Exception:
+            skipped.append("slide-level pptx fixes (title/contrast/reading order) could not be applied")
 
     if not applied:
         return None, [], skipped or ["language and title already set"]
