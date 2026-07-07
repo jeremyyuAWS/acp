@@ -733,6 +733,29 @@ def _file_extent(path: Path, ext: str) -> dict:
     return {k: v for k, v in out.items() if v is not None}
 
 
+# Reading order is a low-confidence heuristic the partner engine emits PER SLIDE
+# ("Reading order may not match visual order"). Left as-is, N per-slide SERIOUS
+# findings zero a deck's score on a suspicion. Collapse them into a single MODERATE
+# advisory — one penalty, still visible and routed to human review to verify —
+# rather than N confirmed serious failures. Remediation reorders every slide, so a
+# remediated file still re-scans clean (zero reading-order findings).
+_READING_ORDER_RULES = {"PPTX-ORDER-001"}
+
+
+def _collapse_reading_order(issues: list[dict]) -> list[dict]:
+    ro = [i for i in issues if i.get("ruleId") in _READING_ORDER_RULES]
+    if len(ro) <= 1:
+        for i in ro:
+            i["severity"] = "MODERATE"
+        return issues
+    kept = [i for i in issues if i.get("ruleId") not in _READING_ORDER_RULES]
+    adv = dict(ro[0])
+    adv["severity"] = "MODERATE"
+    adv["detail"] = (f"Reading order may not match visual order on {len(ro)} slides"
+                     " — a heuristic flag; verify the reading order (routed to review).")
+    return kept + [adv]
+
+
 def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = True):
     """Analyse + rubric-assess ONE already-downloaded file (fan-out path, ADR 0007).
     `tmp` is a directory containing `name`. Returns (assessed_file_dict, pii_info),
@@ -773,6 +796,7 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = True):
         raw["issues"] = list(raw.get("issues", [])) + _off_mod.checks_for(tmp / name, ext)
     except Exception:
         pass
+    raw["issues"] = _collapse_reading_order(raw["issues"])
     raw["issues"] = [i for i in raw["issues"] if i["ruleId"] not in rb.disabled]
     raw["errors"] = [e for e in raw["errors"]
                      if (e.get("rule") if isinstance(e, dict) else None) not in rb.disabled]
@@ -853,6 +877,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                 r["issues"] = list(r.get("issues", [])) + _off_mod.checks_for(tmp / name, ext)
             except Exception:
                 pass
+            r["issues"] = _collapse_reading_order(r["issues"])
             pinfo = _pii_mod.detect_file(tmp / name) if detect_pii else None
             return (name, r, pinfo)
 
