@@ -138,6 +138,44 @@ unsupervised live window.
 
 ---
 
+## LOE — remaining work to full functionality
+
+Principle (owner's call): anything not auto-remediable by a deterministic or AI
+fixer **routes to HITL** — so no new auto-fixers are required for the long tail;
+non-mechanical findings already surface as HUMAN-tier and go to the review queue.
+Route legend: **Auto** (deterministic/AI fix) · **HITL** (human review) · **Ops**
+(credential/config) · **Decision**.
+
+| # | Item | Verb | Route | LOE | Notes |
+|---|---|---|---|---|---|
+| 1 | Fix live "Couldn't remediate this file" | Remediate | Auto | M · 1–2 d | Runtime failure in the Drive round-trip (re-download via per-user token / write-back), NOT a remediator bug — `remediate_pdf` runs clean locally on the same file (applies language + display-title). Likely the write-back needs a Drive *write* scope the read-only sign-in token lacks, and the Blob fallback isn't catching it. Lives in `handlers.py` / `routes/scans.py` — **T-contested; coordinate**. |
+| 2 | Complete the DB-backed HITL queue | Remediate | HITL | In progress (T) | Assignment, status, notifications — this IS the HITL route. Owned by the concurrent session (~M if scoped fresh). |
+| 3 | 3.1.3 Unusual Words | Assess | HITL | ~~XS~~ DONE | Re-tagged Human / AT · Tier 3 HITL in `wcagCatalog.js` (was aspirational "Automated + Agentic"). No AI check built, by decision. |
+| 4 | 1.4.2 pptx audio autoplay | Assess | HITL | XS · 0.5 d | Detection is blocked on a real fixture. Per the HITL decision, surface 1.4.2-on-pptx as HUMAN-tier in the per-file coverage manifest instead of UNCHECKED — a one-liner in `FileDrawer.jsx` (**T-contested; coordinate**). Not built here to avoid colliding. |
+| 5 | Deploy the mislabel fix (`e83d775`) | Release | — | XS · 0.25 d | Frontend rebuild — makes corrected auto-vs-assisted labeling live. |
+| 6 | Drive credential + folder | Ops | Ops | S · 0.5 d | Regenerate the demo SA key with `drive.readonly`, share Deva's folder with the SA email, set `ACP_DRIVE_FOLDER`. Unblocks demo Drive scans (the 403 below) and closes P2 #1. Ops, not eng. |
+| 7 | Measure Ollama 8B latency | Verify | — | XS · 0.25 d | Needs live access; include a cold-start number (scale-to-zero). |
+| 8 | ADO review cadence | — | Decision | 0 d | Standing reviewer vs. bypass-as-needed. |
+
+**Real engineering build left ≈ 2–3.5 person-days, almost all of it item #1**
+(and #1 is blocked on coordinating with T's rewrite of that exact code, not on
+effort). Item #2 is T's. Items #4–7 are hours; #3 is done; #8 is a decision.
+
+**Two mislabel/UX fixes already landed this session:** the "fully automatic"
+misclassification (`e83d775`, `sim.js` — real-vs-sim wcag format mismatch +
+format-aware auto set) and the 9 detection-code defects (`9d7c7a3`).
+
+### Live Drive-flow finding (`403 insufficient scopes`)
+A headless smoke test of `POST /scans?source=drive` (via the E2E + demo keys)
+authenticated and reached Drive, then failed at `files.list` with Google
+`403 "Request had insufficient authentication scopes"`. The code correctly
+requests `drive.readonly` (`scanner.py` `SCOPES`), so the stored demo ADC
+credential can't obtain that scope — a credential/config issue, not a code bug.
+Fixed by item #6. (Real usage via signed-in users' own Drive tokens is
+unaffected; only the demo/ADC path is broken.)
+
+---
+
 ## P2 — Decisions pending on the user (not blocked on engineering)
 
 1. **Point `ACP_DRIVE_FOLDER` at Deva's folder** for scheduled sweeps —
