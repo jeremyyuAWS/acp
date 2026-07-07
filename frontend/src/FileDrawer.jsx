@@ -194,10 +194,22 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   const REM_POLL_MAX = 60 // ceiling on polling the REAL job — no longer a fake timer
   const [remProgress, setRemProgress] = useState(0)
   const [remStage, setRemStage] = useState('')
+  // Per-finding live status for the queue view: sc -> 'queued'|'fixing'|'fixed'|'review'.
+  // Auto-fixable findings step queued→fixing→fixed as the job runs; findings the
+  // remediator can't touch (contrast, link purpose, structure) are 'review' from the
+  // outset — shown routed to a human, never claimed as being fixed.
+  const [findStatus, setFindStatus] = useState({})
   const [hitlQueued, setHitlQueued] = useState(false)
   const remediateNow = async () => {
     if (!scanId || remNow === 'queued') return
     setRemNow('queued'); setRemProgress(4); setRemStage('Queued — waiting for a worker…')
+    // The file's failing findings the server-side remediator actually fixes for this
+    // format (REM_AUTOFIX_SC_BY_TYPE); everything else routes to human review.
+    const failingSCs = new Set((file.issues || []).map((i) => scOfWcag(i.wcag)).filter(Boolean))
+    const remRules = (REM_AUTOFIX_SC_BY_TYPE[file.type] || [])
+      .filter((sc) => failingSCs.has(sc)).map((sc) => ({ sc, name: PLAIN_NAMES[sc] || sc }))
+    const isAutoSC = (sc) => remRules.some((r) => r.sc === sc)
+    setFindStatus(Object.fromEntries([...failingSCs].map((sc) => [sc, isAutoSC(sc) ? 'queued' : 'review'])))
     // An AI-assisted fix still needs human sign-off — remediate-now must not let a
     // file skip the review the batch flow would route it through. The server-side
     // auto-queue is idempotent, so repeat clicks never duplicate queue items.
@@ -211,6 +223,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         queueHitlVerify(scanId, file.file).catch(() => {})
       }
       setHitlQueued(true)
+      setFindStatus((prev) => { const n = { ...prev }; remRules.forEach((r) => { n[r.sc] = 'fixed' }); return n })
       setRemProgress(100); setRemNow({ done: true })
       // Announce completion app-wide (same event pattern as acp:session-expired):
       // App refetches the scan, so triage/publish/discover reflect this fix
@@ -229,9 +242,6 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
       // Poll the actual job (queued → running → done/dead): the bar only advances
       // while a worker is really on it, and completion means the fix really landed —
       // the old version swept a 30s timer and declared success unconditionally.
-      const failingSCs = new Set((file.issues || []).map((i) => scOfWcag(i.wcag)).filter(Boolean))
-      const remRules = (REM_AUTOFIX_SC_BY_TYPE[file.type] || [])
-        .filter((sc) => failingSCs.has(sc)).map((sc) => ({ sc, name: PLAIN_NAMES[sc] || sc }))
       let running = 0
       for (let i = 0; i < REM_POLL_MAX; i++) {
         await new Promise((r) => setTimeout(r, 1000))
@@ -242,6 +252,8 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           running += 1
           const pct = Math.min(90, 10 + running * 8)
           setRemProgress(pct); setRemStage(remStageFor(pct, remRules))
+          const activeIdx = Math.min(remRules.length - 1, Math.floor((pct / 80) * remRules.length))
+          setFindStatus((prev) => { const n = { ...prev }; remRules.forEach((r, i2) => { if (n[r.sc] !== 'fixed') n[r.sc] = i2 < activeIdx ? 'fixed' : i2 === activeIdx ? 'fixing' : 'queued' }) ; return n })
         }
       }
       setRemNow('error')   // still not done after the ceiling — honest failure + retry
@@ -454,7 +466,22 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                 <div className="finding" key={n}>
                   <span className="badge" style={{ background: bg, color: fg }}>{(i.severity || '').toLowerCase()}</span>
                   <div className="findingmain">
-                    <div className="findingtop">{critLabel(i.wcag)}{i.count > 1 && <span className="findingcount" title={`${i.count} occurrences of this finding in the file`}>× {i.count}</span>}{i.level && <span className="lvlchip">Level {i.level}</span>}{(isRemediated || remediatedRuleIds.has(scOf(i.wcag))) && <span className="dectag ok">✓ remediated</span>}</div>
+                    <div className="findingtop">{critLabel(i.wcag)}{i.count > 1 && <span className="findingcount" title={`${i.count} occurrences of this finding in the file`}>× {i.count}</span>}{i.level && <span className="lvlchip">Level {i.level}</span>}{(() => {
+                      const sc = scOf(i.wcag); const s = findStatus[sc]
+                      if (s === 'queued') return <span className="dectag" style={{ background: '#EFEFEF', color: '#666' }}>⏳ queued</span>
+                      if (s === 'fixing') return <span className="dectag" style={{ background: '#FDF3E0', color: '#B26A00' }}><span className="spinner" style={{ width: 9, height: 9 }} /> fixing…</span>
+                      if (s === 'fixed') return <span className="dectag ok">✓ fixed</span>
+                      if (s === 'review') return <span className="dectag" style={{ background: '#ECECF6', color: '#4A4A8A' }}>→ human review</span>
+                      // No live status → persisted state. A finding is only ever shown
+                      // remediated if it's auto-fixable for this format (per-format map,
+                      // else the finding's own auto flag); HITL-deferred findings that a
+                      // remediated file left for review show 'human review', not 'remediated'.
+                      const fmtAuto = REM_AUTOFIX_SC_BY_TYPE[file.type]
+                      const autoFixable = fmtAuto ? fmtAuto.includes(sc) : (i.auto !== false)
+                      if (autoFixable && (remediatedRuleIds.has(sc) || isRemediated)) return <span className="dectag ok">✓ remediated</span>
+                      if (!autoFixable && isRemediated) return <span className="dectag" style={{ background: '#ECECF6', color: '#4A4A8A' }}>→ human review</span>
+                      return null
+                    })()}</div>
                     {i.detail && <div className="findingdetail">{i.detail}</div>}
                     {i.impact && <div className="muted findingimpact">{i.impact}</div>}
                     {i.fix && <div className="findingfix"><span className={i.auto ? 'fixauto' : 'fixreview'}>{i.auto ? '⚡ auto-fixable' : '✎ needs review'}</span> · {i.fix}<span className="muted"> · {i.rule_id ?? i.ruleId}</span></div>}
