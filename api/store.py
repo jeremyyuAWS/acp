@@ -227,6 +227,7 @@ RULE_CATALOG: list[dict] = [
     {"id": "1.2.2",  "name": "Captions (Prerecorded)",      "level": "A",   "fix_mode": "human-only",   "plain": "Video missing captions"},
     {"id": "1.2.3",  "name": "Audio Description or Alt",     "level": "A",   "fix_mode": "human-only",   "plain": "Video missing audio description or transcript"},
     {"id": "1.3.1",  "name": "Info and Relationships",      "level": "A",   "fix_mode": "auto",         "plain": "Structure not marked up (headings, lists, tables)"},
+    {"id": "1.3.2",  "name": "Meaningful Sequence",         "level": "A",   "fix_mode": "auto",         "plain": "Reading order does not match the visual order"},
     {"id": "1.3.3",  "name": "Sensory Characteristics",      "level": "A",   "fix_mode": "human-only",   "plain": "Instructions rely on shape or position alone"},
     {"id": "1.3.4",  "name": "Orientation",                "level": "AA",  "fix_mode": "auto",         "plain": "Content locked to one screen orientation"},
     {"id": "1.3.5",  "name": "Identify Input Purpose",     "level": "AA",  "fix_mode": "auto",         "plain": "Form fields don't declare their purpose"},
@@ -272,7 +273,7 @@ _ALL_FORMATS = frozenset({"html", "docx", "pptx", "xlsx", "pdf"})
 _OFFICE_PDF = frozenset({"docx", "pptx", "xlsx", "pdf"})
 RULE_FORMATS: dict[str, frozenset[str]] = {
     "1.1.1": _ALL_FORMATS, "1.2.1": frozenset({"html"}), "1.2.2": frozenset({"html"}),
-    "1.2.3": frozenset({"html"}), "1.3.1": _ALL_FORMATS, "1.3.3": _ALL_FORMATS,
+    "1.2.3": frozenset({"html"}), "1.3.1": _ALL_FORMATS, "1.3.2": frozenset({"pptx"}), "1.3.3": _ALL_FORMATS,
     "1.3.4": frozenset({"html"}), "1.3.5": frozenset({"html"}), "1.4.1": frozenset({"html"}),
     "1.4.2": frozenset({"html"}), "1.4.3": _ALL_FORMATS,
     "1.4.4": frozenset({"html"}), "1.4.5": _OFFICE_PDF, "1.4.6": frozenset({"html", "pdf", "pptx", "xlsx"}),
