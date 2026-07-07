@@ -239,7 +239,6 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
         .catch((e) => { setCad(prev); setSchedErr(e.message || 'schedule not saved — try again') })
     }
   }
-  const cadCount = (v) => Object.values(cad).filter((c) => c === v).length
   const next = useRef(1)
   const push = (e) => setEvents((cur) => [{ ...e, id: next.current++, when: 'just now' }, ...cur].slice(0, 9))
 
@@ -325,7 +324,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
 
             {/* Scan triggers & schedule */}
             <div>
-              <h3 style={{ margin: '0 0 8px' }}>Scan triggers &amp; schedule <span className="muted" style={{ fontWeight: 400 }}>· how the agent decides when to scan</span></h3>
+              <h3 style={{ margin: '0 0 8px' }}>Scan triggers <span className="muted" style={{ fontWeight: 400 }}>· event-based automation (preview) — the live schedule is below</span></h3>
               <div className="scanctl">
                 <div className="ctlcol">
                   <div className="ctlsub">Event-based triggers <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, color: '#854F0B', background: '#FBF1DF', border: '1px solid #EAD9BF', borderRadius: 4, padding: '1px 5px', marginLeft: 6, verticalAlign: 'middle' }}>PREVIEW</span></div>
@@ -336,24 +335,6 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
                   <Toggle label="Auto-remediate high-confidence fixes" hint="apply + re-certify without waiting for a sweep" on={triggers.autoRemediate} set={(v) => setTriggers((t) => ({ ...t, autoRemediate: v }))} />
                   <Toggle label="Alert owner on regression" hint="notify when a published doc drops > 5 points" on={triggers.alertRegression} set={(v) => setTriggers((t) => ({ ...t, alertRegression: v }))} />
                   </div>
-                </div>
-                <div className="ctlcol">
-                  <div className="ctlsub">Scheduled sweeps <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, color: '#3B6D11', background: '#E7F0DC', border: '1px solid #C9E0B0', borderRadius: 4, padding: '1px 5px', marginLeft: 6, verticalAlign: 'middle' }}>LIVE</span></div>
-                  <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>Re-scans your source on this cadence (background, via the service account) and attributes the scan to you.</div>
-                  <div className="seg">
-                    {['live', 'hourly', 'daily', 'weekly', 'off'].map((v) => {
-                      const isActive = watch.length > 0 && cadCount(v) === watch.length
-                      return (
-                        <button key={v} className="segbtn"
-                          style={isActive ? { background: '#185FA5', color: '#fff', borderColor: '#185FA5' } : {}}
-                          onClick={() => setAllCad(v)}>{v}</button>
-                      )
-                    })}
-                  </div>
-                  <div className="cadsummary">
-                    {['live', 'hourly', 'daily', 'weekly', 'off'].map((v) => cadCount(v) ? <span key={v} className="cadpill">{cadCount(v)} {v}</span> : null)}
-                  </div>
-                  {schedErr && <div style={{ fontSize: 12, color: '#A32D2D', marginTop: 6 }} role="alert">⚠ {schedErr}</div>}
                 </div>
               </div>
             </div>
@@ -451,7 +432,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
 
       <section className="panel" style={{ marginBottom: 14 }}>
         <div className="proghd">
-          <h2 style={{ margin: 0 }}>Scheduled re-scans <span className="muted">· automatic re-scan of your estate</span></h2>
+          <h2 style={{ margin: 0 }}>Scheduled re-scans <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, color: '#3B6D11', background: '#E7F0DC', border: '1px solid #C9E0B0', borderRadius: 4, padding: '1px 5px', marginLeft: 8, verticalAlign: 'middle' }}>LIVE</span> <span className="muted">· automatic re-scan of your estate, server-side via the service account</span></h2>
           {schedNext && (Object.values(cad)[0] || 'off') !== 'off' && (
             <span className="trstatchip pending" style={{ fontSize: 12 }}>next {new Date(schedNext).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
           )}

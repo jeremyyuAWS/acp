@@ -76,15 +76,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         <div className="metric"><span>owners notified</span><b style={{ color: pubStarted ? undefined : '#9AA1B4' }}>{pubStarted ? Object.keys(done).length + certified.length : 0}</b></div>
       </div>
 
-      <section className="panel">
-        <h2>What “publish” does <span className="muted">· every re-validated document</span></h2>
-        <div className="pubsteps">
+      <details className="panel">
+        <summary style={{ cursor: 'pointer', fontWeight: 600, listStyle: 'revert' }}>What “publish” does <span className="muted" style={{ fontWeight: 400 }}>· what happens to every re-validated document</span></summary>
+        <div className="pubsteps" style={{ marginTop: 12 }}>
           <div className="pubstep"><b>↺ Replace in place</b><span className="muted">the accessible version takes over the original URL / path</span></div>
           <div className="pubstep"><b>📦 Archive prior version</b><span className="muted">the old file is retained for the audit trail</span></div>
           <div className="pubstep"><b>🏷 Update metadata</b><span className="muted">conformance status + scan date written back to the source</span></div>
           <div className="pubstep"><b>✉ Notify stakeholders</b><span className="muted">the document owner is told it’s now compliant</span></div>
         </div>
-      </section>
+      </details>
 
       <section className="panel">
         <div className="rubrichdr">
