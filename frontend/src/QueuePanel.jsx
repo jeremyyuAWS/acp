@@ -54,7 +54,9 @@ export default function QueuePanel() {
       })
       .catch((e) => { if (on) setErr(e.message || 'unavailable') })
     load()
-    const t = setInterval(load, 4000)
+    // 2s poll so the worker queue animates in near-real-time (running → done ticks,
+    // throughput, recent-job list) while a batch is churning — still light on the API.
+    const t = setInterval(load, 2000)
     return () => { on = false; clearInterval(t) }
   }, [])
 

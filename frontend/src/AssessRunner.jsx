@@ -168,8 +168,13 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
           {scanBusy && <p style={{ margin: '6px 0 0', fontSize: 13, color: '#854F0B' }}>⏳ A scan is still running — assessment will be available once it finishes.</p>}
         </div>
         <button className="assessbtn" onClick={assess} disabled={phase === 'running' || !docs.length || scanBusy}
-                title={scanBusy ? 'A scan is still running — assessment will be available when it completes' : undefined}>
-          {phase === 'running' ? 'Assessing…' : scanBusy ? 'Scan in progress…' : `▶ Assess ${docs.length.toLocaleString()} files`}
+                style={phase === 'done' ? { background: 'transparent', color: '#1F5FA8', border: '1.5px solid #9DBCE4', fontWeight: 600 } : undefined}
+                title={scanBusy ? 'A scan is still running — assessment will be available when it completes'
+                       : phase === 'done' ? 'Already assessed — re-run only if you changed the target level or re-scanned' : undefined}>
+          {phase === 'running' ? 'Assessing…'
+            : scanBusy ? 'Scan in progress…'
+            : phase === 'done' ? `↻ Re-assess ${docs.length.toLocaleString()} files`
+            : `▶ Assess ${docs.length.toLocaleString()} files`}
         </button>
       </div>
 
