@@ -44,6 +44,26 @@ def _pptx(tmp: Path, *slide_xmls: str, rels_xmls: dict[int, str] | None = None) 
     return p
 
 
+_XLSX_STYLES_TMPL = """<?xml version="1.0"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<fonts count="{n}">{fonts}</fonts>
+<fills count="{n}">{fills}</fills>
+<cellXfs count="{n}">{xfs}</cellXfs>
+</styleSheet>"""
+
+
+def _xlsx(tmp: Path, cell_xml: str, fonts: str, fills: str, xfs: str) -> Path:
+    """fonts/fills/xfs: raw inner XML for each block, index-aligned by
+    position (font index 0 pairs with fill index 0 pairs with xf index 0)."""
+    p = tmp / "book.xlsx"
+    styles = _XLSX_STYLES_TMPL.format(n=99, fonts=fonts, fills=fills, xfs=xfs)
+    sheet = f'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{cell_xml}</sheetData></worksheet>'
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("xl/styles.xml", styles)
+        z.writestr("xl/worksheets/sheet1.xml", sheet)
+    return p
+
+
 def _pdf(tmp: Path, *, light=False, dark=False) -> Path:
     from reportlab.lib.colors import Color
     from reportlab.pdfgen import canvas
@@ -223,6 +243,70 @@ def test_pptx_same_link_text_same_target_not_flagged(tmp_path):
 
 # --- pdf: 1.4.3 / 1.4.6 contrast ---------------------------------------------
 
+def _xlsx_cell(ref: str, style_idx: int, text: str) -> str:
+    return f'<c r="{ref}" s="{style_idx}"><is><t>{text}</t></is></c>'
+
+
+def test_xlsx_light_grey_on_default_white_flagged(tmp_path):
+    # font[0]=theme (default, unused directly), font[1]=explicit light grey;
+    # fill[0]=no pattern (resolves to white), fill[1]=unused (paired w/ font[1]).
+    fonts = '<font><color theme="1"/></font><font><color rgb="00CCCCCC"/></font>'
+    fills = '<fill><patternFill/></fill><fill><patternFill/></fill>'
+    xfs = '<xf fontId="0" fillId="0"/><xf fontId="1" fillId="1"/>'
+    cells = _xlsx_cell("A1", 1, "Low contrast text")
+    findings = os_.xlsx_contrast_checks(_xlsx(tmp_path, cells, fonts, fills, xfs))
+    ids = {f["ruleId"] for f in findings}
+    assert ids == {"XLSX_LOW_CONTRAST_AA", "XLSX_LOW_CONTRAST_AAA"}
+
+
+def test_xlsx_black_on_default_white_not_flagged(tmp_path):
+    fonts = '<font><color theme="1"/></font><font><color rgb="00000000"/></font>'
+    fills = '<fill><patternFill/></fill><fill><patternFill/></fill>'
+    xfs = '<xf fontId="0" fillId="0"/><xf fontId="1" fillId="1"/>'
+    cells = _xlsx_cell("A1", 1, "Good contrast text")
+    findings = os_.xlsx_contrast_checks(_xlsx(tmp_path, cells, fonts, fills, xfs))
+    assert findings == []
+
+
+def test_xlsx_theme_font_color_not_flagged(tmp_path):
+    """A default-styled cell (theme font, no fill) is unresolvable by design —
+    guessing at theme colors is the exact false-positive risk this check must
+    avoid, since Excel's built-in header/table styles use theme colors."""
+    fonts = '<font><color theme="1"/></font>'
+    fills = '<fill><patternFill/></fill>'
+    xfs = '<xf fontId="0" fillId="0"/>'
+    cells = _xlsx_cell("A1", 0, "Default styled text")
+    findings = os_.xlsx_contrast_checks(_xlsx(tmp_path, cells, fonts, fills, xfs))
+    assert findings == []
+
+
+def test_xlsx_non_solid_pattern_fill_not_flagged(tmp_path):
+    """A half-tone/stripe pattern fill (e.g. gray125) has no single resolvable
+    background color — skipped rather than guessed at."""
+    fonts = '<font><color rgb="00CCCCCC"/></font>'
+    fills = '<fill><patternFill patternType="gray125"/></fill>'
+    xfs = '<xf fontId="0" fillId="0"/>'
+    cells = _xlsx_cell("A1", 0, "Halftone background text")
+    findings = os_.xlsx_contrast_checks(_xlsx(tmp_path, cells, fonts, fills, xfs))
+    assert findings == []
+
+
+def test_xlsx_empty_cell_with_low_contrast_style_not_flagged(tmp_path):
+    fonts = '<font><color rgb="00CCCCCC"/></font>'
+    fills = '<fill><patternFill/></fill>'
+    xfs = '<xf fontId="0" fillId="0"/>'
+    cells = '<c r="A1" s="0"/>'  # styled but empty — nothing rendered, nothing to contrast-check
+    findings = os_.xlsx_contrast_checks(_xlsx(tmp_path, cells, fonts, fills, xfs))
+    assert findings == []
+
+
+def test_xlsx_no_styles_file_returns_no_findings(tmp_path):
+    p = tmp_path / "nostyles.xlsx"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("xl/worksheets/sheet1.xml", "<worksheet/>")
+    assert os_.xlsx_contrast_checks(p) == []
+
+
 def test_pdf_low_contrast_text_flags_both_aa_and_aaa(tmp_path):
     findings = os_.pdf_contrast_checks(_pdf(tmp_path, light=True))
     ids = {f["ruleId"] for f in findings}
@@ -277,3 +361,8 @@ def test_pdf_long_document_with_bookmarks_not_flagged(tmp_path):
 def test_checks_for_dispatches_by_extension(tmp_path):
     assert os_.checks_for(tmp_path / "x.txt", ".txt") == []
     assert os_.checks_for(_pdf(tmp_path, dark=True), ".pdf") == []
+    fonts = '<font><color rgb="00000000"/></font>'
+    fills = '<fill><patternFill/></fill>'
+    xfs = '<xf fontId="0" fillId="0"/>'
+    xlsx_path = _xlsx(tmp_path, _xlsx_cell("A1", 0, "fine"), fonts, fills, xfs)
+    assert os_.checks_for(xlsx_path, ".xlsx") == []

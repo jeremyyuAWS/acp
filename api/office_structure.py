@@ -20,20 +20,34 @@ the zip/XML/PDF ourselves).
         Scoped to those unambiguous input gallery types only — w:sdt also
         wraps plenty of non-form Word content (TOC blocks, citations,
         building-block placeholders) that legitimately has no alias.
+  1.4.3 / 1.4.6 Contrast (xlsx) — cell font vs. fill color, resolved through
+        xl/styles.xml's cellXfs -> fonts/fills chain and luma-diffed the same
+        heuristic way as the HTML/PDF contrast checks. DELIBERATELY NARROW:
+        only <color rgb="..."/> is resolved (direct RGB). theme= and
+        indexed= colors, and non-solid pattern fills (stripes/half-tones),
+        resolve to "unknown" and the cell is skipped rather than guessed at
+        — theme colors are exactly what Excel's built-in header/table styles
+        use, and guessing wrong there is the false-positive risk (flagging
+        routine formatting) this check exists to avoid. A cell with no
+        explicit fill resolves to white with high confidence (Excel's actual
+        default), which is different from "unresolvable" — that's a real,
+        positive signal, not a guess.
 
 docx/pptx style IDs (Heading1..9, title placeholder type) are locale-invariant
 OOXML identifiers — only the *display* name is localized — so no styles.xml
 cross-reference is needed to recognize them.
 
 Scope not covered here (deliberately, see docs/TODO.md P1):
-xlsx contrast/color-only needs style-index + conditional-formatting resolution
-to avoid false-flagging routine formatting. pptx embedded-audio autoplay is
-BLOCKED, not just deferred: distinguishing an autoplay media node from a
-click-triggered one requires the exact p:timing trigger-condition XML, which
-could not be verified against a real PowerPoint-generated ground-truth fixture
-(no PowerPoint/LibreOffice available in this environment, and Microsoft's own
-docs don't spell out the precise autoplay-vs-click structure) — do not
-implement this from memory/guesswork.
+pptx embedded-audio autoplay is BLOCKED, not just deferred: distinguishing an
+autoplay media node from a click-triggered one requires the exact p:timing
+trigger-condition XML, which could not be verified against a real
+PowerPoint-generated ground-truth fixture (no PowerPoint/LibreOffice
+available in this environment, and Microsoft's own docs don't spell out the
+precise autoplay-vs-click structure) — do not implement this from
+memory/guesswork. xlsx conditional-formatting (cfRule) overrides are also
+out of scope — evaluating those would need a real formula/condition
+evaluator against actual cell values, a much larger scope than a static
+style read.
 
 Never raises — a parse failure just means no findings for that document.
 """
@@ -261,6 +275,101 @@ def pdf_bypass_blocks_check(path: Path) -> list[dict]:
     return [_finding("PDF_NO_BOOKMARKS", "2.4.1 Bypass Blocks", "MODERATE")]
 
 
+_FONT_BLOCK = re.compile(r"<font>(.*?)</font>", re.S)
+_FILL_BLOCK = re.compile(r"<fill>(.*?)</fill>", re.S)
+_XF = re.compile(r"<xf\b[^>]*?/>|<xf\b[^>]*?>.*?</xf>", re.S)
+_ATTR_INT = lambda name: re.compile(rf'\b{name}="(\d+)"')  # noqa: E731
+_FONT_ID, _FILL_ID = _ATTR_INT("fontId"), _ATTR_INT("fillId")
+_PATTERN_TYPE = re.compile(r'patternType="([^"]*)"')
+_FG_COLOR = re.compile(r"<fgColor\b([^/]*)/>")
+_CELL = re.compile(r'<c\b[^>]*\bs="(\d+)"[^>]*(?:/>|>(.*?)</c>)', re.S)
+
+
+def _explicit_rgb(color_attrs: str) -> str | None:
+    """Only <color rgb="XXXXXXXX"/> (or <fgColor rgb=.../>) resolves — theme=
+    and indexed= colors return None (unresolvable), matching the module-level
+    stance: guessing at a theme/indexed color is exactly the false-positive
+    risk (flagging routine header/table styling) this check must avoid."""
+    m = re.search(r'rgb="([0-9A-Fa-f]{6,8})"', color_attrs)
+    return m.group(1)[-6:].upper() if m else None
+
+
+def _xlsx_font_color(font_xml: str) -> str | None:
+    m = re.search(r"<color\b([^/]*)/>", font_xml)
+    return _explicit_rgb(m.group(1)) if m else None
+
+
+def _xlsx_fill_color(fill_xml: str) -> str | None:
+    """None = truly unresolvable (skip). '#FFFFFF' (as a real value, not a
+    sentinel) for a confidently-white default: absent/none pattern type IS
+    Excel's real default background, a positive signal, not a guess. Any
+    other pattern type (stripes/half-tones) is unresolvable."""
+    pt_m = _PATTERN_TYPE.search(fill_xml)
+    pattern_type = pt_m.group(1) if pt_m else ""
+    if not pattern_type or pattern_type == "none":
+        return "FFFFFF"
+    if pattern_type != "solid":
+        return None
+    fg_m = _FG_COLOR.search(fill_xml)
+    return _explicit_rgb(fg_m.group(1)) if fg_m else None
+
+
+def _hex_luma(hexcolor: str) -> float:
+    r, g, b = (int(hexcolor[i:i + 2], 16) for i in (0, 2, 4))
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255
+
+
+def xlsx_contrast_checks(path: Path) -> list[dict]:
+    """1.4.3 / 1.4.6 Contrast — see module docstring for the deliberately
+    narrow resolution scope (direct RGB only; theme/indexed/patterned fills
+    are skipped, not guessed at)."""
+    findings: list[dict] = []
+    try:
+        with zipfile.ZipFile(path) as zf:
+            styles = _read(zf, "xl/styles.xml")
+            if not styles:
+                return []
+            fonts = [_xlsx_font_color(m) for m in _FONT_BLOCK.findall(styles)]
+            fills = [_xlsx_fill_color(m) for m in _FILL_BLOCK.findall(styles)]
+
+            style_colors: dict[int, tuple[str, str]] = {}
+            for i, xf in enumerate(_XF.findall(styles)):
+                fid_m, filid_m = _FONT_ID.search(xf), _FILL_ID.search(xf)
+                if not fid_m or not filid_m:
+                    continue
+                font_hex = fonts[int(fid_m.group(1))] if int(fid_m.group(1)) < len(fonts) else None
+                fill_hex = fills[int(filid_m.group(1))] if int(filid_m.group(1)) < len(fills) else None
+                if font_hex and fill_hex:
+                    style_colors[i] = (font_hex, fill_hex)
+
+            seen_aa = seen_aaa = False
+            for sheet_name in sorted(n for n in zf.namelist()
+                                      if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", n)):
+                sheet_xml = _read(zf, sheet_name)
+                if not sheet_xml:
+                    continue
+                for style_idx, content in _CELL.findall(sheet_xml):
+                    if not content or not content.strip():
+                        continue
+                    colors = style_colors.get(int(style_idx))
+                    if not colors:
+                        continue
+                    diff = abs(_hex_luma(colors[0]) - _hex_luma(colors[1]))
+                    if diff < 0.5:
+                        seen_aaa = True
+                    if diff < 0.3:
+                        seen_aa = True
+                if seen_aa and seen_aaa:
+                    break
+    except Exception:
+        return []
+    if seen_aa:
+        findings.append(_finding("XLSX_LOW_CONTRAST_AA", "1.4.3 Contrast (Minimum)", "SERIOUS"))
+    if seen_aaa:
+        findings.append(_finding("XLSX_LOW_CONTRAST_AAA", "1.4.6 Contrast (Enhanced)", "MODERATE"))
+    return findings
+
+
 def checks_for(path: Path, ext: str) -> list[dict]:
     """Dispatch by extension; returns [] for formats with no structural check yet."""
     ext = ext.lower()
@@ -270,4 +379,6 @@ def checks_for(path: Path, ext: str) -> list[dict]:
         return pptx_checks(path)
     if ext == ".pdf":
         return pdf_contrast_checks(path) + pdf_bypass_blocks_check(path)
+    if ext == ".xlsx":
+        return xlsx_contrast_checks(path)
     return []
