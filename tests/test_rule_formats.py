@@ -24,6 +24,18 @@ def _wcag_scs(path: Path) -> set[str]:
     return set(re.findall(r'"wcag":\s*"(\d+\.\d+\.\d+)', path.read_text()))
 
 
+_OFFICE_STRUCT_FORMATS = {
+    # office_structure.py's per-check format coverage — docx_checks()/pptx_checks()
+    # cover 2.4.6 + 2.4.9 for those two formats; pdf_contrast_checks() covers
+    # 1.4.3 + 1.4.6 for PDF only (not xlsx — deliberately out of scope, see the
+    # module's docstring).
+    "2.4.6": {"docx", "pptx"},
+    "2.4.9": {"docx", "pptx"},
+    "1.4.3": {"pdf"},
+    "1.4.6": {"pdf"},
+}
+
+
 def _derive_formats() -> dict[str, frozenset[str]]:
     html_scs = _wcag_scs(ACP / "api" / "scanner.py")
     ocr_scs = _wcag_scs(ACP / "api" / "ocr.py")
@@ -44,6 +56,8 @@ def _derive_formats() -> dict[str, frozenset[str]]:
     for sc in tc_scs:
         derived.setdefault(sc, set()).update(_ALL_FORMATS)
     for sc, fmts in partner.items():
+        derived.setdefault(sc, set()).update(fmts)
+    for sc, fmts in _OFFICE_STRUCT_FORMATS.items():
         derived.setdefault(sc, set()).update(fmts)
     return {sc: frozenset(fmts) for sc, fmts in derived.items()}
 
