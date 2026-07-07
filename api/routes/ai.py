@@ -1,6 +1,8 @@
 """AI explanation endpoints (local Ollama)."""
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, HTTPException, Query
 
 import core
@@ -25,7 +27,8 @@ def ai_explain(scan_id: str = Query(...), file: str = Query(...), rule_id: str =
     # Fast-fail when no backend can answer: without an Anthropic key the only path
     # is Ollama, and probing it costs 3s — far better than letting the request (and
     # the UI's "thinking…" spinner) hang on a wedged/scaled-to-zero instance.
-    if not os.environ.get("ANTHROPIC_API_KEY") and not _ai.is_available():
+    ollama_only = os.environ.get("ACP_AI_BACKEND", "auto").lower() == "ollama" or not os.environ.get("ANTHROPIC_API_KEY")
+    if ollama_only and not _ai.is_available():
         raise HTTPException(503, "AI explanation unavailable — is Ollama running?")
     trace = core.store.get_trace_row(scan_id, file, rule_id)
     if trace is None:
@@ -51,4 +54,5 @@ def ai_status():
     AI is enabled platform-wide (admin deterministic-only toggle)."""
     import ai as _ai
     return {"available": _ai.is_available(), "base_url": _ai.OLLAMA_BASE_URL,
-            "model": _ai.OLLAMA_MODEL, "ai_enabled": core.store.get_ai_enabled()}
+            "model": _ai.OLLAMA_MODEL, "ai_enabled": core.store.get_ai_enabled(),
+            "backend": os.environ.get("ACP_AI_BACKEND", "auto").lower()}

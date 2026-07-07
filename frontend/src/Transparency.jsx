@@ -2,6 +2,20 @@ import { useState, useEffect } from 'react'
 import { openTraceUrl, getTraceStatus, getScanTraces } from './api.js'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer from './FileDrawer.jsx'
+import { WCAG } from './wcagCatalog.js'
+import { allRules } from './rules/index.js'
+
+// SCs a rule module exists for — distinguishes "check built, no data in this scan"
+// from "no automated check exists yet".
+const BUILT_SCS = new Set(allRules.map((r) => r.meta.id))
+
+const LEVEL_RANK = { A: 1, AA: 2, AAA: 3 }
+// The conformance level the user picked in the Assess runner — persisted per scan
+// (AssessRunner's sessionStorage contract; this panel only renders once an
+// assessment is 'done', so the key is always fresh by the time we read it).
+const assessLevel = (scanId) => {
+  try { return JSON.parse(sessionStorage.getItem(`acp-assess-${scanId || 'none'}`) || 'null')?.level || 'AA' } catch { return 'AA' }
+}
 
 // "📊 View trace" link. File-centric tracing (backend: lf.file_trace) — every file has
 // its OWN Langfuse trace (Discover/Assess/Remediate as spans inside it), grouped into a
@@ -139,11 +153,35 @@ export function RuleBreakdown({ scanId, files }) {
   const fileCount = new Set((rows || []).map((r) => r.file)).size
   const failingRules = rules.filter((r) => r.fail > 0).slice(0, 8)
 
+  // Checklist parity: every in-scope success criterion appears, not just the ones
+  // the scanner automates. Scope = the assessed conformance level + document-applicable
+  // (same rules as the per-file coverage table in FileDrawer).
+  const targetLevel = assessLevel(scanId)
+  const targetRank = LEVEL_RANK[targetLevel] || 2
+  const inScope = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) <= targetRank)
+  const hiddenAboveLevel = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) > targetRank).length
+  const hiddenWebOnly = WCAG.filter((c) => c.docApplies === false).length
+  const evaluatedIds = new Set(rules.map((r) => r.id))
+  // Evaluated rows always render (they're real scan data), but the "X of Y"
+  // header only counts the in-scope ones — e.g. 3.1.4 (AAA) is checked by the
+  // scanner yet shouldn't inflate coverage at an AA target.
+  const inScopeIds = new Set(inScope.map((c) => c.sc))
+  const evaluatedInScope = rules.filter((r) => inScopeIds.has(r.id) || !WCAG.some((c) => c.sc === r.id)).length
+  const unevaluated = inScope
+    .filter((c) => !evaluatedIds.has(c.sc))
+    .map((c) => ({
+      ...c,
+      isHuman: /Human/i.test(c.approach || '') || c.source === 'MDK HITL',
+      isBuilt: BUILT_SCS.has(c.sc),
+    }))
+  const humanCount = unevaluated.filter((c) => c.isHuman).length
+  const builtNoData = unevaluated.filter((c) => !c.isHuman && c.isBuilt).length
+
   return (
     <section className="panel rulebreak">
       <div className="rubrichdr">
         <h2 style={{ margin: 0 }}>By WCAG criterion <span className="muted">· what each check found across {fileCount.toLocaleString()} documents</span></h2>
-        <span className="muted" style={{ fontSize: 12 }}>{rules.length} criteria evaluated</span>
+        <span className="muted" style={{ fontSize: 12 }}>{evaluatedInScope} of {inScope.length} in-scope criteria automated · target {targetLevel}</span>
       </div>
       <div className="rulerows">
         {shown.map((r) => {
@@ -165,7 +203,29 @@ export function RuleBreakdown({ scanId, files }) {
           )
         })}
       </div>
-      {rules.length > 6 && <button className="ghost small" style={{ marginTop: 10 }} onClick={() => setOpen(!open)}>{open ? 'Show less' : `Show all ${rules.length} criteria`}</button>}
+      {open && unevaluated.length > 0 && (
+        <>
+          <h3 className="rulesubhdr">Not evaluated in this scan <span className="muted">· {humanCount} need human / AT validation{unevaluated.length - humanCount - builtNoData > 0 ? ` · ${unevaluated.length - humanCount - builtNoData} automatable, not yet built` : ''}{builtNoData > 0 ? ` · ${builtNoData} built, no data this scan` : ''}</span></h3>
+          <div className="rulerows">
+            {unevaluated.map((c) => (
+              <div className="rulerow rulerow--manual" key={c.sc}>
+                <div className="rulemeta"><b>{c.sc}</b> <span className="lvlpill">{c.level}</span> <span title={c.name}>{c.name}</span></div>
+                <div className="rulereq" title={c.req}>{c.req}</div>
+                <span className={c.isHuman ? 'covchip covchip--human' : c.isBuilt ? 'covchip covchip--nodata' : 'covchip covchip--gap'}
+                      title={c.isHuman ? 'Requires manual or assistive-technology validation — routed to the HITL queue, cannot be fully automated' : c.isBuilt ? 'An automated check exists but this scan recorded no result for it' : `Deterministic automation is possible (${c.approach}) but no check is built yet`}>
+                  {c.isHuman ? 'Human / AT review' : c.isBuilt ? 'Built · no data' : 'Automatable · not built'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {(rules.length > 6 || unevaluated.length > 0) && <button className="ghost small" style={{ marginTop: 10 }} onClick={() => setOpen(!open)}>{open ? 'Show less' : `Show all ${inScope.length} in-scope criteria`}</button>}
+      {open && (hiddenAboveLevel > 0 || hiddenWebOnly > 0) && (
+        <p className="muted" style={{ fontSize: 11.5, margin: '8px 0 0' }}>
+          Scoped to your assessment: {hiddenAboveLevel > 0 ? `${hiddenAboveLevel} criteria above Level ${targetLevel}` : ''}{hiddenAboveLevel > 0 && hiddenWebOnly > 0 ? ' and ' : ''}{hiddenWebOnly > 0 ? `${hiddenWebOnly} web-app-only criteria (not applicable to documents)` : ''} are not shown.
+        </p>
+      )}
       {failingRules.length > 0 && (
         <>
           <h3 className="heatmaptitle">Where failures concentrate <span className="muted">· top {failingRules.length} failing criteria by department</span></h3>

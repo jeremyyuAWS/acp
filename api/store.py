@@ -222,21 +222,32 @@ _UPSERT_INV = (
 # This is the single source of truth for the plain-English rule labels.
 RULE_CATALOG: list[dict] = [
     {"id": "1.1.1",  "name": "Non-text Content",           "level": "A",   "fix_mode": "ai-assisted", "plain": "Images missing a text description"},
+    {"id": "1.2.1",  "name": "Audio-only & Video-only",     "level": "A",   "fix_mode": "human-only",   "plain": "Audio/video with no transcript"},
+    {"id": "1.2.2",  "name": "Captions (Prerecorded)",      "level": "A",   "fix_mode": "human-only",   "plain": "Video missing captions"},
+    {"id": "1.2.3",  "name": "Audio Description or Alt",     "level": "A",   "fix_mode": "human-only",   "plain": "Video missing audio description or transcript"},
     {"id": "1.3.1",  "name": "Info and Relationships",      "level": "A",   "fix_mode": "auto",         "plain": "Structure not marked up (headings, lists, tables)"},
+    {"id": "1.3.4",  "name": "Orientation",                "level": "AA",  "fix_mode": "auto",         "plain": "Content locked to one screen orientation"},
+    {"id": "1.3.5",  "name": "Identify Input Purpose",     "level": "AA",  "fix_mode": "auto",         "plain": "Form fields don't declare their purpose"},
     {"id": "1.4.1",  "name": "Use of Color",                "level": "A",   "fix_mode": "auto",         "plain": "Information shown by color alone"},
+    {"id": "1.4.2",  "name": "Audio Control",              "level": "A",   "fix_mode": "auto",         "plain": "Autoplaying media that can't be stopped"},
     {"id": "1.4.3",  "name": "Contrast (Minimum)",          "level": "AA",  "fix_mode": "auto",         "plain": "Text with low color contrast"},
     {"id": "1.4.4",  "name": "Resize Text",                 "level": "AA",  "fix_mode": "auto",         "plain": "Text that can't be enlarged"},
+    {"id": "1.4.6",  "name": "Contrast (Enhanced)",        "level": "AAA", "fix_mode": "auto",         "plain": "Text below the enhanced contrast ratio"},
     {"id": "1.4.10", "name": "Reflow",                      "level": "AA",  "fix_mode": "auto",         "plain": "Content that doesn't reflow on small screens"},
     {"id": "1.4.11", "name": "Non-text Contrast",           "level": "AA",  "fix_mode": "ai-assisted", "plain": "Buttons or icons with low contrast"},
     {"id": "1.4.12", "name": "Text Spacing",                "level": "AA",  "fix_mode": "auto",         "plain": "Text spacing can't be adjusted"},
     {"id": "2.1.1",  "name": "Keyboard",                    "level": "A",   "fix_mode": "auto",         "plain": "Can't be used with a keyboard"},
+    {"id": "2.4.1",  "name": "Bypass Blocks",              "level": "A",   "fix_mode": "auto",         "plain": "No way to skip repeated navigation"},
     {"id": "2.4.2",  "name": "Page Titled",                 "level": "A",   "fix_mode": "auto",         "plain": "Missing a page or document title"},
     {"id": "2.4.3",  "name": "Focus Order",                 "level": "A",   "fix_mode": "auto",         "plain": "Illogical keyboard navigation order"},
     {"id": "2.4.4",  "name": "Link Purpose (In Context)",   "level": "A",   "fix_mode": "ai-assisted", "plain": "Unclear link text (e.g. 'click here')"},
     {"id": "2.4.6",  "name": "Headings and Labels",         "level": "AA",  "fix_mode": "auto",         "plain": "Unclear headings or labels"},
     {"id": "2.4.7",  "name": "Focus Visible",               "level": "AA",  "fix_mode": "auto",         "plain": "No visible keyboard focus indicator"},
+    {"id": "2.5.3",  "name": "Label in Name",              "level": "A",   "fix_mode": "auto",         "plain": "Control names don't match their visible labels"},
+    {"id": "2.5.8",  "name": "Target Size (Minimum)",       "level": "AA",  "fix_mode": "human-only",   "plain": "Touch targets smaller than 24px"},
     {"id": "3.1.1",  "name": "Language of Page",            "level": "A",   "fix_mode": "auto",         "plain": "Document language not set"},
     {"id": "3.1.4",  "name": "Abbreviations",               "level": "AAA", "fix_mode": "auto",         "plain": "Unexplained abbreviations"},
+    {"id": "3.3.2",  "name": "Labels or Instructions",     "level": "A",   "fix_mode": "ai-assisted", "plain": "Required fields with no label or instructions"},
     {"id": "4.1.2",  "name": "Name, Role, Value",           "level": "A",   "fix_mode": "ai-assisted", "plain": "Controls missing names/roles for assistive tech"},
 ]
 
@@ -1128,14 +1139,14 @@ class Store:
                              "finding_count": c["finding_count"], "status": "pending", "created_at": now})
         return created
 
-    def queue_hitl_deferral(self, scan_id: str, file: str, note: str, count: int = 1) -> str | None:
+    def queue_hitl_deferral(self, scan_id: str, file: str, note: str, count: int = 1,
+                            rule_id: str = "1.1.1/deferred") -> str | None:
         """Queue ONE human-review item for a remediation deferral — e.g. Office images
         with no faithful alt source (remediate_office). Those findings carry fix_mode
         'auto', so queue_hitl_items' ai-assisted pull never sees them; without this
         the deferral is reported in the job result and then silently dropped.
         Idempotent per (scan, file, rule) like queue_hitl_items."""
         from datetime import datetime, timezone
-        rule_id = "1.1.1/deferred"
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT 1 FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s",
@@ -1375,6 +1386,9 @@ class Store:
                 self._db.execute(cur,
                     "UPDATE jobs SET status='dead', last_error=%s, updated_at=%s WHERE id=%s",
                     (error[:2000], now.isoformat(), job_id))
+            # One greppable stdout line per dead-letter — the platform alert
+            # (Log Analytics scheduled query) keys on 'job dead-lettered'.
+            print(f"[acp] job dead-lettered: id={job_id} type={job.get('type')} error={error[:160]}", flush=True)
             return "dead"
         run_after = (now + timedelta(seconds=backoff_seconds)).isoformat()
         with self._db.cursor() as cur:

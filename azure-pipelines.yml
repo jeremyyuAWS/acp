@@ -1,0 +1,62 @@
+# ACP CI — the gate between "committed" and "trusted".
+# Runs the full backend suite (incl. the auth route-coverage guard that fails
+# the build if a new router ships unauthenticated) and proves the frontend
+# builds. Wire this as a build-validation branch policy on main so the
+# PR-required policy gates on green CI rather than ceremony.
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+# KNOWN GAP — office engine oracle tests (tests/test_scan.py, ~18 tests) skip on
+# CI: AcpScan.Cli.csproj references DigitalA11y.* projects from the SIBLING
+# _review-digital-accessibility checkout, which exists only on dev machines, and
+# the built DLL is gitignored (prod ships the laptop-built artifact via the
+# Docker context). Until the engine is vendored or published as a reproducible
+# artifact, those tests are local-only and CI says so in the skip reason.
+steps:
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '3.12'
+    displayName: Python 3.12
+
+  - script: python -m pip install --quiet -r api/requirements.txt
+    displayName: Install API dependencies
+
+  - script: python -m pytest tests/ -q --junitxml=test-results.xml
+    displayName: Backend suite (incl. auth-coverage guard)
+
+  - task: PublishTestResults@2
+    condition: always()
+    inputs:
+      testResultsFiles: test-results.xml
+      testRunTitle: acp backend
+    displayName: Publish test results
+
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '22.x'
+    displayName: Node 22 (pdfjs-dist requires >=22.13)
+
+  - script: npm install -g npm@11 --no-audit --no-fund
+    displayName: npm 11 (lockfile is npm-11 authored; npm 10 rejects its nested entries)
+
+  - script: npm ci --no-audit --no-fund
+    workingDirectory: frontend
+    displayName: Install frontend dependencies
+
+  - script: npx vitest run
+    workingDirectory: frontend
+    displayName: Frontend unit tests (rule round-trips + WCAG coverage contract)
+
+  - script: npx vite build
+    workingDirectory: frontend
+    displayName: Frontend build

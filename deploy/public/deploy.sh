@@ -45,6 +45,13 @@ E2E_KEY="${ACP_E2E_KEY:-}"                # set => X-E2E-Key bypass for smoke te
 BLOB_ACCOUNT="${ACP_BLOB_ACCOUNT:-acpremediatedstore}"
 
 echo "== 0/5 preflight =="
+# Pin the subscription when asked (matches rollback.sh) -- the az default can
+# point elsewhere when other work shares this machine. NOTE: az has no
+# per-invocation profile, so this updates the az CLI's global default.
+if [ -n "${ACP_SUBSCRIPTION:-}" ]; then
+  az account set --subscription "$ACP_SUBSCRIPTION"
+  echo "   subscription = $ACP_SUBSCRIPTION (az default updated)"
+fi
 # Inherit ACP_GOOGLE_CLIENT_ID from the existing ACA if not provided locally, so a plain
 # redeploy doesn't accidentally clear or overwrite the already-configured OAuth client id.
 if [ -z "$CLIENT_ID" ] && az containerapp show -g "$RG" -n "$APP" -o none 2>/dev/null; then

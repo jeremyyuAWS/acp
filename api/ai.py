@@ -93,6 +93,11 @@ def _claude_complete(system: str, user: str, max_tokens: int = 300) -> tuple[str
     """One-shot Claude text completion via the Anthropic SDK. Returns (text, model), or None
     when ANTHROPIC_API_KEY is unset or the call fails. Model: claude-opus-4-8 (ANTHROPIC_MODEL
     override). Shared by the compliance digest and per-finding explanations."""
+    # ACP_AI_BACKEND=ollama pins ALL generation to the local model — external
+    # token spend becomes impossible even if an Anthropic key is present.
+    # 'claude' / unset ('auto') keep the existing prefer-Claude-when-keyed flow.
+    if os.environ.get("ACP_AI_BACKEND", "auto").lower() == "ollama":
+        return None
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         return None

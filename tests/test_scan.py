@@ -23,6 +23,22 @@ import pytest
 ACP = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ACP / "api"))
 sys.path.insert(0, str(ACP / "scripts"))
+
+# The office engine (dotnet + AcpScan.Cli.dll) currently builds only against the
+# sibling _review-digital-accessibility checkout, so CI agents can't have it --
+# skip the whole module there instead of erroring, LOUDLY, so a green CI run is
+# honest about what it did and didn't cover. Locally these always run.
+import os as _os
+import shutil as _shutil
+
+_DOTNET_OK = _shutil.which("dotnet") or Path(
+    _os.environ.get("ACP_DOTNET") or _os.path.expanduser("~/.dotnet/dotnet")).exists()
+_CLI_DLL = ACP / "spike/dotnet/AcpScan.Cli/bin/Release/net10.0/AcpScan.Cli.dll"
+pytestmark = pytest.mark.skipif(
+    not (_DOTNET_OK and _CLI_DLL.exists()),
+    reason="office engine unavailable (needs dotnet + AcpScan.Cli.dll built from the "
+           "sibling _review-digital-accessibility repo) -- engine oracle tests are "
+           "local-only until the engine is vendored/reproducible (see azure-pipelines.yml)")
 from scanner import run_scan  # noqa: E402
 from rubric import Rubric  # noqa: E402
 

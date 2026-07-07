@@ -1,7 +1,10 @@
 // 1.4.1 Use of Color (Level A)
 // Color is not the only visual means of conveying information.
-// Fix: deterministic — in-text links that rely on color alone (no text-decoration)
-//   get an explicit underline so they are distinguishable without color perception.
+// Fix: deterministic — links whose inline style sets a color but no underline
+//   get an explicit text-decoration:underline so they are distinguishable
+//   without color perception. Check and fix share one predicate so a fixed
+//   document always re-checks clean. Inline styles only (same limitation as
+//   the contrast rules): class/stylesheet colors aren't visible to DOM checks.
 
 export const meta = {
   id: '1.4.1',
@@ -10,32 +13,37 @@ export const meta = {
   fixMode: 'auto', // adding text-decoration:underline is always safe
 }
 
+// (?:^|;) anchors the property name so background-color/border-color don't match.
+const reliesOnColorAlone = (a) => {
+  const s = a.getAttribute('style') || ''
+  return /(?:^|;)\s*color\s*:/i.test(s) && !/text-decoration\s*:[^;]*underline/i.test(s)
+}
+
 export function check(doc) {
   const findings = []
-  doc.querySelectorAll('p a, li a, td a').forEach((a) => {
-    const s = a.getAttribute('style') || ''
-    if (/color\s*:/i.test(s) && !/text-decoration\s*:\s*underline/i.test(s)) {
-      findings.push({
-        element: a.outerHTML.slice(0, 120),
-        detail: 'In-text link is distinguished by colour alone (no underline)',
-        severity: 'SERIOUS',
-      })
-    }
+  doc.querySelectorAll('a[style]').forEach((a) => {
+    if (!reliesOnColorAlone(a)) return
+    findings.push({
+      element: a.outerHTML.slice(0, 120),
+      detail: 'Link is distinguished by colour alone (no underline)',
+      severity: 'SERIOUS',
+    })
   })
   return findings
 }
 
 export function fix(doc) {
   const changes = new Set()
-  doc.querySelectorAll('p a, li a, td a').forEach((a) => {
-    const s = a.getAttribute('style') || ''
-    if (/text-decoration[^;]*none/i.test(s) || !/text-decoration/i.test(s)) {
-      a.setAttribute(
-        'style',
-        (s ? s.replace(/;?\s*$/, '; ') : '') + 'text-decoration:underline'
-      )
-      changes.add('Underlined in-text links (not colour alone) · 1.4.1')
-    }
+  doc.querySelectorAll('a[style]').forEach((a) => {
+    if (!reliesOnColorAlone(a)) return
+    const s = a.getAttribute('style')
+    // Replace an explicit text-decoration (e.g. none) rather than stacking a
+    // conflicting second declaration.
+    const next = /text-decoration\s*:/i.test(s)
+      ? s.replace(/text-decoration\s*:[^;]*/i, 'text-decoration:underline')
+      : s.replace(/;?\s*$/, '; ') + 'text-decoration:underline'
+    a.setAttribute('style', next)
+    changes.add('Underlined links styled by colour alone · 1.4.1')
   })
   return changes
 }

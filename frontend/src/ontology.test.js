@@ -91,7 +91,11 @@ describe('classifyFile + annotate', () => {
     const out = annotate(files, pub)
     expect(out[0].ont.priority).toBe('Critical')
     expect(out[1].ont).toBeNull()
-    expect(annotate(files, null)).toBe(files) // unchanged reference
+    // With no ontology, annotate still enriches metadata (type/department/tags)
+    // but attaches no `ont` classification — it doesn't return the input untouched.
+    const bare = annotate(files, null)
+    expect(bare[0].ont).toBeUndefined()
+    expect(bare[0].tags.length).toBeGreaterThan(0)
   })
 })
 
