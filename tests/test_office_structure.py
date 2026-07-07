@@ -212,6 +212,41 @@ def test_docx_many_empty_paragraphs_not_flagged(tmp_path):
     assert not any(f["ruleId"] == "DOCX_NO_SECTION_HEADINGS" for f in findings)
 
 
+# --- docx: 1.4.8 justified body text -----------------------------------------
+
+def _jpara(text):
+    return f'<w:p><w:pPr><w:jc w:val="both"/></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>'
+
+
+def test_docx_justified_body_text_flagged(tmp_path):
+    body = "".join(_jpara(f"Justified block {i}.") for i in range(os_._MIN_JUSTIFIED_PARAS + 1))
+    doc = f"<w:document><w:body>{body}</w:body></w:document>"
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert any(f["ruleId"] == "DOCX_JUSTIFIED_TEXT" for f in findings)
+
+
+def test_docx_one_justified_paragraph_not_flagged(tmp_path):
+    # A single incidental justified line (e.g. a banner) is below the block floor.
+    body = _jpara("One justified line.") + "".join(_para(f"Left {i}.") for i in range(5))
+    doc = f"<w:document><w:body>{body}</w:body></w:document>"
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert not any(f["ruleId"] == "DOCX_JUSTIFIED_TEXT" for f in findings)
+
+
+def test_docx_left_aligned_text_not_flagged(tmp_path):
+    body = "".join(_para(f"Left-aligned line {i}.") for i in range(6))
+    doc = f"<w:document><w:body>{body}</w:body></w:document>"
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert not any(f["ruleId"] == "DOCX_JUSTIFIED_TEXT" for f in findings)
+
+
+def test_docx_empty_justified_paragraphs_not_flagged(tmp_path):
+    body = '<w:p><w:pPr><w:jc w:val="both"/></w:pPr></w:p>' * (os_._MIN_JUSTIFIED_PARAS + 2)
+    doc = f"<w:document><w:body>{body}</w:body></w:document>"
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert not any(f["ruleId"] == "DOCX_JUSTIFIED_TEXT" for f in findings)
+
+
 # --- pptx: 2.4.6 title placeholder present but empty -------------------------
 
 _SLIDE_TMPL = """<p:sld><p:cSld><p:spTree>

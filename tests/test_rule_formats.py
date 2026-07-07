@@ -40,6 +40,7 @@ _OFFICE_STRUCT_FORMATS = {
     "2.4.1": {"pdf"},
     "3.3.2": {"docx"},
     "2.4.10": {"docx"},
+    "1.4.8": {"docx"},    # docx_checks() justified-body-text check
 }
 
 

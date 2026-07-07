@@ -22,6 +22,9 @@ the zip/XML/PDF ourselves).
         building-block placeholders) that legitimately has no alias.
   2.4.10 Section Headings — a docx long enough to need section structure (past a
         text-bearing-paragraph floor) that uses no heading styles at all.
+  1.4.8 Visual Presentation — blocks of docx body text set to justified (both
+        margins), an explicit 1.4.8 failure. Narrow (justified-text only), not
+        the SC's full width/spacing/colour surface.
   1.4.3 / 1.4.6 Contrast (xlsx) — cell font vs. fill color, resolved through
         xl/styles.xml's cellXfs -> fonts/fills chain and luma-diffed the same
         heuristic way as the HTML/PDF contrast checks. DELIBERATELY NARROW:
@@ -65,6 +68,11 @@ _PARA = re.compile(r"<w:p[ >].*?</w:p>", re.S)
 # that the lack of section structure is a real 2.4.10 problem (a short letter/memo
 # below the floor legitimately needs none).
 _MIN_PARAS_FOR_HEADINGS = 15
+# Justified (both-margin) alignment is an explicit 1.4.8 failure. Require a few
+# text-bearing justified paragraphs so a single incidental justified line (e.g. a
+# banner) doesn't trip it — the SC is about blocks of body text.
+_JC_BOTH = re.compile(r'<w:jc w:val="both"\s*/>')
+_MIN_JUSTIFIED_PARAS = 3
 # rIds are XML "ID" type, not necessarily numeric — Word/PowerPoint always emit
 # pure digits (rId4), but any tool producing valid OOXML can use rIdFoo.
 _HYPERLINK = re.compile(r'<w:hyperlink[^>]*r:id="(rId\w+)"[^>]*>(.*?)</w:hyperlink>', re.S)
@@ -169,6 +177,15 @@ def docx_checks(path: Path) -> list[dict]:
                 )
                 if text_paras >= _MIN_PARAS_FOR_HEADINGS:
                     findings.append(_finding("DOCX_NO_SECTION_HEADINGS", "2.4.10 Section Headings", "MODERATE"))
+
+            # 1.4.8 — blocks of body text set justified (both margins). Narrow but
+            # unambiguous: justified alignment is one of the SC's explicit failures.
+            justified = sum(
+                1 for p in _PARA.findall(doc)
+                if _JC_BOTH.search(p) and "".join(_WT.findall(p)).strip()
+            )
+            if justified >= _MIN_JUSTIFIED_PARAS:
+                findings.append(_finding("DOCX_JUSTIFIED_TEXT", "1.4.8 Visual Presentation", "MODERATE"))
     except Exception:
         pass
     return findings
