@@ -198,6 +198,38 @@ def test_pdf_luma_rejects_malformed_color():
     assert os_._pdf_luma("not-a-color") is None
 
 
+# --- pdf: 2.4.1 bypass blocks (bookmark/outline tree) -------------------------
+
+def _pikepdf_pdf(tmp: Path, n_pages: int, bookmark_titles: list[str] | None = None) -> Path:
+    import pikepdf
+    p = tmp / "outline.pdf"
+    doc = pikepdf.new()
+    for _ in range(n_pages):
+        doc.add_blank_page(page_size=(612, 792))
+    if bookmark_titles:
+        with doc.open_outline() as outline:
+            for i, title in enumerate(bookmark_titles):
+                outline.root.append(pikepdf.OutlineItem(title, i))
+    doc.save(p)
+    return p
+
+
+def test_pdf_short_document_not_flagged_even_without_bookmarks(tmp_path):
+    p = _pikepdf_pdf(tmp_path, os_._MIN_PAGES_FOR_OUTLINE - 1)
+    assert os_.pdf_bypass_blocks_check(p) == []
+
+
+def test_pdf_long_document_without_bookmarks_flagged(tmp_path):
+    p = _pikepdf_pdf(tmp_path, os_._MIN_PAGES_FOR_OUTLINE)
+    findings = os_.pdf_bypass_blocks_check(p)
+    assert any(f["ruleId"] == "PDF_NO_BOOKMARKS" for f in findings)
+
+
+def test_pdf_long_document_with_bookmarks_not_flagged(tmp_path):
+    p = _pikepdf_pdf(tmp_path, os_._MIN_PAGES_FOR_OUTLINE, bookmark_titles=["Intro", "Body"])
+    assert os_.pdf_bypass_blocks_check(p) == []
+
+
 # --- dispatcher ----------------------------------------------------------
 
 def test_checks_for_dispatches_by_extension(tmp_path):

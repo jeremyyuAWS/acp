@@ -10,16 +10,21 @@ the zip/XML/PDF ourselves).
         check in scanner.py, ported to OOXML hyperlink+relationship parsing).
   1.4.3 / 1.4.6 Contrast — PDF text color read from the actual content stream
         via pdfplumber's per-character non_stroking_color (RGB 0..1 floats).
+  2.4.1 Bypass Blocks — PDF bookmark/outline tree read via pikepdf (already a
+        scan dependency); a document of non-trivial length with zero outline
+        entries has no way to skip past repeated content, the PDF analog of a
+        missing skip-link. Only checked past a page-count floor (see
+        _MIN_PAGES_FOR_OUTLINE) — a 2-page memo doesn't need bookmarks.
 
 docx/pptx style IDs (Heading1..9, title placeholder type) are locale-invariant
 OOXML identifiers — only the *display* name is localized — so no styles.xml
 cross-reference is needed to recognize them.
 
-Scope not covered here (deliberately, see the session's scoping notes):
+Scope not covered here (deliberately, see docs/TODO.md P1):
 xlsx contrast/color-only needs style-index + conditional-formatting resolution
-to avoid false-flagging routine formatting; pptx embedded-audio autoplay,
-docx/pptx form-field labeling, and a PDF outline-tree analog for 2.4.1 are
-real but lower-value/higher-complexity — left for a follow-up decision.
+to avoid false-flagging routine formatting; pptx embedded-audio autoplay and
+docx/pptx form-field labeling are real but lower-value/higher-complexity —
+left for a follow-up decision.
 
 Never raises — a parse failure just means no findings for that document.
 """
@@ -196,6 +201,35 @@ def pdf_contrast_checks(path: Path) -> list[dict]:
     return findings
 
 
+# A short memo/letter has no real "bypass repeated blocks" problem — bookmarks
+# only start pulling their weight once a reader would otherwise have to scroll
+# past several pages of unrelated content to find a section. Matches common
+# PDF/UA guidance (Adobe's own authoring recommendation) of ~9+ pages; we use
+# a lower, more conservative floor since ACP's corpus skews toward multi-page
+# legal documents (affidavits, contracts, briefs) where navigation matters
+# earlier than in a typical office memo.
+_MIN_PAGES_FOR_OUTLINE = 5
+
+
+def pdf_bypass_blocks_check(path: Path) -> list[dict]:
+    """2.4.1 Bypass Blocks — a PDF's bookmark/outline tree is the direct analog
+    of an HTML skip-link: without it, a screen-reader or keyboard user has no
+    way to jump past repeated content (headers, boilerplate, TOC) to the
+    section they need. Flags documents at/above _MIN_PAGES_FOR_OUTLINE with a
+    completely empty outline tree."""
+    try:
+        import pikepdf
+        with pikepdf.open(str(path)) as pdf:
+            if len(pdf.pages) < _MIN_PAGES_FOR_OUTLINE:
+                return []
+            with pdf.open_outline() as outline:
+                if outline.root:
+                    return []
+    except Exception:
+        return []
+    return [_finding("PDF_NO_BOOKMARKS", "2.4.1 Bypass Blocks", "MODERATE")]
+
+
 def checks_for(path: Path, ext: str) -> list[dict]:
     """Dispatch by extension; returns [] for formats with no structural check yet."""
     ext = ext.lower()
@@ -204,5 +238,5 @@ def checks_for(path: Path, ext: str) -> list[dict]:
     if ext == ".pptx":
         return pptx_checks(path)
     if ext == ".pdf":
-        return pdf_contrast_checks(path)
+        return pdf_contrast_checks(path) + pdf_bypass_blocks_check(path)
     return []
