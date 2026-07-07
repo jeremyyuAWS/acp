@@ -32,7 +32,7 @@ const LEVEL_MEANING = { A: 'must-have baseline', AA: 'should-have · the legal t
 // the LOE because Claude writes the checks, evals and review scaffolds directly.
 const ROADMAP_PHASES = [
   { id: 'P0', label: 'Foundation', when: 'Days 1–2', match: null, done: true, desc: 'Coverage audit vs. partner · lock the check contract · stand up the golden-corpus eval harness.' },
-  { id: 'P1', label: 'Agentic AI checks', when: 'Days 3–5', match: (p) => p.startsWith('Phase 1'), done: true, desc: 'Semantic LLM evaluators — sensory characteristics, headings & labels. Claude authors prompt + evals.' },
+  { id: 'P1', label: 'Agentic AI checks', when: 'Days 3–5', match: (p) => p.startsWith('Phase 1'), done: false, desc: 'Semantic LLM evaluators — sensory characteristics, images of text, language of parts. Claude authors prompt + evals. Not yet built.' },
   { id: 'P2', label: 'Human-in-the-loop', when: 'Weeks 2–3', match: (p) => p.startsWith('Phase 2'), done: true, milestone: 'Level AA conformance', desc: 'Pre-screen detectors + reviewer workflow for the manual Required criteria (captions, focus order, errors…).' },
   { id: 'P3', label: 'AAA / optional', when: 'Weeks 4–6', match: (p) => p.startsWith('Phase 3'), desc: 'Everything not legally required — pursued selectively.' },
 ]
@@ -207,6 +207,11 @@ export default function WcagCoverage() {
   }
   const shown = WCAG.filter(match)
   const tally = (src) => WCAG.filter((r) => r.source === src).length
+  // Required A/AA document coverage — computed, never asserted. A criterion is
+  // "covered" when a real validator backs it (any source except the roadmap).
+  const reqAA = WCAG.filter((r) => r.legal === 'Required' && (r.level === 'A' || r.level === 'AA') && r.docApplies !== false)
+  const reqAACovered = reqAA.filter((r) => r.source !== 'MDK net-new').length
+  const reqAAComplete = reqAACovered === reqAA.length
 
   return (
     <>
@@ -226,7 +231,7 @@ export default function WcagCoverage() {
         <div className="covstatcard"><b>{tally('Shipped (demo)')}</b><span className="muted">auto / AI-remediated live</span></div>
         <div className="covstatcard"><b style={{ color: '#1F5FA8' }}>{tally('MDK HITL')}</b><span className="muted">covered via human review · Phase 2</span></div>
         <div className="covstatcard"><b>{tally('Partner baseline')}</b><span className="muted">automated A/AA from partner</span></div>
-        <div className="covstatcard"><b style={{ color: '#3B6D11' }}>✓ AA</b><span className="muted">every Required A/AA now covered</span></div>
+        <div className="covstatcard"><b style={{ color: reqAAComplete ? '#3B6D11' : '#854F0B' }}>{reqAAComplete ? '✓ AA' : `${reqAACovered}/${reqAA.length}`}</b><span className="muted">{reqAAComplete ? 'every Required A/AA covered' : 'Required A/AA criteria covered today'}</span></div>
       </div>
 
       <div className="levelramp">
@@ -256,7 +261,7 @@ export default function WcagCoverage() {
             // P0/P1 are delivered with no useful filter; P2 (covered) + P3 stay clickable
             const fkey = (ph.id === 'P0' || ph.id === 'P1') ? null : ph.id
             const active = fkey && filters.has(fkey)
-            const cntText = ph.done ? (delivered ? `✓ ${delivered} delivered` : '✓ delivered') : remaining ? `✓ ${delivered} · ${remaining} optional left` : `${delivered || 0} criteria`
+            const cntText = ph.done ? (delivered ? `✓ ${delivered} delivered` : '✓ delivered') : remaining ? `${delivered ? `✓ ${delivered} live · ` : ''}${remaining} on the roadmap` : `${delivered || 0} criteria`
             return (
               <div className="rmstep" key={ph.id}>
                 <button className={`rmseg${active ? ' on' : ''}${fkey ? '' : ' static'}${ph.done ? ' done' : ''}`} onClick={() => fkey && toggle(fkey)} disabled={!fkey} title={ph.desc}>
@@ -264,7 +269,7 @@ export default function WcagCoverage() {
                   <div className="rmlabel">{ph.label}</div>
                   <div className="muted rmcnt">{cntText}</div>
                 </button>
-                {ph.milestone && <span className={`rmmilestone${ph.done ? ' reached' : ''}`} title={ph.done ? 'Legal target reached' : 'Legal target'}>{ph.done ? '✓' : '★'} {ph.milestone}{ph.done ? ' reached' : ''}</span>}
+                {ph.milestone && <span className={`rmmilestone${reqAAComplete ? ' reached' : ''}`} title={reqAAComplete ? 'Legal target reached' : `Legal target — ${reqAACovered}/${reqAA.length} Required A/AA covered today`}>{reqAAComplete ? '✓' : '★'} {ph.milestone}{reqAAComplete ? ' reached' : ''}</span>}
                 {i < ROADMAP_PHASES.length - 1 && <span className="rmarrow" aria-hidden="true">→</span>}
               </div>
             )
