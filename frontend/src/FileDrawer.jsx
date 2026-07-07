@@ -467,7 +467,13 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                   <span className="badge" style={{ background: bg, color: fg }}>{(i.severity || '').toLowerCase()}</span>
                   <div className="findingmain">
                     <div className="findingtop">{critLabel(i.wcag)}{i.count > 1 && <span className="findingcount" title={`${i.count} occurrences of this finding in the file`}>× {i.count}</span>}{i.level && <span className="lvlchip">Level {i.level}</span>}{(() => {
-                      const sc = scOf(i.wcag); const s = findStatus[sc]
+                      // scOfWcag (not scOf): the file's issues carry the engine form
+                      // 'SC_3_1_1', which scOf can't parse (it wants a leading digit) — so
+                      // the live-queue keys (findStatus) and the per-format auto map are all
+                      // built with scOfWcag. Using scOf here would look up findStatus[''] and
+                      // silently drop every live badge, leaving even an auto-fixed finding to
+                      // fall through to the persisted 'human review' branch.
+                      const sc = scOfWcag(i.wcag); const s = findStatus[sc]
                       if (s === 'queued') return <span className="dectag" style={{ background: '#EFEFEF', color: '#666' }}>⏳ queued</span>
                       if (s === 'fixing') return <span className="dectag" style={{ background: '#FDF3E0', color: '#B26A00' }}><span className="spinner" style={{ width: 9, height: 9 }} /> fixing…</span>
                       if (s === 'fixed') return <span className="dectag ok">✓ fixed</span>
