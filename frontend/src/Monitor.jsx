@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { monitoringState, sourceWatch, IDENTITY, SIM } from './sim.js'
 import { getSchedule, putSchedule, listCampaigns, createCampaign, setCampaignStatus, getScanDiff } from './api.js'
 import { prefersReducedMotion } from './a11y.js'
-import QueuePanel from './QueuePanel.jsx'
 import RegressionRadar from './RegressionRadar.jsx'
 import ComplianceDigest from './ComplianceDigest.jsx'
 
@@ -363,8 +362,6 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
       </section>
 
       <ComplianceDigest run={run} />
-
-      <QueuePanel />
 
       <PublishedWatchdog run={run} scanList={scanList} publishedFiles={publishedFiles} />
 
