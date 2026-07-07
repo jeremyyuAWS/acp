@@ -79,7 +79,14 @@ echo "== 2/5 build image in ACR (remote; no local docker) =="
 # Build provenance (ADR: CalVer-style) baked into the image → surfaced in /healthz +
 # the hub footer + the app header. Computed here so every deploy stamps a fresh version
 # (.git is excluded from the build context, so the image can't derive it itself).
-BUILD_VERSION="$(date -u +%Y).$(( 10#$(date -u +%m) )).$(( 10#$(date -u +%d) ))"
+BUILD_DATE="$(date -u +%Y).$(( 10#$(date -u +%m) )).$(( 10#$(date -u +%d) ))"
+# Per-day build counter (.N) so same-day builds are distinguishable (e.g. v2026.7.7.40):
+# the number of commits whose committer date (UTC) is today. deploy.sh runs in the repo,
+# so git is available here even though .git is excluded from the Docker build context.
+BUILD_TODAY="$(date -u +%Y-%m-%d)"
+BUILD_DAY_N="$(TZ=UTC git log --date=format-local:'%Y-%m-%d' --pretty='%cd' 2>/dev/null | grep -cx "$BUILD_TODAY")"
+{ [ "${BUILD_DAY_N:-0}" -ge 1 ]; } 2>/dev/null || BUILD_DAY_N=1
+BUILD_VERSION="${BUILD_DATE}.${BUILD_DAY_N}"
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "   version $BUILD_VERSION · built $BUILD_TIME"
 az acr build -r "$ACR" -t "$IMAGE" -f deploy/public/Dockerfile \
