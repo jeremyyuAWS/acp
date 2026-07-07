@@ -504,6 +504,37 @@ def _analyse_html(path: Path) -> dict:
         if m and _luma(m.group(1)) > 0.45:
             issues.append({"ruleId": "HTML_LOW_CONTRAST_AAA", "wcag": "1.4.6 Contrast (Enhanced)", "severity": "MODERATE"})
 
+    # ── Phase 2 — media alternatives + target size (detect + route to HITL) ──
+
+    # 1.2.2 Captions — <video> with no captions/subtitles track
+    # 1.2.3 Audio Description — <video> with no descriptions track and no transcript
+    for v in root.iter("video"):
+        kinds = {(t.get("kind") or "").lower() for t in v.iter("track")}
+        if not (kinds & {"captions", "subtitles"}):
+            issues.append({"ruleId": "HTML_VIDEO_NO_CAPTIONS", "wcag": "1.2.2 Captions (Prerecorded)", "severity": "SERIOUS"})
+        if "descriptions" not in kinds and not v.get("aria-describedby"):
+            issues.append({"ruleId": "HTML_VIDEO_NO_DESCRIPTION", "wcag": "1.2.3 Audio Description or Media Alternative", "severity": "SERIOUS"})
+
+    # 1.2.1 Audio-only — <audio> with no linked/naming transcript
+    for a in root.iter("audio"):
+        if not (a.get("aria-describedby") or re.search(r"transcript", a.get("aria-label") or "", re.I)):
+            issues.append({"ruleId": "HTML_AUDIO_NO_TRANSCRIPT", "wcag": "1.2.1 Audio-only & Video-only (Prerecorded)", "severity": "SERIOUS"})
+
+    # 2.5.8 Target Size — interactive element with an inline px dimension < 24
+    for el in root.iter():
+        tag = el.tag if isinstance(el.tag, str) else ""
+        role = (el.get("role") or "") if callable(getattr(el, "get", None)) else ""
+        interactive = (tag in ("a", "button", "input", "select", "textarea")
+                       or role == "button" or el.get("onclick") is not None)
+        if not interactive:
+            continue
+        if tag == "a" and not el.get("href"):
+            continue
+        style = el.get("style") or ""
+        dims = [float(m) for m in re.findall(r"(?:^|;)\s*(?:width|height)\s*:\s*([\d.]+)px", style, re.I)]
+        if any(d < 24 for d in dims):
+            issues.append({"ruleId": "HTML_TARGET_TOO_SMALL", "wcag": "2.5.8 Target Size (Minimum)", "severity": "SERIOUS"})
+
     return {"succeeded": True, "issues": issues, "errors": []}
 
 

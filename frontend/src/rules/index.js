@@ -32,10 +32,17 @@ import * as r146  from './wcag-1-4-6.js'
 import * as r241  from './wcag-2-4-1.js'
 import * as r253  from './wcag-2-5-3.js'
 import * as r332  from './wcag-3-3-2.js'
+import * as r121  from './wcag-1-2-1.js'
+import * as r122  from './wcag-1-2-2.js'
+import * as r123  from './wcag-1-2-3.js'
+import * as r258  from './wcag-2-5-8.js'
 
 // Ordered by WCAG SC number. Screen-reader-impacting checks run first.
 export const allRules = [
   r111,  // 1.1.1 Non-text Content
+  r121,  // 1.2.1 Audio-only & Video-only (Prerecorded)
+  r122,  // 1.2.2 Captions (Prerecorded)
+  r123,  // 1.2.3 Audio Description or Media Alternative
   r131,  // 1.3.1 Info and Relationships
   r134,  // 1.3.4 Orientation
   r135,  // 1.3.5 Identify Input Purpose
@@ -55,6 +62,7 @@ export const allRules = [
   r246,  // 2.4.6 Headings and Labels
   r247,  // 2.4.7 Focus Visible
   r253,  // 2.5.3 Label in Name
+  r258,  // 2.5.8 Target Size (Minimum)
   r311,  // 3.1.1 Language of Page
   r314,  // 3.1.4 Abbreviations
   r332,  // 3.3.2 Labels or Instructions
@@ -65,6 +73,9 @@ export const allRules = [
 // Used so the in-app rule-coverage manifest reads like Grafana/Langfuse.
 export const PLAIN_NAMES = {
   '1.1.1': 'Images missing a text description',
+  '1.2.1': 'Audio/video with no transcript',
+  '1.2.2': 'Video missing captions',
+  '1.2.3': 'Video missing audio description or transcript',
   '1.3.1': 'Structure not marked up (headings, lists, tables)',
   '1.3.4': 'Content locked to one screen orientation',
   '1.3.5': "Form fields don't declare their purpose",
@@ -73,6 +84,7 @@ export const PLAIN_NAMES = {
   '1.4.6': 'Text below the enhanced contrast ratio',
   '2.4.1': 'No way to skip repeated navigation',
   '2.5.3': "Control names don't match their visible labels",
+  '2.5.8': 'Touch targets smaller than 24px',
   '3.3.2': 'Required fields with no label or instructions',
   '1.4.3': 'Text with low color contrast',
   '1.4.4': "Text that can't be enlarged",
