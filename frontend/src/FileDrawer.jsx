@@ -34,6 +34,23 @@ const REM_STAGE_LINES = [
   'Verifying the fix and updating records…',
 ]
 const remStageLine = (pct) => REM_STAGE_LINES[Math.min(REM_STAGE_LINES.length - 1, Math.floor(pct / (100 / REM_STAGE_LINES.length)))]
+// The WCAG rules the server-side remediator for each format actually fixes
+// deterministically (mirrors remediate_pdf = language+title, remediate_office
+// = +alt-text). Used to name the real rule under the progress bar as it's
+// applied. HTML runs the broad rule-module set, so it keeps the generic stages.
+// Every rule named here is one the engine genuinely fixes for this file — a
+// HITL-deferred finding (contrast, link purpose) is never claimed as 'fixing'.
+const REM_AUTOFIX_SC_BY_TYPE = { pdf: ['3.1.1', '2.4.2'], docx: ['1.1.1', '3.1.1', '2.4.2'], pptx: ['1.1.1', '3.1.1', '2.4.2'], xlsx: ['1.1.1', '3.1.1', '2.4.2'] }
+const scOfWcag = (v) => ((v || '').replace(/^SC_/, '').replace(/_/g, '.').match(/^\d+\.\d+\.\d+/) || [''])[0]
+// Named rules step across the first 80% of the bar; the last 20% is the
+// write-to-store + re-verify stage. Client-paced (a single-file job streams no
+// per-rule events) but over the file's REAL auto-fixable findings, in order.
+const remStageFor = (pct, rules) => {
+  if (!rules.length) return remStageLine(pct)
+  if (pct >= 80) return 'Writing the fixed copy & re-verifying…'
+  const r = rules[Math.min(rules.length - 1, Math.floor((pct / 80) * rules.length))]
+  return `Fixing ${r.sc} ${r.name}…`
+}
 
 // Where the document actually lives — so a reviewer can open it to remediate manually,
 // or open a superseded doc to compare/replace. In the demo the link opens the source
@@ -212,6 +229,9 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
       // Poll the actual job (queued → running → done/dead): the bar only advances
       // while a worker is really on it, and completion means the fix really landed —
       // the old version swept a 30s timer and declared success unconditionally.
+      const failingSCs = new Set((file.issues || []).map((i) => scOfWcag(i.wcag)).filter(Boolean))
+      const remRules = (REM_AUTOFIX_SC_BY_TYPE[file.type] || [])
+        .filter((sc) => failingSCs.has(sc)).map((sc) => ({ sc, name: PLAIN_NAMES[sc] || sc }))
       let running = 0
       for (let i = 0; i < REM_POLL_MAX; i++) {
         await new Promise((r) => setTimeout(r, 1000))
@@ -221,7 +241,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         if (jb?.status === 'running') {
           running += 1
           const pct = Math.min(90, 10 + running * 8)
-          setRemProgress(pct); setRemStage(remStageLine(pct))
+          setRemProgress(pct); setRemStage(remStageFor(pct, remRules))
         }
       }
       setRemNow('error')   // still not done after the ceiling — honest failure + retry
