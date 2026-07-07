@@ -53,6 +53,10 @@ steps:
     workingDirectory: frontend
     displayName: Install frontend dependencies
 
+  - script: npx vitest run
+    workingDirectory: frontend
+    displayName: Frontend unit tests (rule round-trips + WCAG coverage contract)
+
   - script: npx vite build
     workingDirectory: frontend
     displayName: Frontend build
