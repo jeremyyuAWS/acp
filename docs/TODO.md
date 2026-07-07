@@ -11,14 +11,23 @@ Current coverage (87 WCAG 2.1/2.2 success criteria):
 | Bucket | Count | Meaning |
 |---|---|---|
 | Shipped (demo) | 36 | Real automated validator, verified backing |
-| MDK HITL | 40 | Genuinely needs human judgment (captions, timing, error text, gesture alternatives, etc.) — correctly routed to the HITL queue, not a gap |
+| MDK HITL | 45 | Human-judgment criteria (captions, timing, error text, media, gesture alternatives) — routed to the HITL queue |
 | Partner baseline | 6 | Covered by the .NET partner engine (`spike/dotnet/AcpScan.Cli`) |
-| MDK net-new (Roadmap) | 5 | AAA/Optional, pure-media, non-automatable — explicitly deferred, not silently dropped |
+| ~~Roadmap~~ | 0 | **CLOSED (`75fc6b8`)** — the 5 pure-media AAA "MDK net-new" SCs (1.2.6/1.2.7/1.2.8/1.2.9/1.4.7) were already `Human / AT` + Tier 3, so they already rendered HUMAN-tier per file; reclassified `net-new → MDK HITL`. Zero roadmap. |
 
-Of the 64 document-applicable SCs, **every Required (A/AA) one is either
-auto-detected, correctly routed to HITL, or genuinely web-only (N/A for a
-static file)** — no Required document rule lacks an assess+remediate path.
-The remaining automatable gaps are all AAA/optional (see P1b).
+Every one of the 87 SCs now has a closed disposition: Auto-detected (36),
+HITL (45), or Partner (6). **No Required (A/AA) gap** — every Required
+criterion is auto-detected or HITL-routed matching the checklist's own
+"Human / AT" designation.
+
+**Last genuinely-open-for-documents item:** the 4 Required format gaps
+(1.4.1, 1.3.5, 2.5.3, 4.1.2) are auto-detected for HTML but show UNCHECKED for
+PDF/Office in the per-file coverage manifest. Closing them to HUMAN-tier needs
+a small per-format-applicability pass in the manifest (distinguish
+"doc-applicable, not-auto-here → HUMAN" from "web-only → N-A" — NOT a blanket
+flip, since e.g. Resize Text is genuinely N-A for a static PDF). Lives in
+`FileDrawer.jsx` (concurrent-session-contested) → coordinate with T, or do via
+the isolation-dance as a scoped follow-up.
 
 All of this session's new detection code (`office_structure.py` +
 `textchecks.py`) went through an adversarial correctness review (`9d7c7a3`)
