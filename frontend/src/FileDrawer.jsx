@@ -583,9 +583,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         }
         const LEVEL_RANK = { A: 1, AA: 2, AAA: 3 }
         const targetRank = LEVEL_RANK[targetLevel] || 2
-        const OUT_RANK = { FAIL: 0, PASS: 1, HUMAN: 2, UNCHECKED: 3, WEB: 4 }
-        const OUT_TXT = { PASS: 'pass', FAIL: 'fail', HUMAN: 'human review', UNCHECKED: 'not auto-checked', WEB: 'web-only' }
+        const OUT_RANK = { FAIL: 0, FIXED: 0.5, PASS: 1, HUMAN: 2, UNCHECKED: 3, WEB: 4 }
+        const OUT_TXT = { PASS: 'pass', FAIL: 'fail', FIXED: 'fixed · re-validate', HUMAN: 'human review', UNCHECKED: 'not auto-checked', WEB: 'web-only' }
         const OUT_TIP = {
+          FIXED: 'Remediated in this session — the fixed copy is stored; re-validate (re-scan the fixed copy) to confirm the pass',
           HUMAN: 'This criterion needs a person to verify — it routes through the HITL workflow, not the engine',
           UNCHECKED: 'Not yet automated for this file type — no engine rule evaluates it',
           WEB: 'Web-page criterion — cannot apply to a document file',
@@ -606,7 +607,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         const hiddenWebOnly = WCAG.length - inScope.length - hiddenAboveLevel
         const rows = inScope.map((c) => {
           const count = issuesBySc[c.sc] || 0
-          const outcome = count > 0 ? 'FAIL'
+          const wasFixed = count > 0 && (remediatedRuleIds.has(c.sc)
+            || (effectiveRemediated && (REM_AUTOFIX_SC_BY_TYPE[file.type] || []).includes(c.sc)))
+          const outcome = wasFixed ? 'FIXED'
+            : count > 0 ? 'FAIL'
             : checkedSCs.has(c.sc) ? 'PASS'
             : isHuman(c) ? 'HUMAN'
             : (DOC_HUMAN_WHEN_UNCHECKED.has(c.sc) && fmt && fmt !== 'html') ? 'HUMAN'
@@ -620,6 +624,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
               WCAG coverage · {rows.length} criteria at {targetLevel} · documents
               <span className="covstat pass">{n('PASS')} pass</span>
               {n('FAIL') > 0 && <span className="covstat fail">{n('FAIL')} fail</span>}
+              {n('FIXED') > 0 && <span className="covstat pass">{n('FIXED')} fixed · re-validate</span>}
               {n('HUMAN') > 0 && <span className="covstat skip">{n('HUMAN')} human review</span>}
               {n('UNCHECKED') > 0 && <span className="covstat skip">{n('UNCHECKED')} not auto-checked</span>}
             </summary>
@@ -631,13 +636,13 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                   const exp = explanations[r.id]
                   return (
                     <Fragment key={r.id}>
-                      <tr className={`covrow ${r.outcome === 'FAIL' ? 'fail' : r.outcome === 'PASS' ? 'pass' : 'skip'}`}>
+                      <tr className={`covrow ${r.outcome === 'FAIL' ? 'fail' : (r.outcome === 'PASS' || r.outcome === 'FIXED') ? 'pass' : 'skip'}`}>
                         <td className="covsc">{r.id}</td>
                         <td>{r.plain}<div className="muted" style={{ fontSize: 11 }}>{r.plain === r.name ? (r.req || '').slice(0, 90) : r.name}</div></td>
                         <td className="muted">{r.level}</td>
                         <td className="muted">{r.fix}</td>
-                        <td className={`covoutcome ${r.outcome === 'FAIL' ? 'fail' : r.outcome === 'PASS' ? 'pass' : 'skip'}`} title={OUT_TIP[r.outcome]}>
-                          {r.outcome === 'PASS' ? '✓' : r.outcome === 'FAIL' ? `✕ ${r.count}` : r.outcome === 'HUMAN' ? '👤' : '—'}
+                        <td className={`covoutcome ${r.outcome === 'FAIL' ? 'fail' : (r.outcome === 'PASS' || r.outcome === 'FIXED') ? 'pass' : 'skip'}`} title={OUT_TIP[r.outcome]}>
+                          {(r.outcome === 'PASS' || r.outcome === 'FIXED') ? '✓' : r.outcome === 'FAIL' ? `✕ ${r.count}` : r.outcome === 'HUMAN' ? '👤' : '—'}
                           <span className="covouttxt">{r.outcome === 'PASS' && remediatedRuleIds.has(r.id) ? 'pass — remediated' : OUT_TXT[r.outcome]}</span>
                           {r.outcome === 'FAIL' && scanId && !exp && (
                             <button className="explain-btn" onClick={() => fetchExplanation(r.id)} title="Get AI explanation">Why?</button>
