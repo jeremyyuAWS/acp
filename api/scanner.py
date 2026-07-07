@@ -416,6 +416,29 @@ def _analyse_html(path: Path) -> dict:
         elif text.lower() in _VAGUE_LINK_TEXT and not aria:
             issues.append({"ruleId": "HTML_VAGUE_LINK", "wcag": "2.4.4 Link Purpose (In Context)", "severity": "MODERATE"})
 
+    # 2.4.9 Link Purpose (Link Only) — text alone must convey purpose, with no
+    # credit for surrounding context. Its genuine failure case: identical link
+    # text pointing at different real destinations (2.4.4 tolerates this — context
+    # sorts it out — 2.4.9 doesn't). href="#" is excluded — a common JS-hook
+    # placeholder, not a real distinct destination. Vague text (2.4.4's list)
+    # fails "text alone" regardless of context, so it's flagged here too.
+    link_groups: dict[str, set[str]] = {}
+    for a in root.iter("a"):
+        href = a.get("href")
+        n = (a.get("aria-label") or a.text_content() or "").strip().lower()
+        if not href or href == "#" or not n:
+            continue
+        link_groups.setdefault(n, set()).add(href)
+    ambiguous_hrefs = {h for hrefs in link_groups.values() if len(hrefs) > 1 for h in hrefs}
+    for a in root.iter("a"):
+        href = a.get("href")
+        text = (a.text_content() or "").strip()
+        aria = (a.get("aria-label") or "").strip()
+        vague = text.lower() in _VAGUE_LINK_TEXT and not aria
+        duplicated = bool(href) and href != "#" and href in ambiguous_hrefs
+        if vague or duplicated:
+            issues.append({"ruleId": "HTML_LINK_PURPOSE_AMBIGUOUS", "wcag": "2.4.9 Link Purpose (Link Only)", "severity": "MODERATE"})
+
     # 2.4.6 Headings and Labels — skipped heading levels (e.g. h1 → h3)
     HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
     prev_level = 0
@@ -611,10 +634,12 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = True):
         raw = {"engine": "python/html", **_analyse_html(tmp / name)}
     else:
         return None, None
-    # 1.4.5 Images of Text — OCR embedded images; self-gates + never raises.
+    # 1.4.5 / 1.4.9 Images of Text — OCR embedded images; self-gates + never raises.
     try:
         import ocr as _ocr_mod
-        raw["issues"] = list(raw.get("issues", [])) + _ocr_mod.images_of_text(tmp / name, ext)
+        raw["issues"] = (list(raw.get("issues", []))
+                          + _ocr_mod.images_of_text(tmp / name, ext)
+                          + _ocr_mod.images_of_text_no_exception(tmp / name, ext))
     except Exception:
         pass
     # 1.3.3 Sensory Characteristics + 3.1.2 Language of Parts — text-content checks.
@@ -686,9 +711,11 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                 r = {"engine": "python/html", **_analyse_html(tmp / name)}
             else:
                 return None
-            # 1.4.5 Images of Text — OCR embedded images; self-gates + never raises.
+            # 1.4.5 / 1.4.9 Images of Text — OCR embedded images; self-gates + never raises.
             try:
-                r["issues"] = list(r.get("issues", [])) + _ocr_mod.images_of_text(tmp / name, ext)
+                r["issues"] = (list(r.get("issues", []))
+                                + _ocr_mod.images_of_text(tmp / name, ext)
+                                + _ocr_mod.images_of_text_no_exception(tmp / name, ext))
             except Exception:
                 pass
             # 1.3.3 Sensory Characteristics + 3.1.2 Language of Parts — text-content checks.

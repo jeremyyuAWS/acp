@@ -36,6 +36,7 @@ import * as r121  from './wcag-1-2-1.js'
 import * as r122  from './wcag-1-2-2.js'
 import * as r123  from './wcag-1-2-3.js'
 import * as r258  from './wcag-2-5-8.js'
+import * as r249  from './wcag-2-4-9.js'
 
 // Ordered by WCAG SC number. Screen-reader-impacting checks run first.
 export const allRules = [
@@ -61,6 +62,7 @@ export const allRules = [
   r244,  // 2.4.4 Link Purpose
   r246,  // 2.4.6 Headings and Labels
   r247,  // 2.4.7 Focus Visible
+  r249,  // 2.4.9 Link Purpose (Link Only)
   r253,  // 2.5.3 Label in Name
   r258,  // 2.5.8 Target Size (Minimum)
   r311,  // 3.1.1 Language of Page
@@ -84,7 +86,9 @@ export const PLAIN_NAMES = {
   '1.4.2': "Autoplaying media that can't be stopped",
   '1.4.5': 'Text baked into an image',
   '1.4.6': 'Text below the enhanced contrast ratio',
+  '1.4.9': 'Any text baked into an image (no exceptions)',
   '2.4.1': 'No way to skip repeated navigation',
+  '2.4.9': "Same link text used for different destinations",
   '2.5.3': "Control names don't match their visible labels",
   '2.5.8': 'Touch targets smaller than 24px',
   '3.3.2': 'Required fields with no label or instructions',

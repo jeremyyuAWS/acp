@@ -1,4 +1,4 @@
-"""1.4.5 images-of-text OCR detection (api/ocr.py).
+"""1.4.5 / 1.4.9 images-of-text OCR detection (api/ocr.py).
 
 OCR round-trips are skipped when tesseract isn't installed (e.g. CI without the
 apt package) — the gating + non-OCR behaviour is always exercised.
@@ -78,3 +78,33 @@ def test_env_disable_gates_off(monkeypatch):
     assert ocr.is_available() is False
     # disabled → no work, empty result even for a supported type
     assert ocr.images_of_text(Path("whatever.docx"), ".docx") == []
+    assert ocr.images_of_text_no_exception(Path("whatever.docx"), ".docx") == []
+
+
+# ── 1.4.9 (AAA, No Exception) — stricter floor, genuinely a superset of 1.4.5 ──
+
+@needs_tesseract
+def test_1_4_9_catches_a_small_short_text_image_1_4_5_misses(tmp_path):
+    # 220x80px (17,600px) with 4 words: clears 1.4.9's floor (3 words / 1200px)
+    # but sits below 1.4.5's AA floor (10 words / 20,000px) — proves 1.4.9 is a
+    # genuinely stricter check, not an alias of 1.4.5.
+    img = _png("Save twenty percent today", size=(220, 80))
+    doc = _docx(tmp_path, img)
+    strict = ocr.images_of_text_no_exception(doc, ".docx")
+    lenient = ocr.images_of_text(doc, ".docx")
+    assert len(strict) == 1 and strict[0]["wcag"].startswith("1.4.9")
+    assert lenient == []
+
+
+@needs_tesseract
+def test_1_4_9_still_ignores_textless_and_tiny_images(tmp_path):
+    assert ocr.images_of_text_no_exception(_docx(tmp_path, _png(None, color="skyblue")), ".docx") == []
+    assert ocr.images_of_text_no_exception(_docx(tmp_path, _png(_PARAGRAPH, size=(20, 20))), ".docx") == []
+
+
+@needs_tesseract
+def test_1_4_9_also_flags_full_1_4_5_violations(tmp_path):
+    # A real block of text (the 1.4.5 fixture) must still fail the stricter check.
+    doc = _docx(tmp_path, _png(_PARAGRAPH))
+    assert len(ocr.images_of_text_no_exception(doc, ".docx")) == 1
+    assert len(ocr.images_of_text(doc, ".docx")) == 1

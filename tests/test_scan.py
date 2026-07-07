@@ -147,10 +147,17 @@ def test_html_heading_skip_only(report):
 
 
 def test_html_all_violations_hits_every_rule(report):
-    """html-all-violations.html must trigger all 7 HTML engine rules."""
+    """html-all-violations.html must trigger all 8 HTML engine rules.
+
+    HTML_LINK_PURPOSE_AMBIGUOUS (2.4.9) added: the fixture's vague link already
+    fails 2.4.4 (no context helps a bare "click here") and now also fails 2.4.9
+    (the same reasoning applies with zero context credit) — a real, expected hit,
+    not test drift to work around.
+    """
     ALL_HTML_RULES = {
         "HTML_MISSING_TITLE", "HTML_MISSING_LANG", "HTML_IMG_MISSING_ALT",
         "HTML_EMPTY_LINK", "HTML_VAGUE_LINK", "HTML_HEADING_SKIP", "HTML_INPUT_NO_LABEL",
+        "HTML_LINK_PURPOSE_AMBIGUOUS",
     }
     f = by_file(report).get("html-all-violations.html")
     assert f is not None and f["status"] == "analysed"
