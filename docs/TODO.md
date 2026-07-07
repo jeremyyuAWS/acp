@@ -1,6 +1,6 @@
 # ACP — comprehensive to-do
 
-Snapshot as of `5ec86b6` (main, all three remotes in sync). Verified against
+Snapshot as of `7eafe79` (main, all three remotes in sync). Verified against
 current source (`frontend/src/wcagCatalog.js`, `api/store.py` RULE_FORMATS,
 `docs/adr/`) rather than carried forward from memory — every item below is
 either a real, buildable gap or an explicit decision waiting on someone.
@@ -9,10 +9,15 @@ Current coverage (87 WCAG 2.1/2.2 success criteria):
 
 | Bucket | Count | Meaning |
 |---|---|---|
-| Shipped (demo) | 33 | Real automated validator, verified backing |
-| MDK HITL | 43 | Genuinely needs human judgment (captions, timing, error text, gesture alternatives, etc.) — correctly routed to the HITL queue, not a gap |
+| Shipped (demo) | 35 | Real automated validator, verified backing |
+| MDK HITL | 41 | Genuinely needs human judgment (captions, timing, error text, gesture alternatives, etc.) — correctly routed to the HITL queue, not a gap |
 | Partner baseline | 6 | Covered by the .NET partner engine (`spike/dotnet/AcpScan.Cli`) |
 | MDK net-new (Roadmap) | 5 | AAA/Optional, pure-media, non-automatable — explicitly deferred, not silently dropped |
+
+Of the 64 document-applicable SCs, **every Required (A/AA) one is either
+auto-detected, correctly routed to HITL, or genuinely web-only (N/A for a
+static file)** — no Required document rule lacks an assess+remediate path.
+The remaining automatable gaps are all AAA/optional (see P1b).
 
 No TODO/FIXME/XXX comments, no skipped tests, and no ADR left in Proposed/Draft
 status anywhere in the repo — this file is the single backlog.
@@ -62,6 +67,33 @@ implementing — no guessed detection logic.
    fills, resolve to "unknown" and are skipped rather than guessed at (theme
    colors are exactly what Excel's built-in header/table styles use).
    Conditional-formatting (`cfRule`) overrides are out of scope entirely.
+
+---
+
+## P1b — AAA/optional assess gaps pulled out of HITL (`7eafe79`)
+
+Deterministic detection for two document criteria that previously surfaced
+only as manual-checklist (HITL) items — now auto-assessed, remediation still
+human-only (both are inherently judgement calls to fix):
+
+1. ~~**2.4.10 Section Headings**~~ — SHIPPED (`7eafe79`), docx.
+   `docx_checks()` flags a body past a text-bearing-paragraph floor
+   (`_MIN_PARAS_FOR_HEADINGS`) with zero heading styles. Short letters/memos
+   below the floor are not flagged.
+2. ~~**3.1.5 Reading Level**~~ — SHIPPED (`7eafe79`), all formats via
+   `textchecks.py`. Flesch-Kincaid grade level over extracted text, flagged
+   only well above the SC's grade-9 floor (mid-college+) so it stays
+   actionable rather than firing on ordinary professional prose. No new deps
+   (heuristic syllable count).
+
+Remaining automatable AAA/optional candidates, not yet built (all lower value):
+1.4.8 Visual Presentation (partial: line-length/justification), 3.1.3 Unusual
+Words (needs Ollama-assisted glossary detection). Everything else
+doc-applicable is genuine human-judgment (correctly HITL) or web-only (N/A).
+
+The one deterministic *remediate*-side candidate worth considering: PDF
+bookmark-outline auto-generation for 2.4.1 (we already *detect* the gap; a
+fixer would generate `/Outlines` from heading positions). Left as a decision.
 
 ---
 
