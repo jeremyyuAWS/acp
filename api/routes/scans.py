@@ -145,7 +145,7 @@ async def remediate_scan(sid: str, request: Request):
         jid = core.store.enqueue_job(
             "remediate_file",
             {"scan_id": sid, "file": f["file"], "drive_file_id": drive_file_id,
-             "remediated_folder_id": remediated_folder_id},
+             "remediated_folder_id": remediated_folder_id, "drive_token": token},
             scan_id=sid)
         enqueued.append(jid)
     return {"scan_id": sid, "enqueued": len(enqueued), "job_ids": enqueued, "workers": core.WORKERS}

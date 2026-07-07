@@ -106,7 +106,11 @@ def _remediate_file(payload: dict, job: dict) -> None:
                                 file=filename, detail=f"no server-side remediator for .{ext}")
         return
 
-    token = core.get_scan_tokens(scan_id).get("drive")
+    # Prefer the token carried in the durable job payload: the in-memory scan-token
+    # store is per-replica and is wiped by a restart/redeploy, so a durable remediate
+    # job that later runs on another replica (or after a restart) would otherwise fail
+    # with "no Drive token". The payload token survives both; fall back to in-memory.
+    token = payload.get("drive_token") or core.get_scan_tokens(scan_id).get("drive")
     if not token:
         raise FatalJobError("no Drive token for this scan (expired/restarted) — re-trigger")
 
