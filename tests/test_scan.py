@@ -135,29 +135,44 @@ def _rules(f: dict) -> set[str]:
 
 
 def test_html_missing_title_only(report):
+    # Also genuinely violates 1.4.10 Reflow — the fixture's <head> has content
+    # (e.g. a charset meta) with no responsive viewport, a real finding the
+    # engine had no way to notice before HTML_NO_VIEWPORT_REFLOW was added.
     f = by_file(report).get("html-missing-title.html")
     assert f is not None and f["status"] == "analysed"
-    assert _rules(f) == {"HTML_MISSING_TITLE"}, f"rule drift: {sorted(_rules(f))}"
+    assert _rules(f) == {"HTML_MISSING_TITLE", "HTML_NO_VIEWPORT_REFLOW"}, f"rule drift: {sorted(_rules(f))}"
 
 
 def test_html_heading_skip_only(report):
+    # Also genuinely violates 1.4.10 Reflow — same reasoning as the title-only
+    # fixture above.
     f = by_file(report).get("html-heading-skip.html")
     assert f is not None and f["status"] == "analysed"
-    assert _rules(f) == {"HTML_HEADING_SKIP"}, f"rule drift: {sorted(_rules(f))}"
+    assert _rules(f) == {"HTML_HEADING_SKIP", "HTML_NO_VIEWPORT_REFLOW"}, f"rule drift: {sorted(_rules(f))}"
 
 
 def test_html_all_violations_hits_every_rule(report):
-    """html-all-violations.html must trigger all 8 HTML engine rules.
+    """html-all-violations.html must trigger all 10 HTML engine rules it actually
+    violates (not every rule in the engine — see test_html_checks.py for the
+    rules with no natural trigger in this fixture, e.g. 1.4.1/1.4.3/2.4.3/3.1.4).
 
-    HTML_LINK_PURPOSE_AMBIGUOUS (2.4.9) added: the fixture's vague link already
-    fails 2.4.4 (no context helps a bare "click here") and now also fails 2.4.9
-    (the same reasoning applies with zero context credit) — a real, expected hit,
-    not test drift to work around.
+    Three additions beyond the original 7, all genuinely real — this fixture
+    always violated them, but no backend check existed to notice before:
+      - HTML_LINK_PURPOSE_AMBIGUOUS (2.4.9): the vague "click here" link already
+        fails 2.4.4 (no context helps it) and equally fails 2.4.9 (zero context
+        credit at all).
+      - HTML_FORM_CONTROL_NO_NAME (1.3.1): the unlabelled input already fails
+        4.1.2; 1.3.1's broader "no accessible name" test (which also credits
+        implicit <label>wrapping, unlike 4.1.2's narrower check above) catches
+        the same element from a different WCAG angle.
+      - HTML_NO_VIEWPORT_REFLOW (1.4.10): the document has head content
+        (<meta charset>) but no responsive viewport, so it won't reflow at
+        320px — a real, previously-invisible finding.
     """
     ALL_HTML_RULES = {
         "HTML_MISSING_TITLE", "HTML_MISSING_LANG", "HTML_IMG_MISSING_ALT",
         "HTML_EMPTY_LINK", "HTML_VAGUE_LINK", "HTML_HEADING_SKIP", "HTML_INPUT_NO_LABEL",
-        "HTML_LINK_PURPOSE_AMBIGUOUS",
+        "HTML_LINK_PURPOSE_AMBIGUOUS", "HTML_FORM_CONTROL_NO_NAME", "HTML_NO_VIEWPORT_REFLOW",
     }
     f = by_file(report).get("html-all-violations.html")
     assert f is not None and f["status"] == "analysed"

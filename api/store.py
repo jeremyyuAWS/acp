@@ -256,6 +256,52 @@ RULE_CATALOG: list[dict] = [
     {"id": "4.1.2",  "name": "Name, Role, Value",           "level": "A",   "fix_mode": "ai-assisted", "plain": "Controls missing names/roles for assistive tech"},
 ]
 
+# Which document formats each RULE_CATALOG rule actually has a validator for.
+# Without this, a rule that only runs for HTML (say) silently reads PASS on a
+# PDF/DOCX/PPTX/XLSX file in scan_rule_traces — the check was never evaluated,
+# but a zero finding-count looks identical to a real pass. tests/test_rule_formats.py
+# derives this same table from source (api/scanner.py + ocr.py + textchecks.py +
+# config/rule-catalog.json) and asserts it matches — kept in sync by hand, same
+# posture as RULE_CATALOG vs frontend/src/rules/index.js's PLAIN_NAMES, but with
+# an automated drift check this time.
+_ALL_FORMATS = frozenset({"html", "docx", "pptx", "xlsx", "pdf"})
+_OFFICE_PDF = frozenset({"docx", "pptx", "xlsx", "pdf"})
+RULE_FORMATS: dict[str, frozenset[str]] = {
+    "1.1.1": _ALL_FORMATS, "1.2.1": frozenset({"html"}), "1.2.2": frozenset({"html"}),
+    "1.2.3": frozenset({"html"}), "1.3.1": _ALL_FORMATS, "1.3.3": _ALL_FORMATS,
+    "1.3.4": frozenset({"html"}), "1.3.5": frozenset({"html"}), "1.4.1": frozenset({"html"}),
+    "1.4.2": frozenset({"html"}), "1.4.3": frozenset({"docx", "html", "pptx"}),
+    "1.4.4": frozenset({"html"}), "1.4.5": _OFFICE_PDF, "1.4.6": frozenset({"html"}),
+    "1.4.9": _OFFICE_PDF, "1.4.10": frozenset({"html"}), "1.4.11": frozenset({"html"}),
+    "1.4.12": frozenset({"html"}), "2.1.1": frozenset({"pptx"}), "2.4.1": frozenset({"html"}),
+    "2.4.2": _ALL_FORMATS, "2.4.3": frozenset({"html"}), "2.4.4": frozenset({"docx", "html", "pptx"}),
+    "2.4.6": frozenset({"html"}), "2.4.7": frozenset({"html"}), "2.4.9": frozenset({"html"}),
+    "2.5.3": frozenset({"html"}), "2.5.8": frozenset({"html"}), "3.1.1": _ALL_FORMATS,
+    "3.1.2": _ALL_FORMATS, "3.1.4": frozenset({"html"}), "3.3.2": frozenset({"html"}),
+    "4.1.2": frozenset({"html"}),
+}
+
+
+def _file_format(filename: str) -> str | None:
+    """Canonical format name for a scanned filename, or None if unrecognized."""
+    ext = Path(filename).suffix.lower()
+    if ext in (".html", ".htm"):
+        return "html"
+    if ext in (".docx", ".pptx", ".xlsx"):
+        return ext.lstrip(".")
+    if ext == ".pdf":
+        return "pdf"
+    return None
+
+
+def _rule_outcome(rule_id: str, fmt: str | None, count: int) -> str:
+    """PASS/FAIL if the rule actually has a validator for this file's format,
+    else NOT_APPLICABLE — the rule was never evaluated, not silently passed."""
+    if fmt is None or fmt not in RULE_FORMATS.get(rule_id, _ALL_FORMATS):
+        return "NOT_APPLICABLE"
+    return "FAIL" if count > 0 else "PASS"
+
+
 def _extract_sc(wcag: str) -> str:
     """Extract the 'X.Y.Z' SC number from any wcag field format.
     Handles: '1.1.1', '1.1.1 Non-text Content', 'SC_1_1_1', 'wcag111'."""
@@ -461,10 +507,11 @@ class Store:
                     sc = _extract_sc(i.get("wcag", ""))
                     if sc:
                         sc_counts[sc] = sc_counts.get(sc, 0) + 1
+                fmt = _file_format(f["file"])
                 for rule in RULE_CATALOG:
                     rid = rule["id"]
                     count = sc_counts.get(rid, 0)
-                    outcome = "FAIL" if count > 0 else "PASS"
+                    outcome = _rule_outcome(rid, fmt, count)
                     self._db.execute(cur,
                         "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "
                         "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) "
@@ -549,9 +596,10 @@ class Store:
                 sc = _extract_sc(i.get("wcag", ""))
                 if sc:
                     sc_counts[sc] = sc_counts.get(sc, 0) + 1
+            fmt = _file_format(f["file"])
             for rule in RULE_CATALOG:
                 rid = rule["id"]; count = sc_counts.get(rid, 0)
-                outcome = "FAIL" if count > 0 else "PASS"
+                outcome = _rule_outcome(rid, fmt, count)
                 self._db.execute(cur,
                     "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "
                     "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file,rule_id) DO UPDATE SET "

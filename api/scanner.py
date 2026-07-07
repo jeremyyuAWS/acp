@@ -558,6 +558,116 @@ def _analyse_html(path: Path) -> dict:
         if any(d < 24 for d in dims):
             issues.append({"ruleId": "HTML_TARGET_TOO_SMALL", "wcag": "2.5.8 Target Size (Minimum)", "severity": "SERIOUS"})
 
+    # ── Phase 4 — legacy rule modules with no prior backend mirror ──
+    # These SCs have a frontend rule module (used for the client-side remediation
+    # preview) and read as 'Shipped (demo)' in the catalog, but a real server-side
+    # scan never actually evaluated them — every persisted scan silently showed
+    # PASS for every HTML file, regardless of content. Ported here to close that
+    # false-PASS gap; predicates mirror frontend/src/rules/wcag-*.js exactly.
+
+    # 1.3.1 Info and Relationships — form control with no accessible name at all
+    # (broader than 4.1.2's check above: also credits implicit <label>wrapping).
+    SELF_NAMED_TYPES = {"hidden", "button", "submit", "reset", "image"}
+    for inp in root.iter("input", "select", "textarea"):
+        if inp.tag == "input" and (inp.get("type") or "text").lower() in SELF_NAMED_TYPES:
+            continue
+        if inp.get("aria-label") or inp.get("aria-labelledby"):
+            continue
+        if next(inp.iterancestors("label"), None) is not None:
+            continue
+        if inp.get("id", "") in labelled_ids:
+            continue
+        issues.append({"ruleId": "HTML_FORM_CONTROL_NO_NAME", "wcag": "1.3.1 Info and Relationships", "severity": "CRITICAL"})
+
+    # 1.4.1 Use of Color — link styled by inline color alone, no underline
+    for a in root.iter("a"):
+        style = a.get("style") or ""
+        if not style:
+            continue
+        if re.search(r"(?:^|;)\s*color\s*:", style) and not re.search(r"text-decoration\s*:[^;]*underline", style, re.I):
+            issues.append({"ruleId": "HTML_LINK_COLOR_ONLY", "wcag": "1.4.1 Use of Color", "severity": "SERIOUS"})
+
+    # 1.4.3 Contrast (Minimum, AA) — inline color likely below 4.5:1 (luma > 0.62).
+    # Same _INLINE_COLOR/_luma helpers as 1.4.6 above; AA's threshold is looser.
+    for el in root.iter():
+        style = el.get("style") if callable(getattr(el, "get", None)) else None
+        if not style:
+            continue
+        m = _INLINE_COLOR.search(style)
+        if m and _luma(m.group(1)) > 0.62:
+            issues.append({"ruleId": "HTML_LOW_CONTRAST_AA", "wcag": "1.4.3 Contrast (Minimum)", "severity": "SERIOUS"})
+
+    # 1.4.4 Resize Text — viewport meta blocks pinch-zoom / text resize
+    for meta in root.iter("meta"):
+        if (meta.get("name") or "").lower() != "viewport":
+            continue
+        content = meta.get("content") or ""
+        if re.search(r"user-scalable\s*=\s*(no|0)|maximum-scale\s*=\s*(0|1)(\.0+)?\b", content, re.I):
+            issues.append({"ruleId": "HTML_VIEWPORT_BLOCKS_ZOOM", "wcag": "1.4.4 Resize Text", "severity": "SERIOUS"})
+
+    # 1.4.10 Reflow — a real page (has meta/link/style) with no responsive viewport
+    has_head_content = any(next(root.iter(t), None) is not None for t in ("meta", "link", "style"))
+    has_viewport = any((m.get("name") or "").lower() == "viewport" for m in root.iter("meta"))
+    if has_head_content and not has_viewport:
+        issues.append({"ruleId": "HTML_NO_VIEWPORT_REFLOW", "wcag": "1.4.10 Reflow", "severity": "SERIOUS"})
+
+    # 1.4.11 Non-text Contrast (AA) — inline border color likely below 3:1
+    for el in root.iter():
+        style = el.get("style") if callable(getattr(el, "get", None)) else None
+        if not style:
+            continue
+        m = re.search(r"border(?:-[a-z]+)?:[^;]*?#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b", style, re.I)
+        if m and _luma(m.group(1)) > 0.62:
+            issues.append({"ruleId": "HTML_BORDER_LOW_CONTRAST", "wcag": "1.4.11 Non-text Contrast", "severity": "MODERATE"})
+
+    # 1.4.12 Text Spacing — fixed-pixel line-height blocks the user's spacing override
+    for el in root.iter():
+        style = el.get("style") if callable(getattr(el, "get", None)) else None
+        if style and re.search(r"line-height:\s*\d+px", style, re.I):
+            issues.append({"ruleId": "HTML_FIXED_LINE_HEIGHT", "wcag": "1.4.12 Text Spacing", "severity": "MODERATE"})
+
+    # 2.4.3 Focus Order — positive tabindex overrides natural reading order
+    for el in root.iter():
+        ti = el.get("tabindex") if callable(getattr(el, "get", None)) else None
+        if ti is None:
+            continue
+        try:
+            if int(ti) > 0:
+                issues.append({"ruleId": "HTML_POSITIVE_TABINDEX", "wcag": "2.4.3 Focus Order", "severity": "SERIOUS"})
+        except ValueError:
+            continue
+
+    # 2.4.7 Focus Visible — outline suppressed (CSS or inline) with interactive content present
+    css_blocks = "\n".join((s.text_content() or "") for s in root.iter("style"))
+    inline_suppressed = any(
+        re.search(r"outline:\s*(none|0)\b", el.get("style") or "", re.I)
+        for el in root.iter() if callable(getattr(el, "get", None)) and el.get("style")
+    )
+    outline_suppressed = bool(re.search(r"outline:\s*(none|0)\b", css_blocks, re.I)) or inline_suppressed
+    has_interactive = next(root.iter("a", "button", "input", "select", "textarea"), None) is not None
+    if outline_suppressed and has_interactive:
+        issues.append({"ruleId": "HTML_FOCUS_OUTLINE_SUPPRESSED", "wcag": "2.4.7 Focus Visible", "severity": "SERIOUS"})
+
+    # 3.1.4 Abbreviations — known abbreviation with no <abbr title> expansion.
+    # ABBR mirrors frontend/src/rules/utils.js's ABBR dict (a small editorial
+    # glossary) — kept in sync by hand, same posture as RULE_CATALOG vs PLAIN_NAMES.
+    ABBR = {
+        "WCAG": "Web Content Accessibility Guidelines", "ADA": "Americans with Disabilities Act",
+        "PDF": "Portable Document Format", "PPO": "Preferred Provider Organization",
+        "HDHP": "High-Deductible Health Plan", "FSA": "Flexible Spending Account",
+        "HSA": "Health Savings Account", "FAQ": "Frequently Asked Questions",
+        "PII": "Personally Identifiable Information", "UTSW": "UT Southwestern", "HR": "Human Resources",
+    }
+    ABBR_RE = re.compile(r"\b(" + "|".join(ABBR) + r")\b")
+    SKIP_ANCESTOR_TAGS = {"abbr", "script", "style", "title"}
+    for el in root.iter():
+        tag = el.tag if isinstance(el.tag, str) else ""
+        if tag in SKIP_ANCESTOR_TAGS or any(a.tag in SKIP_ANCESTOR_TAGS for a in el.iterancestors()):
+            continue
+        for text in (el.text, el.tail):
+            if text and ABBR_RE.search(text):
+                issues.append({"ruleId": "HTML_UNEXPANDED_ABBR", "wcag": "3.1.4 Abbreviations", "severity": "MINOR"})
+
     return {"succeeded": True, "issues": issues, "errors": []}
 
 
