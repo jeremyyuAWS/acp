@@ -354,7 +354,13 @@ def _analyse_office(dest: Path) -> dict:
         for item in json.loads(out.read_text()):
             res[item["file"]] = {
                 "succeeded": item["succeeded"],
-                "issues": [{"ruleId": i["ruleId"], "wcag": i["wcag"], "severity": i["severity"]} for i in item.get("issues", [])],
+                # Keep the engine's human-readable per-finding title as `detail` — it's
+                # the only evidence of WHY a finding fired ("Slide is missing a title",
+                # "Reading order may not match visual order"). Dropping it left the UI
+                # and traces showing a bare rule id with no explanation.
+                "issues": [{"ruleId": i["ruleId"], "wcag": i["wcag"], "severity": i["severity"],
+                            **({"detail": i["title"]} if i.get("title") else {})}
+                           for i in item.get("issues", [])],
                 "errors": [_office_err(e) for e in item.get("errors", [])],
             }
     return res
