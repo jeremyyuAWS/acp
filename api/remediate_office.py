@@ -34,7 +34,10 @@ _CORE = "docProps/core.xml"
 _CUSTOM = "docProps/custom.xml"
 _FMTID = "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}"  # standard OPC custom-properties GUID
 TOOL = "Mova.io ACP"
-VERSION = os.environ.get("ACP_VERSION", "2026.06")
+# CalVer build version (v2026.M.D.N) — the same value /healthz and the UI report, so a
+# remediated file's provenance stamp matches the deployed build. ACP_BUILD_VERSION is
+# baked onto the image by deploy.sh; fall back to the legacy ACP_VERSION, then 'dev'.
+VERSION = os.environ.get("ACP_BUILD_VERSION") or os.environ.get("ACP_VERSION") or "dev"
 
 
 def _xesc(s: str) -> str:
