@@ -1,16 +1,17 @@
 # ACP — comprehensive to-do
 
-Snapshot as of `7eafe79` (main, all three remotes in sync). Verified against
-current source (`frontend/src/wcagCatalog.js`, `api/store.py` RULE_FORMATS,
-`docs/adr/`) rather than carried forward from memory — every item below is
-either a real, buildable gap or an explicit decision waiting on someone.
+Snapshot as of `9d7c7a3` (main, all three remotes in sync; DEPLOYED live as
+revision acp-app--0000194, version 2026.7.7). Verified against current source
+(`frontend/src/wcagCatalog.js`, `api/store.py` RULE_FORMATS, `docs/adr/`)
+rather than carried forward from memory — every item below is either a real,
+buildable gap or an explicit decision waiting on someone.
 
 Current coverage (87 WCAG 2.1/2.2 success criteria):
 
 | Bucket | Count | Meaning |
 |---|---|---|
-| Shipped (demo) | 35 | Real automated validator, verified backing |
-| MDK HITL | 41 | Genuinely needs human judgment (captions, timing, error text, gesture alternatives, etc.) — correctly routed to the HITL queue, not a gap |
+| Shipped (demo) | 36 | Real automated validator, verified backing |
+| MDK HITL | 40 | Genuinely needs human judgment (captions, timing, error text, gesture alternatives, etc.) — correctly routed to the HITL queue, not a gap |
 | Partner baseline | 6 | Covered by the .NET partner engine (`spike/dotnet/AcpScan.Cli`) |
 | MDK net-new (Roadmap) | 5 | AAA/Optional, pure-media, non-automatable — explicitly deferred, not silently dropped |
 
@@ -18,6 +19,13 @@ Of the 64 document-applicable SCs, **every Required (A/AA) one is either
 auto-detected, correctly routed to HITL, or genuinely web-only (N/A for a
 static file)** — no Required document rule lacks an assess+remediate path.
 The remaining automatable gaps are all AAA/optional (see P1b).
+
+All of this session's new detection code (`office_structure.py` +
+`textchecks.py`) went through an adversarial correctness review (`9d7c7a3`)
+that found and fixed 9 real defects — most notably the xlsx-contrast check was
+reading the wrong style block on essentially every real workbook, and the
+reading-level check false-fired on punctuation-free extracted text. Both are
+fixed with regression tests. See P1c.
 
 No TODO/FIXME/XXX comments, no skipped tests, and no ADR left in Proposed/Draft
 status anywhere in the repo — this file is the single backlog.
@@ -86,14 +94,47 @@ human-only (both are inherently judgement calls to fix):
    actionable rather than firing on ordinary professional prose. No new deps
    (heuristic syllable count).
 
-Remaining automatable AAA/optional candidates, not yet built (all lower value):
-1.4.8 Visual Presentation (partial: line-length/justification), 3.1.3 Unusual
-Words (needs Ollama-assisted glossary detection). Everything else
-doc-applicable is genuine human-judgment (correctly HITL) or web-only (N/A).
+3. ~~**1.4.8 Visual Presentation**~~ — SHIPPED (`eb542d4`), docx. `docx_checks()`
+   flags blocks of body text set justified (both margins), an explicit 1.4.8
+   failure, past a `_MIN_JUSTIFIED_PARAS` floor. Narrow by design (justified
+   alignment only, not the SC's full width/spacing/colour surface) — same
+   honest-partial posture as xlsx-contrast and 3.3.2.
+
+Remaining automatable AAA/optional candidate, not yet built (lowest value):
+3.1.3 Unusual Words — needs Ollama-assisted glossary detection, i.e.
+non-deterministic, which cuts against the compliance-tool principle that
+identical input must give identical findings; left unbuilt on purpose.
+Everything else doc-applicable is genuine human-judgment (correctly HITL) or
+web-only (N/A).
 
 The one deterministic *remediate*-side candidate worth considering: PDF
-bookmark-outline auto-generation for 2.4.1 (we already *detect* the gap; a
-fixer would generate `/Outlines` from heading positions). Left as a decision.
+bookmark-outline auto-generation for 2.4.1 (we already *detect* the gap). NOTE
+(revised): a *meaningful* outline needs to know what the headings ARE, which
+for an untagged PDF means font-size/style heuristics — that's judgement-laden
+and risks emitting garbage bookmarks. Not a clean deterministic fix; only worth
+doing for already-tagged PDFs (rare). Left as a decision, with that caveat.
+
+---
+
+## P1c — Correctness hardening of this session's detection code (`9d7c7a3`)
+
+An adversarial review of every new check found **9 real defects** (all
+reproduced, all fixed with regression tests) before the code went live. The
+two that mattered most:
+- **xlsx contrast read the wrong style block.** A cell's `s="N"` indexes only
+  `<cellXfs>`, but the regexes matched every `<xf>`/`<font>`/`<fill>` in
+  styles.xml — including `<cellStyleXfs>` and the `<dxfs>` conditional-format
+  differentials — shifting every index. It mis-read colour on essentially every
+  real workbook. Now scoped to each real container block.
+- **3.1.5 reading level false-fired on punctuation-free text.** Bulleted/table
+  extraction with no terminal punctuation collapsed to one "sentence" and the
+  FK grade exploded (a 3rd-grade bullet list scored 86). Newlines now count as
+  sentence boundaries; unpunctuated blobs decline to score.
+The other 7 (dedup-link false positive on shared URLs, PDF contrast 40-char cap
++ grayscale/CMYK colour handling, pptx title `idx=`/paired-tag forms, `<a:t>`
+`xml:space`, docx regex whitespace) are all fixed too. This is the kind of bug
+the honest-detection bar exists to catch — worth the review pass before any
+unsupervised live window.
 
 ---
 
@@ -101,10 +142,15 @@ fixer would generate `/Outlines` from heading positions). Left as a decision.
 
 1. **Point `ACP_DRIVE_FOLDER` at Deva's folder** for scheduled sweeps —
    waiting on the folder ID.
-2. **Measure real Ollama `llama3.1:8b` latency** in actual UI use (currently
-   only confirmed healthy at the container level, revision
-   `acp-ollama--v8b9ae76a1`, 0 restarts — never timed a live compliance-digest
-   generation end-to-end).
+2. **Measure real Ollama `llama3.1:8b` latency** — still open, and it turns out
+   this can't be done from a headless/CI context: `acp-ollama` has
+   `external:false` ingress (internal-only) and scales to zero, and the app's
+   digest endpoint is behind Google SSO. To get the number: sign in to the live
+   app and time a compliance-digest generation, OR hand me the E2E test key so a
+   headless request can bypass SSO. Container config: 4 CPU / 8Gi, CPU-only,
+   scale-to-zero — so the first request pays a cold model-load of the ~4.7GB 8B
+   weights on top of CPU inference (expect tens of seconds cold, less warm —
+   estimate, NOT a measurement).
 3. **ADO review-cadence** — standing reviewer vs. bypass-as-needed for future
    PRs. Bypass-policies permission is already granted; this is a process
    choice, not a technical one.
