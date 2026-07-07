@@ -245,6 +245,84 @@ def pptx_checks(path: Path) -> list[dict]:
     return findings
 
 
+# ── 1.4.3 / 1.4.6 pptx contrast ───────────────────────────────────────────────
+# Deliberately narrow, mirroring xlsx_contrast_checks: only a text run whose
+# colour is an EXPLICIT <a:srgbClr>, sitting inside a shape whose fill is ALSO an
+# explicit <a:srgbClr> solid fill, is measured. Theme colours, gradient/picture
+# fills, and text on the slide/layout/master background (a shape with no fill of
+# its own) are skipped — not guessed. Estimating luma against an unknown inherited
+# background would invent findings, which is worse than a conservative miss. The
+# luma-difference thresholds are the same approximation as xlsx (not a true WCAG
+# contrast ratio); one AA + one AAA finding per file at most.
+_PPTX_SP = re.compile(r"<p:sp>.*?</p:sp>", re.S)
+_PPTX_SPPR = re.compile(r"<p:spPr\b.*?</p:spPr>", re.S)
+_A_LN_BLOCK = re.compile(r"<a:ln\b.*?</a:ln>", re.S)
+_SOLID_SRGB = re.compile(r'<a:solidFill>\s*<a:srgbClr val="([0-9A-Fa-f]{6})"')
+
+
+def _wcag_luminance(hex6: str) -> float:
+    """WCAG 2.x relative luminance of an #RRGGBB colour (sRGB-linearised)."""
+    def _lin(c: int) -> float:
+        c /= 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    return (0.2126 * _lin(int(hex6[0:2], 16))
+            + 0.7152 * _lin(int(hex6[2:4], 16))
+            + 0.0722 * _lin(int(hex6[4:6], 16)))
+
+
+def _contrast_ratio(hex_a: str, hex_b: str) -> float:
+    """True WCAG contrast ratio (1..21) — not a luma-difference proxy."""
+    la, lb = _wcag_luminance(hex_a), _wcag_luminance(hex_b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def pptx_contrast_checks(path: Path) -> list[dict]:
+    """1.4.3 / 1.4.6 Contrast for pptx — explicit run colour on an explicit shape
+    solid fill only (see the narrow-scope note above).
+
+    Thresholds are the WCAG *large-text* ratios (AA 3:1, AAA 4.5:1). Font size
+    isn't reliably knowable per run (it's often inherited from the placeholder),
+    so flagging only below the large-text bar guarantees every finding is a real
+    failure at *any* size — a genuine result over an over-eager one."""
+    seen_aa = seen_aaa = False
+    try:
+        with zipfile.ZipFile(path) as zf:
+            for slide_name in sorted(n for n in zf.namelist()
+                                     if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)):
+                xml = _read(zf, slide_name)
+                if not xml:
+                    continue
+                for sp in _PPTX_SP.findall(xml):
+                    sppr_m = _PPTX_SPPR.search(sp)
+                    if not sppr_m:
+                        continue
+                    # The shape's own fill — strip the <a:ln> border block first so a
+                    # coloured outline is never mistaken for the background fill.
+                    fill_m = _SOLID_SRGB.search(_A_LN_BLOCK.sub("", sppr_m.group(0)))
+                    if not fill_m:
+                        continue
+                    for run in _A_RUN.findall(sp):
+                        col_m = _SOLID_SRGB.search(run)      # the run's own text colour
+                        if not col_m or not "".join(_AT.findall(run)).strip():
+                            continue
+                        ratio = _contrast_ratio(fill_m.group(1), col_m.group(1))
+                        if ratio < 4.5:
+                            seen_aaa = True
+                        if ratio < 3.0:
+                            seen_aa = True
+                if seen_aa and seen_aaa:
+                    break
+    except Exception:
+        return []
+    findings: list[dict] = []
+    if seen_aa:
+        findings.append(_finding("PPTX_LOW_CONTRAST_AA", "1.4.3 Contrast (Minimum)", "SERIOUS"))
+    if seen_aaa:
+        findings.append(_finding("PPTX_LOW_CONTRAST_AAA", "1.4.6 Contrast (Enhanced)", "MODERATE"))
+    return findings
+
+
 # 4.5:1 (AA) / 7:1 (AAA) approximated the same way as scanner.py's HTML contrast
 # checks — relative luma of the declared color; not a true APCA/WCAG contrast-
 # ratio computation against the actual background, which for a PDF would need
@@ -453,7 +531,7 @@ def checks_for(path: Path, ext: str) -> list[dict]:
     if ext == ".docx":
         return docx_checks(path)
     if ext == ".pptx":
-        return pptx_checks(path)
+        return pptx_checks(path) + pptx_contrast_checks(path)
     if ext == ".pdf":
         return pdf_contrast_checks(path) + pdf_bypass_blocks_check(path)
     if ext == ".xlsx":
