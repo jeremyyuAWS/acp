@@ -139,7 +139,7 @@ function FixCarousel() {
 // readOnly: time-travel replay — historical scans are for looking, not enqueuing
 // real remediation jobs against (decisions stay editable: per-scan decision saves
 // are the time-travel feature itself).
-export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, aiEnabled = true, readOnly = false, onRefresh }) {
+export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, aiEnabled = true, readOnly = false, onRefresh, onHitlCount }) {
   const [queue, setQueue] = useState(() => buildHumanQueue(files, {}))
   const [acted, setActed] = useState({ approved: 0, rejected: 0, deferred: 0 })
   const [deferredItems, setDeferredItems] = useState([])
@@ -271,6 +271,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const pendingHitlFiles = new Set(queue.map((q) => q.file))
   const totalHitl = queue.length + acted.approved + acted.rejected + acted.deferred + self.length
   const hitlProgress = totalHitl > 0 ? Math.round(((totalHitl - queue.length) / totalHitl) * 100) : 0
+  useEffect(() => { onHitlCount?.(queue.length) }, [queue.length, onHitlCount])
   // Don't surface remediation numbers until the user has actually started remediating
   // (ran "Remediate all" or acted on a review item) — pre-engagement estimates read as
   // in-progress work and confuse first-time users. Until then the cards show zeros.
@@ -324,6 +325,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
   return (
     <>
+      {queue.length > 0 && (
+        <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 14px', marginBottom: 12, borderRadius: 9, background: '#FBF1DF', border: '1px solid #EAD9BF' }}>
+          <span style={{ fontSize: 15 }} aria-hidden="true">⚑</span>
+          <b style={{ color: '#7A5A12', fontSize: 13.5 }}>{queue.length} document{queue.length !== 1 ? 's' : ''} need your review</b>
+          <span className="muted" style={{ fontSize: 12 }}>· AI-assisted fixes and low-confidence findings need human sign-off before they can be certified.</span>
+          <button className="qbtn approve" style={{ marginLeft: 'auto' }} onClick={() => document.getElementById('rem-review')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>Review now →</button>
+        </div>
+      )}
       <div className="metrics">
         <div className={`metric${remLive ? ' livecard' : ''}`} title="Estimated number of issues that can be fixed automatically — populates once you run remediation"><span>auto-fixable (est.)</span><b style={{ color: remStarted ? '#3B6D11' : '#9AA1B4' }}>{remStarted ? autoFixed : 0}</b></div>
         <div className="metric"><span>HITL queue</span>{remStarted

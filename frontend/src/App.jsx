@@ -177,6 +177,7 @@ export default function App() {
   const [rolePrivileges, setRolePrivileges] = useState(loadRolePrivileges)
   const [ontology, setOntology] = useState(loadPublished)
   const [aiEnabled, setAiEnabled] = useState(true)
+  const [hitlCount, setHitlCount] = useState(0)  // pending HITL items, reported up from Remediate for the nav badge
   const [queuedScan, setQueuedScan] = useState(true)   // durable fan-out queue by default; "This session" is the opt-out
   const [deepScan, setDeepScan] = useState(false)      // off by default → Fast scan; opt in to PII scan via the switch
   const [excludeRemediated, setExcludeRemediated] = useState(true)  // on by default — skip re-discovering ACP's own Remediated/ output
@@ -511,6 +512,7 @@ export default function App() {
                       onClick={() => setView(k)}>
                 <span className="tablbl">{done && <span className="tabok" aria-hidden="true">✓ </span>}{label}{done && <span className="vh"> completed</span>}</span>
                 <span className="rg">{rg}</span>
+                {k === 'remediate' && hitlCount > 0 && <span title={`${hitlCount} document${hitlCount !== 1 ? 's' : ''} awaiting your review`} style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, minWidth: 16, height: 16, lineHeight: '16px', textAlign: 'center', padding: '0 5px', borderRadius: 9, background: '#B4690E', color: '#fff', display: 'inline-block' }}>{hitlCount}</span>}
               </button>
             )
           })}
@@ -605,7 +607,7 @@ export default function App() {
         ) : placeholder)}
 
         {view === 'remediate' && run && <QueuePanel />}
-        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id).then(setScan).catch(() => {})} /> : placeholder)}
+        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id).then(setScan).catch(() => {})} onHitlCount={setHitlCount} /> : placeholder)}
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} /> : placeholder)}
 
