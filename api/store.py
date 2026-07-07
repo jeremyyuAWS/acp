@@ -247,11 +247,13 @@ RULE_CATALOG: list[dict] = [
     {"id": "2.4.6",  "name": "Headings and Labels",         "level": "AA",  "fix_mode": "auto",         "plain": "Unclear headings or labels"},
     {"id": "2.4.7",  "name": "Focus Visible",               "level": "AA",  "fix_mode": "auto",         "plain": "No visible keyboard focus indicator"},
     {"id": "2.4.9",  "name": "Link Purpose (Link Only)",  "level": "AAA", "fix_mode": "ai-assisted", "plain": "Same link text used for different destinations"},
+    {"id": "2.4.10", "name": "Section Headings",           "level": "AAA", "fix_mode": "human-only",   "plain": "Long document has no section headings"},
     {"id": "2.5.3",  "name": "Label in Name",              "level": "A",   "fix_mode": "auto",         "plain": "Control names don't match their visible labels"},
     {"id": "2.5.8",  "name": "Target Size (Minimum)",       "level": "AA",  "fix_mode": "human-only",   "plain": "Touch targets smaller than 24px"},
     {"id": "3.1.1",  "name": "Language of Page",            "level": "A",   "fix_mode": "auto",         "plain": "Document language not set"},
     {"id": "3.1.2",  "name": "Language of Parts",           "level": "AA",  "fix_mode": "ai-assisted", "plain": "A passage's language not marked"},
     {"id": "3.1.4",  "name": "Abbreviations",               "level": "AAA", "fix_mode": "auto",         "plain": "Unexplained abbreviations"},
+    {"id": "3.1.5",  "name": "Reading Level",               "level": "AAA", "fix_mode": "human-only",   "plain": "Text reading level well above lower-secondary"},
     {"id": "3.3.2",  "name": "Labels or Instructions",     "level": "A",   "fix_mode": "ai-assisted", "plain": "Required fields with no label or instructions"},
     {"id": "4.1.2",  "name": "Name, Role, Value",           "level": "A",   "fix_mode": "ai-assisted", "plain": "Controls missing names/roles for assistive tech"},
 ]
@@ -276,8 +278,9 @@ RULE_FORMATS: dict[str, frozenset[str]] = {
     "1.4.12": frozenset({"html"}), "2.1.1": frozenset({"pptx"}), "2.4.1": frozenset({"html", "pdf"}),
     "2.4.2": _ALL_FORMATS, "2.4.3": frozenset({"html"}), "2.4.4": frozenset({"docx", "html", "pptx"}),
     "2.4.6": frozenset({"docx", "html", "pptx"}), "2.4.7": frozenset({"html"}), "2.4.9": frozenset({"docx", "html", "pptx"}),
+    "2.4.10": frozenset({"docx"}),
     "2.5.3": frozenset({"html"}), "2.5.8": frozenset({"html"}), "3.1.1": _ALL_FORMATS,
-    "3.1.2": _ALL_FORMATS, "3.1.4": frozenset({"html"}), "3.3.2": frozenset({"docx", "html"}),
+    "3.1.2": _ALL_FORMATS, "3.1.4": frozenset({"html"}), "3.1.5": _ALL_FORMATS, "3.3.2": frozenset({"docx", "html"}),
     "4.1.2": frozenset({"html"}),
 }
 

@@ -77,3 +77,41 @@ def test_language_parts_short_text_no_flag():
 def test_content_findings_never_raises_on_junk():
     assert isinstance(tc.content_findings(""), list)
     assert isinstance(tc.content_findings("x" * 5), list)
+
+
+# ── 3.1.5 Reading Level ─────────────────────────────────────────────────────────
+
+_SIMPLE = ('The cat sat on the mat. The dog ran to the park. We had fun in the '
+           'sun. She likes to read a book. He can jump high. They play all day. ') * 8
+_DENSE = ('Notwithstanding any provision herein to the contrary, the indemnifying '
+          'party shall, upon receipt of written notification, undertake commercially '
+          'reasonable remediation efforts commensurate with the materiality of the '
+          'aforementioned contractual deficiencies enumerated in the preceding '
+          'subsections. ') * 8
+
+
+def test_reading_level_flags_dense_prose():
+    assert tc.detect_reading_level(_DENSE) == [
+        {"ruleId": "READING_LEVEL_ADVANCED", "wcag": "3.1.5 Reading Level", "severity": "MODERATE"}
+    ]
+
+
+def test_reading_level_ignores_simple_prose():
+    assert tc.detect_reading_level(_SIMPLE) == []
+
+
+def test_reading_level_ignores_short_text():
+    # Below the word floor a readability score is meaningless — never flag.
+    assert tc.flesch_kincaid_grade("This is a short sentence.") is None
+    assert tc.detect_reading_level("This is a short sentence.") == []
+
+
+def test_reading_level_reproducible():
+    assert tc.detect_reading_level(_DENSE) == tc.detect_reading_level(_DENSE)
+
+
+def test_syllable_heuristic_sane():
+    assert tc._syllables("cat") == 1
+    assert tc._syllables("table") == 2      # silent-e handling keeps 'le' syllable
+    assert tc._syllables("reasonable") == 4
+    assert tc._syllables("the") == 1

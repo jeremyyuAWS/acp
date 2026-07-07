@@ -8,8 +8,12 @@ human review, never auto-passed.
   3.1.2 Language of Parts — a document that mixes languages, where each passage's
         language should be marked. Detection is deterministic (langdetect seeded);
         self-gates to [] when langdetect isn't installed.
+  3.1.5 Reading Level — text whose Flesch-Kincaid grade level is far above the
+        "lower secondary" bar the SC targets, i.e. genuinely dense prose that
+        warrants a plain-language alternative. Pure arithmetic on the text, no
+        deps, fully reproducible.
 
-Both run on pii.extract_text output, so they cover every format the scanner reads
+All run on pii.extract_text output, so they cover every format the scanner reads
 (HTML, PDF, docx/pptx/xlsx). Never raise — content checks must not fail a scan.
 """
 from __future__ import annotations
@@ -82,8 +86,55 @@ def detect_language_parts(text: str) -> list[dict]:
     return []
 
 
+# ── 3.1.5 Reading Level ─────────────────────────────────────────────────────────
+# Flesch-Kincaid Grade Level = 0.39·(words/sentences) + 11.8·(syllables/words) − 15.59.
+# The SC's bar is "lower secondary education level" (~grade 9), but flagging every
+# document above grade 9 would fire on essentially all professional prose and be
+# useless noise. We deliberately only flag text that is genuinely dense — grade
+# _MIN_GRADE and up (early-college and beyond) — where a plain-language summary is
+# a real, defensible ask; the milder grade-9..N band is left to the reviewer.
+_MIN_WORDS_FOR_READING = 200   # a readability score on a short snippet is meaningless
+_MIN_GRADE = 15.0              # ~ mid-college; well above the SC's grade-9 floor
+_WORD_RE = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?")
+_SENT_SPLIT = re.compile(r"[.!?]+")
+_VOWEL_GROUP = re.compile(r"[aeiouy]+")
+
+
+def _syllables(word: str) -> int:
+    """Heuristic syllable count: vowel groups, minus a silent trailing 'e',
+    floored at 1. Standard readability-tool approximation — not perfect on every
+    word, but the aggregate over hundreds of words is stable and reproducible."""
+    w = word.lower()
+    groups = len(_VOWEL_GROUP.findall(w))
+    if w.endswith("e") and not w.endswith("le") and groups > 1:
+        groups -= 1
+    return max(1, groups)
+
+
+def flesch_kincaid_grade(text: str) -> float | None:
+    """FK grade level, or None if there isn't enough text to be meaningful."""
+    words = _WORD_RE.findall(text)
+    if len(words) < _MIN_WORDS_FOR_READING:
+        return None
+    sentences = [s for s in _SENT_SPLIT.split(text) if s.strip()]
+    n_sent = max(1, len(sentences))
+    syllables = sum(_syllables(w) for w in words)
+    n_words = len(words)
+    return 0.39 * (n_words / n_sent) + 11.8 * (syllables / n_words) - 15.59
+
+
+def detect_reading_level(text: str) -> list[dict]:
+    if not text:
+        return []
+    grade = flesch_kincaid_grade(text)
+    if grade is not None and grade >= _MIN_GRADE:
+        return [{"ruleId": "READING_LEVEL_ADVANCED", "wcag": "3.1.5 Reading Level",
+                 "severity": "MODERATE"}]
+    return []
+
+
 def content_findings(text: str) -> list[dict]:
-    """All text-content findings for one document (1.3.3 + 3.1.2)."""
+    """All text-content findings for one document (1.3.3 + 3.1.2 + 3.1.5)."""
     out: list[dict] = []
     try:
         out += detect_sensory(text)
@@ -91,6 +142,10 @@ def content_findings(text: str) -> list[dict]:
         pass
     try:
         out += detect_language_parts(text)
+    except Exception:
+        pass
+    try:
+        out += detect_reading_level(text)
     except Exception:
         pass
     return out

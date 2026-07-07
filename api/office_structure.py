@@ -20,6 +20,8 @@ the zip/XML/PDF ourselves).
         Scoped to those unambiguous input gallery types only — w:sdt also
         wraps plenty of non-form Word content (TOC blocks, citations,
         building-block placeholders) that legitimately has no alias.
+  2.4.10 Section Headings — a docx long enough to need section structure (past a
+        text-bearing-paragraph floor) that uses no heading styles at all.
   1.4.3 / 1.4.6 Contrast (xlsx) — cell font vs. fill color, resolved through
         xl/styles.xml's cellXfs -> fonts/fills chain and luma-diffed the same
         heuristic way as the HTML/PDF contrast checks. DELIBERATELY NARROW:
@@ -59,6 +61,10 @@ from pathlib import Path
 
 _HEADING_STYLE = re.compile(r'<w:pStyle w:val="Heading(\d)"/>')
 _PARA = re.compile(r"<w:p[ >].*?</w:p>", re.S)
+# A body with this many text-bearing paragraphs and zero headings is long enough
+# that the lack of section structure is a real 2.4.10 problem (a short letter/memo
+# below the floor legitimately needs none).
+_MIN_PARAS_FOR_HEADINGS = 15
 # rIds are XML "ID" type, not necessarily numeric — Word/PowerPoint always emit
 # pure digits (rId4), but any tool producing valid OOXML can use rIdFoo.
 _HYPERLINK = re.compile(r'<w:hyperlink[^>]*r:id="(rId\w+)"[^>]*>(.*?)</w:hyperlink>', re.S)
@@ -153,6 +159,16 @@ def docx_checks(path: Path) -> list[dict]:
                 alias_m = _SDT_ALIAS.search(pr_m.group(1))
                 if not alias_m or not alias_m.group(1).strip():
                     findings.append(_finding("DOCX_FORM_FIELD_NO_LABEL", "3.3.2 Labels or Instructions", "SERIOUS"))
+
+            # 2.4.10 — a document long enough to need section structure that uses
+            # no heading styles at all. A short letter/memo legitimately has none,
+            # so this only fires past a text-bearing-paragraph floor.
+            if not _HEADING_STYLE.search(doc):
+                text_paras = sum(
+                    1 for p in _PARA.findall(doc) if "".join(_WT.findall(p)).strip()
+                )
+                if text_paras >= _MIN_PARAS_FOR_HEADINGS:
+                    findings.append(_finding("DOCX_NO_SECTION_HEADINGS", "2.4.10 Section Headings", "MODERATE"))
     except Exception:
         pass
     return findings

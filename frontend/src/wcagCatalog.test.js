@@ -26,11 +26,16 @@ const repoFile = (rel) => {
 // The three surfaces that can ACTUALLY validate a criterion — a claim of
 // "Live now" is only honest if one of these backs it. Read from source so the
 // test tracks reality, not a hand-kept allowlist.
-const scannerSCs = new Set(
-  ['api/scanner.py', 'api/ocr.py', 'api/textchecks.py'].flatMap((f) =>
+const scannerSCs = new Set([
+  // scanner.py / ocr.py / textchecks.py emit findings as inline `"wcag": "X.X.X …"`.
+  ...['api/scanner.py', 'api/ocr.py', 'api/textchecks.py'].flatMap((f) =>
     [...readFileSync(repoFile(f), 'utf8').matchAll(/wcag":\s*"(\d+\.\d+\.\d+)/g)].map((m) => m[1])
-  )
-)
+  ),
+  // office_structure.py passes the SC literal as the 2nd arg of _finding(id, "X.X.X …").
+  // Match that call form specifically so a docstring mention can't fake coverage.
+  ...[...readFileSync(repoFile('api/office_structure.py'), 'utf8')
+    .matchAll(/_finding\([^,]+,\s*"(\d+\.\d+\.\d+)/g)].map((m) => m[1]),
+])
 const partnerSCs = new Set(
   Object.entries(JSON.parse(readFileSync(repoFile('config/rule-catalog.json'), 'utf8')))
     .filter(([fmt]) => fmt !== '_meta')

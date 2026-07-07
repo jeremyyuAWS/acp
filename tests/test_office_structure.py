@@ -176,6 +176,42 @@ def test_docx_toc_content_control_without_alias_not_flagged(tmp_path):
     assert not any(f["ruleId"] == "DOCX_FORM_FIELD_NO_LABEL" for f in findings)
 
 
+# --- docx: 2.4.10 section headings -------------------------------------------
+
+def _para(text):
+    return f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"
+
+
+def test_docx_long_body_with_no_headings_flagged(tmp_path):
+    body = "".join(_para(f"Paragraph {i} carries real content.")
+                   for i in range(os_._MIN_PARAS_FOR_HEADINGS + 3))
+    doc = f"<w:document><w:body>{body}</w:body></w:document>"
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert any(f["ruleId"] == "DOCX_NO_SECTION_HEADINGS" for f in findings)
+
+
+def test_docx_long_body_with_a_heading_not_flagged(tmp_path):
+    heading = '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Intro</w:t></w:r></w:p>'
+    body = heading + "".join(_para(f"Paragraph {i}.") for i in range(os_._MIN_PARAS_FOR_HEADINGS + 3))
+    doc = f"<w:document><w:body>{body}</w:body></w:document>"
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert not any(f["ruleId"] == "DOCX_NO_SECTION_HEADINGS" for f in findings)
+
+
+def test_docx_short_body_with_no_headings_not_flagged(tmp_path):
+    body = "".join(_para(f"Line {i}.") for i in range(os_._MIN_PARAS_FOR_HEADINGS - 5))
+    doc = f"<w:document><w:body>{body}</w:body></w:document>"
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert not any(f["ruleId"] == "DOCX_NO_SECTION_HEADINGS" for f in findings)
+
+
+def test_docx_many_empty_paragraphs_not_flagged(tmp_path):
+    body = "<w:p></w:p>" * (os_._MIN_PARAS_FOR_HEADINGS + 5)
+    doc = f"<w:document><w:body>{body}</w:body></w:document>"
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert not any(f["ruleId"] == "DOCX_NO_SECTION_HEADINGS" for f in findings)
+
+
 # --- pptx: 2.4.6 title placeholder present but empty -------------------------
 
 _SLIDE_TMPL = """<p:sld><p:cSld><p:spTree>

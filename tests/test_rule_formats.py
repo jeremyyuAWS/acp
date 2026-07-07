@@ -30,13 +30,16 @@ _OFFICE_STRUCT_FORMATS = {
     # xlsx_contrast_checks() cover 1.4.3 + 1.4.6 for pdf and xlsx (the html
     # coverage for these two comes from scanner.py, already counted above via
     # html_scs); pdf_bypass_blocks_check() covers 2.4.1 for PDF only;
-    # docx_checks()'s form-field-label check covers 3.3.2 for docx only.
+    # docx_checks()'s form-field-label check covers 3.3.2 for docx only, and its
+    # no-section-headings check covers 2.4.10 for docx only. (3.1.5 Reading Level
+    # lives in textchecks.py and is derived as all-formats automatically.)
     "2.4.6": {"docx", "pptx"},
     "2.4.9": {"docx", "pptx"},
     "1.4.3": {"pdf", "xlsx"},
     "1.4.6": {"pdf", "xlsx"},
     "2.4.1": {"pdf"},
     "3.3.2": {"docx"},
+    "2.4.10": {"docx"},
 }
 
 
