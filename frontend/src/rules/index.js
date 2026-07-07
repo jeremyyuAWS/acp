@@ -77,6 +77,7 @@ export const PLAIN_NAMES = {
   '1.2.2': 'Video missing captions',
   '1.2.3': 'Video missing audio description or transcript',
   '1.3.1': 'Structure not marked up (headings, lists, tables)',
+  '1.3.3': 'Instructions rely on shape or position alone',
   '1.3.4': 'Content locked to one screen orientation',
   '1.3.5': "Form fields don't declare their purpose",
   '1.4.1': 'Information shown by color alone',
@@ -99,6 +100,7 @@ export const PLAIN_NAMES = {
   '2.4.6': 'Unclear headings or labels',
   '2.4.7': 'No visible keyboard focus indicator',
   '3.1.1': 'Document language not set',
+  '3.1.2': "A passage's language not marked",
   '3.1.4': 'Unexplained abbreviations',
   '4.1.2': 'Controls missing names/roles for assistive tech',
 }

@@ -617,6 +617,13 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = True):
         raw["issues"] = list(raw.get("issues", [])) + _ocr_mod.images_of_text(tmp / name, ext)
     except Exception:
         pass
+    # 1.3.3 Sensory Characteristics + 3.1.2 Language of Parts — text-content checks.
+    try:
+        import pii as _pii_mod2
+        import textchecks as _txt_mod
+        raw["issues"] = list(raw.get("issues", [])) + _txt_mod.content_findings(_pii_mod2.extract_text(tmp / name))
+    except Exception:
+        pass
     raw["issues"] = [i for i in raw["issues"] if i["ruleId"] not in rb.disabled]
     raw["errors"] = [e for e in raw["errors"]
                      if (e.get("rule") if isinstance(e, dict) else None) not in rb.disabled]
@@ -659,6 +666,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
 
         import pii as _pii_mod  # sensitive-data detection dimension (ADR 0006)
         import ocr as _ocr_mod  # 1.4.5 images-of-text OCR detection
+        import textchecks as _txt_mod  # 1.3.3 sensory + 3.1.2 language-of-parts
         pii_by_file: dict[str, dict] = {}
         raw: dict[str, dict] = {}
 
@@ -681,6 +689,11 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             # 1.4.5 Images of Text — OCR embedded images; self-gates + never raises.
             try:
                 r["issues"] = list(r.get("issues", [])) + _ocr_mod.images_of_text(tmp / name, ext)
+            except Exception:
+                pass
+            # 1.3.3 Sensory Characteristics + 3.1.2 Language of Parts — text-content checks.
+            try:
+                r["issues"] = list(r.get("issues", [])) + _txt_mod.content_findings(_pii_mod.extract_text(tmp / name))
             except Exception:
                 pass
             pinfo = _pii_mod.detect_file(tmp / name) if detect_pii else None

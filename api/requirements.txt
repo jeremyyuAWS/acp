@@ -30,6 +30,7 @@ pdfplumber==0.11.10
 pdfminer.six==20260107
 pillow==12.2.0
 pytesseract==0.3.13  # 1.4.5 images-of-text OCR (wraps the tesseract-ocr binary; see Dockerfile)
+langdetect==1.0.9  # 3.1.2 language-of-parts detection (MIT; deterministic w/ seeded factory)
 lxml==6.1.1
 
 # --- branded PDF report export ---
