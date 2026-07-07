@@ -1,14 +1,16 @@
 """Local-model AI layer for ACP.
 
-Calls a locally-running Ollama instance (or any OpenAI-compatible endpoint)
-to generate human-readable explanations and fix examples for WCAG findings.
+Calls a locally-running Ollama instance (its native /api HTTP endpoint) to
+generate human-readable explanations and fix examples for WCAG findings. No
+commercial-LLM SDK or API key is used anywhere — the only backend is the local
+Ollama model; the layer degrades to deterministic prose when it is unreachable.
 
 Config (env vars):
   OLLAMA_BASE_URL  — default http://localhost:11434
   OLLAMA_MODEL     — default llama3.2 (3B, runs on CPU; swap for llava for vision tasks)
 
-Fails gracefully: every public function returns None when Ollama is unreachable
-so callers can show "AI explanation unavailable" without breaking the UI.
+Fails gracefully: every public function returns None (deterministic prose for the
+digest) when Ollama is unreachable — callers never break and never need a key.
 """
 from __future__ import annotations
 import os
@@ -89,37 +91,6 @@ def _parse(text: str) -> dict[str, str]:
     return {"why": why, "fix": fix}
 
 
-def _claude_complete(system: str, user: str, max_tokens: int = 300) -> tuple[str, str] | None:
-    """One-shot Claude text completion via the Anthropic SDK. Returns (text, model), or None
-    when ANTHROPIC_API_KEY is unset or the call fails. Model: claude-opus-4-8 (ANTHROPIC_MODEL
-    override). Shared by the compliance digest and per-finding explanations."""
-    # ACP_AI_BACKEND=ollama pins ALL generation to the local model — external
-    # token spend becomes impossible even if an Anthropic key is present.
-    # 'claude' / unset ('auto') keep the existing prefer-Claude-when-keyed flow.
-    if os.environ.get("ACP_AI_BACKEND", "auto").lower() == "ollama":
-        return None
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
-        return None
-    model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
-    try:
-        from anthropic import Anthropic
-        msg = Anthropic(api_key=key).messages.create(
-            model=model, max_tokens=max_tokens, system=system,
-            messages=[{"role": "user", "content": user}])
-        text = "".join(getattr(b, "text", "") for b in msg.content if getattr(b, "type", "") == "text").strip()
-        return (text, model) if text else None
-    except Exception:
-        return None
-
-
-_EXPLAIN_SYSTEM = (
-    "You are an accessibility compliance assistant. Reply with exactly two labeled lines — "
-    "WHY: (which users are blocked and how) and FIX: (one concrete action or minimal snippet) "
-    "— under 55 words total, specific to the file type. Use only the finding details given."
-)
-
-
 def explain_finding(
     rule_id: str,
     rule_name: str,
@@ -129,12 +100,9 @@ def explain_finding(
     severity: str,
     engine_rule_ids: list[str],
 ) -> dict | None:
-    """Explain a WCAG finding. Prefers Claude (when ANTHROPIC_API_KEY is set) → local Ollama.
-    Returns None when neither is available / on error."""
+    """Explain a WCAG finding via the local Ollama model. Returns None when Ollama
+    is unavailable / on error (the UI then shows 'AI explanation unavailable')."""
     prompt = _prompt(rule_id, rule_name, level, filename, finding_count, severity, engine_rule_ids)
-    res = _claude_complete(_EXPLAIN_SYSTEM, prompt, max_tokens=200)
-    if res:
-        return {**_parse(res[0]), "model": res[1], "raw": res[0]}
     try:
         import httpx
         r = httpx.post(
@@ -218,19 +186,6 @@ def _digest_fallback_narrative(facts: dict) -> str:
     return " ".join(parts)
 
 
-_DIGEST_SYSTEM = (
-    "You are an accessibility compliance analyst writing for a compliance officer. Use ONLY "
-    "the facts provided; never invent numbers, file names, or success criteria. Output a "
-    "single plain-English paragraph (2-3 sentences), no markdown, no preamble, no bullet points."
-)
-
-
-def _claude_narrative(facts: dict) -> tuple[str, str] | None:
-    """Best-quality digest narrative via Claude (only when ANTHROPIC_API_KEY is set)."""
-    res = _claude_complete(_DIGEST_SYSTEM, _digest_prompt(facts), max_tokens=400)
-    return res if (res and len(res[0]) > 40) else None
-
-
 def _ollama_narrative(facts: dict) -> tuple[str, str] | None:
     """Local fallback narrative via the deployed Ollama backend. Returns (text, model)."""
     try:
@@ -248,11 +203,11 @@ def _ollama_narrative(facts: dict) -> tuple[str, str] | None:
 
 def compliance_digest(d: dict, ai_enabled: bool = True) -> dict:
     """Executive digest from real scan data — deterministic facts + a narrative. Narrative
-    preference: Claude (when ANTHROPIC_API_KEY is set) → local Ollama → deterministic prose."""
+    preference: local Ollama → deterministic prose (no external LLM)."""
     facts = _digest_facts(d)
     narrative, ai, model = _digest_fallback_narrative(facts), False, "deterministic"
     if ai_enabled:
-        res = _claude_narrative(facts) or _ollama_narrative(facts)
+        res = _ollama_narrative(facts)
         if res:
             narrative, model, ai = res[0], res[1], True
     return {**facts, "narrative": narrative, "ai": ai, "model": model}

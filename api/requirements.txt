@@ -39,9 +39,9 @@ reportlab==4.5.1
 # --- observability (per-rule Langfuse spans; no-ops when env vars absent) ---
 langfuse>=2.0,<3.0
 
-# --- AI compliance-digest narrative (preferred when ANTHROPIC_API_KEY is set; otherwise
-#     the digest falls back to the local Ollama backend, then a deterministic paragraph) ---
-anthropic>=0.49,<1.0
+# --- AI compliance-digest narrative + per-finding explanations: 100% local via the
+#     Ollama backend (OLLAMA_BASE_URL / OLLAMA_MODEL), with a deterministic-prose
+#     fallback. No commercial-LLM SDK or key — Anthropic/OpenAI are not used at all. ---
 
 # --- tests ---
 pytest==9.1.0

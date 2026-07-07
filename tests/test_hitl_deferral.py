@@ -61,14 +61,21 @@ def test_deferral_does_not_collide_with_ai_assisted_pull(store):
     assert ids == {"1.1.1/deferred"}
 
 
-def test_ai_backend_ollama_pins_local(monkeypatch):
-    # ACP_AI_BACKEND=ollama must make external token spend impossible even
-    # with an Anthropic key present — _claude_complete short-circuits to None
-    # before any SDK call, so everything falls through to the local model.
+def test_no_commercial_llm_surface():
+    # The AI layer is 100% local: no Anthropic/OpenAI SDK, no key, no external
+    # call path. Even with a (would-bill) key set, there is nothing to invoke it —
+    # the module carries no commercial-LLM symbols at all.
     import ai
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-would-bill-if-used")
-    monkeypatch.setenv("ACP_AI_BACKEND", "ollama")
-    assert ai._claude_complete("sys", "user") is None
-    monkeypatch.setenv("ACP_AI_BACKEND", "auto")
-    monkeypatch.delenv("ANTHROPIC_API_KEY")
-    assert ai._claude_complete("sys", "user") is None   # no key → still no external call
+    src = open(ai.__file__).read().lower()
+    assert "anthropic" not in src, "ai.py must not reference Anthropic"
+    assert "openai" not in src, "ai.py must not reference OpenAI"
+    assert not hasattr(ai, "_claude_complete") and not hasattr(ai, "_claude_narrative")
+
+
+def test_digest_is_keyless_and_deterministic_when_offline(monkeypatch):
+    # With no key and Ollama unreachable, the compliance digest still returns a real
+    # deterministic narrative (never crashes, never needs a commercial LLM key).
+    import ai
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-would-bill-if-used")  # must be ignored — no code reads it
+    d = ai.compliance_digest({"avg_score": 66, "total": 3, "certifiable": 1}, ai_enabled=True)
+    assert d["ai"] is False and d["model"] == "deterministic" and d["narrative"]
