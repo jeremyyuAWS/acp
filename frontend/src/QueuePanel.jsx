@@ -24,6 +24,17 @@ const STATUS = {
   failed:  ['#A32D2D', '#FCEBEB', 'failed'],
   dead:    ['#A32D2D', '#FCEBEB', 'dead-letter'],
 }
+// The deterministic WCAG fixes the server-side remediator applies (alt text, contrast,
+// title, language, reading order). Cycled next to the title while a file is in flight to
+// show the remediation is active — client-paced (a one-shot job streams no per-rule step),
+// the same representative animation the FileDrawer progress line uses.
+const REM_STEPS = [
+  'Images missing a text description (1.1.1)',
+  'Low colour contrast (1.4.3 / 1.4.6)',
+  'Missing document title (2.4.2)',
+  'Language of page not set (3.1.1)',
+  'Reading order may not match visual order (1.3.2)',
+]
 
 export default function QueuePanel() {
   const [q, setQ] = useState(null)
@@ -35,6 +46,7 @@ export default function QueuePanel() {
   // returns. Rate = delta(done) / delta(t) over the oldest-vs-newest sample in the window.
   const historyRef = useRef([])
   const [throughput, setThroughput] = useState(null)   // jobs/min, or null until 2+ samples
+  const [remStep, setRemStep] = useState(0)            // cycles the live "Remediating …" fix label
 
   useEffect(() => {
     let on = true
@@ -59,6 +71,16 @@ export default function QueuePanel() {
     const t = setInterval(load, 2000)
     return () => { on = false; clearInterval(t) }
   }, [])
+
+  // The file a worker is remediating right now (most recent running remediate job).
+  const remJob = (q?.jobs || []).find((j) => j.status === 'running' && j.type === 'remediate_file')
+  const remFile = remJob ? jobFile(remJob.payload) : null
+  // Cycle the fix label while a remediation is in flight.
+  useEffect(() => {
+    if (!remFile) { setRemStep(0); return }
+    const t = setInterval(() => setRemStep((i) => (i + 1) % REM_STEPS.length), 1600)
+    return () => clearInterval(t)
+  }, [remFile])
 
   const scaleWorkers = (next) => {
     const cur = q?.workers ?? 0
@@ -104,10 +126,19 @@ export default function QueuePanel() {
 
   return (
     <section className="panel" style={{ marginBottom: 14 }}>
-      <h2 style={{ margin: 0 }}>
-        Async job queue{' '}
-        <span className="muted">· durable scan &amp; remediation processing</span>
-      </h2>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+        <h2 style={{ margin: 0 }}>
+          Async job queue{' '}
+          <span className="muted">· durable scan &amp; remediation processing</span>
+        </h2>
+        {remFile && (
+          <span aria-live="polite" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#185FA5', fontWeight: 600 }}>
+            <span className="livedot" aria-hidden="true" />
+            Remediating <span className="fname" title={remFile} style={{ fontWeight: 700 }}>{remFile}</span>
+            <span className="muted" style={{ fontWeight: 400 }}>· {REM_STEPS[remStep]}</span>
+          </span>
+        )}
+      </div>
 
       {q && workers === 0 && (
         <p className="muted" style={{ marginTop: 8, fontSize: 13 }}>
