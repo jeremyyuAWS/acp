@@ -62,7 +62,7 @@ import re
 import zipfile
 from pathlib import Path
 
-_HEADING_STYLE = re.compile(r'<w:pStyle w:val="Heading(\d)"/>')
+_HEADING_STYLE = re.compile(r'<w:pStyle\s+w:val="Heading(\d)"\s*/>')
 _PARA = re.compile(r"<w:p[ >].*?</w:p>", re.S)
 # A body with this many text-bearing paragraphs and zero headings is long enough
 # that the lack of section structure is a real 2.4.10 problem (a short letter/memo
@@ -70,8 +70,9 @@ _PARA = re.compile(r"<w:p[ >].*?</w:p>", re.S)
 _MIN_PARAS_FOR_HEADINGS = 15
 # Justified (both-margin) alignment is an explicit 1.4.8 failure. Require a few
 # text-bearing justified paragraphs so a single incidental justified line (e.g. a
-# banner) doesn't trip it — the SC is about blocks of body text.
-_JC_BOTH = re.compile(r'<w:jc w:val="both"\s*/>')
+# banner) doesn't trip it — the SC is about blocks of body text. "distribute" is
+# East-Asian full-justify, likewise a both-margins failure.
+_JC_BOTH = re.compile(r'<w:jc\s+w:val="(?:both|distribute)"\s*/>')
 _MIN_JUSTIFIED_PARAS = 3
 # rIds are XML "ID" type, not necessarily numeric — Word/PowerPoint always emit
 # pure digits (rId4), but any tool producing valid OOXML can use rIdFoo.
@@ -92,11 +93,13 @@ _SDT_INPUT_TYPE = re.compile(r"<w:(checkbox|date|dropDownList|comboBox|picture)\
 _SDT_ALIAS = re.compile(r'<w:alias\s+w:val="([^"]*)"')
 
 # "title" = normal slide layouts; "ctrTitle" = the Title Slide layout's centered
-# title — both are the slide's title for 2.4.6 purposes.
-_PPTX_TITLE_PH = re.compile(r'<p:ph type="(?:ctrTitle|title)"\s*/>')
+# title — both are the slide's title for 2.4.6 purposes. Match the whole <p:ph>
+# opening tag regardless of extra attributes (e.g. idx="0") or self-closing vs
+# paired form — a strict `type=".."/>` missed those and silently skipped the check.
+_PPTX_TITLE_PH = re.compile(r'<p:ph\b(?=[^>]*\btype="(?:ctrTitle|title)")[^>]*>')
 _A_RUN = re.compile(r"<a:r>(.*?)</a:r>", re.S)
 _A_HLINK = re.compile(r'<a:hlinkClick[^>]*r:id="(rId\w+)"')
-_AT = re.compile(r"<a:t>([^<]*)</a:t>")
+_AT = re.compile(r"<a:t\b[^>]*>([^<]*)</a:t>")  # tolerate xml:space="preserve" etc.
 
 
 def _read(zf: zipfile.ZipFile, name: str) -> str | None:
@@ -118,17 +121,20 @@ def _finding(rule_id: str, wcag: str, severity: str) -> dict:
 
 
 def _duplicate_href_findings(links: list[tuple[str, str]], rule_id: str, wcag: str) -> list[dict]:
-    """links: [(display_text, href), ...]. Same algorithm as scanner.py's HTML
-    2.4.9 check — identical text pointing at different real destinations fails
-    'text alone', even though nothing here is analogous to 2.4.4's context credit."""
+    """links: [(display_text, href), ...]. 2.4.9 fails when identical display
+    TEXT points at different destinations. Flag links whose *text* is ambiguous —
+    NOT other links that merely share one of those URLs (a distinctly-labelled
+    link pointing at the same target as an ambiguous pair is fine, and flagging
+    it was a false positive found in review)."""
     groups: dict[str, set[str]] = {}
     for text, href in links:
         key = text.strip().lower()
         if not key or not href:
             continue
         groups.setdefault(key, set()).add(href)
-    bad_hrefs = {h for hrefs in groups.values() if len(hrefs) > 1 for h in hrefs}
-    return [_finding(rule_id, wcag, "MODERATE") for text, href in links if href in bad_hrefs]
+    ambiguous_texts = {k for k, hrefs in groups.items() if len(hrefs) > 1}
+    return [_finding(rule_id, wcag, "MODERATE") for text, href in links
+            if href and text.strip().lower() in ambiguous_texts]
 
 
 def docx_checks(path: Path) -> list[dict]:
@@ -243,24 +249,48 @@ def pptx_checks(path: Path) -> list[dict]:
 # checks — relative luma of the declared color; not a true APCA/WCAG contrast-
 # ratio computation against the actual background, which for a PDF would need
 # per-glyph background sampling. Consistent with the existing HTML heuristic.
-_MIN_CHARS_PER_PAGE = 40  # bound pdfplumber work on huge PDFs
+# Caps to bound pdfplumber work on huge PDFs — but large enough to reach body text
+# past a high-contrast heading (the old 40-char slice stopped inside the header and
+# missed light-grey body that followed → false negative).
+_MAX_CHARS_PER_PAGE = 600
+_MAX_CHARS_TOTAL = 4000
 
 
-def _pdf_luma(rgb) -> float | None:
-    if not isinstance(rgb, (tuple, list)) or len(rgb) < 3:
+def _pdf_luma(color) -> float | None:
+    """Relative luma 0..1 from pdfplumber's non_stroking_color, which may be a
+    single float (DeviceGray), a 3-tuple (RGB), or a 4-tuple (CMYK). A bare RGB
+    slice of a CMYK value silently mis-reads it (light-grey CMYK looked pure
+    black → never flagged), and gray singletons were dropped entirely."""
+    try:
+        if isinstance(color, (int, float)):
+            return float(color)
+        if not isinstance(color, (tuple, list)) or not color:
+            return None
+        vals = [float(v) for v in color]
+        if len(vals) == 1:
+            return vals[0]
+        if len(vals) == 3:
+            r, g, b = vals
+        elif len(vals) == 4:
+            c, m, y, k = vals
+            r, g, b = (1 - c) * (1 - k), (1 - m) * (1 - k), (1 - y) * (1 - k)
+        else:
+            return None
+        return 0.299 * r + 0.587 * g + 0.114 * b
+    except (TypeError, ValueError):
         return None
-    r, g, b = rgb[0], rgb[1], rgb[2]
-    return 0.299 * r + 0.587 * g + 0.114 * b
 
 
 def pdf_contrast_checks(path: Path) -> list[dict]:
     findings: list[dict] = []
     seen_aa = seen_aaa = False
+    total = 0
     try:
         import pdfplumber
         with pdfplumber.open(str(path)) as pdf:
             for page in pdf.pages:
-                for ch in page.chars[:_MIN_CHARS_PER_PAGE]:
+                for ch in page.chars[:_MAX_CHARS_PER_PAGE]:
+                    total += 1
                     luma = _pdf_luma(ch.get("non_stroking_color"))
                     if luma is None:
                         continue
@@ -268,7 +298,7 @@ def pdf_contrast_checks(path: Path) -> list[dict]:
                         seen_aaa = True
                     if luma > 0.62:
                         seen_aa = True
-                if seen_aa and seen_aaa:
+                if (seen_aa and seen_aaa) or total >= _MAX_CHARS_TOTAL:
                     break
     except Exception:
         return []
@@ -308,9 +338,23 @@ def pdf_bypass_blocks_check(path: Path) -> list[dict]:
     return [_finding("PDF_NO_BOOKMARKS", "2.4.1 Bypass Blocks", "MODERATE")]
 
 
+# styles.xml holds several look-alike collections. The real cell formats a cell's
+# s="N" indexes live ONLY in <cellXfs>; <cellStyleXfs> (named styles) and the
+# <dxfs> differential formats (conditional formatting) share the <xf>/<font>/<fill>
+# tag names but must NOT be counted — mixing them shifts every index and resolves
+# the wrong colour (both false pos and false neg). So scope each list to its
+# container block first, then enumerate within.
+_FONTS_CONTAINER = re.compile(r"<fonts\b[^>]*>(.*?)</fonts>", re.S)
+_FILLS_CONTAINER = re.compile(r"<fills\b[^>]*>(.*?)</fills>", re.S)
+_CELLXFS_CONTAINER = re.compile(r"<cellXfs\b[^>]*>(.*?)</cellXfs>", re.S)
 _FONT_BLOCK = re.compile(r"<font>(.*?)</font>", re.S)
 _FILL_BLOCK = re.compile(r"<fill>(.*?)</fill>", re.S)
 _XF = re.compile(r"<xf\b[^>]*?/>|<xf\b[^>]*?>.*?</xf>", re.S)
+
+
+def _container(container_re, styles: str) -> str:
+    m = container_re.search(styles)
+    return m.group(1) if m else ""
 _ATTR_INT = lambda name: re.compile(rf'\b{name}="(\d+)"')  # noqa: E731
 _FONT_ID, _FILL_ID = _ATTR_INT("fontId"), _ATTR_INT("fillId")
 _PATTERN_TYPE = re.compile(r'patternType="([^"]*)"')
@@ -362,11 +406,11 @@ def xlsx_contrast_checks(path: Path) -> list[dict]:
             styles = _read(zf, "xl/styles.xml")
             if not styles:
                 return []
-            fonts = [_xlsx_font_color(m) for m in _FONT_BLOCK.findall(styles)]
-            fills = [_xlsx_fill_color(m) for m in _FILL_BLOCK.findall(styles)]
+            fonts = [_xlsx_font_color(m) for m in _FONT_BLOCK.findall(_container(_FONTS_CONTAINER, styles))]
+            fills = [_xlsx_fill_color(m) for m in _FILL_BLOCK.findall(_container(_FILLS_CONTAINER, styles))]
 
             style_colors: dict[int, tuple[str, str]] = {}
-            for i, xf in enumerate(_XF.findall(styles)):
+            for i, xf in enumerate(_XF.findall(_container(_CELLXFS_CONTAINER, styles))):
                 fid_m, filid_m = _FONT_ID.search(xf), _FILL_ID.search(xf)
                 if not fid_m or not filid_m:
                     continue

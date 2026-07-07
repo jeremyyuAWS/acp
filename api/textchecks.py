@@ -96,8 +96,17 @@ def detect_language_parts(text: str) -> list[dict]:
 _MIN_WORDS_FOR_READING = 200   # a readability score on a short snippet is meaningless
 _MIN_GRADE = 15.0              # ~ mid-college; well above the SC's grade-9 floor
 _WORD_RE = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?")
-_SENT_SPLIT = re.compile(r"[.!?]+")
+# Sentence boundaries: terminal punctuation AND line breaks. Extracted PDF/OOXML
+# text (bulleted lists, tables, forms, title pages) is often punctuation-free but
+# line-broken; without treating newlines as boundaries the whole document collapses
+# into one "sentence", the words/sentence ratio explodes, and FK grade blows past
+# the threshold on trivially readable content (a real false-positive found in review).
+_SENT_SPLIT = re.compile(r"[.!?\r\n]+")
 _VOWEL_GROUP = re.compile(r"[aeiouy]+")
+# Even after splitting on newlines, a blob with neither punctuation nor line breaks
+# yields one enormous "sentence" — that's unpunctuated extraction, not dense prose,
+# so the grade is unreliable and we decline to score rather than false-flag.
+_MAX_WORDS_PER_SENTENCE = 80
 
 
 def _syllables(word: str) -> int:
@@ -118,8 +127,10 @@ def flesch_kincaid_grade(text: str) -> float | None:
         return None
     sentences = [s for s in _SENT_SPLIT.split(text) if s.strip()]
     n_sent = max(1, len(sentences))
-    syllables = sum(_syllables(w) for w in words)
     n_words = len(words)
+    if n_words / n_sent > _MAX_WORDS_PER_SENTENCE:
+        return None  # unpunctuated / not well-formed prose — don't guess a grade
+    syllables = sum(_syllables(w) for w in words)
     return 0.39 * (n_words / n_sent) + 11.8 * (syllables / n_words) - 15.59
 
 

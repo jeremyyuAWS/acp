@@ -116,6 +116,25 @@ def test_docx_duplicate_link_text_different_targets_flagged(tmp_path):
     assert sum(1 for f in findings if f["ruleId"] == "DOCX_LINK_PURPOSE_AMBIGUOUS") == 2
 
 
+def test_docx_distinct_link_sharing_a_target_not_flagged(tmp_path):
+    """A distinctly-labelled link that happens to point at the same URL as an
+    ambiguous pair must NOT be flagged — only the ambiguous-text links fail 2.4.9
+    (regression: the old href-based logic flagged the innocent 'Homepage' link)."""
+    doc = """<w:document><w:body>
+    <w:p><w:hyperlink r:id="rId2"><w:r><w:t>Read more</w:t></w:r></w:hyperlink></w:p>
+    <w:p><w:hyperlink r:id="rId3"><w:r><w:t>Read more</w:t></w:r></w:hyperlink></w:p>
+    <w:p><w:hyperlink r:id="rId4"><w:r><w:t>Homepage</w:t></w:r></w:hyperlink></w:p>
+    </w:body></w:document>"""
+    rels = _RELS_XML.format(rels="\n".join([
+        _REL.format(rid="rId2", target="https://example.com/apple"),
+        _REL.format(rid="rId3", target="https://example.com/banana"),
+        _REL.format(rid="rId4", target="https://example.com/apple"),
+    ]))
+    findings = os_.docx_checks(_docx(tmp_path, doc, rels))
+    # Exactly the two "Read more" links, not "Homepage".
+    assert sum(1 for f in findings if f["ruleId"] == "DOCX_LINK_PURPOSE_AMBIGUOUS") == 2
+
+
 def test_docx_same_link_text_same_target_not_flagged(tmp_path):
     doc = """<w:document><w:body>
     <w:p><w:hyperlink r:id="rId2"><w:r><w:t>View details</w:t></w:r></w:hyperlink></w:p>
@@ -284,6 +303,14 @@ def test_pptx_no_title_placeholder_not_flagged(tmp_path):
     assert not any(f["ruleId"] == "PPTX_TITLE_EMPTY" for f in findings)
 
 
+def test_pptx_empty_title_with_idx_attr_flagged(tmp_path):
+    """The title placeholder may carry extra attributes (idx) — the check must
+    still fire (regression: a strict type=".."/> match silently skipped these)."""
+    xml = _SLIDE_TMPL.format(ph='<p:ph type="title" idx="0"/>', body="")
+    findings = os_.pptx_checks(_pptx(tmp_path, xml))
+    assert any(f["ruleId"] == "PPTX_TITLE_EMPTY" for f in findings)
+
+
 # --- pptx: 2.4.9 duplicate link text -----------------------------------------
 
 _LINK_SLIDE = """<p:sld><p:cSld><p:spTree>
@@ -351,6 +378,33 @@ def test_xlsx_theme_font_color_not_flagged(tmp_path):
     assert findings == []
 
 
+def test_xlsx_indices_scoped_to_real_blocks(tmp_path):
+    """Regression: a real workbook has <cellStyleXfs> (named styles) before
+    <cellXfs>, and <dxfs> (conditional-format) fonts/fills sharing the tag names.
+    A cell's s="N" indexes ONLY into cellXfs; counting the other blocks shifts
+    every index and resolves the wrong colour. Here s=1 -> cellXfs[1] = light
+    grey on white must still be flagged despite the decoy blocks."""
+    styles = (
+        '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<fonts count="2"><font><color rgb="FF000000"/></font>'
+        '<font><color rgb="FFCCCCCC"/></font></fonts>'
+        '<fills count="2"><fill><patternFill patternType="none"/></fill>'
+        '<fill><patternFill patternType="solid"><fgColor rgb="FFFFFFFF"/></patternFill></fill></fills>'
+        '<cellStyleXfs count="2"><xf fontId="0" fillId="0"/><xf fontId="0" fillId="0"/></cellStyleXfs>'
+        '<cellXfs count="2"><xf fontId="0" fillId="0"/><xf fontId="1" fillId="1"/></cellXfs>'
+        '<dxfs count="1"><dxf><font><color rgb="FFFF0000"/></font></dxf></dxfs>'
+        '</styleSheet>'
+    )
+    sheet = ('<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+             '<sheetData><row><c r="A1" s="1"><v>text</v></c></row></sheetData></worksheet>')
+    p = tmp_path / "real.xlsx"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("xl/styles.xml", styles)
+        z.writestr("xl/worksheets/sheet1.xml", sheet)
+    ids = {f["ruleId"] for f in os_.xlsx_contrast_checks(p)}
+    assert ids == {"XLSX_LOW_CONTRAST_AA", "XLSX_LOW_CONTRAST_AAA"}
+
+
 def test_xlsx_non_solid_pattern_fill_not_flagged(tmp_path):
     """A half-tone/stripe pattern fill (e.g. gray125) has no single resolvable
     background color — skipped rather than guessed at."""
@@ -391,8 +445,20 @@ def test_pdf_dark_text_only_not_flagged(tmp_path):
 
 def test_pdf_luma_rejects_malformed_color():
     assert os_._pdf_luma(None) is None
-    assert os_._pdf_luma((0.5,)) is None
+    assert os_._pdf_luma(()) is None
     assert os_._pdf_luma("not-a-color") is None
+    assert os_._pdf_luma((0.1, 0.2, 0.3, 0.4, 0.5)) is None  # 5-tuple = unknown space
+
+
+def test_pdf_luma_handles_gray_rgb_and_cmyk():
+    # DeviceGray single value (float or 1-tuple) — a common way grey text is set.
+    assert os_._pdf_luma(0.8) == 0.8
+    assert os_._pdf_luma((0.8,)) == 0.8
+    # RGB.
+    assert round(os_._pdf_luma((0.1, 0.1, 0.1)), 2) == 0.1
+    # CMYK light-grey (0,0,0,0.1) must read ~0.9 (light), not 0 (a bare RGB slice
+    # of the CMYK tuple mis-read it as pure black → never flagged).
+    assert round(os_._pdf_luma((0, 0, 0, 0.1)), 2) == 0.9
 
 
 # --- pdf: 2.4.1 bypass blocks (bookmark/outline tree) -------------------------

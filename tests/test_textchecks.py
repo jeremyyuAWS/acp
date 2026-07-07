@@ -115,3 +115,15 @@ def test_syllable_heuristic_sane():
     assert tc._syllables("table") == 2      # silent-e handling keeps 'le' syllable
     assert tc._syllables("reasonable") == 4
     assert tc._syllables("the") == 1
+
+
+def test_reading_level_no_false_positive_on_unpunctuated_lines():
+    # Regression: newline-separated simple lines with no terminal punctuation must
+    # NOT read as one giant sentence and explode the grade (was flagged at grade 86).
+    text = "\n".join(["Please bring your identification card"] * 40)
+    assert tc.detect_reading_level(text) == []
+
+
+def test_reading_level_declines_to_score_unpunctuated_blob():
+    # A blob with neither punctuation nor line breaks isn't well-formed prose.
+    assert tc.flesch_kincaid_grade("word " * 250) is None
