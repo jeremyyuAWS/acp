@@ -114,6 +114,48 @@ def test_docx_non_hyperlink_xml_returns_no_findings(tmp_path):
     assert findings == []
 
 
+# --- docx: 3.3.2 form-field content controls with no label -------------------
+
+def test_docx_checkbox_with_no_alias_flagged(tmp_path):
+    doc = """<w:document><w:body>
+    <w:sdt><w:sdtPr><w:id w:val="1"/><w:checkbox/></w:sdtPr>
+    <w:sdtContent><w:r><w:t>[ ]</w:t></w:r></w:sdtContent></w:sdt>
+    </w:body></w:document>"""
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert any(f["ruleId"] == "DOCX_FORM_FIELD_NO_LABEL" for f in findings)
+
+
+def test_docx_checkbox_with_empty_alias_flagged(tmp_path):
+    doc = """<w:document><w:body>
+    <w:sdt><w:sdtPr><w:alias w:val=""/><w:dropDownList><w:listItem w:value="A"/></w:dropDownList></w:sdtPr>
+    <w:sdtContent><w:r><w:t>A</w:t></w:r></w:sdtContent></w:sdt>
+    </w:body></w:document>"""
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert any(f["ruleId"] == "DOCX_FORM_FIELD_NO_LABEL" for f in findings)
+
+
+def test_docx_checkbox_with_alias_not_flagged(tmp_path):
+    doc = """<w:document><w:body>
+    <w:sdt><w:sdtPr><w:alias w:val="Agree to terms"/><w:id w:val="1"/><w:checkbox/></w:sdtPr>
+    <w:sdtContent><w:r><w:t>[ ]</w:t></w:r></w:sdtContent></w:sdt>
+    </w:body></w:document>"""
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert not any(f["ruleId"] == "DOCX_FORM_FIELD_NO_LABEL" for f in findings)
+
+
+def test_docx_toc_content_control_without_alias_not_flagged(tmp_path):
+    """docPartObj (building-block placeholders like a TOC field) is not a
+    form-input gallery type — Word uses w:sdt for lots of non-form structural
+    content, and flagging every un-aliased sdt would false-positive on it."""
+    doc = """<w:document><w:body>
+    <w:sdt><w:sdtPr><w:id w:val="2"/>
+    <w:docPartObj><w:docPartGallery w:val="Table of Contents"/></w:docPartObj>
+    </w:sdtPr><w:sdtContent><w:r><w:t>Contents...</w:t></w:r></w:sdtContent></w:sdt>
+    </w:body></w:document>"""
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert not any(f["ruleId"] == "DOCX_FORM_FIELD_NO_LABEL" for f in findings)
+
+
 # --- pptx: 2.4.6 title placeholder present but empty -------------------------
 
 _SLIDE_TMPL = """<p:sld><p:cSld><p:spTree>

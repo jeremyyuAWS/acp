@@ -28,12 +28,14 @@ _OFFICE_STRUCT_FORMATS = {
     # office_structure.py's per-check format coverage — docx_checks()/pptx_checks()
     # cover 2.4.6 + 2.4.9 for those two formats; pdf_contrast_checks() covers
     # 1.4.3 + 1.4.6 for PDF only (not xlsx — deliberately out of scope, see
-    # docs/TODO.md P1); pdf_bypass_blocks_check() covers 2.4.1 for PDF only.
+    # docs/TODO.md P1); pdf_bypass_blocks_check() covers 2.4.1 for PDF only;
+    # docx_checks()'s form-field-label check covers 3.3.2 for docx only.
     "2.4.6": {"docx", "pptx"},
     "2.4.9": {"docx", "pptx"},
     "1.4.3": {"pdf"},
     "1.4.6": {"pdf"},
     "2.4.1": {"pdf"},
+    "3.3.2": {"docx"},
 }
 
 

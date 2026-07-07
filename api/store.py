@@ -277,7 +277,7 @@ RULE_FORMATS: dict[str, frozenset[str]] = {
     "2.4.2": _ALL_FORMATS, "2.4.3": frozenset({"html"}), "2.4.4": frozenset({"docx", "html", "pptx"}),
     "2.4.6": frozenset({"docx", "html", "pptx"}), "2.4.7": frozenset({"html"}), "2.4.9": frozenset({"docx", "html", "pptx"}),
     "2.5.3": frozenset({"html"}), "2.5.8": frozenset({"html"}), "3.1.1": _ALL_FORMATS,
-    "3.1.2": _ALL_FORMATS, "3.1.4": frozenset({"html"}), "3.3.2": frozenset({"html"}),
+    "3.1.2": _ALL_FORMATS, "3.1.4": frozenset({"html"}), "3.3.2": frozenset({"docx", "html"}),
     "4.1.2": frozenset({"html"}),
 }
 

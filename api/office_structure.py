@@ -15,6 +15,11 @@ the zip/XML/PDF ourselves).
         entries has no way to skip past repeated content, the PDF analog of a
         missing skip-link. Only checked past a page-count floor (see
         _MIN_PAGES_FOR_OUTLINE) — a 2-page memo doesn't need bookmarks.
+  3.3.2 Labels or Instructions — docx content-control form fields (checkbox,
+        date picker, dropdown, combo box, picture) with no w:alias title set.
+        Scoped to those unambiguous input gallery types only — w:sdt also
+        wraps plenty of non-form Word content (TOC blocks, citations,
+        building-block placeholders) that legitimately has no alias.
 
 docx/pptx style IDs (Heading1..9, title placeholder type) are locale-invariant
 OOXML identifiers — only the *display* name is localized — so no styles.xml
@@ -22,9 +27,13 @@ cross-reference is needed to recognize them.
 
 Scope not covered here (deliberately, see docs/TODO.md P1):
 xlsx contrast/color-only needs style-index + conditional-formatting resolution
-to avoid false-flagging routine formatting; pptx embedded-audio autoplay and
-docx/pptx form-field labeling are real but lower-value/higher-complexity —
-left for a follow-up decision.
+to avoid false-flagging routine formatting. pptx embedded-audio autoplay is
+BLOCKED, not just deferred: distinguishing an autoplay media node from a
+click-triggered one requires the exact p:timing trigger-condition XML, which
+could not be verified against a real PowerPoint-generated ground-truth fixture
+(no PowerPoint/LibreOffice available in this environment, and Microsoft's own
+docs don't spell out the precise autoplay-vs-click structure) — do not
+implement this from memory/guesswork.
 
 Never raises — a parse failure just means no findings for that document.
 """
@@ -41,6 +50,18 @@ _PARA = re.compile(r"<w:p[ >].*?</w:p>", re.S)
 _HYPERLINK = re.compile(r'<w:hyperlink[^>]*r:id="(rId\w+)"[^>]*>(.*?)</w:hyperlink>', re.S)
 _WT = re.compile(r"<w:t[^>]*>([^<]*)</w:t>")
 _RELATIONSHIP = re.compile(r'<Relationship\s+Id="(rId\w+)"[^>]*Target="([^"]+)"')
+
+# Content control (structured document tag) blocks and their title/label.
+# w:sdt wraps a LOT of non-form Word content too (TOC blocks, citations,
+# building-block placeholders via w:docPartObj) that legitimately has no
+# alias and isn't a labeling gap — only the unambiguous interactive-input
+# gallery types below are ever genuinely "a form field a user fills in",
+# so those are the only ones checked; w:text/w:richText are excluded since
+# Word also uses them for non-input template placeholders.
+_SDT = re.compile(r"<w:sdt>(.*?)</w:sdt>", re.S)
+_SDT_PR = re.compile(r"<w:sdtPr>(.*?)</w:sdtPr>", re.S)
+_SDT_INPUT_TYPE = re.compile(r"<w:(checkbox|date|dropDownList|comboBox|picture)\b")
+_SDT_ALIAS = re.compile(r'<w:alias\s+w:val="([^"]*)"')
 
 # "title" = normal slide layouts; "ctrTitle" = the Title Slide layout's centered
 # title — both are the slide's title for 2.4.6 purposes.
@@ -108,6 +129,16 @@ def docx_checks(path: Path) -> list[dict]:
                 if href:
                     links.append((text, href))
             findings += _duplicate_href_findings(links, "DOCX_LINK_PURPOSE_AMBIGUOUS", "2.4.9 Link Purpose (Link Only)")
+
+            # 3.3.2 — interactive content-control form fields (checkbox, date
+            # picker, dropdown, combo box, picture) with no alias/title set.
+            for sdt_inner in _SDT.findall(doc):
+                pr_m = _SDT_PR.search(sdt_inner)
+                if not pr_m or not _SDT_INPUT_TYPE.search(pr_m.group(1)):
+                    continue
+                alias_m = _SDT_ALIAS.search(pr_m.group(1))
+                if not alias_m or not alias_m.group(1).strip():
+                    findings.append(_finding("DOCX_FORM_FIELD_NO_LABEL", "3.3.2 Labels or Instructions", "SERIOUS"))
     except Exception:
         pass
     return findings
