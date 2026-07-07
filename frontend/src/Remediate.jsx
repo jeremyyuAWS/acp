@@ -353,7 +353,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       </div>
 
       {remProg && (
-        <div style={{ margin: '0 0 14px', maxWidth: 560 }} role="status" aria-live="polite">
+        <div style={{ margin: '0 0 14px' }} role="status" aria-live="polite">
           <div style={{ height: 9, borderRadius: 6, background: 'var(--line)', overflow: 'hidden' }}>
             <i style={{ display: 'block', height: '100%',
                         width: `${Math.round((remProg.done / Math.max(1, remProg.total)) * 100)}%`,
