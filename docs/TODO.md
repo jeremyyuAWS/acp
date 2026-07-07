@@ -1,6 +1,6 @@
 # ACP — comprehensive to-do
 
-Snapshot as of `16581bd` (main, all three remotes in sync). Verified against
+Snapshot as of `5ec86b6` (main, all three remotes in sync). Verified against
 current source (`frontend/src/wcagCatalog.js`, `api/store.py` RULE_FORMATS,
 `docs/adr/`) rather than carried forward from memory — every item below is
 either a real, buildable gap or an explicit decision waiting on someone.
@@ -30,39 +30,38 @@ zero backend validator at all) are both fixed and committed (`92189ce`,
 
 ## P1 — Tier 2 format-coverage gaps (scoped out of the last pass, real work)
 
-These are SCs that already have a **real validator for at least one format**
-(so they show "Shipped" in the catalog) but are missing coverage for others.
-Each is buildable with declared dependencies — no new pip packages needed.
+Three of four shipped (`22a7202`, `a916068`, `5ec86b6`); one is genuinely
+blocked, not just deferred. Each landed with real fixtures verified before
+implementing — no guessed detection logic.
 
-1. **xlsx contrast (1.4.3 / 1.4.6)** — `api/office_structure.py` covers PDF
-   contrast via pdfplumber's `non_stroking_color`; xlsx has no equivalent.
-   Harder than PDF: a cell's true rendered color depends on the style index
-   + any matching conditional-formatting rule, not just a direct fill/font
-   color read — get this wrong and it's a false-positive machine on
-   ordinary formatting (zebra-striping, header-row styling). Needs a
-   deliberate design pass on how much of the style-resolution chain to
-   implement before it's trustworthy enough to ship.
-2. **pptx embedded-audio autoplay (1.4.2 Audio Control)** — HTML already
-   detects autoplaying audio without a pause control; pptx slides can embed
-   audio set to auto-advance/autoplay via `<p:timing>` and media relationship
-   XML. Same posture as `office_structure.py`: read the slide XML directly,
-   no partner dependency.
-3. **docx/pptx form-field labeling (3.3.2 Labels or Instructions / 4.1.2
-   Name, Role, Value)** — both are currently `frozenset({"html"})` only in
-   `store.py`'s `RULE_FORMATS`. Word content controls (`<w:sdt>`) and
-   legacy form fields (`<w:ffData>`) need a label/title check; pptx form
-   controls are rare enough this may not be worth it standalone — bundle
-   with the docx work and reassess.
-4. **PDF outline-tree analog for 2.4.1 (Bypass Blocks)** — HTML has this
-   via skip-links/landmarks; a PDF's equivalent is a populated
-   `/Outlines` bookmark tree (or tagged-PDF structure tree) letting a
-   screen-reader user jump past repeated content. `pikepdf` is already a
-   declared dependency and can read `/Root/Outlines` directly — this is
-   the most tractable of the four.
-
-Suggested order: **#4 (PDF outline) → #2 (pptx audio) → #3 (form fields) →
-#1 (xlsx contrast)**, roughly increasing implementation risk/false-positive
-exposure.
+1. ~~**PDF outline-tree analog for 2.4.1 (Bypass Blocks)**~~ — SHIPPED
+   (`22a7202`). `pdf_bypass_blocks_check()` in `office_structure.py`, via
+   pikepdf's `/Root/Outlines`. Only checked at 5+ pages (a short memo has no
+   real bypass-blocks problem).
+2. **pptx embedded-audio autoplay (1.4.2 Audio Control)** — BLOCKED. Verified
+   the audio-attachment marker (`<a:audioFile r:link="rId">` inside
+   `<p:nvPr>`) via Microsoft's own Open XML SDK docs, but could not verify
+   the exact `<p:timing>` trigger-condition XML that distinguishes autoplay
+   from click-to-play — Microsoft's docs don't spell it out precisely, and
+   no PowerPoint/LibreOffice is available in this environment to generate a
+   real ground-truth fixture. Do not implement this from memory/guesswork —
+   next attempt needs either a real PowerPoint install somewhere, or a
+   donated real autoplay-audio .pptx to inspect.
+3. ~~**docx/pptx form-field labeling (3.3.2 / 4.1.2)**~~ — SHIPPED
+   (`a916068`), docx only. `docx_checks()` flags content-control form fields
+   (checkbox/date/dropdown/comboBox/picture — the unambiguous input gallery
+   types) missing a `w:alias` title. Verified against 3 independent sources
+   that `w:sdt` also wraps non-form content (TOC blocks, citations) that
+   must NOT be flagged — pptx form controls were assessed as too rare to be
+   worth a separate pass. Ships as 3.3.2 only, not 4.1.2 (4.1.2 is broader
+   than just labeling and wasn't fully verified as covered).
+4. ~~**xlsx contrast (1.4.3 / 1.4.6)**~~ — SHIPPED (`5ec86b6`), deliberately
+   narrow. `xlsx_contrast_checks()` resolves cell font/fill color through
+   `xl/styles.xml`'s cellXfs → fonts/fills chain, but ONLY direct
+   `<color rgb="...">` — theme= and indexed= colors, and non-solid pattern
+   fills, resolve to "unknown" and are skipped rather than guessed at (theme
+   colors are exactly what Excel's built-in header/table styles use).
+   Conditional-formatting (`cfRule`) overrides are out of scope entirely.
 
 ---
 
@@ -107,12 +106,24 @@ in-place first, then build a separate clean-`HEAD`-based copy (same edits,
 `assert count==1` string replace) to actually stage and commit, then restore
 the mixed working copy afterward.
 
+**Gotcha hit during the P1 work (`a916068`):** the "save the mixed copy"
+step must happen *after* editing the working copy in place, not before —
+saving it first and editing second means the later restore silently reverts
+your own edit from the working tree even though the commit itself is fine
+(git history stays correct; only the local file drifts). `test_rule_formats.py`
+caught this immediately on the next isolation dance because the derived
+truth no longer matched `RULE_FORMATS` — that's exactly the kind of drift
+the contract test exists to catch, but don't rely on it; get the copy order
+right: **edit in place → save mixed copy → build clean-HEAD copy → commit →
+restore mixed copy**.
+
 ---
 
 ## Reference — where things live
 
-- `api/office_structure.py` — first-party docx/pptx/pdf structural checks
-  (2.4.6, 2.4.9, 1.4.3, 1.4.6); dispatcher is `checks_for(path, ext)`.
+- `api/office_structure.py` — first-party docx/pptx/pdf/xlsx structural
+  checks (2.4.6, 2.4.9, 1.4.3, 1.4.6, 2.4.1, 3.3.2); dispatcher is
+  `checks_for(path, ext)`.
 - `api/store.py` — `RULE_CATALOG` (the 87-ish rule list) + `RULE_FORMATS`
   (per-rule format applicability) + `_rule_outcome()` (PASS/FAIL/NOT_APPLICABLE).
 - `tests/test_rule_formats.py` — contract test deriving `RULE_FORMATS` truth
