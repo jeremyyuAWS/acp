@@ -232,6 +232,7 @@ RULE_CATALOG: list[dict] = [
     {"id": "1.4.2",  "name": "Audio Control",              "level": "A",   "fix_mode": "auto",         "plain": "Autoplaying media that can't be stopped"},
     {"id": "1.4.3",  "name": "Contrast (Minimum)",          "level": "AA",  "fix_mode": "auto",         "plain": "Text with low color contrast"},
     {"id": "1.4.4",  "name": "Resize Text",                 "level": "AA",  "fix_mode": "auto",         "plain": "Text that can't be enlarged"},
+    {"id": "1.4.5",  "name": "Images of Text",             "level": "AA",  "fix_mode": "ai-assisted", "plain": "Text baked into an image"},
     {"id": "1.4.6",  "name": "Contrast (Enhanced)",        "level": "AAA", "fix_mode": "auto",         "plain": "Text below the enhanced contrast ratio"},
     {"id": "1.4.10", "name": "Reflow",                      "level": "AA",  "fix_mode": "auto",         "plain": "Content that doesn't reflow on small screens"},
     {"id": "1.4.11", "name": "Non-text Contrast",           "level": "AA",  "fix_mode": "ai-assisted", "plain": "Buttons or icons with low contrast"},

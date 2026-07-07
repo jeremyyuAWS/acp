@@ -24,9 +24,11 @@ RUN printf 'VITE_API=\nVITE_SIM=%s\n' "$VITE_SIM" > .env.production && npm run b
 FROM mirror.gcr.io/library/python:3.12-slim AS runtime
 WORKDIR /app
 
-# .NET 10 runtime (for the Office analyser CLI); libicu is required by the CLR
+# .NET 10 runtime (for the Office analyser CLI); libicu is required by the CLR.
+# tesseract-ocr backs the 1.4.5 images-of-text check (api/ocr.py) — a lightweight
+# binary (unlike easyocr, which OOMs small containers).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates libicu-dev \
+    && apt-get install -y --no-install-recommends curl ca-certificates libicu-dev tesseract-ocr \
     && curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
     && bash /tmp/dotnet-install.sh --runtime dotnet --channel 10.0 --install-dir /usr/share/dotnet \
     && ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet \

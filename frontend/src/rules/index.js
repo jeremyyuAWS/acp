@@ -81,6 +81,7 @@ export const PLAIN_NAMES = {
   '1.3.5': "Form fields don't declare their purpose",
   '1.4.1': 'Information shown by color alone',
   '1.4.2': "Autoplaying media that can't be stopped",
+  '1.4.5': 'Text baked into an image',
   '1.4.6': 'Text below the enhanced contrast ratio',
   '2.4.1': 'No way to skip repeated navigation',
   '2.5.3': "Control names don't match their visible labels",

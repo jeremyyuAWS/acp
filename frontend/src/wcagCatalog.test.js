@@ -27,8 +27,9 @@ const repoFile = (rel) => {
 // "Live now" is only honest if one of these backs it. Read from source so the
 // test tracks reality, not a hand-kept allowlist.
 const scannerSCs = new Set(
-  [...readFileSync(repoFile('api/scanner.py'), 'utf8')
-    .matchAll(/wcag":\s*"(\d+\.\d+\.\d+)/g)].map((m) => m[1])
+  ['api/scanner.py', 'api/ocr.py'].flatMap((f) =>
+    [...readFileSync(repoFile(f), 'utf8').matchAll(/wcag":\s*"(\d+\.\d+\.\d+)/g)].map((m) => m[1])
+  )
 )
 const partnerSCs = new Set(
   Object.entries(JSON.parse(readFileSync(repoFile('config/rule-catalog.json'), 'utf8')))
