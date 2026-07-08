@@ -187,6 +187,10 @@ function recommendFor(f) {
   const sensitive = (f.tags || []).some((t) => t === 'PII' || t === 'legal-hold')
   const publicDoc = (f.tags || []).some((t) => t === 'public-facing' || t === 'high-traffic')
   const stale = f.ageDays >= 540; const lowTraffic = f.views90d < 60
+  // Real backend scans carry no crawl metadata (views/age/superseded) — only SIM's
+  // genCorpus does. Guard every crawl-derived branch + rationale so a real file never
+  // shows 'undefined views/90d' or gets archived on missing data.
+  const hasCrawl = f.views90d != null || f.ageDays != null
   const manualMin = n ? n * 35 + 20 : 40
   const sav = (eta) => Math.max(0, Math.round((1 - eta / manualMin) * 100))
 
@@ -203,14 +207,14 @@ function recommendFor(f) {
   // of 'keep'. f.compliant is the actual boolean (set correctly by both the real backend
   // and SIM's genCorpus) and is what statusOf() itself derives "certifiable" from.
   if (f.compliant) {
-    if (f.superseded || (stale && lowTraffic))
+    if (f.superseded || (hasCrawl && stale && lowTraffic))
       return { action: 'archive', mode: 'auto', confidence: 84, etaMin: 2, rationale: `Compliant, but ${f.superseded ? 'a newer version exists' : `last edited ${fmtAge(f.ageDays)} with ${f.views90d} views/90d`} — archive to shrink the audited estate.` }
-    return { action: 'keep', mode: 'monitor', confidence: 99, etaMin: 0, rationale: `Certifiable at ${f.score}/100 with ${f.views90d} views/90d. Keep published under continuous monitoring for drift.` }
+    return { action: 'keep', mode: 'monitor', confidence: 99, etaMin: 0, rationale: `Certifiable at ${f.score}/100${hasCrawl ? ` with ${f.views90d} views/90d` : ''}. Keep published under continuous monitoring for drift.` }
   }
 
   if (f.superseded)
     return { action: 'archive', mode: 'auto', confidence: 88, etaMin: 2, rationale: `Superseded by a newer version and only ${f.views90d} views/90d — archiving avoids ~${manualMin} min of remediation on a dead document.` }
-  if (stale && lowTraffic && !sensitive)
+  if (hasCrawl && stale && lowTraffic && !sensitive)
     return { action: 'archive', mode: 'auto', confidence: 78, etaMin: 2, rationale: `${n} finding${n === 1 ? '' : 's'}, but last edited ${fmtAge(f.ageDays)} with ${f.views90d} views/90d — not worth ${manualMin} min of remediation.` }
 
   if (f.status === 'uncertain') {
