@@ -99,6 +99,7 @@ def _normalize(files: list[dict]) -> list[dict]:
     """
     result = []
     seen: set[str] = set()
+    skipped = 0
     for f in files:
         mime = f.get("mimeType", "")
         raw_name = f["name"]
@@ -110,6 +111,7 @@ def _normalize(files: list[dict]) -> list[dict]:
             # Accept the same set the local path + scan loop handle, including HTML
             # (was dropping .html/.htm uploaded to Drive as real text/html).
             if ext not in OFFICE + (".pdf",) + HTML_EXTS:
+                skipped += 1
                 continue
             name = _safe_name(raw_name)
         # Deduplicate: Drive can have same-name files in different folders
@@ -127,6 +129,12 @@ def _normalize(files: list[dict]) -> list[dict]:
         # dedup cares about.
         result.append({"name": unique, "id": f["id"], "checksum": f.get("md5Checksum"),
                        **({"mime": mime} if mime in EXPORT_MAP else {})})
+    if skipped:
+        # Not silent anymore: unsupported types (images, .txt/.csv, legacy .doc/.ppt/.xls,
+        # video, …) are out of accessibility scope — say how many so 'scan complete' isn't
+        # mistaken for 'everything was covered'.
+        print(f"[scan] {skipped} file(s) skipped as unsupported for accessibility scanning "
+              f"(only pdf/docx/pptx/xlsx/html are analysed)", flush=True)
     return result
 
 
@@ -140,7 +148,8 @@ def _find_remediated_folder_id(svc) -> str | None:
     safe = name.replace("\\", "\\\\").replace("'", "\\'")
     q = f"name='{safe}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
     folders = svc.files().list(q=q, fields="files(id)", orderBy="createdTime",
-                               pageSize=1).execute().get("files", [])
+                               pageSize=1, includeItemsFromAllDrives=True,
+                               supportsAllDrives=True).execute(num_retries=5).get("files", [])
     return folders[0]["id"] if folders else None
 
 
@@ -162,11 +171,17 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False) -
             pageSize=200,
             orderBy="name",
             pageToken=page_token,
-        ).execute()
+            corpora="allDrives",             # span My Drive + every Shared Drive
+            includeItemsFromAllDrives=True,
+            supportsAllDrives=True,
+        ).execute(num_retries=5)             # backoff on 429/5xx instead of failing the file
         files.extend(resp.get("files", []))
         page_token = resp.get("nextPageToken")
         if not page_token:
             break
+    if page_token:
+        print(f"[scan] whole-Drive listing hit the {max_files}-file cap — not all files were "
+              f"scanned; raise ACP_FANOUT_MAX_FILES to cover the full estate", flush=True)
     return _normalize(files[:max_files])
 
 
@@ -198,7 +213,9 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
                 fields="nextPageToken,files(id,name,mimeType,md5Checksum)",
                 pageSize=200,
                 pageToken=page_token,
-            ).execute()
+                includeItemsFromAllDrives=True,
+                supportsAllDrives=True,
+            ).execute(num_retries=5)
             for f in resp.get("files", []):
                 if f["mimeType"] == "application/vnd.google-apps.folder":
                     if exclude_remediated and f["name"] == remediated_folder_name:
@@ -209,6 +226,9 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
             page_token = resp.get("nextPageToken")
             if not page_token or len(raw) >= max_files:
                 break
+    if len(raw) >= max_files and (queue or page_token):
+        print(f"[scan] folder listing hit the {max_files}-file cap — not all files were "
+              f"scanned; raise ACP_FANOUT_MAX_FILES to cover the full subtree", flush=True)
     return _normalize(raw[:max_files])
 
 
@@ -292,7 +312,8 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         # ADC/demo mode with a pinned folder
         resp = svc.files().list(q=f"'{_DEMO_FOLDER}' in parents and trashed=false",
                                 fields="files(id,name,mimeType,md5Checksum)", pageSize=200,
-                                orderBy="name").execute()
+                                orderBy="name", includeItemsFromAllDrives=True,
+                                supportsAllDrives=True).execute(num_retries=5)
         result = _normalize(resp.get("files", []))
     return _dedupe_names(result)
 
@@ -312,11 +333,11 @@ def _download(item: dict, dest: Path, svc=None, sp_token: str | None = None) -> 
         export_mime = EXPORT_MAP[item["mime"]][0]
         req = svc.files().export_media(fileId=item["id"], mimeType=export_mime)
     else:
-        req = svc.files().get_media(fileId=item["id"])
+        req = svc.files().get_media(fileId=item["id"], supportsAllDrives=True)
     dl = MediaIoBaseDownload(buf, req)
     done = False
     while not done:
-        _, done = dl.next_chunk()
+        _, done = dl.next_chunk(num_retries=5)
     out.write_bytes(buf.getvalue())
 
 
