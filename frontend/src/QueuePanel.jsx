@@ -168,6 +168,13 @@ export default function QueuePanel() {
         </span>
         {/* Real-time worker state — what the pool is doing right now. */}
         <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
+          {workers > 0 && (
+            <span className="workerdots" aria-hidden="true" style={{ marginBottom: 3 }}>
+              {Array.from({ length: workers }, (_, i) => (
+                <span key={i} className={i < active ? 'activedot' : 'idledot'} />
+              ))}
+            </span>
+          )}
           <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600 }}>
             <span style={{ color: active > 0 ? '#185FA5' : 'var(--muted)' }}>
               {active > 0 && <span className="livedot" aria-hidden="true" style={{ marginRight: 5 }} />}
@@ -239,7 +246,7 @@ export default function QueuePanel() {
                   <span className="jobfile" title={file || jb.scan_id || jb.id}>
                     {file || (jb.scan_id ? `scan ${String(jb.scan_id).slice(0, 8)}` : String(jb.id).slice(0, 8))}
                   </span>
-                  <span className="jobstatus" style={{ color: fg, background: bg }}>
+                  <span className="jobstatus flash" key={jb.status} style={{ color: fg, background: bg }}>
                     {jb.status === 'running' && <span className="livedot" aria-hidden="true" />}{jb.status}
                   </span>
                   {dur != null && <span className="muted jobdur">{fmtDur(dur)}</span>}

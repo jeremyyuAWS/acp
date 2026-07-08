@@ -336,8 +336,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       )}
       <div className="metrics">
         <div className={`metric${remLive ? ' livecard' : ''}`} title="Estimated number of issues that can be fixed automatically — populates once you run remediation"><span>auto-fixable (est.)</span><b style={{ color: remStarted ? '#3B6D11' : '#9AA1B4' }}>{remStarted ? autoFixed : 0}</b></div>
-        <div className="metric"><span>HITL queue</span>{remStarted
-          ? <><b style={{ color: queue.length ? '#854F0B' : '#3B6D11' }}>{totalHitl === 0 ? 'no items' : `${queue.length} remaining`}</b>{totalHitl > 0 && <span className="muted" style={{ fontSize: 11 }}> · {hitlProgress}% done</span>}</>
+        <div className={`metric${remLive && queue.length > 0 ? ' livecard' : ''}`}>
+          <span>HITL queue{remLive && queue.length > 0 && <span className="activedot" aria-hidden="true" style={{ marginLeft: 5 }} />}</span>
+          {remStarted
+          ? <><b key={queue.length} className={remStarted ? 'tick' : undefined} style={{ color: queue.length ? '#854F0B' : '#3B6D11' }}>{totalHitl === 0 ? 'no items' : `${queue.length} remaining`}</b>{totalHitl > 0 && <span className="muted" style={{ fontSize: 11 }}> · {hitlProgress}% done</span>}</>
           : <b style={{ color: '#9AA1B4' }}>—</b>}</div>
         {pureAutomated ? (
           <div className="metric" title="Fixed copies written back to the source Drive folder"><span>written to Drive</span><b key={written} className={written ? 'tick' : undefined} style={{ color: '#3B6D11' }}>{written}</b></div>
