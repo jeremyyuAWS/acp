@@ -17,7 +17,7 @@ async function logoDataUrl() {
   } catch { return null }
 }
 
-async function makeDoc({ title = 'mova.io Accessibility Report', lang = 'en-US' } = {}) {
+async function makeDoc({ title = 'mova.io Accessibility Report', lang = 'en-US', footerVersion, footerGenerated } = {}) {
   const { jsPDF } = await import('jspdf')
   const doc = new jsPDF('p', 'pt', 'a4')
   // The platform must not ship inaccessible PDFs: set a document title (2.4.2), the
@@ -70,6 +70,56 @@ async function makeDoc({ title = 'mova.io Accessibility Report', lang = 'en-US' 
       ink(color); doc.setFont('helvetica', 'bold'); doc.setFontSize(20); doc.text(String(s), cx, cy + 3, { align: 'center' })
       ink(MUTED); doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.text('/ 100', cx, cy + 14, { align: 'center' })
     },
+    // A highlighted, bordered callout — for the executive summary and the
+    // conformance statement, so they read as report sections, not plain body text.
+    callout(t, { color = PLUM, bg = '#F7F5F9' } = {}) {
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(10)
+      const lines = doc.splitTextToSize(t, CW - 24)
+      const h = lines.length * 14 + 20
+      ensure(h + 10)
+      draw(color); fill(bg); doc.setLineWidth(1.2)
+      doc.roundedRect(M, st.y, CW, h, 6, 6, 'FD')
+      ink(INK); doc.text(lines, M + 12, st.y + 18)
+      st.y += h + 14
+    },
+    // A real filled donut chart (fan of thin triangles per jsPDF's fill primitive —
+    // the same technique ring() uses for a stroked arc, just filled per-segment) with
+    // a swatch legend — not a screenshot, not ASCII bars pretending to be a chart.
+    donut(items, { R = 42 } = {}) {
+      const data = (items || []).filter((it) => (it.value || 0) > 0)
+      const total = data.reduce((s, it) => s + it.value, 0)
+      ensure(R * 2 + 16)
+      const cx = M + R + 4, cy = st.y + R
+      if (total <= 0) {
+        draw(LINE); fill('#F7F5F9'); doc.setLineWidth(1); doc.circle(cx, cy, R, 'FD')
+        ink(MUTED); doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.text('No data', cx, cy + 3, { align: 'center' })
+      } else {
+        let angle = -90
+        data.forEach((it) => {
+          const sweep = (it.value / total) * 360
+          const steps = Math.max(1, Math.round(sweep / 6))
+          fill(it.color || PLUM)
+          for (let i = 0; i < steps; i++) {
+            const a0 = (angle + sweep * (i / steps)) * Math.PI / 180
+            const a1 = (angle + sweep * ((i + 1) / steps)) * Math.PI / 180
+            doc.triangle(cx, cy, cx + R * Math.cos(a0), cy + R * Math.sin(a0), cx + R * Math.cos(a1), cy + R * Math.sin(a1), 'F')
+          }
+          angle += sweep
+        })
+        fill('#FFFFFF'); doc.circle(cx, cy, R * 0.55, 'F')
+        ink(INK); doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.text(String(total), cx, cy + 4, { align: 'center' })
+        ink(MUTED); doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.text('criteria', cx, cy + 13, { align: 'center' })
+      }
+      const lx = cx + R + 22
+      let ly = cy - R + 4
+      ink(INK); doc.setFont('helvetica', 'normal'); doc.setFontSize(9)
+      ;(items || []).forEach((it) => {
+        fill(it.color || PLUM); doc.roundedRect(lx, ly - 7, 9, 9, 2, 2, 'F')
+        ink(INK); doc.text(`${it.label} — ${it.value}`, lx + 14, ly)
+        ly += 15
+      })
+      st.y = Math.max(cy + R, ly - 15) + 18
+    },
     metricGrid(cards) {
       const n = cards.length, gp = 10, cw = (CW - (n - 1) * gp) / n, ch = 56
       ensure(ch + 6)
@@ -108,12 +158,14 @@ async function makeDoc({ title = 'mova.io Accessibility Report', lang = 'en-US' 
     },
     save(name) {
       const pages = doc.getNumberOfPages()
+      const brand = 'mova.io · Accessibility Platform' + (footerVersion ? ` · v${footerVersion}` : '')
       for (let p = 1; p <= pages; p++) {
         doc.setPage(p); draw(LINE); doc.setLineWidth(0.8); doc.line(M, H - FOOT + 10, M + CW, H - FOOT + 10)
         ink(MUTED); doc.setFont('helvetica', 'normal'); doc.setFontSize(8)
-        doc.text('mova.io · Accessibility Platform', M, H - FOOT + 25)
+        doc.text(brand, M, H - FOOT + 25)
         doc.text('Confidential', W / 2, H - FOOT + 25, { align: 'center' })
         doc.text(`Page ${p} of ${pages}`, M + CW, H - FOOT + 25, { align: 'right' })
+        if (footerGenerated) { doc.setFontSize(7); doc.text(`Generated ${footerGenerated}`, M, H - FOOT + 34) }
       }
       doc.save(name)
     },
@@ -372,7 +424,11 @@ export async function exportFileCertification(d) {
   const openN = failN + humanN
   const fullyConformant = rows.length > 0 && openN === 0
 
-  const p = await makeDoc({ title: `Accessibility Certification — ${d.file}` })
+  const p = await makeDoc({
+    title: `Accessibility Certification — ${d.file}`,
+    footerVersion: d.platformVersion,
+    footerGenerated: d.timestamp || d.date,
+  })
   if (d.score != null) p.ring(d.score, fullyConformant ? GREEN : AMBER)
   p.cover({
     title: 'Accessibility Certification',
@@ -384,11 +440,12 @@ export async function exportFileCertification(d) {
   })
 
   p.heading('Executive summary')
-  if (fullyConformant) {
-    p.text(`As of this report, "${d.file}" meets all ${rows.length} in-scope WCAG 2.1 Level ${d.targetLevel || 'AA'} success criteria evaluated by the mova.io engine (${passN} passing, ${fixedN} fixed and pending re-validation). No open findings remain.`, { color: GREEN, bold: true, size: 11, gapAfter: 8 })
-  } else {
-    p.text(`"${d.file}" scored ${d.score ?? 'n/a'}/100 against WCAG 2.1 Level ${d.targetLevel || 'AA'}. Of ${rows.length} in-scope criteria: ${passN} pass, ${fixedN} fixed pending re-validation, ${failN} have open finding(s), and ${humanN} require human review before certification. This document is ${failN > 0 || humanN > 0 ? 'NOT yet fully certified' : 'conditionally certified'} — see Open items below.`, { color: AMBER, bold: true, size: 10.5, gapAfter: 8 })
-  }
+  p.callout(
+    fullyConformant
+      ? `As of this report, "${d.file}" meets all ${rows.length} in-scope WCAG 2.1 Level ${d.targetLevel || 'AA'} success criteria evaluated by the mova.io engine (${passN} passing, ${fixedN} fixed and pending re-validation). No open findings remain.`
+      : `"${d.file}" scored ${d.score ?? 'n/a'}/100 against WCAG 2.1 Level ${d.targetLevel || 'AA'}. Of ${rows.length} in-scope criteria: ${passN} pass, ${fixedN} fixed pending re-validation, ${failN} have open finding(s), and ${humanN} require human review before certification. This document is ${failN > 0 || humanN > 0 ? 'NOT yet fully certified' : 'conditionally certified'} — see Open items below.`,
+    { color: fullyConformant ? GREEN : AMBER, bg: fullyConformant ? '#EEF5E8' : '#FBF1DF' }
+  )
   p.text('This report reflects the exact same per-criterion outcomes shown in the platform’s WCAG coverage table for this file — pass is only claimed where the engine actually evaluated the criterion for this file type; unevaluated criteria are reported as such, not silently omitted.', { size: 8.5, color: MUTED, lh: 12 })
 
   p.heading('Result')
@@ -399,10 +456,28 @@ export async function exportFileCertification(d) {
     { label: 'Human review', value: humanN, color: humanN ? AMBER : GREEN },
   ])
 
+  p.heading('Coverage at a glance')
+  p.donut([
+    { label: 'Pass', value: passN, color: GREEN },
+    { label: 'Fixed · re-validate', value: fixedN, color: '#5C9B2E' },
+    { label: 'Open finding', value: failN, color: '#A32D2D' },
+    { label: 'Human review', value: humanN, color: AMBER },
+    { label: 'Not auto-checked', value: uncheckedN, color: '#B6B0BC' },
+  ])
+
   if (openN > 0) {
-    p.heading('Open items — must resolve before full certification')
     const open = rows.filter((r) => r.outcome === 'FAIL' || r.outcome === 'HUMAN')
       .sort((a, b) => (a.outcome === 'FAIL' ? 0 : 1) - (b.outcome === 'FAIL' ? 0 : 1))
+    const prinCount = {}
+    open.forEach((r) => { const k = r.id.match(/^(\d)/)?.[1]; if (PRINCIPLE[k]) prinCount[k] = (prinCount[k] || 0) + 1 })
+    const prinItems = Object.keys(PRINCIPLE).filter((k) => prinCount[k]).map((k) => ({ label: PRINCIPLE[k], value: prinCount[k], color: PRIN_CLR[k] }))
+    if (prinItems.length) {
+      p.heading('Open items by WCAG principle')
+      p.text('The four WCAG principles — content must be Perceivable, Operable, Understandable, and Robust.', { size: 9, color: MUTED, gapAfter: 11 })
+      p.barChart(prinItems, { labelW: 150 })
+    }
+
+    p.heading('Open items — must resolve before full certification')
     p.table(['WCAG', 'Criterion', 'Status', 'Finding'],
       open.map((r) => [r.id, r.plain || r.name, COV_OUT_TXT[r.outcome],
         r.outcome === 'FAIL' ? (r.fileIssues || []).map((i) => i.detail).filter(Boolean).slice(0, 2).join('; ') || `${r.count} finding(s)` : 'Needs a person to verify — routes through HITL review'
@@ -427,13 +502,14 @@ export async function exportFileCertification(d) {
   p.table(['Step', 'Actor', 'Action', 'Document'], auditRows, [72, 108, p.CW - 72 - 108 - 140, 140])
 
   p.heading('Conformance statement')
-  if (fullyConformant) {
-    p.text(`"${d.file}" has been assessed against WCAG 2.1 Level ${d.targetLevel || 'AA'} success criteria as required by the Americans with Disabilities Act (ADA) Title II, the European Accessibility Act (EN 301 549), and Section 508 of the Rehabilitation Act. All ${rows.length} in-scope criteria evaluated by the mova.io engine for this file type are passing.`, { size: 10, gapAfter: 8 })
-  } else {
-    p.text(`"${d.file}" has been assessed against WCAG 2.1 Level ${d.targetLevel || 'AA'} success criteria. ${passN + fixedN} of ${rows.length} in-scope criteria currently pass; ${failN} have an open finding and ${humanN} await human review. This document does NOT yet meet the bar for full certification — resolve the items listed above and re-validate to update this report.`, { size: 10, color: AMBER, gapAfter: 8 })
-  }
+  p.callout(
+    fullyConformant
+      ? `"${d.file}" has been assessed against WCAG 2.1 Level ${d.targetLevel || 'AA'} success criteria as required by the Americans with Disabilities Act (ADA) Title II, the European Accessibility Act (EN 301 549), and Section 508 of the Rehabilitation Act. All ${rows.length} in-scope criteria evaluated by the mova.io engine for this file type are passing.`
+      : `"${d.file}" has been assessed against WCAG 2.1 Level ${d.targetLevel || 'AA'} success criteria. ${passN + fixedN} of ${rows.length} in-scope criteria currently pass; ${failN} have an open finding and ${humanN} await human review. This document does NOT yet meet the bar for full certification — resolve the items listed above and re-validate to update this report.`,
+    { color: fullyConformant ? GREEN : AMBER, bg: fullyConformant ? '#EEF5E8' : '#FBF1DF' }
+  )
   p.text('Certified by the mova.io Accessibility Platform', { bold: true, size: 9.5, gapAfter: 4 })
-  p.text(`Generated: ${d.timestamp || d.date}`, { size: 9, color: MUTED, gapAfter: 4 })
+  p.text(`Generated: ${d.timestamp || d.date}${d.platformVersion ? ` · Platform v${d.platformVersion}` : ''}`, { size: 9, color: MUTED, gapAfter: 4 })
   p.text('Authorised signatory: ___________________________', { size: 9, color: MUTED, gapAfter: 4 })
   p.text('Title / Role: ___________________________', { size: 9, color: MUTED, gapAfter: 16 })
   p.text('This report was generated by the mova.io Accessibility Platform from the live coverage data for this file and is intended as evidence for ADA, EAA, and Section 508 compliance audits.', { size: 8, color: MUTED, lh: 12 })

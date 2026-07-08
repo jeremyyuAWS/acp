@@ -4,7 +4,7 @@ import Tag from './Tag.jsx'
 import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
-import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, downloadRemediated, getRules, getRubric } from './api.js'
+import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, downloadRemediated, getRules, getRubric, getConfig } from './api.js'
 import { WCAG } from './wcagCatalog.js'
 import { TraceChip } from './Transparency.jsx'
 
@@ -428,12 +428,14 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                     try {
                       const rows = computeCoverageRows(file, { catalogRules, targetLevel, remediatedRuleIds, effectiveRemediated, aiEnabled })
                       const now = new Date()
+                      const cfg = await getConfig().catch(() => null)
                       const { exportFileCertification } = await import('./pdfReport.js')
                       await exportFileCertification({
                         file: file.file, score: file.score, targetLevel, rows,
                         date: now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
                         timestamp: now.toLocaleString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }),
                         engine: file.engine, sourceName: file.sourceName, department: file.department || file.dept,
+                        platformVersion: cfg?.version,
                       })
                     } catch (e) { console.error('certification PDF export failed', e) }
                     finally { setTimeout(() => setCertExporting(false), 500) }
