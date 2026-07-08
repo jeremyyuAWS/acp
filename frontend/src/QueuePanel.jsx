@@ -147,6 +147,24 @@ export default function QueuePanel() {
   const stats = q?.stats || {}
   const workers = q?.workers ?? 0
   const total = Object.values(stats).reduce((a, b) => a + b, 0)
+  // Distinct scans & documents behind those jobs — so the count reads as "2 scans · 1
+  // file · 8 jobs" instead of implying 8 documents. Each scan fans out into several
+  // durable jobs (discover → one per file → finalize → assess), which is why jobs > files.
+  // Derived from the visible job list (capped at 100 by /jobs); only shown when that list
+  // covers every job (jobs.length >= total), so we never under-report on a huge estate.
+  const jobList = q?.jobs || []
+  const fullList = total > 0 && jobList.length >= total
+  const scanCount = new Set(jobList.map((j) => j.scan_id).filter(Boolean)).size
+  const fileCount = (() => {
+    const seen = new Set()
+    for (const j of jobList) {
+      let p = {}
+      try { p = JSON.parse(j.payload || '{}') } catch { /* opaque payload */ }
+      if (p.file) seen.add(p.file)
+      if (Array.isArray(p.items)) for (const it of p.items) if (it?.file) seen.add(it.file)
+    }
+    return seen.size
+  })()
   const order = ['queued', 'running', 'done', 'failed', 'dead']
   const shown = order.filter((s) => stats[s])
   const deadReason = q?.dead_letters?.top_errors?.[0]?.error
@@ -221,7 +239,10 @@ export default function QueuePanel() {
             {queued > 0 ? ` · ${queued} waiting` : ''}
           </span>
         </span>
-        <Stat label="total jobs" value={total} />
+        {fullList && scanCount > 0 && <Stat label={`scan${scanCount !== 1 ? 's' : ''}`} value={scanCount} />}
+        {fullList && fileCount > 0 && <Stat label={`file${fileCount !== 1 ? 's' : ''}`} value={fileCount} />}
+        <Stat label="total jobs" value={total}
+              title="Each scan fans out into several durable jobs — discover, one per file, finalize, then assess — so this counts pipeline steps across all your scans, not documents." />
         {throughput != null && <Stat label="throughput" value={`${throughput < 10 ? throughput.toFixed(1) : Math.round(throughput)}/min`} />}
         {shown.length === 0 && !err && (
           <span className="muted" style={{ fontSize: 13 }}>queue empty — nothing in flight</span>
@@ -294,9 +315,9 @@ export default function QueuePanel() {
   )
 }
 
-function Stat({ label, value }) {
+function Stat({ label, value, title }) {
   return (
-    <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
+    <span title={title} style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1, cursor: title ? 'help' : undefined }}>
       <span style={{ fontSize: 22, fontWeight: 700 }}>{value}</span>
       <span className="muted" style={{ fontSize: 11 }}>{label}</span>
     </span>
