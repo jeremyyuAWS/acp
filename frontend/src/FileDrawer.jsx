@@ -40,7 +40,7 @@ const remStageLine = (pct) => REM_STAGE_LINES[Math.min(REM_STAGE_LINES.length - 
 // applied. HTML runs the broad rule-module set, so it keeps the generic stages.
 // Every rule named here is one the engine genuinely fixes for this file — a
 // HITL-deferred finding (contrast, link purpose) is never claimed as 'fixing'.
-const REM_AUTOFIX_SC_BY_TYPE = { pdf: ['3.1.1', '2.4.2'], docx: ['1.1.1', '3.1.1', '2.4.2'], pptx: ['1.1.1', '3.1.1', '2.4.2', '1.4.3', '1.4.6', '1.3.2', '2.4.6'], xlsx: ['1.1.1', '3.1.1', '2.4.2', '1.4.3', '1.4.6'], html: ['3.1.1', '2.4.2', '1.3.1', '1.4.3', '1.4.6'] }
+const REM_AUTOFIX_SC_BY_TYPE = { pdf: ['3.1.1', '2.4.2'], docx: ['1.1.1', '3.1.1', '2.4.2'], pptx: ['1.1.1', '3.1.1', '2.4.2', '1.4.3', '1.4.6', '1.3.2', '2.4.6'], xlsx: ['1.1.1', '3.1.1', '2.4.2', '1.4.3', '1.4.6'], html: ['3.1.1', '2.4.2', '1.3.1', '1.4.3', '1.4.6', '1.4.10', '1.4.4', '1.4.12', '1.4.2', '1.3.4'] }
 const scOfWcag = (v) => ((v || '').replace(/^SC_/, '').replace(/_/g, '.').match(/^\d+\.\d+\.\d+/) || [''])[0]
 // Named rules step across the first 80% of the bar; the last 20% is the
 // write-to-store + re-verify stage. Client-paced (a single-file job streams no

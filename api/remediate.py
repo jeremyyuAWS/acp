@@ -117,6 +117,85 @@ def _fix_contrast(tree) -> list:
     return [f"Darkened {n} low-contrast inline text colour(s) to meet AA/AAA · 1.4.3 / 1.4.6"] if n else []
 
 
+# ── 1.4.10 Reflow — inject a responsive viewport (auto) ──
+# Mirrors scanner: a real page (has meta/link/style) with no viewport meta fails
+# reflow. Add a zoom-friendly viewport (no user-scalable=no, so it can't create a
+# 1.4.4 issue). Creates <head> if the document lacks one.
+def _head(tree):
+    heads = tree.xpath("//head")
+    if heads:
+        return heads[0]
+    htmls = tree.xpath("//html")
+    parent = htmls[0] if htmls else tree
+    head = parent.makeelement("head", {})
+    parent.insert(0, head)
+    return head
+
+
+@_register("1.4.10", "auto")
+def _fix_reflow(tree) -> list:
+    has_head_content = any(tree.xpath(f"//{t}") for t in ("meta", "link", "style"))
+    has_viewport = any((m.get("name") or "").lower() == "viewport" for m in tree.iter("meta"))
+    if not has_head_content or has_viewport:
+        return []
+    head = _head(tree)
+    head.insert(0, head.makeelement("meta", {"name": "viewport", "content": "width=device-width, initial-scale=1"}))
+    return ["Added a responsive viewport so content reflows without horizontal scroll · 1.4.10"]
+
+
+# ── 1.4.4 Resize Text — un-block pinch-zoom on the viewport (auto) ──
+@_register("1.4.4", "auto")
+def _fix_resize(tree) -> list:
+    n = 0
+    for m in tree.iter("meta"):
+        if (m.get("name") or "").lower() != "viewport":
+            continue
+        if re.search(r"user-scalable\s*=\s*(no|0)|maximum-scale\s*=\s*(0|1)(\.0+)?\b", m.get("content") or "", re.I):
+            m.set("content", "width=device-width, initial-scale=1")
+            n += 1
+    return [f"Restored pinch-zoom / text resize on {n} viewport tag(s) · 1.4.4"] if n else []
+
+
+# ── 1.4.12 Text Spacing — relax fixed-pixel line-height (auto) ──
+@_register("1.4.12", "auto")
+def _fix_text_spacing(tree) -> list:
+    n = 0
+    for el in tree.iter():
+        style = el.get("style") if hasattr(el, "get") else None
+        if not style or not re.search(r"line-height:\s*\d+px", style, re.I):
+            continue
+        el.set("style", re.sub(r"line-height:\s*\d+px", "line-height:1.5", style, flags=re.I))
+        n += 1
+    return [f"Relaxed fixed line-height on {n} element(s) so users can override spacing · 1.4.12"] if n else []
+
+
+# ── 1.4.2 Audio Control — stop autoplaying media (auto) ──
+@_register("1.4.2", "auto")
+def _fix_autoplay(tree) -> list:
+    n = 0
+    for m in tree.iter("audio", "video"):
+        if m.get("autoplay") is not None and m.get("controls") is None:
+            m.attrib.pop("autoplay", None)
+            n += 1
+    return [f"Removed autoplay from {n} media element(s) · 1.4.2"] if n else []
+
+
+# ── 1.3.4 Orientation — un-lock content hidden in one orientation (auto) ──
+_ORIENT = re.compile(
+    r"@media[^{]*\(\s*orientation\s*:\s*(?:portrait|landscape)\s*\)[^{]*\{[^@]*?display\s*:\s*none", re.I)
+
+
+@_register("1.3.4", "auto")
+def _fix_orientation(tree) -> list:
+    n = 0
+    for st in tree.iter("style"):
+        txt = st.text or ""
+        if txt and _ORIENT.search(txt):
+            st.text = _ORIENT.sub(lambda mm: re.sub(r"display\s*:\s*none", "display:revert", mm.group(0), count=1, flags=re.I), txt)
+            n += 1
+    return [f"Removed orientation lock from {n} stylesheet(s) · 1.3.4"] if n else []
+
+
 def remediate_html(html_text: str, *, ai_enabled: bool = True) -> tuple[str, list, list]:
     """Apply server-side HTML remediation.
 
