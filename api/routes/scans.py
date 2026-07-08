@@ -537,17 +537,34 @@ def rescore_file(sid: str, request: Request, file: str = Query(...)):
 
 @router.post("/scans/{sid}/publish")
 def publish_files(sid: str, request: Request, body: dict):
-    """Record one or more files as published (replaced in place, owner notified).
+    """Publish one or more re-validated files — ADR 0010 archive-copy, NON-destructive.
+    The fixed copy (durable in Blob) is placed in a distinct Drive "Published (Accessible)"
+    folder as the official document-of-record; the original source file is never
+    overwritten. Records published_at + the published Drive URL. Absent Drive token /
+    read-only grant / no Blob copy → record-only publish (Blob stays the durable copy).
     Body: {"files": ["fname1", "fname2"]} or {"file": "fname"}."""
     if core.store.get_scan(sid, owner=_owner(request)) is None:
         raise HTTPException(404, "scan not found")
     files = body.get("files") or ([body["file"]] if body.get("file") else [])
     if not files:
         raise HTTPException(422, "provide 'file' or 'files' in body")
+    # Best-effort Drive service + published folder, resolved once for the batch.
+    token = request.headers.get("x-drive-token")
+    owner_email = (core.store.get_scan(sid) or {}).get("run", {}).get("owner_email")
+    import publish as _publish
+    svc = folder_id = None
+    if token:
+        try:
+            import handlers
+            svc = handlers._drive_client(token)
+            folder_id = _publish.ensure_published_folder(svc)
+        except Exception:
+            svc = folder_id = None
     results = []
     for f in files:
-        ts = core.store.record_publish(sid, f)
-        results.append({"file": f, "published_at": ts})
+        url = _publish.archive_copy_publish(svc, folder_id, owner_email, sid, f)
+        ts = core.store.record_publish(sid, f, published_url=url)
+        results.append({"file": f, "published_at": ts, "published_url": url})
     return {"published": results}
 
 

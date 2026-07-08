@@ -74,6 +74,7 @@ _SCHEMA = [
     # Migrations for existing deployments
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS drive_file_id TEXT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS remediated_at TEXT",
+    "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS published_url TEXT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS drive_write_url TEXT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS acp_stamped TEXT",
     # Drive's md5Checksum (free in the same files().list() call) — lets a scan recognize
@@ -1050,13 +1051,17 @@ class Store:
             row = self._db.fetchone(cur)
         return row["drive_file_id"] if row else None
 
-    def record_publish(self, scan_id: str, file: str) -> str:
+    def record_publish(self, scan_id: str, file: str, published_url: str | None = None) -> str:
+        """Mark a file published (ADR 0010 archive-copy). Stores the Drive URL of the
+        published fixed copy when one was written; COALESCE keeps a prior URL if this
+        publish was record-only."""
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "UPDATE file_records SET published_at=%s WHERE scan_id=%s AND file=%s",
-                (now, scan_id, file))
+                "UPDATE file_records SET published_at=%s, published_url=COALESCE(%s, published_url) "
+                "WHERE scan_id=%s AND file=%s",
+                (now, published_url, scan_id, file))
         return now
 
     def refresh_scan_aggregate(self, scan_id: str) -> dict:
