@@ -113,7 +113,6 @@ function dbItemToUi(it, files) {
     icon: ITEM_ICON[sc] || '◈',
     title: `${((it.file || '').split('.').pop() || 'DOC').toUpperCase()} · ${it.rule_name || ITEM_NAME[sc] || sc}`,
     meta: ba.meta,
-    conf: 42 + (h % 26),
     file: it.file,
     scanId: it.scan_id,
     ruleId: it.rule_id,
@@ -144,8 +143,7 @@ function buildHumanQueue(files, triage = {}) {
       icon: ITEM_ICON[sc] || '◈',
       title: `${(f.file.split('.').pop() || 'DOC').toUpperCase()} · ${issue.detail || ITEM_NAME[sc] || sc}`,
       meta: ba.meta,
-      conf: 42 + (h % 26),
-      file: f.file,
+        file: f.file,
       aiDraftable: AI_DRAFTABLE_SCS.has(sc),
       source: f.sourceName,
       rule: `WCAG ${sc}${ITEM_NAME[sc] ? ' — ' + ITEM_NAME[sc] : ''}`,
@@ -883,10 +881,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 <div className="qmain">
                   <div className="qtitle">{q.title} <span className="muted" style={{ fontSize: 12 }}>· {q.file}</span></div>
                   <div className="qmeta">{q.meta}</div>
-                  <div className="conf">
-                    <span className="conftrack"><i style={{ width: `${q.conf}%`, background: q.conf >= 55 ? '#BF8C00' : '#2E72C9' }} /></span>
-                    <span className="muted">{q.conf}% confidence</span>
-                  </div>
+                  {/* Honest escalation line — no fabricated confidence %. */}
+                  <div className="muted" style={{ fontSize: 12 }}>⚑ escalated — automated fixes ran first; this needs human judgement</div>
                 </div>
                 <button className="qbtn approve" onClick={(e) => { e.stopPropagation(); act(q.id, 'approved') }}>✓ approve</button>
                 <button className="qbtn self" onClick={(e) => { e.stopPropagation(); act(q.id, 'self') }} title="Take ownership — fix it yourself, then re-scan to confirm">✋ I’ll fix it</button>

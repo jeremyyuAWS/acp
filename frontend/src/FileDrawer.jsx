@@ -482,7 +482,6 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
             <p className="recwhy">{r.rationale}</p>
             <div className="recmeta">
               <span><b>{MODE_LABEL[r.mode] || r.mode}</b><span className="muted"> mode</span></span>
-              {r.confidence != null && <span><b>{r.confidence}%</b><span className="muted"> confidence</span></span>}
             </div>
             {scanId && r.mode !== 'manual' && r.mode !== 'monitor' && (
               <div style={{ marginTop: 10 }}>

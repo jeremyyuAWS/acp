@@ -606,9 +606,9 @@ export default function App() {
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
 
-        {view === 'monitor' && (run ? (assessed ? <Monitor run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? statusMsg(progress.elapsed || 0, deepScan) : ''} /> : assessGate) : placeholder)}
+        {view === 'monitor' && (run ? (assessed ? <Monitor me={me} run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? statusMsg(progress.elapsed || 0, deepScan) : ''} /> : assessGate) : placeholder)}
 
-        {view === 'upload' && <Upload onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
+        {view === 'upload' && <Upload me={me} onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
 
         {/* Standalone Knowledge Graph — was nested inside Assess (findable only after
             scrolling past the score/dashboard); now its own tab so it's directly

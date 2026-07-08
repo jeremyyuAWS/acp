@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { generateCaptions, blobToBase64, generateAltText, generateInsights } from './aiRemediate.js'
 import { Bars } from './charts.jsx'
-import { IDENTITY, PERSONAS } from './sim.js'
+import { IDENTITY, PERSONAS, SIM } from './sim.js'
 import Logo from './Logo.jsx'
 import BeforeAfter, { remediateHtml } from './BeforeAfter.jsx'
 import ResultPreview from './ResultPreview.jsx'
@@ -251,7 +251,9 @@ function ScanImg({ blob }) {
   return <img src={url} alt="" style={{ maxWidth: '100%', maxHeight: 220, borderRadius: 6, display: 'block', margin: '0 auto' }} />
 }
 
-export default function Upload({ onCertified }) {
+export default function Upload({ onCertified, me }) {
+  // Real signed-in org for the certificate footer — demo org only in SIM.
+  const orgName = SIM ? IDENTITY.org : (me?.email?.split('@')[1]?.replace(/\.[^.]+$/, '') || me?.name || 'your organisation')
   // Single-file workflow state
   const [step, setStep] = useState(0)
   const [file, setFile] = useState(null)
@@ -902,7 +904,7 @@ export default function Upload({ onCertified }) {
                 <h2>Human-in-the-loop review · {file?.name}</h2>
                 <div className="qrow" style={{ borderRadius: 10, border: '1px solid var(--line)', padding: '11px 13px', marginBottom: 12 }}>
                   <span className="qico" aria-hidden="true">⚑</span>
-                  <div className="qmain"><div className="qtitle">{reviewItem.wcag}</div><div className="qmeta">{reviewItem.detail} · agent confidence 52% — below the auto-apply threshold</div></div>
+                  <div className="qmain"><div className="qtitle">{reviewItem.wcag}</div><div className="qmeta">{reviewItem.detail} · needs human judgement — this finding type is never auto-applied</div></div>
                 </div>
                 <div className="muted" style={{ marginBottom: 6 }}>Proposed fix · {reviewItem.wcag}</div>
                 <div className="diffbox before"><span className="difftag">before</span>{before}</div>
@@ -959,7 +961,7 @@ export default function Upload({ onCertified }) {
                   <Logo />
                   <div>
                     <div style={{ fontWeight: 600, fontSize: 15 }}>Accessibility compliance certificate</div>
-                    <div className="muted">{IDENTITY.org} · WCAG {wcagVersion} AA{assignee ? ' · ' + assignee : ''} · {today}</div>
+                    <div className="muted">{orgName} · WCAG {wcagVersion} AA{assignee ? ' · ' + assignee : ''} · {today}</div>
                   </div>
                 </div>
 

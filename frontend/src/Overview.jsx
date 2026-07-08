@@ -13,7 +13,9 @@ import PiiPanel from './PiiPanel.jsx'
 import WhatsChanged from './WhatsChanged.jsx'
 
 // The estate dashboard — doubles as the exportable compliance report.
-export default function Overview({ run, files, trend, trendDates, onGo, scanList = [], onPickScan }) {
+export default function Overview({ run, files, trend, trendDates, onGo, scanList = [], onPickScan, me }) {
+  // Real signed-in org (email domain) — the hardcoded demo org only ever shows in SIM.
+  const orgName = SIM ? IDENTITY.org : (me?.email?.split('@')[1]?.replace(/\.[^.]+$/, '') || me?.name || 'your organisation')
   const [on, setOn] = useState(false)
   const [seg, setSeg] = useState(null)
   const [selFile, setSelFile] = useState(null)
@@ -41,7 +43,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       const criteria = Object.entries(wm).sort((a, b) => b[1] - a[1]).map(([w, count]) => ({ sc: w.replace(/^SC_/, '').replace(/_/g, '.'), label: critLabel(w).replace(/^[\d.]+\s*/, ''), count }))
       const { exportGovernanceReport } = await import('./pdfReport.js')
       await exportGovernanceReport({
-        org: IDENTITY.org, quarter, date, scope: 'full document estate',
+        org: orgName, quarter, date, scope: 'full document estate',
         total: n, score: run.avg_score, certifiable: run.certifiable, needFix, auditReady,
         uncertain: run.uncertain, error: run.error,
         summary: `Estate accessibility score ${run.avg_score ?? '—'}/100, with ${auditReady}% of documents audit-ready. ${needFix} documents are in the remediation backlog and ${n.toLocaleString()} are under continuous monitoring across ${(trend && trend.length) || 4} scans.`,
@@ -224,7 +226,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
 
       <div className="chartrow">
         <section className="panel"><h2>Top WCAG violations</h2><WordCloud items={wcCloud} /><Insight text={INS.wcag} /></section>
-        <section className="panel"><h2>Documents by department <span className="muted" style={{ fontWeight: 400 }}>· {IDENTITY.org}</span></h2><Bars items={byDept} cols="150px 1fr 28px" /><Insight text={INS.dept} /></section>
+        <section className="panel"><h2>Documents by department <span className="muted" style={{ fontWeight: 400 }}>· {orgName}</span></h2><Bars items={byDept} cols="150px 1fr 28px" /><Insight text={INS.dept} /></section>
       </div>
 
       <div className="muted" style={{ margin: '20px 0 2px' }}>Compliance by dimension · scores, severity &amp; WCAG level <span style={{ fontWeight: 400 }}>· click a bar to drill in</span></div>

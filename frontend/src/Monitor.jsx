@@ -20,7 +20,7 @@ const SRC_ICON = { sharepoint: '▤', gdrive: '▣', box: '◰', confluence: '�
 const hrs = (m) => m >= 90 ? `${(m / 60).toFixed(1)} hrs` : `${Math.round(m)} min`
 
 const DEC_ACT = { auto: 'auto-fix', assisted: 'review', review: 'review', archive: 'archive', keep: 'archive', manual: 'review' }
-const DEC_WHAT = { auto: 'issues auto-remediated', assisted: 'AI fix queued for approval', review: 'flagged for manual review', archive: 'archived — superseded', keep: 'kept as-is', manual: 'flagged for manual rebuild' }
+const DEC_WHAT = { auto: 'issues auto-remediated', assisted: 'AI fix queued for approval', review: 'flagged for manual review', archive: 'marked for archive — superseded', keep: 'kept as-is', manual: 'flagged for manual rebuild' }
 const ACTOR = { 'auto-fix': 'mova engine', review: 'you', publish: 'mova engine', 're-scan': 'mova engine', archive: 'mova engine' }
 const ACOLOR = { 'auto-fix': '#157A56', review: '#854F0B', publish: '#185FA5', 're-scan': '#3B6D11', archive: '#5F5E5A' }
 
@@ -109,8 +109,10 @@ function useProgramBatches(files, decisions) {
   }
 }
 
-export default function Monitor({ run, scanList = [], sources = [], files = [], ratified, decisions = {}, publishedFiles = [], aiEnabled = true, onAiToggle, busy = false, progress = null, scanPct = 0, scanStatus = '', readOnly = false }) {
+export default function Monitor({ run, scanList = [], sources = [], files = [], ratified, decisions = {}, publishedFiles = [], aiEnabled = true, onAiToggle, busy = false, progress = null, scanPct = 0, scanStatus = '', readOnly = false, me }) {
   const m = monitoringState(files)
+  // Real signed-in org for the evidence report — demo org only in SIM.
+  const orgName = SIM ? IDENTITY.org : (me?.email?.split('@')[1]?.replace(/\.[^.]+$/, '') || me?.name || 'your organisation')
   const watch = sourceWatch(sources, files)
   const derivedProg = useProgramBatches(files, decisions)
 
@@ -185,7 +187,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
     try {
       const { exportEvidenceReport } = await import('./pdfReport.js')
       await exportEvidenceReport({
-        org: IDENTITY.org,
+        org: orgName,
         date: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
         summary: `${prog.total.toLocaleString()} documents in the remediation plan across ${prog.batches.length} batches; ${prog.batches.reduce((a, b) => a + b.done, 0).toLocaleString()} of ${prog.batches.reduce((a, b) => a + b.count, 0).toLocaleString()} resolved. Evidence below is the live audit trail of decisions and re-validations recorded for this estate.`,
         metrics: [
@@ -218,7 +220,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
 
   // Build the live audit trail: published files first, then remediation decisions, padded with baseline.
   const realAuditSrc = useMemo(() => {
-    const fromPub = publishedFiles.slice(-3).reverse().map((file) => ['publish', 'replaced in place · owner notified', file])
+    const fromPub = publishedFiles.slice(-3).reverse().map((file) => ['publish', 'published · fixed copy stored · audit recorded', file])
     const decided = files.filter((f) => decisions[f.file])
     const fromDec = decided.slice(0, 4 - fromPub.length).map((f) => {
       const dec = decisions[f.file]
@@ -400,7 +402,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
               </div>
             ))}
           </div>
-          <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>Breaches notify the document owner and surface on the executive dashboard — the agent escalates before the deadline, not after.</p>
+          <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>Breaches surface here and on the executive dashboard — the agent flags them before the deadline, not after.</p>
         </section>
       )}
 

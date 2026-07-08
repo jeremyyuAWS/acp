@@ -25,9 +25,10 @@ export default function ReviewDrawer({ item, onClose, onAct, onDraft }) {
 
   return (
     <Drawer title={item.title} subtitle={subtitle} onClose={onClose}>
-      <div className="conf" style={{ margin: '10px 0 6px' }}>
-        <span className="conftrack" style={{ width: 130 }}><i style={{ width: `${item.conf}%`, background: item.conf >= 55 ? '#BF8C00' : '#2E72C9' }} /></span>
-        <span className="muted">{item.conf}% agent confidence</span>
+      {/* Honest escalation line — no fabricated confidence %. The AI exhausted its
+          automated options; this item genuinely needs a person. */}
+      <div className="muted" style={{ margin: '10px 0 6px', fontSize: 12.5 }}>
+        ⚑ Escalated to you: {item.meta || 'this finding type needs human judgement'} — deterministic fixes ran first; this one needs your approval.
       </div>
 
       {item.before && (

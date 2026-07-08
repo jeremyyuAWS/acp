@@ -5,9 +5,11 @@ import { openReport, publishFile, publishAllFiles } from './api.js'
 
 const scoreColor = (s) => (s >= 80 ? '#3B6D11' : s >= 50 ? '#854F0B' : '#7B1D1D')
 
-// Step 9 · Publish / Replace / Archive. Re-validated documents are published back
-// to their source — replaced in place, the prior version archived, metadata updated,
-// and owners notified. publish() persists to the backend via POST /scans/{sid}/publish.
+// Step 9 · Publish. Marks re-validated documents as published: the conformance status
+// is recorded in the audit trail and the fixed copy (already in Blob + the Drive
+// mirror) becomes the document of record. Source replace-in-place and owner
+// notification are roadmap — the UI must not claim them until they're real.
+// publish() persists via POST /scans/{sid}/publish.
 // readOnly: time-travel replay — publishing must act on the live estate, not a snapshot.
 export default function Publish({ run, files = [], certified = [], readOnly = false, onPublish, me }) {
   const ready = files.filter((f) => f.compliant)
@@ -88,17 +90,17 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       <div className="metrics">
         <div className="metric"><span>ready to publish</span><b>{ready.length}</b></div>
         <div className="metric"><span>published</span><b style={{ color: pubStarted ? '#3B6D11' : '#9AA1B4' }}>{pubStarted ? publishedCount : 0}</b></div>
-        <div className="metric"><span>replaced in place</span><b style={{ color: pubStarted ? undefined : '#9AA1B4' }}>{Object.keys(done).length}</b></div>
-        <div className="metric"><span>owners notified</span><b style={{ color: pubStarted ? undefined : '#9AA1B4' }}>{pubStarted ? Object.keys(done).length + certified.length : 0}</b></div>
+        <div className="metric"><span>fixed copies stored</span><b style={{ color: pubStarted ? undefined : '#9AA1B4' }}>{Object.keys(done).length}</b></div>
+        <div className="metric"><span>audit entries</span><b style={{ color: pubStarted ? undefined : '#9AA1B4' }}>{pubStarted ? Object.keys(done).length + certified.length : 0}</b></div>
       </div>
 
       <details className="panel">
         <summary style={{ cursor: 'pointer', fontWeight: 600, listStyle: 'revert' }}>What “publish” does <span className="muted" style={{ fontWeight: 400 }}>· what happens to every re-validated document</span></summary>
         <div className="pubsteps" style={{ marginTop: 12 }}>
-          <div className="pubstep"><b>↺ Replace in place</b><span className="muted">the accessible version takes over the original URL / path</span></div>
-          <div className="pubstep"><b>📦 Archive prior version</b><span className="muted">the old file is retained for the audit trail</span></div>
-          <div className="pubstep"><b>🏷 Update metadata</b><span className="muted">conformance status + scan date written back to the source</span></div>
-          <div className="pubstep"><b>✉ Notify stakeholders</b><span className="muted">the document owner is told it’s now compliant</span></div>
+          <div className="pubstep"><b>✓ Marked published</b><span className="muted">the re-validated fixed copy becomes the document of record</span></div>
+          <div className="pubstep"><b>⤓ Fixed copy stored</b><span className="muted">the accessible copy lives in Blob storage and the Drive “remediated” mirror</span></div>
+          <div className="pubstep"><b>📦 Original preserved</b><span className="muted">the source file is left untouched for the audit trail</span></div>
+          <div className="pubstep"><b>🏷 Audit recorded</b><span className="muted">conformance status + timestamp written to the compliance audit log</span></div>
         </div>
       </details>
 
@@ -118,7 +120,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                 <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span></button>
                 <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11' }}>{f.score} / 100</span>
                 {done[f.file]
-                  ? <span className="okline" style={{ fontSize: 13 }}>✓ published · replaced in place · owner notified</span>
+                  ? <span className="okline" style={{ fontSize: 13 }}>✓ published · fixed copy stored · audit recorded</span>
                   : <button className="qbtn approve" onClick={() => publish(f.file)} disabled={readOnly || publishing} title={readOnly ? 'Time-travel replay — switch to the latest scan to publish' : undefined}>↺ Replace &amp; publish</button>}
               </div>
             ))}
@@ -129,7 +131,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>📋 Audit trail · {publishedEntries.length} published</div>
             {publishedEntries.slice(0, 8).map((e) => (
               <div key={e.file} style={{ fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
-                ✓ <b>{e.file}</b> <span className="muted">· replaced in place · prior version archived · owner notified · {fmtPublished(e)}</span>
+                ✓ <b>{e.file}</b> <span className="muted">· fixed copy stored · original preserved · audit recorded · {fmtPublished(e)}</span>
               </div>
             ))}
             {publishedEntries.length > 8 && <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>+{publishedEntries.length - 8} more</div>}
