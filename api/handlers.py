@@ -353,8 +353,16 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                 _download(it, tmp, svc, sp_token=toks.get("sp"))
                 fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii)
             except Exception as e:
+                # Classify Drive auth expiry distinctly: GIS access tokens live ~1h and
+                # cannot be refreshed server-side, so on a long scan every remaining file
+                # fails with 401. A clear reason (instead of a generic error) tells the
+                # user exactly what happened and that a re-scan after signing in fixes it.
+                _msg = f"{type(e).__name__}: {e}"
+                if "401" in _msg or "Invalid Credentials" in _msg or "authError" in _msg:
+                    _msg = ("Drive authorization expired mid-scan — sign in again and "
+                            "re-run the scan to cover this file")
                 core.store.log_decision("system", "scan.file_error", scan_id=scan_id, file=name,
-                                        detail=f"{type(e).__name__}: {e}"[:200])
+                                        detail=_msg[:200])
         if fdict is None:                              # fetch/analyse failed → error record
             fdict = {"file": name, "engine": "n/a", "status": "error", "score": None,
                      "compliant": 0, "skipped_rules": 0, "issues": []}

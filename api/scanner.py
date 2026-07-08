@@ -368,7 +368,20 @@ def _analyse_office(dest: Path) -> dict:
     out = dest / "_o.json"
     env = {**os.environ, "DOTNET_ROOT": os.path.expanduser("~/.dotnet"),
            "DOTNET_CLI_TELEMETRY_OPTOUT": "1", "DOTNET_NOLOGO": "1"}
-    subprocess.run([DOTNET, str(CLI_DLL), str(dest), str(out)], capture_output=True, text=True, env=env)
+    # Bounded: a hung dotnet process would otherwise stall the worker thread forever —
+    # and since the fan-out scan finalizes only when every file reports in, one hang
+    # froze the whole scan. On timeout/failure res stays {} and the affected files
+    # bucket as engine-error (unanalysable), never as a silent pass.
+    timeout_s = int(os.environ.get("ACP_OFFICE_CLI_TIMEOUT", "180"))
+    try:
+        proc = subprocess.run([DOTNET, str(CLI_DLL), str(dest), str(out)],
+                              capture_output=True, text=True, env=env, timeout=timeout_s)
+        if proc.returncode != 0:
+            print(f"[scan] office CLI exited {proc.returncode}: {(proc.stderr or '')[-400:]}",
+                  flush=True)
+    except subprocess.TimeoutExpired:
+        print(f"[scan] office CLI timed out after {timeout_s}s on {dest} — "
+              f"files will be recorded as engine-error", flush=True)
     res = {}
     if out.exists():
         for item in json.loads(out.read_text()):
