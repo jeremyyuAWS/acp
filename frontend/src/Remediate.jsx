@@ -196,7 +196,7 @@ const REM_SECTIONS = [
   { id: 'rem-revalidate', label: '4 · Re-validate' },
 ]
 
-function StickyNav({ sections, triageComplete }) {
+function StickyNav({ sections, triageComplete, counts = {} }) {
   const [active, setActive] = useState(sections[0]?.id || '')
   useEffect(() => {
     const io = new IntersectionObserver(
@@ -214,12 +214,13 @@ function StickyNav({ sections, triageComplete }) {
       <span className="snavlabel">Steps</span>
       {sections.map(({ id, label }) => {
         const locked = !triageComplete && id !== 'rem-triage'
+        const n = counts[id]
         return (
           <button key={id} className={`snavbtn${active === id ? ' on' : ''}`}
             style={locked ? { opacity: 0.45, cursor: 'default' } : undefined}
             disabled={locked}
             onClick={() => !locked && document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
-            {label}
+            {label}{n != null && n > 0 && <span className="snavcount">{n}</span>}
           </button>
         )
       })}
@@ -501,7 +502,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
       <QueuePanel />
 
-      <StickyNav sections={REM_SECTIONS} triageComplete={triageComplete} />
+      <StickyNav sections={REM_SECTIONS} triageComplete={triageComplete}
+        counts={{ 'rem-triage': remediable.length, 'rem-auto': autoFiles.length, 'rem-review': queue.length, 'rem-revalidate': revalidated.length }} />
 
 
       {/* Write-back results — proof the fixed copies landed in Drive. Surfaces the
