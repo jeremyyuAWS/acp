@@ -330,11 +330,31 @@ def _analyse_pdf(path: Path) -> dict:
                       enqueued_at=datetime.now(timezone.utc), department_id=uuid.uuid4(), disabled_rule_ids=[])
     try:
         r = asyncio.run(PdfAnalyser().analyse(path, job))
+        issues = [{"ruleId": i.rule_id, "wcag": i.wcag_criterion.name, "severity": i.severity.name} for i in r.issues]
+        issues = _pdf_correct_title(path, issues)
         return {"succeeded": r.succeeded,
-                "issues": [{"ruleId": i.rule_id, "wcag": i.wcag_criterion.name, "severity": i.severity.name} for i in r.issues],
+                "issues": issues,
                 "errors": [{"message": e.message, "rule": e.rule_id} for e in r.errors]}
     except Exception as e:
         return {"succeeded": False, "issues": [], "errors": [{"message": f"{type(e).__name__}: {e}", "rule": None}]}
+
+
+def _pdf_correct_title(path: Path, issues: list[dict]) -> list[dict]:
+    """The pdf.document-title rule (WCAG 2.4.2) reads /Title via pikepdf, whose docinfo
+    READS are nondeterministic once libxml2 is loaded in a long-lived worker (office/HTML
+    remediation use lxml) — so it can false-flag a PDF that actually declares a title.
+    Re-read the title with pypdf (pure-Python, reliable) and drop the false finding.
+    Mirror of why remediate_pdf writes metadata with pypdf."""
+    if not any(i.get("ruleId") == "pdf.document-title" for i in issues):
+        return issues
+    try:
+        from pypdf import PdfReader
+        title = str((PdfReader(str(path)).metadata or {}).get("/Title") or "").strip()
+    except Exception:
+        return issues
+    if title:
+        return [i for i in issues if i.get("ruleId") != "pdf.document-title"]
+    return issues
 
 
 def _office_err(e: dict) -> dict:

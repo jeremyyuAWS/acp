@@ -67,3 +67,24 @@ def test_pdf_existing_title_preserved(tmp_path):
     fixed, applied, _ = RP.remediate_pdf(titled)
     assert fixed is not None
     assert _title(Path(fixed)) == "Quarterly Board Report"   # a real title is never overwritten
+
+
+def test_scanner_title_correction(tmp_path):
+    """scanner._pdf_correct_title drops a false pdf.document-title finding when the PDF
+    actually declares a title (pikepdf's docinfo read is unreliable under libxml2), and
+    keeps it when the title is genuinely missing."""
+    import scanner
+
+    finding = [{"ruleId": "pdf.document-title", "wcag": "SC_2_4_2", "severity": "SERIOUS"}]
+
+    has = tmp_path / "has.pdf"
+    c = canvas.Canvas(str(has))
+    c.setTitle("Real Title")
+    c.drawString(72, 720, "Body.")
+    c.showPage()
+    c.save()
+    assert scanner._pdf_correct_title(has, list(finding)) == []      # title present -> drop
+
+    none = tmp_path / "none.pdf"
+    _titleless_pdf(none)
+    assert scanner._pdf_correct_title(none, list(finding)) == finding  # no title -> keep
