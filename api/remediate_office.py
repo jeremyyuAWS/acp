@@ -379,6 +379,68 @@ def _remediate_xlsx_contrast(entries: dict) -> list[str]:
     return [f"Recoloured {changed} low-contrast cell style(s) to reach AA/AAA · 1.4.3 / 1.4.6"]
 
 
+def _remediate_docx_structure(entries: dict) -> list[str]:
+    """Deterministic docx structural fixes that clear the analyser (WCAG 1.3.1):
+    mark the first row of every multi-row table as a header row (w:tblHeader), and ensure
+    the heading outline has exactly one Heading 1. Uses lxml so every OOXML namespace in
+    word/document.xml round-trips untouched."""
+    from lxml import etree
+
+    name = "word/document.xml"
+    if name not in entries:
+        return []
+    W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    root = etree.fromstring(entries[name])
+    applied: list[str] = []
+
+    # Table headers (1.3.1): the first row of every multi-row table gets w:tblHeader,
+    # which is exactly what the analyser's HasHeaderRow() checks for.
+    tbl_fixed = 0
+    for tbl in root.iter(f"{{{W}}}tbl"):
+        rows = tbl.findall(f"{{{W}}}tr")
+        if len(rows) <= 1:
+            continue
+        first = rows[0]
+        trPr = first.find(f"{{{W}}}trPr")
+        if trPr is None:
+            trPr = first.makeelement(f"{{{W}}}trPr", {})
+            first.insert(0, trPr)                      # trPr must be the first child of tr
+        if trPr.find(f"{{{W}}}tblHeader") is None:
+            trPr.insert(0, trPr.makeelement(f"{{{W}}}tblHeader", {}))
+            tbl_fixed += 1
+    if tbl_fixed:
+        applied.append(f"Marked the first row as a header on {tbl_fixed} table(s) · 1.3.1")
+
+    # Heading outline (1.3.1): exactly one Heading 1. Promote the top heading if none is
+    # level 1; demote any extra Heading 1s to Heading 2. Matches the doc's own style-id
+    # spelling ("Heading1" vs "Heading 1") so the promoted style still resolves.
+    levels = {"Heading1": 1, "Heading 1": 1, "Heading2": 2, "Heading 2": 2,
+              "Heading3": 3, "Heading 3": 3, "Heading4": 4, "Heading 4": 4,
+              "Heading5": 5, "Heading 5": 5, "Heading6": 6, "Heading 6": 6}
+    headings = []
+    for p in root.iter(f"{{{W}}}p"):
+        pPr = p.find(f"{{{W}}}pPr")
+        st = pPr.find(f"{{{W}}}pStyle") if pPr is not None else None
+        val = st.get(f"{{{W}}}val") if st is not None else None
+        if val in levels:
+            headings.append((st, val))
+    if headings:
+        h1s = [h for h in headings if levels[h[1]] == 1]
+        spaced = " " in headings[0][1]
+        h1_id, h2_id = ("Heading 1", "Heading 2") if spaced else ("Heading1", "Heading2")
+        if not h1s:
+            headings[0][0].set(f"{{{W}}}val", h1_id)
+            applied.append("Promoted the top heading to Heading 1 · 1.3.1")
+        elif len(h1s) > 1:
+            for st, _ in h1s[1:]:
+                st.set(f"{{{W}}}val", h2_id)
+            applied.append(f"Demoted {len(h1s) - 1} extra Heading 1(s) to Heading 2 · 1.3.1")
+
+    if applied:
+        entries[name] = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+    return applied
+
+
 def remediate_office(path: Path, *, lang: str = "en-US"):
     """Apply deterministic Office accessibility fixes to a copy of the file.
 
@@ -418,6 +480,13 @@ def remediate_office(path: Path, *, lang: str = "en-US"):
     if alt_deferred:
         skipped.append(f"{alt_deferred} image(s) lack a faithful alt source — "
                        "needs human alt text (routed to review)")
+
+    # docx structural fixes (table header rows + heading outline) — WCAG 1.3.1.
+    if path.suffix.lower() == ".docx":
+        try:
+            applied.extend(_remediate_docx_structure(entries))
+        except Exception:
+            skipped.append("docx structural fixes (table headers / heading outline) could not be applied")
 
     # pptx-only structural fixes that need the slide XML (title / contrast / reading order).
     if path.suffix.lower() == ".pptx":
