@@ -97,6 +97,19 @@ applied as a blind three-file dance.
 - This is a deploy-topology change (`deploy/public/deploy.sh` + a second app + Redis) with a
   cost/latency tradeoff, so it is gated on real load justifying a second replica set.
 
+**Code-ready (2026-07-08):** the standalone worker entrypoint `api/worker_main.py` is
+implemented + committed (dormant until wired) — it calls `core.start_workers()`, blocks the
+main thread, and on SIGTERM runs a graceful `core.stop_workers()` drain; no HTTP port. The
+Redis token plumbing already exists (`core.REDIS_URL` → `_get_redis()` → register/get_scan_
+tokens). Remaining is pure provisioning + topology (billable → greenlit separately):
+  1. Provision Redis (Azure Cache for Redis, or a small Redis container app); set `REDIS_URL`
+     as a secret on BOTH apps.
+  2. Create the worker Container App from the SAME image, command `python -m worker_main`,
+     env `ACP_WORKERS=N` + `REDIS_URL` + the same DB/Blob/Langfuse secrets; no external
+     ingress; min-replicas ≥1 (workers poll).
+  3. Flip the API app to `ACP_WORKERS=0` — ONLY after the worker app is live, or queued scans
+     stop processing.
+
 ## Consequences
 
 - **Finalize (1):** duplicate HITL/audit emission and the transient done-but-short window are
