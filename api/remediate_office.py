@@ -337,6 +337,48 @@ def _remediate_pptx_slides(entries: dict) -> list[str]:
     return applied
 
 
+def _remediate_xlsx_contrast(entries: dict) -> list[str]:
+    """1.4.3 / 1.4.6 xlsx contrast — clone each offending font with a black/white
+    colour and repoint its low-contrast cell style, so every flagged font/fill pair
+    reaches the luma-diff the detector requires. Mirrors office_structure's resolver
+    exactly (direct-RGB fonts + solid/none fills only) so it clears what it flags."""
+    import office_structure as _os
+    styles = entries.get("xl/styles.xml", b"").decode("utf-8", "ignore")
+    if not styles:
+        return []
+    fonts_raw = _os._FONT_BLOCK.findall(_os._container(_os._FONTS_CONTAINER, styles))
+    fill_hexes = [_os._xlsx_fill_color(m) for m in _os._FILL_BLOCK.findall(_os._container(_os._FILLS_CONTAINER, styles))]
+    font_hexes = [_os._xlsx_font_color(m) for m in fonts_raw]
+    xfs = _os._XF.findall(_os._container(_os._CELLXFS_CONTAINER, styles))
+    new_fonts, new_xfs, changed = list(fonts_raw), list(xfs), 0
+    for i, xf in enumerate(xfs):
+        fid_m, filid_m = _os._FONT_ID.search(xf), _os._FILL_ID.search(xf)
+        if not fid_m or not filid_m:
+            continue
+        fid, filid = int(fid_m.group(1)), int(filid_m.group(1))
+        fh = font_hexes[fid] if fid < len(font_hexes) else None
+        kh = fill_hexes[filid] if filid < len(fill_hexes) else None
+        if not fh or not kh or abs(_os._hex_luma(fh) - _os._hex_luma(kh)) >= 0.5:
+            continue
+        target = "FF000000" if _os._hex_luma(kh) >= 0.5 else "FFFFFFFF"
+        base = fonts_raw[fid]
+        cloned = (re.sub(r"<color\b[^/]*/>", f'<color rgb="{target}"/>', base, count=1)
+                  if re.search(r"<color\b[^/]*/>", base) else base + f'<color rgb="{target}"/>')
+        new_xfs[i] = re.sub(r'fontId="\d+"', f'fontId="{len(new_fonts)}"', xf, count=1)
+        new_fonts.append(cloned)
+        changed += 1
+    if not changed:
+        return []
+    fonts_inner = "".join(f"<font>{f}</font>" for f in new_fonts)
+    styles = re.sub(r"<fonts\b[^>]*>.*?</fonts>",
+                    lambda m: re.sub(r'count="\d+"', f'count="{len(new_fonts)}"', m.group(0).split(">", 1)[0]) + ">" + fonts_inner + "</fonts>",
+                    styles, count=1, flags=re.S)
+    styles = re.sub(r"(<cellXfs\b[^>]*>).*?(</cellXfs>)",
+                    lambda m: m.group(1) + "".join(new_xfs) + m.group(2), styles, count=1, flags=re.S)
+    entries["xl/styles.xml"] = styles.encode("utf-8")
+    return [f"Recoloured {changed} low-contrast cell style(s) to reach AA/AAA · 1.4.3 / 1.4.6"]
+
+
 def remediate_office(path: Path, *, lang: str = "en-US"):
     """Apply deterministic Office accessibility fixes to a copy of the file.
 
@@ -383,6 +425,14 @@ def remediate_office(path: Path, *, lang: str = "en-US"):
             applied.extend(_remediate_pptx_slides(entries))
         except Exception:
             skipped.append("slide-level pptx fixes (title/contrast/reading order) could not be applied")
+
+    # xlsx contrast recolour (1.4.3 / 1.4.6) — clone offending fonts to reach the
+    # luma-diff the detector requires (mirrors the pptx contrast fix).
+    if path.suffix.lower() == ".xlsx":
+        try:
+            applied.extend(_remediate_xlsx_contrast(entries))
+        except Exception:
+            skipped.append("xlsx contrast recolour could not be applied")
 
     if not applied:
         return None, [], skipped or ["language and title already set"]

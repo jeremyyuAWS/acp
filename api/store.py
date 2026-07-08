@@ -273,7 +273,7 @@ _ALL_FORMATS = frozenset({"html", "docx", "pptx", "xlsx", "pdf"})
 _OFFICE_PDF = frozenset({"docx", "pptx", "xlsx", "pdf"})
 RULE_FORMATS: dict[str, frozenset[str]] = {
     "1.1.1": _ALL_FORMATS, "1.2.1": frozenset({"html"}), "1.2.2": frozenset({"html"}),
-    "1.2.3": frozenset({"html"}), "1.3.1": _ALL_FORMATS, "1.3.2": frozenset({"pptx"}), "1.3.3": _ALL_FORMATS,
+    "1.2.3": frozenset({"html"}), "1.3.1": _ALL_FORMATS, "1.3.2": frozenset({"pdf", "pptx", "xlsx"}), "1.3.3": _ALL_FORMATS,
     "1.3.4": frozenset({"html"}), "1.3.5": frozenset({"html"}), "1.4.1": frozenset({"html"}),
     "1.4.2": frozenset({"html"}), "1.4.3": _ALL_FORMATS,
     "1.4.4": frozenset({"html"}), "1.4.5": _OFFICE_PDF, "1.4.6": frozenset({"html", "pdf", "pptx", "xlsx"}),

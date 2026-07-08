@@ -13,6 +13,7 @@ To add a fixer: write fix_<sc>(tree) -> list[str] and register it in FIXERS with
 its fix_mode, citing the frontend module it mirrors. Keep the two in sync (parity).
 """
 from __future__ import annotations
+import re
 from typing import Callable
 
 from lxml import html as _lh
@@ -79,6 +80,41 @@ def _fix_form_labels(tree) -> list:
         inp.set("aria-label", hint or "Field")
         changed = True
     return ["Labeled form controls · 1.3.1"] if changed else []
+
+
+# ── 1.4.3 / 1.4.6 Contrast — darken low-contrast inline text colour (auto) ──
+# Mirrors the scanner's inline-colour heuristic (text colour luma > 0.45 fails the
+# enhanced ratio on a light background). Darkens the flagged colour so BOTH AA and
+# AAA clear; skips any element with a dark inline background — there darkening would
+# make it worse, so it's left for human review.
+_C_COLOR = re.compile(r"(?:^|[^-])color:\s*#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b")
+_C_BG = re.compile(r"background(?:-color)?:\s*#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b")
+
+
+def _c_luma(h: str) -> float:
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255
+
+
+@_register("1.4.3", "auto")
+def _fix_contrast(tree) -> list:
+    n = 0
+    for el in tree.iter():
+        style = el.get("style") if hasattr(el, "get") else None
+        if not style:
+            continue
+        m = _C_COLOR.search(style)
+        if not m or _c_luma(m.group(1)) <= 0.45:
+            continue
+        bg = _C_BG.search(style)
+        if bg and _c_luma(bg.group(1)) < 0.5:      # dark background → darkening would be wrong
+            continue
+        el.set("style", re.sub(r"((?:^|[^-])color:\s*)#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b",
+                               lambda mm: mm.group(1) + "#111111", style, count=1))
+        n += 1
+    return [f"Darkened {n} low-contrast inline text colour(s) to meet AA/AAA · 1.4.3 / 1.4.6"] if n else []
 
 
 def remediate_html(html_text: str, *, ai_enabled: bool = True) -> tuple[str, list, list]:
