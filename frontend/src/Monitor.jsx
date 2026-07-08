@@ -19,15 +19,6 @@ const KIND = {
 const SRC_ICON = { sharepoint: '▤', gdrive: '▣', box: '◰', confluence: '❖', cms: '🌐', s3: '☁', onedrive: '☁' }
 const hrs = (m) => m >= 90 ? `${(m / 60).toFixed(1)} hrs` : `${Math.round(m)} min`
 
-// Baseline audit entries — shown when no real decisions have been made yet.
-const BASELINE_AUDIT = [
-  ['auto-fix', 'alt-text added to figure 3', 'benefits-guide.pdf'],
-  ['review', 'approved table-header fix', 'q3-board-deck.pptx'],
-  ['publish', 'replaced in place', 'hr-policy-2026.docx'],
-  ['re-scan', 'verified 100 / 100', 'onboarding.pdf'],
-  ['archive', 'superseded version archived', '2019-policy-old.docx'],
-  ['auto-fix', 'reading order corrected', 'annual-report.pdf'],
-]
 const DEC_ACT = { auto: 'auto-fix', assisted: 'review', review: 'review', archive: 'archive', keep: 'archive', manual: 'review' }
 const DEC_WHAT = { auto: 'issues auto-remediated', assisted: 'AI fix queued for approval', review: 'flagged for manual review', archive: 'archived — superseded', keep: 'kept as-is', manual: 'flagged for manual rebuild' }
 const ACTOR = { 'auto-fix': 'mova engine', review: 'you', publish: 'mova engine', 're-scan': 'mova engine', archive: 'mova engine' }
@@ -181,21 +172,6 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
   const slaAtRisk = slaItems.filter((s) => s.status === 'at-risk')
   const slaOnTrack = slaItems.filter((s) => s.status === 'on-track')
 
-  // event pool grounded in real corpus docs
-  const pub = files.find((f) => (f.tags || []).includes('public-facing'))?.file || 'public-page.html'
-  const cert = files.find((f) => f.compliant)?.file || 'onboarding.pdf'
-  const iss = files.find((f) => (f.issues || []).length)?.file || 'care-pathway.pdf'
-  const POOL = [
-    { kind: 'new', src: 'SharePoint · HR', doc: 'hr-policy-2026.docx', text: 'New file landed — auto-queued for scan' },
-    { kind: 'scanned', src: 'Box · Cardiology', doc: iss, text: 'Auto-scanned a new document — 2 findings, score 71' },
-    { kind: 'changed', src: 'Google Drive', doc: cert, text: 'Document edited — re-assessment triggered' },
-    { kind: 'regressed', src: 'CMS · public site', doc: pub, text: 'Score dropped 100 → 82 after an edit — alert raised' },
-    { kind: 'recertified', src: 'Box · Cardiology', doc: iss, text: 'Auto-remediated & re-certified at 100/100' },
-    { kind: 'clean', src: 'Confluence', doc: cert, text: 'Scheduled re-scan complete — no change' },
-  ]
-  const seed = [3, 2, 1, 0].map((k, i) => ({ ...POOL[k], id: -i, when: ['just now', '4m ago', '9m ago', '15m ago'][i] }))
-  const [events, setEvents] = useState(seed)
-  const [paused, setPaused] = useState(false)
   // Collapsible settings at top — remembered per session so it doesn't snap shut
   // on every tab switch once someone has opened it.
   const [controlsOpen, setControlsOpen] = useState(() => sessionStorage.getItem('acp-mon-controls') === '1')
@@ -239,8 +215,6 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
         .catch((e) => { setCad(prev); setSchedErr(e.message || 'schedule not saved — try again') })
     }
   }
-  const next = useRef(1)
-  const push = (e) => setEvents((cur) => [{ ...e, id: next.current++, when: 'just now' }, ...cur].slice(0, 9))
 
   // Build the live audit trail: published files first, then remediation decisions, padded with baseline.
   const realAuditSrc = useMemo(() => {
