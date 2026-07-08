@@ -21,6 +21,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   ]
   const shownReady = sfP.active ? ready.filter(matchesFilters(sfP, PUB_FACETS, (f) => f.file)) : ready
   const [done, setDone] = useState({})
+  const [pubUrls, setPubUrls] = useState({})   // file -> published Drive URL, from POST /publish
   const [publishing, setPublishing] = useState(false)
   const [sel, setSel] = useState(null)
   const orgLabel = me?.email
@@ -28,7 +29,11 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     : me?.name || 'your organisation'
   const publish = async (file) => {
     if (done[file]) return
-    try { await publishFile(run?.id, file) } catch { /* best-effort — local state still updates */ }
+    try {
+      const res = await publishFile(run?.id, file)
+      const u = res?.published?.find((x) => x.file === file)?.published_url
+      if (u) setPubUrls((m) => ({ ...m, [file]: u }))
+    } catch { /* best-effort — local state still updates */ }
     setDone((d) => ({ ...d, [file]: true }))
     onPublish?.(file)
   }
@@ -36,7 +41,12 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     if (publishing) return
     setPublishing(true)
     const pending = ready.filter((f) => !done[f.file]).map((f) => f.file)
-    try { await publishAllFiles(run?.id, pending) } catch { /* best-effort */ }
+    try {
+      const res = await publishAllFiles(run?.id, pending)
+      const urls = {}
+      ;(res?.published || []).forEach((x) => { if (x.published_url) urls[x.file] = x.published_url })
+      if (Object.keys(urls).length) setPubUrls((m) => ({ ...m, ...urls }))
+    } catch { /* best-effort */ }
     setDone(() => Object.fromEntries(ready.map((f) => [f.file, true])))
     ready.forEach((f) => onPublish?.(f.file))
     setPublishing(false)
@@ -120,7 +130,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                 <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span></button>
                 <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11' }}>{f.score} / 100</span>
                 {done[f.file]
-                  ? <span className="okline" style={{ fontSize: 13 }}>✓ published · fixed copy stored · audit recorded</span>
+                  ? <span className="okline" style={{ fontSize: 13 }}>✓ published · fixed copy stored · audit recorded{pubUrls[f.file] && <> · <a href={pubUrls[f.file]} target="_blank" rel="noopener noreferrer">↗ open in Drive</a></>}</span>
                   : <button className="qbtn approve" onClick={() => publish(f.file)} disabled={readOnly || publishing} title={readOnly ? 'Time-travel replay — switch to the latest scan to publish' : undefined}>↺ Replace &amp; publish</button>}
               </div>
             ))}
@@ -131,7 +141,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>📋 Audit trail · {publishedEntries.length} published</div>
             {publishedEntries.slice(0, 8).map((e) => (
               <div key={e.file} style={{ fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
-                ✓ <b>{e.file}</b> <span className="muted">· fixed copy stored · original preserved · audit recorded · {fmtPublished(e)}</span>
+                ✓ <b>{e.file}</b> <span className="muted">· fixed copy stored · original preserved · audit recorded · {fmtPublished(e)}{pubUrls[e.file] && <> · <a href={pubUrls[e.file]} target="_blank" rel="noopener noreferrer">↗ open in Drive</a></>}</span>
               </div>
             ))}
             {publishedEntries.length > 8 && <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>+{publishedEntries.length - 8} more</div>}

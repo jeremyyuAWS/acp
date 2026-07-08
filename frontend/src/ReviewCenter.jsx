@@ -1,5 +1,6 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { SEV, sevOf, reasonOf, priorityScore, groupLabel } from './hitlMeta.js'
+import { openTraceUrl } from './api.js'
 
 // Rules whose fix IS a value a human writes/edits (alt text, link text, title, label) —
 // these get an editable "approved value" box (the AI draft, if any, prefilled). Judgement
@@ -37,6 +38,10 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
       .sort((a, b) => priorityScore(b.items[0]) - priorityScore(a.items[0]))
   }, [pending])
 
+  // Flat render-order list + a cursor, for keyboard-driven review (j/k, a/r/s, Enter).
+  const ordered = useMemo(() => groups.flatMap((g) => g.items), [groups])
+  const [cursor, setCursor] = useState(0)
+
   const doAct = (it, status) => {
     setBusy(it.id)
     const val = VALUE_FIX.has(scOf(it.rule_id)) ? (edits[it.id] ?? it.approved_value ?? null) : null
@@ -44,6 +49,26 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
       .catch(() => {})   // act() already reverts optimistic state on failure; avoid an unhandled rejection
       .finally(() => { setBusy(null); setExpanded(null) })
   }
+
+  // Keyboard-driven review — power reviewers never touch the mouse. Typing in a note /
+  // value box is never hijacked; Escape closes.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') { onClose(); return }
+      const tag = (e.target?.tagName || '').toUpperCase()
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      if (!ordered.length) return
+      const cur = ordered[Math.min(cursor, ordered.length - 1)]
+      if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); setCursor((c) => Math.min(ordered.length - 1, c + 1)) }
+      else if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); setCursor((c) => Math.max(0, c - 1)) }
+      else if (e.key === 'Enter') { e.preventDefault(); setExpanded((x) => (x === cur.id ? null : cur.id)) }
+      else if (e.key === 'a') { e.preventDefault(); doAct(cur, 'approved') }
+      else if (e.key === 'r') { e.preventDefault(); doAct(cur, 'rejected') }
+      else if (e.key === 's') { e.preventDefault(); doAct(cur, 'skipped') }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [ordered, cursor, onClose])
 
   const approveGroup = (grp) => grp.items.forEach((it) => {
     if (!VALUE_FIX.has(scOf(it.rule_id))) onAct(it.id, 'approved')   // bulk-approve only judgement items (no value needed)
@@ -66,6 +91,7 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
           <div className="rc-metric"><span>Resolved today</span><b>{resolvedToday.length}</b></div>
           <div className="rc-metric"><span>AI draft acceptance</span><b>{acceptance == null ? '—' : `${acceptance}%`}</b></div>
         </div>
+        <div className="rc-kbd-hint" aria-hidden="true">↑↓ / j k navigate · <b>a</b> approve · <b>r</b> reject · <b>s</b> skip · Enter expand · Esc close</div>
 
         <div className="rc-body">
           {error && <div className="rc-empty">The review queue is unavailable right now. <button className="ghost small" onClick={onRefresh}>Retry</button></div>}
@@ -84,7 +110,7 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
                 const isVal = VALUE_FIX.has(scOf(it.rule_id))
                 const isOpen = expanded === it.id
                 return (
-                  <div className={`rc-item${isOpen ? ' rc-item-open' : ''}`} key={it.id}>
+                  <div className={`rc-item${isOpen ? ' rc-item-open' : ''}${ordered[cursor]?.id === it.id ? ' rc-item-cursor' : ''}`} key={it.id}>
                     <button className="rc-item-row" onClick={() => setExpanded(isOpen ? null : it.id)} aria-expanded={isOpen}>
                       <span className="rc-sevchip" style={{ background: s.bg, color: s.color }}>{s.label}</span>
                       <span className="rc-item-file">{it.file || 'document'}</span>
@@ -118,6 +144,10 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
                           <button className="rc-approve" disabled={busy === it.id} onClick={() => doAct(it, 'approved')}>✓ Approve</button>
                           <button className="ghost small" disabled={busy === it.id} onClick={() => doAct(it, 'rejected')}>✕ Reject</button>
                           <button className="ghost small" disabled={busy === it.id} onClick={() => doAct(it, 'skipped')}>⏭ Skip</button>
+                          {it.scan_id && openTraceUrl(it.scan_id, 'file', it.file) && (
+                            <a className="rc-trace" href={openTraceUrl(it.scan_id, 'file', it.file)}
+                               target="_blank" rel="noopener noreferrer">📊 View trace</a>
+                          )}
                         </div>
                       </div>
                     )}

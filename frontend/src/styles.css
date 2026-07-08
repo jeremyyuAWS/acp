@@ -1574,3 +1574,10 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .privai { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 600;
   color: #2F5310; background: #E7F0DC; border: 1px solid #A6C98A; border-radius: 20px;
   padding: 3px 10px; white-space: nowrap; cursor: default; }
+
+/* Review Center: keyboard cursor + view-trace link + shortcut hint */
+.rc-kbd-hint { font-size: 11.5px; color: var(--muted); padding: 0 22px 10px; }
+.rc-kbd-hint b { color: var(--ink, #2b2130); font-weight: 700; }
+.rc-item-cursor { outline: 2px solid var(--plum, #7A3E8E); outline-offset: -1px; }
+.rc-trace { font-size: 12px; color: var(--plum, #7A3E8E); text-decoration: none; align-self: center; margin-left: auto; }
+.rc-trace:hover { text-decoration: underline; }

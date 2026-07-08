@@ -1,7 +1,7 @@
 """Human-in-the-loop review queue endpoints."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 import core
@@ -47,9 +47,11 @@ def hitl_verify_queue(scan_id: str, file: str = Query(...)):
 
 
 @router.get("/hitl/queue")
-def hitl_list(status: str | None = None, scan_id: str | None = None):
-    """List HITL review items. Filter by status (pending/approved/rejected/skipped) or scan_id."""
-    return core.store.list_hitl_queue(status=status, scan_id=scan_id)
+def hitl_list(request: Request, status: str | None = None, scan_id: str | None = None):
+    """List HITL review items, scoped to the signed-in user's own documents. Filter by
+    status (pending/approved/rejected/skipped) or scan_id."""
+    owner = getattr(request.state, "user_email", None)
+    return core.store.list_hitl_queue(status=status, scan_id=scan_id, owner=owner)
 
 
 @router.put("/hitl/queue/{item_id}")
