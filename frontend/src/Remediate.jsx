@@ -58,13 +58,6 @@ const FIX_WCAG_LABELS = {
   SC_3_1_1: { label: 'language set', color: '#726BC6' },
   SC_1_3_1: { label: 'table headers', color: '#A56814' },
 }
-const FALLBACK_EXAMPLES = [
-  { fmt: 'PDF', wcag: 'WCAG 1.1.1 · alt text', auto: true, before: 'figure — no alt text', after: 'alt: AI-generated description added — review before certifying' },
-  { fmt: 'Video', wcag: 'WCAG 1.2.2 · captions', auto: false, before: '4:12 video — no caption track', after: 'Synchronized captions drafted (speech-to-text) — pending human review' },
-  { fmt: 'Excel', wcag: 'WCAG 1.3.1 · table headers', auto: true, before: 'merged cells A1:C1, no header row', after: 'header row tagged <th scope=”col”> so structure is announced' },
-  { fmt: 'Web', wcag: 'WCAG 1.4.3 · contrast', auto: false, before: 'body text at 3.1:1 on grey', after: 'recoloured to 4.8:1 — now passes AA (design-reviewed)' },
-  { fmt: 'Audio', wcag: 'WCAG 1.2.1 · transcript', auto: false, before: 'audio — no transcript', after: 'transcript drafted from speech-to-text — pending human review' },
-]
 function buildFixExamples(files) {
   const examples = []
   for (const f of files) {
@@ -87,7 +80,9 @@ function buildFixExamples(files) {
       if (examples.length >= 6) break
     }
   }
-  return examples.length >= 2 ? examples : FALLBACK_EXAMPLES
+  // Only genuine, scan-derived examples — no fabricated fallback. FixCarousel hides itself
+  // when there are none (see the early return), so nothing illustrative is ever shown.
+  return examples
 }
 const ITEM_ICON = { '1.1.1': '▦', '1.2.1': '🎧', '1.2.2': '🎬', '1.2.5': '🎬', '1.3.1': '⊞', '1.3.2': '¶', '1.4.3': '◑', '2.4.2': '¶', '2.4.4': '↗', '3.1.1': '✦' }
 const ITEM_NAME = { '1.1.1': 'non-text content', '1.2.1': 'audio-only & video-only', '1.2.2': 'captions', '1.2.5': 'audio description', '1.3.1': 'info & relationships', '1.3.2': 'meaningful sequence', '1.4.3': 'contrast minimum', '2.4.2': 'page titled', '2.4.4': 'link purpose', '3.1.1': 'language of page' }
@@ -166,7 +161,7 @@ function FixCarousel({ files = [] }) {
   const [paused, setPaused] = useState(false)
   useEffect(() => { setIdx(0) }, [examples])
   useEffect(() => {
-    if (paused || prefersReducedMotion()) return
+    if (paused || prefersReducedMotion() || examples.length <= 1) return
     const t = setInterval(() => setIdx((i) => (i + 1) % examples.length), 3800)
     return () => clearInterval(t)
   }, [paused, examples])
@@ -175,7 +170,7 @@ function FixCarousel({ files = [] }) {
   return (
     <section className="panel" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}>
       <div className="fixhd">
-        <h2 style={{ margin: 0 }}>AI remediation · example fixes <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>· how the engine works</span></h2>
+        <h2 style={{ margin: 0 }}>AI remediation · sample fixes <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>· from your scanned documents</span></h2>
         <span className="muted" style={{ fontSize: 12 }}>{idx + 1} / {examples.length}</span>
       </div>
       <div className="fixcard" key={idx}>
