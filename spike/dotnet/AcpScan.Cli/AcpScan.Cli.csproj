@@ -14,7 +14,7 @@
     <PackageReference Include="Microsoft.Extensions.Options" Version="10.*" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="../../../../_review-digital-accessibility/DigitalA11y.Analysers.DotNet/DigitalA11y.Analysers.DotNet.csproj" />
-    <ProjectReference Include="../../../../_review-digital-accessibility/DigitalA11y.Core/DigitalA11y.Core.csproj" />
+    <ProjectReference Include="../../../engine/office-analysers/DigitalA11y.Analysers.DotNet/DigitalA11y.Analysers.DotNet.csproj" />
+    <ProjectReference Include="../../../engine/office-analysers/DigitalA11y.Core/DigitalA11y.Core.csproj" />
   </ItemGroup>
 </Project>

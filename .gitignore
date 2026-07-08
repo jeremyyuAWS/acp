@@ -38,6 +38,7 @@ test-corpus/files/_office.json
 # vendored compiled engine for the deploy image (not committed)
 deploy/public/vendor/
 
-# Partner code (DigitalA11y) — lives in its own repo: github.com/aveeranjan/digital-accessibility
-# Consumed as a pinned build artifact, not vendored here.
+# Partner code (DigitalA11y) full upstream solution — its own repo, not tracked here.
+# The live-path analyser projects are OWNED and vendored under engine/office-analysers/
+# (ADR 0012); only this full working clone stays ignored.
 digital-accessibility/

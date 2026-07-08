@@ -1,0 +1,23 @@
+namespace DigitalA11y.Core.Enums;
+
+public enum IssueCategory
+{
+    ALT_TEXT,
+    COLOUR_CONTRAST,
+    DOCUMENT_TITLE,
+    LANGUAGE,
+    HEADING_STRUCTURE,
+    READING_ORDER,
+    LINKS,
+    TABLES,
+    LISTS,
+    FORMS,
+    IMAGES_OF_TEXT,
+    FLASHING_CONTENT,
+    AUDIO_VIDEO,
+    KEYBOARD_NAVIGATION,
+    FOCUS_VISIBLE,
+    ERROR_IDENTIFICATION,
+    PARSING,
+    NAME_ROLE_VALUE
+}
