@@ -128,10 +128,10 @@ const SEV = {
   MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'],
 }
 const SEV_LEGEND = [
-  ['critical', '#1F5FA8', '#E2EDFB', 'Completely blocks a group of users — e.g. an unlabelled image or a keyboard trap. Almost always WCAG Level A.'],
-  ['serious', '#2A5E9E', '#E6EFFB', 'A major barrier that’s hard to work around — e.g. missing table headers or an empty document title.'],
-  ['moderate', '#854F0B', '#FAEEDA', 'Noticeable difficulty, but the content is still reachable — e.g. wrong reading order or undeclared language.'],
-  ['minor', '#5F5E5A', '#F1EFE8', 'A minor annoyance or best-practice gap — e.g. unclear worksheet names.'],
+  ['critical', '#1F5FA8', '#E2EDFB', "Completely blocks a group of users — e.g. an unlabelled image or a keyboard trap. Almost always WCAG Level A."],
+  ['serious', '#2A5E9E', '#E6EFFB', "A major barrier that's hard to work around — e.g. missing table headers or an empty document title."],
+  ['moderate', '#854F0B', '#FAEEDA', "Noticeable difficulty, but the content is still reachable — e.g. wrong reading order or undeclared language."],
+  ['minor', '#5F5E5A', '#F1EFE8', "A minor annoyance or best-practice gap — e.g. unclear worksheet names."],
 ]
 export const statusOf = (f) => (f.status === 'error' ? 'unanalysable' : f.status === 'uncertain' ? 'uncertain' : f.compliant ? 'certifiable' : 'issues')
 export const STATUS_BADGE = {
@@ -389,7 +389,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
     const ret = retentionOf(file)
     return (
       <Drawer title={file.file} subtitle={`${file.sourceName ? `${file.sourceName} · ${file.dept || file.department || '—'} · ` : ''}${(file.type || '').toUpperCase()}`} onClose={onClose}>
-        {file.locked && <div className="lockbanner">🔒 Could not open — <b>{file.openIssue}</b>. Discovered from its metadata, but the content couldn’t be read.</div>}
+        {file.locked && <div className="lockbanner">🔒 Could not open — <b>{file.openIssue}</b>. Discovered from its metadata, but the content couldn't be read.</div>}
         {provBlock}
         {scanId && <div style={{ margin: '0 0 12px' }}><TraceChip scanId={scanId} kind="file" file={file.file} label="View this document's trace" refreshKey={remNow?.done ? 1 : 0} /></div>}
         {tagBlock}
@@ -586,6 +586,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         </>
       )}
 
+
       {context === 'remediate' && /\.html?$/i.test(file.file || '') && scanId && (
         <div className="drive-rem-panel">
           <b>Remediate HTML → Google Drive</b>
@@ -663,7 +664,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         const issuesBySc = {}
         ;(file.issues || []).forEach((i) => {
           const sc = scOfIssue(i.wcag)
-          if (sc) issuesBySc[sc] = (issuesBySc[sc] || 0) + 1
+          if (sc) { if (!issuesBySc[sc]) issuesBySc[sc] = []; issuesBySc[sc].push(i) }
         })
         // Scope: only criteria that can apply to documents, at or below the
         // certification target. Web-only and above-target rows are counted in
@@ -672,7 +673,8 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         const hiddenAboveLevel = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) > targetRank).length
         const hiddenWebOnly = WCAG.length - inScope.length - hiddenAboveLevel
         const rows = inScope.map((c) => {
-          const count = issuesBySc[c.sc] || 0
+          const fileIssues = issuesBySc[c.sc] || []
+          const count = fileIssues.length
           const wasFixed = count > 0 && (remediatedRuleIds.has(c.sc)
             || (effectiveRemediated && (REM_AUTOFIX_SC_BY_TYPE[file.type] || []).includes(c.sc)))
           const outcome = wasFixed ? 'FIXED'
@@ -681,7 +683,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
             : isHuman(c) ? 'HUMAN'
             : (DOC_HUMAN_WHEN_UNCHECKED.has(c.sc) && fmt && fmt !== 'html') ? 'HUMAN'
             : 'UNCHECKED'
-          return { id: c.sc, name: c.name, plain: PLAIN_NAMES[c.sc] || c.name, req: c.req, level: c.level, fix: fixOf(c), outcome, count }
+          return { id: c.sc, name: c.name, plain: PLAIN_NAMES[c.sc] || c.name, req: c.req, level: c.level, fix: fixOf(c), outcome, count, fileIssues }
         }).sort((a, b) => (OUT_RANK[a.outcome] ?? 3) - (OUT_RANK[b.outcome] ?? 3))
         const n = (o) => rows.filter((r) => r.outcome === o).length
         return (
@@ -715,6 +717,25 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                           )}
                         </td>
                       </tr>
+                      {r.outcome === 'FAIL' && r.fileIssues.length > 0 && (
+                        <tr className="covrow-issues">
+                          <td colSpan={5}>
+                            {r.fileIssues.map((issue, idx) => {
+                              const [bg, fg] = SEV[issue.severity] || SEV.MINOR
+                              return (
+                                <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: 7, padding: '3px 0 3px 10px', borderLeft: `2px solid ${bg}` }}>
+                                  <span className="badge" style={{ background: bg, color: fg, fontSize: 10, padding: '1px 5px', flexShrink: 0 }}>{(issue.severity || '').toLowerCase()}</span>
+                                  <div style={{ fontSize: 12, lineHeight: 1.4 }}>
+                                    {issue.fix && <span>{issue.fix}</span>}
+                                    {issue.detail && !issue.fix && <span>{issue.detail}</span>}
+                                    {issue.auto != null && <span className={issue.auto ? 'fixauto' : 'fixreview'} style={{ marginLeft: 6, fontSize: 11 }}>{issue.auto ? '⚡ auto' : '✎ review'}</span>}
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </td>
+                        </tr>
+                      )}
                       {r.outcome === 'FAIL' && exp && (
                         <tr className="covrow-explain">
                           <td colSpan={5}>

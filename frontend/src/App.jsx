@@ -32,16 +32,17 @@ import A11ySelfCheck from './A11ySelfCheck.jsx'
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
 const SHOW_A11Y = import.meta.env.DEV || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('a11y'))
 
+// step=0 → utility tab (no number); step>0 → workflow step with numbered badge
 const TABS = [
-  ['overview', 'Overview', 'at a glance'],
-  ['integrations', 'Integrations', 'data sources'],
-  ['discover', 'Discover', 'steps 1–3'],
-  ['assess', 'Assess', 'steps 4–5'],
-  ['remediate', 'Remediate', 'steps 6–8'],
-  ['publish', 'Publish', 'step 9'],
-  ['monitor', 'Monitor', 'step 10'],
-  ['upload', 'Upload', 'try it live'],
-  ['graph', 'Knowledge Graph', 'explore findings'],
+  ['overview',      'Overview',      'at a glance',         0],
+  ['integrations',  'Integrations',  'connect sources',     0],
+  ['discover',      'Discover',      'inventory · classify', 1],
+  ['assess',        'Assess',        'score vs WCAG',       2],
+  ['remediate',     'Remediate',     'fix issues',          3],
+  ['publish',       'Publish',       'certify',             4],
+  ['monitor',       'Monitor',       'track compliance',    5],
+  ['upload',        'Upload',        'try it live',         0],
+  ['graph',         'Knowledge Graph', 'explore findings',   0],
 ]
 
 function timeAgo(iso) {
@@ -490,12 +491,7 @@ export default function App() {
 
       <nav aria-label="Compliance workflow">
         <div className="tabs" role="tablist" aria-label="Compliance workflow">
-          {TABS.filter(([k]) => !me.allow || me.allow.includes(k)).map(([k, label, rg]) => {
-            // Stepper: a workflow tab (Discover→Assess→Remediate→Publish→Monitor) shows
-            // "done" once its stage is complete for the scan IN VIEW — so it works in
-            // time-travel too (run/assessed/files/publishedFiles reflect the selected
-            // scan). Non-workflow tabs (overview/integrations/upload) have no stage and
-            // never show done. The active tab shows as current, never done.
+          {TABS.filter(([k]) => !me.allow || me.allow.includes(k)).map(([k, label, rg, step]) => {
             const stageDone = {
               discover: !!run,
               assess: assessed,
@@ -507,9 +503,10 @@ export default function App() {
             return (
               <button key={k} role="tab" aria-selected={view === k}
                       aria-current={view === k ? 'step' : undefined}
-                      className={`tab${view === k ? ' on' : ''}${done ? ' done' : ''}`}
+                      className={`tab${view === k ? ' on' : ''}${done ? ' done' : ''}${step ? ' stepTab' : ''}`}
                       onClick={() => setView(k)}>
-                <span className="tablbl">{done && <span className="tabok" aria-hidden="true">✓ </span>}{label}{done && <span className="vh"> completed</span>}</span>
+                {step > 0 && <span className="stepnum" aria-hidden="true">{done ? '✓' : step}</span>}
+                <span className="tablbl">{done && <span className="vh">completed: </span>}{label}</span>
                 <span className="rg">{rg}</span>
                 {k === 'remediate' && hitlCount > 0 && <span title={`${hitlCount} document${hitlCount !== 1 ? 's' : ''} awaiting your review`} style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, minWidth: 16, height: 16, lineHeight: '16px', textAlign: 'center', padding: '0 5px', borderRadius: 9, background: '#B4690E', color: '#fff', display: 'inline-block' }}>{hitlCount}</span>}
               </button>
@@ -582,7 +579,7 @@ export default function App() {
 
       <main id="main-content" tabIndex={-1}>
       <ErrorBoundary key={view}>
-        {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} /> : assessGate) : placeholder)}
+        {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} me={me} /> : assessGate) : placeholder)}
 
         {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
           deepScan={deepScan} setDeepScan={setDeepScan} queuedScan={queuedScan} setQueuedScan={setQueuedScan}
@@ -607,7 +604,7 @@ export default function App() {
 
         {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id).then(setScan).catch(() => {})} onHitlCount={setHitlCount} /> : placeholder)}
 
-        {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} /> : placeholder)}
+        {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
 
         {view === 'monitor' && (run ? (assessed ? <Monitor run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? statusMsg(progress.elapsed || 0, deepScan) : ''} /> : assessGate) : placeholder)}
 

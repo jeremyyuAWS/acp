@@ -102,6 +102,17 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
           <div className="muted" style={{ fontSize: 11, marginTop: 6, whiteSpace: 'nowrap' }}>
             {isLatest ? '★ latest scan' : 'selected scan'}{run.completed_at ? ` · ${fmtDate(run.completed_at)}` : ''}
           </div>
+          <div className="score-benchmark">
+            <span>WCAG AA target: <b>90+</b></span>
+            <span>industry avg: <b>~72</b></span>
+            {run.avg_score != null && run.avg_score >= 90
+              ? <span style={{ color: '#3B6D11', fontWeight: 600 }}>✓ above target</span>
+              : run.avg_score != null && run.avg_score >= 80
+                ? <span style={{ color: '#854F0B' }}>approaching target</span>
+                : run.avg_score != null
+                  ? <span style={{ color: '#7B1D1D' }}>below target</span>
+                  : null}
+          </div>
         </div>
         <div className="heroright">
           {/* These 4 categories are a STRICT partition of every file (statusOf() in the File
