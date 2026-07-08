@@ -97,4 +97,16 @@ def hitl_update(item_id: str, body: HitlUpdate):
             core.store.upsert_remediation_state(doc_id, item["rule_id"], _STATE_FOR[body.status], scan_id)
         except Exception:
             pass
+    # Re-validate → certify: once a remediated file's every review item is approved, it is
+    # fully conformant (auto fixes verified + human findings signed off) and advances to
+    # Publish. This is the seam that closes the remediate → review → publish loop — without
+    # it an approved file stays compliant=0 forever and never reaches the publish queue.
+    if body.status == "approved" and item.get("scan_id") and item.get("file"):
+        try:
+            if core.store.mark_file_compliant_if_reviewed(item["scan_id"], item["file"]):
+                core.store.log_decision(
+                    "system", "revalidate.certified", scan_id=item["scan_id"], file=item["file"],
+                    detail="all findings resolved (auto-fixed + human-approved) — certified & advanced to Publish")
+        except Exception:
+            pass
     return updated

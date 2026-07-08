@@ -234,15 +234,41 @@ def _remediate_file(payload: dict, job: dict) -> None:
         from documents import resolve_doc_id
         doc_id = resolve_doc_id("drive", drive_file_id, filename, None)
         auto_rules = core.store.list_auto_fail_rules(scan_id, filename)
+        cleared: set[str] = set()   # rule_ids this run verifiably auto-cleared
         kept = []
         for rule_id in auto_rules:
             if residual is not None and rule_id in residual:
                 kept.append(rule_id)                       # reported fix did not clear -> leave failing
                 continue
             core.store.upsert_remediation_state(doc_id, rule_id, "complete", scan_id)
+            cleared.add(rule_id)
         if residual is not None and kept:
             core.store.log_decision("system", "remediate.unverified", scan_id=scan_id, file=filename,
-                                    detail=f"{len(auto_rules) - len(kept)} verified cleared; {len(kept)} reported-fixed but still failing on re-scan (kept for review): {', '.join(sorted(kept))}")
+                                    detail=f"{len(cleared)} verified cleared; {len(kept)} reported-fixed but still failing on re-scan (kept for review): {', '.join(sorted(kept))}")
+        # Tie the HITL review queue to the remediate action. Every FAILing finding this run
+        # did NOT verifiably auto-clear — contrast sign-off, link purpose, structure, or an
+        # auto fix that didn't take — must reach a human here, or it silently vanishes: the
+        # mount-time queue_hitl_items pull only sees fix_mode='ai-assisted', so a stuck
+        # fix_mode='auto' finding never routes to anyone, the reviewer has nothing to
+        # approve, and the file can never re-validate to compliant (Publish stays empty).
+        # A fully-cleared file still gets ONE verification item (user decision 2026-07-02)
+        # so no unreviewed fix reaches Publish on trust alone.
+        review_rules = [
+            {"rule_id": r["rule_id"], "rule_name": r.get("rule_name"),
+             "finding_count": r.get("finding_count")}
+            for r in core.store.get_scan_traces(scan_id, file=filename)
+            if r.get("outcome") == "FAIL" and r["rule_id"] not in cleared
+        ]
+        if review_rules:
+            queued = core.store.queue_hitl_review_for_file(scan_id, filename, review_rules)
+            if queued:
+                core.fire_webhook(queued)
+                core.store.log_decision("system", "hitl.review_routed", scan_id=scan_id, file=filename,
+                                        detail=f"{len(queued)} finding(s) routed to human review after remediation")
+        else:
+            core.store.queue_hitl_deferral(scan_id, filename,
+                                           "Automatic fix applied — verify the result", 1,
+                                           rule_id="auto/verify")
     except Exception:
         pass
 

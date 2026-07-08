@@ -1372,21 +1372,20 @@ class Store:
         self.refresh_scan_aggregate(scan_id)
         return True
 
-    def list_hitl_queue(self, status: str | None = None, scan_id: str | None = None) -> list[dict]:
+    def list_hitl_queue(self, status: str | None = None, scan_id: str | None = None,
+                        owner: str | None = None) -> list[dict]:
+        """List HITL items. `owner` scopes to the signed-in user's own documents (joined via
+        the scan's owner_email) — the inbox must not show another tenant's review items."""
+        conds, params = [], []
+        if status:
+            conds.append("status=%s"); params.append(status)
+        if scan_id:
+            conds.append("scan_id=%s"); params.append(scan_id)
+        if owner:
+            conds.append("scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)"); params.append(owner)
+        where = (" WHERE " + " AND ".join(conds)) if conds else ""
         with self._db.cursor() as cur:
-            if status and scan_id:
-                self._db.execute(cur,
-                    "SELECT * FROM hitl_queue WHERE status=%s AND scan_id=%s ORDER BY created_at DESC",
-                    (status, scan_id))
-            elif status:
-                self._db.execute(cur,
-                    "SELECT * FROM hitl_queue WHERE status=%s ORDER BY created_at DESC", (status,))
-            elif scan_id:
-                self._db.execute(cur,
-                    "SELECT * FROM hitl_queue WHERE scan_id=%s ORDER BY created_at DESC", (scan_id,))
-            else:
-                self._db.execute(cur,
-                    "SELECT * FROM hitl_queue ORDER BY created_at DESC")
+            self._db.execute(cur, f"SELECT * FROM hitl_queue{where} ORDER BY created_at DESC", tuple(params))
             return self._db.fetchall(cur)
 
     def get_hitl_item(self, item_id: str) -> dict | None:

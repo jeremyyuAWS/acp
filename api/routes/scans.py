@@ -574,13 +574,21 @@ def get_remediated_file(scan_id: str, filename: str, request: Request):
     of truth), falling back to a redirect to the Drive mirror copy for a pre-ADR-0010
     remediation that only ever wrote there. 404 if neither exists."""
     import blob as _blob
-    urls = core.store.get_remediation_urls(scan_id, filename)
-    if not urls or not (urls.get("blob_url") or urls.get("drive_write_url")):
-        raise HTTPException(404, "no remediated copy recorded for this file")
     owner = _owner(request)
-    data = _blob.download_remediated(owner, scan_id, filename)
+    urls = core.store.get_remediation_urls(scan_id, filename)
+    src_scan_id, src_file = scan_id, filename
+    if not urls or not (urls.get("blob_url") or urls.get("drive_write_url")):
+        # ADR 0011: an incremental re-scan mints a new scan_id and, for an unchanged file,
+        # never re-remediates — so the fixed copy (Blob object + DB record) lives under the
+        # scan_id that actually ran the remediation. Both are scan_id-keyed, so resolve the
+        # document across this owner's scans and stream from where the bytes really are.
+        alt = core.store.find_remediation_for_file(owner, scan_id, filename)
+        if not alt or not (alt.get("blob_url") or alt.get("drive_write_url")):
+            raise HTTPException(404, "no remediated copy recorded for this file")
+        urls, src_scan_id, src_file = alt, alt["scan_id"], alt["file"]
+    data = _blob.download_remediated(owner, src_scan_id, src_file)
     if data is not None:
-        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
+        ext = src_file.rsplit(".", 1)[-1].lower() if "." in src_file else "bin"
         mime_map = {"html": "text/html", "htm": "text/html", "pdf": "application/pdf",
                     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
