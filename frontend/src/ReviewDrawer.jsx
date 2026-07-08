@@ -1,8 +1,28 @@
+import { useEffect, useState } from 'react'
 import Drawer from './Drawer.jsx'
 
-export default function ReviewDrawer({ item, onClose, onAct }) {
+export default function ReviewDrawer({ item, onClose, onAct, onDraft }) {
+  const [afterText, setAfterText] = useState(item?.after || '')
+  const [drafting, setDrafting] = useState(false)
+  const [draftError, setDraftError] = useState(null)
+
+  useEffect(() => {
+    setAfterText(item?.after || '')
+    setDraftError(null)
+  }, [item?.id])
+
   if (!item) return null
   const subtitle = item.file ? item.file + (item.rule ? ' · ' + item.rule : '') : item.meta
+
+  const requestDraft = () => {
+    if (!onDraft) return
+    setDrafting(true); setDraftError(null)
+    onDraft(item)
+      .then((suggestion) => { if (suggestion) setAfterText(suggestion) })
+      .catch((e) => setDraftError(e?.message || 'AI draft unavailable — is Ollama running?'))
+      .finally(() => setDrafting(false))
+  }
+
   return (
     <Drawer title={item.title} subtitle={subtitle} onClose={onClose}>
       <div className="conf" style={{ margin: '10px 0 6px' }}>
@@ -14,14 +34,34 @@ export default function ReviewDrawer({ item, onClose, onAct }) {
         <>
           <h4 className="drawerh">Proposed fix &middot; before &rarr; after</h4>
           <div className="diffbox before"><span className="difftag">before</span><code>{item.before}</code></div>
-          <div className="diffbox after"><span className="difftag">after</span><code>{item.after}</code></div>
+          {item.aiDraftable ? (
+            <div className="diffbox after">
+              <span className="difftag">after</span>
+              <textarea
+                className="draftedit"
+                value={afterText}
+                onChange={(e) => setAfterText(e.target.value)}
+                rows={3}
+                style={{ width: '100%', font: 'inherit', resize: 'vertical' }}
+                placeholder="Edit the AI draft, or write the fix yourself"
+              />
+              {onDraft && (
+                <button className="ghost" style={{ marginTop: 6, fontSize: 12 }} disabled={drafting} onClick={requestDraft}>
+                  {drafting ? '✨ drafting…' : '✨ draft with AI'}
+                </button>
+              )}
+              {draftError && <p className="muted" style={{ color: '#B23B3B', fontSize: 12, marginTop: 4 }}>{draftError}</p>}
+            </div>
+          ) : (
+            <div className="diffbox after"><span className="difftag">after</span><code>{item.after}</code></div>
+          )}
         </>
       )}
 
       <p className="muted" style={{ marginTop: 12 }}>{item.note || 'The agent proposes this fix; a human confirms because confidence is below the auto-apply threshold. Approving re-validates the file against all engines.'}</p>
 
       <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 16, flexWrap: 'wrap' }}>
-        <button onClick={() => onAct(item.id, 'approved')}>&#10003; approve fix</button>
+        <button onClick={() => onAct(item.id, 'approved', item.aiDraftable ? afterText : undefined)}>&#10003; approve fix</button>
         <button className="ghost" onClick={() => onAct(item.id, 'self')}>&#9995; I&apos;ll fix it myself</button>
         <button className="ghost" style={{ color: '#1F5FA8' }} onClick={() => onAct(item.id, 'deferred')}>&#9208; defer to next cycle</button>
         <button className="ghost" onClick={() => onAct(item.id, 'rejected')}>&#10005; reject</button>

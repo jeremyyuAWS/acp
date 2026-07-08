@@ -116,6 +116,11 @@ _SCHEMA = [
       reviewed_at TEXT,
       reviewer_note TEXT
     )""",
+    # ADR: AI-draft + human-approve lane. The reviewer's final, possibly-edited
+    # value for a semantic finding (alt text / link text / title) — durable
+    # compliance evidence of what was actually approved, distinct from the
+    # ai.py-generated draft (which is regenerated on demand, not persisted).
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS approved_value TEXT",
     # Per-file, per-rule-id (from rule-catalog.json) execution manifest.
     # PASS = rule ran, no findings; FAIL = findings found; ERROR = engine error.
     """CREATE TABLE IF NOT EXISTS scan_file_manifests (
@@ -508,7 +513,7 @@ class Store:
                         "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail) "
                         "VALUES(%s,%s,%s,%s,%s,%s)",
                         (sid, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail")))
-                # Per-rule trace: one row per catalog rule per file — PASS/FAIL/SKIP.
+                # Per-rule trace: one row per catalog rule per file — PASS/FAIL/NOT_APPLICABLE.
                 sc_counts: dict[str, int] = {}
                 for i in f["issues"]:
                     sc = _extract_sc(i.get("wcag", ""))
@@ -1045,6 +1050,38 @@ class Store:
             row = self._db.fetchone(cur)
         return row["drive_file_id"] if row else None
 
+    def record_publish(self, scan_id: str, file: str) -> str:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE file_records SET published_at=%s WHERE scan_id=%s AND file=%s",
+                (now, scan_id, file))
+        return now
+
+    def refresh_scan_aggregate(self, scan_id: str) -> dict:
+        """Re-compute avg_score and certifiable from current file_records — called after
+        a single-file rescore so the scan summary stays consistent without a full finalize."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE scan_runs SET "
+                "certifiable=(SELECT COALESCE(SUM(compliant),0) FROM file_records WHERE scan_id=%s), "
+                "avg_score=(SELECT ROUND(AVG(score)) FROM file_records WHERE scan_id=%s AND score IS NOT NULL) "
+                "WHERE id=%s",
+                (scan_id, scan_id, scan_id))
+            self._db.execute(cur,
+                "SELECT files,certifiable,uncertain,error,avg_score FROM scan_runs WHERE id=%s", (scan_id,))
+            return self._db.fetchone(cur) or {}
+
+    def get_file_record(self, scan_id: str, file: str) -> dict | None:
+        """Return the full file_records row for one file in a scan."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT file,engine,status,score,compliant,drive_file_id,remediated_at,published_at "
+                "FROM file_records WHERE scan_id=%s AND file=%s",
+                (scan_id, file))
+            return self._db.fetchone(cur)
+
     def record_remediation(self, scan_id: str, file: str, drive_write_url: str | None = None,
                            blob_url: str | None = None) -> str:
         from datetime import datetime, timezone
@@ -1243,13 +1280,18 @@ class Store:
             self._db.execute(cur, "SELECT * FROM hitl_queue WHERE id=%s", (item_id,))
             return self._db.fetchone(cur)
 
-    def update_hitl_item(self, item_id: str, status: str, reviewer_note: str | None = None) -> dict | None:
+    def update_hitl_item(self, item_id: str, status: str, reviewer_note: str | None = None,
+                         approved_value: str | None = None) -> dict | None:
+        """approved_value: the reviewer's final (AI-drafted or hand-edited) text for a
+        semantic finding — e.g. alt text / link text. COALESCE so a reject/skip call
+        (which never passes one) never clobbers a value set by an earlier approve."""
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "UPDATE hitl_queue SET status=%s, reviewed_at=%s, reviewer_note=%s WHERE id=%s",
-                (status, now, reviewer_note, item_id))
+                "UPDATE hitl_queue SET status=%s, reviewed_at=%s, reviewer_note=%s, "
+                "approved_value=COALESCE(%s, approved_value) WHERE id=%s",
+                (status, now, reviewer_note, approved_value, item_id))
         return self.get_hitl_item(item_id)
 
     # ── Admin settings (persisted; survives restarts) ─────────────────────────

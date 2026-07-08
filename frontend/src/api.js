@@ -268,6 +268,51 @@ export const setCampaignStatus = (campaignId, status) => (SIM
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ status }),
     }).then(j))
+// ── HITL review queue ─────────────────────────────────────────────────────────
+// Auto-populate HITL queue from AI-assisted FAILs in a scan (idempotent).
+export const autoPopulateHitlQueue = (scanId) => (SIM
+  ? sim({ queued: 0, items: [] })
+  : fetch(`${BASE}/hitl/queue/${encodeURIComponent(scanId)}/auto`, { method: 'POST', headers: headers() }).then(j))
+// List HITL items for a scan, optionally filtered by status.
+export const listHitlQueue = (scanId, status = null) => (SIM
+  ? sim([])
+  : fetch(`${BASE}/hitl/queue?scan_id=${encodeURIComponent(scanId)}${status ? `&status=${status}` : ''}`, { headers: headers() }).then(j))
+// Update a HITL item (approved / rejected / skipped) with an optional reviewer note
+// and/or the reviewer's final (AI-drafted or hand-edited) approved_value.
+export const updateHitlItem = (itemId, status, reviewerNote = null, approvedValue = null) => (SIM
+  ? sim({ id: itemId, status })
+  : fetch(`${BASE}/hitl/queue/${encodeURIComponent(itemId)}`, {
+      method: 'PUT',
+      headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ status, reviewer_note: reviewerNote, approved_value: approvedValue }),
+    }).then(j))
+// Draft a concrete fix value (alt text / link text / title) via the local AI model
+// for one semantic finding. Reviewer accepts/edits it — never auto-applied here.
+export const suggestFix = (scanId, file, ruleId) => (SIM
+  ? sim({ suggestion: 'AI draft unavailable in demo mode — edit manually', kind: 'fix', is_template: true })
+  : fetch(`${BASE}/ai/suggest?scan_id=${encodeURIComponent(scanId)}&file=${encodeURIComponent(file)}&rule_id=${encodeURIComponent(ruleId)}`,
+      { headers: headers() }).then(j))
+
+// Re-download and re-score ONE file the user fixed externally. Returns {job_id} for polling.
+export const rescoreFile = (scanId, file) => (SIM
+  ? sim({ job_id: 'sim-rescore', workers: 1 }, 200)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/rescore?file=${encodeURIComponent(file)}`, { method: 'POST', headers: headers() }).then(j))
+// Record a file (or files) as published back to its source. Body drives both forms.
+export const publishFile = (scanId, file) => (SIM
+  ? sim({ published: [{ file, published_at: new Date().toISOString() }] }, 150)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/publish`, {
+      method: 'POST',
+      headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ file }),
+    }).then(j))
+export const publishAllFiles = (scanId, files) => (SIM
+  ? sim({ published: files.map((f) => ({ file: f, published_at: new Date().toISOString() })) }, 150)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/publish`, {
+      method: 'POST',
+      headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ files }),
+    }).then(j))
+
 // Queue state: depth by status + recent jobs (drives the in-app queue panel).
 export const getJobs = (status = null) => (SIM
   ? sim({ workers: 4, stats: { done: 12, running: 1, queued: 3 }, dead_letters: { by_type: {}, top_errors: [] }, jobs: [
