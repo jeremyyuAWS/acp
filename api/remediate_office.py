@@ -436,8 +436,107 @@ def _remediate_docx_structure(entries: dict) -> list[str]:
                 st.set(f"{{{W}}}val", h2_id)
             applied.append(f"Demoted {len(h1s) - 1} extra Heading 1(s) to Heading 2 · 1.3.1")
 
+    # Contrast (1.4.3): recolour any run whose explicit w:color falls below 4.5:1 against
+    # its paragraph background — to black or white, whichever gives better contrast. Mirrors
+    # the pptx contrast fix and matches what the analyser's ColourContrastRule measures
+    # (direct run colour vs paragraph shading, default white).
+    import office_structure as _osx
+    val_attr = f"{{{W}}}val"
+    contrast_fixed = 0
+    for p in root.iter(f"{{{W}}}p"):
+        pPr = p.find(f"{{{W}}}pPr")
+        bg = "FFFFFF"
+        if pPr is not None:
+            shd = pPr.find(f"{{{W}}}shd")
+            fill = shd.get(f"{{{W}}}fill") if shd is not None else None
+            if fill and fill.lower() != "auto" and len(fill) == 6:
+                bg = fill
+        for run in p.iter(f"{{{W}}}r"):
+            rPr = run.find(f"{{{W}}}rPr")
+            color = rPr.find(f"{{{W}}}color") if rPr is not None else None
+            fg = color.get(val_attr) if color is not None else None
+            if not fg or fg.lower() == "auto" or len(fg) != 6:
+                continue
+            try:
+                if _osx._contrast_ratio(bg, fg) >= 4.5:
+                    continue
+                new = "000000" if _osx._contrast_ratio(bg, "000000") >= _osx._contrast_ratio(bg, "FFFFFF") else "FFFFFF"
+            except Exception:
+                continue
+            color.set(val_attr, new)
+            contrast_fixed += 1
+    if contrast_fixed:
+        applied.append(f"Recoloured {contrast_fixed} low-contrast run(s) to ≥4.5:1 · 1.4.3")
+
     if applied:
         entries[name] = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+    return applied
+
+
+def _remediate_xlsx_structure(entries: dict) -> list[str]:
+    """Deterministic xlsx structural fixes: give every defined table a header row
+    (headerRowCount>=1, WCAG 1.3.1) and unhide any row/column that is hidden but holds
+    data (WCAG 1.3.2) — matching the analyser's TableHeaderRule and HiddenContentRule."""
+    from lxml import etree
+
+    SS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    applied: list[str] = []
+
+    # Table headers: headerRowCount="0" -> "1" on every table-definition part.
+    tbl_fixed = 0
+    for name in list(entries):
+        if name.startswith("xl/tables/") and name.endswith(".xml"):
+            root = etree.fromstring(entries[name])
+            if root.get("headerRowCount") == "0":
+                root.set("headerRowCount", "1")
+                entries[name] = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+                tbl_fixed += 1
+    if tbl_fixed:
+        applied.append(f"Gave {tbl_fixed} table(s) a header row · 1.3.1")
+
+    # Hidden content: unhide rows/columns that are hidden AND contain data.
+    hid_fixed = 0
+    for name in list(entries):
+        if not (name.startswith("xl/worksheets/") and name.endswith(".xml")):
+            continue
+        root = etree.fromstring(entries[name])
+        changed = False
+
+        for row in root.iter(f"{{{SS}}}row"):
+            if row.get("hidden") not in ("1", "true"):
+                continue
+            has_content = any(c.find(f"{{{SS}}}v") is not None or c.find(f"{{{SS}}}is") is not None
+                              for c in row.findall(f"{{{SS}}}c"))
+            if has_content:
+                del row.attrib["hidden"]
+                changed = True
+                hid_fixed += 1
+
+        # Column indices (1-based) that hold a value, so we only unhide columns with content.
+        content_cols: set[int] = set()
+        for c in root.iter(f"{{{SS}}}c"):
+            if c.find(f"{{{SS}}}v") is None and c.find(f"{{{SS}}}is") is None:
+                continue
+            letters = "".join(ch for ch in (c.get("r") or "") if ch.isalpha())
+            if letters:
+                idx = 0
+                for ch in letters:
+                    idx = idx * 26 + (ord(ch.upper()) - 64)
+                content_cols.add(idx)
+        for col in root.iter(f"{{{SS}}}col"):
+            if col.get("hidden") not in ("1", "true"):
+                continue
+            mn, mx = int(col.get("min", "0")), int(col.get("max", "0"))
+            if any(mn <= i <= mx for i in content_cols):
+                del col.attrib["hidden"]
+                changed = True
+                hid_fixed += 1
+
+        if changed:
+            entries[name] = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+    if hid_fixed:
+        applied.append(f"Unhid {hid_fixed} hidden row(s)/column(s) that contained data · 1.3.2")
+
     return applied
 
 
@@ -502,6 +601,10 @@ def remediate_office(path: Path, *, lang: str = "en-US"):
             applied.extend(_remediate_xlsx_contrast(entries))
         except Exception:
             skipped.append("xlsx contrast recolour could not be applied")
+        try:
+            applied.extend(_remediate_xlsx_structure(entries))
+        except Exception:
+            skipped.append("xlsx structural fixes (table headers / hidden content) could not be applied")
 
     if not applied:
         return None, [], skipped or ["language and title already set"]
