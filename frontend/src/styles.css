@@ -1335,7 +1335,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .intname { font-size: 14px; font-weight: 500; }
 .intstatus { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
 .intstatus.live { color: #3B6D11; }
-.livedot { width: 7px; height: 7px; border-radius: 50%; background: #639922; display: inline-block; animation: pulse 1.6s ease-in-out infinite; }
+.pulsedot { width: 7px; height: 7px; border-radius: 50%; background: #639922; display: inline-block; animation: pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .intbtn { margin-top: auto; padding: 6px 14px; font-size: 13px; }
 .intbtn.ghost { background: #fff; color: var(--muted); border-color: var(--line); }

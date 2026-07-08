@@ -184,7 +184,7 @@ export default function QueuePanel() {
         </h2>
         {remFile && (
           <span aria-live="polite" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#185FA5', fontWeight: 600 }}>
-            <span className="livedot" aria-hidden="true" />
+            <span className="pulsedot" aria-hidden="true" />
             Remediating <span className="fname" title={remFile} style={{ fontWeight: 700 }}>{remFile}</span>
             <span className="muted" style={{ fontWeight: 400 }}>· {REM_STEPS[remStep]}</span>
           </span>
@@ -228,7 +228,7 @@ export default function QueuePanel() {
           )}
           <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600 }}>
             <span style={{ color: active > 0 ? '#185FA5' : 'var(--muted)' }}>
-              {active > 0 && <span className="livedot" aria-hidden="true" style={{ marginRight: 5 }} />}
+              {active > 0 && <span className="pulsedot" aria-hidden="true" style={{ marginRight: 5 }} />}
               {active} active
             </span>
             <span style={{ color: 'var(--muted)' }}>· {idle} idle</span>
@@ -255,7 +255,7 @@ export default function QueuePanel() {
               padding: '5px 12px', borderRadius: 9, background: bg, color: fg,
               fontSize: 13, fontWeight: 600,
             }}>
-              {s === 'running' && <span className="livedot" aria-hidden="true" />}
+              {s === 'running' && <span className="pulsedot" aria-hidden="true" />}
               {stats[s]} {label}
             </span>
           )
@@ -301,7 +301,7 @@ export default function QueuePanel() {
                     {desc}
                   </span>
                   <span className="jobstatus flash" key={jb.status} style={{ color: fg, background: bg }}>
-                    {jb.status === 'running' && <span className="livedot" aria-hidden="true" />}{jb.status}
+                    {jb.status === 'running' && <span className="pulsedot" aria-hidden="true" />}{jb.status}
                   </span>
                   {dur != null && <span className="muted jobdur">{fmtDur(dur)}</span>}
                   {jb.scan_id && <TraceChip scanId={jb.scan_id} kind="session" label="trace" />}

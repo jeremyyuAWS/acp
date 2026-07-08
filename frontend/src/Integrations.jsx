@@ -421,7 +421,7 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                     {enriched.files != null && <span>{enriched.files.toLocaleString()} files</span>}
                     <span>{lastScan ? `last scanned ${lastScan}` : 'not yet scanned'}</span>
                     <span className="srccard-badge">
-                      <span className="livedot" aria-hidden="true" />connected · read-only
+                      <span className="pulsedot" aria-hidden="true" />connected · read-only
                     </span>
                     {health && (() => {
                       const [label, fg, bg] = HEALTH_BADGE[health.status]

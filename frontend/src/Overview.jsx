@@ -136,8 +136,13 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
     scoreBand: `${band(90, 100)} documents are certifiable now (${pct(band(90, 100), n)}% of the estate). The ${band(50, 89)} in the 50–89 band are within striking distance — remediation here produces the fastest estate-level lift.`,
   }
 
-  const before = run.avg_score ?? 72
+  const scoredNow = files.filter((f) => f.score != null)
+  // Real measured baseline — average of the scored documents in this run (or the run's
+  // stored avg). No magic fallback: if nothing is scored yet, `before` is null and the
+  // projected-lift panel below is hidden rather than showing an invented number.
+  const before = run.avg_score ?? (scoredNow.length ? Math.round(scoredNow.reduce((a, f) => a + f.score, 0) / scoredNow.length) : null)
   const after = (() => {
+    if (before == null) return null
     const SEV_PEN = { CRITICAL: 16, SERIOUS: 11, MODERATE: 5, MINOR: 2 }
     const scored = files.filter((f) => f.score != null)
     if (!scored.length) return Math.min(100, before + 12)
@@ -290,6 +295,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         )
       })()}
 
+      {before != null && (
       <section className="panel"><h2>Compliance lift · projected after remediation</h2>
         <div className="lift">
           <div className="liftcol"><div className="liftnum" style={{ color: '#1F5FA8' }}>{before}</div><div className="muted">today · measured</div></div>
@@ -299,6 +305,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         </div>
         <p className="muted">Projected estate score assuming all queued remediations are approved and pass re-validation — actual results may vary.</p>
       </section>
+      )}
       </div>
 
       {seg &&<SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={setSelFile} />}

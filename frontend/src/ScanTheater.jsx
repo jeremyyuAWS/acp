@@ -29,7 +29,7 @@ export default function ScanTheater({ busy, progress, pct = 0, status = '' }) {
   return (
     <section className="panel theaterpanel" style={{ marginBottom: 14 }}>
       <div className="proghd">
-        <h2 style={{ margin: 0 }}><span className="livedot" aria-hidden="true" style={{ marginRight: 7 }} />Live scan in progress</h2>
+        <h2 style={{ margin: 0 }}><span className="pulsedot" aria-hidden="true" style={{ marginRight: 7 }} />Live scan in progress</h2>
         {progress.elapsed != null && <span className="muted" style={{ fontSize: 12 }}>{progress.elapsed}s elapsed</span>}
       </div>
 

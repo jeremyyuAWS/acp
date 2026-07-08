@@ -768,8 +768,12 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 const gain = (f.issues || []).filter((i) => i.auto).reduce((s, i) => s + (SEV_PEN[i.severity] || 0), 0)
                 return Math.min(100, f.score + gain)
               })
-              const liftBefore = run?.avg_score ?? 72
-              const liftAfter = projScores.length ? Math.min(100, Math.round(projScores.reduce((a, b) => a + b, 0) / projScores.length)) : Math.min(100, liftBefore + 8)
+              // Real measured baseline — average of the scored documents (or the run's
+              // stored avg). If nothing is scored yet, hide the lift rather than inventing one.
+              const measuredBefore = scoredFiles.length ? Math.round(scoredFiles.reduce((a, f) => a + f.score, 0) / scoredFiles.length) : null
+              const liftBefore = run?.avg_score ?? measuredBefore
+              const liftAfter = projScores.length ? Math.min(100, Math.round(projScores.reduce((a, b) => a + b, 0) / projScores.length)) : (liftBefore != null ? Math.min(100, liftBefore + 8) : null)
+              if (liftBefore == null || liftAfter == null) return null
               return (
                 <div className="lift" style={{ margin: '8px 0 12px' }}>
                   <div className="liftcol"><div className="liftnum" style={{ color: '#1F5FA8' }}>{liftBefore}</div><div className="muted">before</div></div>

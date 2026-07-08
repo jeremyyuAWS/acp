@@ -432,7 +432,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
 
       <section className="panel" style={{ marginTop: 14 }} ref={evidenceRef}>
         <div className="monfeedhd">
-          <h2 style={{ margin: 0 }}>Audit trail · live <span className="livedot" aria-hidden="true" /></h2>
+          <h2 style={{ margin: 0 }}>Audit trail · live <span className="pulsedot" aria-hidden="true" /></h2>
           <button className="exportbtn" onClick={exportEvidence} disabled={exporting}>{exporting ? 'Generating…' : '⤓ Export evidence package'}</button>
         </div>
         <div className="auditfeed" style={{ marginTop: 10 }} role="log" aria-live="polite" aria-label="Audit trail">
