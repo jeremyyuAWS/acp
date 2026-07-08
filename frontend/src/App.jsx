@@ -24,7 +24,6 @@ import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
 import Dashboard from './Dashboard.jsx'
 import Remediate from './Remediate.jsx'
-import QueuePanel from './QueuePanel.jsx'
 import Upload from './Upload.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
@@ -606,7 +605,6 @@ export default function App() {
           </>
         ) : placeholder)}
 
-        {view === 'remediate' && run && <QueuePanel />}
         {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id).then(setScan).catch(() => {})} onHitlCount={setHitlCount} /> : placeholder)}
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} /> : placeholder)}

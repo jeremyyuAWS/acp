@@ -9,6 +9,7 @@ import { PRI_COLOR, PRI_RANK } from './ontology.js'
 import { prefersReducedMotion } from './a11y.js'
 import { remediateScan, getRemediationStatus, downloadRemediated } from './api.js'
 import { TraceChip } from './Transparency.jsx'
+import QueuePanel from './QueuePanel.jsx'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
 // (what to fix, prioritized, accept/reject/modify), the HITL queue, and self-remediation.
@@ -351,6 +352,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           <b key={reVerified} className={reVerified ? 'tick' : undefined} style={{ color: '#3B6D11' }}>{reVerified.toLocaleString()}</b>
         </div>
       </div>
+
+      <QueuePanel />
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', margin: '4px 0 12px' }}>
         <button disabled={remBusy || !runId || readOnly} onClick={() => runServerRemediation(remediable)}
