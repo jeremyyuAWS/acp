@@ -1118,6 +1118,45 @@ class Store:
                 (scan_id, file))
             return self._db.fetchone(cur)
 
+    def find_remediation_for_file(self, owner: str | None, scan_id: str, file: str) -> dict | None:
+        """Most-recent recorded remediation of the SAME document across this owner's scans.
+
+        Both the file_records remediation row AND the Blob object are keyed by scan_id,
+        but an ADR 0011 incremental re-scan mints a NEW scan_id and, for an unchanged
+        file, reuses the prior analysis WITHOUT re-remediating — so the fixed copy stays
+        under the scan_id that actually ran the remediation. When the download route can't
+        find a remediation on the scan the user is viewing, resolve the document's stable
+        identity (Drive id first — survives rename; else byte-identical checksum; else the
+        file name) and return the newest COMPLETED scan that DID record one, so the fixed
+        bytes remain reachable from a later scan's drawer. Returns {scan_id, file, blob_url,
+        drive_write_url} — scan_id/file identify where the Blob object actually lives (the
+        caller downloads from there, not the viewed scan). None if no prior remediation."""
+        with self._db.cursor() as cur:
+            # Identity of the file as seen in the scan the user is viewing.
+            self._db.execute(cur,
+                "SELECT drive_file_id, checksum FROM file_records WHERE scan_id=%s AND file=%s",
+                (scan_id, file))
+            cur_row = self._db.fetchone(cur)
+            if not cur_row:
+                return None
+            drive_file_id = cur_row.get("drive_file_id")
+            checksum = cur_row.get("checksum")
+            if drive_file_id:
+                match_sql, match_val = "fr.drive_file_id=%s", drive_file_id
+            elif checksum:
+                match_sql, match_val = "fr.checksum=%s", checksum
+            else:
+                match_sql, match_val = "fr.file=%s", file
+            self._db.execute(cur,
+                "SELECT fr.scan_id, fr.file, fr.blob_url, fr.drive_write_url "
+                "FROM file_records fr JOIN scan_runs sr ON sr.id = fr.scan_id "
+                f"WHERE sr.owner_email=%s AND {match_sql} "
+                "AND (fr.blob_url IS NOT NULL OR fr.drive_write_url IS NOT NULL) "
+                "AND sr.completed_at IS NOT NULL "
+                "ORDER BY sr.completed_at DESC LIMIT 1",
+                (owner, match_val))
+            return self._db.fetchone(cur)
+
     def _full_catalog_rules(self) -> dict[str, list[dict]]:
         """Load rule-catalog.json grouped by engine (docx/pptx/xlsx/pdf/html)."""
         import json as _json
@@ -1267,20 +1306,87 @@ class Store:
                  note[:200], count))
         return item_id
 
-    def list_hitl_queue(self, status: str | None = None, scan_id: str | None = None,
-                        owner: str | None = None) -> list[dict]:
-        """List HITL items. `owner` scopes to the signed-in user's own documents (joined via
-        the scan's owner_email) — the inbox must not show another tenant's review items."""
-        conds, params = [], []
-        if status:
-            conds.append("status=%s"); params.append(status)
-        if scan_id:
-            conds.append("scan_id=%s"); params.append(scan_id)
-        if owner:
-            conds.append("scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)"); params.append(owner)
-        where = (" WHERE " + " AND ".join(conds)) if conds else ""
+    def queue_hitl_review_for_file(self, scan_id: str, file: str,
+                                   rules: list[dict]) -> list[dict]:
+        """Queue HITL review items for specific FAILing rules of ONE file — the human-
+        judgment findings a remediate_file run could NOT verifiably auto-clear (contrast
+        sign-off, link purpose, structure, or an auto fix that didn't take on re-scan).
+        Without this the residual routes to nobody: queue_hitl_items only pulls
+        fix_mode='ai-assisted' scan-wide, so a fix_mode='auto' finding the remediator
+        couldn't clear (e.g. 1.4.3 contrast needing design sign-off) silently vanishes and
+        the file can never re-validate to compliant. `rules` = [{rule_id, rule_name,
+        finding_count}]. Idempotent per (scan, file, rule) like queue_hitl_items /
+        queue_hitl_deferral — repeat remediate clicks never duplicate. Returns new items."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        created: list[dict] = []
         with self._db.cursor() as cur:
-            self._db.execute(cur, f"SELECT * FROM hitl_queue{where} ORDER BY created_at DESC", tuple(params))
+            self._db.execute(cur,
+                "SELECT rule_id FROM hitl_queue WHERE scan_id=%s AND file=%s", (scan_id, file))
+            already = {r["rule_id"] for r in self._db.fetchall(cur)}
+            for r in rules:
+                rid = r.get("rule_id")
+                if not rid or rid in already:
+                    continue
+                item_id = uuid.uuid4().hex[:12]
+                name = r.get("rule_name") or rid
+                count = r.get("finding_count") or 1
+                self._db.execute(cur,
+                    "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending')",
+                    (item_id, now, scan_id, file, rid, name, count))
+                already.add(rid)
+                created.append({"id": item_id, "scan_id": scan_id, "file": file,
+                                "rule_id": rid, "rule_name": name, "finding_count": count,
+                                "status": "pending", "created_at": now})
+        return created
+
+    def mark_file_compliant_if_reviewed(self, scan_id: str, file: str) -> bool:
+        """After a HITL resolution: a REMEDIATED file whose every HITL item is 'approved'
+        (none pending / rejected / skipped) is fully conformant — its auto fixes verified
+        and its human-judgment findings signed off. Flip file_records.compliant=1 and set
+        score=100 so it advances to Publish (Publish gates on f.compliant), then refresh
+        the scan aggregate (certifiable = Σcompliant). Composite by design: a plain re-scan
+        of the fixed copy can't clear a finding whose resolution IS the human approval
+        (e.g. an approved link-text rewrite), so approval — not re-analysis — is the gate.
+        Idempotent: an already-compliant file, an un-remediated file, or one with any
+        item still pending / rejected / skipped returns False and changes nothing."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT compliant, remediated_at FROM file_records WHERE scan_id=%s AND file=%s",
+                (scan_id, file))
+            rec = self._db.fetchone(cur)
+            if not rec or not rec.get("remediated_at") or rec.get("compliant"):
+                return False
+            self._db.execute(cur,
+                "SELECT status, COUNT(*) AS n FROM hitl_queue WHERE scan_id=%s AND file=%s "
+                "GROUP BY status", (scan_id, file))
+            counts = {r["status"]: r["n"] for r in self._db.fetchall(cur)}
+        total = sum(counts.values())
+        if total == 0 or counts.get("approved", 0) != total:
+            return False   # still items pending / rejected / skipped — not fully resolved
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE file_records SET compliant=1, score=100, status='pass' "
+                "WHERE scan_id=%s AND file=%s", (scan_id, file))
+        self.refresh_scan_aggregate(scan_id)
+        return True
+
+    def list_hitl_queue(self, status: str | None = None, scan_id: str | None = None) -> list[dict]:
+        with self._db.cursor() as cur:
+            if status and scan_id:
+                self._db.execute(cur,
+                    "SELECT * FROM hitl_queue WHERE status=%s AND scan_id=%s ORDER BY created_at DESC",
+                    (status, scan_id))
+            elif status:
+                self._db.execute(cur,
+                    "SELECT * FROM hitl_queue WHERE status=%s ORDER BY created_at DESC", (status,))
+            elif scan_id:
+                self._db.execute(cur,
+                    "SELECT * FROM hitl_queue WHERE scan_id=%s ORDER BY created_at DESC", (scan_id,))
+            else:
+                self._db.execute(cur,
+                    "SELECT * FROM hitl_queue ORDER BY created_at DESC")
             return self._db.fetchall(cur)
 
     def get_hitl_item(self, item_id: str) -> dict | None:
