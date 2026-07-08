@@ -282,8 +282,9 @@ def _spawn_worker() -> None:
 
 def set_worker_count(n: int) -> int:
     """Scale the in-process worker pool to n live workers (spawn or stop threads).
-    Stopped workers finish their current job before exiting. Persisted so a restart
-    keeps the chosen size. Returns the new live count."""
+    Stopped workers finish their current job before exiting. Live for THIS process
+    only -- a restart/redeploy always resets to ACP_WORKERS (see start_workers).
+    Returns the new live count."""
     global WORKERS
     n = max(0, min(int(n), _MAX_WORKERS))
     import handlers  # noqa: F401 — ensure job handlers are registered before spawning
@@ -296,10 +297,6 @@ def set_worker_count(n: int) -> int:
             w.stop()                       # exits after the current job (if any)
         del _worker_handles[n:]
     WORKERS = n
-    try:
-        store.set_setting("worker_count", str(n))
-    except Exception:
-        pass
     return len(_worker_handles)
 
 
@@ -417,20 +414,19 @@ def finalize_scan(scan_id: str, effective_ai: bool, source: str) -> None:
 
 
 def start_workers() -> int:
-    """Spawn the worker pool + a stuck-job sweeper. Pool size = the persisted
-    worker_count setting if set (live-scaled via the UI), else ACP_WORKERS.
-    No-op when the resolved size is 0."""
+    """Spawn the worker pool + a stuck-job sweeper. Pool size = ACP_WORKERS,
+    always -- a deploy-time env var must mean what it says. (Previously a
+    persisted worker_count setting from a prior live-scale action silently
+    overrode ACP_WORKERS on every restart, so setting ACP_WORKERS at deploy
+    time had no visible effect once anyone had ever used the +/- live-scale
+    buttons.) Live-scaling via the UI still works for the running process; it
+    just no longer survives the next restart. No-op when ACP_WORKERS is 0."""
     global WORKERS
     if _worker_handles:
         return len(_worker_handles)
     import threading
     import handlers  # noqa: F401 — registers job handlers with the worker
-    try:
-        saved = store.get_setting("worker_count")
-        target = int(saved) if saved not in (None, "") else WORKERS
-    except Exception:
-        target = WORKERS
-    WORKERS = max(0, min(target, _MAX_WORKERS))
+    WORKERS = max(0, min(WORKERS, _MAX_WORKERS))
     for _ in range(WORKERS):
         _spawn_worker()
 
