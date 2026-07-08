@@ -10,6 +10,39 @@ const JOBLABEL = {
 const fmtDur = (s) => (s == null ? '' : s < 1 ? '<1s' : s < 60 ? `${Math.round(s)}s` : `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`)
 const jobFile = (payload) => { try { return JSON.parse(payload || '{}').file || null } catch { return null } }
 
+// Source code → friendly name for job descriptions.
+const SRC_NAME = {
+  drive: 'Google Drive', gdrive: 'Google Drive', sharepoint: 'SharePoint', box: 'Box',
+  confluence: 'Confluence', cms: 'CMS', s3: 'S3', onedrive: 'OneDrive', upload: 'Upload',
+}
+// Human, informative label for a recent-job card — says what the worker is actually doing
+// rather than an opaque scan id. Per-file jobs name the document; scan-level jobs (which
+// have no single file) describe the phase and its source/scope from the job payload.
+const jobDesc = (jb) => {
+  let p = {}
+  try { p = JSON.parse(jb.payload || '{}') } catch { /* opaque payload — fall through */ }
+  const src = SRC_NAME[p.source] || p.source
+  switch (jb.type) {
+    case 'scan_file':
+    case 'remediate_file':
+      return p.file || 'a document'
+    case 'scan_discover':
+      return src ? `Finding documents · ${src}` : 'Finding documents to scan'
+    case 'scan_batch': {
+      const n = Array.isArray(p.items) ? p.items.length : null
+      return n ? `Scanning ${n} document${n !== 1 ? 's' : ''}` : 'Scanning a batch'
+    }
+    case 'scan_finalize':
+      return 'Scoring & finalizing results'
+    case 'assess_trace':
+      return `Assessing coverage · WCAG ${p.level || 'AA'}`
+    case 'scan':
+      return src ? `Scanning · ${src}` : 'Scanning documents'
+    default:
+      return p.file || (jb.scan_id ? `scan ${String(jb.scan_id).slice(0, 8)}` : String(jb.id).slice(0, 8))
+  }
+}
+
 // Live view of the durable async job queue (ADR 0004). Polls /jobs and shows
 // queue depth by status. The same data Grafana's queue panel renders.
 const WBTN = {
@@ -237,14 +270,14 @@ export default function QueuePanel() {
           </div>
           <div className="jobcards">
             {q.jobs.slice(0, 8).map((jb) => {
-              const file = jobFile(jb.payload)
+              const desc = jobDesc(jb)
               const dur = jb.created_at && jb.updated_at ? Math.max(0, (new Date(jb.updated_at) - new Date(jb.created_at)) / 1000) : null
               const [fg, bg] = STATUS[jb.status] || ['#555', '#eee']
               return (
                 <div className="jobcard" key={jb.id}>
                   <span className="jobtype">{JOBLABEL[jb.type] || jb.type}</span>
-                  <span className="jobfile" title={file || jb.scan_id || jb.id}>
-                    {file || (jb.scan_id ? `scan ${String(jb.scan_id).slice(0, 8)}` : String(jb.id).slice(0, 8))}
+                  <span className="jobfile" title={jb.scan_id ? `${desc} · scan ${jb.scan_id}` : desc}>
+                    {desc}
                   </span>
                   <span className="jobstatus flash" key={jb.status} style={{ color: fg, background: bg }}>
                     {jb.status === 'running' && <span className="livedot" aria-hidden="true" />}{jb.status}
