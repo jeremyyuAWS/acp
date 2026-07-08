@@ -131,6 +131,59 @@ def is_available() -> bool:
         return False
 
 
+# ── AI-drafted fix suggestions (semantic HITL lane) ───────────────────────────
+# For findings that can't be closed deterministically (alt text, link purpose, title),
+# the text model drafts a concrete, human-approvable value the reviewer accepts or edits.
+# Honest limit: the text model can't see images, so 1.1.1 alt drafts are fill-in templates
+# (real vision alt-text would need a llava-class model). Everything degrades to None when
+# Ollama is unreachable — the reviewer then writes the value manually.
+_SUGGEST_KIND: dict[str, tuple[str, str]] = {
+    "1.1.1": ("alt text", "concise descriptive alternative text (under 15 words) for an image"),
+    "2.4.4": ("link text", "descriptive link text stating the destination or purpose without surrounding context"),
+    "2.4.9": ("link text", "descriptive link text understandable from the link alone"),
+    "2.4.2": ("title", "a concise, descriptive document title"),
+}
+
+
+def _suggest_prompt(rule_id: str, rule_name: str, filename: str, detail: str) -> str:
+    kind, want = _SUGGEST_KIND.get(rule_id, ("fix", "a concrete corrected value"))
+    ctx = f"\nFinding detail: {detail}" if detail else ""
+    vision_note = ""
+    if rule_id == "1.1.1":
+        vision_note = ("\nYou cannot see the image. Produce a SHORT fill-in-the-blank template the author "
+                       "completes, e.g. 'Describe: [what the image shows and why it matters here]'.")
+    return (
+        f"You are an accessibility remediation assistant. A WCAG {rule_id} ({rule_name}) issue was found "
+        f"in the document '{filename}'.{ctx}\n"
+        f"Draft {want}.{vision_note}\n"
+        f"Reply with ONLY the suggested {kind} — no preamble, no quotes, under 20 words."
+    )
+
+
+def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
+                detail: str = "") -> dict | None:
+    """Draft a concrete, human-approvable fix value (alt text / link text / title) for a
+    semantic finding via the local text model. Returns None when Ollama is unavailable."""
+    prompt = _suggest_prompt(rule_id, rule_name, filename, detail)
+    try:
+        import httpx
+        r = httpx.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
+                  "options": {"temperature": 0.4, "num_predict": 60}},
+            timeout=90,
+        )
+        r.raise_for_status()
+        text = r.json().get("response", "").strip().strip('"').strip()
+        if not text:
+            return None
+        kind = _SUGGEST_KIND.get(rule_id, ("fix", ""))[0]
+        return {"suggestion": text, "kind": kind,
+                "is_template": rule_id == "1.1.1", "model": OLLAMA_MODEL}
+    except Exception:
+        return None
+
+
 # ── Compliance digest (ADR 0009 follow-on) ────────────────────────────────────
 # Deterministic facts (always reliable, grounded in real numbers) + an AI-written
 # executive narrative on top, with a deterministic-prose fallback. The model only

@@ -48,6 +48,34 @@ def ai_explain(scan_id: str = Query(...), file: str = Query(...), rule_id: str =
     return result
 
 
+@router.get("/ai/suggest")
+def ai_suggest(scan_id: str = Query(...), file: str = Query(...), rule_id: str = Query(...)):
+    """Draft a concrete, human-approvable fix value (alt text / link text / title) for a
+    semantic finding. Same AI gates as /ai/explain; 503 when Ollama is unavailable. The
+    reviewer accepts or edits the draft in the HITL queue — it is never auto-applied."""
+    if not core.store.get_ai_enabled():
+        raise HTTPException(403, "AI is disabled (deterministic-only mode) — findings route to human review")
+    import os
+
+    import ai as _ai
+    ollama_only = os.environ.get("ACP_AI_BACKEND", "auto").lower() == "ollama" or not os.environ.get("ANTHROPIC_API_KEY")
+    if ollama_only and not _ai.is_available():
+        raise HTTPException(503, "AI suggestion unavailable — is Ollama running?")
+    trace = core.store.get_trace_row(scan_id, file, rule_id)
+    if trace is None:
+        raise HTTPException(404, "trace not found")
+    result = _ai.suggest_fix(
+        rule_id=rule_id,
+        rule_name=trace["rule_name"],
+        level=trace["level"],
+        filename=file,
+        detail=trace.get("detail", "") or "",
+    )
+    if result is None:
+        raise HTTPException(503, "AI suggestion unavailable — is Ollama running?")
+    return result
+
+
 @router.get("/ai/status")
 def ai_status():
     """Check whether the local Ollama instance is reachable, and report whether
