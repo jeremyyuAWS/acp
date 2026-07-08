@@ -151,7 +151,11 @@ _SCHEMA = [
       campaign_id TEXT, batch_id TEXT, scan_id TEXT,
       last_error TEXT, created_at TEXT, updated_at TEXT
     )""",
-    "CREATE INDEX IF NOT EXISTS idx_jobs_claim ON jobs(status, run_after, priority)",
+    # Column order matches the claim ORDER BY (priority, run_after) so Postgres reads the
+    # top queued job index-only instead of sorting all queued rows every poll (audit P2).
+    # New name + drop-old so this migrates once, not a rebuild every boot.
+    "DROP INDEX IF EXISTS idx_jobs_claim",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_claim2 ON jobs(status, priority, run_after)",
     # Sensitive-data (PII) findings per document (ADR 0006). A detection dimension
     # orthogonal to WCAG. samples holds JSON array of MASKED strings only — never
     # raw PII (the masking is enforced in api/pii.py).
@@ -1497,6 +1501,18 @@ class Store:
             self._db.execute(cur, "SELECT COUNT(*) AS n FROM jobs WHERE status='dead'" + scope, sp)
             n = self._db.fetchone(cur)["n"]
             self._db.execute(cur, "DELETE FROM jobs WHERE status='dead'" + scope, sp)
+        return n
+
+    def purge_done_jobs(self, older_than_hours: int = 24) -> int:
+        """Delete completed ('done') jobs older than the cutoff so the jobs table (and the
+        claim index) don't grow unbounded — done rows were previously never purged (audit
+        P2). Dead jobs are retained for diagnostics; purge_dead_jobs handles those."""
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT COUNT(*) AS n FROM jobs WHERE status='done' AND updated_at<%s", (cutoff,))
+            n = self._db.fetchone(cur)["n"]
+            self._db.execute(cur, "DELETE FROM jobs WHERE status='done' AND updated_at<%s", (cutoff,))
         return n
 
     def touch_job(self, job_id: str) -> None:

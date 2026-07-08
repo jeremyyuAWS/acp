@@ -465,6 +465,7 @@ def start_workers() -> int:
     # Always start the sweeper (even at 0 workers) so a later live scale-up is covered.
     def _sweep():
         import time as _t
+        ticks = 0
         while True:
             try:
                 # 30-min lease: scans of large estates legitimately run ~10-15min,
@@ -473,6 +474,11 @@ def start_workers() -> int:
                 n = store.reclaim_stuck_jobs(lease_seconds=1800)
                 if n:
                     print(f"[sweeper] reclaimed {n} stuck job(s)", flush=True)
+                ticks += 1
+                if ticks % 60 == 0:      # ~hourly: trim old completed jobs so the jobs
+                    d = store.purge_done_jobs(older_than_hours=24)   # table + claim index don't bloat (audit P2)
+                    if d:
+                        print(f"[sweeper] purged {d} old done job(s)", flush=True)
             except Exception as e:
                 print(f"[sweeper] error: {e}", flush=True)
             _t.sleep(60)

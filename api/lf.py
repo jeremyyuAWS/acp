@@ -300,10 +300,15 @@ def finish_assess_trace(trace, summary: dict, *, scan_id: str | None = None,
 
 
 def flush():
-    """Flush pending events — call at the end of each scan."""
-    lf = _lf()
-    if lf:
-        lf.flush()
+    """Flush pending events — call at the end of each scan. Guarded: flush() runs before
+    the fan-out progress counter advances (handlers.py), so a raising Langfuse flush must
+    never fail or stall a scan/remediation job."""
+    try:
+        lf = _lf()
+        if lf:
+            lf.flush()
+    except Exception:
+        pass
 
 
 _PROJECT_ID_CACHE: str | None = None

@@ -931,7 +931,8 @@ export default function Upload({ onCertified, me }) {
                   <span style={{ fontSize: 12, color: 'var(--muted)' }}>Assign to:</span>
                   <select style={{ fontSize: 12 }} value={assignee || ''} onChange={(e) => setAssignee(e.target.value || null)}>
                     <option value="">— Not assigned (self)</option>
-                    {PERSONAS.map((p) => <option key={p.id} value={p.name}>{p.name} · {p.role}</option>)}
+                    {/* Demo personas are illustrative — never offer them as real assignees in prod. */}
+                    {(SIM ? PERSONAS : []).map((p) => <option key={p.id} value={p.name}>{p.name} · {p.role}</option>)}
                   </select>
                 </div>
                 <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 10, flexWrap: 'wrap' }}>

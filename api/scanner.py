@@ -327,7 +327,12 @@ def _download(item: dict, dest: Path, svc=None, sp_token: str | None = None) -> 
         _sp_download(sp_token, item, dest)
         return
     from googleapiclient.http import MediaIoBaseDownload
+    from googleapiclient.errors import HttpError
     buf = io.BytesIO()
+    # Per-file memory guard: workers hold the whole file in RAM (+a copy) on a 1GiB
+    # container, so a few large files in parallel can OOM the worker. Abort early past
+    # the cap and let the file bucket as an error instead of taking the process down.
+    max_bytes = int(os.environ.get("ACP_MAX_DOWNLOAD_MB", "150")) * 1024 * 1024
     if "mime" in item:
         # Google Workspace native — export as OOXML
         export_mime = EXPORT_MAP[item["mime"]][0]
@@ -336,8 +341,19 @@ def _download(item: dict, dest: Path, svc=None, sp_token: str | None = None) -> 
         req = svc.files().get_media(fileId=item["id"], supportsAllDrives=True)
     dl = MediaIoBaseDownload(buf, req)
     done = False
-    while not done:
-        _, done = dl.next_chunk(num_retries=5)
+    try:
+        while not done:
+            _, done = dl.next_chunk(num_retries=5)
+            if buf.tell() > max_bytes:
+                raise ValueError(f"file exceeds the {max_bytes // (1024 * 1024)}MB download "
+                                 f"cap — skipped to protect worker memory (raise ACP_MAX_DOWNLOAD_MB)")
+    except HttpError as e:
+        # Google-native exports are capped at 10MB by Drive; surface it clearly rather
+        # than as an opaque 403 so the file records a meaningful error.
+        if getattr(e, "resp", None) is not None and e.resp.status == 403 and "exportSizeLimit" in str(e):
+            raise ValueError("Google Doc/Sheet/Slide exceeds Drive's 10MB export limit — "
+                             "can't export to Office format for analysis") from e
+        raise
     out.write_bytes(buf.getvalue())
 
 
