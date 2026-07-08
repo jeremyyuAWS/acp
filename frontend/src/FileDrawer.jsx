@@ -437,11 +437,18 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         {st === 'uncertain' && <span className="muted">{file.skipped_rules} rule(s) skipped — score is an upper bound</span>}
         {effectiveRemediated && st === 'issues' && <span className="muted">score reflects the original scan — the fixed copy is stored; re-validate to refresh</span>}
         {(remNow?.done || effectiveRemediated) && (
-          <button className="ghost small dlfixed" style={{ marginLeft: 'auto' }} disabled={remNow === 'queued'}
-                  title={remNow === 'queued' ? 'Available once this remediation finishes' : 'Download the fixed copy (Blob primary, Drive-mirror fallback)'}
-                  onClick={() => downloadRemediated(scanId, file.file).catch((e) => console.error('download fixed copy failed', e))}>
-            ⤓ Download fixed copy
-          </button>
+          <>
+            <button className="ghost small dlfixed" style={{ marginLeft: 'auto' }} disabled={remNow === 'queued' || dl === 'loading'}
+                    title={remNow === 'queued' ? 'Available once this remediation finishes' : 'Download the fixed copy (Blob primary, Drive-mirror fallback)'}
+                    onClick={downloadFixedCopy}>
+              {dl === 'loading' ? '⏳ Preparing…' : '⤓ Download fixed copy'}
+            </button>
+            {dl?.error && (
+              <div className="muted" role="status" aria-live="polite" style={{ flexBasis: '100%', color: '#B43A2A', fontSize: 12 }}>
+                {dl.error}
+              </div>
+            )}
+          </>
         )}
         {st !== 'unanalysable' && (
           <button className="ghost small" style={(remNow?.done || effectiveRemediated) ? undefined : { marginLeft: 'auto' }} disabled={certExporting}

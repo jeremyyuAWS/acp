@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import FileDrawer from './FileDrawer.jsx'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
-import { openReport, publishFile, publishAllFiles } from './api.js'
+import { openReport, publishFile, publishAllFiles, listHitlQueue } from './api.js'
 
 const scoreColor = (s) => (s >= 80 ? '#3B6D11' : s >= 50 ? '#854F0B' : '#7B1D1D')
 
@@ -24,6 +24,18 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [pubUrls, setPubUrls] = useState({})   // file -> published Drive URL, from POST /publish
   const [publishing, setPublishing] = useState(false)
   const [sel, setSel] = useState(null)
+  // Why is the publish queue empty? A remediated file only becomes certifiable once its
+  // human-review findings are approved. Fetch the pending HITL queue so the empty state can
+  // say "N findings await review — approve them in Review first" instead of a dead-end.
+  const [pendingReview, setPendingReview] = useState({ items: 0, files: 0 })
+  useEffect(() => {
+    let live = true
+    if (!run?.id) { setPendingReview({ items: 0, files: 0 }); return }
+    listHitlQueue(run.id, 'pending')
+      .then((q) => { if (live) setPendingReview({ items: (q || []).length, files: new Set((q || []).map((i) => i.file)).size }) })
+      .catch(() => { if (live) setPendingReview({ items: 0, files: 0 }) })
+    return () => { live = false }
+  }, [run?.id, ready.length])
   const orgLabel = me?.email
     ? me.email.split('@')[1]?.replace(/\.[^.]+$/, '') || me.name || 'your organisation'
     : me?.name || 'your organisation'
@@ -123,7 +135,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <SearchFilterBar ctl={sfP} items={ready} facets={PUB_FACETS} noun="files"
                            placeholder="Search the publish queue…" />
         )}
-        {ready.length === 0 ? <p className="muted" style={{ marginTop: 10 }}>Nothing certifiable yet — re-validate fixes in Remediate first.</p> : (
+        {ready.length === 0 ? (
+          pendingReview.items > 0 ? (
+            <div className="muted" style={{ marginTop: 10, padding: '10px 14px', borderRadius: 9, background: '#FBF1DF', border: '1px solid #EAD9BF', color: '#7A5A12' }}>
+              ⚑ <b>{pendingReview.items} finding{pendingReview.items !== 1 ? 's' : ''} await{pendingReview.items === 1 ? 's' : ''} human review</b> across {pendingReview.files} document{pendingReview.files !== 1 ? 's' : ''} — approve {pendingReview.items === 1 ? 'it' : 'them'} in <b>Remediate → step 3 · Human review</b> first. A document becomes certifiable — and appears here — only once its every review item is approved.
+            </div>
+          ) : (
+            <p className="muted" style={{ marginTop: 10 }}>Nothing certifiable yet — remediate documents and approve their review items in Remediate first.</p>
+          )
+        ) : (
           <div className="publist">
             {shownReady.length === 0 ? <p className="muted">No files match — <button className="ghost small" onClick={sfP.clear}>clear the filters</button></p> : shownReady.map((f) => (
               <div className={`pubrow${done[f.file] ? ' pubdone' : ''}`} key={f.file}>

@@ -143,7 +143,7 @@ function buildHumanQueue(files, triage = {}) {
       icon: ITEM_ICON[sc] || '◈',
       title: `${(f.file.split('.').pop() || 'DOC').toUpperCase()} · ${issue.detail || ITEM_NAME[sc] || sc}`,
       meta: ba.meta,
-        file: f.file,
+      file: f.file,
       aiDraftable: AI_DRAFTABLE_SCS.has(sc),
       source: f.sourceName,
       rule: `WCAG ${sc}${ITEM_NAME[sc] ? ' — ' + ITEM_NAME[sc] : ''}`,
@@ -306,6 +306,13 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           setRemMsg(`✓ Remediation complete — ${ok} document${ok === 1 ? '' : 's'} fixed${s.failed ? `, ${s.failed} failed` : ''}.`)
           try { sessionStorage.removeItem(REMKEY(runId)) } catch { /* ignore */ }
           onRefresh?.()                             // refresh scan so the write-back banner updates
+          // Re-list the HITL queue: the just-finished jobs route every finding they could
+          // NOT verifiably auto-clear (contrast sign-off, link purpose, …) to human review
+          // server-side. Without this re-fetch the queue stays on its mount-time snapshot,
+          // so those new review items never surface and the reviewer has nothing to approve.
+          if (!SIM) listHitlQueue(runId, 'pending')
+            .then((items) => setQueue((items || []).map((it) => dbItemToUi(it, files))))
+            .catch(() => {})
         }
       } catch {
         // Transient errors retry, but not forever: ~30s of consecutive misses means
@@ -375,7 +382,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     // approved_value: the reviewer's final AI-drafted/hand-edited text, persisted as
     // durable compliance evidence of what was actually approved (not auto-applied to
     // the file yet — that needs a per-instance locator, a later increment).
-    if (!SIM && item?.id && apiStatus) updateHitlItem(item.id, apiStatus, null, apiStatus === 'approved' ? (editedValue || null) : null).catch(() => {})
+    if (!SIM && item?.id && apiStatus) {
+      const p = updateHitlItem(item.id, apiStatus, null, apiStatus === 'approved' ? (editedValue || null) : null)
+      // On approval the server re-validates the file: once its every review item is
+      // approved it flips to compliant and enters the publish queue. Refresh the scan so
+      // "Re-validated & ready to publish" (and the Publish tab) pick that up immediately.
+      if (apiStatus === 'approved') p.then(() => onRefresh?.()).catch(() => {})
+      else p.catch(() => {})
+    }
   }
   const draftAi = (item) => suggestFix(item.scanId || runId, item.file, item.ruleId).then((r) => r?.suggestion)
   const rescan = (id) => {
