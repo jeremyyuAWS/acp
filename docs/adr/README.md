@@ -11,3 +11,5 @@ header). Match the structure of the latest ADR when adding a new one.
 - [0005 — Server-side remediation engine](0005-server-side-remediation.md) — **Accepted** (2026-06-25)
 - [0010 — Azure Blob as the remediated-output store (Drive write becomes opt-in)](0010-remediated-output-object-store.md) — **Proposed** (2026-06-30)
 - [0011 — Incremental scans: skip unchanged files across scan runs](0011-incremental-scan-fingerprinting.md) — **Proposed** (2026-06-30)
+- [0012 — Own the Office analysers; fix the language rules](0012-own-office-analysers.md) — **Accepted** (2026-07-08)
+- [0013 — Worker durability hardening: idempotent finalize + worker-process isolation](0013-worker-durability-hardening.md) — **Proposed** (2026-07-08)
