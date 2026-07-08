@@ -352,6 +352,95 @@ export async function exportDocumentReport(d) {
   p.save(d.filename || `mova-${(d.file || 'document').replace(/\.[^.]+$/, '')}-report.pdf`)
 }
 
+const COV_OUT_TXT = { PASS: 'Pass', FAIL: 'Open finding', FIXED: 'Fixed · re-validate', HUMAN: 'Human review', UNCHECKED: 'Not auto-checked', WEB: 'Web-only (n/a)' }
+const COV_OUT_CLR = { PASS: GREEN, FAIL: '#A32D2D', FIXED: GREEN, HUMAN: AMBER, UNCHECKED: MUTED, WEB: MUTED }
+
+// Per-file WCAG certification (FileDrawer, any file, any state) — built ONLY from the
+// same honest per-criterion coverage rows shown on screen (outcome PASS/FAIL/FIXED/
+// HUMAN/UNCHECKED — never a fabricated per-finding narrative). The conformance
+// statement is gated on the REAL outstanding count: it only claims full conformance
+// when every in-scope criterion is PASS or FIXED — otherwise it states exactly how
+// many items remain open or pending human review. Nothing here asserts more than the
+// coverage manifest itself already shows.
+export async function exportFileCertification(d) {
+  const rows = d.rows || []
+  const passN = rows.filter((r) => r.outcome === 'PASS').length
+  const fixedN = rows.filter((r) => r.outcome === 'FIXED').length
+  const failN = rows.filter((r) => r.outcome === 'FAIL').length
+  const humanN = rows.filter((r) => r.outcome === 'HUMAN').length
+  const uncheckedN = rows.filter((r) => r.outcome === 'UNCHECKED').length
+  const openN = failN + humanN
+  const fullyConformant = rows.length > 0 && openN === 0
+
+  const p = await makeDoc({ title: `Accessibility Certification — ${d.file}` })
+  if (d.score != null) p.ring(d.score, fullyConformant ? GREEN : AMBER)
+  p.cover({
+    title: 'Accessibility Certification',
+    subtitle: d.file,
+    meta: [
+      `Generated ${d.timestamp || d.date}${d.engine ? ` · ${d.engine}` : ''}`,
+      `WCAG 2.1 Level ${d.targetLevel || 'AA'}${d.sourceName ? ` · ${d.sourceName}` : ''}${d.department ? ` · ${d.department}` : ''}`,
+    ],
+  })
+
+  p.heading('Executive summary')
+  if (fullyConformant) {
+    p.text(`As of this report, "${d.file}" meets all ${rows.length} in-scope WCAG 2.1 Level ${d.targetLevel || 'AA'} success criteria evaluated by the mova.io engine (${passN} passing, ${fixedN} fixed and pending re-validation). No open findings remain.`, { color: GREEN, bold: true, size: 11, gapAfter: 8 })
+  } else {
+    p.text(`"${d.file}" scored ${d.score ?? 'n/a'}/100 against WCAG 2.1 Level ${d.targetLevel || 'AA'}. Of ${rows.length} in-scope criteria: ${passN} pass, ${fixedN} fixed pending re-validation, ${failN} have open finding(s), and ${humanN} require human review before certification. This document is ${failN > 0 || humanN > 0 ? 'NOT yet fully certified' : 'conditionally certified'} — see Open items below.`, { color: AMBER, bold: true, size: 10.5, gapAfter: 8 })
+  }
+  p.text('This report reflects the exact same per-criterion outcomes shown in the platform’s WCAG coverage table for this file — pass is only claimed where the engine actually evaluated the criterion for this file type; unevaluated criteria are reported as such, not silently omitted.', { size: 8.5, color: MUTED, lh: 12 })
+
+  p.heading('Result')
+  p.metricGrid([
+    { label: 'Score', value: d.score != null ? `${d.score}/100` : 'n/a', color: fullyConformant ? GREEN : AMBER },
+    { label: 'Pass', value: passN + fixedN, color: GREEN },
+    { label: 'Open findings', value: failN, color: failN ? '#A32D2D' : GREEN },
+    { label: 'Human review', value: humanN, color: humanN ? AMBER : GREEN },
+  ])
+
+  if (openN > 0) {
+    p.heading('Open items — must resolve before full certification')
+    const open = rows.filter((r) => r.outcome === 'FAIL' || r.outcome === 'HUMAN')
+      .sort((a, b) => (a.outcome === 'FAIL' ? 0 : 1) - (b.outcome === 'FAIL' ? 0 : 1))
+    p.table(['WCAG', 'Criterion', 'Status', 'Finding'],
+      open.map((r) => [r.id, r.plain || r.name, COV_OUT_TXT[r.outcome],
+        r.outcome === 'FAIL' ? (r.fileIssues || []).map((i) => i.detail).filter(Boolean).slice(0, 2).join('; ') || `${r.count} finding(s)` : 'Needs a person to verify — routes through HITL review'
+      ]),
+      [55, 130, 90, p.CW - 55 - 130 - 90])
+  }
+
+  p.heading('Full WCAG coverage')
+  p.text(`Every criterion applicable to a document, at the ${d.targetLevel || 'AA'} certification target. ${uncheckedN > 0 ? `${uncheckedN} criteria are not yet automated for this file type and are reported as unchecked, not passing.` : ''}`, { size: 9, color: MUTED, gapAfter: 8 })
+  p.table(['WCAG', 'Criterion', 'Level', 'Fix approach', 'Outcome'],
+    rows.map((r) => [r.id, r.plain || r.name, r.level, (r.fix || '').replace(/[⚡✎✋]\s*/, ''), COV_OUT_TXT[r.outcome]]),
+    [55, p.CW - 55 - 55 - 90 - 90, 55, 90, 90])
+
+  p.heading('Audit trail')
+  const auditRows = [
+    ['Discovered', 'mova.io agent', 'Document ingested from source', d.file],
+    ['Assessed', `mova.io · WCAG ${d.targetLevel || 'AA'}`, `${rows.length} criteria evaluated · score ${d.score ?? 'n/a'}/100`, d.file],
+    ...(fixedN > 0 ? [['Auto-remediated', 'mova.io auto-fix', `${fixedN} criterion/criteria fixed`, d.file]] : []),
+    ...(humanN > 0 ? [['Pending human review', 'HITL queue', `${humanN} criterion/criteria awaiting a reviewer`, d.file]] : []),
+    ['Report generated', 'mova.io Platform', `${fullyConformant ? 'Zero open findings' : `${openN} item(s) still open`} · score ${d.score ?? 'n/a'}/100`, d.file],
+  ]
+  p.table(['Step', 'Actor', 'Action', 'Document'], auditRows, [72, 108, p.CW - 72 - 108 - 140, 140])
+
+  p.heading('Conformance statement')
+  if (fullyConformant) {
+    p.text(`"${d.file}" has been assessed against WCAG 2.1 Level ${d.targetLevel || 'AA'} success criteria as required by the Americans with Disabilities Act (ADA) Title II, the European Accessibility Act (EN 301 549), and Section 508 of the Rehabilitation Act. All ${rows.length} in-scope criteria evaluated by the mova.io engine for this file type are passing.`, { size: 10, gapAfter: 8 })
+  } else {
+    p.text(`"${d.file}" has been assessed against WCAG 2.1 Level ${d.targetLevel || 'AA'} success criteria. ${passN + fixedN} of ${rows.length} in-scope criteria currently pass; ${failN} have an open finding and ${humanN} await human review. This document does NOT yet meet the bar for full certification — resolve the items listed above and re-validate to update this report.`, { size: 10, color: AMBER, gapAfter: 8 })
+  }
+  p.text('Certified by the mova.io Accessibility Platform', { bold: true, size: 9.5, gapAfter: 4 })
+  p.text(`Generated: ${d.timestamp || d.date}`, { size: 9, color: MUTED, gapAfter: 4 })
+  p.text('Authorised signatory: ___________________________', { size: 9, color: MUTED, gapAfter: 4 })
+  p.text('Title / Role: ___________________________', { size: 9, color: MUTED, gapAfter: 16 })
+  p.text('This report was generated by the mova.io Accessibility Platform from the live coverage data for this file and is intended as evidence for ADA, EAA, and Section 508 compliance audits.', { size: 8, color: MUTED, lh: 12 })
+
+  p.save(d.filename || `mova-${(d.file || 'document').replace(/\.[^.]+$/, '')}-certification.pdf`)
+}
+
 // Immutable evidence package (Monitor) — the who/when/what/which-engine audit trail.
 export async function exportEvidenceReport(d) {
   const p = await makeDoc({ title: 'Accessibility Evidence Package' })

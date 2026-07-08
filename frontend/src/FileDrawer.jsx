@@ -42,6 +42,47 @@ const remStageLine = (pct) => REM_STAGE_LINES[Math.min(REM_STAGE_LINES.length - 
 // HITL-deferred finding (contrast, link purpose) is never claimed as 'fixing'.
 const REM_AUTOFIX_SC_BY_TYPE = { pdf: ['3.1.1', '2.4.2'], docx: ['1.1.1', '3.1.1', '2.4.2'], pptx: ['1.1.1', '3.1.1', '2.4.2', '1.4.3', '1.4.6', '1.3.2', '2.4.6'], xlsx: ['1.1.1', '3.1.1', '2.4.2', '1.4.3', '1.4.6'], html: ['3.1.1', '2.4.2', '1.3.1', '1.4.3', '1.4.6', '1.4.10', '1.4.4', '1.4.12', '1.4.2', '1.3.4'] }
 const scOfWcag = (v) => ((v || '').replace(/^SC_/, '').replace(/_/g, '.').match(/^\d+\.\d+\.\d+/) || [''])[0]
+
+// Pure per-criterion coverage computation — the SAME honest PASS/FAIL/FIXED/HUMAN/
+// UNCHECKED logic the on-screen WCAG coverage table below uses, extracted so the
+// certification-PDF export shares it exactly rather than risk drifting from what's
+// shown on screen.
+function computeCoverageRows(file, { catalogRules, targetLevel, remediatedRuleIds, effectiveRemediated, aiEnabled }) {
+  const ext = (file.file || '').split('.').pop().toLowerCase()
+  const fmt = /^html?$/.test(ext) ? 'html' : ['pdf', 'docx', 'pptx', 'xlsx'].includes(ext) ? ext : null
+  const scFromRule = (r) => r.wcag_sc || ((r.wcag || '').startsWith('SC_') ? r.wcag.slice(3).replaceAll('_', '.') : scOf(r.wcag || ''))
+  const checkedSCs = fmt === 'html'
+    ? new Set(allRules.map((m) => m.meta.id))
+    : new Set((((catalogRules || {})[fmt]) || []).map(scFromRule).filter(Boolean))
+  const isHuman = (c) => /Human/i.test(c.approach || '') || c.source === 'MDK HITL'
+  const DOC_HUMAN_WHEN_UNCHECKED = new Set(['1.4.1', '1.3.5', '2.5.3', '4.1.2'])
+  const fixOf = (c) => {
+    if ((c.tier || '').startsWith('Tier 1')) return '⚡ auto'
+    if ((c.tier || '').startsWith('Tier 2')) return aiEnabled ? '✎ AI' : '✋ human'
+    return '✋ human'
+  }
+  const issuesBySc = {}
+  ;(file.issues || []).forEach((i) => {
+    const sc = scOfWcag(i.wcag)
+    if (sc) issuesBySc[sc] = (issuesBySc[sc] || 0) + 1
+  })
+  const LEVEL_RANK = { A: 1, AA: 2, AAA: 3 }
+  const targetRank = LEVEL_RANK[targetLevel] || 2
+  const OUT_RANK = { FAIL: 0, FIXED: 0.5, PASS: 1, HUMAN: 2, UNCHECKED: 3, WEB: 4 }
+  const inScope = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) <= targetRank)
+  return inScope.map((c) => {
+    const count = issuesBySc[c.sc] || 0
+    const wasFixed = count > 0 && (remediatedRuleIds.has(c.sc)
+      || (effectiveRemediated && (REM_AUTOFIX_SC_BY_TYPE[file.type] || []).includes(c.sc)))
+    const outcome = wasFixed ? 'FIXED'
+      : count > 0 ? 'FAIL'
+      : checkedSCs.has(c.sc) ? 'PASS'
+      : isHuman(c) ? 'HUMAN'
+      : (DOC_HUMAN_WHEN_UNCHECKED.has(c.sc) && fmt && fmt !== 'html') ? 'HUMAN'
+      : 'UNCHECKED'
+    return { id: c.sc, name: c.name, plain: PLAIN_NAMES[c.sc] || c.name, level: c.level, fix: fixOf(c), outcome, count }
+  }).sort((a, b) => (OUT_RANK[a.outcome] ?? 3) - (OUT_RANK[b.outcome] ?? 3))
+}
 // Named rules step across the first 80% of the bar; the last 20% is the
 // write-to-store + re-verify stage. Client-paced (a single-file job streams no
 // per-rule events) but over the file's REAL auto-fixable findings, in order.
@@ -267,6 +308,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   // a plain "pass" for a criterion that only passes because remediation fixed it.
   // Re-fetches once remNow?.done flips true, so a same-session fix shows up immediately.
   const [remediatedRuleIds, setRemediatedRuleIds] = useState(new Set())
+  const [certExporting, setCertExporting] = useState(false)
   useEffect(() => {
     if (!scanId || !file?.file) { setRemediatedRuleIds(new Set()); return }
     let cancelled = false
@@ -377,6 +419,28 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         <span className="drawerscore">{file.score === null ? 'n/a' : `${st === 'uncertain' ? '≤' : ''}${file.score}`}<span className="muted"> / 100</span></span>
         {st === 'uncertain' && <span className="muted">{file.skipped_rules} rule(s) skipped — score is an upper bound</span>}
         {effectiveRemediated && st === 'issues' && <span className="muted">score reflects the original scan — the fixed copy is stored; re-validate to refresh</span>}
+        {st !== 'unanalysable' && (
+          <button className="ghost small" style={{ marginLeft: 'auto' }} disabled={certExporting}
+                  title="Download a branded, timestamped WCAG certification PDF for this file — built from the same coverage data shown below"
+                  onClick={async () => {
+                    if (certExporting) return
+                    setCertExporting(true)
+                    try {
+                      const rows = computeCoverageRows(file, { catalogRules, targetLevel, remediatedRuleIds, effectiveRemediated, aiEnabled })
+                      const now = new Date()
+                      const { exportFileCertification } = await import('./pdfReport.js')
+                      await exportFileCertification({
+                        file: file.file, score: file.score, targetLevel, rows,
+                        date: now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+                        timestamp: now.toLocaleString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }),
+                        engine: file.engine, sourceName: file.sourceName, department: file.department || file.dept,
+                      })
+                    } catch (e) { console.error('certification PDF export failed', e) }
+                    finally { setTimeout(() => setCertExporting(false), 500) }
+                  }}>
+            {certExporting ? '⏳ Generating…' : '⤓ Certification PDF'}
+          </button>
+        )}
       </div>
 
       {ontBlock}
