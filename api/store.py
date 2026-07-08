@@ -36,7 +36,7 @@ _SCHEMA = [
       id TEXT PRIMARY KEY, started_at TEXT, completed_at TEXT, source TEXT,
       rubric_name TEXT, rubric_hash TEXT,
       files INT, certifiable INT, uncertain INT, error INT, avg_score INT,
-      status TEXT, files_done INT, owner_email TEXT, assessed_at TEXT
+      status TEXT, files_done INT, owner_email TEXT, assessed_at TEXT, finalized_at TEXT
     )""",
     """CREATE TABLE IF NOT EXISTS file_records (
       scan_id TEXT, file TEXT, engine TEXT, status TEXT, score INT,
@@ -68,6 +68,7 @@ _SCHEMA = [
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS owner_email TEXT",
     # Presentation decouple: set when the user runs Assess — results views gate on it.
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS assessed_at TEXT",
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS finalized_at TEXT",  # ADR 0013 finalize-once guard
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS size_kb INT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS pages INT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS sheets INT",
@@ -739,6 +740,31 @@ class Store:
                 "RETURNING files_done, files", (n, scan_id))
             row = self._db.fetchone(cur)
         return (row["files_done"], row["files"]) if row else (0, 0)
+
+    def count_files_done(self, scan_id: str) -> tuple[int, int]:
+        """(distinct files persisted, total enqueued) — the idempotent finalize trigger
+        (ADR 0013). save_file_result upserts, so a retried scan_file re-saving the same row
+        can't inflate the count; unlike the running counter (bump_files_done) this never
+        overshoots or finalizes a scan early after a crash/retry."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT (SELECT COUNT(*) FROM file_records WHERE scan_id=%s) AS done, files "
+                "FROM scan_runs WHERE id=%s", (scan_id, scan_id))
+            row = self._db.fetchone(cur)
+        return (row["done"], row["files"]) if row else (0, 0)
+
+    def mark_finalized(self, scan_id: str) -> bool:
+        """Claim the finalize exactly once: set finalized_at iff still unset. Returns True for
+        the single caller that won (it emits HITL routing + audit); False for duplicate/
+        concurrent scan_finalize runs, which then no-op (ADR 0013). The summary recompute
+        (finalize_scan_run) stays idempotent and runs regardless."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE scan_runs SET finalized_at=%s WHERE id=%s AND finalized_at IS NULL",
+                (now, scan_id))
+            return getattr(cur, "rowcount", 1) == 1
 
     def finalize_scan_run(self, scan_id: str, completed_at: str) -> dict:
         """Aggregate per-file results into the scan_runs summary — matches

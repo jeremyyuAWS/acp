@@ -432,7 +432,13 @@ def clear_scan_tokens(scan_id: str) -> None:
 def finalize_scan(scan_id: str, effective_ai: bool, source: str) -> None:
     """Shared post-scan step: audit the run and, in deterministic mode, auto-route
     ai-assisted findings to the HITL queue. Used by both the threaded and queued
-    scan paths so they behave identically."""
+    scan paths so they behave identically.
+
+    Finalize-once (ADR 0013): a crash between a fan-out file's bump and completion used to
+    re-trigger and double-emit HITL/audit. mark_finalized claims the scan atomically, so
+    only the first caller runs this body; duplicate/concurrent scan_finalize jobs no-op."""
+    if not store.mark_finalized(scan_id):
+        return
     store.log_decision(
         "system", "scan.completed", scan_id=scan_id,
         detail=f"source={source} mode={'ai-assisted' if effective_ai else 'deterministic'}")

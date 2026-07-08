@@ -1,6 +1,6 @@
 # ADR 0013 — Worker durability hardening: idempotent finalize + worker-process isolation
 
-Status: Proposed
+Status: Partially accepted — finalize-once SHIPPED 2026-07-08; worker-process isolation still Proposed
 Date: 2026-07-08
 
 ## Context
@@ -59,7 +59,7 @@ fallback is per-replica and the co-located default doesn't benefit.
 
 Two independent changes; either can ship alone.
 
-### 1. Make finalize idempotent (correctness — do first; smaller)
+### 1. Make finalize idempotent (correctness) — SHIPPED 2026-07-08
 
 - **Trigger on a real count, not a running counter.** Replace the `bump_files_done`
   increment-and-compare trigger with a comparison of the **actual persisted count** —
@@ -73,6 +73,12 @@ Two independent changes; either can ship alone.
   enqueue harmless regardless of the trigger.
 - Cover both with a test that simulates a `scan_file` retry (bump/observe twice) and asserts
   a single finalize + no duplicate HITL/audit rows.
+
+  **Shipped:** `store.count_files_done` (COUNT of file_records vs `scan_runs.files`) replaced the
+  `bump_files_done` running-counter trigger in `scan_file`/`scan_batch`; `store.mark_finalized`
+  (atomic `SET finalized_at WHERE finalized_at IS NULL`, `finalized_at` added to the scan_runs
+  CREATE + a Postgres ALTER) guards `core.finalize_scan` so duplicate/concurrent `scan_finalize`
+  jobs no-op. Covered by `tests/test_finalize_idempotent.py` (idempotent count + once-only).
 
 This is `store.py` + `handlers.py` + `core.py` and **must be sequenced after** the
 in-flight remediate/finalize-path work merges, then tested on the finalize path — not

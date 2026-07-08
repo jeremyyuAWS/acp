@@ -464,7 +464,7 @@ def _scan_batch(payload: dict, job: dict) -> None:
         _analyse_and_persist_one(scan_id, it, source, pii, svc, toks, now, _lf, user=user,
                                  rubric_hash=rubric_hash, incremental=incremental)
     _lf.flush()  # send any file spans before the batch job exits
-    done, total = core.store.bump_files_done(scan_id, len(items))
+    done, total = core.store.count_files_done(scan_id)   # ADR 0013: count, not a running counter
     if done >= total > 0:
         core.store.enqueue_job("scan_finalize",
                                {"scan_id": scan_id, "source": source,
@@ -489,7 +489,7 @@ def _scan_file(payload: dict, job: dict) -> None:
                              rubric_hash=core.active_rubric().hash,
                              incremental=bool(payload.get("incremental", True)))
     _lf.flush()  # send file span before this per-file job exits
-    done, total = core.store.bump_files_done(scan_id)
+    done, total = core.store.count_files_done(scan_id)   # ADR 0013: count, not a running counter
     if done >= total > 0:
         core.store.enqueue_job("scan_finalize",
                                {"scan_id": scan_id, "source": source,
