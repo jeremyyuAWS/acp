@@ -37,6 +37,17 @@ async function makeDoc({ title = 'mova.io Accessibility Report', lang = 'en-US',
   return {
     doc, W, H, M, CW,
     gap(h) { st.y += h },
+    pageBreak() { if (st.y > M + 1) { doc.addPage(); st.y = M } },
+    bullets(items, { size = 10, color = INK, lh = 14, gap = 5 } = {}) {
+      doc.setFontSize(size)
+      items.forEach((it) => {
+        const lines = doc.splitTextToSize(String(it), CW - 16); ensure(lines.length * lh + gap)
+        ink(PLUM); doc.setFont('helvetica', 'bold'); doc.text('\u2022', M + 2, st.y + size)
+        ink(color); doc.setFont('helvetica', 'normal'); doc.text(lines, M + 14, st.y + size)
+        st.y += lines.length * lh + gap
+      })
+      st.y += 4
+    },
     heading(t) {
       ensure(34); ink(PLUM); doc.setFont('helvetica', 'bold'); doc.setFontSize(12.5)
       doc.text(t.toUpperCase(), M, st.y + 12); st.y += 18
@@ -442,11 +453,18 @@ export async function exportFileCertification(d) {
   p.heading('Executive summary')
   p.callout(
     fullyConformant
-      ? `As of this report, "${d.file}" meets all ${rows.length} in-scope WCAG 2.1 Level ${d.targetLevel || 'AA'} success criteria evaluated by the mova.io engine (${passN} passing, ${fixedN} fixed and pending re-validation). No open findings remain.`
-      : `"${d.file}" scored ${d.score ?? 'n/a'}/100 against WCAG 2.1 Level ${d.targetLevel || 'AA'}. Of ${rows.length} in-scope criteria: ${passN} pass, ${fixedN} fixed pending re-validation, ${failN} have open finding(s), and ${humanN} require human review before certification. This document is ${failN > 0 || humanN > 0 ? 'NOT yet fully certified' : 'conditionally certified'} — see Open items below.`,
+      ? `"${d.file}" meets all ${rows.length} in-scope WCAG 2.1 Level ${d.targetLevel || 'AA'} criteria evaluated for this file type — no open findings remain.`
+      : `"${d.file}" scored ${d.score ?? 'n/a'}/100 against WCAG 2.1 Level ${d.targetLevel || 'AA'} and is ${openN > 0 ? 'NOT yet fully certified' : 'conditionally certified'}: ${openN} of ${rows.length} in-scope criteria still need attention.`,
     { color: fullyConformant ? GREEN : AMBER, bg: fullyConformant ? '#EEF5E8' : '#FBF1DF' }
   )
-  p.text('This report reflects the exact same per-criterion outcomes shown in the platform’s WCAG coverage table for this file — pass is only claimed where the engine actually evaluated the criterion for this file type; unevaluated criteria are reported as such, not silently omitted.', { size: 8.5, color: MUTED, lh: 12 })
+  p.bullets([
+    `${passN + fixedN} of ${rows.length} in-scope criteria pass${fixedN ? ` — ${fixedN} auto-fixed, pending re-validation` : ''}`,
+    failN ? `${failN} open finding${failN !== 1 ? 's' : ''} to resolve` : null,
+    humanN ? `${humanN} criteri${humanN !== 1 ? 'a' : 'on'} need a human reviewer before certification` : null,
+    uncheckedN ? `${uncheckedN} criteri${uncheckedN !== 1 ? 'a' : 'on'} not auto-checked for this file type — reported, not assumed passing` : null,
+    fullyConformant ? 'Ready to certify and publish.' : 'Next step: resolve the open items below, then re-validate.',
+  ].filter(Boolean))
+  p.text('Per-criterion outcomes match the platform’s WCAG coverage table for this file — pass is claimed only where the engine evaluated the criterion; unevaluated criteria are reported as such.', { size: 8.5, color: MUTED, lh: 12 })
 
   p.heading('Result')
   p.metricGrid([
@@ -466,6 +484,7 @@ export async function exportFileCertification(d) {
   ])
 
   if (openN > 0) {
+    p.pageBreak()
     const open = rows.filter((r) => r.outcome === 'FAIL' || r.outcome === 'HUMAN')
       .sort((a, b) => (a.outcome === 'FAIL' ? 0 : 1) - (b.outcome === 'FAIL' ? 0 : 1))
     const prinCount = {}
@@ -485,12 +504,14 @@ export async function exportFileCertification(d) {
       [55, 130, 90, p.CW - 55 - 130 - 90])
   }
 
+  p.pageBreak()
   p.heading('Full WCAG coverage')
   p.text(`Every criterion applicable to a document, at the ${d.targetLevel || 'AA'} certification target. ${uncheckedN > 0 ? `${uncheckedN} criteria are not yet automated for this file type and are reported as unchecked, not passing.` : ''}`, { size: 9, color: MUTED, gapAfter: 8 })
   p.table(['WCAG', 'Criterion', 'Level', 'Fix approach', 'Outcome'],
     rows.map((r) => [r.id, r.plain || r.name, r.level, (r.fix || '').replace(/[⚡✎✋]\s*/, ''), COV_OUT_TXT[r.outcome]]),
     [55, p.CW - 55 - 55 - 90 - 90, 55, 90, 90])
 
+  p.pageBreak()
   p.heading('Audit trail')
   const auditRows = [
     ['Discovered', 'mova.io agent', 'Document ingested from source', d.file],
