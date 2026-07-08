@@ -241,6 +241,22 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   // outset — shown routed to a human, never claimed as being fixed.
   const [findStatus, setFindStatus] = useState({})
   const [hitlQueued, setHitlQueued] = useState(false)
+  // Download the stored fixed copy. downloadRemediated() rejects on a non-2xx (e.g. the
+  // 404 an ADR 0011 incremental re-scan produced for a file whose fixed copy lives under
+  // an earlier scan_id) — but the bare onClick used to drop that rejection, so the button
+  // silently did nothing. Await + catch so the failure is surfaced. The backend now falls
+  // back across the owner's scans, so a residual error genuinely means no copy exists yet.
+  const [dl, setDl] = useState(null) // null | 'loading' | { error }
+  const downloadFixedCopy = async () => {
+    if (dl === 'loading') return
+    setDl('loading')
+    try {
+      await downloadRemediated(scanId, file.file)
+      setDl(null)
+    } catch (e) {
+      setDl({ error: 'Fixed copy not available for this scan — re-remediate to refresh it.' })
+    }
+  }
   const remediateNow = async () => {
     if (!scanId || remNow === 'queued') return
     setRemNow('queued'); setRemProgress(4); setRemStage('Queued — waiting for a worker…')
@@ -310,6 +326,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   const [remediatedRuleIds, setRemediatedRuleIds] = useState(new Set())
   const [certExporting, setCertExporting] = useState(false)
   useEffect(() => {
+    setDl(null)   // clear a stale download error/spinner when switching files or scans
     if (!scanId || !file?.file) { setRemediatedRuleIds(new Set()); return }
     let cancelled = false
     getFileRemediationState(scanId, file.file)
@@ -419,8 +436,15 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         <span className="drawerscore">{file.score === null ? 'n/a' : `${st === 'uncertain' ? '≤' : ''}${file.score}`}<span className="muted"> / 100</span></span>
         {st === 'uncertain' && <span className="muted">{file.skipped_rules} rule(s) skipped — score is an upper bound</span>}
         {effectiveRemediated && st === 'issues' && <span className="muted">score reflects the original scan — the fixed copy is stored; re-validate to refresh</span>}
+        {(remNow?.done || effectiveRemediated) && (
+          <button className="ghost small dlfixed" style={{ marginLeft: 'auto' }} disabled={remNow === 'queued'}
+                  title={remNow === 'queued' ? 'Available once this remediation finishes' : 'Download the fixed copy (Blob primary, Drive-mirror fallback)'}
+                  onClick={() => downloadRemediated(scanId, file.file).catch((e) => console.error('download fixed copy failed', e))}>
+            ⤓ Download fixed copy
+          </button>
+        )}
         {st !== 'unanalysable' && (
-          <button className="ghost small" style={{ marginLeft: 'auto' }} disabled={certExporting}
+          <button className="ghost small" style={(remNow?.done || effectiveRemediated) ? undefined : { marginLeft: 'auto' }} disabled={certExporting}
                   title="Download a branded, timestamped WCAG certification PDF for this file — built from the same coverage data shown below"
                   onClick={async () => {
                     if (certExporting) return
@@ -485,13 +509,6 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                 )}
                 {remNow?.done && (
                   <span className="dectag ok" style={{ fontSize: 12, padding: '3px 10px' }}>✓ Remediated — fixed copy stored{hitlQueued ? ' · queued for human review' : ''}</span>
-                )}
-                {(remNow?.done || effectiveRemediated) && (
-                  <button className="ghost small" style={{ marginLeft: 8 }} disabled={remNow === 'queued'}
-                          title={remNow === 'queued' ? 'Available once this remediation finishes' : 'Download the fixed copy (Blob primary, Drive-mirror fallback)'}
-                          onClick={() => downloadRemediated(scanId, file.file)}>
-                    ⤓ Download fixed copy
-                  </button>
                 )}
                 {remNow === 'error' && (
                   <span style={{ color: '#B43A2A' }}>

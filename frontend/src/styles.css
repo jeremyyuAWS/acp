@@ -466,7 +466,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .filerow:hover { background: var(--bg); }
 .filerow:focus-visible { outline: 2px solid #7a5c8e; outline-offset: -2px; }
 .drawer-overlay { position: fixed; inset: 0; background: rgba(28, 22, 32, 0.4); z-index: 50; }
-.drawer { position: fixed; top: 0; right: 0; height: 100%; width: 460px; max-width: 92vw; background: var(--card);
+.drawer { position: fixed; top: 0; right: 0; height: 100%; width: 598px; max-width: 94vw; background: var(--card);
   z-index: 51; box-shadow: -10px 0 36px rgba(40, 30, 48, 0.16); overflow-y: auto; padding: 22px 24px 40px;
   animation: drawerin 0.22s ease; }
 @keyframes drawerin { from { transform: translateX(36px); opacity: 0.5; } to { transform: none; opacity: 1; } }
@@ -1480,3 +1480,14 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
   margin-left: 6px; padding: 0 5px; border-radius: 999px; background: var(--card); color: var(--ink);
   font-size: 11px; font-weight: 700; }
 .snavbtn.on .snavcount { background: rgba(255,255,255,.25); color: #fff; }
+
+/* 'Download fixed copy' — green, pops in once the fixed copy is ready. */
+.dlfixed { background: #E7F0DC; border-color: #A6C98A; color: #2F5310;
+  animation: dlready .7s cubic-bezier(.2,.7,.3,1) both; }
+.dlfixed:hover { background: #DCEBCD; border-color: #8FBE6E; color: #24420C; }
+@keyframes dlready {
+  0% { opacity: 0; transform: translateY(-5px) scale(.96); }
+  55% { transform: translateY(0) scale(1.03); }
+  100% { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .dlfixed { animation: none; } }
