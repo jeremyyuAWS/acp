@@ -182,3 +182,29 @@ def test_alt_junk_descr_treated_as_missing(tmp_path):
     assert 'descr="image.png"' not in xml
     assert 'descr="image2.jpeg"' in xml                   # no faithful source → junk left, deferred
     assert any("1 image(s) lack a faithful alt source" in s for s in skipped)
+
+
+def test_alt_pathstyle_descr_treated_as_missing(tmp_path):
+    # Path-style descr ("icons/user.png") passes a naive non-empty check but is
+    # meaningless to a screen reader — must be treated as missing alt (1.1.1).
+    src = tmp_path / "h.docx"
+    _make_docx_with_body(src,
+        '<w:p><w:r><w:drawing><wp:docPr id="1" name="Picture 1" descr="icons/user.png" title="Patient intake diagram"/></w:drawing></w:r></w:p>'
+        '<w:p><w:r><w:drawing><wp:docPr id="2" name="Picture 2" descr="icons/shield.png"/></w:drawing></w:r></w:p>')
+    out, applied, skipped = remediate_office.remediate_office(src)
+    xml = _doc_xml(out)
+    assert 'descr="Patient intake diagram"' in xml        # path-style replaced from title
+    assert 'descr="icons/user.png"' not in xml
+    assert 'descr="icons/shield.png"' in xml               # no faithful source → left, deferred to human
+    assert any("1 image(s) lack a faithful alt source" in s for s in skipped)
+
+
+def test_alt_descriptive_slash_prose_preserved(tmp_path):
+    # A real description that merely contains a slash must NOT be flagged.
+    src = tmp_path / "i.docx"
+    _make_docx_with_body(src,
+        '<w:p><w:r><w:drawing><wp:docPr id="1" name="Picture 1" descr="Input/output flow of the intake system"/></w:drawing></w:r></w:p>')
+    out, applied, _ = remediate_office.remediate_office(src)
+    xml = _doc_xml(out)
+    assert 'descr="Input/output flow of the intake system"' in xml   # preserved, not treated as junk
+    assert not any("Alt text" in a for a in applied)

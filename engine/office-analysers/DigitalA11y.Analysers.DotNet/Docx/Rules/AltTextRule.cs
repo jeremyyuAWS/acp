@@ -1,4 +1,5 @@
 using DigitalA11y.Analysers.DotNet.Docx.Helpers;
+using DigitalA11y.Analysers.DotNet.Helpers;
 using DigitalA11y.Core.Analysis;
 using DigitalA11y.Core.Enums;
 using DigitalA11y.Core.Models.Manifest;
@@ -64,6 +65,11 @@ public class AltTextRule : IDocxRule
         if (PlaceholderPatterns.Contains(trimmed))
         {
             return MakeIssue(paragraphIndex, drawingId, trimmed, $"The alt text \"{trimmed}\" is a non-descriptive placeholder.");
+        }
+
+        if (AltTextHeuristics.LooksLikeFilenameOrPath(trimmed))
+        {
+            return MakeIssue(paragraphIndex, drawingId, trimmed, $"The alt text \"{trimmed}\" is a file name or path, not a description of the image.");
         }
 
         return null;

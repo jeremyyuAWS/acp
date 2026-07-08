@@ -1,3 +1,4 @@
+using DigitalA11y.Analysers.DotNet.Helpers;
 using DigitalA11y.Analysers.DotNet.Pptx.Helpers;
 using DigitalA11y.Core.Analysis;
 using DigitalA11y.Core.Enums;
@@ -65,6 +66,12 @@ public class AltTextRule : IPptxRule
         {
             return MakeIssue(slideIndex, elementName, trimmed,
                 $"The alt text \"{trimmed}\" is a non-descriptive placeholder.");
+        }
+
+        if (AltTextHeuristics.LooksLikeFilenameOrPath(trimmed))
+        {
+            return MakeIssue(slideIndex, elementName, trimmed,
+                $"The alt text \"{trimmed}\" is a file name or path, not a description of the image.");
         }
 
         return null;

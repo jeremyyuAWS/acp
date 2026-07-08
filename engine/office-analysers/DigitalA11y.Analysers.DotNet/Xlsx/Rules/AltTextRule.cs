@@ -1,3 +1,4 @@
+using DigitalA11y.Analysers.DotNet.Helpers;
 using DigitalA11y.Analysers.DotNet.Xlsx.Helpers;
 using DigitalA11y.Core.Analysis;
 using DigitalA11y.Core.Enums;
@@ -81,6 +82,11 @@ public class AltTextRule : IXlsxRule
         if (PlaceholderPatterns.Contains(trimmed))
         {
             return MakeIssue(sheetName, trimmed, drawingId, $"The alt text \"{trimmed}\" is a non-descriptive placeholder.");
+        }
+
+        if (AltTextHeuristics.LooksLikeFilenameOrPath(trimmed))
+        {
+            return MakeIssue(sheetName, trimmed, drawingId, $"The alt text \"{trimmed}\" is a file name or path, not a description of the image or chart.");
         }
 
         return null;

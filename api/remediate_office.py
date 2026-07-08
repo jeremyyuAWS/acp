@@ -110,6 +110,27 @@ _CAPTION_LEAD = re.compile(r"^\s*((figure|fig\.?|table|chart|diagram|abb\.?)\s*\
 _JUNK_DESCR = re.compile(
     r"^\s*(?:img|image|picture|photo|graphic|grafik)?[\s_-]*\d*\s*"
     r"(?:\.(?:png|jpe?g|gif|bmp|svg|tiff?|emf|wmf))?\s*$", re.I)
+# a file path or arbitrary image filename ("icons/user.png", "media\image1.png",
+# "logo.svg") — meaningless to a screen reader. A real description is a phrase
+# (has spaces); these are single whitespace-free tokens, so we only treat a
+# space-free value as filename-ish (keeps "input/output diagram" descriptive).
+_IMG_FILENAME = re.compile(
+    r"^[^\s/\\]+\.(?:png|jpe?g|gif|bmp|svg|tiff?|emf|wmf)$", re.I)
+
+
+def _is_junk_descr(descr: str) -> bool:
+    """True when descr is empty, a generic auto-name, or a file name/path rather
+    than a real description — mirrors the .NET AltTextRule (WCAG 1.1.1)."""
+    if _JUNK_DESCR.match(descr):
+        return True
+    trimmed = descr.strip()
+    if not trimmed or any(c.isspace() for c in trimmed):
+        return False
+    if "/" in trimmed or "\\" in trimmed:
+        return True
+    return bool(_IMG_FILENAME.match(trimmed))
+
+
 _ATTR = lambda attrs, name: (re.search(rf'\b{name}="([^"]*)"', attrs) or [None, ""])[1]
 
 
@@ -154,7 +175,7 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
         out.append(xml[last:m.start()]); last = m.end()
         keep = m.group(0)
         inside_pic = pic_spans is None or any(a <= m.start() < b for a, b in pic_spans)
-        if inside_pic and _JUNK_DESCR.match(_ATTR(attrs, "descr")):
+        if inside_pic and _is_junk_descr(_ATTR(attrs, "descr")):
             # decorative? the marker lives in the element's extLst children
             block_end = xml.find(f"</{tag}>", m.end()) if not selfclose else m.end()
             block = xml[m.start():block_end if block_end != -1 else m.end()]
