@@ -82,6 +82,26 @@ def _scan(payload: dict, job: dict) -> None:
 
 
 @handler("remediate_file")
+def _verify_residual_scs(fixed_bytes: bytes, filename: str):
+    """Re-scan the remediated bytes; return the set of WCAG SCs STILL failing, so a
+    reported fix that did not actually clear is never credited. None if the re-scan
+    cannot run -- never penalise remediation on an infra hiccup. Uses the same SC
+    normalisation as the scan traces so the ids line up with list_auto_fail_rules."""
+    try:
+        import tempfile
+        from pathlib import Path as _P
+        from scanner import analyse_and_assess
+        from store import _extract_sc
+        with tempfile.TemporaryDirectory(prefix="acp-verify-") as _d:
+            (_P(_d) / filename).write_bytes(fixed_bytes)
+            fd, _ = analyse_and_assess(_P(_d), filename, detect_pii=False)
+        if not fd:
+            return None
+        return {sc for i in fd.get("issues", []) if (sc := _extract_sc(i.get("wcag", "")))}
+    except Exception:
+        return None
+
+
 def _remediate_file(payload: dict, job: dict) -> None:
     """Apply server-side remediation to one file and write the fixed copy to Drive.
 
@@ -204,13 +224,25 @@ def _remediate_file(payload: dict, job: dict) -> None:
     core.store.log_decision("system", "remediate.applied", scan_id=scan_id, file=filename,
                             detail="; ".join(applied) or "no auto fixes needed")
     # ADR 0003 Phase 2: mark this file's deterministically-auto-fixable violations
-    # complete. This handler only ever runs against Drive files (get_media above is a
-    # Drive-only call), so source is fixed -- no lookup needed to resolve doc_id.
+    # complete -- but VERIFY first. Some criteria (docx/pdf language & title) report
+    # 'applied' yet do not clear on re-scan (metadata is written, but the engine reads
+    # a field it does not touch). Re-scan the fixed bytes and only credit criteria that
+    # ACTUALLY cleared; the rest stay failing for review, so the app never shows a fix
+    # that did not take.
+    residual = _verify_residual_scs(fixed_bytes, filename)
     try:
         from documents import resolve_doc_id
         doc_id = resolve_doc_id("drive", drive_file_id, filename, None)
-        for rule_id in core.store.list_auto_fail_rules(scan_id, filename):
+        auto_rules = core.store.list_auto_fail_rules(scan_id, filename)
+        kept = []
+        for rule_id in auto_rules:
+            if residual is not None and rule_id in residual:
+                kept.append(rule_id)                       # reported fix did not clear -> leave failing
+                continue
             core.store.upsert_remediation_state(doc_id, rule_id, "complete", scan_id)
+        if residual is not None and kept:
+            core.store.log_decision("system", "remediate.unverified", scan_id=scan_id, file=filename,
+                                    detail=f"{len(auto_rules) - len(kept)} verified cleared; {len(kept)} reported-fixed but still failing on re-scan (kept for review): {', '.join(sorted(kept))}")
     except Exception:
         pass
 
