@@ -1435,11 +1435,41 @@ class Store:
             claimed = getattr(cur, "rowcount", 1) == 1
         return self.get_job(jid) if claimed else None
 
+    _SECRET_PAYLOAD_KEYS = ("drive_token", "sp_token", "token")
+
+    def _scrub_payload_secrets(self, job_id: str) -> str | None:
+        """Payload JSON with short-lived auth tokens removed — so a TERMINAL (done/dead)
+        job row doesn't persist a plaintext Drive/Graph token in Postgres (dead-lettered
+        rows otherwise linger until purge). In-flight (queued/running) jobs keep the
+        token: it's the deliberate cross-replica/restart durability path (see
+        handlers._remediate_file), and it's short-lived (~1h) anyway. Returns None when
+        there's no payload or nothing to scrub, so the caller leaves payload untouched."""
+        import json as _j
+        job = self.get_job(job_id)
+        if not job:
+            return None
+        payload = job.get("payload")
+        try:
+            data = payload if isinstance(payload, dict) else _j.loads(payload or "{}")
+        except Exception:
+            return None
+        if not isinstance(data, dict) or not any(k in data for k in self._SECRET_PAYLOAD_KEYS):
+            return None
+        for k in self._SECRET_PAYLOAD_KEYS:
+            data.pop(k, None)
+        return _j.dumps(data)
+
     def complete_job(self, job_id: str) -> None:
+        scrubbed = self._scrub_payload_secrets(job_id)
         with self._db.cursor() as cur:
-            self._db.execute(cur,
-                "UPDATE jobs SET status='done', updated_at=%s, last_error=NULL WHERE id=%s",
-                (self._now(), job_id))
+            if scrubbed is not None:
+                self._db.execute(cur,
+                    "UPDATE jobs SET status='done', updated_at=%s, last_error=NULL, payload=%s WHERE id=%s",
+                    (self._now(), scrubbed, job_id))
+            else:
+                self._db.execute(cur,
+                    "UPDATE jobs SET status='done', updated_at=%s, last_error=NULL WHERE id=%s",
+                    (self._now(), job_id))
 
     def dead_letter_breakdown(self, owner: str | None = None) -> dict:
         """Diagnostic: dead-lettered jobs grouped by type + the most common errors.
@@ -1489,10 +1519,16 @@ class Store:
             return "missing"
         now = datetime.now(timezone.utc)
         if force_dead or job["attempts"] >= job["max_attempts"]:
+            scrubbed = self._scrub_payload_secrets(job_id)
             with self._db.cursor() as cur:
-                self._db.execute(cur,
-                    "UPDATE jobs SET status='dead', last_error=%s, updated_at=%s WHERE id=%s",
-                    (error[:2000], now.isoformat(), job_id))
+                if scrubbed is not None:
+                    self._db.execute(cur,
+                        "UPDATE jobs SET status='dead', last_error=%s, updated_at=%s, payload=%s WHERE id=%s",
+                        (error[:2000], now.isoformat(), scrubbed, job_id))
+                else:
+                    self._db.execute(cur,
+                        "UPDATE jobs SET status='dead', last_error=%s, updated_at=%s WHERE id=%s",
+                        (error[:2000], now.isoformat(), job_id))
             # One greppable stdout line per dead-letter — the platform alert
             # (Log Analytics scheduled query) keys on 'job dead-lettered'.
             print(f"[acp] job dead-lettered: id={job_id} type={job.get('type')} error={error[:160]}", flush=True)

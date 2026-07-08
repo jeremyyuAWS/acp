@@ -364,6 +364,27 @@ def trace_ai_call(surface: str, model: str, latency_ms: int, *, ok: bool,
         pass
 
 
+def trace_hitl_decision(scan_id, file, rule_id, status, *, note=None, approved_value=None) -> None:
+    """Trace a human-in-the-loop review decision (approve/reject/skip) as a span on the
+    file's scan trace — the audit found HITL decisions had zero Langfuse coverage. Reuses
+    the file's trace id so the human decision sits alongside that document's AI/scan spans.
+    No-op when tracing is disabled."""
+    lf = _lf()
+    if lf is None:
+        return
+    try:
+        tid = f"{scan_id}::{file}" if scan_id and file else None
+        t = lf.trace(id=tid, name="hitl:decision", session_id=scan_id,
+                     metadata={"file": file, "rule_id": rule_id})
+        s = t.span(name=f"hitl.{status}",
+                   input={"rule_id": rule_id},
+                   output={"status": status, "note": note,
+                           "approved_value": (approved_value or "")[:500]})
+        s.end()
+    except Exception:
+        pass
+
+
 def trace_deep_link(trace_id: str) -> str | None:
     """Public Langfuse URL for a trace — the same shape /config exposes to the SPA.
     Returns None when tracing isn't configured (no LANGFUSE_HOST)."""

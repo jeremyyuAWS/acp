@@ -71,6 +71,15 @@ def hitl_update(item_id: str, body: HitlUpdate):
         "reviewer", f"hitl.{body.status}",
         scan_id=item.get("scan_id"), file=item.get("file"), rule_id=item.get("rule_id"),
         detail=_detail)
+    # Observability: the human decision joins the file's Langfuse trace (audit P1 — HITL
+    # decisions were previously untraced). Best-effort; never blocks the review.
+    try:
+        import lf as _lf
+        _lf.trace_hitl_decision(item.get("scan_id"), item.get("file"), item.get("rule_id"),
+                                body.status, note=body.reviewer_note,
+                                approved_value=body.approved_value)
+    except Exception:
+        pass
     # ADR 0003 Phase 2: HITL resolution is an explicit remediation_state transition.
     # approved (AI draft accepted) -> complete; rejected (a human said it's wrong, still
     # needs work) -> in_progress; skipped (deferred, still needs attention) -> unchanged
