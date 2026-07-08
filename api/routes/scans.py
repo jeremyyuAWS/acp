@@ -516,6 +516,41 @@ def mark_remediated(scan_id: str, filename: str):
     return {"remediated_at": now}
 
 
+@router.post("/scans/{sid}/rescore")
+def rescore_file(sid: str, request: Request, file: str = Query(...)):
+    """Re-download and re-analyse ONE file that a user fixed externally, then refresh the
+    scan aggregate. Enqueues a rescore_file worker job and returns its id for polling."""
+    scan = core.store.get_scan(sid, owner=_owner(request))
+    if scan is None:
+        raise HTTPException(404, "scan not found")
+    run = scan.get("run", {})
+    source = run.get("source", "local")
+    drive_token = request.headers.get("x-drive-token")
+    jid = core.store.enqueue_job(
+        "rescore_file",
+        {"scan_id": sid, "file": file, "source": source,
+         "drive_token": drive_token, "user": _owner(request)},
+        scan_id=sid,
+    )
+    return {"scan_id": sid, "file": file, "job_id": jid, "workers": core.WORKERS}
+
+
+@router.post("/scans/{sid}/publish")
+def publish_files(sid: str, request: Request, body: dict):
+    """Record one or more files as published (replaced in place, owner notified).
+    Body: {"files": ["fname1", "fname2"]} or {"file": "fname"}."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    files = body.get("files") or ([body["file"]] if body.get("file") else [])
+    if not files:
+        raise HTTPException(422, "provide 'file' or 'files' in body")
+    results = []
+    for f in files:
+        ts = core.store.record_publish(sid, f)
+        results.append({"file": f, "published_at": ts})
+    return {"published": results}
+
+
 @router.get("/scans/{scan_id}/files/{filename:path}/remediated")
 def get_remediated_file(scan_id: str, filename: str, request: Request):
     """Stream a remediated file's fixed bytes (ADR 0010): Blob first (the durable source

@@ -538,3 +538,40 @@ def _assess_trace(payload: dict, job: dict) -> None:
     """Worker path for the on-demand assessment trace — delegates to the shared
     ensure_assess_trace so the job and the trace-redirect endpoint stay in agreement."""
     ensure_assess_trace(payload["scan_id"], payload.get("level", "AA"))
+
+
+@handler("rescore_file")
+def _rescore_file(payload: dict, job: dict) -> None:
+    """Re-download and re-analyse ONE file from an existing scan, then refresh the scan
+    aggregate. Called when a user self-remediates a file externally and clicks Re-scan
+    to confirm. Tokens are embedded in the payload (scan tokens were cleared at finalize)."""
+    import lf as _lf
+    scan_id = payload["scan_id"]
+    file = payload["file"]
+    source = payload.get("source", "drive")
+    pii = bool(payload.get("pii", True))
+    user = payload.get("user")
+    drive_token = payload.get("drive_token")
+    from scanner import _drive_service
+    svc = None
+    if source not in ("local", "sharepoint") and drive_token:
+        try:
+            svc = _drive_service(drive_token)
+        except Exception:
+            pass
+    toks = {"drive": drive_token} if drive_token else {}
+    now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    file_rec = core.store.get_file_record(scan_id, file) or {}
+    item = {
+        "file": file,
+        "drive_file_id": file_rec.get("drive_file_id"),
+        "source": source,
+    }
+    if source == "local":
+        # Reconstruct the corpus path the same way the original scan did.
+        import os as _os
+        corpus = _os.environ.get("ACP_CORPUS_DIR", "/corpus")
+        item["path"] = _os.path.join(corpus, file)
+    _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, user=user)
+    core.store.refresh_scan_aggregate(scan_id)
+    _lf.flush()

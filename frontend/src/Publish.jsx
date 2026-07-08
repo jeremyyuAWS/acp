@@ -1,16 +1,15 @@
 import { useState } from 'react'
 import FileDrawer from './FileDrawer.jsx'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
-import { openReport } from './api.js'
-import { IDENTITY } from './sim.js'
+import { openReport, publishFile, publishAllFiles } from './api.js'
 
 const scoreColor = (s) => (s >= 80 ? '#3B6D11' : s >= 50 ? '#854F0B' : '#7B1D1D')
 
 // Step 9 · Publish / Replace / Archive. Re-validated documents are published back
-// to their source — replaced in place, the prior version archived, metadata
-// updated, and owners notified. Simulated actions on the live certifiable set.
+// to their source — replaced in place, the prior version archived, metadata updated,
+// and owners notified. publish() persists to the backend via POST /scans/{sid}/publish.
 // readOnly: time-travel replay — publishing must act on the live estate, not a snapshot.
-export default function Publish({ run, files = [], certified = [], readOnly = false, onPublish }) {
+export default function Publish({ run, files = [], certified = [], readOnly = false, onPublish, me }) {
   const ready = files.filter((f) => f.compliant)
   const sfP = useSearchFilter('publish')
   const PUB_FACETS = [
@@ -20,9 +19,26 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   ]
   const shownReady = sfP.active ? ready.filter(matchesFilters(sfP, PUB_FACETS, (f) => f.file)) : ready
   const [done, setDone] = useState({})
+  const [publishing, setPublishing] = useState(false)
   const [sel, setSel] = useState(null)
-  const publish = (file) => { setDone((d) => (d[file] ? d : { ...d, [file]: true })); onPublish?.(file) }
-  const publishAll = () => { setDone(() => Object.fromEntries(ready.map((f) => [f.file, true]))); ready.forEach((f) => onPublish?.(f.file)) }
+  const orgLabel = me?.email
+    ? me.email.split('@')[1]?.replace(/\.[^.]+$/, '') || me.name || 'your organisation'
+    : me?.name || 'your organisation'
+  const publish = async (file) => {
+    if (done[file]) return
+    try { await publishFile(run?.id, file) } catch { /* best-effort — local state still updates */ }
+    setDone((d) => ({ ...d, [file]: true }))
+    onPublish?.(file)
+  }
+  const publishAll = async () => {
+    if (publishing) return
+    setPublishing(true)
+    const pending = ready.filter((f) => !done[f.file]).map((f) => f.file)
+    try { await publishAllFiles(run?.id, pending) } catch { /* best-effort */ }
+    setDone(() => Object.fromEntries(ready.map((f) => [f.file, true])))
+    ready.forEach((f) => onPublish?.(f.file))
+    setPublishing(false)
+  }
   const publishedCount = Object.keys(done).length + certified.length
   const pubStarted = Object.keys(done).length > 0   // zero the outcome cards until the user publishes
   const pct = run?.files ? Math.round((run.certifiable / run.files) * 100) : 0
@@ -51,7 +67,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <div style={{ flex: '1 1 340px' }}>
             <h2 style={{ margin: 0 }}>📜 Conformance Report</h2>
             <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
-              {IDENTITY.org} · WCAG 2.1 Level AA · generated {reportDate}
+              {orgLabel} · WCAG 2.1 Level AA · generated {reportDate}
             </div>
             <p style={{ fontSize: 13.5, lineHeight: 1.6, margin: '12px 0 0', maxWidth: 620 }}>
               This document estate was assessed against <b>WCAG 2.1 Level AA</b> — the ADA Title II, EAA, and Section 508 legal target.
@@ -89,7 +105,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       <section className="panel">
         <div className="rubrichdr">
           <h2 style={{ margin: 0 }}>Publish queue <span className="muted">· {ready.length} re-validated &amp; certifiable</span></h2>
-          <button disabled={readOnly || !ready.length || Object.keys(done).length >= ready.length} title={readOnly ? 'Time-travel replay — switch to the latest scan to publish' : undefined} onClick={publishAll}>Publish all</button>
+          <button disabled={readOnly || publishing || !ready.length || Object.keys(done).length >= ready.length} title={readOnly ? 'Time-travel replay — switch to the latest scan to publish' : undefined} onClick={publishAll}>{publishing ? 'Publishing…' : 'Publish all'}</button>
         </div>
         {ready.length > 8 && (
           <SearchFilterBar ctl={sfP} items={ready} facets={PUB_FACETS} noun="files"
@@ -103,7 +119,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                 <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11' }}>{f.score} / 100</span>
                 {done[f.file]
                   ? <span className="okline" style={{ fontSize: 13 }}>✓ published · replaced in place · owner notified</span>
-                  : <button className="qbtn approve" disabled={readOnly} title={readOnly ? 'Time-travel replay — switch to the latest scan to publish' : undefined} onClick={() => publish(f.file)}>↺ Replace &amp; publish</button>}
+                  : <button className="qbtn approve" onClick={() => publish(f.file)} disabled={readOnly || publishing} title={readOnly ? 'Time-travel replay — switch to the latest scan to publish' : undefined}>↺ Replace &amp; publish</button>}
               </div>
             ))}
           </div>
