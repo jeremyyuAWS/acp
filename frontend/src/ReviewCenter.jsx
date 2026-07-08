@@ -41,6 +41,7 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
     setBusy(it.id)
     const val = VALUE_FIX.has(scOf(it.rule_id)) ? (edits[it.id] ?? it.approved_value ?? null) : null
     Promise.resolve(onAct(it.id, status, notes[it.id] || null, status === 'approved' ? val : null))
+      .catch(() => {})   // act() already reverts optimistic state on failure; avoid an unhandled rejection
       .finally(() => { setBusy(null); setExpanded(null) })
   }
 

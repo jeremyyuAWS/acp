@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } from 'react'
 import HitlBell from './HitlBell.jsx'
+import PrivateAiBadge from './PrivateAiBadge.jsx'
 import { getSources, getRubric, listScans, getScan, getActiveScan, startScan, startScanQueued, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens, getDecisions, saveDecisionsBatch } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
@@ -467,6 +468,7 @@ export default function App() {
           {rubric && me.allow?.includes('settings') && <span className="chip">{rubric.target} · rubric {rubric.hash.slice(0, 8)}</span>}
           {/* Global mode (applies across scanning, explanations, and remediation). The
               scan-only options (Deep scan, Queued) live on the Sources tab where you scan. */}
+          <PrivateAiBadge aiEnabled={aiEnabled} />
           <HitlBell />
           <button
             className={`ai-toggle${aiEnabled ? ' ai-toggle--on' : ''}`}

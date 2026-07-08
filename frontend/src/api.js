@@ -369,7 +369,7 @@ export const explainFinding = (scanId, file, ruleId) => (SIM
   : fetch(`${BASE}/ai/explain?scan_id=${encodeURIComponent(scanId)}&file=${encodeURIComponent(file)}&rule_id=${encodeURIComponent(ruleId)}`, { headers: headers() }).then(j))
 
 export const getAiStatus = () => (SIM
-  ? sim({ available: true, base_url: 'http://localhost:11434', model: 'llama3.2' })
+  ? sim({ available: true, base_url: 'http://localhost:11434', model: 'llama3.1:8b', ai_enabled: true, backend: 'ollama' })
   : fetch(`${BASE}/ai/status`, { headers: headers() }).then(j))
 
 // ── Disposition policies (ADR 0003 Phase 3) — admin-only lifecycle ────────────
