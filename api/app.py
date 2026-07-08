@@ -79,6 +79,19 @@ def _start_job_workers():
         print(f"[acp] started {n} async job worker(s)", flush=True)
 
 
+@app.on_event("shutdown")
+def _drain_job_workers():
+    # Azure Container Apps sends SIGTERM then waits (~30s) before SIGKILL on every
+    # deploy/scale event; uvicorn runs this hook in that window. Draining here means
+    # in-flight jobs aren't stranded ~31min waiting for the lease sweeper on the new
+    # container (audit P1).
+    try:
+        core.stop_workers()
+        print("[acp] drained job workers for shutdown", flush=True)
+    except Exception as e:
+        print(f"[acp] shutdown drain error: {e}", flush=True)
+
+
 @app.on_event("startup")
 def _ollama_prewarm():
     """Keep the Ollama model loaded so 'Why?' explanations don't eat a cold start

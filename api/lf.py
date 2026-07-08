@@ -306,13 +306,70 @@ def flush():
         lf.flush()
 
 
+_PROJECT_ID_CACHE: str | None = None
+
+
+def _project_id() -> str:
+    """Project id used in Langfuse deep-link URLs. Langfuse routes /project/<id>/... by
+    the project's opaque id, NOT its human name, so a hardcoded slug ('acp-compliance')
+    can 404 even when trace_exists() (which authenticates by API key) says the trace is
+    there. Resolve the real id once from the project the key belongs to and cache it;
+    an explicit LANGFUSE_DEFAULT_PROJECT_ID env wins, and the legacy literal is the
+    last-resort fallback so a lookup failure never regresses below today's behaviour."""
+    global _PROJECT_ID_CACHE
+    if _PROJECT_ID_CACHE:
+        return _PROJECT_ID_CACHE
+    env = os.environ.get("LANGFUSE_DEFAULT_PROJECT_ID")
+    if env:
+        _PROJECT_ID_CACHE = env
+        return env
+    if _ENABLED:
+        try:
+            import base64
+            import httpx
+            auth = base64.b64encode(f"{_PK}:{_SK}".encode()).decode()
+            r = httpx.get(f"{_HOST.rstrip('/')}/api/public/projects",
+                          headers={"Authorization": f"Basic {auth}"}, timeout=5)
+            r.raise_for_status()
+            data = r.json().get("data") or []
+            pid = (data[0] or {}).get("id") if data else None
+            if pid:
+                _PROJECT_ID_CACHE = pid
+                return pid
+        except Exception:
+            pass
+    return "acp-compliance"
+
+
+def trace_ai_call(surface: str, model: str, latency_ms: int, *, ok: bool,
+                  prompt_chars: int = 0, completion: str | None = None,
+                  scan_id: str | None = None, file: str | None = None) -> None:
+    """Trace one local-model (Ollama) generation. AI calls run on the request path,
+    outside the per-file scan trace, so each becomes its own trace (grouped into the
+    scan's session when scan_id is known). Captures model, latency, prompt size,
+    completion and success — the LLM-observability the audit found missing. No-op when
+    tracing is disabled."""
+    lf = _lf()
+    if lf is None:
+        return
+    try:
+        t = lf.trace(name=f"ai:{surface}", session_id=scan_id,
+                     metadata={"file": file, "model": model, "surface": surface})
+        s = t.span(name=surface,
+                   input={"prompt_chars": prompt_chars, "model": model},
+                   output={"completion": (completion or "")[:1500],
+                           "latency_ms": latency_ms, "ok": ok})
+        s.end()
+    except Exception:
+        pass
+
+
 def trace_deep_link(trace_id: str) -> str | None:
     """Public Langfuse URL for a trace — the same shape /config exposes to the SPA.
     Returns None when tracing isn't configured (no LANGFUSE_HOST)."""
     if not _HOST:
         return None
-    project = os.environ.get("LANGFUSE_DEFAULT_PROJECT_ID", "acp-compliance")
-    return f"{_HOST.rstrip('/')}/project/{project}/traces/{trace_id}"
+    return f"{_HOST.rstrip('/')}/project/{_project_id()}/traces/{trace_id}"
 
 
 def session_deep_link(scan_id: str) -> str | None:
@@ -322,8 +379,7 @@ def session_deep_link(scan_id: str) -> str | None:
     a 404, so this is safe to link to immediately."""
     if not _HOST:
         return None
-    project = os.environ.get("LANGFUSE_DEFAULT_PROJECT_ID", "acp-compliance")
-    return f"{_HOST.rstrip('/')}/project/{project}/sessions/{scan_id}"
+    return f"{_HOST.rstrip('/')}/project/{_project_id()}/sessions/{scan_id}"
 
 
 # ── Per-file trace (file-centric tracing) ──────────────────────────────────────

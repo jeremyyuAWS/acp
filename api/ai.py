@@ -91,6 +91,17 @@ def _parse(text: str) -> dict[str, str]:
     return {"why": why, "fix": fix}
 
 
+def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, ok: bool) -> None:
+    """Emit a Langfuse span for one Ollama call — latency, prompt size, completion, ok."""
+    try:
+        import time as _t
+        import lf as _lf
+        _lf.trace_ai_call(surface, OLLAMA_MODEL, int((_t.monotonic() - t0) * 1000),
+                          ok=ok, prompt_chars=len(prompt or ""), completion=completion)
+    except Exception:
+        pass
+
+
 def explain_finding(
     rule_id: str,
     rule_name: str,
@@ -103,6 +114,8 @@ def explain_finding(
     """Explain a WCAG finding via the local Ollama model. Returns None when Ollama
     is unavailable / on error (the UI then shows 'AI explanation unavailable')."""
     prompt = _prompt(rule_id, rule_name, level, filename, finding_count, severity, engine_rule_ids)
+    import time as _t
+    _t0 = _t.monotonic()
     try:
         import httpx
         r = httpx.post(
@@ -116,8 +129,10 @@ def explain_finding(
         )
         r.raise_for_status()
         raw = r.json().get("response", "").strip()
+        _trace_ai("explain", prompt, raw, _t0, ok=True)
         return {**_parse(raw), "model": OLLAMA_MODEL, "raw": raw}
     except Exception:
+        _trace_ai("explain", prompt, None, _t0, ok=False)
         return None
 
 
@@ -165,6 +180,8 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
     """Draft a concrete, human-approvable fix value (alt text / link text / title) for a
     semantic finding via the local text model. Returns None when Ollama is unavailable."""
     prompt = _suggest_prompt(rule_id, rule_name, filename, detail)
+    import time as _t
+    _t0 = _t.monotonic()
     try:
         import httpx
         r = httpx.post(
@@ -175,6 +192,7 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
         )
         r.raise_for_status()
         text = r.json().get("response", "").strip().strip('"').strip()
+        _trace_ai("suggest", prompt, text, _t0, ok=bool(text))
         if not text:
             return None
         kind = _SUGGEST_KIND.get(rule_id, ("fix", ""))[0]
@@ -241,16 +259,21 @@ def _digest_fallback_narrative(facts: dict) -> str:
 
 def _ollama_narrative(facts: dict) -> tuple[str, str] | None:
     """Local fallback narrative via the deployed Ollama backend. Returns (text, model)."""
+    import time as _t
+    _t0 = _t.monotonic()
+    _p = _digest_prompt(facts)
     try:
         import httpx
         r = httpx.post(
             f"{OLLAMA_BASE_URL}/api/generate",
-            json={"model": OLLAMA_MODEL, "prompt": _digest_prompt(facts), "stream": False,
+            json={"model": OLLAMA_MODEL, "prompt": _p, "stream": False,
                   "options": {"temperature": 0.4, "num_predict": 200}}, timeout=150)
         r.raise_for_status()
         raw = r.json().get("response", "").strip()
+        _trace_ai("digest", _p, raw, _t0, ok=bool(raw and len(raw) > 40))
         return (raw, OLLAMA_MODEL) if raw and len(raw) > 40 else None
     except Exception:
+        _trace_ai("digest", _p, None, _t0, ok=False)
         return None
 
 

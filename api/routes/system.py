@@ -130,7 +130,8 @@ def config():
     # to the relevant trace (deterministic ids: {scan}, {scan}-assess, {scan}-remediate).
     # Null when Langfuse isn't configured → the frontend simply omits the chips.
     lf_host = os.environ.get("LANGFUSE_HOST", "").rstrip("/")
-    lf_project = os.environ.get("LANGFUSE_DEFAULT_PROJECT_ID", "acp-compliance")
+    import lf as _lf
+    lf_project = _lf._project_id()
     return {"google_client_id": core.GOOGLE_CLIENT_ID,
             "drive_scope": core.DRIVE_SCOPES[0],
             "auth": "gis" if core.GOOGLE_CLIENT_ID else "demo",

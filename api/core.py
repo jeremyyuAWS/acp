@@ -300,6 +300,38 @@ def set_worker_count(n: int) -> int:
     return len(_worker_handles)
 
 
+def stop_workers() -> None:
+    """Graceful drain for shutdown/redeploy. Signals every worker to stop after its
+    current job (the loop checks between jobs), briefly joins so idle/near-done workers
+    exit cleanly instead of being SIGKILLed and left 'running' until the 30-min lease
+    sweeper reclaims them on the next container. A long in-flight job still can't be
+    interrupted — it falls back to lease reclaim — but the common idle/between-jobs
+    deploy now drains cleanly. Best-effort and time-bounded so shutdown can't hang.
+    Flushes Langfuse last so a redeploy doesn't drop the last job's spans."""
+    global WORKERS
+    import time as _t
+    for w, _t2 in _worker_handles:
+        try:
+            w.stop()
+        except Exception:
+            pass
+    deadline = _t.monotonic() + float(os.environ.get("ACP_SHUTDOWN_DRAIN_SECONDS", "20"))
+    for _w, t in _worker_handles:
+        remaining = deadline - _t.monotonic()
+        if remaining > 0:
+            try:
+                t.join(timeout=remaining)
+            except Exception:
+                pass
+    _worker_handles.clear()
+    WORKERS = 0
+    try:
+        import lf as _lf
+        _lf.flush()
+    except Exception:
+        pass
+
+
 def reset_langfuse_traces() -> int:
     """Best-effort: delete all traces in the ACP Langfuse project via the public
     API. Returns the count deleted (0 if Langfuse isn't configured, or its version
