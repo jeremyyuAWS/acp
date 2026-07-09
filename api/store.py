@@ -1192,6 +1192,94 @@ class Store:
                 "WHERE scan_id=%s ORDER BY rule_id, file, seq LIMIT %s", (scan_id, limit))
             return self._db.fetchall(cur)
 
+    def get_remediation_evidence(self, scan_id: str) -> list[dict]:
+        """Per-file remediation evidence for the certification report's evidence appendix.
+
+        Returns [{file, applied: [...], proposed: [...]}], files with neither omitted.
+
+        `applied` — fixes that VERIFIABLY cleared the post-fix re-scan. `remediation_diff` is
+        only ever written for those (the truthfulness gate in handlers._remediate_file), so
+        every entry here is genuinely validated; each is enriched with the concrete value the
+        AI wrote + its image thumbnail (`applied_fixes`) and the human sign-off that resolved
+        it (`hitl_queue` + the immutable `decision_log`).
+
+        `proposed` — AI proposals still awaiting human approval (`hitl_queue.proposals`,
+        status 'pending'). These are NOT fixes: they must never be rendered as remediated or
+        as PASS. Keeping the two lists separate is what stops the report claiming work the
+        platform has not actually done.
+
+        Note on attribution: `decision_log.actor` for a review is the literal string
+        'reviewer' — the platform does not record the approving user's identity. We surface
+        exactly what was recorded (that a human approved, and when) and never invent a name.
+        """
+        rule_names = {r["id"]: r["name"] for r in RULE_CATALOG}
+
+        # applied_fixes.rule_id is 'SC_1_1_1'; remediation_diff/hitl_queue use dotted '1.1.1'
+        # (and hitl deferrals carry a '1.1.1/deferred' suffix). Normalise to the dotted SC.
+        def _sc(rule_id: str) -> str:
+            r = (rule_id or "").split("/", 1)[0]
+            if r.upper().startswith("SC_"):
+                r = r[3:].replace("_", ".")
+            return r
+
+        applied_fixes = self.list_applied_fixes(scan_id, limit=1000)
+        fixes = {(f["file"], _sc(f["rule_id"]), f.get("seq") or 0): f for f in applied_fixes}
+
+        hitl: dict[tuple, dict] = {}
+        for h in self.list_hitl_queue(scan_id=scan_id):
+            hitl.setdefault((h["file"], _sc(h["rule_id"])), h)
+
+        reviews: dict[tuple, dict] = {}
+        for d in self.list_decisions(scan_id, limit=1000):
+            if (d.get("action") or "").startswith("hitl.") and d.get("file"):
+                reviews.setdefault((d["file"], _sc(d.get("rule_id") or "")), d)
+
+        # list_remediation_diffs returns every verified-cleared diff scan-wide WITH its file,
+        # so one query replaces a per-file fan-out (and the DISTINCT-file helper this method
+        # used to carry before that method existed).
+        diffs_by_file: dict[str, list] = {}
+        for d in self.list_remediation_diffs(scan_id):
+            diffs_by_file.setdefault(d["file"], []).append(d)
+
+        files = sorted({k[0] for k in hitl} | {f["file"] for f in applied_fixes}
+                       | set(diffs_by_file))
+        out: list[dict] = []
+        for file in files:
+            applied: list[dict] = []
+            for d in diffs_by_file.get(file, []):
+                sc = _sc(d["rule_id"])
+                fx = fixes.get((file, sc, d.get("seq") or 0)) or {}
+                hq = hitl.get((file, sc)) or {}
+                rv = reviews.get((file, sc)) or {}
+                # A criterion auto-cleared by a deterministic fixer has no HITL row at all;
+                # one signed off by a human has a row and/or a decision_log entry. Prefer the
+                # queue's status, else derive it from the immutable log ('hitl.approved' →
+                # 'approved'), else leave None — meaning "no human decision was recorded",
+                # which is the truth for an auto-applied deterministic fix.
+                decision = hq.get("status") or ((rv.get("action") or "").split(".", 1)[1]
+                                                if rv.get("action") else None)
+                applied.append({
+                    "sc": sc, "criterion": rule_names.get(sc, sc),
+                    "before": d.get("before"), "after": d.get("after"), "note": d.get("note"),
+                    "value": fx.get("value"), "source": fx.get("source"), "thumb": fx.get("thumb"),
+                    "decision": decision, "approved_value": hq.get("approved_value"),
+                    "reviewer": rv.get("actor"), "reviewed_at": rv.get("ts") or hq.get("reviewed_at"),
+                    "validated": True,   # in remediation_diff ⇒ it cleared the re-scan
+                })
+            proposed: list[dict] = []
+            for (f_, sc), h in hitl.items():
+                if f_ != file or h.get("status") != "pending" or not h.get("proposals"):
+                    continue
+                proposed.append({
+                    "sc": sc, "criterion": rule_names.get(sc, h.get("rule_name") or sc),
+                    "validated": bool(h.get("validated")),
+                    "proposals": h["proposals"],
+                })
+            if applied or proposed:
+                out.append({"file": file, "applied": applied,
+                            "proposed": sorted(proposed, key=lambda p: p["sc"])})
+        return out
+
     def get_trace_row(self, scan_id: str, file: str, rule_id: str) -> dict | None:
         """Return a single scan_rule_traces row for the AI explain endpoint."""
         with self._db.cursor() as cur:

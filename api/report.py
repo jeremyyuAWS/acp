@@ -3,9 +3,9 @@
 Renders a scan run as a designed, chart-led report: logo header, plain-language
 verdict, certification summary band, scope & methodology, compliance velocity,
 status donut + severity split, remediation outcomes, open findings by criterion,
-the decisions snapshot (time-travel), and the full file inventory. Reproducible
-from the stamped rubric hash. Footer carries page numbers and the generation
-stamp on every page.
+the decisions snapshot (time-travel), the full file inventory, and the per-issue
+remediation evidence appendix. Reproducible from the stamped rubric hash. Footer
+carries page numbers and the generation stamp on every page.
 
 Honesty rule enforced here: a finding is only counted as "open" (blocking) when
 its document is NOT certifiable. Findings on a certifiable document were either
@@ -13,6 +13,13 @@ remediated (the file carries remediated_at) or are non-blocking below the target
 threshold — either way they are reported separately, never mixed into the
 "where failures concentrate" view. That keeps a 100%-certifiable estate from
 also appearing to have open critical findings.
+
+The evidence appendix (`_evidence_section`) is the audit artifact: for every
+finding it shows before → after, the concrete value the AI wrote and why, the
+image thumbnail, and the human sign-off. It keeps two lists strictly apart —
+fixes that VERIFIABLY cleared the post-fix re-scan, and AI proposals still
+awaiting approval, which are never presented as remediated. That separation is
+the report's core honesty guarantee.
 """
 from __future__ import annotations
 import io
@@ -110,6 +117,128 @@ def _footer(canvas, doc):
     canvas.restoreState()
 
 
+def _esc(s) -> str:
+    """Escape for reportlab's mini-HTML paragraph markup; bound the length."""
+    if s is None or s == "":
+        return "—"
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))[:400]
+
+
+def _thumb_flowable(thumb: str | None, edge: float = 0.62 * inch):
+    """A base64 data-URL thumbnail (`applied_fixes.thumb`) → a reportlab Image, or None.
+    Best-effort: an undecodable thumbnail must never break the report."""
+    if not thumb or "base64," not in thumb:
+        return None
+    try:
+        import base64
+        raw = base64.b64decode(thumb.split("base64,", 1)[1])
+        img = Image(io.BytesIO(raw))
+        w, h = img.imageWidth or 1, img.imageHeight or 1
+        scale = edge / max(w, h)
+        img.drawWidth, img.drawHeight = w * scale, h * scale
+        return img
+    except Exception:
+        return None
+
+
+# Cap the appendix so a large estate can't produce a 400-page PDF. Whatever is dropped is
+# ALWAYS disclosed in the report — a silent truncation would read as "this is everything",
+# exactly the over-claim this section exists to prevent.
+_EVIDENCE_MAX_FILES = 25
+_EVIDENCE_MAX_PER_FILE = 20
+
+
+def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
+    """Per-issue remediation evidence — the audit artifact (backlog R1).
+
+    Two DELIBERATELY separate parts per document:
+      * Applied & verified — from `remediation_diff`, which the worker only writes for fixes
+        that cleared the post-fix re-scan. Every row here is genuinely validated.
+      * Proposed, awaiting approval — AI drafts a human has not yet accepted. These are NOT
+        remediations and are never shown as PASS. Merging the two would let the report claim
+        work the platform has not actually done.
+    """
+    el: list = []
+    if not evidence:
+        return el
+
+    el.append(Paragraph("Remediation evidence · what changed, and on whose authority", h2))
+    el.append(Paragraph(
+        "Each entry is one finding. <b>Applied &amp; verified</b> fixes were re-scanned after the "
+        "change and the criterion no longer fails — that re-scan is the only thing that promotes a "
+        "fix into this list. <b>Proposed</b> entries are AI drafts still awaiting human approval; "
+        "they are <b>not</b> remediations and are counted as fixed nowhere in this report.", muted))
+    el.append(Spacer(1, 8))
+
+    for doc in evidence[:_EVIDENCE_MAX_FILES]:
+        el.append(Spacer(1, 6))
+        el.append(Paragraph(f"<b>{_esc(doc['file'])}</b>", body))
+
+        for e in doc["applied"][:_EVIDENCE_MAX_PER_FILE]:
+            when = (e.get("reviewed_at") or "")[:19].replace("T", " ")
+            if e.get("decision"):
+                # Attribution is only ever what decision_log recorded ('reviewer') — the
+                # platform does not capture the approving user's identity, so never invent one.
+                sign_off = f"{e['decision']} by {e.get('reviewer') or 'reviewer'}" + (f" · {when} UTC" if when else "")
+            else:
+                sign_off = "auto-applied (deterministic fixer) — no human decision recorded"
+            lines = [
+                Paragraph(f"<b>{_esc(e['criterion'])}</b> &nbsp;<font color='#3B6D11'>✓ validated on re-scan</font>", cell),
+                Paragraph(f"<font color='#6c6470'>Before</font> &nbsp;{_esc(e.get('before'))}", cell),
+                Paragraph(f"<font color='#6c6470'>After</font> &nbsp;<b>{_esc(e.get('after'))}</b>", cell),
+            ]
+            if e.get("value"):
+                src = f" <font color='#6c6470'>({_esc(e['source'])})</font>" if e.get("source") else ""
+                lines.append(Paragraph(f"<font color='#6c6470'>AI wrote</font> &nbsp;{_esc(e['value'])}{src}", cell))
+            if e.get("note"):
+                lines.append(Paragraph(f"<font color='#6c6470'>Why</font> &nbsp;{_esc(e['note'])}", cell))
+            lines.append(Paragraph(f"<font color='#6c6470'>Decision</font> &nbsp;{_esc(sign_off)}", cell))
+
+            thumb = _thumb_flowable(e.get("thumb"))
+            row = [[thumb, lines]] if thumb else [[lines]]
+            widths = [0.75 * inch, 6.35 * inch] if thumb else [7.1 * inch]
+            t = Table(row, colWidths=widths)
+            t.setStyle(TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("BACKGROUND", (0, 0), (-1, -1), ZEBRA),
+                ("BOX", (0, 0), (-1, -1), 0.5, LINE),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]))
+            el.append(t)
+            el.append(Spacer(1, 4))
+
+        dropped = len(doc["applied"]) - _EVIDENCE_MAX_PER_FILE
+        if dropped > 0:
+            el.append(Paragraph(f"…and {dropped} further verified fix(es) on this document, omitted for length.", muted))
+
+        for p in doc["proposed"]:
+            note = ("validated on re-scan — awaiting approval" if p.get("validated")
+                    else "awaiting human approval")
+            lines = [Paragraph(
+                f"<b>{_esc(p['criterion'])}</b> &nbsp;<font color='#854F0B'>proposed — not remediated "
+                f"({note})</font>", cell)]
+            for pr in p["proposals"][:6]:
+                why = f" <font color='#6c6470'>— {_esc(pr.get('rationale'))}</font>" if pr.get("rationale") else ""
+                lines.append(Paragraph(f"<font color='#6c6470'>Proposed</font> &nbsp;{_esc(pr.get('proposed_value'))}{why}", cell))
+            t = Table([[lines]], colWidths=[7.1 * inch])
+            t.setStyle(TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("BOX", (0, 0), (-1, -1), 0.5, AMBER),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]))
+            el.append(Spacer(1, 2))
+            el.append(t)
+
+    if len(evidence) > _EVIDENCE_MAX_FILES:
+        el.append(Spacer(1, 6))
+        el.append(Paragraph(
+            f"Evidence shown for the first {_EVIDENCE_MAX_FILES} of {len(evidence)} remediated "
+            "documents. The remainder are available via the per-file remediation API.", muted))
+    return el
+
+
 def _donut(counts: dict[str, int]) -> Drawing:
     """Status split donut + legend, drawn as one Drawing so it flows as a block."""
     d = Drawing(250, 130)
@@ -176,7 +305,8 @@ def _stat_band(cells, styles) -> Table:
     return band
 
 
-def build_report(run: dict, files: list, meta: dict, decisions: dict | None = None) -> bytes:
+def build_report(run: dict, files: list, meta: dict, decisions: dict | None = None,
+                 evidence: list | None = None) -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=LETTER, title=f"mova.io conformance report {run['id']}",
                             topMargin=0.6 * inch, bottomMargin=0.75 * inch,
@@ -461,7 +591,15 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     ft.setStyle(TableStyle(style))
     el.append(ft)
 
+    # ── Remediation evidence appendix (backlog R1) ───────────────────────────
+    # Applied-and-verified fixes vs proposals awaiting approval, kept strictly apart.
+    # Sits before the conformance statement so the closing attestation is the last word.
+    foot_style = ParagraphStyle("evfoot", parent=ss["Normal"], textColor=MUTED,
+                                fontSize=8, leading=11.5)
+    el.extend(_evidence_section(evidence or [], h2, body, cell, foot_style))
+
     # ── Conformance statement & how to read this report ──────────────────────
+    el.append(Spacer(1, 14))
     el.append(Paragraph("Conformance statement &amp; notes", h2))
     el.append(Paragraph(
         f"Based on this scan, <b>{cert} of {total}</b> document(s) conform to {std} with no "
