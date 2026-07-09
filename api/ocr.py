@@ -65,21 +65,33 @@ def is_available() -> bool:
 
 def _ocr_words(img_bytes: bytes, min_pixels: int = _MIN_PIXELS) -> int:
     """Word count of text OCR'd from one image; 0 on any failure or if too small."""
+    return len(_WORD_RE.findall(ocr_text(img_bytes, min_pixels=min_pixels)))
+
+
+def ocr_text(img_bytes: bytes, *, min_pixels: int = _MIN_PIXELS_STRICT) -> str:
+    """Raw text OCR'd from one image, or "" on any failure / if too small. Same bounded,
+    self-gating image handling as _ocr_words (resize cap, mode coerce). Used to GROUND a
+    vision alt-text proposal: a chart/screenshot with real embedded text ("2026 Sales
+    Report", axis labels) yields OCR words the description can be anchored in — a High-
+    confidence, auto-applyable derivation — whereas a textless photo yields "" and its
+    description stays a pure vision guess surfaced for human confirmation (WCAG 1.1.1
+    intent). Defaults to the STRICT pixel floor so a small labelled chart still grounds."""
+    if not is_available():
+        return ""
     try:
         from PIL import Image
         import pytesseract
         im = Image.open(io.BytesIO(img_bytes))
         if (im.width * im.height) < min_pixels:
-            return 0
+            return ""
         if max(im.width, im.height) > _MAX_DIM:
             scale = _MAX_DIM / max(im.width, im.height)
             im = im.resize((max(1, int(im.width * scale)), max(1, int(im.height * scale))))
         if im.mode not in ("RGB", "L"):
             im = im.convert("RGB")
-        text = pytesseract.image_to_string(im) or ""
-        return len(_WORD_RE.findall(text))
+        return (pytesseract.image_to_string(im) or "").strip()
     except Exception:
-        return 0
+        return ""
 
 
 def _ooxml_images(path: Path):

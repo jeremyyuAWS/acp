@@ -83,23 +83,59 @@ def _scan(payload: dict, job: dict) -> None:
 
 
 def _verify_residual_scs(fixed_bytes: bytes, filename: str):
-    """Re-scan the remediated bytes; return the set of WCAG SCs STILL failing, so a
-    reported fix that did not actually clear is never credited. None if the re-scan
-    cannot run -- never penalise remediation on an infra hiccup. Uses the same SC
-    normalisation as the scan traces so the ids line up with list_auto_fail_rules."""
+    """Re-scan the remediated bytes; return the set of WCAG SCs STILL failing, so a reported
+    fix that did not actually clear is never credited. Delegates to the single shared
+    implementation in api/proposals.py — the proposal lane and this loop must use the exact
+    same residual re-scan (one whole-file path, never a divergent copy)."""
+    from proposals import verify_residual_scs
+    return verify_residual_scs(fixed_bytes, filename)
+
+
+def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_enabled: bool) -> None:
+    """Format-agnostic text proposers (WCAG 3.1.2 language-of-parts + 1.3.3 sensory rewrite).
+    Both self-gate: they yield proposals ONLY when the document actually mixes languages /
+    carries a sensory instruction, so this is safe to run on every remediated file. Runs on
+    the extracted text (same source as the scan-time detectors), enqueues prefilled one-click
+    values onto the file's HITL rows, and never fails the remediation job."""
     try:
         import tempfile
         from pathlib import Path as _P
-        from scanner import analyse_and_assess
-        from store import _extract_sc
-        with tempfile.TemporaryDirectory(prefix="acp-verify-") as _d:
-            (_P(_d) / filename).write_bytes(fixed_bytes)
-            fd, _ = analyse_and_assess(_P(_d), filename, detect_pii=False)
-        if not fd:
-            return None
-        return {sc for i in fd.get("issues", []) if (sc := _extract_sc(i.get("wcag", "")))}
+        import pii as _pii
+        import proposals as _prop
+        with tempfile.TemporaryDirectory(prefix="acp-textprop-") as _d:
+            p = _P(_d) / filename
+            p.write_bytes(file_bytes)
+            text = _pii.extract_text(p)
     except Exception:
-        return None
+        return
+    if not text:
+        return
+    try:
+        _enqueue_proposals(scan_id, filename, "3.1.2", "Language of Parts",
+                           _prop.propose_language_parts(text))
+    except Exception:
+        pass
+    try:
+        _enqueue_proposals(scan_id, filename, "1.3.3", "Sensory Characteristics",
+                           _prop.propose_sensory_rewrite(text, filename=filename, ai_enabled=ai_enabled))
+    except Exception:
+        pass
+
+
+def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
+                       proposals: list, *, validated: bool = False) -> None:
+    """Best-effort: attach AI-proposed (not auto-applied) fix values to the file's HITL row
+    for this SC, so the reviewer approves a prefilled value in one click. Never fails the
+    remediation job — a telemetry/queue error just means the finding routes as a plain
+    deferral. `validated` stays False for model/heuristic proposals (a machine guess a human
+    confirms), so confidence.js surfaces them as Medium/Low, never a trusted 'fixed'."""
+    if not proposals:
+        return
+    try:
+        core.store.enqueue_proposals(scan_id, filename, sc, proposals,
+                                     validated=validated, rule_name=rule_name)
+    except Exception:
+        pass
 
 
 @handler("remediate_file")
@@ -138,15 +174,27 @@ def _remediate_file(payload: dict, job: dict) -> None:
     svc = _drive_client(token)
     data = svc.files().get_media(fileId=drive_file_id).execute()
 
+    # Format-agnostic text proposers (3.1.2 language-of-parts + 1.3.3 sensory rewrite) run on
+    # the original bytes — the prose these check is unchanged by remediation, and running
+    # here (not after the format branch) means they still surface even when a file has no
+    # deterministic fixes and would hit the no-fixes early return below. Both self-gate.
+    _propose_text_findings(scan_id, filename, data, core.store.get_ai_enabled())
+
     # Per-fix before→after evidence for the certification report's "Before → After"
     # section. Each remediator appends {rule_id (SC), before, after, note}; we persist
     # only the ones that verifiably cleared on the post-fix re-scan (below).
     rem_diffs: list[dict] = []
 
+    # AI-proposed one-click values applied/drafted inline during remediation (e.g. 2.4.4
+    # link text). Collected here so they can be enqueued AFTER the residual re-scan below,
+    # with an honest `validated` flag (True only when the applied fix actually cleared).
+    inline_proposals: list[dict] = []
+
     if ext in ("html", "htm"):
         fixed_html, applied, _deferred = remediate_html(
             data.decode("utf-8", errors="replace"),
-            ai_enabled=core.store.get_ai_enabled(), diffs=rem_diffs)
+            ai_enabled=core.store.get_ai_enabled(), diffs=rem_diffs,
+            proposals=inline_proposals)
         fixed_bytes = fixed_html.encode("utf-8")
         mimetype = "text/html"
     else:  # pdf / office — file-based deterministic remediators (ADR 0005 step 4)
@@ -157,15 +205,21 @@ def _remediate_file(payload: dict, job: dict) -> None:
             src.write_bytes(data)
             if ext == "pdf":
                 from remediate_pdf import remediate_pdf
+                _pdf_proposals: list = []
                 out_path, applied, _skipped = remediate_pdf(
-                    src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id, diffs=rem_diffs)
+                    src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
+                    diffs=rem_diffs, proposals=_pdf_proposals)
                 mimetype = "application/pdf"
+                # 1.3.2 reading-order vision proposal (untagged/scanned PDF) — surfaced for
+                # one-click confirm, never auto-applied. Before the no-fixes early return.
+                _enqueue_proposals(scan_id, filename, "1.3.2", "Meaningful Sequence", _pdf_proposals)
             else:  # docx / pptx / xlsx
                 from remediate_office import remediate_office
                 _applied_fixes: list = []
+                _proposals: list = []
                 out_path, applied, _skipped = remediate_office(
                     src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
-                    applied_fixes=_applied_fixes, diffs=rem_diffs)
+                    applied_fixes=_applied_fixes, proposals=_proposals, diffs=rem_diffs)
                 mimetype = _OFFICE_MIME[ext]
                 # Persist the concrete values the AI wrote (vision alt text + image
                 # thumbnail) so "Recent AI fixes" shows what was really applied. Best-effort:
@@ -177,6 +231,11 @@ def _remediate_file(payload: dict, job: dict) -> None:
                             source=_fx.get("source"), thumb=_fx.get("thumb"), seq=_i)
                     except Exception:
                         pass
+                # AI-proposed (but not auto-applied) alt: an ungrounded vision guess is
+                # surfaced for one-click approval rather than silently written (WCAG 1.1.1
+                # intent stays human). Attach the prefilled drafts to the file's 1.1.1 HITL
+                # row — before the no-fixes early return, or they die inside the job result.
+                _enqueue_proposals(scan_id, filename, "1.1.1", "Non-text Content", _proposals)
                 # Deferred alt text (no faithful source — see remediate_office) must
                 # reach a human: those findings are fix_mode 'auto', so the ai-assisted
                 # HITL pull never sees them. Queue here — before the no-fixes early
@@ -256,6 +315,24 @@ def _remediate_file(payload: dict, job: dict) -> None:
     # ACTUALLY cleared; the rest stay failing for review, so the app never shows a fix
     # that did not take.
     residual = _verify_residual_scs(fixed_bytes, filename)
+    # Enqueue the inline AI proposals (2.4.4 link text …) now that the re-scan has run, so a
+    # deterministic fix that verifiably cleared carries validated=True (confidence.js reads
+    # it as a High, one-click confirm) while a fix still failing / a model draft stays
+    # unvalidated (Medium). Group per SC — one HITL row per (file, sc).
+    if inline_proposals:
+        _by_sc: dict[str, list] = {}
+        for _p in inline_proposals:
+            _by_sc.setdefault(_p.get("sc", ""), []).append(_p)
+        _PROPOSAL_RULE_NAMES = {"2.4.4": "Link Purpose (In Context)",
+                                "2.4.6": "Headings and Labels", "1.3.1": "Info and Relationships"}
+        for _sc, _ps in _by_sc.items():
+            if not _sc:
+                continue
+            _applied_any = any(p.get("applied") for p in _ps)
+            _cleared = residual is not None and _sc not in residual
+            _enqueue_proposals(scan_id, filename, _sc, _PROPOSAL_RULE_NAMES.get(_sc, _sc),
+                               [{k: v for k, v in p.items() if k not in ("sc", "applied")} for p in _ps],
+                               validated=bool(_applied_any and _cleared))
     # Truthfulness gate: keep a before→after record only when its criterion is NOT still
     # failing on the re-scan (or when the re-scan could not run — same "credit it" posture
     # as remediation_state below). A fix that did not actually clear never reaches the PDF.

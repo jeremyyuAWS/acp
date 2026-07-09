@@ -11,6 +11,17 @@ const VALUE_FIX = new Set(['1.1.1', '2.4.4', '2.4.9', '2.4.2', '3.3.2'])
 const scOf = (r) => String(r || '').replace(/^SC[_ ]?/i, '').replace(/_/g, '.').match(/^\d+\.\d+\.\d+/)?.[0] || ''
 const isToday = (iso) => { if (!iso) return false; const d = new Date(iso), n = new Date(); return d.toDateString() === n.toDateString() }
 
+// AI-proposed concrete values attached to a HITL item (hitl_queue.proposals). Returns the
+// list plus whether the batch was re-scan-validated and whether it is a subjective call
+// (decorative / sensory) — used for the confidence chip and the one-click prefill.
+const propMeta = (it) => {
+  const list = Array.isArray(it.proposals) ? it.proposals : []
+  if (!list.length) return null
+  const subjective = list.some((p) => p && p.kind === 'decorative') || scOf(it.rule_id) === '1.3.3'
+  return { list, validated: !!it.validated, subjective }
+}
+const firstProposed = (it) => (Array.isArray(it.proposals) && it.proposals[0]?.proposed_value) || null
+
 // The full-screen "AI Work Inbox" — GitHub-PRs-meets-Gmail. Items are grouped by issue
 // type, priority-sorted, each showing the REAL reason it escalated to a human, with
 // one-click approve / reject / skip (and inline edit of the AI-drafted value).
@@ -48,7 +59,8 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
 
   const doAct = (it, status) => {
     setBusy(it.id)
-    const val = VALUE_FIX.has(scOf(it.rule_id)) ? (edits[it.id] ?? it.approved_value ?? null) : null
+    const takesValue = VALUE_FIX.has(scOf(it.rule_id)) || !!(it.proposals && it.proposals.length)
+    const val = takesValue ? (edits[it.id] ?? firstProposed(it) ?? it.approved_value ?? null) : null
     Promise.resolve(onAct(it.id, status, notes[it.id] || null, status === 'approved' ? val : null))
       .catch(() => {})   // act() already reverts optimistic state on failure; avoid an unhandled rejection
       .finally(() => { setBusy(null); setExpanded(null) })
@@ -74,9 +86,10 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
     return () => document.removeEventListener('keydown', onKey)
   }, [ordered, cursor, onClose])
 
-  const approveGroup = (grp) => grp.items.forEach((it) => {
-    if (!VALUE_FIX.has(scOf(it.rule_id))) onAct(it.id, 'approved')   // bulk-approve only judgement items (no value needed)
-  })
+  // A "judgement" item has no value to type (no VALUE_FIX rule and no AI proposal) — only
+  // those are safe to bulk-approve; a proposal must be reviewed individually.
+  const isJudgement = (it) => !VALUE_FIX.has(scOf(it.rule_id)) && !(it.proposals && it.proposals.length)
+  const approveGroup = (grp) => grp.items.forEach((it) => { if (isJudgement(it)) onAct(it.id, 'approved') })
 
   return (
     <div className="rc-overlay" role="dialog" aria-modal="true" aria-label="Human review center">
@@ -111,18 +124,23 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
             <section className="rc-group" key={grp.label}>
               <div className="rc-group-head">
                 <span className="rc-group-title">{grp.label} <span className="muted">· {grp.items.length}</span></span>
-                {grp.items.some((it) => !VALUE_FIX.has(scOf(it.rule_id))) && (
+                {grp.items.some((it) => isJudgement(it)) && (
                   <button className="ghost small" onClick={() => approveGroup(grp)}>✓ Approve all judgement items</button>
                 )}
               </div>
               {grp.items.map((it) => {
                 const s = SEV[sevOf(it)] || SEV.medium
-                const isVal = VALUE_FIX.has(scOf(it.rule_id))
+                const pm = propMeta(it)
+                const isVal = VALUE_FIX.has(scOf(it.rule_id)) || !!pm
                 const isOpen = expanded === it.id
-                // Detection-method confidence (confidence.js) — helps a reviewer triage:
-                // a High item is a definite finding that just needs a fix approved; a
-                // Medium item came from a heuristic lane and is worth a closer look.
-                const conf = confidenceForFinding({ sc: scOf(it.rule_id) })
+                // Confidence (confidence.js) — helps a reviewer triage. When the item carries
+                // an AI proposal, the chip reflects it: a validated deterministic proposal is
+                // a fast Medium confirm; a subjective (decorative / sensory) one is Low and
+                // wants judgement. Otherwise it falls back to detection-method confidence.
+                const conf = confidenceForFinding({
+                  sc: scOf(it.rule_id),
+                  proposal: pm && { validated: pm.validated, subjective: pm.subjective },
+                })
                 return (
                   <div className={`rc-item${isOpen ? ' rc-item-open' : ''}${ordered[cursor]?.id === it.id ? ' rc-item-cursor' : ''}`} key={it.id}>
                     <button className="rc-item-row" onClick={() => setExpanded(isOpen ? null : it.id)} aria-expanded={isOpen}>
@@ -145,11 +163,27 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
                           </ul>
                         </div>
                         <p className="muted" style={{ fontSize: 12, margin: '2px 0 8px' }}>Detection confidence <span className={confClass(conf.level)}>{conf.level.label}</span> · {conf.basis}</p>
+                        {pm && (
+                          <div className="rc-proposals">
+                            <b>AI proposed {pm.list.length > 1 ? `${pm.list.length} fixes` : 'a fix'}</b>
+                            {pm.validated && <span className="rc-prop-badge" title="Applied to a scratch copy and re-scanned — the criterion cleared">✓ validated by re-scan</span>}
+                            <ul>
+                              {pm.list.slice(0, 8).map((p, i) => (
+                                <li key={i}>
+                                  {p.before && <span className="rc-prop-before">{p.before}</span>}
+                                  <span className="rc-prop-value">{p.proposed_value}</span>
+                                  {p.rationale && <span className="muted rc-prop-why"> — {p.rationale}</span>}
+                                </li>
+                              ))}
+                            </ul>
+                            {pm.list.length > 8 && <span className="muted">…and {pm.list.length - 8} more</span>}
+                          </div>
+                        )}
                         {isVal && (
                           <label className="rc-valedit">
-                            <span className="muted">Approved value {it.approved_value ? '(AI draft — edit as needed)' : ''}</span>
+                            <span className="muted">Approved value {(firstProposed(it) || it.approved_value) ? '(AI draft — edit as needed)' : ''}</span>
                             <textarea
-                              value={edits[it.id] ?? it.approved_value ?? ''}
+                              value={edits[it.id] ?? firstProposed(it) ?? it.approved_value ?? ''}
                               placeholder="Type the value a screen reader should announce…"
                               onChange={(e) => setEdits((m) => ({ ...m, [it.id]: e.target.value }))} />
                           </label>

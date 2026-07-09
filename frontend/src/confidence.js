@@ -62,9 +62,24 @@ export function methodForSc(sc) {
 //                            per-rule 'complete' row confirms it yet).
 // Precedence: an objective re-scan clear beats everything; an unconfirmed fix is
 // demoted to medium; otherwise fall back to the detection method.
-export function confidenceForFinding({ sc, verifiedCleared = false, reportedFixedUnverified = false } = {}) {
+// `proposal` (optional): an AI-proposed concrete fix value awaiting one-click approval
+// (hitl_queue.proposals). It carries { validated, subjective }:
+//   validated  — the proposal batch cleared its SC on the post-apply re-scan.
+//   subjective — the value is a genuine human judgement (decorative call, sensory rewrite,
+//                alt-text intent) that a re-scan can never validate.
+// A proposal is never High: nothing an AI *proposed* is trusted until a human approves it.
+// A subjective proposal is Low; any other proposal is Medium (validated ones note the
+// re-scan evidence). This keeps the "AI proposes → human approves" lane honest — the chip
+// tells the reviewer whether they are confirming validated machine work (fast) or making a
+// judgement (slower), never implying the platform already decided.
+export function confidenceForFinding({ sc, verifiedCleared = false, reportedFixedUnverified = false, proposal = null } = {}) {
   if (verifiedCleared) return { level: CONFIDENCE.HIGH, basis: 'fix cleared on re-scan verification' }
   if (reportedFixedUnverified) return { level: CONFIDENCE.MEDIUM, basis: 'fix applied — re-scan confirmation pending' }
+  if (proposal) {
+    if (proposal.subjective) return { level: CONFIDENCE.LOW, basis: 'AI proposal — needs human judgement' }
+    if (proposal.validated) return { level: CONFIDENCE.MEDIUM, basis: 'AI proposal validated by re-scan — awaiting approval' }
+    return { level: CONFIDENCE.MEDIUM, basis: 'AI proposal — approve to apply' }
+  }
   switch (methodForSc(sc)) {
     case 'deterministic': return { level: CONFIDENCE.HIGH,   basis: 'deterministic rule check' }
     case 'heuristic':     return { level: CONFIDENCE.MEDIUM, basis: 'AI / heuristic detection — semantic judgement' }
