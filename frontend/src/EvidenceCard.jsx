@@ -1,18 +1,20 @@
 import { useState, useEffect, useRef } from 'react'
-import { updateHitlItem, getFileRemediationDiffs } from './api.js'
+import { getFileRemediationDiffs } from './api.js'
 import { confClass } from './confidence.js'
 import Thumbnail from './Thumbnail.jsx'
-import { buildEvidenceCard } from './reviewCard.js'
+import { buildEvidenceCard, isValueFix, reviewTelemetry } from './reviewCard.js'
 
 // Evidence Card (PRD v2) — a PR-style review of ONE accessibility issue. The human APPROVES
 // ACP's recommendation; ACP applies it. Assembles only shipped primitives (confidence basis,
 // remediationTrack, remediation_diff, thumbnail) and records review telemetry (edited flag +
 // review time) so the workspace can report reviewer time saved and calibrate confidence.
 //
-// onResolved(id, status) — parent refreshes the queue (drain stays wired via acp:hitl-changed).
-export default function EvidenceCard({ item, onResolved }) {
+// onAct(id, status, note, approvedValue, telemetry) — the parent owns the write, so its
+// optimistic update and the queue-drain event stay wired. traceUrl is optional.
+export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null }) {
   const [diffs, setDiffs] = useState([])
   const [value, setValue] = useState(item?.approved_value ?? '')
+  const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const shownAt = useRef(Date.now())               // reviewer-time metric starts when the card mounts
   const aiDraft = useRef(item?.approved_value ?? null)
@@ -26,18 +28,21 @@ export default function EvidenceCard({ item, onResolved }) {
   }, [item?.scan_id, item?.file])
 
   const card = buildEvidenceCard(item, diffs)
-  const editable = card.track.track !== 'auto' && aiDraft.current != null   // a value the reviewer can edit
+  // An editor appears for every value-fix criterion, draft or not — a reviewer must be able to
+  // author alt text the AI could not draft. Keying off `aiDraft != null` (as this once did)
+  // silently hid the box exactly when the human was most needed.
+  const editable = card.track.track !== 'auto' && isValueFix(card.sc)
   const primaryLabel = card.track.action                                    // "Approve & Apply" | "Review & edit"
 
   const decide = async (status) => {
     if (busy) return
     setBusy(true)
-    const finalVal = editable && status === 'approved' ? (value || null) : null
-    const edited = editable && status === 'approved' && (value || '') !== (aiDraft.current || '')
+    const t = reviewTelemetry({
+      editable, status, value, aiDraft: aiDraft.current, elapsedMs: Date.now() - shownAt.current,
+    })
     try {
-      await updateHitlItem(card.id, status, null, finalVal, {
-        edited, reviewMs: Date.now() - shownAt.current, aiValue: aiDraft.current,
-      })
+      await onAct(card.id, status, note || null, t.finalValue,
+                  { edited: t.edited, reviewMs: t.reviewMs, aiValue: t.aiValue })
       onResolved && onResolved(card.id, status)
     } finally {
       setBusy(false)
@@ -62,8 +67,12 @@ export default function EvidenceCard({ item, onResolved }) {
 
           {editable ? (
             <label className="evcard-rec">
-              <span className="muted" style={{ fontSize: 12 }}>AI recommendation {aiDraft.current ? '(edit before approving if needed)' : ''}</span>
-              <textarea className="evcard-rec-input" rows={2} value={value} onChange={(e) => setValue(e.target.value)} />
+              <span className="muted" style={{ fontSize: 12 }}>
+                {aiDraft.current ? 'AI recommendation (edit before approving if needed)' : 'No AI draft — type the value a screen reader should announce'}
+              </span>
+              <textarea className="evcard-rec-input" rows={2} value={value}
+                        placeholder={aiDraft.current ? '' : 'Type the value a screen reader should announce…'}
+                        onChange={(e) => setValue(e.target.value)} />
             </label>
           ) : card.recommendation ? (
             <p className="evcard-rec-static"><b>AI recommendation:</b> {card.recommendation}</p>
@@ -91,10 +100,16 @@ export default function EvidenceCard({ item, onResolved }) {
             Compliance: <span className="conf conf-low">{card.impact.before}</span> → <span className="conf conf-high">{card.impact.after}</span> after approval
           </p>
 
+          <input className="rc-note" placeholder="Reviewer note (optional)" value={note}
+                 onChange={(e) => setNote(e.target.value)} />
+
           <div className="evcard-actions">
             <button className="qbtn approve" disabled={busy} onClick={() => decide('approved')}>✓ {primaryLabel}</button>
+            <button className="qbtn self" disabled={busy}
+                    title="Take ownership — fix it yourself, then re-scan to confirm"
+                    onClick={() => decide('skipped')}>✋ I’ll fix it</button>
             <button className="qbtn reject" disabled={busy} onClick={() => decide('rejected')}>✕ Reject</button>
-            <button className="ghost small" disabled={busy} onClick={() => decide('skipped')}>Skip</button>
+            {traceUrl && <a className="rc-trace" href={traceUrl} target="_blank" rel="noopener noreferrer">📊 View trace</a>}
           </div>
         </div>
       </div>
