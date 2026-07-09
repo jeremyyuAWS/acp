@@ -1622,3 +1622,13 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
   list-style: revert; user-select: none; }
 .rem-adv-summary:hover { color: var(--ink, #2b2130); }
 .rem-adv-block[open] .rem-adv-summary { margin-bottom: 10px; }
+
+/* Page-1 document preview (ADR 0015). Self-hides when no thumbnail is available, so these
+   rules only ever apply to a real rendered image. */
+.thumb { margin: 0 0 14px; padding: 8px; background: var(--card, #fff); border: 1px solid var(--line);
+  border-radius: 12px; display: flex; justify-content: center; }
+.thumb img { display: block; max-width: 100%; height: auto; border-radius: 6px;
+  border: 1px solid var(--line); box-shadow: 0 1px 4px rgba(43, 35, 48, .08); }
+/* In the HITL review detail the preview sits alongside dense text — cap it tighter. */
+.rc-thumb { max-width: 260px; margin: 2px 0 12px; }
+.drawer-thumb { margin-top: 2px; }

@@ -359,6 +359,15 @@ export const getFileContent = (scanId, file) => (SIM
   ? sim(null)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/content`, { headers: headers() }).then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.arrayBuffer() }))
 
+// Page-1 preview image (ADR 0015). Resolves to a PNG Blob, or null when there's no preview
+// (unsupported type, source unreachable, render failed, or SIM mode). NEVER rejects — a
+// missing thumbnail must degrade silently, never surface as an error to the caller.
+export const getFileThumbnail = (scanId, file) => (SIM
+  ? sim(null)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/thumbnail`, { headers: headers() })
+      .then(r => (r.ok ? r.blob() : null))
+      .catch(() => null))
+
 export const uploadToDrive = (scanId, file, blob, contentType) => {
   if (SIM) return sim({ url: 'https://drive.google.com/file/d/sim/view', file_id: 'sim' })
   const fd = new FormData()
