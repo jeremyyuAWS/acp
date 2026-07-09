@@ -3,7 +3,8 @@
 remediate_pdf sets a filename-derived /Title when a PDF has none (the analyser's
 pdf.document-title rule passes iff /Title is non-empty). Metadata is written with pypdf
 because pikepdf's docinfo writes persist nondeterministically once libxml2 is loaded in a
-long-lived worker process. Self-skips when pikepdf / pypdf / reportlab are unavailable.
+long-lived worker process. Self-skips when pikepdf / pypdf / reportlab, or the partner PDF
+engine, are unavailable.
 """
 from __future__ import annotations
 
@@ -20,6 +21,12 @@ from reportlab.pdfgen import canvas  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "api"))
 import remediate_pdf as RP  # noqa: E402
+
+# remediate_pdf() imports the partner PDF engine, a separate repo located via scanner.WP /
+# $ACP_PDF_ENGINE and absent on a clean CI agent. Skip there rather than hard-fail.
+from conftest import requires_pdf_engine  # noqa: E402
+
+pytestmark = requires_pdf_engine
 
 
 def _title(pdf_path: Path) -> str:
