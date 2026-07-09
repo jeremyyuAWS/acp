@@ -129,6 +129,15 @@ _SCHEMA = [
       scan_id TEXT, file TEXT, rule_id TEXT, status TEXT, finding_count INT,
       PRIMARY KEY (scan_id, file, rule_id)
     )""",
+    # The actual value an AI fix WROTE (e.g. the vision-generated alt text) + a tiny
+    # base64 image thumbnail, so the "Recent AI fixes" surface shows what was really
+    # applied instead of a canned template. One row per fixed element (seq disambiguates
+    # several images in one file). Best-effort telemetry — never on the remediation path.
+    """CREATE TABLE IF NOT EXISTS applied_fixes (
+      scan_id TEXT, file TEXT, rule_id TEXT, seq INT,
+      value TEXT, source TEXT, thumb TEXT, created_at TEXT,
+      PRIMARY KEY (scan_id, file, rule_id, seq)
+    )""",
     # Admin-controlled platform settings (key/value). e.g. ai_enabled='false'
     # forces deterministic-only mode for the whole platform (overrides per-scan ?ai=).
     """CREATE TABLE IF NOT EXISTS app_settings (
@@ -1030,6 +1039,32 @@ class Store:
                     "SELECT file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count "
                     "FROM scan_rule_traces WHERE scan_id=%s ORDER BY file,rule_id",
                     (scan_id,))
+            return self._db.fetchall(cur)
+
+    def record_applied_fix(self, scan_id: str, file: str, rule_id: str, value: str,
+                           *, source: str | None = None, thumb: str | None = None,
+                           seq: int = 0) -> None:
+        """Persist the concrete value an AI fix wrote (+ optional image thumbnail) so the
+        UI can show the real applied text. Best-effort: callers wrap in try/except so a
+        telemetry failure never fails the remediation job."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO applied_fixes(scan_id,file,rule_id,seq,value,source,thumb,created_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(scan_id,file,rule_id,seq) DO UPDATE SET "
+                "value=EXCLUDED.value,source=EXCLUDED.source,thumb=EXCLUDED.thumb,created_at=EXCLUDED.created_at",
+                (scan_id, file, rule_id, seq, value, source, thumb, now))
+
+    def list_applied_fixes(self, scan_id: str, limit: int = 200) -> list[dict]:
+        """The AI fixes that wrote a concrete value in this scan, newest first — real
+        applied text + thumbnail for the 'Recent AI fixes' surface."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT file,rule_id,seq,value,source,thumb,created_at FROM applied_fixes "
+                "WHERE scan_id=%s ORDER BY created_at DESC, file, seq LIMIT %s",
+                (scan_id, limit))
             return self._db.fetchall(cur)
 
     def get_trace_row(self, scan_id: str, file: str, rule_id: str) -> dict | None:

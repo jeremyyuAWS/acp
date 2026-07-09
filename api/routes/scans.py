@@ -386,6 +386,16 @@ def scan_traces(sid: str, request: Request, file: str | None = None):
     return core.store.get_scan_traces(sid, file=file)
 
 
+@router.get("/scans/{sid}/applied-fixes")
+def scan_applied_fixes(sid: str, request: Request):
+    """The concrete values AI fixes wrote this scan (vision-generated alt text + a small
+    image thumbnail), newest first — so 'Recent AI fixes' can show what was really applied
+    instead of a canned template. Owner-scoped."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    return core.store.list_applied_fixes(sid)
+
+
 @router.get("/scans/{sid}/diff")
 def scan_diff(sid: str, request: Request, vs: str | None = Query(None)):
     """Regression diff (ADR 0009): which documents got worse / better vs a prior scan, and

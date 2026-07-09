@@ -168,6 +168,30 @@ _MIN_IMG_BYTES = 64
 _R_EMBED = re.compile(r'r:embed="(rId\d+)"')
 
 
+def _thumb_b64(img_bytes: bytes, *, max_edge: int = 96) -> str | None:
+    """A tiny base64 PNG data-URL of an embedded image, for the "Recent AI fixes" UI so it
+    can show the actual picture that got alt text. Best-effort: any decode/resize/encode
+    error returns None — a missing thumbnail must never affect remediation."""
+    try:
+        import base64
+        import io as _io
+        from PIL import Image
+        im = Image.open(_io.BytesIO(img_bytes))
+        im.load()
+        if im.mode not in ("RGB", "RGBA"):
+            im = im.convert("RGB")
+        w, h = im.size
+        longest = max(w, h) or 1
+        if longest > max_edge:
+            r = max_edge / longest
+            im = im.resize((max(1, round(w * r)), max(1, round(h * r))), Image.LANCZOS)
+        buf = _io.BytesIO()
+        im.save(buf, format="PNG", optimize=True)
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        return None
+
+
 def _resolve_media(entries: dict, part_name: str, rid: str) -> bytes | None:
     """Resolve a drawing's r:embed relationship id to the embedded image bytes.
 
@@ -203,7 +227,8 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
                   captions: bool = False, entries: dict | None = None,
                   part_name: str | None = None, vision_enabled: bool = False,
                   context_file: str = "", scan_id: str | None = None,
-                  vision_budget: list | None = None) -> tuple[str, list[tuple[str, str]], int]:
+                  vision_budget: list | None = None,
+                  applied_fixes: list | None = None) -> tuple[str, list[tuple[str, str]], int]:
     """Add descr= to every <tag …> lacking one, from a faithful source or (when
     vision_enabled) a genuine vision description of the image bytes.
 
@@ -246,7 +271,8 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
             src = _derive_alt(attrs, caption)
             if src is None:
                 src = _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name,
-                                  vision_enabled, context_file, caption, scan_id, vision_budget)
+                                  vision_enabled, context_file, caption, scan_id, vision_budget,
+                                  applied_fixes)
             if src is None:
                 deferred += 1
                 out.append(keep); continue
@@ -260,7 +286,7 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
 
 
 def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_enabled,
-                context_file, caption, scan_id, vision_budget) -> tuple[str, str] | None:
+                context_file, caption, scan_id, vision_budget, applied_fixes=None) -> tuple[str, str] | None:
     """Genuine alt text for an unlabelled image from the local vision model, or None.
 
     Finds this drawing's r:embed (the blip follows the docPr/cNvPr within the same
@@ -294,6 +320,13 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
         return None
     if vision_budget is not None:
         vision_budget[0] -= 1
+    if applied_fixes is not None:
+        applied_fixes.append({
+            "rule_id": "SC_1_1_1",
+            "value": res["alt"],
+            "source": "AI vision model (llava)",
+            "thumb": _thumb_b64(img),
+        })
     return res["alt"], "an AI vision description of the image"
 
 
@@ -306,7 +339,8 @@ _ALT_TARGETS = [
 
 
 def _fix_image_alt(entries: dict, *, vision_enabled: bool = False,
-                   context_file: str = "", scan_id: str | None = None) -> tuple[list[str], int]:
+                   context_file: str = "", scan_id: str | None = None,
+                   applied_fixes: list | None = None) -> tuple[list[str], int]:
     """Inject alt text across all image-bearing parts — faithful source first, then a
     genuine vision description when vision_enabled. Returns (applied descriptions,
     count of images deferred to human review)."""
@@ -324,7 +358,8 @@ def _fix_image_alt(entries: dict, *, vision_enabled: bool = False,
             new_xml, fixed, part_deferred = _inject_descr(
                 xml, tag, pic_only_within=wrapper, captions=captions,
                 entries=entries, part_name=name, vision_enabled=vision_enabled,
-                context_file=context_file, scan_id=scan_id, vision_budget=vision_budget)
+                context_file=context_file, scan_id=scan_id, vision_budget=vision_budget,
+                applied_fixes=applied_fixes)
             deferred += part_deferred
             if fixed:
                 entries[name] = new_xml.encode("utf-8")
@@ -680,7 +715,7 @@ def _remediate_xlsx_structure(entries: dict) -> list[str]:
 
 
 def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True,
-                     scan_id: str | None = None):
+                     scan_id: str | None = None, applied_fixes: list | None = None):
     """Apply deterministic Office accessibility fixes to a copy of the file.
 
     ai_enabled — when True and a vision (llava-class) Ollama model is reachable,
@@ -727,7 +762,8 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
         except Exception:
             vision_enabled = False
     alt_applied, alt_deferred = _fix_image_alt(
-        entries, vision_enabled=vision_enabled, context_file=path.name, scan_id=scan_id)
+        entries, vision_enabled=vision_enabled, context_file=path.name, scan_id=scan_id,
+        applied_fixes=applied_fixes)
     applied.extend(alt_applied)
     skipped: list[str] = []
     if alt_deferred:

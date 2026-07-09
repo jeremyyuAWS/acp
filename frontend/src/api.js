@@ -115,6 +115,11 @@ export const getScanTraces = (scanId) => {
   }
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/traces`, { headers: headers() }).then(j)
 }
+// The concrete values AI fixes wrote this scan (real vision alt text + a small image
+// thumbnail), for the "Recent AI fixes" panel. Best-effort — [] on any error/SIM.
+export const getAppliedFixes = (scanId) => (SIM || !scanId
+  ? sim([])
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/applied-fixes`, { headers: headers() }).then(j).catch(() => []))
 export const getMe = () => (SIM ? sim(simIdentity()) : fetch(`${BASE}/me`, { headers: headers() }).then(j))
 export const getSources = () => (SIM ? sim(simGetSources()) : fetch(`${BASE}/sources`, { headers: headers() }).then(j))
 export const getRubric = () => (SIM

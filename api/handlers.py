@@ -155,9 +155,21 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 mimetype = "application/pdf"
             else:  # docx / pptx / xlsx
                 from remediate_office import remediate_office
+                _applied_fixes: list = []
                 out_path, applied, _skipped = remediate_office(
-                    src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id)
+                    src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
+                    applied_fixes=_applied_fixes)
                 mimetype = _OFFICE_MIME[ext]
+                # Persist the concrete values the AI wrote (vision alt text + image
+                # thumbnail) so "Recent AI fixes" shows what was really applied. Best-effort:
+                # a telemetry failure must never fail the remediation job.
+                for _i, _fx in enumerate(_applied_fixes):
+                    try:
+                        core.store.record_applied_fix(
+                            scan_id, filename, _fx["rule_id"], _fx["value"],
+                            source=_fx.get("source"), thumb=_fx.get("thumb"), seq=_i)
+                    except Exception:
+                        pass
                 # Deferred alt text (no faithful source — see remediate_office) must
                 # reach a human: those findings are fix_mode 'auto', so the ai-assisted
                 # HITL pull never sees them. Queue here — before the no-fixes early

@@ -301,3 +301,43 @@ def test_alt_vision_miss_defers(tmp_path, monkeypatch):
     assert calls["n"] == 1
     assert not any("AI vision" in a for a in applied)
     assert any("faithful alt source" in s for s in skipped)
+
+
+# ── applied_fixes sink: the real value written + an image thumbnail (Recent AI fixes) ──
+
+def test_applied_fixes_capture_value_and_thumbnail(tmp_path, monkeypatch):
+    import io as _io
+    from PIL import Image
+    buf = _io.BytesIO(); Image.new("RGB", (120, 80), (200, 30, 30)).save(buf, format="PNG")
+    _stub_vision(monkeypatch, alt="A red rectangle on a white background")
+    src = tmp_path / "cap.docx"
+    _make_docx_with_image(src, _DRAWING, img_bytes=buf.getvalue())
+    sink = []
+    out, applied, _ = remediate_office.remediate_office(src, ai_enabled=True, applied_fixes=sink)
+    assert 'descr="A red rectangle on a white background"' in _doc_xml(out)
+    assert len(sink) == 1
+    rec = sink[0]
+    assert rec["rule_id"] == "SC_1_1_1"
+    assert rec["value"] == "A red rectangle on a white background"
+    assert rec["thumb"] and rec["thumb"].startswith("data:image/png;base64,")   # decodable → real thumb
+
+
+def test_applied_fixes_thumbnail_none_on_undecodable_image(tmp_path, monkeypatch):
+    # A non-image blob still captures the alt text but yields a None thumbnail — never raises.
+    _stub_vision(monkeypatch, alt="Some description")
+    src = tmp_path / "cap2.docx"
+    _make_docx_with_image(src, _DRAWING, img_bytes=b"\x89PNG\r\n\x1a\n" + b"notreal" * 20)
+    sink = []
+    remediate_office.remediate_office(src, ai_enabled=True, applied_fixes=sink)
+    assert len(sink) == 1 and sink[0]["value"] == "Some description"
+    assert sink[0]["thumb"] is None
+
+
+def test_applied_fixes_sink_empty_without_vision(tmp_path, monkeypatch):
+    # AI-off: faithful-only, nothing vision-generated → no applied_fixes captured.
+    _stub_vision(monkeypatch)
+    src = tmp_path / "cap3.docx"
+    _make_docx_with_image(src, _DRAWING)
+    sink = []
+    remediate_office.remediate_office(src, ai_enabled=False, applied_fixes=sink)
+    assert sink == []

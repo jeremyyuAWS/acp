@@ -7,7 +7,7 @@ import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
 import { prefersReducedMotion } from './a11y.js'
-import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob } from './api.js'
+import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes } from './api.js'
 import { SIM } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
 import QueuePanel from './QueuePanel.jsx'
@@ -153,26 +153,50 @@ function buildHumanQueue(files, triage = {}) {
   }).filter(Boolean)
 }
 
-function FixCarousel({ files = [] }) {
+function FixCarousel({ files = [], scanId = null }) {
   // 'Recent fixes' — an expandable list (PRD §8: replace the carousel; nobody likes carousels).
-  const examples = useMemo(() => buildFixExamples(files), [files])
-  if (!examples.length) return null
+  const canned = useMemo(() => buildFixExamples(files), [files])
+  // Real applied fixes (actual AI-written value + image thumbnail) from the backend. These
+  // are literally what remediation wrote, so they're preferred over the scan-derived
+  // templates; we fall back to `canned` when none were captured (no vision fix ran / old scan).
+  const [applied, setApplied] = useState([])
+  useEffect(() => {
+    let live = true
+    getAppliedFixes(scanId).then((r) => { if (live) setApplied(Array.isArray(r) ? r : []) }).catch(() => {})
+    return () => { live = false }
+  }, [scanId])
+  const realRows = applied.map((a) => {
+    const sc = (a.rule_id || '').replace(/^SC_/, '').replace(/_/g, '.')
+    return {
+      fmt: ((a.file || '').split('.').pop() || 'DOC').toUpperCase(),
+      wcag: `WCAG ${sc} · ${ITEM_NAME[sc] || 'non-text content'}`,
+      auto: true,
+      before: 'Image had no meaningful alt text',
+      after: a.value,
+      thumb: a.thumb || null,
+      note: a.source,
+    }
+  })
+  const rows = realRows.length ? realRows : canned
+  if (!rows.length) return null
   return (
     <section className="panel">
       <div className="fixhd">
         <h2 style={{ margin: 0 }}>Recent AI fixes <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>· from your scanned documents</span></h2>
-        <span className="muted" style={{ fontSize: 12 }}>{examples.length} shown</span>
+        <span className="muted" style={{ fontSize: 12 }}>{rows.length} shown</span>
       </div>
       <div className="recentfixes">
-        {examples.slice(0, 8).map((ex, i) => (
+        {rows.slice(0, 8).map((ex, i) => (
           <details className="recentfix" key={i}>
             <summary>
+              {ex.thumb && <img src={ex.thumb} alt="" width="36" height="36"
+                                style={{ borderRadius: 4, objectFit: 'cover', border: '1px solid var(--line)', flex: '0 0 auto', background: '#fff' }} />}
               <span className="fmtchip">{ex.fmt}</span>
               <span className="muted" style={{ fontSize: 12 }}>{ex.wcag}</span>
               <span className={ex.auto ? 'fixauto' : 'fixreview'} style={{ marginLeft: 'auto', fontSize: 12 }}>{ex.auto ? '⚡ auto-applied' : '✎ AI draft · human review'}</span>
             </summary>
             <div className="diffbox before"><span className="difftag">before</span>{ex.before}</div>
-            <div className="diffbox after"><span className="difftag">after</span>{ex.after}</div>
+            <div className="diffbox after"><span className="difftag">after</span>{ex.after}{ex.note ? <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>· {ex.note}</span> : null}</div>
           </details>
         ))}
       </div>
@@ -884,7 +908,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
       <div className="chartrow">
         {fixTypesDisplay.length > 0 && <details className="panel rem-advanced"><summary><b>Advanced</b> · automated fixes by type</summary><div style={{ marginTop: 12 }}><Bars items={fixTypesDisplay} cols="140px 1fr 30px" /></div></details>}
-        <FixCarousel files={files} />
+        <FixCarousel files={files} scanId={run?.id} />
       </div>
 
       {/* ── Human review ── */}
