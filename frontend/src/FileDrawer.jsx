@@ -45,6 +45,25 @@ const remStageLine = (pct) => REM_STAGE_LINES[Math.min(REM_STAGE_LINES.length - 
 const REM_AUTOFIX_SC_BY_TYPE = { pdf: ['3.1.1', '2.4.2'], docx: ['1.1.1', '3.1.1', '2.4.2'], pptx: ['1.1.1', '3.1.1', '2.4.2', '1.4.3', '1.4.6', '1.3.2', '2.4.6'], xlsx: ['1.1.1', '3.1.1', '2.4.2', '1.4.3', '1.4.6'], html: ['3.1.1', '2.4.2', '1.3.1', '1.4.3', '1.4.6', '1.4.10', '1.4.4', '1.4.12', '1.4.2', '1.3.4'] }
 const scOfWcag = (v) => ((v || '').replace(/^SC_/, '').replace(/_/g, '.').match(/^\d+\.\d+\.\d+/) || [''])[0]
 
+// Where the occurrences are. The analysers attribute a 1-based page/slide per finding
+// (issue_records.page); a finding they could not place carries none and renders nothing —
+// showing no page beats showing the wrong one. xlsx findings locate by cell, not page, so
+// they legitimately have none.
+function LocationChip({ pages, type }) {
+  if (!pages || !pages.length) return null
+  const noun = type === 'pptx' ? 'Slide' : 'Page'
+  const sorted = [...pages].sort((a, b) => a - b)
+  const shown = sorted.slice(0, 6)
+  const more = sorted.length - shown.length
+  const label = `${noun}${sorted.length > 1 ? 's' : ''}`
+  return (
+    <span className="findingloc muted" style={{ fontSize: 11, marginLeft: 6 }}
+          title={`${label} ${sorted.join(', ')}`}>
+      {label} {shown.join(', ')}{more > 0 ? ` +${more}` : ''}
+    </span>
+  )
+}
+
 // Pure per-criterion coverage computation — the SAME honest PASS/FAIL/FIXED/HUMAN/
 // UNCHECKED logic the on-screen WCAG coverage table below uses, extracted so the
 // certification-PDF export shares it exactly rather than risk drifting from what's
@@ -571,15 +590,20 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         <>
           <div className="findings">
             {(() => {
-              // Engines emit one finding per occurrence (e.g. reading order: one
-              // per slide) with no per-occurrence context to display — collapse
-              // identical (criterion, severity, detail) rows into one with a count.
+              // Engines emit one finding per occurrence (e.g. reading order: one per
+              // slide) — collapse identical (criterion, severity, detail) rows into one
+              // with a count, but keep every occurrence's page so the reviewer is told
+              // WHERE to look instead of hunting through the document.
               const groups = []
               const byKey = {}
               issues.forEach((i) => {
                 const k = `${scOf(i.wcag) || i.wcag}::${i.severity || ''}::${i.detail || ''}`
-                if (byKey[k] == null) { byKey[k] = groups.length; groups.push({ ...i, count: 1 }) }
-                else groups[byKey[k]].count++
+                if (byKey[k] == null) { byKey[k] = groups.length; groups.push({ ...i, count: 1, pages: i.page ? [i.page] : [] }) }
+                else {
+                  const g = groups[byKey[k]]
+                  g.count++
+                  if (i.page && !g.pages.includes(i.page)) g.pages.push(i.page)
+                }
               })
               return groups.map((i, n) => {
               const [bg, fg] = SEV[i.severity] || SEV.MINOR
@@ -587,7 +611,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                 <div className="finding" key={n}>
                   <span className="badge" style={{ background: bg, color: fg }}>{(i.severity || '').toLowerCase()}</span>
                   <div className="findingmain">
-                    <div className="findingtop">{critLabel(i.wcag)}{i.count > 1 && <span className="findingcount" title={`${i.count} occurrences of this finding in the file`}>× {i.count}</span>}{i.level && <span className="lvlchip">Level {i.level}</span>}{(() => {
+                    <div className="findingtop">{critLabel(i.wcag)}{i.count > 1 && <span className="findingcount" title={`${i.count} occurrences of this finding in the file`}>× {i.count}</span>}<LocationChip pages={i.pages} type={file.type} />{i.level && <span className="lvlchip">Level {i.level}</span>}{(() => {
                       // scOfWcag (not scOf): the file's issues carry the engine form
                       // 'SC_3_1_1', which scOf can't parse (it wants a leading digit) — so
                       // the live-queue keys (findStatus) and the per-format auto map are all

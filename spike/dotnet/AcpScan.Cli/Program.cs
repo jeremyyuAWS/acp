@@ -41,6 +41,19 @@ foreach (var path in Directory.GetFiles(inDir))
             wcag = i.WcagCriterion.ToString(),
             severity = i.Severity.ToString(),
             title = i.Title,
+            // Where the finding is. The analysers already populate this (Pptx/LocationHelper
+            // sets SlideNumber; Xlsx sets ElementIndex; Docx rules set a Description) — it was
+            // simply dropped at this projection. Surfaced so the review UI can show the exact
+            // slide/page instead of making a reviewer hunt. Projected explicitly (camelCase) to
+            // match the rest of this payload; every field stays nullable — never invent a page.
+            location = new
+            {
+                pageNumber = i.Location.PageNumber,
+                slideNumber = i.Location.SlideNumber,
+                elementIndex = i.Location.ElementIndex,
+                xPath = i.Location.XPath,
+                description = i.Location.Description,
+            },
         }),
     });
 }

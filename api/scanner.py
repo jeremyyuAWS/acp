@@ -357,6 +357,36 @@ def _download(item: dict, dest: Path, svc=None, sp_token: str | None = None) -> 
     out.write_bytes(buf.getvalue())
 
 
+def _loc_fields(loc) -> tuple[int | None, str | None]:
+    """Normalise an engine IssueLocation (pydantic model, PDF path) or the .NET CLI's JSON
+    dict (Office path) into (page, location_text).
+
+    page — the 1-based page OR slide the finding sits on; to a reviewer they're the same
+    idea ("go here"). None when the analyser could not attribute one: we never invent a page.
+    location_text — the analyser's structured hint for the object ('pptx:slide:0', an XPath).
+    """
+    if not loc:
+        return None, None
+    if isinstance(loc, dict):
+        page = loc.get("pageNumber") or loc.get("slideNumber")
+        text = loc.get("description") or loc.get("xPath")
+    else:
+        page = getattr(loc, "page_number", None) or getattr(loc, "slide_number", None)
+        text = getattr(loc, "description", None) or getattr(loc, "x_path", None)
+    return (page if isinstance(page, int) and page > 0 else None), (text or None)
+
+
+def _issue_with_loc(base: dict, loc) -> dict:
+    """Attach page/location to a finding only when the analyser actually reported them —
+    absent keys mean 'unknown', never a fabricated page-1 default."""
+    page, text = _loc_fields(loc)
+    if page is not None:
+        base["page"] = page
+    if text:
+        base["location"] = text
+    return base
+
+
 def _analyse_pdf(path: Path) -> dict:
     import asyncio
     sys.path.insert(0, str(WP))
@@ -367,7 +397,9 @@ def _analyse_pdf(path: Path) -> dict:
                       enqueued_at=datetime.now(timezone.utc), department_id=uuid.uuid4(), disabled_rule_ids=[])
     try:
         r = asyncio.run(PdfAnalyser().analyse(path, job))
-        issues = [{"ruleId": i.rule_id, "wcag": i.wcag_criterion.name, "severity": i.severity.name} for i in r.issues]
+        issues = [_issue_with_loc({"ruleId": i.rule_id, "wcag": i.wcag_criterion.name,
+                                   "severity": i.severity.name}, getattr(i, "location", None))
+                  for i in r.issues]
         issues = _pdf_correct_title(path, issues)
         return {"succeeded": r.succeeded,
                 "issues": issues,
@@ -428,8 +460,10 @@ def _analyse_office(dest: Path) -> dict:
                 # the only evidence of WHY a finding fired ("Slide is missing a title",
                 # "Reading order may not match visual order"). Dropping it left the UI
                 # and traces showing a bare rule id with no explanation.
-                "issues": [{"ruleId": i["ruleId"], "wcag": i["wcag"], "severity": i["severity"],
-                            **({"detail": i["title"]} if i.get("title") else {})}
+                "issues": [_issue_with_loc({"ruleId": i["ruleId"], "wcag": i["wcag"],
+                                            "severity": i["severity"],
+                                            **({"detail": i["title"]} if i.get("title") else {})},
+                                           i.get("location"))
                            for i in item.get("issues", [])],
                 "errors": [_office_err(e) for e in item.get("errors", [])],
             }

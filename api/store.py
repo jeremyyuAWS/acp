@@ -89,9 +89,15 @@ _SCHEMA = [
     # drive_write_url (a file can carry both; Drive is now a best-effort mirror).
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS blob_url TEXT",
     """CREATE TABLE IF NOT EXISTS issue_records (
-      scan_id TEXT, file TEXT, rule_id TEXT, wcag TEXT, severity TEXT, detail TEXT
+      scan_id TEXT, file TEXT, rule_id TEXT, wcag TEXT, severity TEXT, detail TEXT,
+      page INT, location TEXT
     )""",
     "ALTER TABLE issue_records ADD COLUMN IF NOT EXISTS detail TEXT",
+    # WHERE the finding is — 1-based page/slide the analyser attributed, plus its structured
+    # hint ('pptx:slide:0', an XPath). Feeds "locate in document" so a reviewer never hunts.
+    # Nullable: NULL means the analyser could not attribute a location — never a page-1 default.
+    "ALTER TABLE issue_records ADD COLUMN IF NOT EXISTS page INT",
+    "ALTER TABLE issue_records ADD COLUMN IF NOT EXISTS location TEXT",
     """CREATE TABLE IF NOT EXISTS inventory (
       file TEXT PRIMARY KEY, first_seen TEXT, last_seen TEXT,
       last_status TEXT, last_score INT
@@ -544,9 +550,10 @@ class Store:
                      f.get("checksum"), f.get("size_kb"), f.get("pages"), f.get("sheets")))
                 for i in f["issues"]:
                     self._db.execute(cur,
-                        "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail) "
-                        "VALUES(%s,%s,%s,%s,%s,%s)",
-                        (sid, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail")))
+                        "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location) "
+                        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (sid, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
+                         i.get("page"), i.get("location")))
                 # Per-rule trace: one row per catalog rule per file — PASS/FAIL/NOT_APPLICABLE.
                 sc_counts: dict[str, int] = {}
                 for i in f["issues"]:
@@ -635,8 +642,10 @@ class Store:
             self._db.execute(cur, "DELETE FROM issue_records WHERE scan_id=%s AND file=%s", (scan_id, f["file"]))
             for i in f.get("issues", []):
                 self._db.execute(cur,
-                    "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail) VALUES(%s,%s,%s,%s,%s,%s)",
-                    (scan_id, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail")))
+                    "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                    (scan_id, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
+                     i.get("page"), i.get("location")))
             sc_counts: dict[str, int] = {}
             for i in f.get("issues", []):
                 sc = _extract_sc(i.get("wcag", ""))
@@ -680,9 +689,10 @@ class Store:
             if not row:
                 return None
             self._db.execute(cur,
-                "SELECT rule_id,wcag,severity,detail FROM issue_records WHERE scan_id=%s AND file=%s",
+                "SELECT rule_id,wcag,severity,detail,page,location FROM issue_records WHERE scan_id=%s AND file=%s",
                 (scan_id, row["file"]))
-            issues = [{"ruleId": r["rule_id"], "wcag": r["wcag"], "severity": r["severity"], "detail": r["detail"]}
+            issues = [{"ruleId": r["rule_id"], "wcag": r["wcag"], "severity": r["severity"],
+                       "detail": r["detail"], "page": r["page"], "location": r["location"]}
                       for r in self._db.fetchall(cur)]
             self._db.execute(cur,
                 "SELECT pii_type,label,count,severity,samples FROM pii_findings "
@@ -733,9 +743,10 @@ class Store:
                 return None
             prior_scan_id = row["scan_id"]
             self._db.execute(cur,
-                "SELECT rule_id,wcag,severity,detail FROM issue_records WHERE scan_id=%s AND file=%s",
+                "SELECT rule_id,wcag,severity,detail,page,location FROM issue_records WHERE scan_id=%s AND file=%s",
                 (prior_scan_id, row["file"]))
-            issues = [{"ruleId": r["rule_id"], "wcag": r["wcag"], "severity": r["severity"], "detail": r["detail"]}
+            issues = [{"ruleId": r["rule_id"], "wcag": r["wcag"], "severity": r["severity"],
+                       "detail": r["detail"], "page": r["page"], "location": r["location"]}
                       for r in self._db.fetchall(cur)]
             self._db.execute(cur,
                 "SELECT pii_type,label,count,severity,samples FROM pii_findings "
@@ -941,7 +952,7 @@ class Store:
             for f in files:
                 f["sourceName"] = src_label
                 self._db.execute(cur,
-                    "SELECT rule_id,wcag,severity,detail FROM issue_records WHERE scan_id=%s AND file=%s",
+                    "SELECT rule_id,wcag,severity,detail,page,location FROM issue_records WHERE scan_id=%s AND file=%s",
                     (sid, f["file"]))
                 f["issues"] = self._db.fetchall(cur)
             return {"run": run, "files": files}
