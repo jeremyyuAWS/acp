@@ -425,6 +425,46 @@ const COV_OUT_CLR = { PASS: GREEN, FAIL: '#A32D2D', FIXED: GREEN, HUMAN: AMBER, 
 // when every in-scope criterion is PASS or FIXED — otherwise it states exactly how
 // many items remain open or pending human review. Nothing here asserts more than the
 // coverage manifest itself already shows.
+// ── Certification-report evidence maps (ADR-less curated content; no fabricated data) ──
+const CHANGE_LABEL = {
+  '1.1.1': 'image descriptions (alt text) added', '3.1.1': 'document language declared',
+  '2.4.2': 'document title set', '1.3.1': 'table headers / structure added',
+  '1.4.3': 'colour contrast adjusted', '1.4.6': 'enhanced contrast adjusted',
+  '2.4.6': 'headings / labels clarified', '1.3.2': 'reading order corrected',
+}
+const HUMAN_GUIDE = {
+  '1.1.1': { why: 'AI can draft alt text but cannot confirm it conveys the image’s purpose in context.', how: ['Open each flagged image', 'Confirm the description states the image’s meaning, not just its contents'], min: 2 },
+  '1.2.1': { why: 'AI cannot confirm a transcript fully conveys the audio/video content.', how: ['Play the media', 'Confirm the transcript captures all meaningful content'], min: 5 },
+  '1.2.2': { why: 'AI cannot confirm captions are accurate and complete.', how: ['Play the video with captions on', 'Confirm captions match the audio and note speakers/sounds'], min: 5 },
+  '1.2.3': { why: 'AI cannot confirm audio description covers the meaningful visuals.', how: ['Play the video', 'Confirm every meaningful visual event is described in narration or a text alternative'], min: 5 },
+  '1.4.1': { why: 'AI detected colour-coded meaning; only a person can confirm a non-colour cue also exists.', how: ['Find where colour signals meaning (e.g. red = error)', 'Confirm a label, icon or text also communicates it'], min: 3 },
+  '1.3.5': { why: 'AI cannot confirm form fields declare the right input purpose (autocomplete).', how: ['Check name/email/address fields', 'Confirm the correct autocomplete/purpose is set'], min: 3 },
+  '2.1.1': { why: 'AI cannot operate the document to confirm full keyboard access.', how: ['Tab through all interactive controls', 'Confirm each is reachable and operable by keyboard alone, with no trap'], min: 3 },
+  '2.5.3': { why: 'AI cannot confirm the visible label matches the name a screen reader announces.', how: ['For each labelled control, confirm the spoken name includes the visible label text'], min: 3 },
+  '3.3.1': { why: 'AI cannot confirm error messages clearly identify the problem field.', how: ['Trigger a form error', 'Confirm the message names the field and the problem'], min: 2 },
+  '4.1.2': { why: 'AI cannot confirm custom controls expose the right name/role/value to assistive tech.', how: ['Navigate custom controls with a screen reader', 'Confirm each announces its name, role and state'], min: 4 },
+}
+const DEFAULT_HUMAN = { why: 'This criterion needs human judgement that automated checks can’t provide.', how: ['Review the flagged content against the WCAG success criterion'], min: 3 }
+const VERIFY_GUIDE = {
+  pptx: { app: 'PowerPoint', mac: ['PowerPoint → Review → Check Accessibility', 'Resolve every item under “Inspection Results”'], win: ['PowerPoint → Review → Check Accessibility', 'Work through the “Inspection Results” pane'], sr: ['macOS: VoiceOver (⌘F5) — arrow through each slide; confirm image descriptions, heading order and table headers are announced', 'Windows: NVDA — Tab / arrow keys; confirm reading order, headings, links and image alt text'], checks: ['Alt text on every image', 'Reading order per slide', 'Slide titles', 'Table header rows'] },
+  docx: { app: 'Word', mac: ['Word → Review → Check Accessibility'], win: ['Word → Review → Check Accessibility'], sr: ['macOS: VoiceOver (⌘F5)', 'Windows: NVDA — verify heading levels, alt text, table headers and link text'], checks: ['Alt text on images', 'Heading hierarchy', 'Table header rows', 'Descriptive link text', 'Document language'] },
+  xlsx: { app: 'Excel', mac: ['Excel → Review → Check Accessibility'], win: ['Excel → Review → Check Accessibility'], sr: ['Windows: NVDA — verify table headers and sheet names are announced'], checks: ['Table header rows', 'Named sheets', 'No merged cells that break navigation'] },
+  pdf: { app: 'Acrobat', mac: ['Preview shows text but can’t verify tags — use Acrobat Pro', 'Acrobat Pro → Accessibility → Full Check'], win: ['Acrobat Pro → Accessibility → Full Check', 'Review the Accessibility Report'], sr: ['macOS: VoiceOver', 'Windows: NVDA / JAWS — verify tag reading order, headings, alt text and table structure'], checks: ['Tagged structure', 'Reading order', 'Alt text', 'Document language & title'] },
+  html: { app: 'Browser', mac: ['Chrome/Edge → DevTools → Lighthouse → Accessibility', 'axe DevTools extension → Scan all of my page'], win: ['Chrome/Edge → Lighthouse → Accessibility', 'axe DevTools extension → Scan'], sr: ['macOS: VoiceOver (⌘F5) in Safari', 'Windows: NVDA in Firefox/Chrome — verify landmarks, headings, link purpose and form labels'], checks: ['Keyboard-only navigation', 'Colour contrast', '200% zoom / reflow', 'Screen-reader landmarks & headings'] },
+}
+const CAT_OF = (sc) => {
+  if (sc.startsWith('1.1') || sc === '1.4.5' || sc === '1.4.9') return 'Images'
+  if (sc.startsWith('1.2')) return 'Audio & Video'
+  if (sc === '1.3.1' || sc === '1.3.2') return 'Tables & Structure'
+  if (sc === '2.4.2' || sc === '2.4.6' || sc === '2.4.10') return 'Headings & Titles'
+  if (sc === '2.4.4' || sc === '2.4.9') return 'Links'
+  if (sc === '1.4.3' || sc === '1.4.6') return 'Contrast'
+  if (sc.startsWith('2.1')) return 'Keyboard'
+  if (sc === '3.3.1' || sc === '3.3.2' || sc === '3.3.3' || sc === '4.1.2' || sc === '1.3.5') return 'Forms'
+  if (sc === '3.1.1' || sc === '3.1.2') return 'Language'
+  return 'Other'
+}
+
 export async function exportFileCertification(d) {
   const rows = d.rows || []
   const passN = rows.filter((r) => r.outcome === 'PASS').length
@@ -483,6 +523,31 @@ export async function exportFileCertification(d) {
     { label: 'Not auto-checked', value: uncheckedN, color: '#B6B0BC' },
   ])
 
+  // What ACP changed — the remediation log (auto-fixed criteria).
+  if (fixedN > 0) {
+    p.heading('What ACP changed')
+    p.text(`${fixedN} criteri${fixedN !== 1 ? 'a were' : 'on was'} remediated automatically, then re-validated against every engine before certification.`, { size: 9, color: MUTED, gapAfter: 8 })
+    p.bullets(rows.filter((r) => r.outcome === 'FIXED').map((r) => {
+      const n = r.count || 1
+      return `${r.id} — ${CHANGE_LABEL[r.id] || `${r.plain || r.name} fixed`}${n > 1 ? ` (${n} occurrence${n !== 1 ? 's' : ''})` : ''}`
+    }))
+    p.text('Automated fixes cover deterministic criteria (alt-text placeholders, language, titles, headers, contrast). Content needing human judgement is listed under “Human review”.', { size: 8.5, color: MUTED, lh: 12 })
+  }
+
+  // Compliance checklist — grouped by what a reviewer actually cares about.
+  p.heading('Compliance checklist')
+  const catAgg = {}
+  rows.forEach((r) => {
+    const c = CAT_OF(r.id); const o = r.outcome.toLowerCase()
+    ;(catAgg[c] || (catAgg[c] = {})); catAgg[c][o] = (catAgg[c][o] || 0) + 1
+  })
+  const CAT_ORDER = ['Images', 'Headings & Titles', 'Tables & Structure', 'Links', 'Contrast', 'Language', 'Forms', 'Keyboard', 'Audio & Video', 'Other']
+  p.table(['Area', 'Status'], CAT_ORDER.filter((c) => catAgg[c]).map((c) => {
+    const a = catAgg[c]
+    const status = a.fail ? '✗ Open finding' : a.human ? '◐ Human review' : (a.unchecked && !a.pass && !a.fixed) ? '— Not auto-checked' : '✓ Pass'
+    return [c, status]
+  }), [p.CW - 170, 170])
+
   if (openN > 0) {
     p.pageBreak()
     const open = rows.filter((r) => r.outcome === 'FAIL' || r.outcome === 'HUMAN')
@@ -503,6 +568,32 @@ export async function exportFileCertification(d) {
       ]),
       [55, 130, 90, p.CW - 55 - 130 - 90])
   }
+
+  // Human review — teach WHY + exactly HOW to verify (not just "routes through HITL").
+  const humanRows = rows.filter((r) => r.outcome === 'HUMAN')
+  if (humanRows.length) {
+    p.pageBreak()
+    p.heading('Human review — how to verify')
+    p.text('These criteria need a person to confirm compliance. For each: why automated checks can’t decide it, and exactly how to check.', { size: 9, color: MUTED, gapAfter: 10 })
+    humanRows.forEach((r) => {
+      const g = HUMAN_GUIDE[r.id] || DEFAULT_HUMAN
+      p.text(`${r.id} · ${r.plain || r.name}`, { bold: true, size: 11, gapAfter: 3 })
+      p.text(`Why a human: ${g.why}`, { size: 9.5, lh: 13, gapAfter: 3 })
+      p.bullets(g.how, { size: 9.5 })
+      p.text(`Estimated time: ~${g.min} min`, { size: 9, color: MUTED, gapAfter: 11 })
+    })
+  }
+
+  // Manual verification guide — independently confirm on macOS & Windows.
+  const _ext = (d.file || '').split('.').pop().toLowerCase()
+  const _vg = VERIFY_GUIDE[_ext] || VERIFY_GUIDE.html
+  p.pageBreak()
+  p.heading('Manual verification guide')
+  p.text(`Independently confirm this ${_vg.app} document’s accessibility — no ACP account needed. Steps for macOS and Windows, plus a screen-reader pass.`, { size: 9, color: MUTED, gapAfter: 10 })
+  p.text('macOS', { bold: true, size: 10.5, gapAfter: 3 }); p.bullets(_vg.mac, { size: 9.5 })
+  p.text('Windows', { bold: true, size: 10.5, gapAfter: 3 }); p.bullets(_vg.win, { size: 9.5 })
+  p.text('Screen-reader pass', { bold: true, size: 10.5, gapAfter: 3 }); p.bullets(_vg.sr, { size: 9.5 })
+  p.text('Confirm each of:', { bold: true, size: 10.5, gapAfter: 3 }); p.bullets(_vg.checks.map((c) => `☐ ${c}`), { size: 9.5 })
 
   p.pageBreak()
   p.heading('Full WCAG coverage')
