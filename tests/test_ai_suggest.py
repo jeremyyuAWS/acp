@@ -135,3 +135,19 @@ def test_suggest_fix_falls_back_to_template_when_vision_fails(monkeypatch):
     assert out is not None
     assert out["is_template"] is True                               # fell back to template
     assert calls["n"] == 2
+
+
+def test_vision_prompt_is_ocr_and_chart_aware():
+    # Phase 1 of the AI-propose expansion: alt text must READ embedded text (headlines,
+    # labels, data) and describe charts by type + key figure — the customer's #1 opportunity.
+    low = ai._vision_prompt("q3.pptx", "Quarterly figures").lower()
+    assert "read any text inside" in low
+    assert "chart" in low and ("takeaway" in low or "figure" in low)
+    assert "verbatim" in low                        # embedded text must be preserved, not lost
+
+
+def test_describe_image_captures_chart_content(monkeypatch):
+    _vision_resp(monkeypatch, "Bar chart comparing quarterly 2026 sales; Q4 highest at $2.1M.")
+    out = ai.describe_image(b"\x89PNGfake", filename="sales.pptx", context="Revenue")
+    assert out and out["alt"] == "Bar chart comparing quarterly 2026 sales; Q4 highest at $2.1M."
+    assert "$2.1M" in out["alt"]                     # the key figure survives cleaning

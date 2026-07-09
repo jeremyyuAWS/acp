@@ -215,11 +215,14 @@ def _vision_prompt(filename: str, context: str) -> str:
     where = f" It appears in the document '{filename}'." if filename else ""
     near = f" Nearby text for context: {context.strip()[:200]}" if context and context.strip() else ""
     return (
-        "You are writing alternative text for an image so a person using a screen reader "
-        "understands what it conveys. In ONE concise sentence (under 20 words), describe the "
-        "image's content and its meaning. Do not begin with 'image of', 'picture of', or "
-        "'this image shows'. If it is a chart or diagram, state what it depicts and the key "
-        f"takeaway.{where}{near}\nAlt text:"
+        "You are writing alternative text so a person using a screen reader understands what this "
+        "image conveys. First READ any text inside the image — a headline, labels, axis names, "
+        "legend, or data values are often the whole point and must not be lost. If it is a chart, "
+        "graph, or diagram, name the type and state what it compares and the single most important "
+        "figure or takeaway. If it is a photo or illustration, describe the content and its meaning. "
+        "Reply with ONE concise sentence (under 30 words) that includes the key text verbatim where "
+        "it carries meaning. Do not begin with 'image of', 'picture of', or 'this image shows'."
+        f"{where}{near}\nAlt text:"
     )
 
 
@@ -243,7 +246,7 @@ def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
         r = httpx.post(
             f"{OLLAMA_BASE_URL}/api/generate",
             json={"model": OLLAMA_VISION_MODEL, "prompt": prompt, "images": [b64],
-                  "stream": False, "options": {"temperature": 0.2, "num_predict": 80}},
+                  "stream": False, "options": {"temperature": 0.2, "num_predict": 128}},
             timeout=OLLAMA_VISION_TIMEOUT,
         )
         r.raise_for_status()
