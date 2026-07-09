@@ -154,34 +154,27 @@ function buildHumanQueue(files, triage = {}) {
 }
 
 function FixCarousel({ files = [] }) {
+  // 'Recent fixes' — an expandable list (PRD §8: replace the carousel; nobody likes carousels).
   const examples = useMemo(() => buildFixExamples(files), [files])
-  const [idx, setIdx] = useState(0)
-  const [paused, setPaused] = useState(false)
-  useEffect(() => { setIdx(0) }, [examples])
-  useEffect(() => {
-    if (paused || prefersReducedMotion() || examples.length <= 1) return
-    const t = setInterval(() => setIdx((i) => (i + 1) % examples.length), 3800)
-    return () => clearInterval(t)
-  }, [paused, examples])
-  const ex = examples[Math.min(idx, examples.length - 1)]
-  if (!ex) return null
+  if (!examples.length) return null
   return (
-    <section className="panel" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}>
+    <section className="panel">
       <div className="fixhd">
-        <h2 style={{ margin: 0 }}>AI remediation · sample fixes <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>· from your scanned documents</span></h2>
-        <span className="muted" style={{ fontSize: 12 }}>{idx + 1} / {examples.length}</span>
+        <h2 style={{ margin: 0 }}>Recent AI fixes <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>· from your scanned documents</span></h2>
+        <span className="muted" style={{ fontSize: 12 }}>{examples.length} shown</span>
       </div>
-      <div className="fixcard" key={idx}>
-        <div className="fixmeta">
-          <span className="fmtchip">{ex.fmt}</span>
-          <span className="muted" style={{ fontSize: 12 }}>{ex.wcag}</span>
-          <span className={ex.auto ? 'fixauto' : 'fixreview'} style={{ marginLeft: 'auto', fontSize: 12 }}>{ex.auto ? '⚡ auto-applied' : '✎ AI draft · human review'}</span>
-        </div>
-        <div className="diffbox before"><span className="difftag">before</span>{ex.before}</div>
-        <div className="diffbox after"><span className="difftag">after</span>{ex.after}</div>
-      </div>
-      <div className="fixdots">
-        {examples.map((_, i) => <button key={i} className={i === idx ? 'fixdot on' : 'fixdot'} aria-label={`example ${i + 1}`} onClick={() => setIdx(i)} />)}
+      <div className="recentfixes">
+        {examples.slice(0, 8).map((ex, i) => (
+          <details className="recentfix" key={i}>
+            <summary>
+              <span className="fmtchip">{ex.fmt}</span>
+              <span className="muted" style={{ fontSize: 12 }}>{ex.wcag}</span>
+              <span className={ex.auto ? 'fixauto' : 'fixreview'} style={{ marginLeft: 'auto', fontSize: 12 }}>{ex.auto ? '⚡ auto-applied' : '✎ AI draft · human review'}</span>
+            </summary>
+            <div className="diffbox before"><span className="difftag">before</span>{ex.before}</div>
+            <div className="diffbox after"><span className="difftag">after</span>{ex.after}</div>
+          </details>
+        ))}
       </div>
     </section>
   )
@@ -494,20 +487,30 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
   return (
     <>
-      {queue.length > 0 && (
-        <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 14px', marginBottom: 12, borderRadius: 9, background: '#FBF1DF', border: '1px solid #EAD9BF' }}>
-          <span style={{ fontSize: 15 }} aria-hidden="true">⚑</span>
-          <b style={{ color: '#7A5A12', fontSize: 13.5 }}>{queue.length} document{queue.length !== 1 ? 's' : ''} need your review</b>
-          <span className="muted" style={{ fontSize: 12 }}>· AI-assisted fixes and low-confidence findings need human sign-off before they can be certified.</span>
-          <button className="qbtn approve" style={{ marginLeft: 'auto' }} onClick={() => window.dispatchEvent(new Event('acp:open-inbox'))}>Review now →</button>
+      {/* Hero summary (PRD §1) — the 5-second story: what's done, what needs me, what's running. */}
+      <section className="rem-hero">
+        <div className="rem-hero-main">
+          <h2 className="rem-hero-title">Accessibility Remediation</h2>
+          <div className="rem-hero-stats">
+            {reVerified > 0 && <span className="rh-stat rh-fixed">✓ {reVerified.toLocaleString()} verified</span>}
+            {remStarted && autoFixed > 0 && <span className="rh-stat rh-fixed">⚡ {autoFixed} auto-fixed</span>}
+            {queue.length > 0 && <span className="rh-stat rh-review">⚑ {queue.length} need review</span>}
+            {remLive && <span className="rh-stat rh-proc"><span className="livedot">live</span> processing…</span>}
+            {!remStarted && queue.length === 0 && <span className="rh-stat muted">Ready to remediate</span>}
+          </div>
         </div>
-      )}
+        {queue.length > 0
+          ? <button className="rem-hero-cta" onClick={() => window.dispatchEvent(new Event('acp:open-inbox'))}>Continue Review →</button>
+          : remStarted ? <span className="rh-done">All caught up ✓</span> : null}
+      </section>
       {/* Automation levels — set expectations for WHY something needs review (PRD §13). */}
       <div className="autolevels" aria-label="How ACP decides what needs review">
         <span className="autolevel"><span aria-hidden="true">🟢</span> <b>Fully automatic</b> <span className="muted">deterministic fix · no action</span></span>
         <span className="autolevel"><span aria-hidden="true">🟡</span> <b>AI-assisted</b> <span className="muted">AI-drafted · review suggested</span></span>
         <span className="autolevel"><span aria-hidden="true">🔴</span> <b>Human required</b> <span className="muted">ambiguous · approval needed</span></span>
       </div>
+      <details className="rem-advanced rem-adv-block">
+        <summary className="rem-adv-summary"><b>Advanced</b> · live metrics &amp; worker activity</summary>
       <div className="metrics">
         <div className={`metric${remLive ? ' livecard' : ''}`} title="Estimated number of issues that can be fixed automatically — populates once you run remediation"><span>auto-fixable (est.)</span><b style={{ color: remStarted ? '#3B6D11' : '#9AA1B4' }}>{remStarted ? autoFixed : 0}</b></div>
         <div className={`metric${remLive && queue.length > 0 ? ' livecard' : ''}`}>
@@ -530,6 +533,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       </div>
 
       <QueuePanel />
+      </details>
 
       <StickyNav sections={REM_SECTIONS} triageComplete={triageComplete}
         counts={{ 'rem-triage': remediable.length, 'rem-auto': autoFiles.length, 'rem-review': queue.length, 'rem-revalidate': revalidated.length }} />
@@ -879,7 +883,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       </LockedSection>
 
       <div className="chartrow">
-        {fixTypesDisplay.length > 0 && <section className="panel"><h2>Automated fixes applied · by type</h2><Bars items={fixTypesDisplay} cols="140px 1fr 30px" /></section>}
+        {fixTypesDisplay.length > 0 && <details className="panel rem-advanced"><summary><b>Advanced</b> · automated fixes by type</summary><div style={{ marginTop: 12 }}><Bars items={fixTypesDisplay} cols="140px 1fr 30px" /></div></details>}
         <FixCarousel files={files} />
       </div>
 

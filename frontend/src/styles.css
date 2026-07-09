@@ -1591,3 +1591,34 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
   padding: 9px 13px; border: 1px solid var(--line); border-radius: 10px; background: #faf8fb; font-size: 12.5px; }
 .autolevel { display: inline-flex; align-items: center; gap: 6px; }
 .autolevel b { font-weight: 600; }
+
+/* Phase 2 — Remediation hero + recent-fixes list + advanced disclosure */
+.rem-hero { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  flex-wrap: wrap; padding: 16px 20px; margin-bottom: 12px; border-radius: 12px;
+  background: linear-gradient(180deg, #FBFAFC, #F5F1F7); border: 1px solid var(--line); }
+.rem-hero-title { margin: 0 0 8px; font-size: 18px; }
+.rem-hero-stats { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+.rh-stat { font-size: 14px; font-weight: 600; }
+.rh-fixed { color: #2F5310; }
+.rh-review { color: #854F0B; }
+.rh-proc { color: #7A3E8E; font-weight: 500; }
+.rem-hero-cta { background: #3B2A44; color: #fff; border: none; border-radius: 9px;
+  padding: 10px 20px; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.rem-hero-cta:hover { background: #4a3556; }
+.rh-done { color: #2F5310; font-weight: 600; font-size: 14px; }
+.recentfixes { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
+.recentfix > summary { display: flex; align-items: center; gap: 9px; cursor: pointer;
+  padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; list-style: revert; font-size: 13px; }
+.recentfix > summary:hover { background: #faf8fb; }
+.recentfix[open] > summary { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.recentfix .diffbox { margin: 0; border-radius: 0; }
+.recentfix .diffbox.after { border-bottom-left-radius: 9px; border-bottom-right-radius: 9px; }
+.rem-advanced > summary { cursor: pointer; font-size: 13.5px; list-style: revert; }
+.rem-advanced[open] > summary { margin-bottom: 4px; }
+
+/* Advanced disclosure block (metrics + worker queue) */
+.rem-adv-block { margin-bottom: 12px; }
+.rem-adv-summary { cursor: pointer; font-size: 13px; color: var(--muted); padding: 8px 2px;
+  list-style: revert; user-select: none; }
+.rem-adv-summary:hover { color: var(--ink, #2b2130); }
+.rem-adv-block[open] .rem-adv-summary { margin-bottom: 10px; }
