@@ -5,6 +5,7 @@
 
 import { statusFor } from './exportDeliverables.js'
 import { WCAG } from './wcagCatalog.js'
+import { buildFileCertificationModel } from './reportModel.js'
 
 const INK = '#2B2330', MUTED = '#6B6670', LINE = '#E4E0E8', PLUM = '#4B3460', GREEN = '#3B6D11', AMBER = '#854F0B'
 const rgb = (h) => { h = h.replace('#', ''); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)] }
@@ -415,218 +416,44 @@ export async function exportDocumentReport(d) {
   p.save(d.filename || `mova-${(d.file || 'document').replace(/\.[^.]+$/, '')}-report.pdf`)
 }
 
-const COV_OUT_TXT = { PASS: 'Pass', FAIL: 'Open finding', FIXED: 'Fixed · re-validate', HUMAN: 'Human review', UNCHECKED: 'Not auto-checked', WEB: 'Web-only (n/a)' }
-const COV_OUT_CLR = { PASS: GREEN, FAIL: '#A32D2D', FIXED: GREEN, HUMAN: AMBER, UNCHECKED: MUTED, WEB: MUTED }
-
 // Per-file WCAG certification (FileDrawer, any file, any state) — built ONLY from the
 // same honest per-criterion coverage rows shown on screen (outcome PASS/FAIL/FIXED/
-// HUMAN/UNCHECKED — never a fabricated per-finding narrative). The conformance
-// statement is gated on the REAL outstanding count: it only claims full conformance
-// when every in-scope criterion is PASS or FIXED — otherwise it states exactly how
-// many items remain open or pending human review. Nothing here asserts more than the
-// coverage manifest itself already shows.
-// ── Certification-report evidence maps (ADR-less curated content; no fabricated data) ──
-const CHANGE_LABEL = {
-  '1.1.1': 'image descriptions (alt text) added', '3.1.1': 'document language declared',
-  '2.4.2': 'document title set', '1.3.1': 'table headers / structure added',
-  '1.4.3': 'colour contrast adjusted', '1.4.6': 'enhanced contrast adjusted',
-  '2.4.6': 'headings / labels clarified', '1.3.2': 'reading order corrected',
-}
-const HUMAN_GUIDE = {
-  '1.1.1': { why: 'AI can draft alt text but cannot confirm it conveys the image’s purpose in context.', how: ['Open each flagged image', 'Confirm the description states the image’s meaning, not just its contents'], min: 2 },
-  '1.2.1': { why: 'AI cannot confirm a transcript fully conveys the audio/video content.', how: ['Play the media', 'Confirm the transcript captures all meaningful content'], min: 5 },
-  '1.2.2': { why: 'AI cannot confirm captions are accurate and complete.', how: ['Play the video with captions on', 'Confirm captions match the audio and note speakers/sounds'], min: 5 },
-  '1.2.3': { why: 'AI cannot confirm audio description covers the meaningful visuals.', how: ['Play the video', 'Confirm every meaningful visual event is described in narration or a text alternative'], min: 5 },
-  '1.4.1': { why: 'AI detected colour-coded meaning; only a person can confirm a non-colour cue also exists.', how: ['Find where colour signals meaning (e.g. red = error)', 'Confirm a label, icon or text also communicates it'], min: 3 },
-  '1.3.5': { why: 'AI cannot confirm form fields declare the right input purpose (autocomplete).', how: ['Check name/email/address fields', 'Confirm the correct autocomplete/purpose is set'], min: 3 },
-  '2.1.1': { why: 'AI cannot operate the document to confirm full keyboard access.', how: ['Tab through all interactive controls', 'Confirm each is reachable and operable by keyboard alone, with no trap'], min: 3 },
-  '2.5.3': { why: 'AI cannot confirm the visible label matches the name a screen reader announces.', how: ['For each labelled control, confirm the spoken name includes the visible label text'], min: 3 },
-  '3.3.1': { why: 'AI cannot confirm error messages clearly identify the problem field.', how: ['Trigger a form error', 'Confirm the message names the field and the problem'], min: 2 },
-  '4.1.2': { why: 'AI cannot confirm custom controls expose the right name/role/value to assistive tech.', how: ['Navigate custom controls with a screen reader', 'Confirm each announces its name, role and state'], min: 4 },
-}
-const DEFAULT_HUMAN = { why: 'This criterion needs human judgement that automated checks can’t provide.', how: ['Review the flagged content against the WCAG success criterion'], min: 3 }
-const VERIFY_GUIDE = {
-  pptx: { app: 'PowerPoint', mac: ['PowerPoint → Review → Check Accessibility', 'Resolve every item under “Inspection Results”'], win: ['PowerPoint → Review → Check Accessibility', 'Work through the “Inspection Results” pane'], sr: ['macOS: VoiceOver (⌘F5) — arrow through each slide; confirm image descriptions, heading order and table headers are announced', 'Windows: NVDA — Tab / arrow keys; confirm reading order, headings, links and image alt text'], checks: ['Alt text on every image', 'Reading order per slide', 'Slide titles', 'Table header rows'] },
-  docx: { app: 'Word', mac: ['Word → Review → Check Accessibility'], win: ['Word → Review → Check Accessibility'], sr: ['macOS: VoiceOver (⌘F5)', 'Windows: NVDA — verify heading levels, alt text, table headers and link text'], checks: ['Alt text on images', 'Heading hierarchy', 'Table header rows', 'Descriptive link text', 'Document language'] },
-  xlsx: { app: 'Excel', mac: ['Excel → Review → Check Accessibility'], win: ['Excel → Review → Check Accessibility'], sr: ['Windows: NVDA — verify table headers and sheet names are announced'], checks: ['Table header rows', 'Named sheets', 'No merged cells that break navigation'] },
-  pdf: { app: 'Acrobat', mac: ['Preview shows text but can’t verify tags — use Acrobat Pro', 'Acrobat Pro → Accessibility → Full Check'], win: ['Acrobat Pro → Accessibility → Full Check', 'Review the Accessibility Report'], sr: ['macOS: VoiceOver', 'Windows: NVDA / JAWS — verify tag reading order, headings, alt text and table structure'], checks: ['Tagged structure', 'Reading order', 'Alt text', 'Document language & title'] },
-  html: { app: 'Browser', mac: ['Chrome/Edge → DevTools → Lighthouse → Accessibility', 'axe DevTools extension → Scan all of my page'], win: ['Chrome/Edge → Lighthouse → Accessibility', 'axe DevTools extension → Scan'], sr: ['macOS: VoiceOver (⌘F5) in Safari', 'Windows: NVDA in Firefox/Chrome — verify landmarks, headings, link purpose and form labels'], checks: ['Keyboard-only navigation', 'Colour contrast', '200% zoom / reflow', 'Screen-reader landmarks & headings'] },
-}
-const CAT_OF = (sc) => {
-  if (sc.startsWith('1.1') || sc === '1.4.5' || sc === '1.4.9') return 'Images'
-  if (sc.startsWith('1.2')) return 'Audio & Video'
-  if (sc === '1.3.1' || sc === '1.3.2') return 'Tables & Structure'
-  if (sc === '2.4.2' || sc === '2.4.6' || sc === '2.4.10') return 'Headings & Titles'
-  if (sc === '2.4.4' || sc === '2.4.9') return 'Links'
-  if (sc === '1.4.3' || sc === '1.4.6') return 'Contrast'
-  if (sc.startsWith('2.1')) return 'Keyboard'
-  if (sc === '3.3.1' || sc === '3.3.2' || sc === '3.3.3' || sc === '4.1.2' || sc === '1.3.5') return 'Forms'
-  if (sc === '3.1.1' || sc === '3.1.2') return 'Language'
-  return 'Other'
+// HUMAN/UNCHECKED — never a fabricated per-finding narrative). The report CONTENT
+// lives in reportModel.js so this PDF export and the HTML export (htmlReport.js)
+// share one source and can never drift. This renderer just maps each model block
+// onto the matching makeDoc primitive.
+function renderModelToPdf(p, model) {
+  const c = model.cover
+  if (c) {
+    if (c.ring) p.ring(c.ring.score, c.ring.color)
+    p.cover({ title: c.title, subtitle: c.subtitle, meta: c.meta })
+  }
+  for (const b of model.blocks) {
+    switch (b.k) {
+      case 'heading': p.heading(b.text); break
+      case 'text': p.text(b.text, b.o || {}); break
+      case 'callout': p.callout(b.text, b.o || {}); break
+      case 'bullets': p.bullets(b.items, b.o || {}); break
+      case 'metricGrid': p.metricGrid(b.cards); break
+      case 'donut': p.donut(b.items); break
+      case 'barChart': p.barChart(b.items, b.o || {}); break
+      case 'table': p.table(b.headers, b.rows, b.widths); break
+      case 'pageBreak': p.pageBreak(); break
+      case 'gap': p.gap(b.h || 8); break
+      default: break
+    }
+  }
 }
 
 export async function exportFileCertification(d) {
-  const rows = d.rows || []
-  const passN = rows.filter((r) => r.outcome === 'PASS').length
-  const fixedN = rows.filter((r) => r.outcome === 'FIXED').length
-  const failN = rows.filter((r) => r.outcome === 'FAIL').length
-  const humanN = rows.filter((r) => r.outcome === 'HUMAN').length
-  const uncheckedN = rows.filter((r) => r.outcome === 'UNCHECKED').length
-  const openN = failN + humanN
-  const fullyConformant = rows.length > 0 && openN === 0
-
+  const model = buildFileCertificationModel(d)
   const p = await makeDoc({
-    title: `Accessibility Certification — ${d.file}`,
-    footerVersion: d.platformVersion,
-    footerGenerated: d.timestamp || d.date,
+    title: model.docTitle,
+    footerVersion: model.footerVersion,
+    footerGenerated: model.footerGenerated,
   })
-  if (d.score != null) p.ring(d.score, fullyConformant ? GREEN : AMBER)
-  p.cover({
-    title: 'Accessibility Certification',
-    subtitle: d.file,
-    meta: [
-      `Generated ${d.timestamp || d.date}${d.engine ? ` · ${d.engine}` : ''}`,
-      `WCAG 2.1 Level ${d.targetLevel || 'AA'}${d.sourceName ? ` · ${d.sourceName}` : ''}${d.department ? ` · ${d.department}` : ''}`,
-    ],
-  })
-
-  p.heading('Executive summary')
-  p.callout(
-    fullyConformant
-      ? `"${d.file}" meets all ${rows.length} in-scope WCAG 2.1 Level ${d.targetLevel || 'AA'} criteria evaluated for this file type — no open findings remain.`
-      : `"${d.file}" scored ${d.score ?? 'n/a'}/100 against WCAG 2.1 Level ${d.targetLevel || 'AA'} and is ${openN > 0 ? 'NOT yet fully certified' : 'conditionally certified'}: ${openN} of ${rows.length} in-scope criteria still need attention.`,
-    { color: fullyConformant ? GREEN : AMBER, bg: fullyConformant ? '#EEF5E8' : '#FBF1DF' }
-  )
-  p.bullets([
-    `${passN + fixedN} of ${rows.length} in-scope criteria pass${fixedN ? ` — ${fixedN} auto-fixed, pending re-validation` : ''}`,
-    failN ? `${failN} open finding${failN !== 1 ? 's' : ''} to resolve` : null,
-    humanN ? `${humanN} criteri${humanN !== 1 ? 'a' : 'on'} need a human reviewer before certification` : null,
-    uncheckedN ? `${uncheckedN} criteri${uncheckedN !== 1 ? 'a' : 'on'} not auto-checked for this file type — reported, not assumed passing` : null,
-    fullyConformant ? 'Ready to certify and publish.' : 'Next step: resolve the open items below, then re-validate.',
-  ].filter(Boolean))
-  p.text('Per-criterion outcomes match the platform’s WCAG coverage table for this file — pass is claimed only where the engine evaluated the criterion; unevaluated criteria are reported as such.', { size: 8.5, color: MUTED, lh: 12 })
-
-  p.heading('Result')
-  p.metricGrid([
-    { label: 'Score', value: d.score != null ? `${d.score}/100` : 'n/a', color: fullyConformant ? GREEN : AMBER },
-    { label: 'Pass', value: passN + fixedN, color: GREEN },
-    { label: 'Open findings', value: failN, color: failN ? '#A32D2D' : GREEN },
-    { label: 'Human review', value: humanN, color: humanN ? AMBER : GREEN },
-  ])
-
-  p.heading('Coverage at a glance')
-  p.donut([
-    { label: 'Pass', value: passN, color: GREEN },
-    { label: 'Fixed · re-validate', value: fixedN, color: '#5C9B2E' },
-    { label: 'Open finding', value: failN, color: '#A32D2D' },
-    { label: 'Human review', value: humanN, color: AMBER },
-    { label: 'Not auto-checked', value: uncheckedN, color: '#B6B0BC' },
-  ])
-
-  // What ACP changed — the remediation log (auto-fixed criteria).
-  if (fixedN > 0) {
-    p.heading('What ACP changed')
-    p.text(`${fixedN} criteri${fixedN !== 1 ? 'a were' : 'on was'} remediated automatically, then re-validated against every engine before certification.`, { size: 9, color: MUTED, gapAfter: 8 })
-    p.bullets(rows.filter((r) => r.outcome === 'FIXED').map((r) => {
-      const n = r.count || 1
-      return `${r.id} — ${CHANGE_LABEL[r.id] || `${r.plain || r.name} fixed`}${n > 1 ? ` (${n} occurrence${n !== 1 ? 's' : ''})` : ''}`
-    }))
-    p.text('Automated fixes cover deterministic criteria (alt-text placeholders, language, titles, headers, contrast). Content needing human judgement is listed under “Human review”.', { size: 8.5, color: MUTED, lh: 12 })
-  }
-
-  // Compliance checklist — grouped by what a reviewer actually cares about.
-  p.heading('Compliance checklist')
-  const catAgg = {}
-  rows.forEach((r) => {
-    const c = CAT_OF(r.id); const o = r.outcome.toLowerCase()
-    ;(catAgg[c] || (catAgg[c] = {})); catAgg[c][o] = (catAgg[c][o] || 0) + 1
-  })
-  const CAT_ORDER = ['Images', 'Headings & Titles', 'Tables & Structure', 'Links', 'Contrast', 'Language', 'Forms', 'Keyboard', 'Audio & Video', 'Other']
-  p.table(['Area', 'Status'], CAT_ORDER.filter((c) => catAgg[c]).map((c) => {
-    const a = catAgg[c]
-    const status = a.fail ? '✗ Open finding' : a.human ? '◐ Human review' : (a.unchecked && !a.pass && !a.fixed) ? '— Not auto-checked' : '✓ Pass'
-    return [c, status]
-  }), [p.CW - 170, 170])
-
-  if (openN > 0) {
-    p.pageBreak()
-    const open = rows.filter((r) => r.outcome === 'FAIL' || r.outcome === 'HUMAN')
-      .sort((a, b) => (a.outcome === 'FAIL' ? 0 : 1) - (b.outcome === 'FAIL' ? 0 : 1))
-    const prinCount = {}
-    open.forEach((r) => { const k = r.id.match(/^(\d)/)?.[1]; if (PRINCIPLE[k]) prinCount[k] = (prinCount[k] || 0) + 1 })
-    const prinItems = Object.keys(PRINCIPLE).filter((k) => prinCount[k]).map((k) => ({ label: PRINCIPLE[k], value: prinCount[k], color: PRIN_CLR[k] }))
-    if (prinItems.length) {
-      p.heading('Open items by WCAG principle')
-      p.text('The four WCAG principles — content must be Perceivable, Operable, Understandable, and Robust.', { size: 9, color: MUTED, gapAfter: 11 })
-      p.barChart(prinItems, { labelW: 150 })
-    }
-
-    p.heading('Open items — must resolve before full certification')
-    p.table(['WCAG', 'Criterion', 'Status', 'Finding'],
-      open.map((r) => [r.id, r.plain || r.name, COV_OUT_TXT[r.outcome],
-        r.outcome === 'FAIL' ? (r.fileIssues || []).map((i) => i.detail).filter(Boolean).slice(0, 2).join('; ') || `${r.count} finding(s)` : 'Needs a person to verify — routes through HITL review'
-      ]),
-      [55, 130, 90, p.CW - 55 - 130 - 90])
-  }
-
-  // Human review — teach WHY + exactly HOW to verify (not just "routes through HITL").
-  const humanRows = rows.filter((r) => r.outcome === 'HUMAN')
-  if (humanRows.length) {
-    p.pageBreak()
-    p.heading('Human review — how to verify')
-    p.text('These criteria need a person to confirm compliance. For each: why automated checks can’t decide it, and exactly how to check.', { size: 9, color: MUTED, gapAfter: 10 })
-    humanRows.forEach((r) => {
-      const g = HUMAN_GUIDE[r.id] || DEFAULT_HUMAN
-      p.text(`${r.id} · ${r.plain || r.name}`, { bold: true, size: 11, gapAfter: 3 })
-      p.text(`Why a human: ${g.why}`, { size: 9.5, lh: 13, gapAfter: 3 })
-      p.bullets(g.how, { size: 9.5 })
-      p.text(`Estimated time: ~${g.min} min`, { size: 9, color: MUTED, gapAfter: 11 })
-    })
-  }
-
-  // Manual verification guide — independently confirm on macOS & Windows.
-  const _ext = (d.file || '').split('.').pop().toLowerCase()
-  const _vg = VERIFY_GUIDE[_ext] || VERIFY_GUIDE.html
-  p.pageBreak()
-  p.heading('Manual verification guide')
-  p.text(`Independently confirm this ${_vg.app} document’s accessibility — no ACP account needed. Steps for macOS and Windows, plus a screen-reader pass.`, { size: 9, color: MUTED, gapAfter: 10 })
-  p.text('macOS', { bold: true, size: 10.5, gapAfter: 3 }); p.bullets(_vg.mac, { size: 9.5 })
-  p.text('Windows', { bold: true, size: 10.5, gapAfter: 3 }); p.bullets(_vg.win, { size: 9.5 })
-  p.text('Screen-reader pass', { bold: true, size: 10.5, gapAfter: 3 }); p.bullets(_vg.sr, { size: 9.5 })
-  p.text('Confirm each of:', { bold: true, size: 10.5, gapAfter: 3 }); p.bullets(_vg.checks.map((c) => `☐ ${c}`), { size: 9.5 })
-
-  p.pageBreak()
-  p.heading('Full WCAG coverage')
-  p.text(`Every criterion applicable to a document, at the ${d.targetLevel || 'AA'} certification target. ${uncheckedN > 0 ? `${uncheckedN} criteria are not yet automated for this file type and are reported as unchecked, not passing.` : ''}`, { size: 9, color: MUTED, gapAfter: 8 })
-  p.table(['WCAG', 'Criterion', 'Level', 'Fix approach', 'Outcome'],
-    rows.map((r) => [r.id, r.plain || r.name, r.level, (r.fix || '').replace(/[⚡✎✋]\s*/, ''), COV_OUT_TXT[r.outcome]]),
-    [55, p.CW - 55 - 55 - 90 - 90, 55, 90, 90])
-
-  p.pageBreak()
-  p.heading('Audit trail')
-  const auditRows = [
-    ['Discovered', 'mova.io agent', 'Document ingested from source', d.file],
-    ['Assessed', `mova.io · WCAG ${d.targetLevel || 'AA'}`, `${rows.length} criteria evaluated · score ${d.score ?? 'n/a'}/100`, d.file],
-    ...(fixedN > 0 ? [['Auto-remediated', 'mova.io auto-fix', `${fixedN} criterion/criteria fixed`, d.file]] : []),
-    ...(humanN > 0 ? [['Pending human review', 'HITL queue', `${humanN} criterion/criteria awaiting a reviewer`, d.file]] : []),
-    ['Report generated', 'mova.io Platform', `${fullyConformant ? 'Zero open findings' : `${openN} item(s) still open`} · score ${d.score ?? 'n/a'}/100`, d.file],
-  ]
-  p.table(['Step', 'Actor', 'Action', 'Document'], auditRows, [72, 108, p.CW - 72 - 108 - 140, 140])
-
-  p.heading('Conformance statement')
-  p.callout(
-    fullyConformant
-      ? `"${d.file}" has been assessed against WCAG 2.1 Level ${d.targetLevel || 'AA'} success criteria as required by the Americans with Disabilities Act (ADA) Title II, the European Accessibility Act (EN 301 549), and Section 508 of the Rehabilitation Act. All ${rows.length} in-scope criteria evaluated by the mova.io engine for this file type are passing.`
-      : `"${d.file}" has been assessed against WCAG 2.1 Level ${d.targetLevel || 'AA'} success criteria. ${passN + fixedN} of ${rows.length} in-scope criteria currently pass; ${failN} have an open finding and ${humanN} await human review. This document does NOT yet meet the bar for full certification — resolve the items listed above and re-validate to update this report.`,
-    { color: fullyConformant ? GREEN : AMBER, bg: fullyConformant ? '#EEF5E8' : '#FBF1DF' }
-  )
-  p.text('Certified by the mova.io Accessibility Platform', { bold: true, size: 9.5, gapAfter: 4 })
-  p.text(`Generated: ${d.timestamp || d.date}${d.platformVersion ? ` · Platform v${d.platformVersion}` : ''}`, { size: 9, color: MUTED, gapAfter: 4 })
-  p.text('Authorised signatory: ___________________________', { size: 9, color: MUTED, gapAfter: 4 })
-  p.text('Title / Role: ___________________________', { size: 9, color: MUTED, gapAfter: 16 })
-  p.text('This report was generated by the mova.io Accessibility Platform from the live coverage data for this file and is intended as evidence for ADA, EAA, and Section 508 compliance audits.', { size: 8, color: MUTED, lh: 12 })
-
-  p.save(d.filename || `mova-${(d.file || 'document').replace(/\.[^.]+$/, '')}-certification.pdf`)
+  renderModelToPdf(p, model)
+  p.save(`${model.filename}.pdf`)
 }
 
 // Immutable evidence package (Monitor) — the who/when/what/which-engine audit trail.

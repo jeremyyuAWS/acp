@@ -325,6 +325,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   // Re-fetches once remNow?.done flips true, so a same-session fix shows up immediately.
   const [remediatedRuleIds, setRemediatedRuleIds] = useState(new Set())
   const [certExporting, setCertExporting] = useState(false)
+  const [htmlExporting, setHtmlExporting] = useState(false)
   useEffect(() => {
     setDl(null)   // clear a stale download error/spinner when switching files or scans
     if (!scanId || !file?.file) { setRemediatedRuleIds(new Set()); return }
@@ -450,30 +451,52 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
             )}
           </>
         )}
-        {st !== 'unanalysable' && (
-          <button className="ghost small" style={(remNow?.done || effectiveRemediated) ? undefined : { marginLeft: 'auto' }} disabled={certExporting}
-                  title="Download a branded, timestamped WCAG certification PDF for this file — built from the same coverage data shown below"
-                  onClick={async () => {
-                    if (certExporting) return
-                    setCertExporting(true)
-                    try {
-                      const rows = computeCoverageRows(file, { catalogRules, targetLevel, remediatedRuleIds, effectiveRemediated, aiEnabled })
-                      const now = new Date()
-                      const cfg = await getConfig().catch(() => null)
-                      const { exportFileCertification } = await import('./pdfReport.js')
-                      await exportFileCertification({
-                        file: file.file, score: file.score, targetLevel, rows,
-                        date: now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
-                        timestamp: now.toLocaleString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }),
-                        engine: file.engine, sourceName: file.sourceName, department: file.department || file.dept,
-                        platformVersion: cfg?.version,
-                      })
-                    } catch (e) { console.error('certification PDF export failed', e) }
-                    finally { setTimeout(() => setCertExporting(false), 500) }
-                  }}>
-            {certExporting ? '⏳ Generating…' : '⤓ Certification PDF'}
-          </button>
-        )}
+        {st !== 'unanalysable' && (() => {
+          // Both the PDF and the HTML certification exports are built from the SAME
+          // payload (→ reportModel.js), so the two downloads can never disagree.
+          const buildCertData = async () => {
+            const rows = computeCoverageRows(file, { catalogRules, targetLevel, remediatedRuleIds, effectiveRemediated, aiEnabled })
+            const now = new Date()
+            const cfg = await getConfig().catch(() => null)
+            return {
+              file: file.file, score: file.score, targetLevel, rows,
+              date: now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+              timestamp: now.toLocaleString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }),
+              engine: file.engine, sourceName: file.sourceName, department: file.department || file.dept,
+              platformVersion: cfg?.version,
+            }
+          }
+          return (
+            <>
+              <button className="ghost small" style={(remNow?.done || effectiveRemediated) ? undefined : { marginLeft: 'auto' }} disabled={certExporting || htmlExporting}
+                      title="Download a branded, timestamped WCAG certification PDF for this file — built from the same coverage data shown below"
+                      onClick={async () => {
+                        if (certExporting) return
+                        setCertExporting(true)
+                        try {
+                          const { exportFileCertification } = await import('./pdfReport.js')
+                          await exportFileCertification(await buildCertData())
+                        } catch (e) { console.error('certification PDF export failed', e) }
+                        finally { setTimeout(() => setCertExporting(false), 500) }
+                      }}>
+                {certExporting ? '⏳ Generating…' : '⤓ Certification PDF'}
+              </button>
+              <button className="ghost small" disabled={certExporting || htmlExporting}
+                      title="Download the same certification as a self-contained, screen-reader-friendly HTML file — easy to link, embed or share (and WCAG-conformant itself)"
+                      onClick={async () => {
+                        if (htmlExporting) return
+                        setHtmlExporting(true)
+                        try {
+                          const { exportFileCertificationHtml } = await import('./htmlReport.js')
+                          await exportFileCertificationHtml(await buildCertData())
+                        } catch (e) { console.error('certification HTML export failed', e) }
+                        finally { setTimeout(() => setHtmlExporting(false), 500) }
+                      }}>
+                {htmlExporting ? '⏳ Generating…' : '⤓ HTML report'}
+              </button>
+            </>
+          )
+        })()}
       </div>
 
       {ontBlock}
