@@ -51,7 +51,7 @@ export default function HitlBell() {
     const nowIso = new Date().toISOString()
     setItems((cur) => { prev = cur; return cur.map((i) => (i.id === itemId ? { ...i, status, reviewed_at: nowIso } : i)) })
     return updateHitlItem(itemId, status, note, approvedValue)
-      .then(() => load())
+      .then(() => { load(); window.dispatchEvent(new Event('acp:hitl-changed')) })
       .catch((e) => { if (prev) setItems(prev); throw e })
   }, [load])
 

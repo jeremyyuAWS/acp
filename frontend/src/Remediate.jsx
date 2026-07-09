@@ -259,6 +259,16 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       .catch(() => setQueue(buildHumanQueue(files, {})))
   }, [runId]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Drain in sync with the unified inbox: when an item is approved/rejected in the popup
+  // (or anywhere), re-fetch the pending set so "N remaining" + the review banner update.
+  useEffect(() => {
+    if (!runId || SIM) return
+    const reload = () => listHitlQueue(runId, 'pending')
+      .then((items) => setQueue((items || []).map((it) => dbItemToUi(it, files)))).catch(() => {})
+    window.addEventListener('acp:hitl-changed', reload)
+    return () => window.removeEventListener('acp:hitl-changed', reload)
+  }, [runId, files]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Derive fix-type breakdown from auto-action files in the corpus
   const fixTypesDisplay = useMemo(() => {
     const counts = {}
@@ -378,6 +388,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       return
     }
     setActed((a) => ({ ...a, [kind]: a[kind] + 1 }))
+    window.dispatchEvent(new Event('acp:hitl-changed'))
     const apiStatus = kind === 'approved' ? 'approved' : kind === 'rejected' ? 'rejected' : null
     // approved_value: the reviewer's final AI-drafted/hand-edited text, persisted as
     // durable compliance evidence of what was actually approved (not auto-applied to
@@ -491,6 +502,12 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           <button className="qbtn approve" style={{ marginLeft: 'auto' }} onClick={() => window.dispatchEvent(new Event('acp:open-inbox'))}>Review now →</button>
         </div>
       )}
+      {/* Automation levels — set expectations for WHY something needs review (PRD §13). */}
+      <div className="autolevels" aria-label="How ACP decides what needs review">
+        <span className="autolevel"><span aria-hidden="true">🟢</span> <b>Fully automatic</b> <span className="muted">deterministic fix · no action</span></span>
+        <span className="autolevel"><span aria-hidden="true">🟡</span> <b>AI-assisted</b> <span className="muted">AI-drafted · review suggested</span></span>
+        <span className="autolevel"><span aria-hidden="true">🔴</span> <b>Human required</b> <span className="muted">ambiguous · approval needed</span></span>
+      </div>
       <div className="metrics">
         <div className={`metric${remLive ? ' livecard' : ''}`} title="Estimated number of issues that can be fixed automatically — populates once you run remediation"><span>auto-fixable (est.)</span><b style={{ color: remStarted ? '#3B6D11' : '#9AA1B4' }}>{remStarted ? autoFixed : 0}</b></div>
         <div className={`metric${remLive && queue.length > 0 ? ' livecard' : ''}`}>

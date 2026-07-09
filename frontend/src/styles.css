@@ -1585,3 +1585,9 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .rc-progress { display: flex; align-items: center; gap: 10px; padding: 0 22px 12px; }
 .rc-progress .track { flex: 1; }
 .rc-foot { padding: 14px 4px 4px; font-size: 12px; }
+
+/* Automation-level legend (Remediate) — mental model for what needs review */
+.autolevels { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; margin: 0 0 12px;
+  padding: 9px 13px; border: 1px solid var(--line); border-radius: 10px; background: #faf8fb; font-size: 12.5px; }
+.autolevel { display: inline-flex; align-items: center; gap: 6px; }
+.autolevel b { font-weight: 600; }
