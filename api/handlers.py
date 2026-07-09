@@ -81,7 +81,6 @@ def _scan(payload: dict, job: dict) -> None:
     core.clear_scan_tokens(scan_id)
 
 
-@handler("remediate_file")
 def _verify_residual_scs(fixed_bytes: bytes, filename: str):
     """Re-scan the remediated bytes; return the set of WCAG SCs STILL failing, so a
     reported fix that did not actually clear is never credited. None if the re-scan
@@ -102,6 +101,7 @@ def _verify_residual_scs(fixed_bytes: bytes, filename: str):
         return None
 
 
+@handler("remediate_file")
 def _remediate_file(payload: dict, job: dict) -> None:
     """Apply server-side remediation to one file and write the fixed copy to Drive.
 
