@@ -1158,6 +1158,18 @@ class Store:
                 "WHERE scan_id=%s AND file=%s ORDER BY rule_id, seq", (scan_id, file))
             return self._db.fetchall(cur)
 
+    def list_remediation_diffs(self, scan_id: str, limit: int = 2000) -> list[dict]:
+        """Every verified-cleared before→after record across the whole scan — the honest,
+        scan-wide 'what actually got fixed' set. Unlike applied_fixes (image alt text only),
+        this covers ALL fix types (reading order, titles, headings, language, tables), so
+        the Remediation UI can group real fixes by rule/category without fabricating counts.
+        Includes `file` so the caller can reconcile per-document."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT file,rule_id,seq,before,after,note FROM remediation_diff "
+                "WHERE scan_id=%s ORDER BY rule_id, file, seq LIMIT %s", (scan_id, limit))
+            return self._db.fetchall(cur)
+
     def get_trace_row(self, scan_id: str, file: str, rule_id: str) -> dict | None:
         """Return a single scan_rule_traces row for the AI explain endpoint."""
         with self._db.cursor() as cur:

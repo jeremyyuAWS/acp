@@ -127,6 +127,14 @@ export const getFileRemediationDiffs = (scanId, file) => (SIM || !scanId
   ? sim([])
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/remediation-diffs`,
           { headers: headers() }).then(j).catch(() => []))
+// Scan-wide before→after evidence — every verified-cleared fix across all files, so the
+// Remediation view can group REAL applied fixes by rule/category without fabricating counts.
+// Covers all fix types (reading order, titles, headings, tables), unlike applied-fixes
+// (image alt text only). Best-effort — [] on any error/SIM.
+export const getScanRemediationDiffs = (scanId) => (SIM || !scanId
+  ? sim([])
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation-diffs`,
+          { headers: headers() }).then(j).catch(() => []))
 export const getMe = () => (SIM ? sim(simIdentity()) : fetch(`${BASE}/me`, { headers: headers() }).then(j))
 export const getSources = () => (SIM ? sim(simGetSources()) : fetch(`${BASE}/sources`, { headers: headers() }).then(j))
 export const getRubric = () => (SIM

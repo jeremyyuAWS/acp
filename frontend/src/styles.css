@@ -1629,6 +1629,99 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
   list-style: revert; user-select: none; }
 .rem-adv-summary:hover { color: var(--ink, #2b2130); }
 .rem-adv-block[open] .rem-adv-summary { margin-bottom: 10px; }
+.rem-adv-body { padding-top: 4px; }
+.advh3 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 8px; }
+
+/* ── Reframed remediation view (Review → Approve → Verify → Publish) ── */
+
+/* Progress rail (§2) */
+.progressrail { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin: 0 0 12px;
+  padding: 9px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); overflow-x: auto; }
+.prstep { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.prmark { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
+  border-radius: 50%; font-size: 11px; font-weight: 700; }
+.prlabel { font-size: 12.5px; font-weight: 500; }
+.pr-done .prmark { background: #E7F0DC; color: #3B6D11; }
+.pr-done .prlabel { color: #3B6D11; }
+.pr-active .prmark { background: #FBEECB; color: #8A5A00; }
+.pr-active .prlabel { color: var(--ink, #2b2130); font-weight: 700; }
+.pr-pending .prmark { background: #ECEEF1; color: #8A94A6; }
+.pr-pending .prlabel { color: var(--muted); }
+.prcount { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px;
+  padding: 0 5px; border-radius: 999px; background: #B43A2A; color: #fff; font-size: 11px; font-weight: 700; }
+.prsep { color: var(--line); margin: 0 6px; font-size: 14px; }
+
+/* Hero (§1) + business-risk line (§9) */
+.rem-hero-line { font-size: 15px; line-height: 1.5; }
+.rem-hero-line b { font-weight: 700; }
+.rem-risk { margin-top: 9px; font-size: 12.5px; padding: 6px 11px; border-radius: 8px; display: inline-block; }
+.rem-risk b { font-weight: 700; }
+.risk-high { background: #FBE7E2; color: #8A2A1B; border: 1px solid #F3Cabf; }
+.risk-med { background: #FBEECB; color: #7A4E06; border: 1px solid #ecd9a3; }
+.risk-low { background: #E7F0DC; color: #2F5310; border: 1px solid #cfe3bd; }
+
+/* Section headers shared by review / verify / documents */
+.rem-sec-hd { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.rem-sec-prog { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.reviewpill { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px;
+  padding: 0 7px; border-radius: 999px; background: #854F0B; color: #fff; font-size: 13px; font-weight: 700; vertical-align: middle; }
+.rem-review-panel { border-color: #E6C461; box-shadow: 0 0 0 1px #F3E2B4 inset; }
+
+/* Human-review cards (§3) with per-card badge (§4) */
+.reviewlist { display: flex; flex-direction: column; gap: 10px; }
+.reviewcard { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--card); }
+.reviewcard-top { display: flex; align-items: flex-start; gap: 10px; }
+.reviewcard-title { flex: 1 1 auto; min-width: 0; }
+.reviewcard-title .qmeta { margin-top: 2px; }
+.reviewcard-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.autobadge { flex: 0 0 auto; font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+.ab-auto { background: #E7F0DC; color: #2F5310; }
+.ab-review { background: #FBEECB; color: #7A4E06; }
+.ab-human { background: #FBE7E2; color: #8A2A1B; }
+
+/* "Why am I reviewing this?" panel (§3) */
+.whyreview { margin-top: 10px; padding: 10px 12px; border-radius: 9px; background: var(--bg, #faf8fb); border: 1px solid var(--line); }
+.whyreview-hd { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
+.whyreview-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 13px; line-height: 1.5; padding: 1px 0; }
+.whyreview-row > .muted:first-child { min-width: 96px; font-size: 12px; }
+.whyreview-sugg { font-style: italic; color: var(--ink, #2b2130); }
+
+/* Verification (§8) */
+.verify-run { display: flex; align-items: center; gap: 12px; font-size: 13.5px; flex-wrap: wrap; }
+.verify-track { flex: 1 1 200px; max-width: 320px; height: 9px; border-radius: 6px; background: var(--line); overflow: hidden; }
+.verify-track > i { display: block; height: 100%; background: #BF8C00; transition: width .35s; }
+.verify-wait { font-size: 13.5px; color: #7A4E06; }
+.verify-done { font-size: 13.5px; }
+
+/* Documents list (§5) */
+.doclist { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.docrow { display: grid; grid-template-columns: 1.6fr 150px 56px 56px 130px 72px; gap: 12px; align-items: center;
+  padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.docrow:last-child { border-bottom: none; }
+.docrow:not(.dochead):hover { background: var(--bg, #faf8fb); }
+.dochead { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 600; background: var(--bg, #faf8fb); }
+.doccell-name { min-width: 0; }
+.docsub { font-size: 11px; margin-top: 1px; }
+.docprog { display: flex; align-items: center; gap: 8px; }
+.docbar { flex: 1 1 auto; height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.docbar > i { display: block; height: 100%; }
+.docpct { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.doccount { text-align: center; }
+.docscope { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.scopebtns { display: inline-flex; gap: 4px; }
+.docopen { white-space: nowrap; }
+
+/* Grouped fixes (§6) + impact (§7) */
+.fixgroups { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.fixgroup { font-size: 13px; color: #2F5310; font-weight: 500; }
+.linkbtn { background: none; border: none; color: var(--plum, #6d4a86); font-size: 13px; font-weight: 600; cursor: pointer; padding: 0; }
+.linkbtn:hover { text-decoration: underline; }
+.impactrow { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px;
+  padding-top: 12px; border-top: 1px solid var(--line); }
+.impacthd { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-right: 4px; }
+.impacttile { display: inline-flex; align-items: baseline; gap: 5px; padding: 5px 11px; border-radius: 8px;
+  background: var(--bg, #faf8fb); border: 1px solid var(--line); }
+.impacttile b { font-size: 17px; font-weight: 700; }
 
 /* Page-1 document preview (ADR 0015). Self-hides when no thumbnail is available, so these
    rules only ever apply to a real rendered image. */
