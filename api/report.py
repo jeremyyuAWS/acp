@@ -177,8 +177,9 @@ def _evidence_section(evidence: list, h2, body, cell, muted) -> list:
         for e in doc["applied"][:_EVIDENCE_MAX_PER_FILE]:
             when = (e.get("reviewed_at") or "")[:19].replace("T", " ")
             if e.get("decision"):
-                # Attribution is only ever what decision_log recorded ('reviewer') — the
-                # platform does not capture the approving user's identity, so never invent one.
+                # Attribution is only ever what decision_log recorded — the authenticated
+                # reviewer's email, or the literal 'reviewer' when the platform had no
+                # signed-in identity to record. Never an invented name.
                 sign_off = f"{e['decision']} by {e.get('reviewer') or 'reviewer'}" + (f" · {when} UTC" if when else "")
             else:
                 sign_off = "auto-applied (deterministic fixer) — no human decision recorded"

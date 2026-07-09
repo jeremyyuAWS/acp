@@ -149,6 +149,19 @@ def test_report_never_presents_a_pending_proposal_as_remediated():
     assert "validated on re-scan" not in block
 
 
+def test_report_attributes_the_signoff_to_the_authenticated_reviewer():
+    """Chain of custody: the appendix names WHO approved, straight from decision_log.actor."""
+    from report import build_report
+    s = _store()
+    sid, f = "s2", "deck.pptx"
+    s.record_remediation_diffs(sid, f, [
+        {"rule_id": "1.1.1", "before": "(no alt)", "after": "A bar chart", "note": None}])
+    s.log_decision("ada@movate.com", "hitl.approved", scan_id=sid, file=f, rule_id="1.1.1")
+    ev = s.get_remediation_evidence(sid)
+    assert ev[0]["applied"][0]["reviewer"] == "ada@movate.com"
+    assert "approved by ada@movate.com" in _pdf_text(build_report(_RUN, _FILES, _META, evidence=ev))
+
+
 def test_undecodable_thumbnail_never_breaks_the_report():
     from report import build_report
     ev = [{"file": "x.docx", "proposed": [], "applied": [{

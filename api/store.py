@@ -1208,9 +1208,10 @@ class Store:
         as PASS. Keeping the two lists separate is what stops the report claiming work the
         platform has not actually done.
 
-        Note on attribution: `decision_log.actor` for a review is the literal string
-        'reviewer' — the platform does not record the approving user's identity. We surface
-        exactly what was recorded (that a human approved, and when) and never invent a name.
+        Attribution comes from `decision_log.actor`, which for a review is the authenticated
+        reviewer's email (routes/hitl.py). It falls back to the literal 'reviewer' only when
+        there is no signed-in identity (the demo/SSO-less path) — we surface exactly what was
+        recorded and never invent a name.
         """
         rule_names = {r["id"]: r["name"] for r in RULE_CATALOG}
 
