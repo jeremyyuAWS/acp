@@ -21,6 +21,15 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const [selFile, setSelFile] = useState(null)
   const reportRef = useRef(null)
   const [exporting, setExporting] = useState(false)
+  const [scanExporting, setScanExporting] = useState(false)
+  const doScanExport = async () => {
+    setScanExporting(true)
+    try {
+      const { generateScanReport } = await import('./scanReport.js')
+      await generateScanReport({ scanId: run.id, files, org: orgName })
+    } catch (e) { console.error('scan report export failed', e) }
+    finally { setTimeout(() => setScanExporting(false), 600) }
+  }
   useEffect(() => { const t = setTimeout(() => setOn(true), 80); return () => clearTimeout(t) }, [])
   const doExport = async () => {
     setExporting(true)
@@ -159,6 +168,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
     <>
       <div className="dashtoolbar">
         <button className="exportbtn" onClick={doExport} disabled={exporting}>{exporting ? 'Generating PDF…' : '⤓ Quarterly governance report'}</button>
+        <button className="exportbtn alt" onClick={doScanExport} disabled={scanExporting} title="Whole-scan estate report: conformance, WCAG failure heatmap, per-department breakdown, remediation throughput, HITL queue & a per-document appendix">{scanExporting ? 'Generating PDF…' : '⤓ Export scan report'}</button>
         <button className="exportbtn alt" onClick={exportCsv} title="Every finding as a spreadsheet row">⤓ Findings (CSV)</button>
         {!SIM && run?.id && (
           <button className="exportbtn alt" onClick={() => openReport(run.id)} title="Backend-generated WCAG compliance report PDF">⤓ Compliance report (PDF)</button>

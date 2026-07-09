@@ -134,6 +134,15 @@ export function RuleBreakdown({ scanId, files }) {
   const [seg, setSeg] = useState(null)
   const [sel, setSel] = useState(null)
   const [devaOnly, setDevaOnly] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const doScanExport = async () => {
+    setExporting(true)
+    try {
+      const { generateScanReport } = await import('./scanReport.js')
+      await generateScanReport({ scanId, files: files || [] })
+    } catch (e) { console.error('scan report export failed', e) }
+    finally { setTimeout(() => setExporting(false), 600) }
+  }
   useEffect(() => {
     if (!scanId) { setRows(null); return }
     let cancelled = false
@@ -194,6 +203,11 @@ export function RuleBreakdown({ scanId, files }) {
                   onClick={() => { setDevaOnly((v) => !v); if (!devaOnly) setOpen(true) }}
                   title="Filter to Deva's 20-check document core (US-regulated A/AA criteria that apply to documents)">
             {devaOnly ? "\u2713 Deva 20-core" : "Deva 20-core"}
+          </button>
+          <button className="ghost small" style={{ marginLeft: 8, fontSize: 11 }} disabled={exporting}
+                  onClick={doScanExport}
+                  title="Export a scan-level accessibility report (PDF): conformance, WCAG failure heatmap, per-department breakdown, remediation throughput, HITL queue & a per-document appendix">
+            {exporting ? "\u23f3 Generating\u2026" : "\u2913 Export scan report"}
           </button></span>
       </div>
       <div className="rulerows">
