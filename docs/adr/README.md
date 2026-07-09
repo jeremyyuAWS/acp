@@ -13,3 +13,5 @@ header). Match the structure of the latest ADR when adding a new one.
 - [0011 — Incremental scans: skip unchanged files across scan runs](0011-incremental-scan-fingerprinting.md) — **Proposed** (2026-06-30)
 - [0012 — Own the Office analysers; fix the language rules](0012-own-office-analysers.md) — **Accepted** (2026-07-08)
 - [0013 — Worker durability hardening: idempotent finalize + worker-process isolation](0013-worker-durability-hardening.md) — **Proposed** (2026-07-08)
+
+- [0014 — Keep long-running scans authenticated (Drive token refresh)](0014-drive-token-refresh.md) — **Accepted** (Tier 1) / **Proposed** (Tier 2) (2026-07-09)

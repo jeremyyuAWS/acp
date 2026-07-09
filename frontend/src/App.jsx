@@ -1,7 +1,8 @@
 import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } from 'react'
 import HitlBell from './HitlBell.jsx'
+import { refreshDriveToken } from './driveAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, listScans, getScan, getActiveScan, startScan, startScanQueued, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens, getDecisions, saveDecisionsBatch } from './api'
+import { getSources, getRubric, listScans, getScan, getActiveScan, startScan, startScanQueued, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -173,6 +174,22 @@ export default function App() {
   const [certifiedDocs, setCertifiedDocs] = useState([])
   const [publishedFiles, setPublishedFiles] = useState([])
   const [hasDriveToken, setHasDriveToken] = useState(() => !!sessionStorage.getItem('gd_token'))
+
+  // ADR 0014 — keep a long-running scan's Drive token fresh. GIS access tokens expire ~1h;
+  // while a scan is running we silently re-mint one every 20min and push it to the backend
+  // so scans that outlast the token don't 401 on their tail. Best-effort; no-op without GIS.
+  useEffect(() => {
+    if (!hasDriveToken) return
+    const iv = setInterval(async () => {
+      try {
+        const a = await getActiveScan()
+        if (!a?.id) return
+        await refreshDriveToken()
+        await refreshScanDriveToken(a.id)
+      } catch { /* best-effort keep-alive */ }
+    }, 20 * 60 * 1000)
+    return () => clearInterval(iv)
+  }, [hasDriveToken])
   const [hasSPToken, setHasSPToken] = useState(() => !!sessionStorage.getItem('sp_token'))
   const [delegations, setDelegations] = useState(loadDelegations)
   const [fileTypeConfig, setFileTypeConfig] = useState(loadFileTypeConfig)

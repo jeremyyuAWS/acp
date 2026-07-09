@@ -127,6 +127,10 @@ export const updateRubric = (body) => (SIM
 export const listScans = () => (SIM ? sim(simListScans()) : fetch(`${BASE}/scans`, { headers: headers() }).then(j))
 // In-flight scan (for reconnecting after a reload). Returns {} when nothing is running.
 export const getActiveScan = () => (SIM ? sim({}) : fetch(`${BASE}/scans/active`, { headers: headers() }).then(j))
+// ADR 0014: push a freshly-minted GIS token to a running scan so long scans keep Drive auth.
+export const refreshScanDriveToken = (scanId) => (SIM
+  ? sim({ refreshed: true })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/drive-token`, { method: 'POST', headers: headers() }).then(j))
 export const getScan = (id) => (SIM ? sim(simGetScan(id)) : fetch(`${BASE}/scans/${id}`, { headers: headers() }).then(j))
 export const getInventory = () => (SIM ? sim([]) : fetch(`${BASE}/inventory`, { headers: headers() }).then(j))
 export const reportUrl = (id) => (SIM ? '#' : `${BASE}/scans/${id}/report.pdf`)

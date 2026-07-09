@@ -535,6 +535,21 @@ def rescore_file(sid: str, request: Request, file: str = Query(...)):
     return {"scan_id": sid, "file": file, "job_id": jid, "workers": core.WORKERS}
 
 
+@router.post("/scans/{sid}/drive-token")
+def refresh_scan_drive_token(sid: str, request: Request):
+    """Refresh the Drive token of a RUNNING scan (ADR 0014). GIS access tokens expire ~1h;
+    the frontend silently re-mints one and POSTs it here so a scan that outlasts the token
+    keeps its Drive auth. Owner-checked; updates the ephemeral per-scan token store that
+    scan_file/scan_batch workers re-read on every job."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    token = request.headers.get("x-drive-token")
+    if not token:
+        raise HTTPException(422, "x-drive-token header required")
+    core.register_scan_tokens(sid, drive=token)
+    return {"scan_id": sid, "refreshed": True}
+
+
 @router.post("/scans/{sid}/publish")
 def publish_files(sid: str, request: Request, body: dict):
     """Publish one or more re-validated files — ADR 0010 archive-copy, NON-destructive.
