@@ -67,22 +67,6 @@ function fmtStamp(iso) {
   return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })
 }
 
-// Persistent build stamp — pinned bottom-right so the full CalVer (e.g. 2026.7.9.20)
-// is visible on EVERY page, including the pre-auth sign-in screen and any full-screen
-// view. `version` is the git-derived backend CalVer (with the daily .N counter);
-// __BUILD_VERSION__ (date only, no counter) is the instant fallback until /config loads.
-function VersionStamp({ version }) {
-  const v = version || __BUILD_VERSION__
-  return (
-    <div className="buildstamp" title={`ACP build ${v}${__BUILD_TIME__ ? ` · ${fmtStamp(__BUILD_TIME__)}` : ''}`}
-         style={{ position: 'fixed', right: 8, bottom: 6, zIndex: 400, pointerEvents: 'none',
-                  fontSize: 10.5, fontFamily: 'ui-monospace, monospace', letterSpacing: 0.2,
-                  color: 'var(--muted, #6B6670)', opacity: 0.65 }}>
-      v{v}
-    </div>
-  )
-}
-
 function progressText(p) {
   if (!p) return ''
   const m = {
@@ -386,7 +370,7 @@ export default function App() {
     savedDecRef.current = { scanId: sid, decisions: { ...decisions }, triage: { ...triage } }
   }, [decisions, triage]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!me) return (<><SignIn onSignedIn={signIn} /><VersionStamp version={platformVersion} /></>)
+  if (!me) return <SignIn onSignedIn={signIn} />   // SignIn's own BuildStamp shows the full CalVer
 
   const switchScan = async (id) => {
     if (id === scan?.run?.id) return

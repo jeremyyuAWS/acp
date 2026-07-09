@@ -19,12 +19,15 @@ function timeAgoShort(iso) {
 
 function BuildStamp() {
   const [, setTick] = useState(0)
+  // Prefer the full git-derived CalVer (with the daily .N counter) from /config, which
+  // is public pre-auth; the date-only __BUILD_VERSION__ bundle tag is the instant fallback.
+  const [ver, setVer] = useState(typeof __BUILD_VERSION__ !== 'undefined' ? __BUILD_VERSION__ : null)
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 60_000)
+    getConfig().then((c) => { if (c?.version) setVer(c.version) }).catch(() => { /* keep fallback */ })
     return () => clearInterval(id)
   }, [])
   const iso = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : null
-  const ver = typeof __BUILD_VERSION__ !== 'undefined' ? __BUILD_VERSION__ : null
   if (!ver && !iso) return null
   const stamp = iso ? new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }) : null
   return (
