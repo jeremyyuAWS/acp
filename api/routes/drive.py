@@ -5,6 +5,7 @@ import os
 from fastapi import APIRouter, HTTPException, Request
 
 import core
+import provenance
 
 router = APIRouter()
 
@@ -142,7 +143,8 @@ async def drive_upload(request: Request):
 
         media = MediaIoBaseUpload(io.BytesIO(content), mimetype=content_type, resumable=False)
         result = svc.files().create(
-            body={"name": filename, "parents": [folder_id]},
+            body={"name": filename, "parents": [folder_id],
+                  "properties": provenance.stamp(filename)},
             media_body=media, fields="id,webViewLink"
         ).execute()
         web_url = result.get("webViewLink", "")

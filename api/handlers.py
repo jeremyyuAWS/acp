@@ -15,6 +15,7 @@ Per-file fan-out (PDF/HTML) is a possible future optimization (ADR 0004 step 3).
 from __future__ import annotations
 
 import core
+import provenance
 from worker import handler, FatalJobError
 from scanner import run_scan
 from remediate import remediate_html
@@ -220,11 +221,16 @@ def _remediate_file(payload: dict, job: dict) -> None:
             existing = svc.files().list(
                 q=f"name='{safe}' and '{folder_id}' in parents and trashed=false",
                 fields="files(id)", pageSize=1).execute().get("files", [])
+            # Stamp ACP's own output so a later scan skips it by provenance rather than by
+            # which folder it happens to live in (api/provenance.py).
+            props = provenance.stamp(filename)
             if existing:
                 result = svc.files().update(fileId=existing[0]["id"], media_body=media,
+                                            body={"properties": props},
                                             fields="id,webViewLink").execute()
             else:
-                result = svc.files().create(body={"name": filename, "parents": [folder_id]},
+                result = svc.files().create(body={"name": filename, "parents": [folder_id],
+                                                  "properties": props},
                                             media_body=media, fields="id,webViewLink").execute()
             web_url = result.get("webViewLink", "")
         except HttpError as e:

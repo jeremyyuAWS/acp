@@ -10,6 +10,7 @@ import io, json, os, re, shutil, subprocess, sys, tempfile, uuid, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 import lf as _lf_mod
+import provenance
 
 # Per-file analysis is CPU/IO bound and independent; run it across a small thread
 # pool. pikepdf/lxml release the GIL and each analyser is built fresh per call.
@@ -167,7 +168,7 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False) -
     while len(files) < max_files:
         resp = svc.files().list(
             q=q,
-            fields="nextPageToken,files(id,name,mimeType,md5Checksum)",
+            fields=f"nextPageToken,files({provenance.DRIVE_FIELDS})",
             pageSize=200,
             orderBy="name",
             pageToken=page_token,
@@ -175,7 +176,11 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False) -
             includeItemsFromAllDrives=True,
             supportsAllDrives=True,
         ).execute(num_retries=5)             # backoff on 429/5xx instead of failing the file
-        files.extend(resp.get("files", []))
+        batch = resp.get("files", [])
+        if exclude_remediated:
+            # Provenance beats location: skip anything ACP itself wrote, wherever it sits.
+            batch = [f for f in batch if not provenance.is_acp_generated(f)]
+        files.extend(batch)
         page_token = resp.get("nextPageToken")
         if not page_token:
             break
@@ -210,7 +215,7 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
         while True:
             resp = svc.files().list(
                 q=f"'{fid}' in parents and trashed=false",
-                fields="nextPageToken,files(id,name,mimeType,md5Checksum)",
+                fields=f"nextPageToken,files({provenance.DRIVE_FIELDS})",
                 pageSize=200,
                 pageToken=page_token,
                 includeItemsFromAllDrives=True,
@@ -218,9 +223,13 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
             ).execute(num_retries=5)
             for f in resp.get("files", []):
                 if f["mimeType"] == "application/vnd.google-apps.folder":
+                    # Folder-name exclusion is RETAINED, not replaced: copies written before
+                    # the provenance stamp shipped carry no stamp, and this still skips them.
                     if exclude_remediated and f["name"] == remediated_folder_name:
                         continue
                     queue.append(f["id"])
+                elif exclude_remediated and provenance.is_acp_generated(f):
+                    continue          # ACP's own output — never a source document
                 else:
                     raw.append(f)
             page_token = resp.get("nextPageToken")

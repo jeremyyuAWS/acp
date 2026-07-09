@@ -16,6 +16,7 @@ from __future__ import annotations
 import io
 
 import blob as _blob
+import provenance
 
 # A dedicated, human-legible folder distinct from the 'Remediated' working mirror, so
 # an auditor sees exactly which documents are officially published & accessible.
@@ -61,11 +62,15 @@ def upload_published(svc, folder_id: str, filename: str, data: bytes) -> str:
     existing = svc.files().list(
         q=f"name='{safe}' and '{folder_id}' in parents and trashed=false",
         fields="files(id)", pageSize=1).execute().get("files", [])
+    # ACP's own output — stamped so discovery never re-ingests it as a source document.
+    props = provenance.stamp(filename)
     if existing:
         res = svc.files().update(fileId=existing[0]["id"], media_body=media,
+                                 body={"properties": props},
                                  fields="id,webViewLink").execute()
     else:
-        res = svc.files().create(body={"name": filename, "parents": [folder_id]},
+        res = svc.files().create(body={"name": filename, "parents": [folder_id],
+                                       "properties": props},
                                  media_body=media, fields="id,webViewLink").execute()
     return res.get("webViewLink", "")
 

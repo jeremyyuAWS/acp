@@ -31,10 +31,14 @@ class _Files:
 
     def create(self, body=None, media_body=None, fields=None):
         self._fake.calls.append(("create", body.get("name") if body else None))
+        self._fake.props.append((body or {}).get("properties"))
         return _Exec({"id": "new-id", "webViewLink": "https://drive/new"})
 
-    def update(self, fileId=None, media_body=None, fields=None):
+    # `body` carries the provenance stamp on an upsert — the real Drive API takes it
+    # alongside media_body, and dropping it here would hide an unstamped update.
+    def update(self, fileId=None, body=None, media_body=None, fields=None):
         self._fake.calls.append(("update", fileId))
+        self._fake.props.append((body or {}).get("properties"))
         return _Exec({"id": fileId, "webViewLink": "https://drive/updated"})
 
 
@@ -42,6 +46,7 @@ class _FakeSvc:
     def __init__(self, list_result=None):
         self.list_result = list_result or []
         self.calls = []
+        self.props = []          # `properties` dict passed on each create/update
 
     def files(self):
         return _Files(self)
@@ -95,3 +100,22 @@ def test_archive_copy_publishes_when_blob_present(monkeypatch):
     svc = _FakeSvc(list_result=[])
     url = publish.archive_copy_publish(svc, "folder-1", "o@x.com", "scan1", "f.pdf")
     assert url == "https://drive/new"
+
+
+def test_upload_published_stamps_acp_provenance_on_create_and_update():
+    """Every copy ACP writes must identify itself, so a later scan skips it by provenance
+    rather than by which folder it happens to sit in."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
+    import provenance
+
+    created = _FakeSvc(list_result=[])                       # no existing copy -> create
+    publish.upload_published(created, "fid", "deck.pptx", b"x")
+    assert created.calls[-1][0] == "create"
+    assert provenance.is_acp_generated({"properties": created.props[-1]})
+
+    updated = _FakeSvc(list_result=[{"id": "old"}])           # existing copy -> update
+    publish.upload_published(updated, "fid", "deck.pptx", b"x")
+    assert updated.calls[-1][0] == "update"
+    assert provenance.is_acp_generated({"properties": updated.props[-1]})
