@@ -396,6 +396,16 @@ def scan_applied_fixes(sid: str, request: Request):
     return core.store.list_applied_fixes(sid)
 
 
+@router.get("/scans/{sid}/files/{filename:path}/remediation-diffs")
+def file_remediation_diffs(sid: str, filename: str, request: Request):
+    """Per-fix before→after evidence for one file — the original text/markup and the
+    remediated version of every deterministic fix that verifiably cleared. Feeds the
+    certification PDF's 'Before → After' section. Owner-scoped like remediation-state."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    return core.store.get_remediation_diffs(sid, filename)
+
+
 @router.get("/scans/{sid}/diff")
 def scan_diff(sid: str, request: Request, vs: str | None = Query(None)):
     """Regression diff (ADR 0009): which documents got worse / better vs a prior scan, and

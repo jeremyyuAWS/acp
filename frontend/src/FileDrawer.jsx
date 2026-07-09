@@ -4,7 +4,7 @@ import Tag from './Tag.jsx'
 import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
-import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, downloadRemediated, getRules, getRubric, getConfig } from './api.js'
+import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, getFileRemediationDiffs, downloadRemediated, getRules, getRubric, getConfig } from './api.js'
 import { WCAG } from './wcagCatalog.js'
 import { TraceChip } from './Transparency.jsx'
 import Thumbnail from './Thumbnail.jsx'
@@ -460,8 +460,12 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
             const rows = computeCoverageRows(file, { catalogRules, targetLevel, remediatedRuleIds, effectiveRemediated, aiEnabled })
             const now = new Date()
             const cfg = await getConfig().catch(() => null)
+            // Real before→after evidence for the "Before → After" section — only present for a
+            // genuinely remediated file (server returns [] for SIM or an un-remediated one, so
+            // the section simply won't render). Same payload feeds the PDF and HTML exports.
+            const diffs = scanId ? await getFileRemediationDiffs(scanId, file.file).catch(() => []) : []
             return {
-              file: file.file, score: file.score, targetLevel, rows,
+              file: file.file, score: file.score, targetLevel, rows, diffs,
               date: now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
               timestamp: now.toLocaleString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }),
               engine: file.engine, sourceName: file.sourceName, department: file.department || file.dept,

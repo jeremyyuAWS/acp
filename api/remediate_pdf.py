@@ -32,7 +32,7 @@ _RENDER_SCALE = 150 / 72
 
 
 def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
-                  scan_id: str | None = None):
+                  scan_id: str | None = None, diffs=None):
     """Apply deterministic PDF accessibility fixes to a copy of the file.
 
     ai_enabled — when True and a vision (llava-class) Ollama model is reachable, tagged
@@ -44,6 +44,9 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
       fixed_path — Path to the remediated PDF, or None if nothing was applied.
       applied/skipped — human-readable change descriptions.
     """
+    def _rec(rule_id, before, after, note=""):
+        if diffs is not None:
+            diffs.append({"rule_id": rule_id, "before": before, "after": after, "note": note})
     from scanner import WP  # vendored worker-python root (engine + fixers)
     sys.path.insert(0, str(WP))
     import pikepdf
@@ -76,13 +79,22 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
 
     # ── Stage 1: pikepdf — Root-level structural fixes + figure alt text ──
     try:
-        for fixer, meta in ((PdfLanguageFixer(), {"language": lang}),
-                            (PdfDisplayTitleFixer(), {})):
+        for fixer, meta, _diff in (
+                (PdfLanguageFixer(), {"language": lang},
+                 ("3.1.1", "(no /Lang entry — screen readers guessed the language)",
+                  lang, "catalog /Lang set")),
+                (PdfDisplayTitleFixer(), {},
+                 ("2.4.2", "ViewerPreferences did not request the title bar show the doc title",
+                  "DisplayDocTitle = true", "viewer shows the document title, not the file name"))):
             # The deterministic fixers read only issue.issue_id, so a light stub
             # avoids constructing a full A11yIssue (and its enum imports).
             issue = SimpleNamespace(issue_id=uuid.uuid4())
             res = fixer.apply(pdf, issue, meta, behavior)
-            (applied if res.status == FixStatus.FIXED else skipped).append(res.description)
+            if res.status == FixStatus.FIXED:
+                applied.append(res.description)
+                _rec(*_diff)
+            else:
+                skipped.append(res.description)
         # Genuine alt text for tagged figures (WCAG 1.1.1) — vision when AI is on and a
         # vision model is reachable; unfixed figures defer to review via the re-scan.
         alt_applied, alt_deferred = _fix_pdf_figure_alt(
@@ -100,6 +112,8 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
     if not existing_title:
         new_title = path.stem.replace("-", " ").replace("_", " ").strip() or "Document"
         applied.append(f"Set document title to '{new_title}' · 2.4.2")
+        _rec("2.4.2", "(no document title in metadata)", new_title,
+             "filename-derived /Title written to the docinfo dictionary")
 
     if not applied:
         _unlink(mid_path)

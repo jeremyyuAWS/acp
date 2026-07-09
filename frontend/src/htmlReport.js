@@ -151,6 +151,16 @@ function renderBlocks(blocks) {
       case 'table':
         out += `\n${table(b)}`
         break
+      case 'beforeAfter':
+        out += '\n' + (b.items || []).map((it) => (
+          `<div class="ba-item">` +
+          `<p class="ba-label">${esc(it.label)}</p>` +
+          (it.note ? `<p class="ba-note">${esc(it.note)}</p>` : '') +
+          `<div class="ba-band ba-before"><span class="ba-tag">Before</span><code>${esc(String(it.before == null ? '' : it.before))}</code></div>` +
+          `<div class="ba-band ba-after"><span class="ba-tag">After</span><code>${esc(String(it.after == null ? '' : it.after))}</code></div>` +
+          `</div>`
+        )).join('')
+        break
       default:
         break
     }
@@ -236,6 +246,18 @@ const STYLE = `
     body { background: #fff; } .page { box-shadow: none; margin: 0; max-width: none; }
     .page-break { break-before: page; }
   }
+  .ba-item { margin: 0 0 16px; break-inside: avoid; }
+  .ba-label { font-weight: 700; color: #4B3460; margin: 0 0 3px; }
+  .ba-note { color: #55505A; font-size: 13px; margin: 0 0 6px; }
+  .ba-band { display: flex; gap: 10px; align-items: flex-start; border: 1px solid #E4E0E8;
+    border-left-width: 3px; border-radius: 4px; padding: 7px 9px; margin: 4px 0; }
+  .ba-band code { font-family: ui-monospace, "Courier New", monospace; font-size: 12.5px;
+    white-space: pre-wrap; word-break: break-word; color: #2B2330; }
+  .ba-tag { font-size: 11px; font-weight: 700; letter-spacing: .04em; flex: 0 0 52px; padding-top: 1px; }
+  .ba-before { background: #FBF2F1; border-left-color: #A32D2D; }
+  .ba-before .ba-tag { color: #8A2A24; }
+  .ba-after { background: #F0F5EA; border-left-color: #3B6D11; }
+  .ba-after .ba-tag { color: #345F0F; }
 `
 
 // Build the complete standalone HTML document string from a report model.

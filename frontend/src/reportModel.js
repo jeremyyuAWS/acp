@@ -154,6 +154,26 @@ export function buildFileCertificationModel(d) {
     T('Automated fixes cover deterministic criteria (alt-text placeholders, language, titles, headers, contrast). Content needing human judgement is listed under “Human review”.', { size: 8.5, color: MUTED, lh: 12 })
   }
 
+  // ── Before → After — the exact original text/markup vs. the remediated version for
+  // every fix that verifiably cleared on the post-fix re-scan. Server returns these only
+  // for a genuinely remediated file, so nothing here is illustrative — every pair is what
+  // actually changed. Rendered as monospace before/after bands by both the PDF and HTML. ──
+  const diffs = (d.diffs || []).filter((x) => x && (x.before != null || x.after != null))
+  if (diffs.length) {
+    const nameOf = (sc) => (rows.find((r) => r.id === sc)?.plain) || (rows.find((r) => r.id === sc)?.name) || CHANGE_LABEL[sc] || 'Remediated finding'
+    const MAX = 24
+    blocks.push({ k: 'pageBreak' })
+    H('Before → After — what changed')
+    T('The exact original text or markup and the remediated version of every fix ACP applied and then re-validated on this file. Truncated where long; the fixed copy is the source of truth.', { size: 9, color: MUTED, gapAfter: 10 })
+    blocks.push({ k: 'beforeAfter', items: diffs.slice(0, MAX).map((x) => ({
+      label: `${x.rule_id} · ${nameOf(x.rule_id)}`,
+      note: x.note || '',
+      before: x.before,
+      after: x.after,
+    })) })
+    if (diffs.length > MAX) T(`+ ${diffs.length - MAX} more remediated change(s) not shown here — see the full coverage table and the remediated file.`, { size: 8.5, color: MUTED, lh: 12 })
+  }
+
   // ── Compliance checklist — grouped by what a reviewer actually cares about ──
   H('Compliance checklist')
   const catAgg = {}

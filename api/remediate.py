@@ -19,8 +19,15 @@ from typing import Callable
 from lxml import html as _lh
 
 # wcag_sc -> (fix_mode, fixer). fixer(tree) mutates tree, returns change descriptions.
-Fixer = Callable[[object], list]
+Fixer = Callable[..., list]
 FIXERS: dict[str, tuple[str, Fixer]] = {}
+
+
+def _rec(diffs, rule_id: str, before: str, after: str, note: str = "") -> None:
+    """Append one before→after record for the certification report. No-op when the
+    caller passed no collector, so the return contract stays a plain list[str]."""
+    if diffs is not None:
+        diffs.append({"rule_id": rule_id, "before": before, "after": after, "note": note})
 
 
 def _register(sc: str, fix_mode: str):
@@ -32,20 +39,22 @@ def _register(sc: str, fix_mode: str):
 
 # ── 3.1.1 Language of Page (auto) — mirrors frontend/src/rules/wcag-3-1-1.js ──
 @_register("3.1.1", "auto")
-def _fix_lang(tree) -> list:
+def _fix_lang(tree, diffs=None) -> list:
     root = tree if tree.tag == "html" else (tree.getroottree().getroot())
     html_el = root if root.tag == "html" else root.find(".//html")
     if html_el is None:
         html_el = root
     if not (html_el.get("lang") or "").strip():
         html_el.set("lang", "en")
+        _rec(diffs, "3.1.1", "<html> (no lang attribute)", '<html lang="en">',
+             "so assistive tech announces the page in the right language")
         return ["Set document language to English · 3.1.1"]
     return []
 
 
 # ── 2.4.2 Page Titled (auto) — mirrors frontend/src/rules/wcag-2-4-2.js ──
 @_register("2.4.2", "auto")
-def _fix_title(tree) -> list:
+def _fix_title(tree, diffs=None) -> list:
     titles = tree.xpath("//title")
     title = titles[0] if titles else None
     if title is not None and (title.text or "").strip():
@@ -58,6 +67,8 @@ def _fix_title(tree) -> list:
     h1 = tree.xpath("//h1")
     text = (h1[0].text_content().strip() if h1 else "") or "Document"
     title.text = text[:80]
+    _rec(diffs, "2.4.2", "(no <title> — the page could not be identified in a tab or history)",
+         title.text, "descriptive title derived from the page's <h1>")
     return ["Added a descriptive page title · 2.4.2"]
 
 
@@ -65,7 +76,7 @@ def _fix_title(tree) -> list:
 # Mirrors frontend/src/rules/wcag-1-3-1.js: give unlabeled controls an aria-label
 # from a deterministic hint (placeholder → name → "Field").
 @_register("1.3.1", "auto")
-def _fix_form_labels(tree) -> list:
+def _fix_form_labels(tree, diffs=None) -> list:
     changed = False
     for inp in tree.xpath("//input | //select | //textarea"):
         cid = inp.get("id")
@@ -78,6 +89,8 @@ def _fix_form_labels(tree) -> list:
             continue
         hint = (inp.get("placeholder") or inp.get("name") or "Field").strip()[:60]
         inp.set("aria-label", hint or "Field")
+        _rec(diffs, "1.3.1", f"<{inp.tag}> control with no label",
+             f'aria-label="{hint or "Field"}"', "so a screen reader announces the field's purpose")
         changed = True
     return ["Labeled form controls · 1.3.1"] if changed else []
 
@@ -99,7 +112,7 @@ def _c_luma(h: str) -> float:
 
 
 @_register("1.4.3", "auto")
-def _fix_contrast(tree) -> list:
+def _fix_contrast(tree, diffs=None) -> list:
     n = 0
     for el in tree.iter():
         style = el.get("style") if hasattr(el, "get") else None
@@ -113,6 +126,10 @@ def _fix_contrast(tree) -> list:
             continue
         el.set("style", re.sub(r"((?:^|[^-])color:\s*)#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b",
                                lambda mm: mm.group(1) + "#111111", style, count=1))
+        text = (el.text or "").strip()
+        _rec(diffs, "1.4.3", f"color:#{m.group(1)} (too light on a light background — fails AA)",
+             "color:#111111 (passes AA and AAA)",
+             f'text "{text[:40]}"' if text else "low-contrast inline text")
         n += 1
     return [f"Darkened {n} low-contrast inline text colour(s) to meet AA/AAA · 1.4.3 / 1.4.6"] if n else []
 
@@ -133,49 +150,59 @@ def _head(tree):
 
 
 @_register("1.4.10", "auto")
-def _fix_reflow(tree) -> list:
+def _fix_reflow(tree, diffs=None) -> list:
     has_head_content = any(tree.xpath(f"//{t}") for t in ("meta", "link", "style"))
     has_viewport = any((m.get("name") or "").lower() == "viewport" for m in tree.iter("meta"))
     if not has_head_content or has_viewport:
         return []
     head = _head(tree)
     head.insert(0, head.makeelement("meta", {"name": "viewport", "content": "width=device-width, initial-scale=1"}))
+    _rec(diffs, "1.4.10", "(no viewport meta — content scrolled in two directions at 320px)",
+         '<meta name="viewport" content="width=device-width, initial-scale=1">',
+         "so content reflows to a single column")
     return ["Added a responsive viewport so content reflows without horizontal scroll · 1.4.10"]
 
 
 # ── 1.4.4 Resize Text — un-block pinch-zoom on the viewport (auto) ──
 @_register("1.4.4", "auto")
-def _fix_resize(tree) -> list:
+def _fix_resize(tree, diffs=None) -> list:
     n = 0
     for m in tree.iter("meta"):
         if (m.get("name") or "").lower() != "viewport":
             continue
-        if re.search(r"user-scalable\s*=\s*(no|0)|maximum-scale\s*=\s*(0|1)(\.0+)?\b", m.get("content") or "", re.I):
+        content = m.get("content") or ""
+        if re.search(r"user-scalable\s*=\s*(no|0)|maximum-scale\s*=\s*(0|1)(\.0+)?\b", content, re.I):
             m.set("content", "width=device-width, initial-scale=1")
+            _rec(diffs, "1.4.4", f'viewport "{content[:60]}" (pinch-zoom blocked)',
+                 "width=device-width, initial-scale=1", "so text can be zoomed to 200%+")
             n += 1
     return [f"Restored pinch-zoom / text resize on {n} viewport tag(s) · 1.4.4"] if n else []
 
 
 # ── 1.4.12 Text Spacing — relax fixed-pixel line-height (auto) ──
 @_register("1.4.12", "auto")
-def _fix_text_spacing(tree) -> list:
+def _fix_text_spacing(tree, diffs=None) -> list:
     n = 0
     for el in tree.iter():
         style = el.get("style") if hasattr(el, "get") else None
-        if not style or not re.search(r"line-height:\s*\d+px", style, re.I):
+        if not style or not (lh := re.search(r"line-height:\s*\d+px", style, re.I)):
             continue
         el.set("style", re.sub(r"line-height:\s*\d+px", "line-height:1.5", style, flags=re.I))
+        _rec(diffs, "1.4.12", f"{lh.group(0)} (clips when users override text spacing)",
+             "line-height:1.5", "so overridden spacing no longer clips text")
         n += 1
     return [f"Relaxed fixed line-height on {n} element(s) so users can override spacing · 1.4.12"] if n else []
 
 
 # ── 1.4.2 Audio Control — stop autoplaying media (auto) ──
 @_register("1.4.2", "auto")
-def _fix_autoplay(tree) -> list:
+def _fix_autoplay(tree, diffs=None) -> list:
     n = 0
     for m in tree.iter("audio", "video"):
         if m.get("autoplay") is not None and m.get("controls") is None:
             m.attrib.pop("autoplay", None)
+            _rec(diffs, "1.4.2", f"<{m.tag} autoplay> with no controls (audio a user can't stop)",
+                 f"<{m.tag}> (autoplay removed)", "so the sound no longer plays automatically")
             n += 1
     return [f"Removed autoplay from {n} media element(s) · 1.4.2"] if n else []
 
@@ -186,12 +213,14 @@ _ORIENT = re.compile(
 
 
 @_register("1.3.4", "auto")
-def _fix_orientation(tree) -> list:
+def _fix_orientation(tree, diffs=None) -> list:
     n = 0
     for st in tree.iter("style"):
         txt = st.text or ""
         if txt and _ORIENT.search(txt):
             st.text = _ORIENT.sub(lambda mm: re.sub(r"display\s*:\s*none", "display:revert", mm.group(0), count=1, flags=re.I), txt)
+            _rec(diffs, "1.3.4", "@media (orientation) { … display:none } hid content in one orientation",
+                 "display:revert", "so content shows in both portrait and landscape")
             n += 1
     return [f"Removed orientation lock from {n} stylesheet(s) · 1.3.4"] if n else []
 
@@ -229,7 +258,7 @@ def _purpose_of(inp) -> str | None:
 
 
 @_register("1.3.5", "auto")
-def _fix_input_purpose(tree) -> list:
+def _fix_input_purpose(tree, diffs=None) -> list:
     n = 0
     for inp in tree.iter("input"):
         if (inp.get("autocomplete") or "").strip():
@@ -244,7 +273,7 @@ def _fix_input_purpose(tree) -> list:
 # ── 1.4.1 Use of Color — underline links styled by colour alone (auto) ──
 # Mirrors frontend/src/rules/wcag-1-4-1.js and scanner.py's HTML_LINK_COLOR_ONLY.
 @_register("1.4.1", "auto")
-def _fix_use_of_color(tree) -> list:
+def _fix_use_of_color(tree, diffs=None) -> list:
     n = 0
     for a in tree.iter("a"):
         s = a.get("style") or ""
@@ -269,7 +298,7 @@ def _role(el) -> str:
 
 
 @_register("2.4.1", "auto")
-def _fix_bypass_blocks(tree) -> list:
+def _fix_bypass_blocks(tree, diffs=None) -> list:
     body = tree.find(".//body")
     if body is None:
         return []
@@ -310,7 +339,7 @@ def _fix_bypass_blocks(tree) -> list:
 # ── 2.4.3 Focus Order — reset positive tabindex to 0 (auto) ──
 # Mirrors frontend/src/rules/wcag-2-4-3.js and scanner.py's HTML_POSITIVE_TABINDEX.
 @_register("2.4.3", "auto")
-def _fix_focus_order(tree) -> list:
+def _fix_focus_order(tree, diffs=None) -> list:
     n = 0
     for el in tree.iter():
         ti = el.get("tabindex") if hasattr(el, "get") else None
@@ -333,7 +362,7 @@ def _fix_focus_order(tree) -> list:
 # heuristic: walk headings in document order and clamp any level that jumps by more
 # than one down to prev+1, so the outline has no gaps and re-scans clean.
 @_register("2.4.6", "auto")
-def _fix_heading_skip(tree) -> list:
+def _fix_heading_skip(tree, diffs=None) -> list:
     heads = {"h1", "h2", "h3", "h4", "h5", "h6"}
     prev, changed = 0, 0
     for el in tree.iter():
@@ -360,7 +389,7 @@ _OUTLINE_SUPPRESS = re.compile(r"outline:\s*(none|0)\b", re.I)
 
 
 @_register("2.4.7", "auto")
-def _fix_focus_visible(tree) -> list:
+def _fix_focus_visible(tree, diffs=None) -> list:
     if next(tree.iter("a", "button", "input", "select", "textarea"), None) is None:
         return []
     n = 0
@@ -380,7 +409,7 @@ def _fix_focus_visible(tree) -> list:
 # ── 2.5.3 Label in Name — make the accessible name contain the visible text (auto) ──
 # Mirrors frontend/src/rules/wcag-2-5-3.js and scanner.py's HTML_LABEL_NOT_IN_NAME.
 @_register("2.5.3", "auto")
-def _fix_label_in_name(tree) -> list:
+def _fix_label_in_name(tree, diffs=None) -> list:
     n = 0
     for el in list(tree.iter("a")) + list(tree.iter("button")):
         aria_raw = el.get("aria-label")
@@ -448,7 +477,7 @@ def _abbr_wrap(parent, anchor, text) -> int:
 
 
 @_register("3.1.4", "auto")
-def _fix_abbr(tree) -> list:
+def _fix_abbr(tree, diffs=None) -> list:
     changed = 0
     for el in [e for e in tree.iter() if isinstance(e.tag, str)]:
         if el.tag in _ABBR_SKIP:
@@ -463,7 +492,7 @@ def _fix_abbr(tree) -> list:
     return [f"Expanded {changed} abbreviation(s) with <abbr> · 3.1.4"] if changed else []
 
 
-def remediate_html(html_text: str, *, ai_enabled: bool = True) -> tuple[str, list, list]:
+def remediate_html(html_text: str, *, ai_enabled: bool = True, diffs=None) -> tuple[str, list, list]:
     """Apply server-side HTML remediation.
 
     Returns (fixed_html, applied_changes, deferred_rule_ids):
@@ -477,7 +506,7 @@ def remediate_html(html_text: str, *, ai_enabled: bool = True) -> tuple[str, lis
     for sc, (mode, fn) in FIXERS.items():
         if mode == "auto":
             try:
-                applied.extend(fn(tree))
+                applied.extend(fn(tree, diffs))
             except Exception:
                 # one fixer failing must never abort the whole remediation
                 pass

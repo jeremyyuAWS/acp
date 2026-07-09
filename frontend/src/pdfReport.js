@@ -7,7 +7,7 @@ import { statusFor } from './exportDeliverables.js'
 import { WCAG } from './wcagCatalog.js'
 import { buildFileCertificationModel } from './reportModel.js'
 
-const INK = '#2B2330', MUTED = '#6B6670', LINE = '#E4E0E8', PLUM = '#4B3460', GREEN = '#3B6D11', AMBER = '#854F0B'
+const INK = '#2B2330', MUTED = '#6B6670', LINE = '#E4E0E8', PLUM = '#4B3460', GREEN = '#3B6D11', AMBER = '#854F0B', RED = '#A32D2D'
 const rgb = (h) => { h = h.replace('#', ''); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)] }
 
 async function logoDataUrl() {
@@ -48,6 +48,37 @@ async function makeDoc({ title = 'mova.io Accessibility Report', lang = 'en-US',
         st.y += lines.length * lh + gap
       })
       st.y += 4
+    },
+    // Before → After evidence blocks: for each remediated finding, the original
+    // text/markup and the remediated version, in a monospace card so markup, hex
+    // colours and attributes read literally. Long values truncate + wrap; a finding
+    // is kept on one page when it fits.
+    beforeAfter(items) {
+      const MONO = 'courier', VS = 8.5, VLH = 11, PAD = 8, MAXCH = 600, MAXLINES = 7
+      const clamp = (s) => { s = String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); return s.length > MAXCH ? s.slice(0, MAXCH - 1) + '…' : s }
+      const wrap = (s) => { const l = doc.splitTextToSize(clamp(s), CW - 4 * PAD - 44); return l.length > MAXLINES ? [...l.slice(0, MAXLINES - 1), l[MAXLINES - 1].replace(/.{1,3}$/, '…')] : l }
+      items.forEach((it) => {
+        const bl = wrap(it.before), al = wrap(it.after)
+        const noteL = it.note ? doc.splitTextToSize(String(it.note), CW - 24) : []
+        const rowH = (lines) => lines.length * VLH + 2 * PAD
+        const total = 17 + noteL.length * 11 + rowH(bl) + 4 + rowH(al) + 12
+        if (st.y + Math.min(total, H - 2 * M) > H - FOOT) { doc.addPage(); st.y = M }
+        ink(PLUM); doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5)
+        doc.text(String(it.label), M, st.y + 10); st.y += 15
+        if (noteL.length) { ink(MUTED); doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.text(noteL, M, st.y + 8); st.y += noteL.length * 11 + 2 }
+        const band = (tag, tagClr, bg, lines) => {
+          const h = rowH(lines)
+          draw(LINE); fill(bg); doc.setLineWidth(0.6); doc.roundedRect(M, st.y, CW, h, 4, 4, 'FD')
+          fill(tagClr); doc.rect(M, st.y, 3, h, 'F')
+          ink(tagClr); doc.setFont('helvetica', 'bold'); doc.setFontSize(7)
+          doc.text(tag, M + PAD, st.y + PAD + 4)
+          ink(INK); doc.setFont(MONO, 'normal'); doc.setFontSize(VS)
+          doc.text(lines, M + PAD + 40, st.y + PAD + 4)
+          st.y += h
+        }
+        band('BEFORE', RED, '#FBF2F1', bl); st.y += 4
+        band('AFTER', GREEN, '#F0F5EA', al); st.y += 12
+      })
     },
     heading(t) {
       ensure(34); ink(PLUM); doc.setFont('helvetica', 'bold'); doc.setFontSize(12.5)
@@ -452,6 +483,7 @@ function renderModelToPdf(p, model) {
       case 'metricGrid': p.metricGrid(b.cards); break
       case 'donut': p.donut(b.items); break
       case 'barChart': p.barChart(b.items, b.o || {}); break
+      case 'beforeAfter': p.beforeAfter(b.items); break
       case 'table': p.table(b.headers, b.rows, b.widths); break
       case 'pageBreak': p.pageBreak(); break
       case 'gap': p.gap(b.h || 8); break

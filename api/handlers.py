@@ -137,9 +137,15 @@ def _remediate_file(payload: dict, job: dict) -> None:
     svc = _drive_client(token)
     data = svc.files().get_media(fileId=drive_file_id).execute()
 
+    # Per-fix before→after evidence for the certification report's "Before → After"
+    # section. Each remediator appends {rule_id (SC), before, after, note}; we persist
+    # only the ones that verifiably cleared on the post-fix re-scan (below).
+    rem_diffs: list[dict] = []
+
     if ext in ("html", "htm"):
         fixed_html, applied, _deferred = remediate_html(
-            data.decode("utf-8", errors="replace"), ai_enabled=core.store.get_ai_enabled())
+            data.decode("utf-8", errors="replace"),
+            ai_enabled=core.store.get_ai_enabled(), diffs=rem_diffs)
         fixed_bytes = fixed_html.encode("utf-8")
         mimetype = "text/html"
     else:  # pdf / office — file-based deterministic remediators (ADR 0005 step 4)
@@ -151,14 +157,14 @@ def _remediate_file(payload: dict, job: dict) -> None:
             if ext == "pdf":
                 from remediate_pdf import remediate_pdf
                 out_path, applied, _skipped = remediate_pdf(
-                    src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id)
+                    src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id, diffs=rem_diffs)
                 mimetype = "application/pdf"
             else:  # docx / pptx / xlsx
                 from remediate_office import remediate_office
                 _applied_fixes: list = []
                 out_path, applied, _skipped = remediate_office(
                     src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
-                    applied_fixes=_applied_fixes)
+                    applied_fixes=_applied_fixes, diffs=rem_diffs)
                 mimetype = _OFFICE_MIME[ext]
                 # Persist the concrete values the AI wrote (vision alt text + image
                 # thumbnail) so "Recent AI fixes" shows what was really applied. Best-effort:
@@ -244,6 +250,15 @@ def _remediate_file(payload: dict, job: dict) -> None:
     # ACTUALLY cleared; the rest stay failing for review, so the app never shows a fix
     # that did not take.
     residual = _verify_residual_scs(fixed_bytes, filename)
+    # Truthfulness gate: keep a before→after record only when its criterion is NOT still
+    # failing on the re-scan (or when the re-scan could not run — same "credit it" posture
+    # as remediation_state below). A fix that did not actually clear never reaches the PDF.
+    try:
+        verified_diffs = [d for d in rem_diffs
+                          if residual is None or d.get("rule_id") not in residual]
+        core.store.record_remediation_diffs(scan_id, filename, verified_diffs)
+    except Exception:
+        pass
     try:
         from documents import resolve_doc_id
         doc_id = resolve_doc_id("drive", drive_file_id, filename, None)

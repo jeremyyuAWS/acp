@@ -192,6 +192,15 @@ _SCHEMA = [
       doc_id TEXT, rule_id TEXT, state TEXT, updated_at TEXT, last_scan_id TEXT,
       PRIMARY KEY (doc_id, rule_id)
     )""",
+    # Per-fix before→after evidence (what actually changed), keyed by the scan+file the
+    # UI has on hand. Written by the remediate_file worker ONLY for fixes that verifiably
+    # cleared on the post-fix re-scan, so the certification PDF's "Before → After" section
+    # never shows a diff for a fix that didn't take. rule_id is the dotted WCAG SC.
+    """CREATE TABLE IF NOT EXISTS remediation_diff (
+      scan_id TEXT, file TEXT, rule_id TEXT, seq INT,
+      before TEXT, after TEXT, note TEXT,
+      PRIMARY KEY (scan_id, file, rule_id, seq)
+    )""",
     # Configurable file disposition (ADR 0003, Phase 3). PREVIEW ONLY as of this
     # migration -- api/disposition.py's matches() tells you which documents a policy
     # would select; nothing executes a real move/rename/archive/delete yet. That
@@ -1065,6 +1074,34 @@ class Store:
                 "SELECT file,rule_id,seq,value,source,thumb,created_at FROM applied_fixes "
                 "WHERE scan_id=%s ORDER BY created_at DESC, file, seq LIMIT %s",
                 (scan_id, limit))
+            return self._db.fetchall(cur)
+
+    def record_remediation_diffs(self, scan_id: str, file: str, diffs: list[dict]) -> None:
+        """Replace the stored before→after records for one (scan, file). Called once per
+        remediate_file run with only the verified-cleared fixes, so a re-run overwrites
+        rather than accumulating stale diffs. No-op for an empty list after clearing."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "DELETE FROM remediation_diff WHERE scan_id=%s AND file=%s", (scan_id, file))
+            seq_by_rule: dict[str, int] = {}
+            for d in diffs:
+                rid = str(d.get("rule_id") or "")
+                seq = seq_by_rule.get(rid, 0)
+                seq_by_rule[rid] = seq + 1
+                self._db.execute(cur,
+                    "INSERT INTO remediation_diff(scan_id,file,rule_id,seq,before,after,note) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s)",
+                    (scan_id, file, rid, seq,
+                     str(d.get("before") or "")[:2000], str(d.get("after") or "")[:2000],
+                     str(d.get("note") or "")[:500]))
+
+    def get_remediation_diffs(self, scan_id: str, file: str) -> list[dict]:
+        """The before→after evidence for one file, ordered by SC then application order —
+        what the certification PDF's 'Before → After' section renders."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT rule_id,seq,before,after,note FROM remediation_diff "
+                "WHERE scan_id=%s AND file=%s ORDER BY rule_id, seq", (scan_id, file))
             return self._db.fetchall(cur)
 
     def get_trace_row(self, scan_id: str, file: str, rule_id: str) -> dict | None:

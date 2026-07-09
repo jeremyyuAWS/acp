@@ -120,6 +120,13 @@ export const getScanTraces = (scanId) => {
 export const getAppliedFixes = (scanId) => (SIM || !scanId
   ? sim([])
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/applied-fixes`, { headers: headers() }).then(j).catch(() => []))
+// Per-fix before→after evidence for one file — the original text/markup → remediated
+// version, persisted only for fixes that verifiably cleared. Feeds the certification PDF's
+// "Before → After" section. SIM has no real remediation to diff → returns nothing.
+export const getFileRemediationDiffs = (scanId, file) => (SIM || !scanId
+  ? sim([])
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/remediation-diffs`,
+          { headers: headers() }).then(j).catch(() => []))
 export const getMe = () => (SIM ? sim(simIdentity()) : fetch(`${BASE}/me`, { headers: headers() }).then(j))
 export const getSources = () => (SIM ? sim(simGetSources()) : fetch(`${BASE}/sources`, { headers: headers() }).then(j))
 export const getRubric = () => (SIM

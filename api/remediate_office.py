@@ -50,6 +50,15 @@ def _xesc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
+def _rec(diffs, rule_id: str, before: str, after: str, note: str = "") -> None:
+    """Append one before→after record for the certification report's "Before → After"
+    section. No-op when the caller passed no collector (default None). rule_id is the
+    dotted WCAG SC, matching how the residual re-scan keys criteria, so the worker can
+    filter these to the fixes that verifiably cleared."""
+    if diffs is not None:
+        diffs.append({"rule_id": rule_id, "before": before, "after": after, "note": note})
+
+
 def _stamp_provenance(entries: dict, applied: list[str]) -> None:
     """Write a remediation provenance stamp into docProps/custom.xml — shows in the
     'Custom' tab of the file's Properties: who/what fixed it, the standard, the date,
@@ -340,7 +349,7 @@ _ALT_TARGETS = [
 
 def _fix_image_alt(entries: dict, *, vision_enabled: bool = False,
                    context_file: str = "", scan_id: str | None = None,
-                   applied_fixes: list | None = None) -> tuple[list[str], int]:
+                   applied_fixes: list | None = None, diffs=None) -> tuple[list[str], int]:
     """Inject alt text across all image-bearing parts — faithful source first, then a
     genuine vision description when vision_enabled. Returns (applied descriptions,
     count of images deferred to human review)."""
@@ -365,6 +374,8 @@ def _fix_image_alt(entries: dict, *, vision_enabled: bool = False,
                 entries[name] = new_xml.encode("utf-8")
                 for alt, origin in fixed:
                     applied.append(f"Alt text \"{alt[:60]}\" set from {origin} · 1.1.1")
+                    _rec(diffs, "1.1.1", "(no alt text — image was skipped by screen readers)",
+                         alt, f"set from {origin}")
     return applied, deferred
 
 
@@ -411,7 +422,7 @@ def _pptx_add_title(xml: str, text: str) -> str:
     return re.sub(r"</p:grpSpPr>|<p:grpSpPr\s*/>", lambda m: m.group(0) + sp, xml, count=1)
 
 
-def _remediate_pptx_slides(entries: dict) -> list[str]:
+def _remediate_pptx_slides(entries: dict, diffs=None) -> list[str]:
     """Mutate ppt/slides/*.xml in place; return the list of applied-fix messages."""
     import office_structure as _osx           # contrast helpers + narrow-scope regexes
     from xml.etree import ElementTree as ET
@@ -439,10 +450,15 @@ def _remediate_pptx_slides(entries: dict) -> list[str]:
             col = _osx._SOLID_SRGB.search(run)
             if not col or _osx._contrast_ratio(bg, col.group(1)) >= 4.5:
                 return run
-            if not "".join(_A_T.findall(run)).strip():
+            text = "".join(_A_T.findall(run)).strip()
+            if not text:
                 return run
             new = "000000" if _osx._contrast_ratio(bg, "000000") >= _osx._contrast_ratio(bg, "FFFFFF") else "FFFFFF"
             n_recolor += 1
+            _rec(diffs, "1.4.3", f"#{col.group(1).upper()} on #{bg.upper()} "
+                 f"({_osx._contrast_ratio(bg, col.group(1)):.1f}:1 — fails AA)",
+                 f"#{new} on #{bg.upper()} ({_osx._contrast_ratio(bg, new):.1f}:1 — passes AA)",
+                 f'text run "{text[:40]}"')
             return run.replace(f'srgbClr val="{col.group(1)}"', f'srgbClr val="{new}"', 1)
 
         return _A_R.sub(fix_run, sp)
@@ -465,6 +481,9 @@ def _remediate_pptx_slides(entries: dict) -> list[str]:
         ordered = sorted(shapes, key=key)
         if ordered != shapes:
             n_reorder += 1
+            _rec(diffs, "1.3.2", "shapes read in the slide's stored (authoring) order",
+                 f"{len(ordered)} shapes re-sequenced top-to-bottom, then left-to-right",
+                 "so a screen reader follows the visual reading order")
             for s in shapes:
                 tree.remove(s)
             for s in ordered:
@@ -476,8 +495,11 @@ def _remediate_pptx_slides(entries: dict) -> list[str]:
         xml = entries[sn].decode("utf-8")
         if not _pptx_has_title(xml):
             texts = [t.strip() for t in _A_T.findall(xml) if t.strip()]
-            xml = _pptx_add_title(xml, (max(texts, key=len) if texts else "Untitled slide")[:250])
+            title_text = (max(texts, key=len) if texts else "Untitled slide")[:250]
+            xml = _pptx_add_title(xml, title_text)
             n_title += 1
+            _rec(diffs, "2.4.2", "(no title — assistive tech announced the slide as “Untitled”)",
+                 title_text, f"programmatic title added to {sn.rsplit('/', 1)[-1]}")
         xml = _P_SP.sub(recolor_run_in_sp, xml)
         entries[sn] = reorder(xml.encode("utf-8"))
 
@@ -491,7 +513,7 @@ def _remediate_pptx_slides(entries: dict) -> list[str]:
     return applied
 
 
-def _remediate_xlsx_contrast(entries: dict) -> list[str]:
+def _remediate_xlsx_contrast(entries: dict, diffs=None) -> list[str]:
     """1.4.3 / 1.4.6 xlsx contrast — clone each offending font with a black/white
     colour and repoint its low-contrast cell style, so every flagged font/fill pair
     reaches the luma-diff the detector requires. Mirrors office_structure's resolver
@@ -521,6 +543,10 @@ def _remediate_xlsx_contrast(entries: dict) -> list[str]:
         new_xfs[i] = re.sub(r'fontId="\d+"', f'fontId="{len(new_fonts)}"', xf, count=1)
         new_fonts.append(cloned)
         changed += 1
+        _hx = lambda a: "#" + (a[-6:] if a and len(a) >= 6 else (a or ""))
+        _rec(diffs, "1.4.3", f"font {_hx(fh)} on fill {_hx(kh)} — too little luminance difference",
+             f"font {_hx(target)} on fill {_hx(kh)}",
+             "cell text recoloured to reach the required contrast")
     if not changed:
         return []
     fonts_inner = "".join(f"<font>{f}</font>" for f in new_fonts)
@@ -533,7 +559,7 @@ def _remediate_xlsx_contrast(entries: dict) -> list[str]:
     return [f"Recoloured {changed} low-contrast cell style(s) to reach AA/AAA · 1.4.3 / 1.4.6"]
 
 
-def _remediate_docx_structure(entries: dict) -> list[str]:
+def _remediate_docx_structure(entries: dict, diffs=None) -> list[str]:
     """Deterministic docx structural fixes that clear the analyser (WCAG 1.3.1):
     mark the first row of every multi-row table as a header row (w:tblHeader), and ensure
     the heading outline has exactly one Heading 1. Uses lxml so every OOXML namespace in
@@ -562,6 +588,9 @@ def _remediate_docx_structure(entries: dict) -> list[str]:
         if trPr.find(f"{{{W}}}tblHeader") is None:
             trPr.insert(0, trPr.makeelement(f"{{{W}}}tblHeader", {}))
             tbl_fixed += 1
+            _rec(diffs, "1.3.1", "first row was ordinary data cells (<w:tr>)",
+                 "first row marked as a repeating header row (<w:tblHeader/>)",
+                 "so a screen reader announces the column heading for every data cell")
     if tbl_fixed:
         applied.append(f"Marked the first row as a header on {tbl_fixed} table(s) · 1.3.1")
 
@@ -585,10 +614,16 @@ def _remediate_docx_structure(entries: dict) -> list[str]:
         if not h1s:
             headings[0][0].set(f"{{{W}}}val", h1_id)
             applied.append("Promoted the top heading to Heading 1 · 1.3.1")
+            _rec(diffs, "1.3.1", f"top heading styled “{headings[0][1]}” — document had no Heading 1",
+                 f"top heading promoted to “{h1_id}”",
+                 "so the outline has a single, unambiguous document title level")
         elif len(h1s) > 1:
             for st, _ in h1s[1:]:
                 st.set(f"{{{W}}}val", h2_id)
             applied.append(f"Demoted {len(h1s) - 1} extra Heading 1(s) to Heading 2 · 1.3.1")
+            _rec(diffs, "1.3.1", f"{len(h1s)} separate Heading 1s competed as the document title",
+                 f"kept 1 Heading 1; demoted {len(h1s) - 1} to “{h2_id}”",
+                 "so the heading outline nests correctly under one title")
 
         # Heading skips (2.4.6): after the 1.3.1 outline fix, walk the headings in
         # document order and clamp any level that jumps by more than one down to
@@ -635,10 +670,16 @@ def _remediate_docx_structure(entries: dict) -> list[str]:
                 if _osx._contrast_ratio(bg, fg) >= 4.5:
                     continue
                 new = "000000" if _osx._contrast_ratio(bg, "000000") >= _osx._contrast_ratio(bg, "FFFFFF") else "FFFFFF"
+                ratio_before = _osx._contrast_ratio(bg, fg)
+                ratio_after = _osx._contrast_ratio(bg, new)
             except Exception:
                 continue
             color.set(val_attr, new)
             contrast_fixed += 1
+            run_text = "".join(t.text or "" for t in run.iter(f"{{{W}}}t")).strip()
+            _rec(diffs, "1.4.3", f"#{fg.upper()} on #{bg.upper()} ({ratio_before:.1f}:1 — fails AA)",
+                 f"#{new} on #{bg.upper()} ({ratio_after:.1f}:1 — passes AA)",
+                 f'text run "{run_text[:40]}"' if run_text else "low-contrast text run")
     if contrast_fixed:
         applied.append(f"Recoloured {contrast_fixed} low-contrast run(s) to ≥4.5:1 · 1.4.3")
 
@@ -647,7 +688,7 @@ def _remediate_docx_structure(entries: dict) -> list[str]:
     return applied
 
 
-def _remediate_xlsx_structure(entries: dict) -> list[str]:
+def _remediate_xlsx_structure(entries: dict, diffs=None) -> list[str]:
     """Deterministic xlsx structural fixes: give every defined table a header row
     (headerRowCount>=1, WCAG 1.3.1) and unhide any row/column that is hidden but holds
     data (WCAG 1.3.2) — matching the analyser's TableHeaderRule and HiddenContentRule."""
@@ -665,6 +706,9 @@ def _remediate_xlsx_structure(entries: dict) -> list[str]:
                 root.set("headerRowCount", "1")
                 entries[name] = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
                 tbl_fixed += 1
+                _rec(diffs, "1.3.1", 'table defined with headerRowCount="0" (no header row)',
+                     'headerRowCount="1"',
+                     "so the first row is announced as column headers")
     if tbl_fixed:
         applied.append(f"Gave {tbl_fixed} table(s) a header row · 1.3.1")
 
@@ -710,12 +754,15 @@ def _remediate_xlsx_structure(entries: dict) -> list[str]:
             entries[name] = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
     if hid_fixed:
         applied.append(f"Unhid {hid_fixed} hidden row(s)/column(s) that contained data · 1.3.2")
+        _rec(diffs, "1.3.2", f"{hid_fixed} row(s)/column(s) held data but were hidden — skipped by assistive tech",
+             "hidden flag removed so the data is in the reading sequence",
+             "only lines that actually contained values were unhidden")
 
     return applied
 
 
 def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True,
-                     scan_id: str | None = None, applied_fixes: list | None = None):
+                     scan_id: str | None = None, applied_fixes: list | None = None, diffs=None):
     """Apply deterministic Office accessibility fixes to a copy of the file.
 
     ai_enabled — when True and a vision (llava-class) Ollama model is reachable,
@@ -739,18 +786,21 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
     root = ET.fromstring(entries[_CORE].decode("utf-8"))
     applied: list[str] = []
 
-    def _ensure(tag_uri: str, tag: str, value: str, label: str):
+    def _ensure(tag_uri: str, tag: str, value: str, label: str, sc: str, before: str):
         el = root.find(f"{{{tag_uri}}}{tag}")
         if el is None or not (el.text or "").strip():
             if el is None:
                 el = ET.SubElement(root, f"{{{tag_uri}}}{tag}")
             el.text = value
             applied.append(label.format(value=value))
+            _rec(diffs, sc, before, value, f"read by assistive tech from docProps/core.xml (dc:{tag})")
 
-    _ensure(_DC, "language", lang, "Set document language to '{value}'")
+    _ensure(_DC, "language", lang, "Set document language to '{value}'",
+            "3.1.1", "(no language declared — screen readers guessed pronunciation)")
     # A meaningful title beats an empty one; derive a readable default from the name.
     title = path.stem.replace("-", " ").replace("_", " ").strip() or "Document"
-    _ensure(_DC, "title", title, "Set document title to '{value}'")
+    _ensure(_DC, "title", title, "Set document title to '{value}'",
+            "2.4.2", "(no document title — could not be identified in assistive tech)")
 
     # Image alt text (WCAG 1.1.1) — faithful source first, then a genuine vision
     # description when AI is on and a vision model is reachable; the rest defer to review.
@@ -763,7 +813,7 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
             vision_enabled = False
     alt_applied, alt_deferred = _fix_image_alt(
         entries, vision_enabled=vision_enabled, context_file=path.name, scan_id=scan_id,
-        applied_fixes=applied_fixes)
+        applied_fixes=applied_fixes, diffs=diffs)
     applied.extend(alt_applied)
     skipped: list[str] = []
     if alt_deferred:
@@ -773,14 +823,14 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
     # docx structural fixes (table header rows + heading outline) — WCAG 1.3.1.
     if path.suffix.lower() == ".docx":
         try:
-            applied.extend(_remediate_docx_structure(entries))
+            applied.extend(_remediate_docx_structure(entries, diffs))
         except Exception:
             skipped.append("docx structural fixes (table headers / heading outline) could not be applied")
 
     # pptx-only structural fixes that need the slide XML (title / contrast / reading order).
     if path.suffix.lower() == ".pptx":
         try:
-            applied.extend(_remediate_pptx_slides(entries))
+            applied.extend(_remediate_pptx_slides(entries, diffs))
         except Exception:
             skipped.append("slide-level pptx fixes (title/contrast/reading order) could not be applied")
 
@@ -788,11 +838,11 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
     # luma-diff the detector requires (mirrors the pptx contrast fix).
     if path.suffix.lower() == ".xlsx":
         try:
-            applied.extend(_remediate_xlsx_contrast(entries))
+            applied.extend(_remediate_xlsx_contrast(entries, diffs))
         except Exception:
             skipped.append("xlsx contrast recolour could not be applied")
         try:
-            applied.extend(_remediate_xlsx_structure(entries))
+            applied.extend(_remediate_xlsx_structure(entries, diffs))
         except Exception:
             skipped.append("xlsx structural fixes (table headers / hidden content) could not be applied")
 
