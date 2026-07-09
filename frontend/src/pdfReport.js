@@ -231,8 +231,6 @@ async function makeDoc({ title = 'mova.io Accessibility Report', lang = 'en-US',
 }
 
 const ACTION_LABEL = { auto: 'Auto-fix (deterministic)', assisted: 'AI-assisted + review', review: 'Human review', manual: 'Manual rebuild', archive: 'Archive', keep: 'Keep as-is' }
-const hrs = (min) => `${Math.round((min || 0) / 60)}h`
-const personDays = (min) => `${((min || 0) / 60 / 8).toFixed(1)} person-days`
 
 // Quarterly governance report (Overview) — a detailed, board-ready document.
 export async function exportGovernanceReport(d) {
@@ -265,11 +263,13 @@ export async function exportGovernanceReport(d) {
   }
 
   if (d.rec && d.rec.buckets && d.rec.buckets.length) {
-    p.heading('Remediation roadmap & effort')
-    p.table(['Remediation action', 'Documents', 'Est. effort'],
-      d.rec.buckets.map((b) => [ACTION_LABEL[b.action] || b.action, String(b.n), hrs(b.min)]),
-      [p.CW - 230, 110, 120])
-    p.text(`Total remediation effort: ${hrs(d.rec.remediateMin)} (~${personDays(d.rec.remediateMin)}) across ${d.rec.remediableDocs} document(s). ${d.rec.autoPct}% is fully automated, saving ${hrs(d.rec.savedMin)} versus manual remediation.`, { size: 9.5, gapAfter: 6 })
+    // No effort or savings figures here. They came from a fixed per-finding constant
+    // (sim.js recommendFor), not from measurement — and this is a conformance artifact a
+    // customer relies on. Document counts per action are real; hours were never observed.
+    p.heading('Remediation roadmap')
+    p.table(['Remediation action', 'Documents'],
+      d.rec.buckets.map((b) => [ACTION_LABEL[b.action] || b.action, String(b.n)]),
+      [p.CW - 110, 110])
     if (d.lift) p.text(`Projected estate score after the queued remediation is approved and re-validated: ${d.lift.before} → ${d.lift.after} (+${d.lift.after - d.lift.before} points).`, { size: 9.5, color: GREEN })
   }
 
@@ -339,8 +339,6 @@ function impactGroups(findings) {
   return out
 }
 // Rough per-finding manual effort estimate (minutes), weighted by severity
-const SEV_MIN = { CRITICAL: 45, SERIOUS: 30, MODERATE: 20, MINOR: 10 }
-const AUTO_MIN = 2 // per finding the platform auto-fixes
 
 // Per-document conformance report (Upload) — a detailed, beautiful, LLM-narrated PDF.
 export async function exportDocumentReport(d) {
@@ -418,22 +416,20 @@ export async function exportDocumentReport(d) {
     p.gap(4)
   }
 
-  // Time & effort savings
+  // What the platform actually did to this document.
   const autoN = d.autoFix ?? 0
   const humanN = d.humanReview ?? 0
   const totalN = findings.length || autoN + humanN
-  const manualMin = findings.reduce((s, f) => s + (SEV_MIN[(f.sev || '').toUpperCase()] || 20), 0) + 20
-  const platformMin = autoN * AUTO_MIN + humanN * 5
-  const savedMin = Math.max(0, manualMin - platformMin)
-  const savedPct = manualMin > 0 ? Math.round((savedMin / manualMin) * 100) : 0
-  p.heading('Remediation efficiency')
+  // The "manual effort" / "effort saved" figures that used to live here were derived from a
+  // per-severity minutes constant nobody measured, then printed as a quantified savings claim
+  // in a customer-facing report. Removed. What follows is only what actually happened.
+  p.heading('Remediation outcome')
   p.metricGrid([
+    { label: 'Findings', value: totalN, color: AMBER },
     { label: 'Auto-fixed', value: autoN, color: GREEN },
     { label: 'Human reviewed', value: humanN, color: '#1F5FA8' },
-    { label: 'Manual effort (est.)', value: `~${Math.round(manualMin / 60 * 10) / 10}h`, color: AMBER },
-    { label: 'Effort saved', value: `${savedPct}%`, color: GREEN },
   ])
-  p.text(`Manual remediation of ${totalN} finding(s) at this severity mix is estimated at ~${Math.round(manualMin)} minutes (~${(manualMin / 60).toFixed(1)}h) by a document author. The mova.io platform auto-fixed ${autoN} finding(s) deterministically and routed ${humanN} to human review — estimated platform time ${Math.round(platformMin)} minutes, saving ~${Math.round(savedMin)} minutes (${savedPct}% reduction).`, { size: 9.5, gapAfter: 7 })
+  p.text(`Of ${totalN} finding(s), the mova.io platform auto-fixed ${autoN} deterministically and routed ${humanN} to human review.`, { size: 9.5, gapAfter: 7 })
   p.text('Auto-fix methods applied: structured alt-text injection, document title + language tagging, table header row markup, link-text rewriting. Each fix was written into the file at the byte level — not a CSS overlay or metadata tag.', { size: 9, color: MUTED, lh: 13 })
 
   // Conformance statement (audit evidence page)
@@ -613,11 +609,10 @@ export async function exportScanReport(d) {
     { label: 'Automation rate', value: `${d.effort?.autoPct ?? 0}%`, color: GREEN },
   ])
   if (rt.buckets && rt.buckets.length) {
-    p.table(['Routing', 'Documents', 'Est. effort'],
-      rt.buckets.map((b) => [ACTION_LABEL[b.action] || b.action, String(b.n), hrs(b.min)]),
-      [p.CW - 130 - 120, 130, 120])
+    p.table(['Routing', 'Documents'],
+      rt.buckets.map((b) => [ACTION_LABEL[b.action] || b.action, String(b.n)]),
+      [p.CW - 130, 130])
   }
-  if (d.effort) p.text(`Estimated remediation effort across ${d.effort.remediableDocs} document(s): ${hrs(d.effort.remediateMin)} (~${personDays(d.effort.remediateMin)}). Automated fixes save ~${hrs(d.effort.savedMin)} versus fully-manual remediation.`, { size: 9.5 })
 
   p.heading('Human-in-the-loop review queue')
   const h = d.hitl || {}

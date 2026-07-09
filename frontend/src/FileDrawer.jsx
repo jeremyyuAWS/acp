@@ -11,6 +11,8 @@ import { confidenceForFinding, confidenceForCoverage, confClass } from './confid
 import { TraceChip } from './Transparency.jsx'
 import Thumbnail from './Thumbnail.jsx'
 import { DEVA_20 } from './deva20.js'
+import { fmtEffort, EFFORT_BASIS } from './effort.js'
+export { fmtEffort, EFFORT_BASIS }
 
 // Prescriptive-action styling, shared with the Discover inventory.
 // Distinct hue per action so a long list scans at a glance. The human-touch
@@ -24,7 +26,6 @@ export const REC_STYLE = {
   keep: ['Keep · monitor', '#D8F0EA', '#176B5B', '✓'],
   manual: ['Manual rebuild', '#E2EDFB', '#1F5FA8', '⚠'],
 }
-export const fmtEffort = (m) => m == null ? '—' : m === 0 ? 'no work' : m >= 90 ? `~${(m / 60).toFixed(1)} hrs` : `~${Math.round(m)} min`
 const MODE_LABEL = { auto: 'fully automatic', assisted: 'AI + human review', manual: 'manual', monitor: 'monitor only' }
 
 // Single-file remediation narration — mirrors the real pipeline order in
@@ -561,7 +562,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           <div className="reccard" style={{ borderColor: fg + '55' }}>
             <div className="recheadrow">
               <span className="recbadge" style={{ background: bg, color: fg }}>{icon} {label}</span>
-              <span className="receta">{fmtEffort(r.etaMin)}</span>
+              <span className="receta" title={EFFORT_BASIS}>{fmtEffort(r.etaMin)}</span>
             </div>
             <p className="recwhy">{r.rationale}</p>
             <div className="recmeta">

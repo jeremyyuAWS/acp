@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
-import FileDrawer, { REC_STYLE, fmtEffort, SOURCE_URL } from './FileDrawer.jsx'
+import FileDrawer, { REC_STYLE, fmtEffort, EFFORT_BASIS, SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
@@ -931,7 +931,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                           </span>
                         )}
                       </span>
-                      <span className="etacell">{fmtEffort(effEta)}</span>
+                      <span className="etacell" title={EFFORT_BASIS}>{fmtEffort(effEta)}</span>
                     </div>
                   )
                 })}

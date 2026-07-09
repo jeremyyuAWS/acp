@@ -172,6 +172,13 @@ const AUTO_FIX_SC_BY_TYPE = {
   pptx: new Set(['3.1.1', '2.4.2', '1.1.1']),
   xlsx: new Set(['3.1.1', '2.4.2', '1.1.1']),
 }
+// No `confidence` field. It used to return `90 + (n % 9)` and `70 + (n % 14)` — a confidence
+// PERCENTAGE derived from the finding count modulo a number. Nothing rendered it, but it sat
+// here waiting to be wired to a UI. Evidence-based confidence lives in confidence.js
+// (High/Med/Low + a stated basis), which is the only confidence this product may show.
+//
+// etaMin/manualMin remain a planning heuristic from fixed per-finding constants. They are
+// labelled "est." wherever they render (fmtEffort) and appear in no certification report.
 function recommendFor(f) {
   const issues = f.issues || []; const n = issues.length
   const scIds = issues.map((x) => scId(x.wcag)).filter(Boolean)
@@ -196,7 +203,7 @@ function recommendFor(f) {
 
   if (f.status === 'error') {
     const eta = f.type === 'pdf' ? 45 : 30
-    return { action: 'manual', mode: 'manual', confidence: null, etaMin: eta, manualMin: eta, rationale: 'File is unreadable — the engine can’t parse it. A human must re-author or re-export the source before it can be assessed.' }
+    return { action: 'manual', mode: 'manual', etaMin: eta, manualMin: eta, rationale: 'File is unreadable — the engine can’t parse it. A human must re-author or re-export the source before it can be assessed.' }
   }
 
   // f.status is one of the backend's actual values (analysed/uncertain/error) — never the
@@ -208,18 +215,18 @@ function recommendFor(f) {
   // and SIM's genCorpus) and is what statusOf() itself derives "certifiable" from.
   if (f.compliant) {
     if (f.superseded || (hasCrawl && stale && lowTraffic))
-      return { action: 'archive', mode: 'auto', confidence: 84, etaMin: 2, rationale: `Compliant, but ${f.superseded ? 'a newer version exists' : `last edited ${fmtAge(f.ageDays)} with ${f.views90d} views/90d`} — archive to shrink the audited estate.` }
-    return { action: 'keep', mode: 'monitor', confidence: 99, etaMin: 0, rationale: `Certifiable at ${f.score}/100${hasCrawl ? ` with ${f.views90d} views/90d` : ''}. Keep published under continuous monitoring for drift.` }
+      return { action: 'archive', mode: 'auto', etaMin: 2, rationale: `Compliant, but ${f.superseded ? 'a newer version exists' : `last edited ${fmtAge(f.ageDays)} with ${f.views90d} views/90d`} — archive to shrink the audited estate.` }
+    return { action: 'keep', mode: 'monitor', etaMin: 0, rationale: `Certifiable at ${f.score}/100${hasCrawl ? ` with ${f.views90d} views/90d` : ''}. Keep published under continuous monitoring for drift.` }
   }
 
   if (f.superseded)
-    return { action: 'archive', mode: 'auto', confidence: 88, etaMin: 2, rationale: `Superseded by a newer version and only ${f.views90d} views/90d — archiving avoids ~${manualMin} min of remediation on a dead document.` }
+    return { action: 'archive', mode: 'auto', etaMin: 2, rationale: `Superseded by a newer version and only ${f.views90d} views/90d — archiving avoids ~${manualMin} min of remediation on a dead document.` }
   if (hasCrawl && stale && lowTraffic && !sensitive)
-    return { action: 'archive', mode: 'auto', confidence: 78, etaMin: 2, rationale: `${n} finding${n === 1 ? '' : 's'}, but last edited ${fmtAge(f.ageDays)} with ${f.views90d} views/90d — not worth ${manualMin} min of remediation.` }
+    return { action: 'archive', mode: 'auto', etaMin: 2, rationale: `${n} finding${n === 1 ? '' : 's'}, but last edited ${fmtAge(f.ageDays)} with ${f.views90d} views/90d — not worth ${manualMin} min of remediation.` }
 
   if (f.status === 'uncertain') {
     const eta = 8 + (f.skipped_rules || 0) * 4
-    return { action: 'review', mode: 'assisted', confidence: 66, etaMin: eta, manualMin, savingsPct: sav(eta), rationale: `${f.skipped_rules} rule(s) couldn’t be auto-evaluated — a reviewer confirms before this can be certified.` }
+    return { action: 'review', mode: 'assisted', etaMin: eta, manualMin, savingsPct: sav(eta), rationale: `${f.skipped_rules} rule(s) couldn’t be auto-evaluated — a reviewer confirms before this can be certified.` }
   }
 
   // Escalate to a human when the fix needs judgement (contrast / link), the content
@@ -230,7 +237,7 @@ function recommendFor(f) {
   const escalate = mediaFinding || hardFinding || legalHold || (hasCritical && publicDoc) || formatBlocksAuto
   if (!escalate) {
     const eta = Math.max(1, Math.round(n * (f.type === 'pdf' ? 1.6 : 1.0)))
-    return { action: 'auto', mode: 'auto', confidence: 90 + (n % 9), etaMin: eta, manualMin, savingsPct: sav(eta), rationale: `All ${n} finding${n === 1 ? '' : 's'} are mechanical (alt text, headings, language, titles) — fixed automatically and re-validated. No human needed.` }
+    return { action: 'auto', mode: 'auto', etaMin: eta, manualMin, savingsPct: sav(eta), rationale: `All ${n} finding${n === 1 ? '' : 's'} are mechanical (alt text, headings, language, titles) — fixed automatically and re-validated. No human needed.` }
   }
   const eta = issues.reduce((a, x) => a + (ASSIST_MIN[x.severity] || 5), 0) + 6
   const fmt = String(f.type || 'file').toUpperCase()
@@ -239,7 +246,7 @@ function recommendFor(f) {
     : legalHold ? 'Legal-hold content is never auto-edited'
     : formatBlocksAuto ? `Only ${autoCount} of ${n} finding${n === 1 ? '' : 's'} are mechanically fixable in a ${fmt} (e.g. language, title); the rest need a human`
     : 'A critical finding on a public, high-traffic page'
-  return { action: 'assisted', mode: 'assisted', confidence: 70 + (n % 14), etaMin: eta, manualMin, savingsPct: sav(eta), rationale: `${reason} — a human approves the AI fix before publish.` }
+  return { action: 'assisted', mode: 'assisted', etaMin: eta, manualMin, savingsPct: sav(eta), rationale: `${reason} — a human approves the AI fix before publish.` }
 }
 
 function genCorpus() {
