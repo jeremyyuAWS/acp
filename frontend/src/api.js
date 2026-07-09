@@ -300,13 +300,23 @@ export const listHitlQueue = (scanId, status = null) => (SIM
   : fetch(`${BASE}/hitl/queue?scan_id=${encodeURIComponent(scanId)}${status ? `&status=${status}` : ''}`, { headers: headers() }).then(j))
 // Update a HITL item (approved / rejected / skipped) with an optional reviewer note
 // and/or the reviewer's final (AI-drafted or hand-edited) approved_value.
-export const updateHitlItem = (itemId, status, reviewerNote = null, approvedValue = null) => (SIM
+// opts (optional) carries review telemetry for the Intelligent Review Workspace:
+// { edited } — reviewer changed the AI draft before approving (confidence-calibration signal);
+// { reviewMs } — time from card-open to decision (the reviewer-time-saved metric);
+// { aiValue } — the AI-proposed value shown, so the server stores proposed-vs-final.
+export const updateHitlItem = (itemId, status, reviewerNote = null, approvedValue = null, opts = {}) => (SIM
   ? sim({ id: itemId, status })
   : fetch(`${BASE}/hitl/queue/${encodeURIComponent(itemId)}`, {
       method: 'PUT',
       headers: headers({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ status, reviewer_note: reviewerNote, approved_value: approvedValue }),
+      body: JSON.stringify({ status, reviewer_note: reviewerNote, approved_value: approvedValue,
+        edited: !!opts.edited, review_ms: opts.reviewMs ?? null, ai_value: opts.aiValue ?? null }),
     }).then(j))
+// HITL review telemetry for the workspace dashboard — decisions by action, approval rate,
+// edit rate (confidence-calibration signal), avg review time (reviewer-time-saved). Scan-scoped.
+export const getHitlAnalytics = (scanId = null) => (SIM
+  ? sim({ total: 0, by_action: {}, reviewed: 0, approval_rate: null, edit_rate: null, avg_review_ms: null })
+  : fetch(`${BASE}/hitl/analytics${scanId ? `?scan_id=${encodeURIComponent(scanId)}` : ''}`, { headers: headers() }).then(j).catch(() => null))
 // Draft a concrete fix value (alt text / link text / title) via the local AI model
 // for one semantic finding. Reviewer accepts/edits it — never auto-applied here.
 export const suggestFix = (scanId, file, ruleId) => (SIM

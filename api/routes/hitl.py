@@ -13,6 +13,9 @@ class HitlUpdate(BaseModel):
     status: str                     # pending | approved | rejected | skipped
     reviewer_note: str | None = None
     approved_value: str | None = None   # AI-drafted or hand-edited final text (alt/link text)
+    edited: bool = False                # reviewer changed the AI draft before approving (calibration signal)
+    review_ms: int | None = None        # client-measured time from card-open to decision (reviewer-time metric)
+    ai_value: str | None = None         # the AI-proposed value shown, so we store proposed-vs-final
 
 
 @router.post("/hitl/queue/{scan_id}/auto")
@@ -54,8 +57,19 @@ def hitl_list(request: Request, status: str | None = None, scan_id: str | None =
     return core.store.list_hitl_queue(status=status, scan_id=scan_id, owner=owner)
 
 
+@router.get("/hitl/analytics")
+def hitl_metrics(request: Request, scan_id: str | None = None):
+    """Human-review telemetry for the Intelligent Review Workspace dashboard — decisions by
+    action, approval rate, edit rate (confidence-calibration signal), and average review time
+    (the headline metric: reviewer time eliminated). Scoped to one scan when scan_id is given."""
+    if scan_id is not None and core.store.get_scan(
+            scan_id, owner=getattr(request.state, "user_email", None)) is None:
+        raise HTTPException(404, "scan not found")
+    return core.store.hitl_analytics(scan_id)
+
+
 @router.put("/hitl/queue/{item_id}")
-def hitl_update(item_id: str, body: HitlUpdate):
+def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     """Update a HITL review item status (approve, reject, skip) with an optional reviewer note."""
     item = core.store.get_hitl_item(item_id)
     if item is None:
@@ -73,6 +87,19 @@ def hitl_update(item_id: str, body: HitlUpdate):
         "reviewer", f"hitl.{body.status}",
         scan_id=item.get("scan_id"), file=item.get("file"), rule_id=item.get("rule_id"),
         detail=_detail)
+    # Review telemetry (Intelligent Review Workspace): one event per decision so we can
+    # report reviewer time saved + calibrate confidence from the edit/reject signal.
+    # Best-effort — never blocks the review.
+    try:
+        _action = ("edit" if (body.status == "approved" and body.edited)
+                   else {"approved": "approve", "rejected": "reject", "skipped": "skip"}.get(body.status, body.status))
+        core.store.record_hitl_event(
+            item.get("scan_id"), item.get("file"), item.get("rule_id"), item_id, _action,
+            edited=body.edited, review_ms=body.review_ms, ai_value=body.ai_value,
+            final_value=body.approved_value,
+            reviewer=(getattr(request.state, "user_email", None) if request is not None else None))
+    except Exception:
+        pass
     # Observability: the human decision joins the file's Langfuse trace (audit P1 — HITL
     # decisions were previously untraced). Best-effort; never blocks the review.
     try:

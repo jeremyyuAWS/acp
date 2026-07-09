@@ -201,6 +201,16 @@ _SCHEMA = [
       before TEXT, after TEXT, note TEXT,
       PRIMARY KEY (scan_id, file, rule_id, seq)
     )""",
+    # HITL review telemetry — one row per human decision, so the Intelligent Review
+    # Workspace can report the metric that matters (reviewer TIME eliminated) and calibrate
+    # confidence from the human's edit/reject signal. action: approve|edit|reject|skip;
+    # edited = the reviewer changed the AI draft before approving (the calibration signal);
+    # review_ms = client-measured time from card-open to decision.
+    """CREATE TABLE IF NOT EXISTS hitl_events (
+      id TEXT PRIMARY KEY, scan_id TEXT, file TEXT, rule_id TEXT, item_id TEXT,
+      action TEXT, edited INT, review_ms INT, ai_value TEXT, final_value TEXT,
+      reviewer TEXT, created_at TEXT
+    )""",
     # Configurable file disposition (ADR 0003, Phase 3). PREVIEW ONLY as of this
     # migration -- api/disposition.py's matches() tells you which documents a policy
     # would select; nothing executes a real move/rename/archive/delete yet. That
@@ -1094,6 +1104,50 @@ class Store:
                     (scan_id, file, rid, seq,
                      str(d.get("before") or "")[:2000], str(d.get("after") or "")[:2000],
                      str(d.get("note") or "")[:500]))
+
+    def record_hitl_event(self, scan_id: str, file: str, rule_id: str, item_id: str,
+                          action: str, *, edited: bool = False, review_ms: int | None = None,
+                          ai_value: str | None = None, final_value: str | None = None,
+                          reviewer: str | None = None) -> None:
+        """One immutable row per human review decision — the telemetry the Intelligent
+        Review Workspace reports on (reviewer time saved) and calibrates from (edit rate on
+        High-confidence proposals). Best-effort: callers wrap so it never blocks a review."""
+        from datetime import datetime, timezone
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO hitl_events(id,scan_id,file,rule_id,item_id,action,edited,"
+                "review_ms,ai_value,final_value,reviewer,created_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (uuid.uuid4().hex, scan_id, file, rule_id, item_id, action,
+                 1 if edited else 0, review_ms, ai_value or None, final_value or None,
+                 reviewer, datetime.now(timezone.utc).isoformat()))
+
+    def hitl_analytics(self, scan_id: str | None = None) -> dict:
+        """Aggregate HITL review telemetry — headline metric is reviewer time eliminated,
+        not % automated. Scoped to one scan when scan_id is given (owner-checked at the
+        route), else across all recorded decisions."""
+        with self._db.cursor() as cur:
+            if scan_id:
+                self._db.execute(cur,
+                    "SELECT action,edited,review_ms FROM hitl_events WHERE scan_id=%s", (scan_id,))
+            else:
+                self._db.execute(cur, "SELECT action,edited,review_ms FROM hitl_events")
+            rows = self._db.fetchall(cur)
+        by: dict = {}
+        for r in rows:
+            by[r["action"]] = by.get(r["action"], 0) + 1
+        approvals = by.get("approve", 0) + by.get("edit", 0)
+        decided = len(rows) - by.get("skip", 0)
+        edited_n = sum(1 for r in rows if r.get("edited"))
+        ms = [r["review_ms"] for r in rows if r.get("review_ms") is not None]
+        return {
+            "total": len(rows),
+            "by_action": by,
+            "reviewed": decided,
+            "approval_rate": round(approvals / decided, 3) if decided else None,
+            "edit_rate": round(edited_n / approvals, 3) if approvals else None,   # calibration signal
+            "avg_review_ms": round(sum(ms) / len(ms)) if ms else None,
+        }
 
     def get_remediation_diffs(self, scan_id: str, file: str) -> list[dict]:
         """The before→after evidence for one file, ordered by SC then application order —
