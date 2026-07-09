@@ -100,8 +100,23 @@ def _normalize(files: list[dict]) -> list[dict]:
     """
     result = []
     seen: set[str] = set()
+    seen_ids: set[str] = set()
     skipped = 0
+    relisted = 0
     for f in files:
+        # IDENTITY dedup comes first. Drive can hand the SAME file back more than once in a
+        # single discovery: a file may have several parents (so a subtree BFS meets it twice),
+        # corpora="allDrives" can surface it from My Drive and a Shared Drive, and paged
+        # listings can overlap. Without this, the name-dedup below renames the second sighting
+        # to "Report (1).pptx" — a phantom document that the UI then shows as "x2 copies",
+        # inflates the file count, and gets downloaded and scanned a second time.
+        # A Drive file id IS the document's identity; two parents do not make two documents.
+        fid = f.get("id")
+        if fid is not None:
+            if fid in seen_ids:
+                relisted += 1
+                continue
+            seen_ids.add(fid)
         mime = f.get("mimeType", "")
         raw_name = f["name"]
         if mime in EXPORT_MAP:
@@ -115,7 +130,9 @@ def _normalize(files: list[dict]) -> list[dict]:
                 skipped += 1
                 continue
             name = _safe_name(raw_name)
-        # Deduplicate: Drive can have same-name files in different folders
+        # Disambiguate GENUINELY DISTINCT files that share a name (Drive allows two different
+        # file ids named the same; a filesystem wouldn't). Reaching here means the id is new,
+        # so a " (N)" suffix always denotes a real second document — never a re-listing.
         unique = name
         n = 1
         while unique in seen:
@@ -136,6 +153,9 @@ def _normalize(files: list[dict]) -> list[dict]:
         # mistaken for 'everything was covered'.
         print(f"[scan] {skipped} file(s) skipped as unsupported for accessibility scanning "
               f"(only pdf/docx/pptx/xlsx/html are analysed)", flush=True)
+    if relisted:
+        print(f"[scan] {relisted} duplicate listing(s) of the same Drive file id collapsed "
+              f"(multi-parent / shared-drive / paging overlap) — not extra documents", flush=True)
     return result
 
 
