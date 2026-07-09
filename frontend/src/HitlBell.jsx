@@ -36,6 +36,13 @@ export default function HitlBell() {
     return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey) }
   }, [open])
 
+  // Unify: any part of the app can open the inbox by dispatching 'acp:open-inbox'.
+  useEffect(() => {
+    const open = () => { setCenter(true); load() }
+    window.addEventListener('acp:open-inbox', open)
+    return () => window.removeEventListener('acp:open-inbox', open)
+  }, [load])
+
   const act = useCallback((itemId, status, note = null, approvedValue = null) => {
     // Optimistic: mark resolved locally so it leaves `pending` (and the metrics update)
     // immediately — the inbox feels instant. load() reconciles with server truth; a

@@ -488,7 +488,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           <span style={{ fontSize: 15 }} aria-hidden="true">⚑</span>
           <b style={{ color: '#7A5A12', fontSize: 13.5 }}>{queue.length} document{queue.length !== 1 ? 's' : ''} need your review</b>
           <span className="muted" style={{ fontSize: 12 }}>· AI-assisted fixes and low-confidence findings need human sign-off before they can be certified.</span>
-          <button className="qbtn approve" style={{ marginLeft: 'auto' }} onClick={() => document.getElementById('rem-review')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>Review now →</button>
+          <button className="qbtn approve" style={{ marginLeft: 'auto' }} onClick={() => window.dispatchEvent(new Event('acp:open-inbox'))}>Review now →</button>
         </div>
       )}
       <div className="metrics">

@@ -24,6 +24,8 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
   const rejectedN = items.filter((i) => i.status === 'rejected').length
   const acceptance = approvedN + rejectedN ? Math.round((approvedN / (approvedN + rejectedN)) * 100) : null
   const highN = pending.filter((i) => sevOf(i) === 'high').length
+  const reviewedN = items.filter((i) => i.status !== 'pending').length
+  const totalN = items.length
 
   // Group pending by issue type; order groups by their most-urgent item.
   const groups = useMemo(() => {
@@ -91,7 +93,13 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
           <div className="rc-metric"><span>Resolved today</span><b>{resolvedToday.length}</b></div>
           <div className="rc-metric"><span>AI draft acceptance</span><b>{acceptance == null ? '—' : `${acceptance}%`}</b></div>
         </div>
-        <div className="rc-kbd-hint" aria-hidden="true">↑↓ / j k navigate · <b>a</b> approve · <b>r</b> reject · <b>s</b> skip · Enter expand · Esc close</div>
+        <div className="rc-kbd-hint" aria-hidden="true">↑↓ / j k navigate · <b>a</b> approve · <b>r</b> I’ll fix it · <b>s</b> reject · Enter expand · Esc close</div>
+        {totalN > 0 && (
+          <div className="rc-progress">
+            <span className="track"><i style={{ width: `${Math.round((reviewedN / totalN) * 100)}%` }} /></span>
+            <span className="muted">{reviewedN} of {totalN} reviewed</span>
+          </div>
+        )}
 
         <div className="rc-body">
           {error && <div className="rc-empty">The review queue is unavailable right now. <button className="ghost small" onClick={onRefresh}>Retry</button></div>}
@@ -141,9 +149,11 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
                                value={notes[it.id] || ''}
                                onChange={(e) => setNotes((m) => ({ ...m, [it.id]: e.target.value }))} />
                         <div className="rc-actions">
-                          <button className="rc-approve" disabled={busy === it.id} onClick={() => doAct(it, 'approved')}>✓ Approve</button>
-                          <button className="ghost small" disabled={busy === it.id} onClick={() => doAct(it, 'rejected')}>✕ Reject</button>
-                          <button className="ghost small" disabled={busy === it.id} onClick={() => doAct(it, 'skipped')}>⏭ Skip</button>
+                          <button className="qbtn approve" disabled={busy === it.id} onClick={() => doAct(it, 'approved')}>✓ approve</button>
+                          <button className="qbtn self" disabled={busy === it.id}
+                                  title="Take ownership — fix it yourself, then re-scan to confirm"
+                                  onClick={() => doAct(it, 'skipped')}>✋ I’ll fix it</button>
+                          <button className="qbtn reject" disabled={busy === it.id} onClick={() => doAct(it, 'rejected')}>✕ reject</button>
                           {it.scan_id && openTraceUrl(it.scan_id, 'file', it.file) && (
                             <a className="rc-trace" href={openTraceUrl(it.scan_id, 'file', it.file)}
                                target="_blank" rel="noopener noreferrer">📊 View trace</a>
@@ -156,6 +166,9 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
               })}
             </section>
           ))}
+          {pending.length > 0 && (
+            <p className="muted rc-foot">↻ Re-validated against all engines after each approved fix — only re-passing files advance to publish.</p>
+          )}
         </div>
       </div>
     </div>
