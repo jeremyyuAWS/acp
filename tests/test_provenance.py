@@ -142,3 +142,37 @@ def test_folder_walk_keeps_acp_copy_when_exclusion_is_off():
     svc = FakeDrive(children={"root": [_source(), _acp_copy()]})
     out = scanner._search_folder(svc, "root", max_files=50, exclude_remediated=False)
     assert len(out) == 2
+
+
+# ── discovery logging: the audit trail of what a scan ingested, and what it refused ──
+
+def test_whole_drive_logs_what_it_listed_skipped_and_kept(capsys):
+    svc = FakeDrive(all_files=[_source(), _acp_copy()], folder_lookup=[])
+    scanner._search_drive(svc, max_files=50, exclude_remediated=True)
+    line = [ln for ln in capsys.readouterr().out.splitlines() if "discovery (whole-Drive)" in ln]
+    assert line, "discovery emitted no audit line"
+    assert "2 listed" in line[0]
+    assert "1 skipped as ACP-generated output" in line[0]
+    assert "1 scannable" in line[0]
+
+
+def test_whole_drive_logs_zero_skips_when_exclusion_is_off(capsys):
+    svc = FakeDrive(all_files=[_source(), _acp_copy()], folder_lookup=[])
+    scanner._search_drive(svc, max_files=50, exclude_remediated=False)
+    line = [ln for ln in capsys.readouterr().out.splitlines() if "discovery (whole-Drive)" in ln][0]
+    assert "0 skipped as ACP-generated output" in line and "2 scannable" in line
+
+
+def test_folder_walk_logs_folders_walked_and_both_skip_reasons(capsys):
+    legacy = {"id": "old1", "name": "legacy.pptx", "mimeType": PPTX, "md5Checksum": "ccc"}
+    svc = FakeDrive(children={
+        "root": [_source(), _acp_copy(), {"id": "remf", "name": "Remediated", "mimeType": FOLDER}],
+        "remf": [legacy],
+    })
+    scanner._search_folder(svc, "root", max_files=50, exclude_remediated=True)
+    line = [ln for ln in capsys.readouterr().out.splitlines() if "discovery (folder subtree)" in ln][0]
+    assert "1 folder(s) walked" in line          # the mirror folder was never entered
+    assert "2 listed" in line
+    assert "1 skipped as ACP-generated output" in line
+    assert "1 mirror folder(s) skipped" in line
+    assert "1 scannable" in line

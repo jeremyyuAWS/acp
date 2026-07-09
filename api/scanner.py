@@ -164,6 +164,8 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False) -
         # sole/primary location, which matches the actual upload behavior.
         q += f" and not '{excl_id}' in parents"
     files: list[dict] = []
+    listed = 0            # raw items Drive returned, before any filtering
+    skipped_acp = 0       # ACP's own output, skipped by provenance
     page_token = None
     while len(files) < max_files:
         resp = svc.files().list(
@@ -177,9 +179,12 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False) -
             supportsAllDrives=True,
         ).execute(num_retries=5)             # backoff on 429/5xx instead of failing the file
         batch = resp.get("files", [])
+        listed += len(batch)
         if exclude_remediated:
             # Provenance beats location: skip anything ACP itself wrote, wherever it sits.
-            batch = [f for f in batch if not provenance.is_acp_generated(f)]
+            kept = [f for f in batch if not provenance.is_acp_generated(f)]
+            skipped_acp += len(batch) - len(kept)
+            batch = kept
         files.extend(batch)
         page_token = resp.get("nextPageToken")
         if not page_token:
@@ -187,7 +192,12 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False) -
     if page_token:
         print(f"[scan] whole-Drive listing hit the {max_files}-file cap — not all files were "
               f"scanned; raise ACP_FANOUT_MAX_FILES to cover the full estate", flush=True)
-    return _normalize(files[:max_files])
+    result = _normalize(files[:max_files])
+    # An audit trail of what this scan chose to ingest, and what it refused. Without it the
+    # only place a file count exists is the UI, and "why 2 files?" can't be answered offline.
+    print(f"[scan] discovery (whole-Drive): {listed} listed · {skipped_acp} skipped as "
+          f"ACP-generated output · {len(result)} scannable", flush=True)
+    return result
 
 
 def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediated: bool = False) -> list[dict]:
@@ -206,6 +216,9 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
     queue = [folder_id]
     seen_folders: set[str] = set()
     raw: list[dict] = []
+    listed = 0            # raw non-folder items Drive returned
+    skipped_acp = 0       # ACP's own output, skipped by provenance
+    skipped_mirror = 0    # subfolders skipped by name (pre-provenance copies live here)
     while queue and len(raw) < max_files:
         fid = queue.pop(0)
         if fid in seen_folders:
@@ -226,10 +239,13 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
                     # Folder-name exclusion is RETAINED, not replaced: copies written before
                     # the provenance stamp shipped carry no stamp, and this still skips them.
                     if exclude_remediated and f["name"] == remediated_folder_name:
+                        skipped_mirror += 1
                         continue
                     queue.append(f["id"])
-                elif exclude_remediated and provenance.is_acp_generated(f):
-                    continue          # ACP's own output — never a source document
+                    continue
+                listed += 1
+                if exclude_remediated and provenance.is_acp_generated(f):
+                    skipped_acp += 1  # ACP's own output — never a source document
                 else:
                     raw.append(f)
             page_token = resp.get("nextPageToken")
@@ -238,7 +254,11 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
     if len(raw) >= max_files and (queue or page_token):
         print(f"[scan] folder listing hit the {max_files}-file cap — not all files were "
               f"scanned; raise ACP_FANOUT_MAX_FILES to cover the full subtree", flush=True)
-    return _normalize(raw[:max_files])
+    result = _normalize(raw[:max_files])
+    print(f"[scan] discovery (folder subtree): {len(seen_folders)} folder(s) walked · "
+          f"{listed} listed · {skipped_acp} skipped as ACP-generated output · "
+          f"{skipped_mirror} mirror folder(s) skipped · {len(result)} scannable", flush=True)
+    return result
 
 
 def _sp_list(token: str, max_files: int = 200) -> list[dict]:
