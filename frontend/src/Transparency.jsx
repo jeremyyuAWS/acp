@@ -122,11 +122,18 @@ function FailureHeatmap({ rows, files, topRules, onCellClick }) {
 // "By WCAG criterion" breakdown — aggregates the authoritative per-rule outcomes
 // (PASS / FAIL / SKIP) the scanner recorded into scan_rule_traces, so users see exactly
 // what each check did across the estate instead of only the summary tiles.
+// Deva's "20-check document core" — the US-regulated (A/AA) WCAG criteria that apply to
+// documents (87 → 50 → 20). Lets the coverage table demo coverage against that exact list.
+const DEVA_20 = new Set(['1.1.1', '1.3.1', '1.3.2', '1.3.3', '2.4.6', '3.1.1', '3.1.2',
+  '1.4.4', '1.4.5', '1.4.10', '1.4.12', '1.4.1', '1.4.3', '1.4.11', '2.4.2', '2.4.3',
+  '2.4.4', '2.1.1', '2.1.2', '4.1.2'])
+
 export function RuleBreakdown({ scanId, files }) {
   const [rows, setRows] = useState(null)
   const [open, setOpen] = useState(false)
   const [seg, setSeg] = useState(null)
   const [sel, setSel] = useState(null)
+  const [devaOnly, setDevaOnly] = useState(false)
   useEffect(() => {
     if (!scanId) { setRows(null); return }
     let cancelled = false
@@ -147,9 +154,10 @@ export function RuleBreakdown({ scanId, files }) {
     else byRule[k].skip++
     byRule[k].findings += r.finding_count || 0
   })
-  const rules = Object.values(byRule).sort((a, b) => b.fail - a.fail || a.id.localeCompare(b.id))
+  const rulesAll = Object.values(byRule).sort((a, b) => b.fail - a.fail || a.id.localeCompare(b.id))
+  const rules = devaOnly ? rulesAll.filter((r) => DEVA_20.has(r.id)) : rulesAll
   if (!rules.length) return null
-  const shown = open ? rules : rules.slice(0, 6)
+  const shown = (open || devaOnly) ? rules : rules.slice(0, 6)
   const fileCount = new Set((rows || []).map((r) => r.file)).size
   const failingRules = rules.filter((r) => r.fail > 0).slice(0, 8)
 
@@ -158,7 +166,7 @@ export function RuleBreakdown({ scanId, files }) {
   // (same rules as the per-file coverage table in FileDrawer).
   const targetLevel = assessLevel(scanId)
   const targetRank = LEVEL_RANK[targetLevel] || 2
-  const inScope = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) <= targetRank)
+  const inScope = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) <= targetRank && (!devaOnly || DEVA_20.has(c.sc)))
   const hiddenAboveLevel = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) > targetRank).length
   const hiddenWebOnly = WCAG.filter((c) => c.docApplies === false).length
   const evaluatedIds = new Set(rules.map((r) => r.id))
@@ -181,7 +189,12 @@ export function RuleBreakdown({ scanId, files }) {
     <section className="panel rulebreak">
       <div className="rubrichdr">
         <h2 style={{ margin: 0 }}>By WCAG criterion <span className="muted">· what each check found across {fileCount.toLocaleString()} documents</span></h2>
-        <span className="muted" style={{ fontSize: 12 }}>{evaluatedInScope} of {inScope.length} in-scope criteria automated · target {targetLevel}</span>
+        <span className="muted" style={{ fontSize: 12 }}>{evaluatedInScope} of {inScope.length} {devaOnly ? "Deva document-core" : "in-scope"} criteria automated · target {targetLevel}
+          <button className={`ghost small${devaOnly ? " on" : ""}`} style={{ marginLeft: 8, fontSize: 11 }}
+                  onClick={() => { setDevaOnly((v) => !v); if (!devaOnly) setOpen(true) }}
+                  title="Filter to Deva's 20-check document core (US-regulated A/AA criteria that apply to documents)">
+            {devaOnly ? "\u2713 Deva 20-core" : "Deva 20-core"}
+          </button></span>
       </div>
       <div className="rulerows">
         {shown.map((r) => {
@@ -203,7 +216,7 @@ export function RuleBreakdown({ scanId, files }) {
           )
         })}
       </div>
-      {open && unevaluated.length > 0 && (
+      {(open || devaOnly) && unevaluated.length > 0 && (
         <>
           <h3 className="rulesubhdr">Not evaluated in this scan <span className="muted">· {humanCount} need human / AT validation{unevaluated.length - humanCount - builtNoData > 0 ? ` · ${unevaluated.length - humanCount - builtNoData} automatable, not yet built` : ''}{builtNoData > 0 ? ` · ${builtNoData} built, no data this scan` : ''}</span></h3>
           <div className="rulerows">
