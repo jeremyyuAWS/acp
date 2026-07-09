@@ -9,6 +9,8 @@ serializing writes and survives container restarts across all replicas.
 from __future__ import annotations
 import contextlib
 import os
+import re
+import time
 import sqlite3
 import uuid
 from pathlib import Path
@@ -417,11 +419,73 @@ class _SQLiteAdapter:
         return dict(zip([d[0] for d in cur.description], row)) if row else None
 
 
+def logical_name(name: str) -> str:
+    """Strip the ' (N)' disambiguation suffix to recover the logical document name.
+
+    Drive appends it on a duplicate upload, and scanner._dedupe_names appends it when one
+    listing contains two files with the identical name (Drive permits that; a filesystem
+    doesn't).
+    """
+    return re.sub(r" \(\d+\)(\.[^.]+)$", r"\1", name or "")
+
+
+def shadowed_acp_outputs(files: list[dict]) -> set[str]:
+    """The file names in this scan that are ACP's OWN output shadowing the source document it
+    was made from — the "1 Drive document, 2 scanned files" bug.
+
+    Discriminated by the in-document ACP stamp (file_records.acp_stamped, set by
+    detect_acp_stamp over the real bytes), NEVER by the ' (N)' suffix: _dedupe_names renames
+    whichever item Drive happened to return second, which may just as easily be the user's
+    original.
+
+    A stamped file is shadowing only when an UNSTAMPED file shares its logical name. A
+    certified document published back into the estate stands alone under its own name, and
+    must still be scanned, counted, and monitored for drift — so it is never dropped here.
+    """
+    by_name: dict[str, list[dict]] = {}
+    for f in files:
+        by_name.setdefault(logical_name(f.get("file", "")), []).append(f)
+    shadowed: set[str] = set()
+    for group in by_name.values():
+        if len(group) < 2:
+            continue
+        if not any(not f.get("acp_stamped") for f in group):
+            continue        # every copy is ACP output — none of them shadows a source
+        shadowed.update(f["file"] for f in group if f.get("acp_stamped"))
+    return shadowed
+
+
+def db_max_conn(env: dict | None = None) -> int:
+    """How many Postgres connections this replica may hold.
+
+    Sized from the concurrency that actually exists: every scan/remediate worker thread can
+    hold a connection while it works, and every in-flight HTTP handler needs one on top of
+    that. The old fixed 5, against ACP_WORKERS=4, meant a dashboard poll landing while the
+    workers were busy raised `PoolError: connection pool exhausted` — /hitl/auto-queue 500'd
+    and the reviewer saw an empty review queue while items were waiting to be queued.
+
+    Still bounded well under Azure Postgres' max_connections (~50 on small SKUs); override
+    with ACP_DB_MAX_CONN if the worker count or replica count grows.
+    """
+    e = os.environ if env is None else env
+    explicit = e.get("ACP_DB_MAX_CONN")
+    if explicit:
+        return max(2, int(explicit))
+    try:
+        workers = int(e.get("ACP_WORKERS") or 4)
+    except ValueError:
+        workers = 4
+    return max(2, workers) + _API_HEADROOM_CONN
+
+
+# Concurrent HTTP handlers that may need a connection while every worker holds one.
+# The dashboard alone polls /jobs, /hitl/queue and /scans/{id}/remediation-status together.
+_API_HEADROOM_CONN = 8
+
+
 class _PgAdapter:
-    # Keep a small pool (2–5 connections) so ACA's single-replica container
-    # never exhausts the Azure Postgres max_connections limit (~50 on small SKUs).
     _MIN_CONN = 1
-    _MAX_CONN = 5
+    _MAX_CONN = db_max_conn()
 
     def __init__(self, url: str):
         # Strip query params that confuse psycopg2 (e.g. ?sslmode=require can
@@ -458,11 +522,27 @@ class _PgAdapter:
         finally:
             conn.close()
 
+    def _getconn(self, timeout: float = 5.0):
+        """psycopg2's ThreadedConnectionPool.getconn raises PoolError the moment the pool is
+        empty — it never waits. A request arriving during a burst should queue for a moment,
+        not fail. Beyond the timeout the error still surfaces: a pool that stays empty for
+        seconds is a real problem and must not be silently swallowed."""
+        import psycopg2.pool
+        pool = self._get_pool()
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                return pool.getconn()
+            except psycopg2.pool.PoolError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
+
     @contextlib.contextmanager
     def cursor(self):
         import psycopg2.extras
         pool = self._get_pool()
-        conn = pool.getconn()
+        conn = self._getconn()
         try:
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             yield cur
@@ -943,6 +1023,16 @@ class Store:
                 "SELECT file,engine,status,score,compliant,skipped_rules,remediated_at,drive_write_url,acp_stamped,published_at,size_kb,pages,sheets "
                 "FROM file_records WHERE scan_id=%s ORDER BY file", (sid,))
             files = self._db.fetchall(cur)
+            # Drop ACP's own remediated copies when they shadow the source document they were
+            # made from. They are artifacts, not documents in the estate: counting them
+            # inflated "total scanned", invented a "duplicate", and made a scan that
+            # remediated nothing report "remediated ✓ 1". Rows are kept in the table — this
+            # filters the read, it does not delete evidence.
+            shadowed = shadowed_acp_outputs(files)
+            if shadowed:
+                print(f"[scan] get_scan({sid}): hiding {len(shadowed)} ACP-generated file(s) "
+                      f"shadowing their source: {sorted(shadowed)}", flush=True)
+                files = [f for f in files if f["file"] not in shadowed]
             # file_records has no per-file source column (every file in one scan shares the
             # scan's single source) — derive the friendly sourceName here, at the single read
             # path, so every consumer (Overview/Dashboard/FileDrawer/Monitor/Publish/...) gets
