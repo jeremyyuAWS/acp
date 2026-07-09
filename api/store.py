@@ -1281,6 +1281,96 @@ class Store:
                             "proposed": sorted(proposed, key=lambda p: p["sc"])})
         return out
 
+    def get_certification_facts(self, scan_id: str) -> dict:
+        """Facts backing the certification-decision block, the richer file inventory, and the
+        scope-of-assertion statement (backlog R2 / R6 / R-A). Every number is COUNTED from
+        stored rows — none is estimated, and none is a percentage of an invented denominator.
+
+        Per document:
+          evaluated       — criteria that actually ran for this file's format (PASS or FAIL).
+          not_applicable  — criteria with NO validator for this format. They were never
+                            evaluated; a zero finding-count is not a pass (see _rule_outcome).
+          failing         — criteria still failing.
+          remediated      — criteria whose fix VERIFIABLY cleared the post-fix re-scan
+                            (distinct SCs in remediation_diff — the truthfulness gate).
+          remaining       — failing criteria with no verified fix.
+          approvals       — HITL items a human approved for this file.
+          by_mode         — how the evaluated criteria split across deterministic /
+                            AI-assisted / human-only checks. This is what stops a reader
+                            treating "100%" as "fully WCAG conformant": it shows how much of
+                            the assertion rests on deterministic evidence.
+
+        `scope.catalog_size` is the number of criteria this platform has a validator for —
+        NOT the 87 success criteria of WCAG 2.1 AA. The report must never imply the two are
+        the same.
+        """
+        rules = {r["id"]: r for r in RULE_CATALOG}
+        traces = self.get_scan_traces(scan_id)
+        evidence = {e["file"]: e for e in self.get_remediation_evidence(scan_id)}
+
+        # Approvals are counted from the IMMUTABLE decision_log, not from hitl_queue's current
+        # status, so this figure and the evidence appendix's per-fix sign-off line (which also
+        # reads the log) can never disagree. Distinct per (file, criterion): re-approving the
+        # same finding is one approval, not two.
+        approved: set[tuple] = set()
+        for d in self.list_decisions(scan_id, limit=1000):
+            if d.get("action") == "hitl.approved" and d.get("file"):
+                approved.add((d["file"], d.get("rule_id") or ""))
+        approvals: dict[str, int] = {}
+        for file, _rule in approved:
+            approvals[file] = approvals.get(file, 0) + 1
+
+        per_file: dict[str, dict] = {}
+        for t in traces:
+            f = per_file.setdefault(t["file"], {
+                "file": t["file"], "evaluated": 0, "not_applicable": 0, "failing": 0,
+                "findings": 0, "na_criteria": [], "by_mode": {},
+            })
+            outcome = t.get("outcome")
+            if outcome == "NOT_APPLICABLE":
+                f["not_applicable"] += 1
+                f["na_criteria"].append(t["rule_id"])
+                continue
+            if outcome not in ("PASS", "FAIL"):
+                continue                       # ERROR: the rule could not evaluate — assert nothing
+            f["evaluated"] += 1
+            mode = (rules.get(t["rule_id"], {}) or {}).get("fix_mode", "unknown")
+            f["by_mode"][mode] = f["by_mode"].get(mode, 0) + 1
+            if outcome == "FAIL":
+                f["failing"] += 1
+                f["findings"] += t.get("finding_count") or 0
+
+        docs = []
+        for f in sorted(per_file.values(), key=lambda x: x["file"]):
+            remediated = {a["sc"] for a in evidence.get(f["file"], {}).get("applied", [])}
+            f["remediated"] = len(remediated)
+            f["remaining"] = max(0, f["failing"] - len(remediated))
+            f["approvals"] = approvals.get(f["file"], 0)
+            f["na_criteria"] = sorted(f["na_criteria"])
+            docs.append(f)
+
+        scope_modes: dict[str, int] = {}
+        na_union: set[str] = set()
+        for f in docs:
+            for m, n in f["by_mode"].items():
+                scope_modes[m] = scope_modes.get(m, 0) + n
+            na_union.update(f["na_criteria"])
+
+        return {
+            "documents": docs,
+            "scope": {
+                "catalog_size": len(RULE_CATALOG),
+                "by_mode": scope_modes,
+                "not_applicable_criteria": [
+                    {"sc": sc, "name": rules.get(sc, {}).get("name", sc)} for sc in sorted(na_union)],
+                "human_only_criteria": [
+                    {"sc": r["id"], "name": r["name"]} for r in RULE_CATALOG
+                    if r["fix_mode"] == "human-only"],
+            },
+            "approvals_total": sum(approvals.values()),
+            "remediated_total": sum(d["remediated"] for d in docs),
+        }
+
     def get_trace_row(self, scan_id: str, file: str, rule_id: str) -> dict | None:
         """Return a single scan_rule_traces row for the AI explain endpoint."""
         with self._db.cursor() as cur:

@@ -529,7 +529,8 @@ def report_pdf(sid: str, request: Request):
     meta = {"target": rb.cfg.get("conformance_target"), "version": rb.version,
             "hash": res["run"].get("rubric_hash") or rb.hash}
     pdf = build_report(res["run"], res["files"], meta, decisions=core.store.get_decisions(sid),
-                       evidence=core.store.get_remediation_evidence(sid))
+                       evidence=core.store.get_remediation_evidence(sid),
+                       facts=core.store.get_certification_facts(sid))
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="acp-report-{sid}.pdf"'})
 

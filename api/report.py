@@ -1,11 +1,22 @@
 """Branded PDF conformance report (reportlab) — the exportable audit evidence.
 
-Renders a scan run as a designed, chart-led report: logo header, plain-language
-verdict, certification summary band, scope & methodology, compliance velocity,
-status donut + severity split, remediation outcomes, open findings by criterion,
-the decisions snapshot (time-travel), the full file inventory, and the per-issue
-remediation evidence appendix. Reproducible from the stamped rubric hash. Footer
-carries page numbers and the generation stamp on every page.
+Renders a scan run as a designed, chart-led report: logo header, certification
+decision, plain-language verdict, certification summary band, scope & methodology,
+scope of assertion, compliance velocity, status donut + severity split, remediation
+outcomes, open findings by criterion, the decisions snapshot (time-travel), the
+per-document file inventory, and the per-issue remediation evidence appendix.
+Reproducible from the stamped rubric hash. Footer carries page numbers and the
+generation stamp on every page.
+
+Two sections exist to stop the report over-claiming, and should not be weakened:
+
+* `_scope_section` — the negative assurance. This platform validates a SUBSET of
+  WCAG 2.1 AA, and for each document only the criteria with a validator for that
+  file format are evaluated at all. A 100/100 score means "no blocking findings
+  among the criteria evaluated", never "fully conformant". The section names what
+  was not evaluated.
+* `_content_digest` — a recomputable SHA-256 of the stored scan result. It is a
+  DIGEST, not a digital signature: no key, no non-repudiation. Never relabel it.
 
 Honesty rule enforced here: a finding is only counted as "open" (blocking) when
 its document is NOT certifiable. Findings on a certifiable document were either
@@ -117,11 +128,156 @@ def _footer(canvas, doc):
     canvas.restoreState()
 
 
+def _content_digest(run: dict, files: list, meta: dict) -> str:
+    """SHA-256 over the canonical scan result — scan id, rubric hash, conformance target, and
+    every file's score/compliance/failing criteria. Anyone holding the same scan can recompute
+    it and get the same value, which is what makes the report tamper-evident.
+
+    It deliberately EXCLUDES the generation timestamp, so the digest is stable across
+    re-exports of the same scan.
+
+    This is a DIGEST, not a signature. There is no signing key and it provides no
+    non-repudiation — it proves the report's contents match the stored scan, not who produced
+    it. Labelling a bare hash a "digital signature" would over-claim, which is exactly what an
+    auditor checks for.
+    """
+    import hashlib
+    import json
+    payload = {
+        "scan": run.get("id"),
+        "rubric_hash": meta.get("hash"),
+        "target": meta.get("target"),
+        "files": sorted(
+            ({"file": f["file"],
+              "score": f.get("score"),
+              "compliant": int(bool(f.get("compliant"))),
+              "failing": sorted({i.get("wcag", "") for i in f.get("issues", [])})}
+             for f in files), key=lambda x: x["file"]),
+    }
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
 def _esc(s) -> str:
     """Escape for reportlab's mini-HTML paragraph markup; bound the length."""
     if s is None or s == "":
         return "—"
     return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))[:400]
+
+
+def _decision_block(run, files, meta, facts, h2, body, muted) -> list:
+    """Certification decision (backlog R2) + why it is certifiable (R3).
+
+    Answers, before anything else, the question a reader actually has: can I ship this?
+    Every figure is COUNTED from stored rows; the digest is recomputable. The status is
+    deliberately three-valued — a partially-conformant estate must never render as a green
+    CERTIFIABLE just because most documents passed.
+    """
+    total = len(files)
+    cert = sum(1 for f in files if _status(f) == "certifiable")
+    if total and cert == total:
+        status, colour = "CERTIFIABLE", "#3B6D11"
+    elif cert == 0:
+        status, colour = "NOT CERTIFIABLE", "#A32D2D"
+    else:
+        status, colour = "PARTIALLY CERTIFIABLE", "#854F0B"
+
+    remediated = (facts or {}).get("remediated_total", 0)
+    approvals = (facts or {}).get("approvals_total", 0)
+    digest = _content_digest(run, files, meta)
+
+    el = [Paragraph("Certification decision", h2)]
+    card = Table([[
+        # meta['target'] is the full conformance target string (e.g. "WCAG 2.1 AA") — do not
+        # prefix it with "WCAG 2.1" or the card reads "WCAG 2.1 · WCAG 2.1 AA".
+        Paragraph(f'<font size="15" color="{colour}"><b>{status}</b></font><br/>'
+                  f'<font size="8.5" color="#6c6470">{_esc(meta.get("target"))}</font>', body),
+        Paragraph(f'<font size="15"><b>{cert} of {total}</b></font><br/>'
+                  f'<font size="8.5" color="#6c6470">documents certifiable</font>', body),
+        Paragraph(f'<font size="15"><b>{remediated}</b></font><br/>'
+                  f'<font size="8.5" color="#6c6470">fixes verified on re-scan</font>', body),
+        Paragraph(f'<font size="15"><b>{approvals}</b></font><br/>'
+                  f'<font size="8.5" color="#6c6470">human approvals recorded</font>', body),
+    ]], colWidths=[1.85 * inch] * 4)
+    card.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), CARD), ("BOX", (0, 0), (-1, -1), 0.75, LINE),
+        ("LINEAFTER", (0, 0), (-2, -1), 0.75, LINE),
+        ("TOPPADDING", (0, 0), (-1, -1), 10), ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+    ]))
+    el.append(card)
+
+    # The plain-language WHY (R3) is the executive verdict rendered just below this card —
+    # it already states, from the same real counts, which documents are certifiable and why.
+    # Repeating it here would be noise; instead, bound what that verdict covers.
+    el.append(Spacer(1, 6))
+    el.append(Paragraph(
+        "<b>Any certification below covers only the criteria listed under ‘Scope of assertion’.</b>", muted))
+    el.append(Spacer(1, 4))
+    el.append(Paragraph(
+        f"Content digest (SHA-256) <b>{digest[:32]}…</b> — recomputable from the stored scan, so "
+        "this report is tamper-evident. It is a digest, <b>not a digital signature</b>: there is no "
+        "signing key and it asserts nothing about who produced the report.", muted))
+    return el
+
+
+def _scope_section(files, facts, h2, body, cell, muted) -> list:
+    """Scope of assertion / negative assurance (backlog R-A).
+
+    The single most important section for an auditor, and the report's guard against its own
+    headline number. A 100/100 score means "no blocking findings among the criteria we
+    actually evaluated" — NOT "fully WCAG 2.1 AA conformant". Most criteria have no validator
+    for most file formats; those are reported as not-applicable and are never asserted to
+    pass. This section says so explicitly, and names them.
+    """
+    if not facts or not facts.get("documents"):
+        return []
+    scope = facts["scope"]
+    docs = facts["documents"]
+    el = [Paragraph("Scope of assertion · what this report does and does not certify", h2)]
+    el.append(Paragraph(
+        f"This platform has an automated validator for <b>{scope['catalog_size']}</b> success criteria. "
+        "That is <b>not</b> the full WCAG 2.1 AA criteria set: many criteria require human or "
+        "assistive-technology judgement and are routed to review rather than asserted here. For each "
+        "document, only the criteria that have a validator <i>for that file format</i> are evaluated — "
+        "the remainder are reported as <b>not applicable</b>, meaning they were <b>never evaluated</b>. "
+        "A zero finding-count on an unevaluated criterion is not a pass.", muted))
+    el.append(Spacer(1, 8))
+
+    rows = [["Document", "Evaluated", "Not evaluated", "Deterministic", "AI-assisted", "Human-only"]]
+    for d in docs:
+        bm = d["by_mode"]
+        rows.append([Paragraph(_esc(d["file"]), cell), d["evaluated"], d["not_applicable"],
+                     bm.get("auto", 0), bm.get("ai-assisted", 0), bm.get("human-only", 0)])
+    t = Table(rows, colWidths=[2.6 * inch, 0.85 * inch, 0.95 * inch, 0.95 * inch, 0.9 * inch, 0.85 * inch],
+              repeatRows=1)
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 8.5), ("TEXTCOLOR", (0, 0), (-1, 0), MUTED),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, LINE), ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ZEBRA]),
+        ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+    el.append(t)
+    el.append(Spacer(1, 8))
+
+    na = scope.get("not_applicable_criteria") or []
+    hu = scope.get("human_only_criteria") or []
+    el.append(Paragraph("<b>This report makes no assertion about:</b>", body))
+    if na:
+        el.append(Paragraph(
+            "<b>Not evaluated for these file formats</b> — " +
+            _esc(", ".join(f"{c['sc']} {c['name']}" for c in na[:18]))
+            + (f", and {len(na) - 18} more." if len(na) > 18 else "."), muted))
+    if hu:
+        el.append(Paragraph(
+            "<b>Requires human or assistive-technology judgement</b> (routed to review, never "
+            "auto-certified) — " + _esc(", ".join(f"{c['sc']} {c['name']}" for c in hu)) + ".", muted))
+    el.append(Spacer(1, 4))
+    el.append(Paragraph(
+        "<b>A score of 100 therefore means: no blocking findings among the criteria evaluated for that "
+        "document's format.</b> It does not mean the document is fully WCAG 2.1 AA conformant, and it "
+        "must not be represented as such.", muted))
+    return el
 
 
 def _thumb_flowable(thumb: str | None, edge: float = 0.62 * inch):
@@ -307,7 +463,7 @@ def _stat_band(cells, styles) -> Table:
 
 
 def build_report(run: dict, files: list, meta: dict, decisions: dict | None = None,
-                 evidence: list | None = None) -> bytes:
+                 evidence: list | None = None, facts: dict | None = None) -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=LETTER, title=f"mova.io conformance report {run['id']}",
                             topMargin=0.6 * inch, bottomMargin=0.75 * inch,
@@ -346,6 +502,13 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     el.append(Paragraph(
         f"Scan <b>{run['id']}</b> · rubric v{meta.get('version', '—')} · stamped hash <b>{meta.get('hash', '—')}</b> — "
         "results are reproducible from this hash. Scans run read-only; documents are never retained.", sub))
+
+    # ── Certification decision (R2) ──────────────────────────────────────────
+    # Answers "can I ship this?" before any chart. The plain-language WHY (R3) is the
+    # executive verdict below — this card carries the decision, the counts and the digest,
+    # and deliberately does not repeat that prose.
+    _muted = ParagraphStyle("rmuted", parent=ss["Normal"], textColor=MUTED, fontSize=8, leading=11.5)
+    el.extend(_decision_block(run, files, meta, facts, h2, body, _muted))
 
     # ── Reconcile the estate: open (blocking) vs certifiable/remediated ──────
     counts: dict[str, int] = {}
@@ -561,10 +724,13 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
             ]))
             el.append(dt)
 
-    # ── File inventory ───────────────────────────────────────────────────────
+    # ── File inventory (R6) ──────────────────────────────────────────────────
+    # Per document: what was found, what was verifiably fixed, what is still open, and
+    # whether a human signed anything off — instead of a bare finding count.
     el.append(Paragraph("File inventory", h2))
     ordered = sorted(files, key=lambda x: (_status(x) != "issues", x["file"]))   # open findings first
-    rows = [["File", "Type", "Extent", "Status", "Score", "Findings"]]
+    by_file = {d["file"]: d for d in (facts or {}).get("documents", [])}
+    rows = [["File", "Type", "Extent", "Status", "Score", "Findings", "Fixed", "Open", "Approvals"]]
     for f in ordered:
         st = _status(f)
         issues = f.get("issues") or []
@@ -576,21 +742,33 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
             find = "could not analyse"
         else:
             find = "clean"
+        # Counted per document (R6): verifiably-cleared fixes, criteria still failing, and
+        # human sign-offs. A separate "validation" column would be redundant — a document is
+        # validated exactly when Open is 0, and it can never read clear while findings remain.
+        d = by_file.get(f["file"])
+        if f["status"] == "error" or not d:
+            fixed = still_open = approvals = "—"
+        else:
+            fixed, still_open, approvals = str(d["remediated"]), str(d["remaining"]), str(d["approvals"])
         rows.append([Paragraph(f["file"], cell), _fmt(f), _extent(f), STATUS_LABEL.get(st, st),
-                     ("—" if f.get("score") is None else str(f["score"])), find])
+                     ("—" if f.get("score") is None else str(f["score"])), find,
+                     fixed, still_open, approvals])
     style = [
-        ("FONTSIZE", (0, 0), (-1, -1), 8.5), ("TEXTCOLOR", (0, 0), (-1, 0), MUTED),
-        ("LINEBELOW", (0, 0), (-1, 0), 0.5, LINE), ("ALIGN", (4, 0), (4, -1), "RIGHT"),
+        ("FONTSIZE", (0, 0), (-1, -1), 7.5), ("TEXTCOLOR", (0, 0), (-1, 0), MUTED),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, LINE), ("ALIGN", (4, 0), (-1, -1), "RIGHT"),
         ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ZEBRA]),
     ]
     for r, f in enumerate(ordered, start=1):
         style.append(("TEXTCOLOR", (3, r), (3, r), STATUS_COLOR.get(_status(f), MUTED)))
-    ft = Table(rows, colWidths=[2.7 * inch, 0.55 * inch, 0.7 * inch, 1.05 * inch, 0.5 * inch, 1.6 * inch],
-               repeatRows=1)
+    ft = Table(rows, colWidths=[1.85 * inch, 0.45 * inch, 0.6 * inch, 0.95 * inch, 0.45 * inch,
+                                1.15 * inch, 0.5 * inch, 0.5 * inch, 0.65 * inch], repeatRows=1)
     ft.setStyle(TableStyle(style))
     el.append(ft)
+
+    # ── Scope of assertion / negative assurance (R-A) ────────────────────────
+    el.extend(_scope_section(files, facts, h2, body, cell, _muted))
 
     # ── Remediation evidence appendix (backlog R1) ───────────────────────────
     # Applied-and-verified fixes vs proposals awaiting approval, kept strictly apart.
