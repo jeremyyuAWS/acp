@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import threading
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, Response
@@ -635,3 +636,76 @@ def get_file_content(scan_id: str, filename: str, request: Request):
                 "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation"}
     return Response(data, media_type=mime_map.get(ext, "application/octet-stream"))
+
+
+def _source_bytes_for_render(request: Request, scan_id: str, filename: str, owner: str) -> bytes | None:
+    """Best-effort original bytes to rasterize for a preview (ADR 0015), tried cheapest-first
+    and preferring the *original* the reviewer is looking at over the remediated copy:
+      1. local corpus file  (source=local — the demo default; no token, on disk)
+      2. Drive original      (via drive_file_id + a live x-drive-token)
+      3. remediated blob copy (post-remediation fallback; accessibility fixes are structurally
+         near-identical to the original page, so it's an acceptable last resort)
+    Returns None if none are reachable — the caller then 404s. Never raises."""
+    scan = core.store.get_scan(scan_id, owner=owner)
+    source = (scan or {}).get("run", {}).get("source")
+
+    if source == "local":
+        try:
+            import scanner
+            corpus = Path(os.environ.get("ACP_LOCAL_CORPUS") or (scanner.ACP / "test-corpus/files"))
+            p = corpus / filename
+            if p.is_file():
+                return p.read_bytes()
+        except Exception:
+            pass
+
+    drive_file_id = core.store.get_file_drive_id(scan_id, filename)
+    if drive_file_id:
+        try:
+            svc = core.drive_service(request)
+            return svc.files().get_media(fileId=drive_file_id).execute()
+        except Exception:
+            pass
+
+    try:
+        import blob as _blob
+        return _blob.download_remediated(owner, scan_id, filename)
+    except Exception:
+        return None
+
+
+@router.get("/scans/{scan_id}/files/{filename:path}/thumbnail")
+def get_file_thumbnail(scan_id: str, filename: str, request: Request,
+                       fresh: int = Query(0)):
+    """Serve a page-1 PNG preview of a file (ADR 0015): blob cache → render-on-demand →
+    cache → serve. Opt-in and non-blocking — any miss or failure is a 404, never a 500, and
+    nothing here touches scan/remediate/report. PDF only in phase 1; Office → 404 → the UI
+    shows a placeholder. ?fresh=1 bypasses the cache read (forced re-render)."""
+    import blob as _blob
+    import render as _render
+
+    owner = _owner(request)
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+
+    ext = os.path.splitext(filename)[1].lower()
+    if not _render.can_render(ext):
+        raise HTTPException(404, "no preview available for this file type")
+
+    if not fresh:
+        cached = _blob.download_render(owner, scan_id, filename)
+        if cached is not None:
+            return Response(cached, media_type="image/png",
+                            headers={"Cache-Control": "private, max-age=86400"})
+
+    data = _source_bytes_for_render(request, scan_id, filename, owner)
+    if not data:
+        raise HTTPException(404, "source document not retrievable for preview")
+
+    png = _render.render_page1_png(data, ext)
+    if not png:
+        raise HTTPException(404, "could not render a preview for this document")
+
+    _blob.upload_render(owner, scan_id, filename, png)  # best-effort cache; never raises
+    return Response(png, media_type="image/png",
+                    headers={"Cache-Control": "private, max-age=86400"})

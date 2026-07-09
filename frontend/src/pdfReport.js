@@ -66,6 +66,21 @@ async function makeDoc({ title = 'mova.io Accessibility Report', lang = 'en-US',
       doc.setFontSize(9.5); meta.forEach((m) => { doc.text(m, M, st.y + 8); st.y += 13 })
       st.y += 10; draw(PLUM); doc.setLineWidth(2); doc.line(M, st.y, M + CW, st.y); st.y += 22
     },
+    // Embed a raster image (e.g. a page-1 document preview, ADR 0015) scaled to a capped
+    // width, page-break aware, in a subtle frame. Best-effort: silently does nothing if the
+    // blob can't be decoded — a certification PDF must render with or without a preview.
+    async imageFromBlob(blob, { maxW = 300, caption = null } = {}) {
+      try {
+        const dataUrl = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => res(null); r.readAsDataURL(blob) })
+        if (!dataUrl) return
+        const props = doc.getImageProperties(dataUrl)
+        const w = Math.min(CW, maxW), h = w * props.height / props.width
+        ensure(h + (caption ? 20 : 8))
+        doc.addImage(dataUrl, props.fileType || 'PNG', M, st.y, w, h)
+        draw(LINE); doc.setLineWidth(0.8); doc.rect(M, st.y, w, h); st.y += h + 6
+        if (caption) { ink(MUTED); doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.text(caption, M, st.y + 6); st.y += 14 }
+      } catch { /* undecodable image — omit, never throw out of report generation */ }
+    },
     // A score dial drawn at the top-right of the cover — a real ring, not just a number.
     ring(score, color) {
       const R = 30, cx = W - M - R - 2, cy = M + R + 2
@@ -489,6 +504,16 @@ export async function exportFileCertification(d) {
       `WCAG 2.1 Level ${d.targetLevel || 'AA'}${d.sourceName ? ` · ${d.sourceName}` : ''}${d.department ? ` · ${d.department}` : ''}`,
     ],
   })
+
+  // Page-1 preview (ADR 0015) — best-effort: rendered server-side, omitted entirely if the
+  // document can't be previewed (unsupported type, source unreachable). Never blocks the cert.
+  if (d.scanId && d.file) {
+    try {
+      const { getFileThumbnail } = await import('./api.js')
+      const blob = await getFileThumbnail(d.scanId, d.file)
+      if (blob) { p.heading('Document preview'); await p.imageFromBlob(blob, { caption: `Page 1 of “${d.file}”` }) }
+    } catch { /* preview unavailable — continue without it */ }
+  }
 
   p.heading('Executive summary')
   p.callout(

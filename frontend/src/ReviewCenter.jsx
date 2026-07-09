@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import { SEV, sevOf, reasonOf, priorityScore, groupLabel } from './hitlMeta.js'
 import { openTraceUrl } from './api.js'
+import Thumbnail from './Thumbnail.jsx'
 
 // Rules whose fix IS a value a human writes/edits (alt text, link text, title, label) —
 // these get an editable "approved value" box (the AI draft, if any, prefilled). Judgement
@@ -128,6 +129,7 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
                     </button>
                     {isOpen && (
                       <div className="rc-item-detail">
+                        <Thumbnail scanId={it.scan_id} file={it.file} className="rc-thumb" />
                         <div className="rc-escalation">
                           <b>Escalated because</b>
                           <ul>

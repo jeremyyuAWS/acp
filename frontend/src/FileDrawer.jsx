@@ -7,6 +7,7 @@ import { allRules, PLAIN_NAMES } from './rules/index.js'
 import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, downloadRemediated, getRules, getRubric, getConfig } from './api.js'
 import { WCAG } from './wcagCatalog.js'
 import { TraceChip } from './Transparency.jsx'
+import Thumbnail from './Thumbnail.jsx'
 
 // Prescriptive-action styling, shared with the Discover inventory.
 // Distinct hue per action so a long list scans at a glance. The human-touch
@@ -431,6 +432,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           caller passes yet (Discover/Integrations/KnowledgeGraph don't) — renders nothing
           when absent, same as before this existed. */}
       {scanId && <div style={{ margin: '0 0 12px' }}><TraceChip scanId={scanId} kind="file" file={file.file} label="View this document's trace" refreshKey={remNow?.done ? 1 : 0} /></div>}
+      <Thumbnail scanId={scanId} file={file.file} className="drawer-thumb" />
       <div className="drawerstats">
         <span className="badge" style={{ background: sbg, color: sfg }}>{st}</span>
         <span className="drawerscore">{file.score === null ? 'n/a' : `${st === 'uncertain' ? '≤' : ''}${file.score}`}<span className="muted"> / 100</span></span>
@@ -467,6 +469,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                         timestamp: now.toLocaleString('en-US', { year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }),
                         engine: file.engine, sourceName: file.sourceName, department: file.department || file.dept,
                         platformVersion: cfg?.version,
+                        scanId, // ADR 0015: lets the PDF embed a page-1 preview (best-effort; omitted if unavailable)
                       })
                     } catch (e) { console.error('certification PDF export failed', e) }
                     finally { setTimeout(() => setCertExporting(false), 500) }
