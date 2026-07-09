@@ -167,8 +167,13 @@ _SCHEMA = [
       priority INT DEFAULT 100, attempts INT DEFAULT 0, max_attempts INT DEFAULT 5,
       run_after TEXT, locked_at TEXT, locked_by TEXT,
       campaign_id TEXT, batch_id TEXT, scan_id TEXT,
-      last_error TEXT, created_at TEXT, updated_at TEXT
+      last_error TEXT, created_at TEXT, updated_at TEXT,
+      phase TEXT
     )""",
+    # What the job is doing RIGHT NOW, written by the handler as it works. The queue panel
+    # used to render a hardcoded list of WCAG criteria cycled by a timer, which had nothing
+    # to do with the running job. Nullable: a handler that reports nothing shows nothing.
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS phase TEXT",
     # Column order matches the claim ORDER BY (priority, run_after) so Postgres reads the
     # top queued job index-only instead of sorting all queued rows every poll (audit P2).
     # New name + drop-old so this migrates once, not a rebuild every boot.
@@ -1802,11 +1807,25 @@ class Store:
             # Conditional update: only one worker can flip status from 'queued'.
             self._db.execute(cur,
                 "UPDATE jobs SET status='running', locked_at=%s, locked_by=%s, "
-                "attempts=attempts+1, updated_at=%s "
+                "attempts=attempts+1, updated_at=%s, phase=NULL "
                 "WHERE id=%s AND status='queued'",
                 (now, worker_id, now, jid))
             claimed = getattr(cur, "rowcount", 1) == 1
         return self.get_job(jid) if claimed else None
+
+    def set_job_phase(self, job_id: str, phase: str | None) -> None:
+        """Record what this job is doing right now, for the queue panel's per-row line.
+
+        Best-effort and never fatal: progress reporting must not be able to fail the work it
+        reports on. Bumps updated_at, which is also what the panel's elapsed timer reads — so
+        a job that stops reporting stops looking busy.
+        """
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur, "UPDATE jobs SET phase=%s, updated_at=%s WHERE id=%s",
+                                 (phase, self._now(), job_id))
+        except Exception as e:
+            print(f"[jobs] could not record phase for {job_id}: {e}", flush=True)
 
     _SECRET_PAYLOAD_KEYS = ("drive_token", "sp_token", "token")
 
