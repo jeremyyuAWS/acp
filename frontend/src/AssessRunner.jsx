@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { allRules } from './rules'
 import { assessScan } from './api.js'
 import { TraceChip } from './Transparency.jsx'
+import { assessLine } from './phaseNarration.js'
 
 // Re-assess the whole estate against a chosen WCAG 2.1 conformance level. A finding blocks
 // conformance when its level is at or below the target (A ⊆ AA ⊆ AAA), so the numbers
@@ -35,16 +36,7 @@ const engineFor = (name = '') => {
   return 'WCAG rule engine'
 }
 
-// Realistic phase messages shown as each file is scanned
-const phaseFor = (name = '') => {
-  const n = name.toLowerCase()
-  if (/\.docx?$/.test(n)) return ['Opening OOXML package…', 'Checking alt text, headings & tables…', 'Running WCAG 2.1 AA conformance checks…']
-  if (/\.pptx?$/.test(n)) return ['Unpacking presentation slides…', 'Checking slide titles & reading order…', 'Running WCAG 2.1 AA conformance checks…']
-  if (/\.pdf$/.test(n)) return ['Extracting PDF tag tree…', 'Checking alt text, title & language…', 'Running WCAG 2.1 AA conformance checks…']
-  if (/\.html?$/.test(n)) return ['Parsing DOM…', 'Running axe-core rules…', 'Scoring against WCAG 2.1 AA…']
-  if (/\.mp3$|\.webm$/.test(n)) return ['Transcribing with Whisper…', 'Checking captions & transcript…']
-  return ['Analysing…', 'Scoring…']
-}
+
 
 // Persist the assessment per-scan in sessionStorage, so leaving the Assess tab (or even
 // reloading) and coming back shows the result instead of resetting to idle. Self-contained
@@ -112,7 +104,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
         return
       }
       const idx = Math.min(docs.length - 1, Math.floor((elapsed / DURATION) * docs.length))
-      setProgress(idx); setCurrentFile(docs[idx]); setCurrentPhase(phaseFor(docs[idx]?.name)[idx % 2])
+      setProgress(idx); setCurrentFile(docs[idx]); setCurrentPhase(assessLine(idx))
     }
     step()
     timer.current = setInterval(step, 200)

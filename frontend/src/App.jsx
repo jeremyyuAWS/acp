@@ -31,6 +31,7 @@ import Upload from './Upload.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
 import A11ySelfCheck from './A11ySelfCheck.jsx'
+import { discoverLine } from './phaseNarration.js'
 
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
 const SHOW_A11Y = import.meta.env.DEV || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('a11y'))
@@ -91,24 +92,7 @@ function progressText(p) {
 // analysing and scoring still follow). The read phase spans 12→84%, scaled by the
 // real per-file count; the post-read phases fill the remainder.
 const PHASE_PCT = { queued: 2, connecting: 5, discovering: 9, reading: 12, tagging: 88, analysing: 92, scoring: 97, done: 100, error: 100 }
-// Informative "still working" lines for the long worker-pool phase, so a multi-minute
-// scan reports what it's doing instead of looking frozen. These name only what the scan
-// itself does — fetch, parse, extract, collect. They deliberately do NOT narrate WCAG
-// criteria or conformance scores: assessment is the Assess step, and announcing criteria
-// here made the scan look like it had already assessed (and even remediated) the estate.
-const STATUS_LINES = [
-  'Downloading and parsing each document…',
-  'Extracting text, images and document structure…',
-  'Reading document metadata and properties…',
-  'Running deep scan for sensitive data (PII)…',
-  'Collecting findings for the Assess step…',
-]
-// When PII (deep) scan is off, drop the PII line so the progress narration never claims
-// work that isn't actually running — the rest of the lines are checks every scan does.
-function statusMsg(elapsed, deepScan = false) {
-  const lines = deepScan ? STATUS_LINES : STATUS_LINES.filter((l) => !/sensitive data \(PII\)/i.test(l))
-  return lines[Math.floor(elapsed / 5) % lines.length]
-}
+
 
 function progressPct(p) {
   if (!p) return 0
@@ -597,7 +581,7 @@ export default function App() {
           </div>
           <div className="track"><i style={{ width: `${progressPct(progress)}%`, background: '#BF8C00', transition: 'width .3s' }} /></div>
           {progress.elapsed != null && (
-            <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>{statusMsg(progress.elapsed, deepScan)}</div>
+            <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>{discoverLine(progress.elapsed, deepScan)}</div>
           )}
         </div>
       )}
@@ -611,7 +595,7 @@ export default function App() {
           excludeRemediated={excludeRemediated} setExcludeRemediated={setExcludeRemediated}
           incremental={incremental} setIncremental={setIncremental} scanId={run?.id} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? statusMsg(progress.elapsed || 0, deepScan) : ''} scanId={run?.id} decisions={decisions} setDecisions={setDecisions} />}
+        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? discoverLine(progress.elapsed || 0, deepScan) : ''} scanId={run?.id} decisions={decisions} setDecisions={setDecisions} />}
 
         {view === 'assess' && (run ? (
           <>
@@ -631,7 +615,7 @@ export default function App() {
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
 
-        {view === 'monitor' && (run ? (assessed ? <Monitor me={me} run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? statusMsg(progress.elapsed || 0, deepScan) : ''} /> : assessGate) : placeholder)}
+        {view === 'monitor' && (run ? (assessed ? <Monitor me={me} run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? discoverLine(progress.elapsed || 0, deepScan) : ''} /> : assessGate) : placeholder)}
 
         {view === 'upload' && <Upload me={me} onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
 
