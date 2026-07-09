@@ -42,8 +42,14 @@ pytestmark = pytest.mark.skipif(
 from scanner import run_scan  # noqa: E402
 from rubric import Rubric  # noqa: E402
 
+# NOTE: *-LANG-001 is intentionally absent from these oracle sets. Per ADR 0012 the language
+# rule is conformant when EITHER dc:language metadata OR a content language (docx docDefaults/
+# run w:lang, pptx run/master a:rPr @lang) is declared. python-docx/python-pptx bake a default
+# lang="en-US" into every deck's template (docDefaults + slide master/layouts), so these
+# generated fixtures DO declare a language and correctly do NOT fire *-LANG-001. The no-language
+# negative case is covered directly with crafted XML in test_office_language_rules.py.
 EXPECTED_DOCX_NONCOMPLIANT = {
-    "DOCX-TITLE-001", "DOCX-LANG-001", "DOCX-ALT-001", "DOCX-LINK-001", "DOCX-TABLE-001",
+    "DOCX-TITLE-001", "DOCX-ALT-001", "DOCX-LINK-001", "DOCX-TABLE-001",
 }
 CLEAN_COMPLIANT = ["docx-compliant.docx", "pptx-compliant.pptx", "xlsx-compliant.xlsx"]
 MALFORMED = ["edge-corrupt.docx", "edge-plaintext.docx", "edge-pdf-as.docx", "pdf-encrypted.pdf"]
@@ -216,21 +222,21 @@ def test_xlsx_noncompliant_exact_rules(report):
 def test_pptx_vague_links(report):
     f = by_file(report).get("pptx-vague-links.pptx")
     assert f is not None and f["status"] == "analysed"
-    assert _rules(f) == {"PPTX-LINK-001", "PPTX-LANG-001"}, f"rule drift: {sorted(_rules(f))}"
+    assert _rules(f) == {"PPTX-LINK-001"}, f"rule drift: {sorted(_rules(f))}"  # *-LANG-001: see ADR 0012 note above
 
 
 def test_pptx_reading_order(report):
     f = by_file(report).get("pptx-reading-order.pptx")
     assert f is not None and f["status"] == "analysed"
     # Blank layout → no title placeholder → PPTX-TITLE-001 fires in addition
-    assert _rules(f) == {"PPTX-ORDER-001", "PPTX-LANG-001", "PPTX-TITLE-001"}, \
+    assert _rules(f) == {"PPTX-ORDER-001", "PPTX-TITLE-001"}, \
         f"rule drift: {sorted(_rules(f))}"
 
 
 def test_pptx_noncompliant_exact_rules(report):
     f = by_file(report).get("pptx-noncompliant.pptx")
     assert f is not None and f["status"] == "analysed"
-    assert _rules(f) == {"PPTX-TITLE-001", "PPTX-ALT-001", "PPTX-LANG-001"}, \
+    assert _rules(f) == {"PPTX-TITLE-001", "PPTX-ALT-001"}, \
         f"rule drift: {sorted(_rules(f))}"
 
 
