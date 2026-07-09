@@ -196,6 +196,273 @@ def _fix_orientation(tree) -> list:
     return [f"Removed orientation lock from {n} stylesheet(s) · 1.3.4"] if n else []
 
 
+# ── 1.3.5 Identify Input Purpose — declare autocomplete tokens (auto) ──
+# Mirrors frontend/src/rules/wcag-1-3-5.js and scanner.py's HTML_INPUT_NO_AUTOCOMPLETE
+# predicate: the token keyword set is kept identical to scanner._INPUT_PURPOSE so
+# every field the scanner flags gets a token here and re-scans clean.
+_PURPOSES = [
+    (re.compile(r"e-?mail", re.I), "email"),
+    (re.compile(r"(^|[\s_-])(tel|phone|mobile)([\s_-]|$)", re.I), "tel"),
+    (re.compile(r"(first|given)[-_ ]?name", re.I), "given-name"),
+    (re.compile(r"(last|family|sur)[-_ ]?name", re.I), "family-name"),
+    (re.compile(r"full[-_ ]?name|^name$", re.I), "name"),
+    (re.compile(r"(^|[\s_-])(zip|postal)([-_ ]?code)?([\s_-]|$)", re.I), "postal-code"),
+    (re.compile(r"(^|[\s_-])country([\s_-]|$)", re.I), "country-name"),
+    (re.compile(r"(^|[\s_-])(city|town)([\s_-]|$)", re.I), "address-level2"),
+    (re.compile(r"street|address", re.I), "street-address"),
+    (re.compile(r"(^|[\s_-])(org|organization|company)([\s_-]|$)", re.I), "organization"),
+    (re.compile(r"birth[-_ ]?(date|day)|(^|[\s_-])dob([\s_-]|$)", re.I), "bday"),
+]
+
+
+def _purpose_of(inp) -> str | None:
+    t = (inp.get("type") or "").lower()
+    if t == "email":
+        return "email"
+    if t == "tel":
+        return "tel"
+    hint = f'{inp.get("name") or ""} {inp.get("id") or ""} {inp.get("placeholder") or ""}'
+    for rx, token in _PURPOSES:
+        if rx.search(hint):
+            return token
+    return None
+
+
+@_register("1.3.5", "auto")
+def _fix_input_purpose(tree) -> list:
+    n = 0
+    for inp in tree.iter("input"):
+        if (inp.get("autocomplete") or "").strip():
+            continue
+        token = _purpose_of(inp)
+        if token:
+            inp.set("autocomplete", token)
+            n += 1
+    return [f"Declared input purposes with autocomplete tokens on {n} field(s) · 1.3.5"] if n else []
+
+
+# ── 1.4.1 Use of Color — underline links styled by colour alone (auto) ──
+# Mirrors frontend/src/rules/wcag-1-4-1.js and scanner.py's HTML_LINK_COLOR_ONLY.
+@_register("1.4.1", "auto")
+def _fix_use_of_color(tree) -> list:
+    n = 0
+    for a in tree.iter("a"):
+        s = a.get("style") or ""
+        if not s or not re.search(r"(?:^|;)\s*color\s*:", s):
+            continue
+        if re.search(r"text-decoration\s*:[^;]*underline", s, re.I):
+            continue
+        if re.search(r"text-decoration\s*:", s, re.I):
+            s = re.sub(r"text-decoration\s*:[^;]*", "text-decoration:underline", s, count=1, flags=re.I)
+        else:
+            s = re.sub(r";?\s*$", "; ", s) + "text-decoration:underline"
+        a.set("style", s)
+        n += 1
+    return [f"Underlined {n} link(s) distinguished by colour alone · 1.4.1"] if n else []
+
+
+# ── 2.4.1 Bypass Blocks — inject a skip link + main landmark (auto) ──
+# Mirrors frontend/src/rules/wcag-2-4-1.js and scanner.py's HTML_NO_SKIP_LINK: only
+# a document that HAS repeated chrome (nav/header) and NO existing bypass is touched.
+def _role(el) -> str:
+    return (el.get("role") or "") if hasattr(el, "get") else ""
+
+
+@_register("2.4.1", "auto")
+def _fix_bypass_blocks(tree) -> list:
+    body = tree.find(".//body")
+    if body is None:
+        return []
+    has_chrome = (tree.find(".//nav") is not None or tree.find(".//header") is not None
+                  or any(_role(el) in ("navigation", "banner") for el in body.iter()))
+    if not has_chrome:
+        return []
+    ids = {el.get("id") for el in tree.iter() if hasattr(el, "get") and el.get("id")}
+    has_main = tree.find(".//main") is not None or any(_role(el) == "main" for el in body.iter())
+    has_skip = any((a.get("href") or "").startswith("#") and (a.get("href") or "")[1:] in ids
+                   for a in tree.iter("a"))
+    if has_main or has_skip:
+        return []
+    children = list(body)
+    chrome = [el for el in children
+              if (isinstance(el.tag, str) and el.tag in ("nav", "header"))
+              or _role(el) in ("navigation", "banner")]
+    last = chrome[-1] if chrome else None
+    to_wrap, after = [], last is None
+    for el in children:
+        if el is last:
+            after = True
+            continue
+        if after and isinstance(el.tag, str) and el.tag not in ("script", "style"):
+            to_wrap.append(el)
+    if not to_wrap:
+        return []
+    main = body.makeelement("main", {"id": "main-content"})
+    body.insert(list(body).index(to_wrap[0]), main)
+    for el in to_wrap:
+        main.append(el)   # lxml move — carries the element and its tail
+    skip = body.makeelement("a", {"href": "#main-content", "class": "skip-link"})
+    skip.text = "Skip to main content"
+    body.insert(0, skip)
+    return ["Added a skip link and main landmark to bypass repeated chrome · 2.4.1"]
+
+
+# ── 2.4.3 Focus Order — reset positive tabindex to 0 (auto) ──
+# Mirrors frontend/src/rules/wcag-2-4-3.js and scanner.py's HTML_POSITIVE_TABINDEX.
+@_register("2.4.3", "auto")
+def _fix_focus_order(tree) -> list:
+    n = 0
+    for el in tree.iter():
+        ti = el.get("tabindex") if hasattr(el, "get") else None
+        if ti is None:
+            continue
+        try:
+            positive = int(ti) > 0
+        except (ValueError, TypeError):
+            continue
+        if positive:
+            el.set("tabindex", "0")
+            n += 1
+    return [f"Reset {n} positive tabindex value(s) so focus follows reading order · 2.4.3"] if n else []
+
+
+# ── 2.4.6 Headings and Labels — close skipped heading levels (auto) ──
+# The BACKEND heuristic (scanner.py HTML_HEADING_SKIP) is a *skipped heading level*
+# (e.g. h1 → h3), which differs from the frontend wcag-2-4-6.js module (that one
+# promotes visually-styled pseudo-headings). This fixer targets the scanner's
+# heuristic: walk headings in document order and clamp any level that jumps by more
+# than one down to prev+1, so the outline has no gaps and re-scans clean.
+@_register("2.4.6", "auto")
+def _fix_heading_skip(tree) -> list:
+    heads = {"h1", "h2", "h3", "h4", "h5", "h6"}
+    prev, changed = 0, 0
+    for el in tree.iter():
+        if not isinstance(el.tag, str) or el.tag not in heads:
+            continue
+        level = int(el.tag[1])
+        if prev > 0 and level > prev + 1:
+            level = prev + 1
+            el.tag = f"h{level}"
+            changed += 1
+        prev = level
+    return [f"Renumbered {changed} skipped heading level(s) so the outline has no gaps · 2.4.6"] if changed else []
+
+
+# ── 2.4.7 Focus Visible — un-suppress focus outlines (auto) ──
+# scanner.py's HTML_FOCUS_OUTLINE_SUPPRESSED fires on a static `outline:none|0`
+# anywhere (a <style> block or an inline style) when interactive content exists.
+# Adding a :focus-visible rule (as the frontend module does) does NOT clear that
+# static regex, so this instead NEUTRALISES the suppression in place — `outline:
+# revert` restores the UA default focus ring, which is exactly 2.4.7's intent and
+# no longer matches the (none|0) predicate. Editing existing nodes only (no new
+# <style>) avoids side-effecting the 1.4.10 reflow check.
+_OUTLINE_SUPPRESS = re.compile(r"outline:\s*(none|0)\b", re.I)
+
+
+@_register("2.4.7", "auto")
+def _fix_focus_visible(tree) -> list:
+    if next(tree.iter("a", "button", "input", "select", "textarea"), None) is None:
+        return []
+    n = 0
+    for st in tree.iter("style"):
+        txt = st.text or ""
+        if txt and _OUTLINE_SUPPRESS.search(txt):
+            st.text = _OUTLINE_SUPPRESS.sub("outline:revert", txt)
+            n += 1
+    for el in tree.iter():
+        s = el.get("style") if hasattr(el, "get") else None
+        if s and _OUTLINE_SUPPRESS.search(s):
+            el.set("style", _OUTLINE_SUPPRESS.sub("outline:revert", s))
+            n += 1
+    return [f"Restored a visible keyboard focus indicator in {n} place(s) · 2.4.7"] if n else []
+
+
+# ── 2.5.3 Label in Name — make the accessible name contain the visible text (auto) ──
+# Mirrors frontend/src/rules/wcag-2-5-3.js and scanner.py's HTML_LABEL_NOT_IN_NAME.
+@_register("2.5.3", "auto")
+def _fix_label_in_name(tree) -> list:
+    n = 0
+    for el in list(tree.iter("a")) + list(tree.iter("button")):
+        aria_raw = el.get("aria-label")
+        if not aria_raw:
+            continue
+        aria = re.sub(r"\s+", " ", aria_raw).strip().lower()
+        visible = re.sub(r"\s+", " ", el.text_content() or "").strip()[:80]
+        if not visible or visible.lower() in aria:
+            continue
+        old = aria_raw.strip()
+        el.set("aria-label", f"{visible} — {old}" if old else visible)
+        n += 1
+    return [f"Aligned {n} accessible name(s) with the visible label · 2.5.3"] if n else []
+
+
+# ── 3.1.4 Abbreviations — wrap known abbreviations in <abbr title> (auto) ──
+# Mirrors scanner.py's HTML_UNEXPANDED_ABBR. ABBR is duplicated from scanner.py by
+# hand (same posture as scanner.py mirrors frontend utils.js) so the wrap clears the
+# exact same detector. Handles lxml's text/tail model: an abbreviation in an
+# element's .text becomes leading child <abbr>s; one in a child's .tail is inserted
+# after that child. Wrapped text sits inside <abbr>, which the scanner skips, so a
+# re-scan is clean and a re-run is idempotent.
+ABBR = {
+    "WCAG": "Web Content Accessibility Guidelines", "ADA": "Americans with Disabilities Act",
+    "PDF": "Portable Document Format", "PPO": "Preferred Provider Organization",
+    "HDHP": "High-Deductible Health Plan", "FSA": "Flexible Spending Account",
+    "HSA": "Health Savings Account", "FAQ": "Frequently Asked Questions",
+    "PII": "Personally Identifiable Information", "UTSW": "UT Southwestern", "HR": "Human Resources",
+}
+_ABBR_RE = re.compile(r"\b(" + "|".join(ABBR) + r")\b")
+_ABBR_SKIP = {"abbr", "script", "style", "title"}
+
+
+def _abbr_split(text: str):
+    matches = list(_ABBR_RE.finditer(text))
+    if not matches:
+        return None
+    leading = text[:matches[0].start()]
+    pairs = []
+    for i, m in enumerate(matches):
+        nxt = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        pairs.append((m.group(1), text[m.end():nxt]))
+    return leading, pairs
+
+
+def _abbr_wrap(parent, anchor, text) -> int:
+    """Wrap abbreviations found in `text`. anchor=None → the text is parent.text and
+    new <abbr>s become parent's leading children; otherwise the text is anchor.tail
+    and the <abbr>s are inserted right after anchor. Returns the number wrapped."""
+    split = _abbr_split(text)
+    if split is None:
+        return 0
+    leading, pairs = split
+    base = 0 if anchor is None else list(parent).index(anchor) + 1
+    if anchor is None:
+        parent.text = leading
+    else:
+        anchor.tail = leading
+    for i, (word, tail) in enumerate(pairs):
+        ab = parent.makeelement("abbr", {"title": ABBR[word]})
+        ab.text = word
+        ab.tail = tail
+        parent.insert(base + i, ab)
+    return len(pairs)
+
+
+@_register("3.1.4", "auto")
+def _fix_abbr(tree) -> list:
+    changed = 0
+    for el in [e for e in tree.iter() if isinstance(e.tag, str)]:
+        if el.tag in _ABBR_SKIP:
+            continue
+        if any(isinstance(a.tag, str) and a.tag in _ABBR_SKIP for a in el.iterancestors()):
+            continue
+        if el.text:
+            changed += _abbr_wrap(el, None, el.text)
+        parent = el.getparent()
+        if el.tail and parent is not None:
+            changed += _abbr_wrap(parent, el, el.tail)
+    return [f"Expanded {changed} abbreviation(s) with <abbr> · 3.1.4"] if changed else []
+
+
 def remediate_html(html_text: str, *, ai_enabled: bool = True) -> tuple[str, list, list]:
     """Apply server-side HTML remediation.
 

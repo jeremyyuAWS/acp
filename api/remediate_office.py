@@ -457,6 +457,26 @@ def _remediate_docx_structure(entries: dict) -> list[str]:
                 st.set(f"{{{W}}}val", h2_id)
             applied.append(f"Demoted {len(h1s) - 1} extra Heading 1(s) to Heading 2 · 1.3.1")
 
+        # Heading skips (2.4.6): after the 1.3.1 outline fix, walk the headings in
+        # document order and clamp any level that jumps by more than one down to
+        # prev+1, so office_structure's DOCX_HEADING_SKIP detector reads a gap-free
+        # outline. Re-derives each level from the (possibly just-rewritten) style id
+        # and keeps the doc's own spelling (same uniform-spelling assumption the
+        # 1.3.1 fix above already makes).
+        skip_fixed, prev_lvl = 0, 0
+        for st, _old in headings:
+            cur = st.get(f"{{{W}}}val")
+            lvl = levels.get(cur)
+            if lvl is None:
+                continue
+            if prev_lvl > 0 and lvl > prev_lvl + 1:
+                lvl = prev_lvl + 1
+                st.set(f"{{{W}}}val", f"Heading {lvl}" if " " in cur else f"Heading{lvl}")
+                skip_fixed += 1
+            prev_lvl = lvl
+        if skip_fixed:
+            applied.append(f"Closed {skip_fixed} skipped heading level(s) so the outline has no gaps · 2.4.6")
+
     # Contrast (1.4.3): recolour any run whose explicit w:color falls below 4.5:1 against
     # its paragraph background — to black or white, whichever gives better contrast. Mirrors
     # the pptx contrast fix and matches what the analyser's ColourContrastRule measures
