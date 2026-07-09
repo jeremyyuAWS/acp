@@ -112,3 +112,58 @@ def test_multi_parent_file_walked_twice_is_scanned_once():
     out = scanner._search_folder(drive, "root", max_files=100)
     assert [o["id"] for o in out] == ["DECK"]
     assert out[0]["name"] == "deck.pptx"
+
+
+# ── _sp_list: OneDrive / MS Graph paged search returns an item twice ──────────
+
+def _graph(monkeypatch, pages):
+    """Stub httpx.get so _sp_list walks `pages` (each a Graph /search response)."""
+    import httpx
+    calls = iter(pages)
+
+    class _Resp:
+        def __init__(self, payload):
+            self._p = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._p
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: _Resp(next(calls)))
+
+
+def _sp_item(iid, name):
+    return {"id": iid, "name": name, "file": {}}
+
+
+def test_sp_paged_search_returning_an_item_twice_yields_one_document(monkeypatch):
+    """Graph's paged /search can repeat an item across pages. It is still one document."""
+    _graph(monkeypatch, [
+        {"value": [_sp_item("I1", "deck.pptx")],
+         "@odata.nextLink": "https://graph.microsoft.com/next"},
+        {"value": [_sp_item("I1", "deck.pptx"), _sp_item("I2", "budget.xlsx")]},
+    ])
+    out = scanner._sp_list("tok", max_files=50)
+    assert [o["id"] for o in out] == ["I1", "I2"]
+    assert [o["name"] for o in out] == ["deck.pptx", "budget.xlsx"]   # no phantom " (1)"
+
+
+def test_sp_distinct_items_sharing_a_name_are_both_kept(monkeypatch):
+    """Identity dedup must not swallow two DIFFERENT OneDrive items that share a name —
+    _dedupe_names disambiguates those downstream."""
+    _graph(monkeypatch, [{"value": [_sp_item("A", "Report.pptx"), _sp_item("B", "Report.pptx")]}])
+    out = scanner._sp_list("tok", max_files=50)
+    assert [o["id"] for o in out] == ["A", "B"]
+    # names still collide here; _list's _dedupe_names is what separates them
+    assert [o["name"] for o in scanner._dedupe_names(out)] == ["Report.pptx", "Report (1).pptx"]
+
+
+def test_sp_skips_folders_and_unsupported_types(monkeypatch):
+    _graph(monkeypatch, [{"value": [
+        {"id": "F1", "name": "a-folder"},                 # no "file" facet → a folder
+        _sp_item("I3", "photo.png"),                      # unsupported extension
+        _sp_item("I4", "memo.docx"),
+    ]}])
+    assert [o["name"] for o in scanner._sp_list("tok", max_files=50)] == ["memo.docx"]

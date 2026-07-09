@@ -282,11 +282,21 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
 
 
 def _sp_list(token: str, max_files: int = 200) -> list[dict]:
-    """List scannable files from OneDrive personal via MS Graph search."""
+    """List scannable files from OneDrive personal via MS Graph search.
+
+    Identity dedup, same rule as _normalize's for Drive: a drive-item id IS the document,
+    and Graph's paged /search can return the same item on more than one page. Without this,
+    _dedupe_names (which every source funnels through) would rename the repeat to
+    "Deck (1).pptx" — a phantom document that inflates the file count, gets downloaded and
+    analysed a second time, and surfaces in the UI as "x2 copies". Each source is responsible
+    for yielding unique IDENTITIES; _dedupe_names only disambiguates genuine NAME collisions
+    between different items."""
     import httpx
     exts = {".docx", ".pptx", ".xlsx", ".pdf", ".html", ".htm"}
     hdrs = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     files: list[dict] = []
+    seen_ids: set[str] = set()
+    relisted = 0
     url = "https://graph.microsoft.com/v1.0/me/drive/root/search(q='')?$select=id,name,file&$top=200"
     while url and len(files) < max_files:
         r = httpx.get(url, headers=hdrs, timeout=30, follow_redirects=True)
@@ -295,10 +305,19 @@ def _sp_list(token: str, max_files: int = 200) -> list[dict]:
         for item in data.get("value", []):
             if "file" not in item:
                 continue
+            item_id = item.get("id")
+            if item_id is not None:
+                if item_id in seen_ids:
+                    relisted += 1
+                    continue
+                seen_ids.add(item_id)
             name = item.get("name", "")
             if Path(name).suffix.lower() in exts:
-                files.append({"name": _safe_name(name), "id": item["id"], "sp": True})
+                files.append({"name": _safe_name(name), "id": item_id, "sp": True})
         url = data.get("@odata.nextLink")
+    if relisted:
+        print(f"[scan] {relisted} duplicate listing(s) of the same OneDrive item id collapsed "
+              f"(paged /search overlap) — not extra documents", flush=True)
     return files[:max_files]
 
 
