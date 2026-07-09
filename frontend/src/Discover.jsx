@@ -116,8 +116,6 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
   const classConfirmed = files.filter(isConfirmed).length
 
   const dupeCount = dupeCountOf(files)
-  const alreadyScored = files.filter((f) => f.score != null).length
-  const alreadyRemediated = files.filter((f) => f.remediated_at || f.drive_write_url || f.acp_stamped).length
 
   const actionable = files.filter((f) => !f.locked)
   const effAction = (f) => { const d = decisions[f.file]; return d?.state === 'override' ? d.action : RET_BUCKET(f) }
@@ -251,7 +249,6 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
       {files.length === 0 ? (
         <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Integrations.</p>
       ) : (() => {
-        const needsAssessment = files.filter((f) => !isUnreadable(f) && !f.remediated_at && !f.drive_write_url && !f.acp_stamped && f.score == null).length
         const totalWidth = files.length || 1
         return (
         <>
@@ -269,27 +266,15 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
             ))}
           </div>
 
-          {/* File breakdown — how total sums across categories */}
+          {/* Discovery facts only. Rubric scores and remediation state used to appear here,
+              which read as "the scan already assessed and remediated your documents" — it
+              does neither. Those belong to the Assess and Remediate steps that own them. */}
           <div className="filesplit" role="region" aria-label="File breakdown">
             <div className="filesplit-item">
               <span className="filesplit-n" style={{ color: 'var(--ink)' }}>{files.length}</span>
               <span className="filesplit-lbl">total scanned</span>
               <div className="filesplit-bar"><i style={{ width: '100%', background: '#7a5c8e' }} /></div>
             </div>
-            <button className="filesplit-item" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: alreadyRemediated ? 'pointer' : 'default' }}
-                    disabled={!alreadyRemediated}
-                    onClick={() => alreadyRemediated && setSeg({ title: 'Already remediated', subtitle: `${alreadyRemediated} files fixed in a prior or current pass`, files: files.filter((f) => f.remediated_at || f.drive_write_url || f.acp_stamped) })}>
-              <span className="filesplit-n" style={{ color: '#3B6D11' }}>{alreadyRemediated}</span>
-              <span className="filesplit-lbl">remediated ✓</span>
-              <div className="filesplit-bar"><i style={{ width: `${(alreadyRemediated / totalWidth) * 100}%`, background: '#3B6D11' }} /></div>
-            </button>
-            <button className="filesplit-item" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: alreadyScored && !alreadyRemediated ? 'pointer' : 'default' }}
-                    disabled={!alreadyScored}
-                    onClick={() => alreadyScored && setSeg({ title: 'Scored by the scan', subtitle: `${alreadyScored} files have a rubric score from the scan — WCAG conformance assessment happens in the Assess step`, files: files.filter((f) => f.score != null) })}>
-              <span className="filesplit-n" style={{ color: '#2A5E9E' }}>{alreadyScored}</span>
-              <span className="filesplit-lbl">scored by scan</span>
-              <div className="filesplit-bar"><i style={{ width: `${(alreadyScored / totalWidth) * 100}%`, background: '#2A5E9E' }} /></div>
-            </button>
             <button className="filesplit-item" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: dupeCount ? 'pointer' : 'default' }}
                     disabled={!dupeCount}
                     onClick={() => dupeCount && setSeg({ title: 'Duplicate uploads', subtitle: `${dupeCount} extra copies of another document`, files: duplicateFiles(files) })}>
@@ -303,13 +288,6 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
               <span className="filesplit-n" style={{ color: '#75706A' }}>{lockedCount}</span>{/* ≥4.5:1 on white (was #9a948f · 3.0) */}
               <span className="filesplit-lbl">🔒 unreadable</span>
               <div className="filesplit-bar"><i style={{ width: `${(lockedCount / totalWidth) * 100}%`, background: '#9a948f' }} /></div>
-            </button>
-            <button className="filesplit-item" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: needsAssessment ? 'pointer' : 'default' }}
-                    disabled={!needsAssessment}
-                    onClick={() => needsAssessment && setSeg({ title: 'Not yet scored', subtitle: `${needsAssessment} files have no rubric score yet — re-scan to score them`, files: files.filter((f) => !isUnreadable(f) && !f.remediated_at && !f.drive_write_url && !f.acp_stamped && f.score == null) })}>
-              <span className="filesplit-n" style={{ color: '#1F5FA8' }}>{needsAssessment}</span>
-              <span className="filesplit-lbl">not yet scored</span>
-              <div className="filesplit-bar"><i style={{ width: `${(needsAssessment / totalWidth) * 100}%`, background: '#1F5FA8' }} /></div>
             </button>
           </div>
 

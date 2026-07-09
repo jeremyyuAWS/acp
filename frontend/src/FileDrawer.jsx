@@ -5,6 +5,7 @@ import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
 import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, getFileRemediationDiffs, downloadRemediated, getRules, getRubric, getConfig } from './api.js'
+import PagePreview from './PagePreview.jsx'
 import { WCAG } from './wcagCatalog.js'
 import { confidenceForFinding, confidenceForCoverage, confClass } from './confidence.js'
 import { TraceChip } from './Transparency.jsx'
@@ -44,6 +45,27 @@ const remStageLine = (pct) => REM_STAGE_LINES[Math.min(REM_STAGE_LINES.length - 
 // HITL-deferred finding (contrast, link purpose) is never claimed as 'fixing'.
 const REM_AUTOFIX_SC_BY_TYPE = { pdf: ['3.1.1', '2.4.2'], docx: ['1.1.1', '3.1.1', '2.4.2'], pptx: ['1.1.1', '3.1.1', '2.4.2', '1.4.3', '1.4.6', '1.3.2', '2.4.6'], xlsx: ['1.1.1', '3.1.1', '2.4.2', '1.4.3', '1.4.6'], html: ['3.1.1', '2.4.2', '1.3.1', '1.4.3', '1.4.6', '1.4.10', '1.4.4', '1.4.12', '1.4.2', '1.3.4'] }
 const scOfWcag = (v) => ((v || '').replace(/^SC_/, '').replace(/_/g, '.').match(/^\d+\.\d+\.\d+/) || [''])[0]
+
+// Only PDFs can be rasterized server-side (api/render.py RENDERABLE_EXTS = ('.pdf',)).
+// Office formats would need a LibreOffice round-trip, so for a deck we show the slide
+// number and no image — rather than a row of "preview unavailable" placeholders.
+const PAGE_RENDERABLE = new Set(['pdf'])
+
+// Click-to-reveal, not eager: a drawer can list 20+ findings and rendering a PNG per row
+// would fire that many page-render requests the reviewer never asked for.
+function FindingPagePreview({ scanId, file, pages }) {
+  const [open, setOpen] = useState(false)
+  const page = [...pages].sort((a, b) => a - b)[0]
+  if (!scanId) return null
+  return (
+    <div style={{ marginTop: 6 }}>
+      <button className="explain-btn" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        {open ? 'Hide page' : `Show page ${page}`}
+      </button>
+      {open && <div style={{ marginTop: 6 }}><PagePreview scanId={scanId} file={file} page={page} maxHeight={220} /></div>}
+    </div>
+  )
+}
 
 // Where the occurrences are. The analysers attribute a 1-based page/slide per finding
 // (issue_records.page); a finding they could not place carries none and renders nothing —
@@ -636,6 +658,8 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                     {i.detail && <div className="findingdetail">{i.detail}</div>}
                     {i.impact && <div className="muted findingimpact">{i.impact}</div>}
                     {i.fix && <div className="findingfix"><span className={i.auto ? 'fixauto' : 'fixreview'}>{i.auto ? '⚡ auto-fixable' : '✎ needs review'}</span> · {i.fix}<span className="muted"> · {i.rule_id ?? i.ruleId}</span></div>}
+                    {i.pages?.length > 0 && PAGE_RENDERABLE.has(file.type) &&
+                      <FindingPagePreview scanId={scanId} file={file.file} pages={i.pages} />}
                     {(() => {
                       // Evidence-based confidence (confidence.js) — never a fabricated %.
                       // The basis is always shown next to the level so the signal is auditable.

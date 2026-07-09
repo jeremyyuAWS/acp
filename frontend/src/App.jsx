@@ -91,20 +91,17 @@ function progressText(p) {
 // analysing and scoring still follow). The read phase spans 12→84%, scaled by the
 // real per-file count; the post-read phases fill the remainder.
 const PHASE_PCT = { queued: 2, connecting: 5, discovering: 9, reading: 12, tagging: 88, analysing: 92, scoring: 97, done: 100, error: 100 }
-// Informative "still working" lines for the long worker-pool phase, so a
-// multi-minute scan reports what it's doing instead of looking frozen. Each line
-// names a real check (with its WCAG success criterion). Cycled by elapsed seconds.
+// Informative "still working" lines for the long worker-pool phase, so a multi-minute
+// scan reports what it's doing instead of looking frozen. These name only what the scan
+// itself does — fetch, parse, extract, collect. They deliberately do NOT narrate WCAG
+// criteria or conformance scores: assessment is the Assess step, and announcing criteria
+// here made the scan look like it had already assessed (and even remediated) the estate.
 const STATUS_LINES = [
   'Downloading and parsing each document…',
-  'Checking images for text alternatives (WCAG 1.1.1)…',
-  'Verifying heading structure and reading order (1.3.1)…',
-  'Measuring text and UI color contrast (1.4.3 / 1.4.11)…',
-  'Reviewing link text and button names (2.4.4 / 4.1.2)…',
-  'Confirming document titles and language (2.4.2 / 3.1.1)…',
-  'Checking tables, lists and landmarks for structure (1.3.1)…',
+  'Extracting text, images and document structure…',
+  'Reading document metadata and properties…',
   'Running deep scan for sensitive data (PII)…',
-  'Scoring each document against WCAG 2.1 AA…',
-  'Aggregating results and compliance scores…',
+  'Collecting findings for the Assess step…',
 ]
 // When PII (deep) scan is off, drop the PII line so the progress narration never claims
 // work that isn't actually running — the rest of the lines are checks every scan does.
