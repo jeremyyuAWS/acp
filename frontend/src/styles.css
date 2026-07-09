@@ -653,6 +653,13 @@ input:focus-visible, [role="tab"]:focus-visible {
 .dectag.ok { color: #3B6D11; background: #E7F0DC; }
 .dectag.ov { color: #3C3489; background: #EEEDFE; }
 .dectag.rj { color: #1F5FA8; background: #E2EDFB; }
+/* Evidence-based confidence chip (confidence.js) — High/Medium/Low, never a %. */
+.conf { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 6px; white-space: nowrap; display: inline-flex; align-items: center; }
+.conf-high { color: #3B6D11; background: #E7F0DC; }
+.conf-medium { color: #8A5A00; background: #FDF3E0; }
+.conf-low { color: #575360; background: #ECECEF; }
+.findingconf { font-size: 12px; margin-top: 5px; display: flex; align-items: baseline; gap: 2px; flex-wrap: wrap; }
+.covconf { white-space: nowrap; text-align: center; }
 .decctl { display: inline-flex; gap: 6px; margin-left: 8px; vertical-align: middle; }
 .decbtn { width: 32px; height: 32px; border: 1px solid var(--line); background: #fff; border-radius: 8px; cursor: pointer; font-size: 14px; line-height: 1; color: var(--muted); padding: 0; }
 .decbtn:hover { background: var(--bg); }

@@ -16,3 +16,4 @@ header). Match the structure of the latest ADR when adding a new one.
 
 - [0014 — Keep long-running scans authenticated (Drive token refresh)](0014-drive-token-refresh.md) — **Accepted** (Tier 1) / **Proposed** (Tier 2) (2026-07-09)
 - [0015 — Page-render / thumbnail seam (lazy PDF→PNG, blob-cached)](0015-page-render-thumbnail-seam.md) — **Accepted** (PDF) / **Proposed** (Office) (2026-07-09)
+- [0016 — Evidence-based confidence signal (derived, never a fabricated %)](0016-evidence-based-confidence.md) — **Accepted** (2026-07-09)
