@@ -1,27 +1,27 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
 import FileDrawer, { REC_STYLE, fmtEffort, SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
-import { prefersReducedMotion } from './a11y.js'
-import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes } from './api.js'
+import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs } from './api.js'
 import { SIM } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
 import QueuePanel from './QueuePanel.jsx'
+import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
+import { confidenceForFinding, confClass } from './confidence.js'
+import { metaFor } from './hitlMeta.js'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
 // (what to fix, prioritized, accept/reject/modify), the HITL queue, and self-remediation.
+//
+// The view is framed around the four decisions a compliance officer actually makes —
+// Review → Approve → Verify → Publish — with the engine (worker queue, plan decisions,
+// live metrics, business-risk graphs) folded behind an "Advanced" disclosure. Every count,
+// confidence and risk statement traces to real pipeline data (applied-fix evidence, the
+// live HITL queue, confidence.js, the recommendation model); nothing is fabricated.
 const REM_ACTIONS = REMEDIATION_ACTIONS
-const JUNK_PATTERNS = ['_draft', '_old', '_v1', '_backup', '~$', '.tmp', '_temp', '_copy', '_archive', '_test', '_sample', ' copy', '(1)', '(2)']
-const isAutoJunk = (f) => {
-  const name = (f.file || '').toLowerCase()
-  if (JUNK_PATTERNS.some((p) => name.includes(p))) return true
-  if ((f.score ?? 100) >= 90 && !(f.issues || []).some((i) => i.severity === 'CRITICAL' || i.severity === 'SERIOUS')) return true
-  return false
-}
 const ACTIONS = ['auto', 'assisted', 'review', 'archive', 'keep', 'manual']
 const ETA_OVERRIDE = { archive: 2, keep: 0, manual: 35, review: 10 }
 const hrs = (m) => m >= 90 ? `${(m / 60).toFixed(1)} hrs` : `${Math.round(m)} min`
@@ -58,32 +58,6 @@ const FIX_WCAG_LABELS = {
   SC_3_1_1: { label: 'language set', color: '#726BC6' },
   SC_1_3_1: { label: 'table headers', color: '#A56814' },
 }
-function buildFixExamples(files) {
-  const examples = []
-  for (const f of files) {
-    if (examples.length >= 6) break
-    const ext = (f.file || '').split('.').pop().toUpperCase() || 'DOC'
-    for (const issue of (f.issues || [])) {
-      const sc = (issue.wcag || '').replace(/^SC_/, '').replace(/_/g, '.')
-      const ba = ITEM_BA[sc]
-      if (!ba) continue
-      const name = ITEM_NAME[sc] || sc
-      const auto = f.rec?.action === 'auto'
-      examples.push({
-        fmt: ext,
-        wcag: `WCAG ${sc} · ${name}`,
-        auto,
-        before: ba.before(issue.detail, f),
-        after: ba.after(f, issue),
-        file: f.file,
-      })
-      if (examples.length >= 6) break
-    }
-  }
-  // Only genuine, scan-derived examples — no fabricated fallback. FixCarousel hides itself
-  // when there are none (see the early return), so nothing illustrative is ever shown.
-  return examples
-}
 const ITEM_ICON = { '1.1.1': '▦', '1.2.1': '🎧', '1.2.2': '🎬', '1.2.5': '🎬', '1.3.1': '⊞', '1.3.2': '¶', '1.4.3': '◑', '2.4.2': '¶', '2.4.4': '↗', '3.1.1': '✦' }
 const ITEM_NAME = { '1.1.1': 'non-text content', '1.2.1': 'audio-only & video-only', '1.2.2': 'captions', '1.2.5': 'audio description', '1.3.1': 'info & relationships', '1.3.2': 'meaningful sequence', '1.4.3': 'contrast minimum', '2.4.2': 'page titled', '2.4.4': 'link purpose', '3.1.1': 'language of page' }
 const ITEM_BA = {
@@ -107,7 +81,6 @@ function dbItemToUi(it, files) {
   const ba = ITEM_BA[sc] || { meta: 'review AI proposal', before: (d) => d || 'issue found', after: () => 'AI fix applied — review before certifying' }
   const fileRec = (files || []).find((f) => f.file === it.file) || {}
   const issue = ((fileRec.issues || []).find((i) => (i.wcag || '').replace(/^SC_/, '').replace(/_/g, '.') === sc)) || {}
-  const h = [...(it.file || '')].reduce((a, c) => (a * 31 + c.charCodeAt(0)) & 0xffff, it.id || 0)
   return {
     id: it.id,
     icon: ITEM_ICON[sc] || '◈',
@@ -137,7 +110,6 @@ function buildHumanQueue(files, triage = {}) {
     if (!issue) return null
     const sc = (issue.wcag || '').replace(/^SC_/, '').replace(/_/g, '.')
     const ba = ITEM_BA[sc] || { meta: 'review AI proposal', before: (d) => d || 'issue found', after: () => 'AI fix applied — review before certifying' }
-    const h = [...f.file].reduce((a, c) => (a * 31 + c.charCodeAt(0)) & 0xffff, idx)
     return {
       id: idx + 1,
       icon: ITEM_ICON[sc] || '◈',
@@ -153,121 +125,171 @@ function buildHumanQueue(files, triage = {}) {
   }).filter(Boolean)
 }
 
-function FixCarousel({ files = [], scanId = null }) {
-  // 'Recent fixes' — an expandable list (PRD §8: replace the carousel; nobody likes carousels).
-  const canned = useMemo(() => buildFixExamples(files), [files])
-  // Real applied fixes (actual AI-written value + image thumbnail) from the backend. These
-  // are literally what remediation wrote, so they're preferred over the scan-derived
-  // templates; we fall back to `canned` when none were captured (no vision fix ran / old scan).
-  const [applied, setApplied] = useState([])
-  useEffect(() => {
-    let live = true
-    getAppliedFixes(scanId).then((r) => { if (live) setApplied(Array.isArray(r) ? r : []) }).catch(() => {})
-    return () => { live = false }
-  }, [scanId])
-  const realRows = applied.map((a) => {
-    const sc = (a.rule_id || '').replace(/^SC_/, '').replace(/_/g, '.')
-    return {
-      fmt: ((a.file || '').split('.').pop() || 'DOC').toUpperCase(),
-      wcag: `WCAG ${sc} · ${ITEM_NAME[sc] || 'non-text content'}`,
-      auto: true,
-      before: 'Image had no meaningful alt text',
-      after: a.value,
-      thumb: a.thumb || null,
-      note: a.source,
-    }
-  })
-  const rows = realRows.length ? realRows : canned
-  if (!rows.length) return null
-  return (
-    <section className="panel">
-      <div className="fixhd">
-        <h2 style={{ margin: 0 }}>Recent AI fixes <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>· from your scanned documents</span></h2>
-        <span className="muted" style={{ fontSize: 12 }}>{rows.length} shown</span>
-      </div>
-      <div className="recentfixes">
-        {rows.slice(0, 8).map((ex, i) => (
-          <details className="recentfix" key={i}>
-            <summary>
-              {ex.thumb && <img src={ex.thumb} alt="" width="36" height="36"
-                                style={{ borderRadius: 4, objectFit: 'cover', border: '1px solid var(--line)', flex: '0 0 auto', background: '#fff' }} />}
-              <span className="fmtchip">{ex.fmt}</span>
-              <span className="muted" style={{ fontSize: 12 }}>{ex.wcag}</span>
-              <span className={ex.auto ? 'fixauto' : 'fixreview'} style={{ marginLeft: 'auto', fontSize: 12 }}>{ex.auto ? '⚡ auto-applied' : '✎ AI draft · human review'}</span>
-            </summary>
-            <div className="diffbox before"><span className="difftag">before</span>{ex.before}</div>
-            <div className="diffbox after"><span className="difftag">after</span>{ex.after}{ex.note ? <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>· {ex.note}</span> : null}</div>
-          </details>
-        ))}
-      </div>
-    </section>
-  )
+// Per-card automation badge (§4) — we retired the permanent 🟢🟡🔴 legend; the badge now
+// lives ON each card so its meaning is local, never a floating key you have to remember.
+const AUTO_BADGE = {
+  auto:   { cls: 'ab-auto',   label: '🟢 Auto Applied' },
+  review: { cls: 'ab-review', label: '🟡 Review Suggested' },
+  human:  { cls: 'ab-human',  label: '🔴 Human Required' },
+}
+function AutoBadge({ kind }) {
+  const b = AUTO_BADGE[kind] || AUTO_BADGE.review
+  return <span className={`autobadge ${b.cls}`}>{b.label}</span>
 }
 
-const REM_SECTIONS = [
-  { id: 'rem-triage',     label: '1 · Triage' },
-  { id: 'rem-auto',       label: '2 · Plan' },
-  { id: 'rem-review',     label: '3 · Human review' },
-  { id: 'rem-revalidate', label: '4 · Re-validate' },
-]
-
-function StickyNav({ sections, triageComplete, counts = {} }) {
-  const [active, setActive] = useState(sections[0]?.id || '')
-  useEffect(() => {
-    const io = new IntersectionObserver(
-      (entries) => {
-        const vis = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)
-        if (vis.length) setActive(vis[0].target.id)
-      },
-      { rootMargin: '-56px 0px -65% 0px', threshold: 0 }
-    )
-    sections.forEach(({ id }) => { const el = document.getElementById(id); if (el) io.observe(el) })
-    return () => io.disconnect()
-  }, [sections]) // eslint-disable-line react-hooks/exhaustive-deps
+// GitHub-style progress rail (§2) — where am I in Scan → Assess → Remediate → Human Review
+// → Verify → Publish. `state` is 'done' | 'active' | 'pending'; an active step may carry a
+// count (the human-review backlog).
+function ProgressRail({ steps }) {
   return (
-    <nav className="stickynav" aria-label="Remediation steps">
-      <span className="snavlabel">Steps</span>
-      {sections.map(({ id, label }) => {
-        const locked = !triageComplete && id !== 'rem-triage'
-        const n = counts[id]
-        return (
-          <button key={id} className={`snavbtn${active === id ? ' on' : ''}`}
-            style={locked ? { opacity: 0.45, cursor: 'default' } : undefined}
-            disabled={locked}
-            onClick={() => !locked && document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
-            {label}{n != null && n > 0 && <span className="snavcount">{n}</span>}
-          </button>
-        )
-      })}
+    <nav className="progressrail" aria-label="Remediation progress">
+      {steps.map((s, i) => (
+        <div key={s.key} className={`prstep pr-${s.state}`}>
+          <span className="prmark" aria-hidden="true">{s.state === 'done' ? '✓' : s.state === 'active' ? '●' : '○'}</span>
+          <span className="prlabel">{s.label}</span>
+          {s.count != null && s.count > 0 && <span className="prcount">{s.count}</span>}
+          {i < steps.length - 1 && <span className="prsep" aria-hidden="true">›</span>}
+        </div>
+      ))}
     </nav>
   )
 }
 
-// Collapsible wrapper for sections that require triage to be complete first
-function LockedSection({ label, triageComplete, children }) {
-  if (triageComplete) return children
+// "Why am I reviewing this?" (§3) — the honest evidence a compliance officer needs to act:
+// the confidence.js level + its concrete basis (never a fabricated %), the plain-language
+// escalation reason, and the value the AI is suggesting they approve.
+function WhyReview({ sc, suggested }) {
+  const conf = confidenceForFinding({ sc })
+  const reason = metaFor({ rule_id: sc }).reason
   return (
-    <details className="section-locked">
-      <summary className="section-locked-sum">
-        {label}
-        <span className="section-locked-msg">· complete Triage first to unlock</span>
-      </summary>
-      <div className="section-locked-body">{children}</div>
-    </details>
+    <div className="whyreview">
+      <div className="whyreview-hd">Why am I reviewing this?</div>
+      <div className="whyreview-row">
+        <span className="muted">AI confidence</span>
+        <span className={confClass(conf.level)}>{conf.level.label}</span>
+        <span className="muted">— {conf.basis}</span>
+      </div>
+      <div className="whyreview-row"><span className="muted">Reason</span><span>{reason}</span></div>
+      {suggested && <div className="whyreview-row"><span className="muted">Suggested value</span><span className="whyreview-sugg">{suggested}</span></div>}
+    </div>
   )
+}
+
+// One human-review card. Dominant surface (§3): the card leads with WHAT and WHY, carries
+// its own badge (§4), and exposes the review actions inline — no competing top-level buttons.
+function ReviewItemCard({ item, onOpen, onApprove, onSelf, onReject, disabled }) {
+  const sc = scOf(item.ruleId || item.rule || item.title)
+  const conf = confidenceForFinding({ sc })
+  const badgeKind = conf.level.rank <= 1 ? 'human' : 'review'   // Low → human required, else review suggested
+  return (
+    <div className="reviewcard">
+      <div className="reviewcard-top">
+        <span className="qico" aria-hidden="true">{item.icon}</span>
+        <div className="reviewcard-title">
+          <button className="remname" onClick={onOpen}>{item.title}</button>
+          <div className="qmeta">{item.file} · {item.rule}</div>
+        </div>
+        <AutoBadge kind={badgeKind} />
+      </div>
+      <WhyReview sc={sc} suggested={item.after} />
+      <div className="reviewcard-actions">
+        <button className="qbtn approve" disabled={disabled} onClick={onApprove}>✓ Approve</button>
+        <button className="qbtn self" disabled={disabled} onClick={onSelf} title="Take ownership — fix it yourself, then re-scan to confirm">✋ I’ll fix it</button>
+        <button className="qbtn reject" disabled={disabled} onClick={onReject}>✕ Reject</button>
+      </div>
+    </div>
+  )
+}
+
+// Recent AI fixes — a GROUPED summary (§6), not a repetitive per-row list. One chip per
+// rule ("Added 14 image descriptions"), an "Accessibility improvements" impact row (§7),
+// and "View details" expands to the real applied values + thumbnails (applied_fixes).
+// Everything is a straight count of what was written.
+function GroupedFixes({ fixGroups, appliedFixes = [], impact }) {
+  const [showDetail, setShowDetail] = useState(false)
+  if (!fixGroups.length) return null
+  return (
+    <section className="panel">
+      <div className="fixhd">
+        <h2 style={{ margin: 0 }}>Recent AI fixes <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>· what was corrected automatically</span></h2>
+      </div>
+      <div className="fixgroups">
+        {fixGroups.map((g) => <span className="fixgroup" key={g.sc}><span aria-hidden="true">✓</span> {g.phrase}</span>)}
+        {appliedFixes.length > 0 && (
+          <button className="linkbtn" onClick={() => setShowDetail((v) => !v)}>{showDetail ? 'Hide details' : 'View details →'}</button>
+        )}
+      </div>
+      {impact && impact.length > 0 && (
+        <div className="impactrow" aria-label="Accessibility improvements by category">
+          <span className="impacthd muted">Accessibility improvements</span>
+          {impact.map((c) => (
+            <span className="impacttile" key={c.category}><b>{c.count}</b> <span className="muted">{c.category}</span></span>
+          ))}
+        </div>
+      )}
+      {showDetail && appliedFixes.length > 0 && (
+        <div className="recentfixes" style={{ marginTop: 12 }}>
+          {appliedFixes.slice(0, 12).map((a, i) => {
+            const sc = scOf(a.rule_id)
+            return (
+              <details className="recentfix" key={i}>
+                <summary>
+                  {a.thumb && <img src={a.thumb} alt="" width="36" height="36"
+                                   style={{ borderRadius: 4, objectFit: 'cover', border: '1px solid var(--line)', flex: '0 0 auto', background: '#fff' }} />}
+                  <span className="fmtchip">{((a.file || '').split('.').pop() || 'DOC').toUpperCase()}</span>
+                  <span className="muted" style={{ fontSize: 12 }}>WCAG {sc} · {ITEM_NAME[sc] || 'non-text content'} · {a.file}</span>
+                  <span className="fixauto" style={{ marginLeft: 'auto', fontSize: 12 }}>⚡ auto-applied</span>
+                </summary>
+                <div className="diffbox after"><span className="difftag">applied</span>{a.value}{a.source ? <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>· {a.source}</span> : null}</div>
+              </details>
+            )
+          })}
+        </div>
+      )}
+    </section>
+  )
+}
+
+// Verification state (§8) — real, tied to the re-scan/job state; never "0 → 0".
+function VerifyState({ state, pct, remaining, ready, latest }) {
+  if (state === 'running') return (
+    <div className="verify-run" role="status" aria-live="polite">
+      <div className="verify-track"><i style={{ width: `${pct}%` }} /></div>
+      <span>Running… <b>{pct}%</b>{latest ? <> · last verified <span className="fname">{latest}</span></> : null}</span>
+    </div>
+  )
+  if (state === 'waiting') return (
+    <div className="verify-wait" role="status">⏳ Waiting on approval · <b>{remaining}</b> item{remaining === 1 ? '' : 's'} remaining. Verification begins automatically once you approve.</div>
+  )
+  if (state === 'complete') return (
+    <div className="okline verify-done">✓ Verification complete · <b>{ready}</b> document{ready === 1 ? '' : 's'} re-validated and ready to publish.</div>
+  )
+  return <div className="muted">Not started — approve the review items or run remediation and verification begins automatically.</div>
 }
 
 // readOnly: time-travel replay — historical scans are for looking, not enqueuing
 // real remediation jobs against (decisions stay editable: per-scan decision saves
 // are the time-travel feature itself).
-export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, aiEnabled = true, readOnly = false, onRefresh, onHitlCount }) {
+export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, aiEnabled = true, readOnly = false, onRefresh, onHitlCount, onNavigate }) {
   const [queue, setQueue] = useState([])
   const [acted, setActed] = useState({ approved: 0, rejected: 0, deferred: 0 })
   const [deferredItems, setDeferredItems] = useState([])
+  // Real applied-fix evidence: scan-wide before→after (all fix types, verified-cleared) +
+  // the concrete AI-written values/thumbnails. Every hero/impact/recent-fix count is a
+  // straight count of these rows — never a fabricated number (see fixSummary.js).
+  const [scanDiffs, setScanDiffs] = useState([])
+  const [appliedFixes, setAppliedFixes] = useState([])
   const runId = run?.id
+  const fetchFixes = () => {
+    if (!runId) { setScanDiffs([]); setAppliedFixes([]); return }
+    Promise.all([getScanRemediationDiffs(runId), getAppliedFixes(runId)])
+      .then(([d, a]) => { setScanDiffs(Array.isArray(d) ? d : []); setAppliedFixes(Array.isArray(a) ? a : []) })
+      .catch(() => {})
+  }
   useEffect(() => {
     setActed({ approved: 0, rejected: 0, deferred: 0 }); setDeferredItems([])
     clearInterval(pollRef.current); setRemProg(null); setRemBusy(false); setServerFixed(0); setRemMsg('')
+    fetchFixes()
     if (!runId) { setQueue(SIM ? buildHumanQueue(files, {}) : []); return }
     if (SIM) { setQueue(buildHumanQueue(files, {})); return }
     autoPopulateHitlQueue(runId)
@@ -277,11 +299,15 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   }, [runId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Drain in sync with the unified inbox: when an item is approved/rejected in the popup
-  // (or anywhere), re-fetch the pending set so "N remaining" + the review banner update.
+  // (or anywhere), re-fetch the pending set so "N remaining" + the review banner update,
+  // and re-pull the applied-fix evidence so the counts move with real progress.
   useEffect(() => {
     if (!runId || SIM) return
-    const reload = () => listHitlQueue(runId, 'pending')
-      .then((items) => setQueue((items || []).map((it) => dbItemToUi(it, files)))).catch(() => {})
+    const reload = () => {
+      listHitlQueue(runId, 'pending')
+        .then((items) => setQueue((items || []).map((it) => dbItemToUi(it, files)))).catch(() => {})
+      fetchFixes()
+    }
     window.addEventListener('acp:hitl-changed', reload)
     return () => window.removeEventListener('acp:hitl-changed', reload)
   }, [runId, files]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -303,8 +329,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [sel, setSel] = useState(null)
   const [seg, setSeg] = useState(null)
   const [editing, setEditing] = useState(null)
-  const [triageSel, setTriageSel] = useState(new Set())
-  const sfT = useSearchFilter('remediate')
   const [remBusy, setRemBusy] = useState(false)
   const [remMsg, setRemMsg] = useState('')
   const [remProg, setRemProg] = useState(null)   // { total, done, latest, failed }
@@ -333,6 +357,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           setRemMsg(`✓ Remediation complete — ${ok} document${ok === 1 ? '' : 's'} fixed${s.failed ? `, ${s.failed} failed` : ''}.`)
           try { sessionStorage.removeItem(REMKEY(runId)) } catch { /* ignore */ }
           onRefresh?.()                             // refresh scan so the write-back banner updates
+          fetchFixes()                              // re-pull the applied-fix evidence → hero/impact counts move
           // Re-list the HITL queue: the just-finished jobs route every finding they could
           // NOT verifiably auto-clear (contrast sign-off, link purpose, …) to human review
           // server-side. Without this re-fetch the queue stays on its mount-time snapshot,
@@ -388,9 +413,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       remStartRef.current = false
     }
   }
-  const triageFile = (file, st) => { setTriage((t) => { const n = { ...t }; if (st == null) delete n[file]; else n[file] = st; return n }); setTriageSel((s) => { const n = new Set(s); n.delete(file); return n }) }
-  const triageBulk = (flist, st) => { setTriage((t) => { const n = { ...t }; flist.forEach((f) => { if (st == null) delete n[f.file]; else n[f.file] = st }); return n }); setTriageSel(new Set()) }
-  const toggleSel = (file) => setTriageSel((s) => { const n = new Set(s); if (n.has(file)) n.delete(file); else n.add(file); return n })
+  const triageFile = (file, st) => setTriage((t) => { const n = { ...t }; if (st == null) delete n[file]; else n[file] = st; return n })
   const revalidated = files.filter((f) => f.compliant)
 
   const act = (id, kind, editedValue) => {
@@ -499,481 +522,208 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const execFlagged = flagged.filter((f) => f.seniority === 'Executive').length
   const drill = (title, sub, pred) => setSeg({ title, subtitle: sub, files: flagged.filter(pred) })
 
-  // Triage completion state (computed outside triage IIFE for LockedSection + StickyNav)
   const _triageFiles = files.filter((f) => !(f.remediated_at || f.drive_write_url))
-  const triageComplete = _triageFiles.length === 0 || _triageFiles.filter((f) => !triage[f.file]).length === 0
-
   const written = files.filter((f) => f.drive_write_url).length
   // Once remediation has run, an empty HITL queue means every fix went through the
   // automated path — approved/deferred (HITL decision counts) are meaningless there,
   // so swap them for the KPI that actually reflects what happened: writes to Drive.
   const pureAutomated = remStarted && totalHitl === 0
 
+  // ── Reframed view (Review → Approve → Verify → Publish) ──────────────────────────
+  // Every count below is a straight tally of real pipeline rows — applied-fix evidence,
+  // the live HITL queue, the recommendation estimate — never a fabricated number.
+  const fixSource = scanDiffs.length ? scanDiffs : appliedFixes   // diffs cover all fix types; applied_fixes is the fallback for older scans
+  const fixGroups = groupFixesByRule(fixSource)
+  const impact = summarizeImpact(fixSource)
+  const fixedCount = totalFixes(fixSource)
+  const fixesByFile = {}; fixSource.forEach((r) => { fixesByFile[r.file] = (fixesByFile[r.file] || 0) + 1 })
+  const reviewByFile = {}; queue.forEach((q) => { reviewByFile[q.file] = (reviewByFile[q.file] || 0) + 1 })
+  const savedHrs = plan && plan.savedMin ? hrs(plan.savedMin) : null
+
+  // Verification state — tied to the real re-scan/job state (§8), never "0 → 0".
+  const verifyPct = remProg ? Math.round((remProg.done / Math.max(1, remProg.total)) * 100) : 0
+  const verifyState = remLive ? 'running'
+    : queue.length > 0 ? 'waiting'
+    : (revalidated.length > 0 || written > 0 || reVerified > 0) ? 'complete'
+    : 'idle'
+
+  // Business risk — one recommendation from real signals (§9): public / high-traffic
+  // exposure tags × open critical findings. Never invented.
+  const publicDocs = files.filter((f) => (f.tags || []).includes('public-facing'))
+  const trafficDocs = files.filter((f) => (f.tags || []).includes('high-traffic'))
+  const criticalOpen = files.reduce((n, f) => n + (f.issues || []).filter((i) => i.severity === 'CRITICAL').length, 0)
+  const pubCritDocs = publicDocs.filter((f) => (f.issues || []).some((i) => i.severity === 'CRITICAL')).length
+  const risk = publicDocs.length && pubCritDocs > 0
+    ? { level: 'high', text: `Public-facing content · ${pubCritDocs} document${pubCritDocs === 1 ? '' : 's'} with critical findings · HIGH RISK under ADA / EAA` }
+    : (publicDocs.length || trafficDocs.length) && criticalOpen > 0
+    ? { level: 'med', text: `${publicDocs.length ? 'Public-facing' : 'High-traffic'} content · ${criticalOpen} critical finding${criticalOpen === 1 ? '' : 's'} open · MEDIUM RISK` }
+    : criticalOpen > 0
+    ? { level: 'med', text: `Internal content · ${criticalOpen} critical finding${criticalOpen === 1 ? '' : 's'} open · MEDIUM RISK` }
+    : publicDocs.length
+    ? { level: 'low', text: 'Public-facing content · no critical findings · overall risk LOW' }
+    : { level: 'low', text: 'Internal content only · overall risk LOW' }
+
+  // One primary action at a time (§11): review → run → verify → publish.
+  const primary = readOnly ? null
+    : queue.length > 0 ? { label: `Review ${queue.length} Remaining Issue${queue.length === 1 ? '' : 's'} →`, onClick: () => window.dispatchEvent(new Event('acp:open-inbox')) }
+    : verifyState === 'running' ? { label: '⏳ Verifying…', disabled: true }
+    : (!remStarted && remediable.length > 0) ? { label: '⚡ Run Remediation →', onClick: () => runServerRemediation(remediable), disabled: remBusy || !runId }
+    : (verifyState === 'complete' || revalidated.length > 0) ? { label: 'Publish Certified Copy →', onClick: () => onNavigate?.('publish') }
+    : null
+
+  // Progress rail state (§2).
+  const progressSteps = [
+    { key: 'scan', label: 'Scan', state: 'done' },
+    { key: 'assess', label: 'Assess', state: 'done' },
+    { key: 'remediate', label: 'Remediate', state: (remStarted || fixedCount > 0) ? 'done' : 'active' },
+    { key: 'review', label: 'Human Review', state: queue.length > 0 ? 'active' : 'done', count: queue.length },
+    { key: 'verify', label: 'Verify', state: verifyState === 'complete' ? 'done' : verifyState === 'running' ? 'active' : 'pending' },
+    { key: 'publish', label: 'Publish', state: written > 0 ? 'done' : 'pending' },
+  ]
+
+  // Documents list (§5): triage + plan merged — one row per doc. Not-yet-fixed first, then
+  // business priority. Triage counts drive the summary chips.
+  const inscopeCount = _triageFiles.filter((f) => triage[f.file] === 'inscope').length
+  const naCount = _triageFiles.filter((f) => triage[f.file] === 'na').length
+  const deferCount = _triageFiles.filter((f) => triage[f.file] === 'defer').length
+  const docList = [...files].sort((a, b) => {
+    const aR = !!(a.remediated_at || a.drive_write_url), bR = !!(b.remediated_at || b.drive_write_url)
+    if (aR !== bR) return aR ? 1 : -1
+    return (ontRank(a) - ontRank(b)) || (priority(b) - priority(a))
+  })
+  const written2 = files.filter((f) => f.drive_write_url)
+  const downloadOnly = files.filter((f) => f.remediated_at && !f.drive_write_url)
+
   return (
     <>
-      {/* Hero summary (PRD §1) — the 5-second story: what's done, what needs me, what's running. */}
+      {/* GitHub-style progress rail (§2) — where am I in the pipeline. */}
+      <ProgressRail steps={progressSteps} />
+
+      {/* HERO (§1) — the 5-second story + ONE primary action (§11). Every count is real:
+          documents from the scan, issues fixed from applied-fix evidence, review from the
+          live HITL queue, savings from the recommendation model. */}
       <section className="rem-hero">
         <div className="rem-hero-main">
-          <h2 className="rem-hero-title">Accessibility Remediation</h2>
-          <div className="rem-hero-stats">
-            {reVerified > 0 && <span className="rh-stat rh-fixed">✓ {reVerified.toLocaleString()} verified</span>}
-            {remStarted && autoFixed > 0 && <span className="rh-stat rh-fixed">⚡ {autoFixed} auto-fixed</span>}
-            {queue.length > 0 && <span className="rh-stat rh-review">⚑ {queue.length} need review</span>}
-            {remLive && <span className="rh-stat rh-proc"><span className="livedot">live</span> processing…</span>}
-            {!remStarted && queue.length === 0 && <span className="rh-stat muted">Ready to remediate</span>}
+          <h2 className="rem-hero-title">Accessibility remediation</h2>
+          <div className="rem-hero-line">
+            <b>{files.length}</b> document{files.length === 1 ? '' : 's'} processed
+            {fixedCount > 0 && <> · <b className="rh-fixed">{fixedCount}</b> issue{fixedCount === 1 ? '' : 's'} fixed automatically</>}
+            {queue.length > 0 && <> · <b className="rh-review">{queue.length}</b> need your review</>}
+            {savedHrs && <> · est. savings <b>{savedHrs}</b></>}
           </div>
+          {files.length > 0 && (
+            <div className={`rem-risk risk-${risk.level}`}><b>Business risk:</b> {risk.text}</div>
+          )}
         </div>
-        {queue.length > 0
-          ? <button className="rem-hero-cta" onClick={() => window.dispatchEvent(new Event('acp:open-inbox'))}>Continue Review →</button>
+        {primary
+          ? <button className="rem-hero-cta" disabled={primary.disabled} onClick={primary.onClick}>{primary.label}</button>
           : remStarted ? <span className="rh-done">All caught up ✓</span> : null}
       </section>
-      {/* Automation levels — set expectations for WHY something needs review (PRD §13). */}
-      <div className="autolevels" aria-label="How ACP decides what needs review">
-        <span className="autolevel"><span aria-hidden="true">🟢</span> <b>Fully automatic</b> <span className="muted">deterministic fix · no action</span></span>
-        <span className="autolevel"><span aria-hidden="true">🟡</span> <b>AI-assisted</b> <span className="muted">AI-drafted · review suggested</span></span>
-        <span className="autolevel"><span aria-hidden="true">🔴</span> <b>Human required</b> <span className="muted">ambiguous · approval needed</span></span>
-      </div>
-      <details className="rem-advanced rem-adv-block">
-        <summary className="rem-adv-summary"><b>Advanced</b> · live metrics &amp; worker activity</summary>
-      <div className="metrics">
-        <div className={`metric${remLive ? ' livecard' : ''}`} title="Estimated number of issues that can be fixed automatically — populates once you run remediation"><span>auto-fixable (est.)</span><b style={{ color: remStarted ? '#3B6D11' : '#9AA1B4' }}>{remStarted ? autoFixed : 0}</b></div>
-        <div className={`metric${remLive && queue.length > 0 ? ' livecard' : ''}`}>
-          <span>HITL queue{remLive && queue.length > 0 && <span className="activedot" aria-hidden="true" style={{ marginLeft: 5 }} />}</span>
-          {remStarted
-          ? <><b key={queue.length} className={remStarted ? 'tick' : undefined} style={{ color: queue.length ? '#854F0B' : '#3B6D11' }}>{totalHitl === 0 ? 'no items' : `${queue.length} remaining`}</b>{totalHitl > 0 && <span className="muted" style={{ fontSize: 11 }}> · {hitlProgress}% done</span>}</>
-          : <b style={{ color: '#9AA1B4' }}>—</b>}</div>
-        {pureAutomated ? (
-          <div className="metric" title="Fixed copies written back to the source Drive folder"><span>written to Drive</span><b key={written} className={written ? 'tick' : undefined} style={{ color: '#3B6D11' }}>{written}</b></div>
-        ) : (
-          <>
-            <div className="metric"><span>approved</span><b key={acted.approved} className={acted.approved ? 'tick' : undefined}>{acted.approved}</b></div>
-            <div className="metric"><span>deferred</span><b key={acted.deferred} className={acted.deferred ? 'tick' : undefined} style={{ color: '#1F5FA8' }}>{acted.deferred}</b></div>
-          </>
-        )}
-        <div className={`metric${remLive ? ' livecard' : ''}`} title="Documents fixed and re-validated against all engines — ticks in real time as the worker queue completes each file">
-          <span>re-verified{remLive && <span className="livedot">live</span>}</span>
-          <b key={reVerified} className={reVerified ? 'tick' : undefined} style={{ color: '#3B6D11' }}>{reVerified.toLocaleString()}</b>
-        </div>
-      </div>
 
-      <QueuePanel />
-      </details>
-
-      <StickyNav sections={REM_SECTIONS} triageComplete={triageComplete}
-        counts={{ 'rem-triage': remediable.length, 'rem-auto': autoFiles.length, 'rem-review': queue.length, 'rem-revalidate': revalidated.length }} />
-
-
-      {/* Write-back results — proof the fixed copies landed in Drive. Surfaces the
-          drive_write_url recorded server-side, so a successful remediation is visible. */}
-      {(() => {
-        const written = files.filter((f) => f.drive_write_url)
-        const downloadOnly = files.filter((f) => f.remediated_at && !f.drive_write_url)
-        if (!written.length && !downloadOnly.length) return null
-        return (
-          <div style={{ margin: '0 0 14px', padding: '10px 14px', borderRadius: 9,
-                        background: '#E7F0DC', border: '1px solid #C5DBA8',
-                        display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: '#2F5310' }}>
-              ✓ {written.length} fixed document{written.length !== 1 ? 's' : ''} written back to Drive
-              {downloadOnly.length > 0 && ` · ${downloadOnly.length} remediated (no Drive write)`}
-            </span>
-            <span style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-              {written.slice(0, 6).map((f) => (
-                <a key={f.file} href={f.drive_write_url} target="_blank" rel="noreferrer"
-                   style={{ fontSize: 12, color: '#185FA5' }} title={`Open ${f.file} in the Remediated/ folder`}>
-                  {f.file} ↗
-                </a>
-              ))}
-              {written.length > 6 && <span className="muted" style={{ fontSize: 12 }}>+{written.length - 6} more</span>}
-              {/* Blob-only copies (Drive mirror off / write denied) — downloadable via the
-                  authenticated ADR 0010 route, otherwise they'd be unreachable from the UI. */}
-              {downloadOnly.slice(0, 6).map((f) => (
-                <button key={f.file} className="ghost small" style={{ fontSize: 12 }}
-                        title={`Download the fixed copy of ${f.file} (stored in Blob)`}
-                        onClick={() => downloadRemediated(runId, f.file)}>
-                  ⤓ {f.file}
-                </button>
-              ))}
-              {downloadOnly.length > 6 && <span className="muted" style={{ fontSize: 12 }}>+{downloadOnly.length - 6} more</span>}
-            </span>
-          </div>
-        )
-      })()}
-
-      {/* ── Triage ── */}
-      {(() => {
-        const scoreColor = (s) => s >= 80 ? '#3B6D11' : s >= 60 ? '#854F0B' : '#7B1D1D'
-        const SEV_C = { CRITICAL: '#7B1D1D', SERIOUS: '#854F0B', MODERATE: '#1F5FA8', MINOR: '#75706A' }  // MINOR ≥4.5:1 on white (was #9a948f · 3.0)
-        const topSev = (f) => { for (const s of ['CRITICAL', 'SERIOUS', 'MODERATE', 'MINOR']) if ((f.issues || []).some((i) => i.severity === s)) return s; return null }
-        // Already-remediated files are done — drop them from triage so they
-        // don't linger as "undecided". The green write-back banner above is the
-        // record of what's been fixed.
-        const remediatedFiles = files.filter((f) => f.remediated_at || f.drive_write_url)
-        const triageFiles = files.filter((f) => !(f.remediated_at || f.drive_write_url)).sort((a, b) => {
-          const aDec = triage[a.file], bDec = triage[b.file]
-          const aJ = isAutoJunk(a), bJ = isAutoJunk(b)
-          if (!aDec && !bDec) return (bJ ? 1 : 0) - (aJ ? 1 : 0) || ((a.score ?? 50) - (b.score ?? 50))
-          if (!aDec) return -1; if (!bDec) return 1; return 0
-        })
-        // Drain model: the worklist shows only files still to decide; decided files move
-        // to a collapsible group so the list shrinks as you go (and feels "done" at 0).
-        // Search + facet filters over the triage worklist. Filtering narrows what's
-        // SHOWN (and what select-all grabs — filter to "PDF, critical" then bulk-decide);
-        // the summary chips keep counting the whole scan.
-        const SFT_FACETS = [
-          { key: 'sev', label: 'Severity', get: (f) => topSev(f)?.toLowerCase() },
-          { key: 'rec', label: 'Suggested', get: (f) => f.rec?.action },
-          { key: 'type', label: 'Type', get: (f) => (f.file.split('.').pop() || '').toUpperCase() },
-          { key: 'department', label: 'Dept', get: (f) => f.department },
-        ]
-        const shownTriage = sfT.active ? triageFiles.filter(matchesFilters(sfT, SFT_FACETS, (f) => f.file)) : triageFiles
-        const undecidedFiles = shownTriage.filter((f) => !triage[f.file])
-        const decidedFiles = shownTriage.filter((f) => triage[f.file])
-        const undecidedJunk = undecidedFiles.filter(isAutoJunk)
-        const naCount = triageFiles.filter((f) => triage[f.file] === 'na').length
-        const deferCount = triageFiles.filter((f) => triage[f.file] === 'defer').length
-        const inscopeCount = triageFiles.filter((f) => triage[f.file] === 'inscope').length
-        const undecided = undecidedFiles.length
-        const selFiles = triageFiles.filter((f) => triageSel.has(f.file))
-        const allSel = undecidedFiles.length > 0 && undecidedFiles.every((f) => triageSel.has(f.file))
-        return (
-          <section className="panel" id="rem-triage" key="triage">
-            <div className="triagehd">
-              <div>
-                <b>File triage</b>
-                <span className="muted"> · {undecidedFiles.length} to decide · {decidedFiles.length} decided{remediatedFiles.length > 0 ? ` · ${remediatedFiles.length} cleared` : ''}</span>
-                <div className="muted" style={{ fontSize: 12, marginTop: 3, lineHeight: 1.5, maxWidth: 760 }}>
-                  Tick files (or the header checkbox) then set a decision for all of them — or use the buttons on each row:
-                  <b style={{ color: '#3B6D11' }}> ✓ In scope</b> = remediate it · <b> N/A</b> = skip, not relevant · <b style={{ color: '#1F5FA8' }}> ⏸ Defer</b> = decide later. Only <b>in-scope</b> files are remediated.
-                </div>
-              </div>
-              <div className="triagesum">
-                <span className="trstatchip inscope">{inscopeCount} in scope</span>
-                <span className="trstatchip na">{naCount} N/A</span>
-                <span className="trstatchip defer">{deferCount} deferred</span>
-                {undecided > 0 && <span className="trstatchip pending">{undecided} undecided</span>}
-              </div>
-            </div>
-
-            {triageFiles.length > 8 && (
-              <SearchFilterBar ctl={sfT} items={triageFiles} facets={SFT_FACETS} noun="files"
-                               placeholder="Search triage by filename…" />
-            )}
-
-            {undecidedJunk.length > 0 && (
-              <div className="junkbanner">
-                ⚑ <b>{undecidedJunk.length} undecided file{undecidedJunk.length !== 1 ? 's' : ''} suggested as low-priority</b> — draft/backup name patterns, or score ≥ 90 with no critical/serious findings · the agent recommends N/A or archive. Not automatically excluded — you decide.
-                <button className="ghost small" style={{ marginLeft: 10 }} onClick={() => triageBulk(undecidedJunk, 'na')}>Mark all N/A</button>
-                <button className="ghost small" style={{ marginLeft: 6 }} onClick={() => triageBulk(undecidedJunk, 'defer')}>Defer all</button>
-              </div>
-            )}
-
-            {triageSel.size > 0 && (
-              <div className="triagetools">
-                <span style={{ fontSize: 13, fontWeight: 600 }}>{triageSel.size} file{triageSel.size !== 1 ? 's' : ''} selected — set a decision:</span>
-                <button className="ghost small" title="Mark these files in scope — they'll be remediated" onClick={() => triageBulk(selFiles, 'inscope')}>✓ In scope</button>
-                <button className="ghost small" title="Mark N/A — skip these, not relevant to remediate" onClick={() => triageBulk(selFiles, 'na')}>N/A</button>
-                <button className="ghost small" title="Defer — decide on these later" onClick={() => triageBulk(selFiles, 'defer')}>⏸ Defer</button>
-                <button className="ghost small" style={{ color: 'var(--muted)' }} title="Clear the selection" onClick={() => setTriageSel(new Set())}>clear selection</button>
-              </div>
-            )}
-
-            {triageFiles.length > 0 ? (
-            <>
-            {undecidedFiles.length > 0 && (
-            <div className="trlist">
-              <div className="trheader">
-                <input type="checkbox" checked={allSel} onChange={() => setTriageSel(allSel ? new Set() : new Set(undecidedFiles.map((f) => f.file)))} aria-label="Select all undecided" />
-                <span>File</span>
-                <span style={{ textAlign: 'right' }}>Score</span>
-                <span>Issues</span>
-                <span>Decision</span>
-              </div>
-              {undecidedFiles.map((f) => {
-                const dec = triage[f.file]
-                const junk = isAutoJunk(f)
-                const sev = topSev(f)
-                const issel = triageSel.has(f.file)
-                return (
-                  <div className={`trrow${dec === 'na' ? ' trna' : dec === 'defer' ? ' trdefer' : dec === 'inscope' ? ' trinscope' : junk && !dec ? ' trjunkrow' : ''}`} key={f.file}>
-                    <input type="checkbox" checked={issel} onChange={() => toggleSel(f.file)} aria-label={`Select ${f.file}`} />
-                    <div className="trname">
-                      <button className="remname" onClick={() => setSel(f)}>{f.file}</button>
-                      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 1 }}>
-                        {f.department && <span>{f.department}</span>}
-                        {f.department && f.sourceName && <span> · </span>}
-                        {f.sourceName && <span>{f.sourceName}</span>}
-                        {junk && !dec && <span className="junkflag">⚑ likely junk</span>}
-                      </div>
-                    </div>
-                    <span className="trscore" style={{ color: f.score != null ? scoreColor(f.score) : 'var(--muted)' }}>
-                      {f.score != null ? f.score : '—'}
-                    </span>
-                    <span className="trissues">
-                      {(f.issues || []).length > 0
-                        ? <><b>{(f.issues || []).length}</b>{sev && <span style={{ marginLeft: 5, fontSize: 11, color: SEV_C[sev] }}>{sev.toLowerCase()}</span>}</>
-                        : <span style={{ color: 'var(--muted)', fontSize: 12 }}>none</span>}
-                    </span>
-                    <span className="tractions">
-                      {dec ? (
-                        <>
-                          <span className={`trstatchip ${dec}`}>{dec === 'inscope' ? '✓ in scope' : dec === 'na' ? 'N/A' : '⏸ deferred'}</span>
-                          <button className="ghost small" style={{ marginLeft: 6 }} onClick={() => triageFile(f.file, null)} title="Undo">↺</button>
-                        </>
-                      ) : (
-                        <>
-                          <button className="trbtn inscope" onClick={() => triageFile(f.file, 'inscope')} title="In scope — include in remediation plan">✓</button>
-                          <button className="trbtn na" onClick={() => triageFile(f.file, 'na')} title="Not applicable — exclude from plan">N/A</button>
-                          <button className="trbtn defer" onClick={() => triageFile(f.file, 'defer')} title="Defer to a later batch">⏸</button>
-                        </>
-                      )}
-                    </span>
-                  </div>
-                )
-              })}
-            </div>
-            )}
-            {decidedFiles.length > 0 && (
-              <details className="decidedwrap" style={{ marginTop: 12 }}>
-                <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 13, color: 'var(--muted)', padding: '6px 0' }}>✓ {decidedFiles.length} decided · {inscopeCount} in scope · {naCount} N/A · {deferCount} deferred <span style={{ fontWeight: 400 }}>· click to review / change</span></summary>
-                <div style={{ marginTop: 4 }}>
-                  {decidedFiles.map((f) => (
-                    <div key={f.file} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 2px', borderBottom: '1px solid var(--line)' }}>
-                      <button className="remname" style={{ flex: 1, textAlign: 'left' }} onClick={() => setSel(f)}>{f.file}</button>
-                      <span className={`trstatchip ${triage[f.file]}`}>{triage[f.file] === 'inscope' ? '✓ in scope' : triage[f.file] === 'na' ? 'N/A' : '⏸ deferred'}</span>
-                      <button className="ghost small" onClick={() => triageFile(f.file, null)} title="Undo this decision">↺</button>
-                    </div>
-                  ))}
-                </div>
-              </details>
-            )}
-            </>
-            ) : (
-              <div className="triagecta">
-                <b>✓ All scanned files remediated</b> — every file has been fixed and written back. Nothing left to triage{remediatedFiles.length > 0 ? ` · ${remediatedFiles.length} fixed` : ''}.
-                <button className="ctago" style={{ marginLeft: 14 }} onClick={() => document.getElementById('rem-revalidate')?.scrollIntoView({ behavior: 'smooth' })}>→ Re-validate</button>
-              </div>
-            )}
-
-            {undecided === 0 && triageFiles.length > 0 && (
-              <div className="triagecta">
-                <b>✓ Triage complete</b> — {inscopeCount} file{inscopeCount !== 1 ? 's' : ''} in scope · {naCount} N/A · {deferCount} deferred
-                <button className="ctago" style={{ marginLeft: 14 }} onClick={() => document.getElementById('rem-auto')?.scrollIntoView({ behavior: 'smooth' })}>→ Go to remediation plan</button>
-              </div>
-            )}
-          </section>
-        )
-      })()}
-
-      {/* ── Plan & remediation decisions ── */}
-      <div id="rem-auto" />
-      <LockedSection label="Remediation plan" triageComplete={triageComplete}>
-        {plan && (
-          <div className="planband">
-            <div className="planhead">
-              <div>
-                <b>Remediation plan</b>
-                <div className="muted" style={{ marginTop: 2 }}>
-                  ≈ <b style={{ color: 'var(--ink)' }}>{hrs(plan.remediateMin)}</b> across {plan.remediableDocs} documents · <b style={{ color: '#3B6D11' }}>{plan.autoPct}% fully automatic</b> · saves ≈ <b style={{ color: '#3B6D11' }}>{hrs(plan.savedMin)}</b> vs. manual
-                </div>
-              </div>
-              <div className="plandec">
-                <span className="muted">{dcount('accepted')} accepted · {dcount('override')} modified · {dcount('rejected')} rejected · {pending} pending</span>
-                {autoFiles.length > 0 && (
-                  <button className="batchbtn" onClick={batchAutoRemediate}
-                          title="Accept ONLY the fully-automatic files — the engine fixes these deterministically when you click Remediate all. No human review involved.">
-                    ⚡ Auto-fix {autoFiles.length} file{autoFiles.length !== 1 ? 's' : ''} <span style={{ opacity: 0.85, fontWeight: 400 }}>· no review needed</span>
-                  </button>
-                )}
-                <button className="acceptfullbtn" disabled={!pending} onClick={acceptAll}
-                        title="Accept the WHOLE plan — every remediable file, including the ones below that need assisted or manual work from a person.">
-                  👥 Accept full plan · {pending}{humanCount > 0 && <span style={{ opacity: 0.85, fontWeight: 400 }}> · +{humanCount} need a person</span>}
-                </button>
-              </div>
-            </div>
-            <div className="plancards">
-              {planCards.map((b) => {
-                const [label, bg, fg, icon] = REC_STYLE[b.action] || REC_STYLE.review
-                return (
-                  <div className="plancard" key={b.action} style={{ background: bg }} tabIndex={0} aria-label={`${label}: ${ACTION_DESC[b.action]}`}>
-                    <div className="plancardtop" style={{ color: fg }}><span>{icon}</span><b>{b.n}</b></div>
-                    <div className="plancardlbl" style={{ color: fg }}>{label}</div>
-                    <div className="muted plancardeta">{b.action === 'manual' ? `~${hrs(b.min)} manual` : `~${hrs(b.min)}`}</div>
-                    <div className="plantip" role="tooltip"><b style={{ color: fg }}>{icon} {label}</b>{ACTION_DESC[b.action]}</div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        )}
-
-        {flagged.length > 0 && (
-          <div className="prioritypanel">
-            <div className="priorityhd"><b>Business priority</b> <span className="muted">· what to fix first — weighted by exposure, severity &amp; ownership</span></div>
-            <div className="prioritynote">⚑ {pubCrit} public-facing document{pubCrit === 1 ? '' : 's'} ha{pubCrit === 1 ? 's' : 've'} critical findings and {execFlagged} are executive-owned — the highest business risk under ADA / EAA. Start here.</div>
-            <div className="prioritygrid">
-              <section className="ppanel"><h3>Open findings by department</h3><Bars items={deptData} cols="118px 1fr 28px" onPick={(it) => drill(`${it.label} · open findings`, `${it.value} findings`, (f) => f.department === it.label)} /></section>
-              <section className="ppanel"><h3>By owner seniority</h3><Bars items={senData} cols="92px 1fr 28px" onPick={(it) => drill(`${it.label}-owned · open findings`, `${it.value} findings`, (f) => f.seniority === it.label)} /><div className="muted ppfoot">executive / director-owned content carries more reputational weight</div></section>
-              <section className="ppanel"><h3>By exposure</h3><Bars items={expData} cols="98px 1fr 28px" onPick={(it) => drill(`${it.label} · open findings`, `${it.value} findings`, (f) => exposureOf(f) === it.label)} /><div className="muted ppfoot">public-facing pages are the top legal-exposure set</div></section>
-            </div>
-          </div>
-        )}
-
-        {remediable.length > 0 && (
-          <section className="panel">
-            <h2>Documents to remediate <span className="muted">· {remediable.length} · <b style={{ color: 'var(--ink)', fontWeight: 500 }}>AI-triaged</b> by business risk — exposure × severity × ownership — accept / reject / modify</span></h2>
-            {ontCount > 0 && <div className="ontbanner">⬆ Ordered by your <b>business ontology</b> — {ontCount} document{ontCount === 1 ? '' : 's'} elevated by published rules (Settings → Business ontology)</div>}
-            <div className="remlist">
-              {remediable.map((f) => {
-                const rec = f.rec; const dec = decisions[f.file]
-                const effAction = dec?.state === 'override' ? dec.action : rec.action
-                const [label, rbg, rfg, icon] = REC_STYLE[effAction] || REC_STYLE.review
-                const effEta = dec?.state === 'override' ? (ETA_OVERRIDE[dec.action] ?? rec.etaMin) : rec.etaMin
-                const [priLabel, priFg, priBg] = PRI[priTier(f)]
-                return (
-                  <div className={`remrow${dec?.state === 'rejected' ? ' rowrej' : ''}`} key={f.file} style={{ borderLeft: `3px solid ${rfg}`, paddingLeft: 10 }}>
-                    <div className="remmaincol">
-                      <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span>
-                        {pendingHitlFiles.has(f.file) && <span className="hitlbadge">⚑ awaiting review</span>}
-                      </button>
-                      {f.ont ? (
-                        <div className="rempri">
-                          <span className="pritag" style={{ background: PRI_COLOR[f.ont.priority][1], color: PRI_COLOR[f.ont.priority][0] }}>{f.ont.priority}</span>
-                          {f.ont.label && <span className="ontlabelpill" style={{ color: f.ont.label.color, background: f.ont.label.color + '22' }}>{f.ont.label.name}</span>}
-                          <span className="muted">business rule: {f.ont.rule.name}{f.ont.sla ? ` · ${f.ont.sla}d SLA` : ''}</span>
-                        </div>
-                      ) : (
-                        <div className="rempri"><span className="pritag" style={{ background: priBg, color: priFg }}>{priLabel}</span><span className="muted">why: {priWhy(f)}</span></div>
-                      )}
-                    </div>
-                    <span className="reccell">
-                      <span className="badge" style={{ background: rbg, color: rfg }}>{icon} {label}</span>
-                      {dec?.state === 'accepted' && <span className="dectag ok">✓ accepted</span>}
-                      {dec?.state === 'override' && <span className="dectag ov">modified</span>}
-                      {dec?.state === 'rejected' && <span className="dectag rj">rejected</span>}
-                      {editing === f.file ? (
-                        <span className="modchips">
-                          {ACTIONS.map((a) => { const [l, , fg, ic] = REC_STYLE[a]; return <button key={a} className="modchip" style={{ color: fg }} onClick={() => decide(f.file, a === rec.action ? { state: 'accepted' } : { state: 'override', action: a })}>{ic} {l}</button> })}
-                          <button className="modchip cancel" onClick={() => setEditing(null)}>cancel</button>
-                        </span>
-                      ) : (
-                        <span className="decctl">
-                          {!dec ? (<>
-                            <button className="decbtn ok" title="Accept" onClick={() => decide(f.file, { state: 'accepted' })}>✓</button>
-                            <button className="decbtn rj" title="Reject" onClick={() => decide(f.file, { state: 'rejected' })}>✕</button>
-                            <button className="decbtn ed" title="Modify action" onClick={() => setEditing(f.file)}>✎</button>
-                          </>) : <button className="decbtn undo" title="Undo" onClick={() => undo(f.file)}>↺</button>}
-                        </span>
-                      )}
-                    </span>
-                    <span className="etacell">{fmtEffort(effEta)}</span>
-                  </div>
-                )
-              })}
-            </div>
-          </section>
-        )}
-
-        {/* Primary remediation CTA — placed here so the user sees the plan first, accepts decisions, then runs */}
-        <div className="remcta">
-          <div className="remcta-label">
-            {dcount('accepted') + dcount('override') > 0
-              ? <span>✓ <b>{dcount('accepted') + dcount('override')}</b> file{(dcount('accepted') + dcount('override')) !== 1 ? 's' : ''} accepted — ready to remediate</span>
-              : <span className="muted">Accept files above, then run remediation</span>}
-            {remMsg && <span role="status" aria-live="polite" style={{ marginLeft: 12, color: remMsg.startsWith('✓') ? '#3B6D11' : 'var(--muted)' }}>{remMsg}</span>}
-          </div>
-          <button disabled={remBusy || !runId || readOnly} onClick={() => runServerRemediation(remediable)}
-                  title="Run deterministic HTML remediation server-side, in the durable worker queue. Fixed copies are written to a Remediated/ folder; results trace to Langfuse."
-                  style={{ flexShrink: 0 }}>
-            {remBusy ? '⏳ Enqueueing…' : '⚡ Remediate all (server-side)'}
-          </button>
-          {(serverFixed > 0 || remProg) && <TraceChip scanId={runId} kind="session" label="View traces in Langfuse" />}
-        </div>
-
-        {remProg && (
-          <div style={{ margin: '4px 0 14px', maxWidth: 560 }} role="status" aria-live="polite">
-            <div style={{ height: 9, borderRadius: 6, background: 'var(--line)', overflow: 'hidden' }}>
-              <i style={{ display: 'block', height: '100%',
-                          width: `${Math.round((remProg.done / Math.max(1, remProg.total)) * 100)}%`,
-                          background: '#BF8C00', transition: 'width .35s' }} />
-            </div>
-            <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
-              ⚡ <b>Live</b> · remediating {remProg.done.toLocaleString()} of {remProg.total.toLocaleString()} files in real time
-              {remProg.latest ? <> · last fixed <span className="fname">{remProg.latest}</span></> : '…'}
-              {remProg.failed ? ` · ${remProg.failed} failed` : ''}
-            </div>
-          </div>
-        )}
-      </LockedSection>
-
-      <div className="chartrow">
-        {fixTypesDisplay.length > 0 && <details className="panel rem-advanced"><summary><b>Advanced</b> · automated fixes by type</summary><div style={{ marginTop: 12 }}><Bars items={fixTypesDisplay} cols="140px 1fr 30px" /></div></details>}
-        <FixCarousel files={files} scanId={run?.id} />
-      </div>
-
-      {/* ── Human review ── */}
-      <div id="rem-review" />
-      <LockedSection label="Human-in-the-loop review" triageComplete={triageComplete}>
-      <section className="panel">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
-          <h2 style={{ margin: 0 }}>Human-in-the-loop review queue {queue.length === 0 && <span className="muted">· all clear</span>}</h2>
+      {/* ── HUMAN REVIEW (§3) — the only section that needs interaction, so it dominates,
+          directly under the hero. Each card carries its own badge (§4) and a
+          "Why am I reviewing this?" panel (real confidence + reason + suggested value). ── */}
+      <section className="panel rem-review-panel" id="rem-review">
+        <div className="rem-sec-hd">
+          <h2 style={{ margin: 0 }}>Human review {queue.length > 0 ? <span className="reviewpill">{queue.length}</span> : <span className="muted">· all clear</span>}</h2>
           {totalHitl > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+            <div className="rem-sec-prog">
               <div className="conftrack" style={{ width: 120 }}><i style={{ width: `${hitlProgress}%`, background: hitlProgress === 100 ? '#3B6D11' : '#1F5FA8' }} /></div>
               <span className="muted">{totalHitl - queue.length} of {totalHitl} reviewed</span>
-              {acted.deferred > 0 && <span className="trstatchip defer">{acted.deferred} deferred</span>}
             </div>
           )}
         </div>
         {queue.length === 0 ? (
           <p className="muted">{totalHitl === 0
-            ? 'No files require human review for this run — all remediations were fully automatic. Files needing AI-assisted fixes or human sign-off will appear here in future runs.'
-            : `Queue cleared — ${acted.approved} approved, ${acted.rejected} rejected${acted.deferred ? `, ${acted.deferred} deferred to next cycle` : ''}. Re-validation runs on the approved fixes.`
-          }</p>
+            ? 'Nothing needs your review — every fix was applied automatically. Items needing an AI-assisted fix or human sign-off will appear here.'
+            : `All reviewed — ${acted.approved} approved, ${acted.rejected} rejected${acted.deferred ? `, ${acted.deferred} deferred` : ''}. Verification runs on the approved fixes.`}</p>
         ) : (
-          <div className="queue">
+          <div className="reviewlist">
             {queue.map((q) => (
-              <div className="qrow clickable" key={q.id} role="button" tabIndex={0}
-                onClick={() => setSelItem(q)}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelItem(q) } }}>
-                <span className="qico" aria-hidden="true">{q.icon}</span>
-                <div className="qmain">
-                  <div className="qtitle">{q.title} <span className="muted" style={{ fontSize: 12 }}>· {q.file}</span></div>
-                  <div className="qmeta">{q.meta}</div>
-                  {/* Honest escalation line — no fabricated confidence %. */}
-                  <div className="muted" style={{ fontSize: 12 }}>⚑ escalated — automated fixes ran first; this needs human judgement</div>
-                </div>
-                <button className="qbtn approve" onClick={(e) => { e.stopPropagation(); act(q.id, 'approved') }}>✓ approve</button>
-                <button className="qbtn self" onClick={(e) => { e.stopPropagation(); act(q.id, 'self') }} title="Take ownership — fix it yourself, then re-scan to confirm">✋ I’ll fix it</button>
-                <button className="qbtn reject" onClick={(e) => { e.stopPropagation(); act(q.id, 'rejected') }}>✕ reject</button>
-              </div>
+              <ReviewItemCard key={q.id} item={q} disabled={readOnly}
+                onOpen={() => setSelItem(q)}
+                onApprove={() => act(q.id, 'approved')}
+                onSelf={() => act(q.id, 'self')}
+                onReject={() => act(q.id, 'rejected')} />
             ))}
           </div>
         )}
-        <p className="muted" style={{ marginTop: 12 }}>↻ Re-validated against all engines after each approved fix — only re-passing files advance to publish.</p>
       </section>
-      </LockedSection>
 
-      {deferredItems.length > 0 && (
-        <section className="panel">
-          <h2>Deferred <span className="muted">· {deferredItems.length} item{deferredItems.length !== 1 && "s"} &mdash; resurface on next scan</span></h2>
-          <div className="queue">
-            {deferredItems.map((it) => (
-              <div className="qrow" key={it.id} style={{ opacity: 0.7 }}>
-                <span className="qico" aria-hidden="true">{it.icon}</span>
-                <div className="qmain">
-                  <div className="qtitle">{it.title} <span className="muted" style={{ fontSize: 12 }}>· {it.file}</span></div>
-                  <div className="qmeta">{it.rule}</div>
-                </div>
-                <span className="trstatchip defer" style={{ fontSize: 12, padding: "3px 10px" }}>⏸ deferred</span>
-                <button className="ghost small" onClick={() => { setDeferredItems((d) => d.filter((x) => x.id !== it.id)); setQueue((q) => [...q, it]); setActed((a) => ({ ...a, deferred: a.deferred - 1 })) }}>↺ restore</button>
+      {/* ── VERIFICATION (§8) — real state, tied to the re-scan/job, auto-begins on approval. ── */}
+      <section className="panel" id="rem-verify">
+        <div className="rem-sec-hd"><h2 style={{ margin: 0 }}>Verification</h2></div>
+        <VerifyState state={verifyState} pct={verifyPct} remaining={queue.length} ready={revalidated.length} latest={remProg?.latest} />
+        {revalidated.length > 0 && (
+          <div className="publist" style={{ marginTop: 12 }}>
+            {revalidated.slice(0, 12).map((f) => (
+              <div className="pubrow" key={f.file}>
+                <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName}</span></button>
+                <span className="okline" style={{ fontSize: 13 }}>✓ verified {f.score} / 100</span>
               </div>
             ))}
+            {revalidated.length > 12 && <div className="muted" style={{ fontSize: 12, padding: '6px 2px' }}>+{revalidated.length - 12} more</div>}
           </div>
-          <p className="muted" style={{ marginTop: 10 }}>Deferred findings are tracked in the compliance record and flagged automatically when the next scheduled scan runs.</p>
-        </section>
-      )}
+        )}
+      </section>
 
+      {/* ── DOCUMENTS (§5) — file triage + remediation plan merged into ONE list: per-doc
+          progress · fixes · items needing you · scope · Open. Everything about a doc here. ── */}
+      <section className="panel" id="rem-docs">
+        <div className="rem-sec-hd">
+          <h2 style={{ margin: 0 }}>Documents <span className="muted">· {docList.length}</span></h2>
+          <div className="triagesum">
+            <span className="trstatchip inscope">{inscopeCount} in scope</span>
+            <span className="trstatchip na">{naCount} N/A</span>
+            <span className="trstatchip defer">{deferCount} deferred</span>
+          </div>
+        </div>
+        <p className="muted" style={{ fontSize: 12, margin: '0 0 10px' }}>
+          Everything about each document in one place — progress, fixes applied, items needing you, and whether it’s in scope.
+          Set scope per row: <b style={{ color: '#3B6D11' }}>✓</b> in scope · <b>N/A</b> skip · <b style={{ color: '#1F5FA8' }}>⏸</b> defer. Only in-scope files are remediated.
+        </p>
+        <div className="doclist">
+          <div className="docrow dochead">
+            <span>Document</span><span>Progress</span><span style={{ textAlign: 'center' }}>Fixes</span><span style={{ textAlign: 'center' }}>Review</span><span>Scope</span><span />
+          </div>
+          {docList.map((f) => {
+            const done = !!(f.remediated_at || f.drive_write_url)
+            const pct = done ? 100 : (f.score != null ? f.score : 0)
+            const dec = triage[f.file]
+            const nFix = fixesByFile[f.file] || 0
+            const nRev = reviewByFile[f.file] || 0
+            return (
+              <div className="docrow" key={f.file}>
+                <div className="doccell-name">
+                  <button className="remname" onClick={() => setSel(f)}>{f.file}</button>
+                  <div className="docsub muted">{f.sourceName}{f.department ? ` · ${f.department}` : ''}</div>
+                </div>
+                <div className="docprog">
+                  <div className="docbar"><i style={{ width: `${pct}%`, background: pct >= 90 ? '#3B6D11' : pct >= 60 ? '#BF8C00' : '#B43A2A' }} /></div>
+                  <span className="docpct">{done ? '✓ certified' : `${pct}%`}</span>
+                </div>
+                <span className="doccount">{nFix > 0 ? <b style={{ color: '#3B6D11' }}>{nFix}</b> : <span className="muted">—</span>}</span>
+                <span className="doccount">{nRev > 0 ? <b style={{ color: '#854F0B' }}>{nRev}</b> : <span className="muted">—</span>}</span>
+                <span className="docscope">
+                  {done ? <span className="trstatchip inscope">done</span>
+                  : dec ? <><span className={`trstatchip ${dec}`}>{dec === 'inscope' ? '✓ in scope' : dec === 'na' ? 'N/A' : '⏸ deferred'}</span><button className="ghost small" onClick={() => triageFile(f.file, null)} title="Undo">↺</button></>
+                  : <span className="scopebtns">
+                      <button className="trbtn inscope" onClick={() => triageFile(f.file, 'inscope')} title="In scope — include in remediation">✓</button>
+                      <button className="trbtn na" onClick={() => triageFile(f.file, 'na')} title="Not applicable — skip">N/A</button>
+                      <button className="trbtn defer" onClick={() => triageFile(f.file, 'defer')} title="Defer — decide later">⏸</button>
+                    </span>}
+                </span>
+                <button className="ghost small docopen" onClick={() => setSel(f)}>Open →</button>
+              </div>
+            )
+          })}
+        </div>
+      </section>
+
+      {/* ── Recent AI fixes, grouped (§6) + Accessibility improvements impact (§7) ── */}
+      <GroupedFixes fixGroups={fixGroups} appliedFixes={appliedFixes} impact={impact} />
+
+      {/* Self-remediation — you're fixing these yourself; visible whenever active. */}
       {self.length > 0 && (
         <section className="panel">
           <h2>Self-remediation <span className="muted">· you’re fixing these — re-scan to confirm</span></h2>
@@ -1003,55 +753,235 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         </section>
       )}
 
-      {/* ── Re-validate ── */}
-      <div id="rem-revalidate" />
-      <LockedSection label="Re-validate &amp; verify" triageComplete={triageComplete}>
-          <section className="panel"><h2>Re-validate &amp; verify</h2>
-            {(() => {
-              const SEV_PEN = { CRITICAL: 16, SERIOUS: 11, MODERATE: 5, MINOR: 2 }
-              const scoredFiles = files.filter((f) => f.score != null)
-              const projScores = scoredFiles.map((f) => {
-                const accepted = decisions[f.file]?.state === 'accepted' || decisions[f.file]?.state === 'override'
-                const isAuto = (decisions[f.file]?.state === 'override' ? decisions[f.file].action : f.rec?.action) === 'auto'
-                if (!accepted || !isAuto) return f.score
-                const gain = (f.issues || []).filter((i) => i.auto).reduce((s, i) => s + (SEV_PEN[i.severity] || 0), 0)
-                return Math.min(100, f.score + gain)
-              })
-              const liftBefore = run?.avg_score ?? 72
-              const liftAfter = projScores.length ? Math.min(100, Math.round(projScores.reduce((a, b) => a + b, 0) / projScores.length)) : Math.min(100, liftBefore + 8)
-              return (
-                <div className="lift" style={{ margin: '8px 0 12px' }}>
-                  <div className="liftcol"><div className="liftnum" style={{ color: '#1F5FA8' }}>{liftBefore}</div><div className="muted">before</div></div>
-                  <div className="liftarrow" aria-hidden="true">→</div>
-                  <div className="liftcol"><div className="liftnum" style={{ color: '#3B6D11' }}>{liftAfter}</div><div className="muted">after re-validation <span style={{ fontSize: 10, opacity: 0.7 }}>(projected)</span></div></div>
-                  <div className="liftgain">+{liftAfter - liftBefore} pts</div>
+      {deferredItems.length > 0 && (
+        <section className="panel">
+          <h2>Deferred <span className="muted">· {deferredItems.length} item{deferredItems.length !== 1 && "s"} &mdash; resurface on next scan</span></h2>
+          <div className="queue">
+            {deferredItems.map((it) => (
+              <div className="qrow" key={it.id} style={{ opacity: 0.7 }}>
+                <span className="qico" aria-hidden="true">{it.icon}</span>
+                <div className="qmain">
+                  <div className="qtitle">{it.title} <span className="muted" style={{ fontSize: 12 }}>· {it.file}</span></div>
+                  <div className="qmeta">{it.rule}</div>
                 </div>
-              )
-            })()}
-            <p className="muted">Every approved or self-applied fix is re-run against all engines. Only documents that re-pass advance to Publish — no fix is taken on trust.</p>
-            {dcount('accepted') + dcount('override') > 0 && (
-              <div className="outpanel" style={{ marginTop: 14 }}>
-                <div className="muted" style={{ fontSize: 13, marginBottom: 8 }}><b>Where fixed copies go</b> — automatic, no per-run choice needed:</div>
-                <div className="outact" style={{ marginTop: 8 }}>
-                  <span className="muted" style={{ fontSize: 12 }}>Remediated files are stamped <b>_a11y-certified-{new Date().toISOString().split('T')[0]}</b> · originals kept for audit trail</span>
-                  <span className="muted" style={{ fontSize: 12, marginLeft: 12 }}>Always written to <b>Azure Blob</b> (download from each file's drawer) · auto-mirror to Drive: Settings &rarr; Remediated storage</span>
-                </div>
+                <span className="trstatchip defer" style={{ fontSize: 12, padding: "3px 10px" }}>⏸ deferred</span>
+                <button className="ghost small" onClick={() => { setDeferredItems((d) => d.filter((x) => x.id !== it.id)); setQueue((q) => [...q, it]); setActed((a) => ({ ...a, deferred: a.deferred - 1 })) }}>↺ restore</button>
               </div>
+            ))}
+          </div>
+          <p className="muted" style={{ marginTop: 10 }}>Deferred findings are tracked in the compliance record and flagged automatically when the next scheduled scan runs.</p>
+        </section>
+      )}
+
+      {/* ── ADVANCED (§10) — the engine, hidden by default: live metrics, worker queue,
+          the remediation plan + accept/reject decisions, business-risk graphs, the
+          server-side remediation runner, and the fixed-copy write-back. For architects /
+          support; the default view above is the four-decision flow. ── */}
+      <details className="rem-advanced rem-adv-block" id="rem-advanced">
+        <summary className="rem-adv-summary"><b>Advanced</b> · engine internals — remediation plan, worker queue, live metrics &amp; business-risk graphs</summary>
+        <div className="rem-adv-body">
+
+          <div className="metrics">
+            <div className={`metric${remLive ? ' livecard' : ''}`} title="Estimated number of issues that can be fixed automatically — populates once you run remediation"><span>auto-fixable (est.)</span><b style={{ color: remStarted ? '#3B6D11' : '#9AA1B4' }}>{remStarted ? autoFixed : 0}</b></div>
+            <div className={`metric${remLive && queue.length > 0 ? ' livecard' : ''}`}>
+              <span>HITL queue{remLive && queue.length > 0 && <span className="activedot" aria-hidden="true" style={{ marginLeft: 5 }} />}</span>
+              {remStarted
+              ? <><b key={queue.length} className={remStarted ? 'tick' : undefined} style={{ color: queue.length ? '#854F0B' : '#3B6D11' }}>{totalHitl === 0 ? 'no items' : `${queue.length} remaining`}</b>{totalHitl > 0 && <span className="muted" style={{ fontSize: 11 }}> · {hitlProgress}% done</span>}</>
+              : <b style={{ color: '#9AA1B4' }}>—</b>}</div>
+            {pureAutomated ? (
+              <div className="metric" title="Fixed copies written back to the source Drive folder"><span>written to Drive</span><b key={written} className={written ? 'tick' : undefined} style={{ color: '#3B6D11' }}>{written}</b></div>
+            ) : (
+              <>
+                <div className="metric"><span>approved</span><b key={acted.approved} className={acted.approved ? 'tick' : undefined}>{acted.approved}</b></div>
+                <div className="metric"><span>deferred</span><b key={acted.deferred} className={acted.deferred ? 'tick' : undefined} style={{ color: '#1F5FA8' }}>{acted.deferred}</b></div>
+              </>
             )}
-          </section>
-          <section className="panel"><h2>Re-validated &amp; ready to publish <span className="muted">· {revalidated.length}</span></h2>
-            {revalidated.length === 0 ? <p className="muted">None yet — approve fixes in the review step first.</p> : (
-              <div className="publist">
-                {revalidated.slice(0, 40).map((f) => (
-                  <div className="pubrow" key={f.file}>
-                    <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName}</span></button>
-                    <span className="okline" style={{ fontSize: 13 }}>✓ verified {f.score} / 100 — advances to Publish</span>
-                  </div>
+            <div className={`metric${remLive ? ' livecard' : ''}`} title="Documents fixed and re-validated against all engines — ticks in real time as the worker queue completes each file">
+              <span>re-verified{remLive && <span className="livedot">live</span>}</span>
+              <b key={reVerified} className={reVerified ? 'tick' : undefined} style={{ color: '#3B6D11' }}>{reVerified.toLocaleString()}</b>
+            </div>
+          </div>
+
+          <QueuePanel />
+
+          {/* Write-back results — proof the fixed copies landed in Drive / Blob. */}
+          {(written2.length > 0 || downloadOnly.length > 0) && (
+            <div style={{ margin: '12px 0 14px', padding: '10px 14px', borderRadius: 9,
+                          background: '#E7F0DC', border: '1px solid #C5DBA8',
+                          display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#2F5310' }}>
+                ✓ {written2.length} fixed document{written2.length !== 1 ? 's' : ''} written back to Drive
+                {downloadOnly.length > 0 && ` · ${downloadOnly.length} remediated (no Drive write)`}
+              </span>
+              <span style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                {written2.slice(0, 6).map((f) => (
+                  <a key={f.file} href={f.drive_write_url} target="_blank" rel="noreferrer"
+                     style={{ fontSize: 12, color: '#185FA5' }} title={`Open ${f.file} in the Remediated/ folder`}>
+                    {f.file} ↗
+                  </a>
                 ))}
+                {written2.length > 6 && <span className="muted" style={{ fontSize: 12 }}>+{written2.length - 6} more</span>}
+                {downloadOnly.slice(0, 6).map((f) => (
+                  <button key={f.file} className="ghost small" style={{ fontSize: 12 }}
+                          title={`Download the fixed copy of ${f.file} (stored in Blob)`}
+                          onClick={() => downloadRemediated(runId, f.file)}>
+                    ⤓ {f.file}
+                  </button>
+                ))}
+                {downloadOnly.length > 6 && <span className="muted" style={{ fontSize: 12 }}>+{downloadOnly.length - 6} more</span>}
+              </span>
+            </div>
+          )}
+
+          {/* Remediation plan + accept/reject/modify decisions. */}
+          {plan && (
+            <div className="planband">
+              <div className="planhead">
+                <div>
+                  <b>Remediation plan</b>
+                  <div className="muted" style={{ marginTop: 2 }}>
+                    ≈ <b style={{ color: 'var(--ink)' }}>{hrs(plan.remediateMin)}</b> across {plan.remediableDocs} documents · <b style={{ color: '#3B6D11' }}>{plan.autoPct}% fully automatic</b> · saves ≈ <b style={{ color: '#3B6D11' }}>{hrs(plan.savedMin)}</b> vs. manual
+                  </div>
+                </div>
+                <div className="plandec">
+                  <span className="muted">{dcount('accepted')} accepted · {dcount('override')} modified · {dcount('rejected')} rejected · {pending} pending</span>
+                  {autoFiles.length > 0 && (
+                    <button className="batchbtn" onClick={batchAutoRemediate}
+                            title="Accept ONLY the fully-automatic files — the engine fixes these deterministically when you click Remediate all. No human review involved.">
+                      ⚡ Auto-fix {autoFiles.length} file{autoFiles.length !== 1 ? 's' : ''} <span style={{ opacity: 0.85, fontWeight: 400 }}>· no review needed</span></button>
+                  )}
+                  <button className="acceptfullbtn" disabled={!pending} onClick={acceptAll}
+                          title="Accept the WHOLE plan — every remediable file, including the ones below that need assisted or manual work from a person.">
+                    👥 Accept full plan · {pending}{humanCount > 0 && <span style={{ opacity: 0.85, fontWeight: 400 }}> · +{humanCount} need a person</span>}
+                  </button>
+                </div>
               </div>
-            )}
-          </section>
-      </LockedSection>
+              <div className="plancards">
+                {planCards.map((b) => {
+                  const [label, bg, fg, icon] = REC_STYLE[b.action] || REC_STYLE.review
+                  return (
+                    <div className="plancard" key={b.action} style={{ background: bg }} tabIndex={0} aria-label={`${label}: ${ACTION_DESC[b.action]}`}>
+                      <div className="plancardtop" style={{ color: fg }}><span>{icon}</span><b>{b.n}</b></div>
+                      <div className="plancardlbl" style={{ color: fg }}>{label}</div>
+                      <div className="muted plancardeta">{b.action === 'manual' ? `~${hrs(b.min)} manual` : `~${hrs(b.min)}`}</div>
+                      <div className="plantip" role="tooltip"><b style={{ color: fg }}>{icon} {label}</b>{ACTION_DESC[b.action]}</div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {flagged.length > 0 && (
+            <div className="prioritypanel">
+              <div className="priorityhd"><b>Business priority</b> <span className="muted">· what to fix first — weighted by exposure, severity &amp; ownership</span></div>
+              <div className="prioritynote">⚑ {pubCrit} public-facing document{pubCrit === 1 ? '' : 's'} ha{pubCrit === 1 ? 's' : 've'} critical findings and {execFlagged} are executive-owned — the highest business risk under ADA / EAA. Start here.</div>
+              <div className="prioritygrid">
+                <section className="ppanel"><h3>Open findings by department</h3><Bars items={deptData} cols="118px 1fr 28px" onPick={(it) => drill(`${it.label} · open findings`, `${it.value} findings`, (f) => f.department === it.label)} /></section>
+                <section className="ppanel"><h3>By owner seniority</h3><Bars items={senData} cols="92px 1fr 28px" onPick={(it) => drill(`${it.label}-owned · open findings`, `${it.value} findings`, (f) => f.seniority === it.label)} /><div className="muted ppfoot">executive / director-owned content carries more reputational weight</div></section>
+                <section className="ppanel"><h3>By exposure</h3><Bars items={expData} cols="98px 1fr 28px" onPick={(it) => drill(`${it.label} · open findings`, `${it.value} findings`, (f) => exposureOf(f) === it.label)} /><div className="muted ppfoot">public-facing pages are the top legal-exposure set</div></section>
+              </div>
+            </div>
+          )}
+
+          {remediable.length > 0 && (
+            <section className="panel">
+              <h2>Documents to remediate <span className="muted">· {remediable.length} · <b style={{ color: 'var(--ink)', fontWeight: 500 }}>AI-triaged</b> by business risk — exposure × severity × ownership — accept / reject / modify</span></h2>
+              {ontCount > 0 && <div className="ontbanner">⬆ Ordered by your <b>business ontology</b> — {ontCount} document{ontCount === 1 ? '' : 's'} elevated by published rules (Settings → Business ontology)</div>}
+              <div className="remlist">
+                {remediable.map((f) => {
+                  const rec = f.rec; const dec = decisions[f.file]
+                  const effAction = dec?.state === 'override' ? dec.action : rec.action
+                  const [label, rbg, rfg, icon] = REC_STYLE[effAction] || REC_STYLE.review
+                  const effEta = dec?.state === 'override' ? (ETA_OVERRIDE[dec.action] ?? rec.etaMin) : rec.etaMin
+                  const [priLabel, priFg, priBg] = PRI[priTier(f)]
+                  return (
+                    <div className={`remrow${dec?.state === 'rejected' ? ' rowrej' : ''}`} key={f.file} style={{ borderLeft: `3px solid ${rfg}`, paddingLeft: 10 }}>
+                      <div className="remmaincol">
+                        <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span>
+                          {pendingHitlFiles.has(f.file) && <span className="hitlbadge">⚑ awaiting review</span>}
+                        </button>
+                        {f.ont ? (
+                          <div className="rempri">
+                            <span className="pritag" style={{ background: PRI_COLOR[f.ont.priority][1], color: PRI_COLOR[f.ont.priority][0] }}>{f.ont.priority}</span>
+                            {f.ont.label && <span className="ontlabelpill" style={{ color: f.ont.label.color, background: f.ont.label.color + '22' }}>{f.ont.label.name}</span>}
+                            <span className="muted">business rule: {f.ont.rule.name}{f.ont.sla ? ` · ${f.ont.sla}d SLA` : ''}</span>
+                          </div>
+                        ) : (
+                          <div className="rempri"><span className="pritag" style={{ background: priBg, color: priFg }}>{priLabel}</span><span className="muted">why: {priWhy(f)}</span></div>
+                        )}
+                      </div>
+                      <span className="reccell">
+                        <span className="badge" style={{ background: rbg, color: rfg }}>{icon} {label}</span>
+                        {dec?.state === 'accepted' && <span className="dectag ok">✓ accepted</span>}
+                        {dec?.state === 'override' && <span className="dectag ov">modified</span>}
+                        {dec?.state === 'rejected' && <span className="dectag rj">rejected</span>}
+                        {editing === f.file ? (
+                          <span className="modchips">
+                            {ACTIONS.map((a) => { const [l, , fg, ic] = REC_STYLE[a]; return <button key={a} className="modchip" style={{ color: fg }} onClick={() => decide(f.file, a === rec.action ? { state: 'accepted' } : { state: 'override', action: a })}>{ic} {l}</button> })}
+                            <button className="modchip cancel" onClick={() => setEditing(null)}>cancel</button>
+                          </span>
+                        ) : (
+                          <span className="decctl">
+                            {!dec ? (<>
+                              <button className="decbtn ok" title="Accept" onClick={() => decide(f.file, { state: 'accepted' })}>✓</button>
+                              <button className="decbtn rj" title="Reject" onClick={() => decide(f.file, { state: 'rejected' })}>✕</button>
+                              <button className="decbtn ed" title="Modify action" onClick={() => setEditing(f.file)}>✎</button>
+                            </>) : <button className="decbtn undo" title="Undo" onClick={() => undo(f.file)}>↺</button>}
+                          </span>
+                        )}
+                      </span>
+                      <span className="etacell">{fmtEffort(effEta)}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </section>
+          )}
+
+          {/* Server-side remediation runner. */}
+          <div className="remcta">
+            <div className="remcta-label">
+              {dcount('accepted') + dcount('override') > 0
+                ? <span>✓ <b>{dcount('accepted') + dcount('override')}</b> file{(dcount('accepted') + dcount('override')) !== 1 ? 's' : ''} accepted — ready to remediate</span>
+                : <span className="muted">Accept files above, then run remediation</span>}
+              {remMsg && <span role="status" aria-live="polite" style={{ marginLeft: 12, color: remMsg.startsWith('✓') ? '#3B6D11' : 'var(--muted)' }}>{remMsg}</span>}
+            </div>
+            <button disabled={remBusy || !runId || readOnly} onClick={() => runServerRemediation(remediable)}
+                    title="Run deterministic HTML remediation server-side, in the durable worker queue. Fixed copies are written to a Remediated/ folder; results trace to Langfuse."
+                    style={{ flexShrink: 0 }}>
+              {remBusy ? '⏳ Enqueueing…' : '⚡ Remediate all (server-side)'}
+            </button>
+            {(serverFixed > 0 || remProg) && <TraceChip scanId={runId} kind="session" label="View traces in Langfuse" />}
+          </div>
+
+          {remProg && (
+            <div style={{ margin: '4px 0 14px', maxWidth: 560 }} role="status" aria-live="polite">
+              <div style={{ height: 9, borderRadius: 6, background: 'var(--line)', overflow: 'hidden' }}>
+                <i style={{ display: 'block', height: '100%',
+                            width: `${Math.round((remProg.done / Math.max(1, remProg.total)) * 100)}%`,
+                            background: '#BF8C00', transition: 'width .35s' }} />
+              </div>
+              <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
+                ⚡ <b>Live</b> · remediating {remProg.done.toLocaleString()} of {remProg.total.toLocaleString()} files in real time
+                {remProg.latest ? <> · last fixed <span className="fname">{remProg.latest}</span></> : '…'}
+                {remProg.failed ? ` · ${remProg.failed} failed` : ''}
+              </div>
+            </div>
+          )}
+
+          {fixTypesDisplay.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div className="advh3">Automated fixes by type</div>
+              <Bars items={fixTypesDisplay} cols="140px 1fr 30px" />
+            </div>
+          )}
+
+          <p className="muted" style={{ fontSize: 12, marginTop: 14 }}>
+            Remediated files are stamped <b>_a11y-certified-{new Date().toISOString().split('T')[0]}</b> · originals kept for the audit trail · always written to <b>Azure Blob</b> (download from each file’s drawer), with an optional Drive mirror (Settings → Remediated storage).
+          </p>
+        </div>
+      </details>
 
       {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
       {sel && <FileDrawer file={sel} context="remediate" aiEnabled={aiEnabled} scanId={run?.id} readOnly={readOnly} onClose={() => setSel(null)} />}
