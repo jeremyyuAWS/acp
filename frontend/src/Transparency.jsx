@@ -4,6 +4,7 @@ import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer from './FileDrawer.jsx'
 import { WCAG } from './wcagCatalog.js'
 import { allRules } from './rules/index.js'
+import { DEVA_20 } from './deva20.js'
 
 // SCs a rule module exists for — distinguishes "check built, no data in this scan"
 // from "no automated check exists yet".
@@ -122,11 +123,6 @@ function FailureHeatmap({ rows, files, topRules, onCellClick }) {
 // "By WCAG criterion" breakdown — aggregates the authoritative per-rule outcomes
 // (PASS / FAIL / SKIP) the scanner recorded into scan_rule_traces, so users see exactly
 // what each check did across the estate instead of only the summary tiles.
-// Deva's "20-check document core" — the US-regulated (A/AA) WCAG criteria that apply to
-// documents (87 → 50 → 20). Lets the coverage table demo coverage against that exact list.
-const DEVA_20 = new Set(['1.1.1', '1.3.1', '1.3.2', '1.3.3', '2.4.6', '3.1.1', '3.1.2',
-  '1.4.4', '1.4.5', '1.4.10', '1.4.12', '1.4.1', '1.4.3', '1.4.11', '2.4.2', '2.4.3',
-  '2.4.4', '2.1.1', '2.1.2', '4.1.2'])
 
 export function RuleBreakdown({ scanId, files }) {
   const [rows, setRows] = useState(null)

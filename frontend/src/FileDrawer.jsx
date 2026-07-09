@@ -10,6 +10,7 @@ import { WCAG } from './wcagCatalog.js'
 import { confidenceForFinding, confidenceForCoverage, confClass } from './confidence.js'
 import { TraceChip } from './Transparency.jsx'
 import Thumbnail from './Thumbnail.jsx'
+import { DEVA_20 } from './deva20.js'
 
 // Prescriptive-action styling, shared with the Discover inventory.
 // Distinct hue per action so a long list scans at a glance. The human-touch
@@ -221,6 +222,9 @@ const STATE_NOTE = {
 
 export default function FileDrawer({ file, onClose, context = 'full', overrideOwner = null, delegatedFrom = null, decision = null, aiEnabled = true, scanId = null, readOnly = false }) {
   const [explanations, setExplanations] = useState({})
+  // The coverage table defaults to Deva's 20-check document core. Listing all 42 in-scope
+  // criteria buried the 20 that actually gate certification among rows nobody is assessed on.
+  const [coreOnly, setCoreOnly] = useState(true)
   // Engine rule catalog (docx/pptx/xlsx/pdf groups) — tells the coverage table
   // which WCAG criteria the engine ACTUALLY evaluates for this file type, so a
   // PASS is never claimed for something that was never checked. Fetched once.
@@ -792,12 +796,14 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           const sc = scOfIssue(i.wcag)
           if (sc) { if (!issuesBySc[sc]) issuesBySc[sc] = []; issuesBySc[sc].push(i) }
         })
-        // Scope: only criteria that can apply to documents, at or below the
-        // certification target. Web-only and above-target rows are counted in
-        // the footnote instead of listed — 87 rows of mostly-N/A is noise.
-        const inScope = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) <= targetRank)
+        // Scope: only criteria that can apply to documents, at or below the certification
+        // target. Web-only and above-target rows are counted in the footnote instead of
+        // listed — 87 rows of mostly-N/A is noise. Narrowed again, by default, to the
+        // 20-check document core: the list the customer certifies against.
+        const scoped = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) <= targetRank)
+        const inScope = coreOnly ? scoped.filter((c) => DEVA_20.has(c.sc)) : scoped
         const hiddenAboveLevel = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) > targetRank).length
-        const hiddenWebOnly = WCAG.length - inScope.length - hiddenAboveLevel
+        const hiddenWebOnly = WCAG.length - scoped.length - hiddenAboveLevel
         const rows = inScope.map((c) => {
           const fileIssues = issuesBySc[c.sc] || []
           const count = fileIssues.length
@@ -816,14 +822,23 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         return (
           <details className="covmanifest" open>
             <summary className="covmanifest-sum">
-              WCAG coverage · {rows.length} criteria at {targetLevel} · documents
+              WCAG coverage · {rows.length} criteria · {coreOnly ? 'document core' : `at ${targetLevel} · documents`}
               <span className="covstat pass">{n('PASS')} pass</span>
               {n('FAIL') > 0 && <span className="covstat fail">{n('FAIL')} fail</span>}
               {n('FIXED') > 0 && <span className="covstat pass">{n('FIXED')} fixed · re-validate</span>}
               {n('HUMAN') > 0 && <span className="covstat skip">{n('HUMAN')} human review</span>}
               {n('UNCHECKED') > 0 && <span className="covstat skip">{n('UNCHECKED')} not auto-checked</span>}
             </summary>
-            <div className="covmanifest-note muted">Criteria that apply to documents, at your {targetLevel} certification target — <b>pass</b> is only claimed where the {fmt || 'file'} engine actually evaluates the criterion; <b>human review</b> routes through the HITL workflow. Hidden: {hiddenAboveLevel} above-{targetLevel} and {hiddenWebOnly} web-only criteria.</div>
+            <div className="covmanifest-note muted">
+              {coreOnly
+                ? <>The <b>20-check document core</b> — 87 WCAG 2.2 criteria → 50 US-regulated (A/AA) → the 20 that apply to documents. </>
+                : <>Criteria that apply to documents, at your {targetLevel} certification target. Hidden: {hiddenAboveLevel} above-{targetLevel} and {hiddenWebOnly} web-only criteria. </>}
+              <b>pass</b> is only claimed where the {fmt || 'file'} engine actually evaluates the criterion; <b>human review</b> routes through the HITL workflow.
+              <button className="explain-btn" style={{ marginLeft: 6 }} aria-pressed={!coreOnly}
+                      onClick={() => setCoreOnly((v) => !v)}>
+                {coreOnly ? `Show all ${scoped.length} at ${targetLevel}` : 'Show only the 20-check core'}
+              </button>
+            </div>
             <table className="covtable">
               <thead><tr><th>SC</th><th>Name</th><th>Lvl</th><th>Fix</th><th>Outcome</th><th>Confidence</th></tr></thead>
               <tbody>
@@ -858,6 +873,9 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                                 <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: 7, padding: '3px 0 3px 10px', borderLeft: `2px solid ${bg}` }}>
                                   <span className="badge" style={{ background: bg, color: fg, fontSize: 10, padding: '1px 5px', flexShrink: 0 }}>{(issue.severity || '').toLowerCase()}</span>
                                   <div style={{ fontSize: 12, lineHeight: 1.4 }}>
+                                    {/* 19 rows of "Image missing alt text" are indistinguishable
+                                        without this. Only shown when the analyser attributed one. */}
+                                    {issue.page && <b style={{ marginRight: 5 }}>{file.type === 'pptx' ? 'Slide' : 'Page'} {issue.page}</b>}
                                     {issue.fix && <span>{issue.fix}</span>}
                                     {issue.detail && !issue.fix && <span>{issue.detail}</span>}
                                     {issue.auto != null && <span className={issue.auto ? 'fixauto' : 'fixreview'} style={{ marginLeft: 6, fontSize: 11 }}>{issue.auto ? '⚡ auto' : '✎ review'}</span>}
