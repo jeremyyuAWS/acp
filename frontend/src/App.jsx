@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } fro
 import HitlBell from './HitlBell.jsx'
 import { refreshDriveToken } from './driveAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, listScans, getScan, getActiveScan, startScan, startScanQueued, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken } from './api'
+import { getSources, getRubric, getConfig, listScans, getScan, getActiveScan, startScan, startScanQueued, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -65,6 +65,22 @@ function fmtStamp(iso) {
   // timeZoneName: 'short' stamps the viewer's zone (e.g. "PDT" / "CDT") so cross-timezone
   // viewers (you in PT, Deva in CT) can tell at a glance it's THEIR local time.
   return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })
+}
+
+// Persistent build stamp — pinned bottom-right so the full CalVer (e.g. 2026.7.9.20)
+// is visible on EVERY page, including the pre-auth sign-in screen and any full-screen
+// view. `version` is the git-derived backend CalVer (with the daily .N counter);
+// __BUILD_VERSION__ (date only, no counter) is the instant fallback until /config loads.
+function VersionStamp({ version }) {
+  const v = version || __BUILD_VERSION__
+  return (
+    <div className="buildstamp" title={`ACP build ${v}${__BUILD_TIME__ ? ` · ${fmtStamp(__BUILD_TIME__)}` : ''}`}
+         style={{ position: 'fixed', right: 8, bottom: 6, zIndex: 400, pointerEvents: 'none',
+                  fontSize: 10.5, fontFamily: 'ui-monospace, monospace', letterSpacing: 0.2,
+                  color: 'var(--muted, #6B6670)', opacity: 0.65 }}>
+      v{v}
+    </div>
+  )
 }
 
 function progressText(p) {
@@ -202,10 +218,17 @@ export default function App() {
   const [excludeRemediated, setExcludeRemediated] = useState(true)  // on by default — skip re-discovering ACP's own Remediated/ output
   const [incremental, setIncremental] = useState(true)  // ADR 0011 — skip re-analysing byte-identical files already scored under the same rubric
   const [tick, setTick] = useState(0)                  // bumped every minute to keep timeAgo labels fresh
+  const [platformVersion, setPlatformVersion] = useState(null)  // full git-derived CalVer from /config (with the daily .N)
 
   useEffect(() => {
     const t = setInterval(() => setTick((n) => n + 1), 60_000)
     return () => clearInterval(t)
+  }, [])
+
+  // Pull the authoritative CalVer once (works pre-auth — /config is public) so the build
+  // stamp + header show the full version with the daily counter, not the date-only bundle tag.
+  useEffect(() => {
+    getConfig().then((c) => c?.version && setPlatformVersion(c.version)).catch(() => { /* keep the build-time fallback */ })
   }, [])
 
   useEffect(() => {
@@ -363,7 +386,7 @@ export default function App() {
     savedDecRef.current = { scanId: sid, decisions: { ...decisions }, triage: { ...triage } }
   }, [decisions, triage]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!me) return <SignIn onSignedIn={signIn} />
+  if (!me) return (<><SignIn onSignedIn={signIn} /><VersionStamp version={platformVersion} /></>)
 
   const switchScan = async (id) => {
     if (id === scan?.run?.id) return
@@ -477,7 +500,7 @@ export default function App() {
         <div className="brand"><Logo /><h1 className="sub">Accessibility Platform</h1>
           <span className="muted" title={`Built ${fmtStamp(__BUILD_TIME__)}`}
                 style={{ fontSize: 11, marginLeft: 10, fontFamily: 'ui-monospace, monospace', whiteSpace: 'nowrap' }}>
-            {void tick}v{__BUILD_VERSION__} · updated {timeAgo(__BUILD_TIME__)}
+            {void tick}v{platformVersion || __BUILD_VERSION__} · updated {timeAgo(__BUILD_TIME__)}
           </span>
         </div>
         <div className="userbox">
