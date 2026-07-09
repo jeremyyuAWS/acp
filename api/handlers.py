@@ -150,7 +150,8 @@ def _remediate_file(payload: dict, job: dict) -> None:
             src.write_bytes(data)
             if ext == "pdf":
                 from remediate_pdf import remediate_pdf
-                out_path, applied, _skipped = remediate_pdf(src)
+                out_path, applied, _skipped = remediate_pdf(
+                    src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id)
                 mimetype = "application/pdf"
             else:  # docx / pptx / xlsx
                 from remediate_office import remediate_office
