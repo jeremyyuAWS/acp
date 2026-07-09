@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { VALUE_FIX, isValueFix, reviewTelemetry } from './reviewCard.js'
+import { VALUE_FIX, isValueFix, reviewTelemetry, locationLabel, buildEvidenceCard } from './reviewCard.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const read = (f) => readFileSync(join(here, f), 'utf8')
@@ -77,5 +77,46 @@ describe('the evidence card is actually mounted, and owns the write', () => {
     // The old gate was `aiDraft != null`, which hid the box exactly when a human was needed.
     expect(read('EvidenceCard.jsx')).toMatch(/isValueFix\(card\.sc\)/)
     expect(read('EvidenceCard.jsx')).not.toMatch(/aiDraft\.current != null/)
+  })
+})
+
+describe('locationLabel — where the criterion fails', () => {
+  it('names slides for a deck and pages for a PDF', () => {
+    expect(locationLabel({ file: 'deck.pptx', pages: '3' })).toBe('Slide 3')
+    expect(locationLabel({ file: 'policy.pdf', pages: '7' })).toBe('Page 7')
+    expect(locationLabel({ file: 'memo.docx', pages: '2' })).toBe('Page 2')
+  })
+
+  it('lists every page — 11 failing slides must not read as one', () => {
+    expect(locationLabel({ file: 'deck.pptx', pages: '1,3,7' })).toBe('Slides 1, 3, 7')
+  })
+
+  it('caps a long list rather than flooding the header', () => {
+    expect(locationLabel({ file: 'deck.pptx', pages: '1,2,3,4,5,6,7,8' })).toBe('Slides 1, 2, 3, 4, 5, 6 +2')
+  })
+
+  it('renders nothing when the analyser attributed no page', () => {
+    // xlsx locates by cell; some rules are file-level. Show no location, never a wrong one.
+    expect(locationLabel({ file: 'book.xlsx', pages: null })).toBeNull()
+    expect(locationLabel({ file: 'deck.pptx', pages: '' })).toBeNull()
+    expect(locationLabel({})).toBeNull()
+    expect(locationLabel(null)).toBeNull()
+  })
+
+  it('survives a malformed pages string', () => {
+    expect(locationLabel({ file: 'deck.pptx', pages: 'x,,3' })).toBe('Slide 3')
+  })
+})
+
+describe('the card surfaces the location', () => {
+  it('buildEvidenceCard carries location + page through', () => {
+    const card = buildEvidenceCard({ id: 'i1', file: 'deck.pptx', rule_id: '1.1.1', page: 3, pages: '3,5' })
+    expect(card.location).toBe('Slides 3, 5')
+    expect(card.page).toBe(3)
+  })
+
+  it('EvidenceCard renders it only when present', () => {
+    const src = read('EvidenceCard.jsx')
+    expect(src).toMatch(/card\.location &&/)
   })
 })

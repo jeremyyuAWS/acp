@@ -23,6 +23,21 @@ export const VALUE_FIX = new Set(['1.1.1', '2.4.4', '2.4.9', '2.4.2', '3.3.2'])
 
 export const isValueFix = (sc) => VALUE_FIX.has(sc)
 
+// A deck fails on slides; a PDF fails on pages. Same idea to a reviewer: "go here".
+export const pageNoun = (file) => (String(file || '').split('.').pop().toLowerCase() === 'pptx' ? 'Slide' : 'Page')
+
+// hitl_queue.pages is a comma-separated list of every distinct page this criterion fails on.
+// Rendering only the first would tell a reviewer a deck failed on one slide when it failed on
+// eleven. Absent pages produce null — we show no location rather than a wrong one.
+export function locationLabel(item) {
+  const pages = String(item?.pages || '').split(',').map((n) => parseInt(n, 10)).filter(Number.isFinite)
+  if (!pages.length) return null
+  const noun = pageNoun(item?.file)
+  const shown = pages.slice(0, 6)
+  const more = pages.length - shown.length
+  return `${noun}${pages.length > 1 ? 's' : ''} ${shown.join(', ')}${more > 0 ? ` +${more}` : ''}`
+}
+
 // What the review actually was — recorded on hitl_events so the workspace can report REVIEWER
 // TIME (the metric that matters) and later calibrate confidence against what humans changed.
 //
@@ -63,5 +78,8 @@ export function buildEvidenceCard(item, diffs = []) {
     diffs: (diffs || []).filter((d) => scOf(d.rule_id) === sc),
     impact: { before: 'Fail', after: 'Pass' },
     findingCount: item?.finding_count || 1,
+    // Where in the document to look — null when the analyser attributed nothing.
+    location: locationLabel(item),
+    page: item?.page ?? null,
   }
 }

@@ -1731,3 +1731,6 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 /* In the HITL review detail the preview sits alongside dense text — cap it tighter. */
 .rc-thumb { max-width: 260px; margin: 2px 0 12px; }
 .drawer-thumb { margin-top: 2px; }
+
+/* Where a queued finding lives — slide/page chip on the evidence card header. */
+.evcard-loc { font-size: 11.5px; white-space: nowrap; }

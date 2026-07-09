@@ -57,6 +57,13 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
         <span className="fmtchip">{card.fmt}</span>
         <b className="evcard-wcag">{card.wcag}</b>
         <span className="muted">{card.name}</span>
+        {/* Where to look. Rendered only when the analysers attributed a page — the reviewer
+            gets no location rather than a wrong one. */}
+        {card.location && (
+          <span className="evcard-loc muted" title={`This criterion fails on ${card.location.toLowerCase()}`}>
+            📍 {card.location}
+          </span>
+        )}
         <span className={`conf conf-${card.track.badge.tone}`} style={{ marginLeft: 'auto' }}>{card.track.badge.label}</span>
       </header>
 

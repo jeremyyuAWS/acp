@@ -124,8 +124,17 @@ _SCHEMA = [
       finding_count INT,
       status TEXT DEFAULT 'pending',
       reviewed_at TEXT,
-      reviewer_note TEXT
+      reviewer_note TEXT,
+      page INT,
+      pages TEXT
     )""",
+    # WHERE this criterion fails in the document, so the reviewer never hunts for it.
+    # page  = the first (lowest) page/slide the analysers attributed — enough to jump to.
+    # pages = every distinct page, comma-separated; a criterion failing on 11 slides must not
+    #         be rendered as if it failed on one. Both NULL when nothing was attributed
+    #         (xlsx locates by cell; some rules are file-level) — we show no page, never a wrong one.
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS page INT",
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS pages TEXT",
     # ADR: AI-draft + human-approve lane. The reviewer's final, possibly-edited
     # value for a semantic finding (alt text / link text / title) — durable
     # compliance evidence of what was actually approved, distinct from the
@@ -359,6 +368,11 @@ def _rule_outcome(rule_id: str, fmt: str | None, count: int) -> str:
     if fmt is None or fmt not in RULE_FORMATS.get(rule_id, _ALL_FORMATS):
         return "NOT_APPLICABLE"
     return "FAIL" if count > 0 else "PASS"
+
+
+def _pages_csv(pages: list[int]) -> str | None:
+    """Compact, capped rendering of the distinct pages a criterion fails on."""
+    return ",".join(str(p) for p in pages[:12]) if pages else None
 
 
 def _extract_sc(wcag: str) -> str:
@@ -1519,6 +1533,24 @@ class Store:
                 "WHERE scan_id=%s GROUP BY rule_id", (latest["id"],))
             return {r["rule_id"]: r["n"] for r in self._db.fetchall(cur)}
 
+    def _pages_for(self, cur, scan_id: str, file: str, rule_id: str) -> list[int]:
+        """Distinct pages/slides where this criterion fails in this file, ascending.
+
+        hitl_queue.rule_id is an SC ('1.1.1', or '1.1.1/deferred'); issue_records keys pages by
+        the ENGINE rule id and carries the SC in `wcag`. So the join goes through _extract_sc on
+        both sides rather than a direct rule_id match — comparing them raw would silently find
+        nothing and every item would show no page.
+        """
+        sc = _extract_sc(rule_id)
+        if not sc:
+            return []
+        self._db.execute(cur,
+            "SELECT wcag, page FROM issue_records WHERE scan_id=%s AND file=%s AND page IS NOT NULL",
+            (scan_id, file))
+        pages = {int(r["page"]) for r in self._db.fetchall(cur)
+                 if _extract_sc(r["wcag"]) == sc and r["page"]}
+        return sorted(pages)
+
     def queue_hitl_items(self, scan_id: str) -> list[dict]:
         """Auto-populate HITL queue from ai-assisted FAILs in a saved scan.
 
@@ -1545,13 +1577,16 @@ class Store:
                 continue  # idempotent — skip already-queued items
             item_id = uuid.uuid4().hex[:12]
             with self._db.cursor() as cur:
+                pages = self._pages_for(cur, scan_id, c["file"], c["rule_id"])
                 self._db.execute(cur,
-                    "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending')",
-                    (item_id, now, scan_id, c["file"], c["rule_id"], c["rule_name"], c["finding_count"]))
+                    "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status,page,pages) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
+                    (item_id, now, scan_id, c["file"], c["rule_id"], c["rule_name"], c["finding_count"],
+                     pages[0] if pages else None, _pages_csv(pages)))
             created.append({"id": item_id, "scan_id": scan_id, "file": c["file"],
                              "rule_id": c["rule_id"], "rule_name": c["rule_name"],
-                             "finding_count": c["finding_count"], "status": "pending", "created_at": now})
+                             "finding_count": c["finding_count"], "status": "pending", "created_at": now,
+                             "page": pages[0] if pages else None, "pages": _pages_csv(pages)})
         return created
 
     def queue_hitl_deferral(self, scan_id: str, file: str, note: str, count: int = 1,
@@ -1569,11 +1604,12 @@ class Store:
             if self._db.fetchone(cur):
                 return None
             item_id = uuid.uuid4().hex[:12]
+            pages = self._pages_for(cur, scan_id, file, rule_id)
             self._db.execute(cur,
-                "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending')",
+                "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status,page,pages) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
                 (item_id, datetime.now(timezone.utc).isoformat(), scan_id, file, rule_id,
-                 note[:200], count))
+                 note[:200], count, pages[0] if pages else None, _pages_csv(pages)))
         return item_id
 
     def queue_hitl_review_for_file(self, scan_id: str, file: str,
@@ -1601,10 +1637,12 @@ class Store:
                 item_id = uuid.uuid4().hex[:12]
                 name = r.get("rule_name") or rid
                 count = r.get("finding_count") or 1
+                pages = self._pages_for(cur, scan_id, file, rid)
                 self._db.execute(cur,
-                    "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending')",
-                    (item_id, now, scan_id, file, rid, name, count))
+                    "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status,page,pages) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
+                    (item_id, now, scan_id, file, rid, name, count,
+                     pages[0] if pages else None, _pages_csv(pages)))
                 already.add(rid)
                 created.append({"id": item_id, "scan_id": scan_id, "file": file,
                                 "rule_id": rid, "rule_name": name, "finding_count": count,
