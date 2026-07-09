@@ -79,8 +79,12 @@ def ai_suggest(scan_id: str = Query(...), file: str = Query(...), rule_id: str =
 @router.get("/ai/status")
 def ai_status():
     """Check whether the local Ollama instance is reachable, and report whether
-    AI is enabled platform-wide (admin deterministic-only toggle)."""
+    AI is enabled platform-wide (admin deterministic-only toggle). Also reports
+    whether a vision model is pulled — genuine image alt text (WCAG 1.1.1) needs it,
+    and it degrades to human review when absent."""
     import ai as _ai
+    vision = _ai.vision_is_available()
     return {"available": _ai.is_available(), "base_url": _ai.OLLAMA_BASE_URL,
             "model": _ai.OLLAMA_MODEL, "ai_enabled": core.store.get_ai_enabled(),
-            "backend": os.environ.get("ACP_AI_BACKEND", "auto").lower()}
+            "backend": os.environ.get("ACP_AI_BACKEND", "auto").lower(),
+            "vision_available": vision, "vision_model": _ai.OLLAMA_VISION_MODEL}

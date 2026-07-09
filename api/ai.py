@@ -6,17 +6,31 @@ commercial-LLM SDK or API key is used anywhere — the only backend is the local
 Ollama model; the layer degrades to deterministic prose when it is unreachable.
 
 Config (env vars):
-  OLLAMA_BASE_URL  — default http://localhost:11434
-  OLLAMA_MODEL     — default llama3.2 (3B, runs on CPU; swap for llava for vision tasks)
+  OLLAMA_BASE_URL      — default http://localhost:11434
+  OLLAMA_MODEL         — default llama3.2 (text: explain / suggest / digest)
+  OLLAMA_VISION_MODEL  — default llava:7b (vision: genuine alt text from image bytes)
+  OLLAMA_VISION_TIMEOUT— default 120s (CPU vision inference is heavier than text)
 
 Fails gracefully: every public function returns None (deterministic prose for the
-digest) when Ollama is unreachable — callers never break and never need a key.
+digest) when Ollama is unreachable — callers never break and never need a key. The
+vision path (describe_image) is the same: unavailable → None, and callers fall back
+to a faithful source or human review.
 """
 from __future__ import annotations
 import os
+import re
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL    = os.environ.get("OLLAMA_MODEL", "llama3.2")
+# A separate vision (llava-class) model — the text model cannot see images, so genuine
+# alt text needs this. Same local-Ollama backend, so the "no third-party AI" claim holds.
+OLLAMA_VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "llava:7b")
+# Vision inference on CPU is heavier than text: a cold single-image describe can take
+# 30-90s. Bound it so a wedged model can't stall a remediation job.
+try:
+    OLLAMA_VISION_TIMEOUT = float(os.environ.get("OLLAMA_VISION_TIMEOUT", "120"))
+except ValueError:
+    OLLAMA_VISION_TIMEOUT = 120.0
 
 # Per-rule plain-English context injected into the prompt so the model
 # produces grounded, file-type-aware explanations rather than generic advice.
@@ -91,13 +105,17 @@ def _parse(text: str) -> dict[str, str]:
     return {"why": why, "fix": fix}
 
 
-def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, ok: bool) -> None:
-    """Emit a Langfuse span for one Ollama call — latency, prompt size, completion, ok."""
+def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, ok: bool,
+              model: str | None = None, scan_id: str | None = None, file: str | None = None) -> None:
+    """Emit a Langfuse span for one Ollama call — model, latency, prompt size, completion, ok.
+    model defaults to the text model; vision calls pass OLLAMA_VISION_MODEL so the trace
+    records which model actually ran."""
     try:
         import time as _t
         import lf as _lf
-        _lf.trace_ai_call(surface, OLLAMA_MODEL, int((_t.monotonic() - t0) * 1000),
-                          ok=ok, prompt_chars=len(prompt or ""), completion=completion)
+        _lf.trace_ai_call(surface, model or OLLAMA_MODEL, int((_t.monotonic() - t0) * 1000),
+                          ok=ok, prompt_chars=len(prompt or ""), completion=completion,
+                          scan_id=scan_id, file=file)
     except Exception:
         pass
 
@@ -146,6 +164,102 @@ def is_available() -> bool:
         return False
 
 
+def vision_is_available() -> bool:
+    """True only when Ollama is reachable AND a vision (llava-class) model is pulled.
+    Distinct from is_available(): a text-only Ollama is 'available' but cannot describe
+    images, so the alt-text remediator must gate genuine captioning on this, not is_available."""
+    import httpx
+    try:
+        r = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=3)
+        r.raise_for_status()
+        want = OLLAMA_VISION_MODEL
+        base = want.split(":", 1)[0]
+        for m in r.json().get("models", []) or []:
+            name = m.get("name", "")
+            if name == want or name.split(":", 1)[0] == base:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+# ── Vision alt text (llava-class model) ───────────────────────────────────────
+# Genuine, image-derived alt text — the gap the text model cannot fill. Extract an
+# image's bytes, send them to the vision model, write the returned one-liner as alt.
+# Everything degrades to None (→ faithful source / human review) when unavailable.
+_ALT_LABEL = re.compile(r"^\s*(?:alt(?:\s*text)?|description|caption|answer)\s*[:\-]\s*", re.I)
+_ALT_LEAD = re.compile(
+    r"^\s*(?:the|a|an|this)?\s*(?:image|picture|photo|photograph|graphic|illustration|screenshot|figure)\s+"
+    r"(?:shows|depicts|of|is\s+of|is\s+a|contains|displays|features|portrays|represents|"
+    r"is\s+a\s+representation\s+of)\s*[:,-]?\s*", re.I)
+
+
+def _clean_alt(text: str) -> str:
+    """Normalise a model reply into a single-line, descr-safe alt string. Strips echoed
+    labels ('Alt text:'), redundant 'this image shows' leads (a screen reader already
+    announces it's an image, and the .NET AltTextRule rejects a bare 'image'), collapses
+    whitespace, and bounds the length."""
+    t = (text or "").strip().strip('"').strip("'").strip()
+    t = _ALT_LABEL.sub("", t).strip().strip('"').strip("'").strip()
+    t = re.sub(r"\s+", " ", t)
+    t = _ALT_LEAD.sub("", t).strip()
+    # Capitalise the first letter (leads were stripped in lower-case-friendly form).
+    if t:
+        t = t[0].upper() + t[1:]
+    if len(t) > 250:
+        t = t[:250].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+    return t.strip()
+
+
+def _vision_prompt(filename: str, context: str) -> str:
+    where = f" It appears in the document '{filename}'." if filename else ""
+    near = f" Nearby text for context: {context.strip()[:200]}" if context and context.strip() else ""
+    return (
+        "You are writing alternative text for an image so a person using a screen reader "
+        "understands what it conveys. In ONE concise sentence (under 20 words), describe the "
+        "image's content and its meaning. Do not begin with 'image of', 'picture of', or "
+        "'this image shows'. If it is a chart or diagram, state what it depicts and the key "
+        f"takeaway.{where}{near}\nAlt text:"
+    )
+
+
+def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
+                   scan_id: str | None = None, file: str | None = None) -> dict | None:
+    """Generate genuine alt text for one image via the local vision model.
+
+    Sends the raw image bytes (base64) to Ollama /api/generate with OLLAMA_VISION_MODEL
+    and an alt-text prompt. Returns {"alt", "model"} or None when the model is
+    unavailable / errors / returns nothing usable. Traced through Langfuse (surface
+    'vision') exactly like explain/suggest/digest — model, latency, prompt size, ok."""
+    if not image_bytes:
+        return None
+    import base64
+    import time as _t
+    prompt = _vision_prompt(filename, context)
+    b64 = base64.b64encode(image_bytes).decode("ascii")
+    _t0 = _t.monotonic()
+    try:
+        import httpx
+        r = httpx.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={"model": OLLAMA_VISION_MODEL, "prompt": prompt, "images": [b64],
+                  "stream": False, "options": {"temperature": 0.2, "num_predict": 80}},
+            timeout=OLLAMA_VISION_TIMEOUT,
+        )
+        r.raise_for_status()
+        alt = _clean_alt(r.json().get("response", ""))
+        # A one-word or empty reply won't clear WCAG 1.1.1 — treat it as a miss so the
+        # caller falls back rather than writing junk that fails re-scan.
+        ok = bool(alt) and len(alt) >= 8 and " " in alt
+        _trace_ai("vision", prompt, alt, _t0, ok=ok,
+                  model=OLLAMA_VISION_MODEL, scan_id=scan_id, file=file)
+        return {"alt": alt, "model": OLLAMA_VISION_MODEL} if ok else None
+    except Exception:
+        _trace_ai("vision", prompt, None, _t0, ok=False,
+                  model=OLLAMA_VISION_MODEL, scan_id=scan_id, file=file)
+        return None
+
+
 # ── AI-drafted fix suggestions (semantic HITL lane) ───────────────────────────
 # For findings that can't be closed deterministically (alt text, link purpose, title),
 # the text model drafts a concrete, human-approvable value the reviewer accepts or edits.
@@ -176,9 +290,19 @@ def _suggest_prompt(rule_id: str, rule_name: str, filename: str, detail: str) ->
 
 
 def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
-                detail: str = "") -> dict | None:
+                detail: str = "", image_bytes: bytes | None = None) -> dict | None:
     """Draft a concrete, human-approvable fix value (alt text / link text / title) for a
-    semantic finding via the local text model. Returns None when Ollama is unavailable."""
+    semantic finding via the local model. Returns None when Ollama is unavailable.
+
+    For 1.1.1 with the image's bytes in hand, uses the VISION model to produce real,
+    image-derived alt text (is_template=False) instead of the text model's fill-in
+    template — the reviewer then approves genuine alt text rather than a blank to fill."""
+    if rule_id == "1.1.1" and image_bytes:
+        res = describe_image(image_bytes, filename=filename, context=detail)
+        if res:
+            return {"suggestion": res["alt"], "kind": "alt text",
+                    "is_template": False, "model": res["model"]}
+        # vision unavailable / unusable → fall through to the text template below.
     prompt = _suggest_prompt(rule_id, rule_name, filename, detail)
     import time as _t
     _t0 = _t.monotonic()

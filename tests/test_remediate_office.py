@@ -208,3 +208,96 @@ def test_alt_descriptive_slash_prose_preserved(tmp_path):
     xml = _doc_xml(out)
     assert 'descr="Input/output flow of the intake system"' in xml   # preserved, not treated as junk
     assert not any("Alt text" in a for a in applied)
+
+
+# ── Vision-generated alt text (llava-class model) ────────────────────────────
+# The model is stubbed so these run offline; the live end-to-end (real llava →
+# descr written → re-scan clears 1.1.1) is exercised separately against Ollama.
+
+_RELS = ('<?xml version="1.0"?>'
+         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+         '<Relationship Id="rId9" '
+         'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+         'Target="media/image1.png"/></Relationships>')
+# A drawing with a generic name (no faithful source) whose blip embeds rId9.
+_DRAWING = ('<w:p><w:r><w:drawing><wp:docPr id="1" name="Picture 1"/>'
+            '<a:blip r:embed="rId9"/></w:drawing></w:r></w:p>')
+
+
+def _make_docx_with_image(path, body_xml, img_bytes=b"\x89PNG\r\n\x1a\n" + b"x" * 200):
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types/>')
+        z.writestr("docProps/core.xml", _CORE_NO_LANG)
+        z.writestr("word/document.xml",
+                   f'<?xml version="1.0"?><w:document {_W}><w:body>{body_xml}</w:body></w:document>')
+        z.writestr("word/_rels/document.xml.rels", _RELS)
+        z.writestr("word/media/image1.png", img_bytes)
+
+
+def _stub_vision(monkeypatch, alt="A red barn in a green field under a blue sky", available=True):
+    import ai
+    calls = {"n": 0, "bytes": None}
+
+    def fake_describe(image_bytes, **kw):
+        calls["n"] += 1
+        calls["bytes"] = image_bytes
+        return {"alt": alt, "model": "llava:7b"} if alt else None
+
+    monkeypatch.setattr(ai, "vision_is_available", lambda: available)
+    monkeypatch.setattr(ai, "describe_image", fake_describe)
+    return calls
+
+
+def test_alt_vision_fills_when_no_faithful_source(tmp_path, monkeypatch):
+    calls = _stub_vision(monkeypatch)
+    src = tmp_path / "v.docx"
+    _make_docx_with_image(src, _DRAWING, img_bytes=b"\x89PNG\r\n\x1a\n" + b"real-image" * 30)
+    out, applied, skipped = remediate_office.remediate_office(src, ai_enabled=True)
+    xml = _doc_xml(out)
+    assert 'descr="A red barn in a green field under a blue sky"' in xml
+    assert any("AI vision description" in a for a in applied)
+    assert not any("faithful alt source" in s for s in skipped)   # vision closed it, not deferred
+    assert calls["n"] == 1
+    assert calls["bytes"].startswith(b"\x89PNG")                  # got the real image bytes
+
+
+def test_alt_faithful_source_wins_over_vision(tmp_path, monkeypatch):
+    calls = _stub_vision(monkeypatch)
+    src = tmp_path / "w.docx"
+    _make_docx_with_image(src,
+        '<w:p><w:r><w:drawing><wp:docPr id="1" name="Picture 1" title="Author supplied alt"/>'
+        '<a:blip r:embed="rId9"/></w:drawing></w:r></w:p>')
+    out, applied, _ = remediate_office.remediate_office(src, ai_enabled=True)
+    assert 'descr="Author supplied alt"' in _doc_xml(out)
+    assert calls["n"] == 0                                        # vision never called
+
+
+def test_alt_vision_not_called_when_ai_off(tmp_path, monkeypatch):
+    calls = _stub_vision(monkeypatch)
+    src = tmp_path / "x.docx"
+    _make_docx_with_image(src, _DRAWING)
+    out, applied, skipped = remediate_office.remediate_office(src, ai_enabled=False)
+    assert calls["n"] == 0                                        # AI-off: no model call
+    assert not any("AI vision" in a for a in applied)
+    assert any("faithful alt source" in s for s in skipped)      # deferred to human review
+
+
+def test_alt_defers_when_vision_unavailable(tmp_path, monkeypatch):
+    # AI on but the vision model isn't pulled → degrade to deferral, never junk.
+    calls = _stub_vision(monkeypatch, available=False)
+    src = tmp_path / "y.docx"
+    _make_docx_with_image(src, _DRAWING)
+    out, applied, skipped = remediate_office.remediate_office(src, ai_enabled=True)
+    assert calls["n"] == 0
+    assert any("faithful alt source" in s for s in skipped)
+
+
+def test_alt_vision_miss_defers(tmp_path, monkeypatch):
+    # Vision reachable but returns nothing usable → defer (don't write junk/empty).
+    calls = _stub_vision(monkeypatch, alt=None)
+    src = tmp_path / "z.docx"
+    _make_docx_with_image(src, _DRAWING)
+    out, applied, skipped = remediate_office.remediate_office(src, ai_enabled=True)
+    assert calls["n"] == 1
+    assert not any("AI vision" in a for a in applied)
+    assert any("faithful alt source" in s for s in skipped)

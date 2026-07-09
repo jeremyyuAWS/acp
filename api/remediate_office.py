@@ -9,12 +9,17 @@ DETERMINISTIC Office fixes directly, in pure stdlib (no new dependency):
   * document title     → dc:title    in docProps/core.xml  (DocumentTitleRule reads
                          PackageProperties.Title)
   * image alt text     → descr= on wp:docPr / p:cNvPr / xdr:cNvPr (what the
-                         .NET AltTextRule reads) — derived ONLY from faithful
-                         in-document sources: the author's own Alt-Text *Title*
-                         field, an adjacent "Figure N:" caption paragraph (docx),
-                         or a meaningful shape name. Images with no faithful
-                         source are left untouched and reported as deferred —
-                         writing invented alt text is worse than none.
+                         .NET AltTextRule reads). Preferred source order:
+                         (1) a faithful in-document source — the author's own
+                         Alt-Text *Title* field, an adjacent "Figure N:" caption
+                         (docx), or a meaningful shape name; then, when AI is on
+                         and a vision model is reachable, (2) a genuine
+                         description of the image PIXELS from the local vision
+                         (llava-class) model — the image bytes are resolved via
+                         the part's .rels and sent to OLLAMA_VISION_MODEL. Images
+                         with neither are left untouched and reported as deferred
+                         — an unlabelled image never gets invented text; it routes
+                         to human review.
 
 OOXML files are zip archives of XML; the OPC core-properties part is identical
 across docx/pptx/xlsx, so one code path covers all three. Anything needing
@@ -24,6 +29,7 @@ review — same contract as the HTML/PDF remediators.
 """
 from __future__ import annotations
 import os
+import posixpath
 import re
 import zipfile
 from datetime import datetime, timezone
@@ -153,14 +159,60 @@ def _derive_alt(attrs: str, caption: str | None) -> tuple[str, str] | None:
     return None
 
 
+# Genuine vision alt text is opt-in (AI on + a vision model reachable) and bounded:
+# CPU vision inference is ~30-90s per image, so cap how many images one document will
+# caption. Beyond the cap, remaining unlabelled images defer to review as before.
+_VISION_MAX_IMAGES = 25
+# Skip degenerate images the model can't meaningfully describe (1x1 spacers etc.).
+_MIN_IMG_BYTES = 64
+_R_EMBED = re.compile(r'r:embed="(rId\d+)"')
+
+
+def _resolve_media(entries: dict, part_name: str, rid: str) -> bytes | None:
+    """Resolve a drawing's r:embed relationship id to the embedded image bytes.
+
+    Reads the part's sibling .rels (word/_rels/document.xml.rels etc.), finds the
+    Relationship with this Id, and returns the referenced media part's bytes. Returns
+    None for external (linked) images or anything that can't be resolved locally."""
+    d, base = (part_name.rsplit("/", 1) if "/" in part_name else ("", part_name))
+    rels_name = f"{d}/_rels/{base}.rels" if d else f"_rels/{base}.rels"
+    rels = entries.get(rels_name)
+    if not rels:
+        return None
+    try:
+        txt = rels.decode("utf-8", "ignore")
+    except Exception:
+        return None
+    rel = re.search(rf'<Relationship\b[^>]*\bId="{re.escape(rid)}"[^>]*?/?>', txt)
+    if not rel:
+        return None
+    tag = rel.group(0)
+    if 'TargetMode="External"' in tag:
+        return None
+    tm = re.search(r'Target="([^"]*)"', tag)
+    if not tm:
+        return None
+    target = tm.group(1)
+    if target.startswith(("http:", "https:", "file:", "/")):
+        return None
+    resolved = posixpath.normpath(posixpath.join(d, target) if d else target)
+    return entries.get(resolved)
+
+
 def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
-                  captions: bool = False) -> tuple[str, list[tuple[str, str]], int]:
-    """Add descr= to every <tag …> lacking one, when a faithful source exists.
+                  captions: bool = False, entries: dict | None = None,
+                  part_name: str | None = None, vision_enabled: bool = False,
+                  context_file: str = "", scan_id: str | None = None,
+                  vision_budget: list | None = None) -> tuple[str, list[tuple[str, str]], int]:
+    """Add descr= to every <tag …> lacking one, from a faithful source or (when
+    vision_enabled) a genuine vision description of the image bytes.
 
     pic_only_within: restrict to tags inside <pic>…</pic> blocks (pptx/xlsx have
     cNvPr on every shape; only pictures need alt). captions: derive from the next
-    paragraph's text when it looks like a caption (docx).
-    Returns (new_xml, [(alt, source)…], deferred_count).
+    paragraph's text when it looks like a caption (docx). entries/part_name let the
+    vision path resolve the image bytes via the part's .rels; vision_budget is a
+    single-element mutable [n] shared across parts so one document's total vision
+    calls stay bounded. Returns (new_xml, [(alt, source)…], deferred_count).
     """
     fixed: list[tuple[str, str]] = []
     deferred = 0
@@ -193,6 +245,9 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
                             caption = cand
             src = _derive_alt(attrs, caption)
             if src is None:
+                src = _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name,
+                                  vision_enabled, context_file, caption, scan_id, vision_budget)
+            if src is None:
                 deferred += 1
                 out.append(keep); continue
             alt, origin = src
@@ -204,6 +259,44 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
     return "".join(out), fixed, deferred
 
 
+def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_enabled,
+                context_file, caption, scan_id, vision_budget) -> tuple[str, str] | None:
+    """Genuine alt text for an unlabelled image from the local vision model, or None.
+
+    Finds this drawing's r:embed (the blip follows the docPr/cNvPr within the same
+    pic/drawing), resolves it to image bytes, and calls the vision model. Bounded by
+    vision_budget so a document with many images can't run unboundedly."""
+    if not (vision_enabled and entries is not None and part_name):
+        return None
+    if vision_budget is not None and vision_budget[0] <= 0:
+        return None
+    # Search window = to the end of this image's pic block (pptx/xlsx) or up to the next
+    # same-tag drawing (docx), so we never grab a sibling image's blip.
+    if pic_spans is not None:
+        region_end = next((b for a, b in pic_spans if a <= m.start() < b), m.end())
+    else:
+        nxt = xml.find(f"<{tag}", m.end())
+        region_end = nxt if nxt != -1 else len(xml)
+        region_end = min(region_end, m.end() + 8000)
+    rid_m = _R_EMBED.search(xml, m.end(), region_end)
+    if not rid_m:
+        return None
+    img = _resolve_media(entries, part_name, rid_m.group(1))
+    if not img or len(img) < _MIN_IMG_BYTES:
+        return None
+    try:
+        import ai as _ai
+        res = _ai.describe_image(img, filename=context_file, context=caption or "",
+                                 scan_id=scan_id, file=context_file)
+    except Exception:
+        res = None
+    if not res:
+        return None
+    if vision_budget is not None:
+        vision_budget[0] -= 1
+    return res["alt"], "an AI vision description of the image"
+
+
 # part-glob → (tag, pic wrapper or None, captions?)
 _ALT_TARGETS = [
     (re.compile(r"^word/(document|header\d*|footer\d*)\.xml$"), "wp:docPr", None, True),
@@ -212,11 +305,14 @@ _ALT_TARGETS = [
 ]
 
 
-def _fix_image_alt(entries: dict) -> tuple[list[str], int]:
-    """Inject faithful alt text across all image-bearing parts.
-    Returns (applied descriptions, count of images deferred to human review)."""
+def _fix_image_alt(entries: dict, *, vision_enabled: bool = False,
+                   context_file: str = "", scan_id: str | None = None) -> tuple[list[str], int]:
+    """Inject alt text across all image-bearing parts — faithful source first, then a
+    genuine vision description when vision_enabled. Returns (applied descriptions,
+    count of images deferred to human review)."""
     applied: list[str] = []
     deferred = 0
+    vision_budget = [_VISION_MAX_IMAGES]
     for name in list(entries):
         for pat, tag, wrapper, captions in _ALT_TARGETS:
             if not pat.match(name):
@@ -226,7 +322,9 @@ def _fix_image_alt(entries: dict) -> tuple[list[str], int]:
             except UnicodeDecodeError:
                 continue
             new_xml, fixed, part_deferred = _inject_descr(
-                xml, tag, pic_only_within=wrapper, captions=captions)
+                xml, tag, pic_only_within=wrapper, captions=captions,
+                entries=entries, part_name=name, vision_enabled=vision_enabled,
+                context_file=context_file, scan_id=scan_id, vision_budget=vision_budget)
             deferred += part_deferred
             if fixed:
                 entries[name] = new_xml.encode("utf-8")
@@ -581,8 +679,14 @@ def _remediate_xlsx_structure(entries: dict) -> list[str]:
     return applied
 
 
-def remediate_office(path: Path, *, lang: str = "en-US"):
+def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True,
+                     scan_id: str | None = None):
     """Apply deterministic Office accessibility fixes to a copy of the file.
+
+    ai_enabled — when True and a vision (llava-class) Ollama model is reachable,
+    unlabelled images get genuine vision-generated alt text; otherwise only faithful
+    sources are used and the rest defer to human review (AI-off degrades gracefully).
+    scan_id threads the vision calls into that scan's Langfuse session.
 
     Returns (fixed_path, applied, skipped). fixed_path is None if nothing applied.
     """
@@ -613,8 +717,17 @@ def remediate_office(path: Path, *, lang: str = "en-US"):
     title = path.stem.replace("-", " ").replace("_", " ").strip() or "Document"
     _ensure(_DC, "title", title, "Set document title to '{value}'")
 
-    # Image alt text (WCAG 1.1.1) — faithful sources only; the rest defer to review.
-    alt_applied, alt_deferred = _fix_image_alt(entries)
+    # Image alt text (WCAG 1.1.1) — faithful source first, then a genuine vision
+    # description when AI is on and a vision model is reachable; the rest defer to review.
+    vision_enabled = False
+    if ai_enabled:
+        try:
+            import ai as _ai
+            vision_enabled = _ai.vision_is_available()
+        except Exception:
+            vision_enabled = False
+    alt_applied, alt_deferred = _fix_image_alt(
+        entries, vision_enabled=vision_enabled, context_file=path.name, scan_id=scan_id)
     applied.extend(alt_applied)
     skipped: list[str] = []
     if alt_deferred:
