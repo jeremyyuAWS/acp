@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react'
 import { SEV, sevOf, reasonOf, priorityScore, groupLabel } from './hitlMeta.js'
+import { confidenceForFinding, confClass } from './confidence.js'
 import { openTraceUrl } from './api.js'
 
 // Rules whose fix IS a value a human writes/edits (alt text, link text, title, label) —
@@ -117,6 +118,10 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
                 const s = SEV[sevOf(it)] || SEV.medium
                 const isVal = VALUE_FIX.has(scOf(it.rule_id))
                 const isOpen = expanded === it.id
+                // Detection-method confidence (confidence.js) — helps a reviewer triage:
+                // a High item is a definite finding that just needs a fix approved; a
+                // Medium item came from a heuristic lane and is worth a closer look.
+                const conf = confidenceForFinding({ sc: scOf(it.rule_id) })
                 return (
                   <div className={`rc-item${isOpen ? ' rc-item-open' : ''}${ordered[cursor]?.id === it.id ? ' rc-item-cursor' : ''}`} key={it.id}>
                     <button className="rc-item-row" onClick={() => setExpanded(isOpen ? null : it.id)} aria-expanded={isOpen}>
@@ -124,6 +129,7 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
                       <span className="rc-item-file">{it.file || 'document'}</span>
                       {it.finding_count > 1 && <span className="muted rc-item-count">{it.finding_count} findings</span>}
                       <span className="rc-item-reason">⚑ {reasonOf(it)}</span>
+                      <span className={confClass(conf.level)} title={`Detection confidence: ${conf.level.label} — ${conf.basis}`}>{conf.level.label}</span>
                       <span className="rc-item-caret" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
                     </button>
                     {isOpen && (
@@ -136,6 +142,7 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
                             <li>Human approval is required before the document can be certified.</li>
                           </ul>
                         </div>
+                        <p className="muted" style={{ fontSize: 12, margin: '2px 0 8px' }}>Detection confidence <span className={confClass(conf.level)}>{conf.level.label}</span> · {conf.basis}</p>
                         {isVal && (
                           <label className="rc-valedit">
                             <span className="muted">Approved value {it.approved_value ? '(AI draft — edit as needed)' : ''}</span>

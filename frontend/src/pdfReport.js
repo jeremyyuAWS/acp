@@ -598,9 +598,13 @@ export async function exportFileCertification(d) {
   p.pageBreak()
   p.heading('Full WCAG coverage')
   p.text(`Every criterion applicable to a document, at the ${d.targetLevel || 'AA'} certification target. ${uncheckedN > 0 ? `${uncheckedN} criteria are not yet automated for this file type and are reported as unchecked, not passing.` : ''}`, { size: 9, color: MUTED, gapAfter: 8 })
-  p.table(['WCAG', 'Criterion', 'Level', 'Fix approach', 'Outcome'],
-    rows.map((r) => [r.id, r.plain || r.name, r.level, (r.fix || '').replace(/[⚡✎✋]\s*/, ''), COV_OUT_TXT[r.outcome]]),
-    [55, p.CW - 55 - 55 - 90 - 90, 55, 90, 90])
+  p.table(['WCAG', 'Criterion', 'Level', 'Fix approach', 'Outcome', 'Confidence'],
+    rows.map((r) => [r.id, r.plain || r.name, r.level, (r.fix || '').replace(/[⚡✎✋]\s*/, ''), COV_OUT_TXT[r.outcome], r.confidence ? r.confidence.level.label : '—']),
+    [52, p.CW - 52 - 44 - 84 - 82 - 62, 44, 84, 82, 62])
+  // Confidence is evidence-based, never a fabricated %: High = deterministic rule
+  // check / checksum-validated PII / fix cleared on re-scan; Medium = AI-heuristic
+  // detection lane or pattern-only match; Low = requires human review. See ADR 0016.
+  p.text('Confidence is derived from concrete pipeline evidence (rule determinism, PII checksum validation, and residual-re-scan verification) — never an invented percentage. High = deterministic check, checksum-validated match, or a fix that cleared re-scan; Medium = AI/heuristic detection or pattern-only match; Low = requires human review.', { size: 8, color: MUTED, lh: 11 })
 
   p.pageBreak()
   p.heading('Audit trail')

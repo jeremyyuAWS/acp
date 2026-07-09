@@ -6,6 +6,7 @@ import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
 import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, downloadRemediated, getRules, getRubric, getConfig } from './api.js'
 import { WCAG } from './wcagCatalog.js'
+import { confidenceForFinding, confidenceForCoverage, confClass } from './confidence.js'
 import { TraceChip } from './Transparency.jsx'
 
 // Prescriptive-action styling, shared with the Discover inventory.
@@ -80,7 +81,8 @@ function computeCoverageRows(file, { catalogRules, targetLevel, remediatedRuleId
       : isHuman(c) ? 'HUMAN'
       : (DOC_HUMAN_WHEN_UNCHECKED.has(c.sc) && fmt && fmt !== 'html') ? 'HUMAN'
       : 'UNCHECKED'
-    return { id: c.sc, name: c.name, plain: PLAIN_NAMES[c.sc] || c.name, level: c.level, fix: fixOf(c), outcome, count }
+    const confidence = confidenceForCoverage({ sc: c.sc, outcome, verifiedCleared: remediatedRuleIds.has(c.sc) })
+    return { id: c.sc, name: c.name, plain: PLAIN_NAMES[c.sc] || c.name, level: c.level, fix: fixOf(c), outcome, count, confidence }
   }).sort((a, b) => (OUT_RANK[a.outcome] ?? 3) - (OUT_RANK[b.outcome] ?? 3))
 }
 // Named rules step across the first 80% of the bar; the last 20% is the
@@ -580,6 +582,22 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                     {i.detail && <div className="findingdetail">{i.detail}</div>}
                     {i.impact && <div className="muted findingimpact">{i.impact}</div>}
                     {i.fix && <div className="findingfix"><span className={i.auto ? 'fixauto' : 'fixreview'}>{i.auto ? '⚡ auto-fixable' : '✎ needs review'}</span> · {i.fix}<span className="muted"> · {i.rule_id ?? i.ruleId}</span></div>}
+                    {(() => {
+                      // Evidence-based confidence (confidence.js) — never a fabricated %.
+                      // The basis is always shown next to the level so the signal is auditable.
+                      const sc = scOfWcag(i.wcag)
+                      const fmtAuto = REM_AUTOFIX_SC_BY_TYPE[file.type]
+                      const autoFixable = fmtAuto ? fmtAuto.includes(sc) : (i.auto !== false)
+                      const verifiedCleared = remediatedRuleIds.has(sc)
+                      const reportedFixedUnverified = !verifiedCleared && isRemediated && autoFixable
+                      const { level, basis } = confidenceForFinding({ sc, verifiedCleared, reportedFixedUnverified })
+                      return (
+                        <div className="findingconf">
+                          <span className={confClass(level)} title={`Confidence: ${level.label} — ${basis}`}>{level.label} confidence</span>
+                          <span className="muted"> · {basis}</span>
+                        </div>
+                      )
+                    })()}
                     {context === 'remediate' && (() => {
                       const sc = scOf(i.wcag)
                       const ba = sc ? baFor(sc, (file?.file || '').replace(/\.[^.]+$/, '')) : null
@@ -605,6 +623,13 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                 <span className="muted">{desc}</span>
               </div>
             ))}
+          </details>
+          <details className="sevhelp">
+            <summary>How is confidence derived?</summary>
+            <p className="muted" style={{ margin: '8px 0' }}>Confidence is a <b>genuine, evidence-based</b> signal — never a made-up percentage. Every level traces to a concrete signal the pipeline already produces, shown as the <i>basis</i> next to it.</p>
+            <div className="sevrow"><span className="conf conf-high" style={{ flex: '0 0 auto' }}>High</span><span className="muted">A deterministic rule check (structural/attribute test), a checksum-validated PII match, or a fix that <b>cleared the residual re-scan</b>.</span></div>
+            <div className="sevrow"><span className="conf conf-medium" style={{ flex: '0 0 auto' }}>Medium</span><span className="muted">An AI / heuristic detection lane (alt text, link purpose, structure), a pattern-only PII match, or a fix applied but not yet re-scan-confirmed.</span></div>
+            <div className="sevrow"><span className="conf conf-low" style={{ flex: '0 0 auto' }}>Low</span><span className="muted">A criterion that requires human judgement — routed to review with no automated signal to stand on.</span></div>
           </details>
         </>
       )}
@@ -706,7 +731,8 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
             : isHuman(c) ? 'HUMAN'
             : (DOC_HUMAN_WHEN_UNCHECKED.has(c.sc) && fmt && fmt !== 'html') ? 'HUMAN'
             : 'UNCHECKED'
-          return { id: c.sc, name: c.name, plain: PLAIN_NAMES[c.sc] || c.name, req: c.req, level: c.level, fix: fixOf(c), outcome, count, fileIssues }
+          const confidence = confidenceForCoverage({ sc: c.sc, outcome, verifiedCleared: remediatedRuleIds.has(c.sc) })
+          return { id: c.sc, name: c.name, plain: PLAIN_NAMES[c.sc] || c.name, req: c.req, level: c.level, fix: fixOf(c), outcome, count, fileIssues, confidence }
         }).sort((a, b) => (OUT_RANK[a.outcome] ?? 3) - (OUT_RANK[b.outcome] ?? 3))
         const n = (o) => rows.filter((r) => r.outcome === o).length
         return (
@@ -721,7 +747,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
             </summary>
             <div className="covmanifest-note muted">Criteria that apply to documents, at your {targetLevel} certification target — <b>pass</b> is only claimed where the {fmt || 'file'} engine actually evaluates the criterion; <b>human review</b> routes through the HITL workflow. Hidden: {hiddenAboveLevel} above-{targetLevel} and {hiddenWebOnly} web-only criteria.</div>
             <table className="covtable">
-              <thead><tr><th>SC</th><th>Name</th><th>Lvl</th><th>Fix</th><th>Outcome</th></tr></thead>
+              <thead><tr><th>SC</th><th>Name</th><th>Lvl</th><th>Fix</th><th>Outcome</th><th>Confidence</th></tr></thead>
               <tbody>
                 {rows.map((r) => {
                   const exp = explanations[r.id]
@@ -739,10 +765,15 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                             <button className="explain-btn" onClick={() => fetchExplanation(r.id)} title="Get AI explanation">Why?</button>
                           )}
                         </td>
+                        <td className="covconf">
+                          {r.confidence
+                            ? <span className={confClass(r.confidence.level)} title={`Confidence: ${r.confidence.level.label} — ${r.confidence.basis}`}>{r.confidence.level.label}</span>
+                            : <span className="muted">—</span>}
+                        </td>
                       </tr>
                       {r.outcome === 'FAIL' && r.fileIssues.length > 0 && (
                         <tr className="covrow-issues">
-                          <td colSpan={5}>
+                          <td colSpan={6}>
                             {r.fileIssues.map((issue, idx) => {
                               const [bg, fg] = SEV[issue.severity] || SEV.MINOR
                               return (
@@ -761,7 +792,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                       )}
                       {r.outcome === 'FAIL' && exp && (
                         <tr className="covrow-explain">
-                          <td colSpan={5}>
+                          <td colSpan={6}>
                             {exp.loading && <span className="explain-loading">⏳ thinking…</span>}
                             {exp.error && <span className="explain-error muted">AI explanation unavailable{exp.detail === 'timeout' ? ' — timed out after 45s' : ''} — is Ollama running? <button className="explain-btn" onClick={() => fetchExplanation(r.id)}>retry</button></span>}
                             {exp.why && (
