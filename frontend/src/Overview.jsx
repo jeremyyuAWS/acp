@@ -85,11 +85,11 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const ontCrit = ontDocs.filter((f) => f.ont.priority === 'Critical').length
   const ontHigh = ontDocs.filter((f) => f.ont.priority === 'High').length
   const ontVer = loadPublished()?.version
-  // Verify: auto-fix files re-pass at ~95%; assisted at ~78% (human sign-off sometimes rejects)
-  const autoCount = files.filter((f) => f.rec?.action === 'auto').length
-  const assistedCount = files.filter((f) => f.rec?.action === 'assisted').length
-  const verify = Math.round(autoCount * 0.95 + assistedCount * 0.78)
-  const publish = Math.min(n, run.certifiable + Math.round(autoCount * 0.92 + assistedCount * 0.70))
+  // Verify + Publish are REAL counts, never projections: a document is "verified" when it is
+  // confirmed compliant (run.certifiable — passed as-is, or remediated then re-scan-cleared),
+  // and "published" only when it has an actual published record (file_records.published_at).
+  const verify = run.certifiable || 0
+  const publish = files.filter((f) => f.published_at).length
   const auditReady = n ? Math.round((run.certifiable / n) * 100) : 0
   const maxN = Math.max(1, n)
 
@@ -97,8 +97,8 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
     { label: 'Discover', v: n, go: 'discover' },
     { label: 'Assess', v: n, go: 'assess' },
     { label: 'Remediate', v: needFix, go: 'remediate' },
-    { label: 'Verify', v: verify, go: 'remediate', proj: true },
-    { label: 'Publish', v: publish, go: 'monitor', proj: true },
+    { label: 'Verify', v: verify, go: 'remediate' },
+    { label: 'Publish', v: publish, go: 'monitor' },
   ]
   const severity = severityItems(files)
 
@@ -258,7 +258,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       </div>
 
       <section className="panel">
-        <h2>Compliance funnel · click a stage · <span style={{ color: '#854F0B', fontWeight: 400 }}>verify &amp; publish projected</span></h2>
+        <h2>Compliance funnel · click a stage</h2>
         <div className="vfunnel">
           {stages.map((s) => (
             <button className="vfrow" key={s.label} onClick={() => onGo(s.go)} aria-label={`${s.label}${s.proj ? ' projected' : ''}: ${s.v.toLocaleString()} documents — open`}>
