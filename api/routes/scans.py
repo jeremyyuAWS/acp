@@ -729,3 +729,42 @@ def get_file_thumbnail(scan_id: str, filename: str, request: Request,
     _blob.upload_render(owner, scan_id, filename, png)  # best-effort cache; never raises
     return Response(png, media_type="image/png",
                     headers={"Cache-Control": "private, max-age=86400"})
+
+
+@router.get("/scans/{scan_id}/files/{filename:path}/page/{page}")
+def get_file_page(scan_id: str, filename: str, page: int, request: Request,
+                  fresh: int = Query(0)):
+    """Serve a PNG of page N of a file — the rendering primitive the Intelligent Review
+    Workspace's 'locate in document' evidence uses. Same blob-cache → render-on-demand →
+    cache → serve as the thumbnail; the renderer clamps `page` to the document's real range.
+    PDF only in phase 1 (Office → 404 → placeholder). Owner-scoped, non-blocking."""
+    import blob as _blob
+    import render as _render
+
+    owner = _owner(request)
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+
+    ext = os.path.splitext(filename)[1].lower()
+    if not _render.can_render(ext):
+        raise HTTPException(404, "no preview available for this file type")
+
+    page = max(1, min(int(page or 1), 5000))          # sane bound; renderer clamps to real range
+    cache_key = f"{filename}#p{page}"                  # page-specific blob cache entry
+    if not fresh:
+        cached = _blob.download_render(owner, scan_id, cache_key)
+        if cached is not None:
+            return Response(cached, media_type="image/png",
+                            headers={"Cache-Control": "private, max-age=86400"})
+
+    data = _source_bytes_for_render(request, scan_id, filename, owner)
+    if not data:
+        raise HTTPException(404, "source document not retrievable for preview")
+
+    png = _render.render_page_png(data, ext, page)
+    if not png:
+        raise HTTPException(404, "could not render this page")
+
+    _blob.upload_render(owner, scan_id, cache_key, png)   # best-effort cache; never raises
+    return Response(png, media_type="image/png",
+                    headers={"Cache-Control": "private, max-age=86400"})

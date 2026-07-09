@@ -33,30 +33,39 @@ def can_render(ext: str) -> bool:
     return (ext or "").lower() in RENDERABLE_EXTS
 
 
-def render_page1_png(data: bytes, ext: str) -> bytes | None:
-    """Render page 1 of a document to a PNG, downscaled to _MAX_EDGE on the long side.
+def render_page_png(data: bytes, ext: str, page: int = 1) -> bytes | None:
+    """Render page N (1-indexed) of a document to a PNG, downscaled to _MAX_EDGE on the long
+    side. `page` is CLAMPED to the document's real range, so an out-of-range request returns
+    the nearest valid page rather than nothing — the "locate in document" evidence primitive.
 
     Returns the PNG bytes, or None for anything we can't render (non-PDF, empty, corrupt,
-    encrypted, or any pdfium/Pillow error). Never raises — a thumbnail is best-effort."""
+    encrypted, or any pdfium/Pillow error). Never raises — a preview is best-effort."""
     if not data or not can_render(ext):
         return None
     try:
-        return _render_pdf_page1(data)
+        return _render_pdf_page(data, page)
     except Exception:
         # Corrupt bytes, password-protected PDF, pdfium load failure, Pillow encode error —
-        # all collapse to "no thumbnail". Intentionally broad: this must never propagate.
+        # all collapse to "no preview". Intentionally broad: this must never propagate.
         return None
 
 
-def _render_pdf_page1(data: bytes) -> bytes | None:
+def render_page1_png(data: bytes, ext: str) -> bytes | None:
+    """Page-1 preview (ADR 0015). Back-compat wrapper over render_page_png."""
+    return render_page_png(data, ext, 1)
+
+
+def _render_pdf_page(data: bytes, page: int) -> bytes | None:
     import pypdfium2 as pdfium
     from PIL import Image
 
-    pdf = pdfium.PdfDocument(data)  # raises on encrypted/corrupt — caught by render_page1_png
+    pdf = pdfium.PdfDocument(data)  # raises on encrypted/corrupt — caught by render_page_png
     try:
-        if len(pdf) == 0:
+        n = len(pdf)
+        if n == 0:
             return None
-        bitmap = pdf[0].render(scale=_RENDER_SCALE)
+        idx = max(0, min(n - 1, int(page or 1) - 1))   # 1-indexed page → clamped 0-indexed
+        bitmap = pdf[idx].render(scale=_RENDER_SCALE)
         img = bitmap.to_pil().convert("RGB")
     finally:
         pdf.close()

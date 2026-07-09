@@ -389,6 +389,13 @@ export const getFileThumbnail = (scanId, file) => (SIM
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/thumbnail`, { headers: headers() })
       .then(r => (r.ok ? r.blob() : null))
       .catch(() => null))
+// Rendered PNG of page N — the "locate in document" evidence primitive. The backend clamps
+// `page` to the document's range; null (→ placeholder) for non-PDF, SIM, or any failure.
+export const getFilePage = (scanId, file, page = 1) => (SIM || !scanId
+  ? sim(null)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/page/${page}`, { headers: headers() })
+      .then(r => (r.ok ? r.blob() : null))
+      .catch(() => null))
 
 export const uploadToDrive = (scanId, file, blob, contentType) => {
   if (SIM) return sim({ url: 'https://drive.google.com/file/d/sim/view', file_id: 'sim' })
