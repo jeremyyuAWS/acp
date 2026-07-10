@@ -20,34 +20,35 @@ const ev = (n) => Array.from({ length: n }, (_, i) => ({ locator: `ppt/slides/sl
 const markup = (item) => renderToStaticMarkup(createElement(EvidenceCard, { item, onAct: () => {} }))
 
 describe('EvidenceCard — the images awaiting a description', () => {
-  it('renders one thumbnail per deferred image, not just the first', () => {
+  // A deferred row's images now each get their own editor (ProposalEditors driven by evidence),
+  // not a shared picker — the only way to record one description per image.
+  it('renders one editable row per deferred image, not just the first', () => {
     const html = markup({ ...base, evidence: ev(19) })
-    expect(html.split(`src="${PNG}"`).length - 1).toBe(19)
+    expect(html.split('evcard-multi-row').length - 1).toBe(19)
   })
 
-  it('says how many images need describing when there is more than one', () => {
-    expect(markup({ ...base, evidence: ev(19) })).toContain('19 images need a description')
+  it('gives every deferred image its own description box', () => {
+    const html = markup({ ...base, evidence: ev(19) })
+    expect((html.match(/<textarea/g) || [])).toHaveLength(19)
   })
 
-  it('uses the singular when a single image is deferred', () => {
-    const html = markup({ ...base, evidence: ev(1), finding_count: 1 })
-    expect(html).toContain('The image needing a description')
-    expect(html).not.toContain('images need a description')
-  })
-
-  it('renders no strip at all when the row carries no evidence', () => {
-    expect(markup({ ...base })).not.toContain('evcard-evidence-strip')
-  })
-
-  it('marks exactly one thumbnail as picked — the one Draft with AI will describe', () => {
+  it('offers Draft with AI on every deferred image, so any can be described from scratch', () => {
     const html = markup({ ...base, evidence: ev(5) })
-    expect(html.split('aria-pressed="true"').length - 1).toBe(1)
+    expect((html.match(/Draft with AI/g) || [])).toHaveLength(5)
   })
 
-  it('gives every thumbnail an alt naming which image it is', () => {
-    const html = markup({ ...base, evidence: ev(3) })
-    expect(html).toContain('Image 1 of 3 in deck.pptx')
-    expect(html).toContain('Image 3 of 3 in deck.pptx')
+  it('no picker survives — nothing is aria-pressed', () => {
+    const html = markup({ ...base, evidence: ev(5) })
+    expect(html).not.toContain('aria-pressed')
+    expect(html).not.toContain('evcard-evidence-strip')
+  })
+
+  it('names each image by its locator, so the reviewer knows which one they are describing', () => {
+    const evd = [{ locator: 'ppt/slides/slide1.xml#Pic1', thumb: PNG },
+                 { locator: 'ppt/slides/slide3.xml#Pic4', thumb: PNG }]
+    const html = markup({ ...base, evidence: evd })
+    expect(html).toContain('ppt/slides/slide1.xml#Pic1')
+    expect(html).toContain('ppt/slides/slide3.xml#Pic4')
   })
 
   it('drops a thumbnail whose data URL is not a safe image', () => {

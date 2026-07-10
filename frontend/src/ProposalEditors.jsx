@@ -13,20 +13,29 @@ import { thumbAlt, formatProposedValue } from './reviewCard.js'
 // Shared by the Remediate drawer and the Review Center's evidence card: the array index IS the
 // contract with the server (approved_values[i] is proposal i), so the two screens must never
 // render a different order.
-export default function ProposalEditors({ proposals, values, onChange, file, sc }) {
+// onDraft(i), when given, adds a per-row "Draft with AI" button — for a DEFERRED row whose images
+// have no draft yet (the reviewer writes from scratch). Omitted for proposals, which arrive with a
+// draft already in the box, so the ReviewDrawer caller is unaffected.
+export default function ProposalEditors({ proposals, values, onChange, file, sc, onDraft, draftingIdx = null }) {
   if (!proposals?.length) return null
   const many = proposals.length > 1
+  const undrafted = !!onDraft   // an evidence row: no drafts, so the header must not claim any
   return (
     <div className="evcard-multi">
       <span className="muted" style={{ fontSize: 12 }}>
-        {many
-          ? `${proposals.length} findings — each gets its own value. Edit any before approving; approving accepts what is shown.`
-          : 'Review the value before approving; approving accepts what is shown.'}
+        {undrafted
+          ? (many
+              ? `${proposals.length} images — each needs its own description. Draft one with AI, or type it.`
+              : 'Describe the image — draft it with AI, or type what a screen reader should announce.')
+          : (many
+              ? `${proposals.length} findings — each gets its own value. Edit any before approving; approving accepts what is shown.`
+              : 'Review the value before approving; approving accepts what is shown.')}
       </span>
       {proposals.map((p, i) => {
         const after = formatProposedValue(sc, values[i] ?? '')
+        const filled = (values[i] ?? '').trim()
         return (
-          <div className="evcard-multi-row" key={p?.locator || i}>
+          <div className={`evcard-multi-row${undrafted && filled ? ' is-described' : ''}`} key={p?.locator || i}>
             {p?.thumb && (
               <ProposalThumb thumb={p.thumb} size={56} alt={thumbAlt(p?.kind, file)}
                              className="evcard-multi-thumb" />
@@ -41,13 +50,23 @@ export default function ProposalEditors({ proposals, values, onChange, file, sc 
                 </div>
               )}
               <label style={{ display: 'block' }}>
-                <span className="muted" style={{ fontSize: 11 }}>
+                <span className="muted evcard-multi-loc" style={{ fontSize: 11 }}>
                   {p?.locator ? `becomes · ${p.locator}` : 'becomes'}
+                  {undrafted && filled ? <span className="evcard-imagerow-tick" aria-hidden="true"> ✓</span> : null}
                 </span>
                 <textarea className="evcard-rec-input" rows={2} value={values[i] ?? ''}
                           placeholder="Type the value that should be written…"
                           onChange={(e) => onChange(i, e.target.value)} />
               </label>
+              {/* Draft THIS image with the vision model. The model sees one image, so the button
+                  lives on the image's own row — there is no "picked" image to get wrong. */}
+              {onDraft && (
+                <button type="button" className="evcard-draft-btn" disabled={draftingIdx != null}
+                        title="Ask the local model to describe this image — you still approve it"
+                        onClick={() => onDraft(i)}>
+                  {draftingIdx === i ? 'Drafting…' : '✨ Draft with AI'}
+                </button>
+              )}
               {/* The raw value can be opaque ("es"). Show the markup it becomes, so the
                   reviewer approves a change they understand. */}
               {after && after !== (values[i] ?? '') && (
