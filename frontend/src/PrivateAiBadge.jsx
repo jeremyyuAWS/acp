@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getAiStatus } from './api.js'
+import { SIM } from './sim.js'
 
 // A trust badge for the security story: ACP's AI runs on a self-hosted local model
 // (Ollama) — no document content ever leaves the deployment for a third-party AI. We
@@ -14,7 +15,9 @@ export default function PrivateAiBadge({ aiEnabled }) {
     return () => { alive = false }
   }, [])
 
-  if (!aiEnabled || !st || st.backend !== 'ollama') return null
+  // Defence in depth: the SIM/Netlify build reaches Anthropic + OpenAI through its serverless
+  // functions, so this promise can never be true there, whatever /ai/status happens to say.
+  if (SIM || !aiEnabled || !st || st.backend !== 'ollama') return null
   return (
     <span
       className="privai"

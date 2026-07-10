@@ -1,9 +1,15 @@
-// Client bridge to the real AI remediation endpoints. The browser never sees the
-// NOTE: every function below POSTs to /.netlify/functions/*, which exist only in the Netlify
-// prototype. The ACP deployment has no such endpoints — these calls 404 and fall back. They
-// do NOT run in production, and ACP's real AI path is the local Ollama model (api/ai.py).
-// degrades gracefully to null so the demo still works with no key (local dev), exactly
-// like the chat path.
+// Client bridge to the serverless AI endpoints in frontend/netlify/functions/.
+//
+// These are REAL and they DO run — on the Netlify deployment of this SPA, where alt-text,
+// ai-fix and insights POST to api.anthropic.com and transcribe POSTs to api.openai.com
+// (keys supplied via Netlify env). The browser never sees a key.
+//
+// On the Azure ACP deployment the Dockerfile never ships netlify/, so /.netlify/functions/*
+// 404s and every call here degrades to null; ACP's own AI is the local Ollama model in
+// api/ai.py. Same SPA, two very different AI backends.
+//
+// Therefore NOTHING here may be labelled with a hardcoded model name. Each function returns
+// the model that actually answered, and the UI renders that — see aiModel.js.
 
 // Alt text for an image (WCAG 1.1.1) — Netlify-prototype path only; see the note above.
 export async function generateAltText({ data, mediaType, hint } = {}) {
@@ -16,7 +22,8 @@ export async function generateAltText({ data, mediaType, hint } = {}) {
     })
     if (!res.ok) return null
     const j = await res.json()
-    return { alt: j?.alt || null, text: j?.text || null }
+    // `model` is whatever answered (e.g. claude-opus-4-8). The badge renders it verbatim.
+    return { alt: j?.alt || null, text: j?.text || null, model: j?.model || null }
   } catch { return null }
 }
 
@@ -48,7 +55,7 @@ export async function generateCaptions({ audio, mediaType, audioUrl } = {}) {
     })
     if (!res.ok) return null
     const j = await res.json()
-    return j?.vtt || null
+    return j?.vtt ? { vtt: j.vtt, model: j?.model || null } : null
   } catch { return null }
 }
 
@@ -63,7 +70,8 @@ export async function generateInsights({ file, score, finalScore, engine, findin
     })
     if (!res.ok) return null
     const j = await res.json()
-    return j?.insight || null
+    // provider marks this as a THIRD-PARTY call, so the report never claims otherwise.
+    return j?.insight ? { ...j.insight, model: j?.model || null, provider: 'anthropic' } : null
   } catch { return null }
 }
 

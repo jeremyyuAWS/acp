@@ -72,3 +72,49 @@ describe('the certification PDF attributes the real model', () => {
     expect(read('pdfReport.js')).toMatch(/No content was sent to a third-party AI service/)
   })
 })
+
+// The same SPA deploys twice: to Azure (VITE_SIM=false; no netlify/ shipped, so
+// /.netlify/functions/* 404 and the real AI is server-side Ollama) and to Netlify
+// (SIM; frontend/netlify/functions POST to api.anthropic.com and api.openai.com).
+// A hardcoded label is therefore wrong on one of them, whichever way it is written.
+describe('the two deployments are labelled by what actually answered', () => {
+  it('SIM must not fabricate a local backend', () => {
+    // getAiStatus's SIM branch returned backend:'ollama'. PrivateAiBadge renders its
+    // "no OpenAI/Anthropic, no external tokens" promise off exactly that field — so the
+    // simulated value printed a false privacy guarantee on the deployment that DOES call out.
+    const api = read('api.js')
+    const simBranch = api.slice(api.indexOf('export const getAiStatus'), api.indexOf('export const getAiStatus') + 400)
+    expect(simBranch).not.toMatch(/backend: 'ollama'/)
+    expect(simBranch).toMatch(/backend: 'netlify-functions'/)
+  })
+
+  it('the privacy badge cannot render on the SIM build at all', () => {
+    const badge = read('PrivateAiBadge.jsx')
+    expect(badge).toMatch(/if \(SIM \|\|/)          // structural, not just a status check
+    expect(badge).toMatch(/from '\.\/sim\.js'/)
+  })
+
+  it('UNKNOWN_MODEL claims neither a vendor nor a location', () => {
+    expect(UNKNOWN_MODEL).not.toMatch(/local|on-prem|self-hosted/i)
+    expect(UNKNOWN_MODEL).not.toMatch(/claude|gpt|anthropic|openai/i)
+  })
+
+  it('every serverless function reports the model it used', () => {
+    const dir = join(here, '..', 'netlify', 'functions')
+    for (const f of ['alt-text.mjs', 'ai-fix.mjs', 'insights.mjs', 'transcribe.mjs']) {
+      expect(readFileSync(join(dir, f), 'utf8'), f).toMatch(/model:/)
+    }
+  })
+
+  it('aiRemediate passes the model through rather than hardcoding one', () => {
+    const src = read('aiRemediate.js')
+    expect(src).toMatch(/model: j\?\.model \|\| null/)
+    expect(src).toMatch(/provider: 'anthropic'/)   // marks a third-party call for the report
+  })
+
+  it('the PDF only promises "no third party" when nothing external answered', () => {
+    const pdf = read('pdfReport.js')
+    expect(pdf).toMatch(/ins\.provider \? ` via \$\{ins\.provider\}\.`/)
+    expect(pdf).toMatch(/No content was sent to a third-party AI service/)
+  })
+})

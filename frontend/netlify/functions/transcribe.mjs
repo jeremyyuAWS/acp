@@ -29,7 +29,7 @@ export async function handler(event) {
       method: 'POST', headers: { authorization: `Bearer ${key}` }, body: fd,
     })
     const vtt = await res.text()
-    return { statusCode: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ vtt: res.ok && /WEBVTT/.test(vtt) ? vtt : null }) }
+    return { statusCode: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ vtt: res.ok && /WEBVTT/.test(vtt) ? vtt : null, model: process.env.OPENAI_TRANSCRIBE_MODEL || 'whisper-1' }) }
   } catch {
     return { statusCode: 200, body: JSON.stringify({ vtt: null }) }
   }

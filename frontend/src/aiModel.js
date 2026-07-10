@@ -14,9 +14,10 @@
 
 import { getAiStatus } from './api.js'
 
-// Shown when the backend hasn't answered yet, or AI is off. Names no model — because we don't
-// know one — rather than guessing a default that may not be what's deployed.
-export const UNKNOWN_MODEL = 'local model'
+// Shown when nothing has told us which model answered. Names no model AND claims no locality:
+// this same SPA also deploys to Netlify, where the AI is Anthropic/OpenAI via serverless
+// functions. Guessing either a default id or "local" would be a claim we cannot support.
+export const UNKNOWN_MODEL = 'AI model'
 
 export function modelLabel(status, kind = 'vision') {
   const id = kind === 'vision' ? status?.vision_model : status?.model

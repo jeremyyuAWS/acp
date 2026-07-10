@@ -364,7 +364,11 @@ export async function exportDocumentReport(d) {
     p.text(ins.summary)
     if (ins.impact) p.text(`User impact — ${ins.impact}`, { size: 9.5, gapAfter: 7 })
     if (ins.recommendation) p.text(`Recommendation — ${ins.recommendation}`, { size: 9.5, color: PLUM, gapAfter: 6 })
-    p.text(`Executive summary generated from this document’s findings by the local model${ins.model ? ` (${ins.model})` : ''}. No content was sent to a third-party AI service.`, { size: 8, color: MUTED, lh: 11 })
+    // `provider` is set only when a THIRD-PARTY service answered (aiRemediate.generateInsights).
+    // The no-third-party sentence is printed only when nothing external was called.
+    p.text(`Executive summary generated from this document’s findings by ${ins.model || 'the configured model'}`
+           + (ins.provider ? ` via ${ins.provider}.` : '. No content was sent to a third-party AI service.'),
+           { size: 8, color: MUTED, lh: 11 })
   } else {
     p.text(`As received, ${d.file} scored ${before} / 100 against WCAG 2.1 AA with ${findings.length} finding(s). After automated remediation and human review it was certified at ${after} / 100 and re-validated. This report documents the assessment and the fixes applied for audit and evidence.`)
   }

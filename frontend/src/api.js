@@ -418,8 +418,14 @@ export const explainFinding = (scanId, file, ruleId) => (SIM
   ? sim({ why: 'Screen readers cannot announce this element — blind users get no information about it.', fix: 'Add a descriptive alt attribute: <img src="logo.png" alt="Company logo">', model: 'llama3.2 (simulated)' })
   : fetch(`${BASE}/ai/explain?scan_id=${encodeURIComponent(scanId)}&file=${encodeURIComponent(file)}&rule_id=${encodeURIComponent(ruleId)}`, { headers: headers() }).then(j))
 
+// SIM is the Netlify/offline build. Its AI, when keys are configured, is the serverless
+// functions in frontend/netlify/functions — which POST to api.anthropic.com and
+// api.openai.com. It is NOT a local backend, and must never claim to be: PrivateAiBadge
+// renders its "no OpenAI/Anthropic, no external tokens" promise off `backend === 'ollama'`,
+// so a fabricated 'ollama' here printed a false privacy guarantee on the one deployment
+// that actually sends document content to a third party.
 export const getAiStatus = () => (SIM
-  ? sim({ available: true, base_url: 'http://localhost:11434', model: 'llama3.1:8b', ai_enabled: true, backend: 'ollama' })
+  ? sim({ available: false, base_url: null, model: null, vision_model: null, ai_enabled: true, backend: 'netlify-functions' })
   : fetch(`${BASE}/ai/status`, { headers: headers() }).then(j))
 
 // ── Disposition policies (ADR 0003 Phase 3) — admin-only lifecycle ────────────

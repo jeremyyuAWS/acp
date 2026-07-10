@@ -188,23 +188,26 @@ function HistoryDetail({ viewing, onClose }) {
   )
 }
 
-// Audio captions/transcript result — real WebVTT from Whisper, with a player + download.
+// Audio captions/transcript result — WebVTT, with a player + download. `captions` is
+// { vtt, model }: the model is whatever actually transcribed (the Netlify deployment posts to
+// OpenAI; the Azure deployment has no transcription endpoint at all and never reaches here).
 function CaptionsPanel({ blob, captions }) {
+  const vtt = captions?.vtt || null
   const url = useMemo(() => (blob ? URL.createObjectURL(blob) : null), [blob])
-  const vttUrl = useMemo(() => (captions ? URL.createObjectURL(new Blob([captions], { type: 'text/vtt' })) : null), [captions])
+  const vttUrl = useMemo(() => (vtt ? URL.createObjectURL(new Blob([vtt], { type: 'text/vtt' })) : null), [vtt])
   useEffect(() => () => { if (url) URL.revokeObjectURL(url); if (vttUrl) URL.revokeObjectURL(vttUrl) }, [url, vttUrl])
-  const lines = (captions || '').split('\n').filter((l) => l.trim() && !/^WEBVTT/.test(l) && !l.includes('-->') && !/^\d+$/.test(l.trim()))
+  const lines = (vtt || '').split('\n').filter((l) => l.trim() && !/^WEBVTT/.test(l) && !l.includes('-->') && !/^\d+$/.test(l.trim()))
   const dl = () => { if (!vttUrl) return; const a = document.createElement('a'); a.href = vttUrl; a.download = 'captions.vtt'; document.body.appendChild(a); a.click(); a.remove() }
   return (
     <div className="capwrap">
-      <div className="bahd"><b>Captions &amp; transcript</b>{captions ? <span className="aialtbadge" style={{ marginLeft: 8 }}>⚡ captions</span> : <span className="muted" style={{ marginLeft: 8 }}>· preparing…</span>}</div>
+      <div className="bahd"><b>Captions &amp; transcript</b>{captions ? <span className="aialtbadge" style={{ marginLeft: 8 }}>⚡ {captions.model || 'captions'}</span> : <span className="muted" style={{ marginLeft: 8 }}>· preparing…</span>}</div>
       {url && (/^video\//.test(blob?.type || '')
         ? <video controls src={url} style={{ width: '100%', maxHeight: 320, marginTop: 10, borderRadius: 8, background: '#000' }}>{vttUrl && <track default kind="captions" srcLang="en" label="English" src={vttUrl} />}</video>
         : <audio controls src={url} style={{ width: '100%', marginTop: 10 }}>{vttUrl && <track default kind="captions" srcLang="en" label="English" src={vttUrl} />}</audio>)}
-      {captions ? (<>
+      {vtt ? (<>
         <div className="captranscript">{lines.map((l, i) => <p key={i}>{l}</p>)}</div>
         <button className="ghost small" onClick={dl} style={{ marginTop: 9 }}>⤓ Download captions (.vtt)</button>
-      </>) : <p className="muted" style={{ marginTop: 9, fontSize: 12 }}>ACP runs no transcription pipeline — missing captions are detected and routed to a human reviewer (1.2.2).</p>}
+      </>) : <p className="muted" style={{ marginTop: 9, fontSize: 12 }}>No captions were generated here — the missing-caption finding is detected and routed to a human reviewer (1.2.2).</p>}
     </div>
   )
 }
@@ -217,7 +220,7 @@ function ImagePanel({ blob, result, visionModel = UNKNOWN_MODEL }) {
   const text = result?.text && result.text.trim()
   return (
     <div className="capwrap">
-      <div className="bahd"><b>Image · alt text &amp; text extraction</b>{result ? <span className="aialtbadge" style={{ marginLeft: 8 }}>⚡ {visionModel}</span> : <span className="muted" style={{ marginLeft: 8 }}>· describing the image…</span>}</div>
+      <div className="bahd"><b>Image · alt text &amp; text extraction</b>{result ? <span className="aialtbadge" style={{ marginLeft: 8 }}>⚡ {result.model || visionModel}</span> : <span className="muted" style={{ marginLeft: 8 }}>· describing the image…</span>}</div>
       {url && <img src={url} alt={result?.alt || ''} style={{ maxWidth: '100%', maxHeight: 280, borderRadius: 8, marginTop: 10, border: '1px solid var(--line)' }} />}
       {result ? (<>
         <div className="aialtcallout" style={{ marginTop: 10 }}>
@@ -295,7 +298,7 @@ export default function Upload({ onCertified, me }) {
   useEffect(() => {
     if (!audioBlob) { setCaptions(null); return }
     let live = true
-    ;(async () => { const b64 = await blobToBase64(audioBlob); const vtt = await generateCaptions({ audio: b64, mediaType: audioBlob.type || 'audio/mpeg' }); if (live) setCaptions(vtt) })()
+    ;(async () => { const b64 = await blobToBase64(audioBlob); const r = await generateCaptions({ audio: b64, mediaType: audioBlob.type || 'audio/mpeg' }); if (live && r) setCaptions(r) })()
     return () => { live = false }
   }, [audioBlob])
 
