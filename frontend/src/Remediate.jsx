@@ -5,13 +5,16 @@ import FileDrawer, { REC_STYLE, fmtEffort, EFFORT_BASIS, SOURCE_URL } from './Fi
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
-import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs } from './api.js'
+import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics } from './api.js'
 import { SIM } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
 import QueuePanel from './QueuePanel.jsx'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
 import { confidenceForFinding, confClass } from './confidence.js'
 import { metaFor } from './hitlMeta.js'
+import { firstProposed, firstThumb, firstRationale, firstSource } from './reviewCard.js'
+import ProposalThumb from './ProposalThumb.jsx'
+import { measuredReviewTime, REVIEW_TIME_BASIS } from './reviewerTime.js'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
 // (what to fix, prioritized, accept/reject/modify), the HITL queue, and self-remediation.
@@ -24,7 +27,6 @@ import { metaFor } from './hitlMeta.js'
 const REM_ACTIONS = REMEDIATION_ACTIONS
 const ACTIONS = ['auto', 'assisted', 'review', 'archive', 'keep', 'manual']
 const ETA_OVERRIDE = { archive: 2, keep: 0, manual: 35, review: 10 }
-const hrs = (m) => m >= 90 ? `${(m / 60).toFixed(1)} hrs` : `${Math.round(m)} min`
 const ACTION_DESC = {
   auto: 'The agent fixes these mechanically — alt text, headings, language, titles — then re-validates. No human needed.',
   assisted: 'AI proposes the fix; a human approves before publish. For critical, sensitive, contrast/link, or media (captions) findings.',
@@ -93,7 +95,19 @@ function dbItemToUi(it, files) {
     source: fileRec.sourceName,
     rule: `WCAG ${sc}${it.rule_name ? ' — ' + it.rule_name : ITEM_NAME[sc] ? ' — ' + ITEM_NAME[sc] : ''}`,
     before: ba.before(issue.detail, fileRec),
-    after: it.approved_value || ba.after(fileRec, issue),
+    // The AI's actual draft, from hitl_queue.proposals — what the vision model wrote for THIS
+    // image. `approved_value` only ever holds what a REVIEWER typed back (nothing writes it
+    // server-side), so the old `it.approved_value || template` fell through to the template on
+    // every item: "AI-generated alt text added — confirm or reword" rendered identically for
+    // every image in every document, whether or not a model had said anything.
+    after: firstProposed(it) || it.approved_value || ba.after(fileRec, issue),
+    // The offending image itself + why the model said what it said. Null when no proposal.
+    thumb: firstThumb(it),
+    rationale: firstRationale(it),
+    proposalSource: firstSource(it),
+    // Distinguishes a real model draft from the canned fallback, so the UI never labels a
+    // template as a suggestion the AI made.
+    hasProposal: !!firstProposed(it),
   }
 }
 
@@ -158,19 +172,38 @@ function ProgressRail({ steps }) {
 // "Why am I reviewing this?" (§3) — the honest evidence a compliance officer needs to act:
 // the confidence.js level + its concrete basis (never a fabricated %), the plain-language
 // escalation reason, and the value the AI is suggesting they approve.
-function WhyReview({ sc, suggested }) {
+function WhyReview({ sc, suggested, thumb, rationale, proposalSource, hasProposal, file }) {
   const conf = confidenceForFinding({ sc })
   const reason = metaFor({ rule_id: sc }).reason
   return (
     <div className="whyreview">
       <div className="whyreview-hd">Why am I reviewing this?</div>
-      <div className="whyreview-row">
-        <span className="muted">AI confidence</span>
-        <span className={confClass(conf.level)}>{conf.level.label}</span>
-        <span className="muted">— {conf.basis}</span>
+      <div className="whyreview-body" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+        {/* The actual image the reviewer must judge. A deck cannot be rasterized, so this
+            base64 thumb — captured when the vision model looked at it — is the only picture
+            we can ever show. Renders nothing when no proposal carried one. */}
+        <ProposalThumb thumb={thumb} alt={`Image needing alt text in ${file || 'the document'}`} size={84} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="whyreview-row">
+            <span className="muted">AI confidence</span>
+            <span className={confClass(conf.level)}>{conf.level.label}</span>
+            <span className="muted">— {conf.basis}</span>
+          </div>
+          <div className="whyreview-row"><span className="muted">Reason</span><span>{reason}</span></div>
+          {suggested && (
+            <div className="whyreview-row">
+              <span className="muted">{hasProposal ? 'AI suggested value' : 'Next step'}</span>
+              <span className="whyreview-sugg">{suggested}</span>
+            </div>
+          )}
+          {rationale && (
+            <div className="whyreview-row">
+              <span className="muted">Why this draft</span>
+              <span>{rationale}{proposalSource ? ` · ${proposalSource}` : ''}</span>
+            </div>
+          )}
+        </div>
       </div>
-      <div className="whyreview-row"><span className="muted">Reason</span><span>{reason}</span></div>
-      {suggested && <div className="whyreview-row"><span className="muted">Suggested value</span><span className="whyreview-sugg">{suggested}</span></div>}
     </div>
   )
 }
@@ -191,7 +224,8 @@ function ReviewItemCard({ item, onOpen, onApprove, onSelf, onReject, disabled })
         </div>
         <AutoBadge kind={badgeKind} />
       </div>
-      <WhyReview sc={sc} suggested={item.after} />
+      <WhyReview sc={sc} suggested={item.after} thumb={item.thumb} rationale={item.rationale}
+                 proposalSource={item.proposalSource} hasProposal={item.hasProposal} file={item.file} />
       <div className="reviewcard-actions">
         <button className="qbtn approve" disabled={disabled} onClick={onApprove}>✓ Approve</button>
         <button className="qbtn self" disabled={disabled} onClick={onSelf} title="Take ownership — fix it yourself, then re-scan to confirm">✋ I’ll fix it</button>
@@ -538,7 +572,19 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const fixedCount = totalFixes(fixSource)
   const fixesByFile = {}; fixSource.forEach((r) => { fixesByFile[r.file] = (fixesByFile[r.file] || 0) + 1 })
   const reviewByFile = {}; queue.forEach((q) => { reviewByFile[q.file] = (reviewByFile[q.file] || 0) + 1 })
-  const savedHrs = plan && plan.savedMin ? hrs(plan.savedMin) : null
+  // Reviewer time, MEASURED (hitl_events.review_ms). Replaces "est. savings", which was one
+  // invented constant (35 min/finding by hand) minus another (~1 min/finding automated).
+  // A saving needs a counterfactual nobody ever timed; an average review time is a fact.
+  const [reviewStats, setReviewStats] = useState(null)
+  useEffect(() => {
+    if (!runId || SIM) { setReviewStats(null); return }
+    let live = true
+    const pull = () => getHitlAnalytics(runId).then((a) => { if (live) setReviewStats(a) }).catch(() => {})
+    pull()
+    window.addEventListener('acp:hitl-changed', pull)
+    return () => { live = false; window.removeEventListener('acp:hitl-changed', pull) }
+  }, [runId])
+  const measured = measuredReviewTime(reviewStats)
 
   // Verification state — tied to the real re-scan/job state (§8), never "0 → 0".
   const verifyPct = remProg ? Math.round((remProg.done / Math.max(1, remProg.total)) * 100) : 0
@@ -609,7 +655,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             <b>{files.length}</b> document{files.length === 1 ? '' : 's'} processed
             {fixedCount > 0 && <> · <b className="rh-fixed">{fixedCount}</b> issue{fixedCount === 1 ? '' : 's'} fixed automatically</>}
             {queue.length > 0 && <> · <b className="rh-review">{queue.length}</b> need your review</>}
-            {savedHrs && <> · est. savings <b>{savedHrs}</b></>}
+            {measured && (
+              <span title={REVIEW_TIME_BASIS}> · avg review <b className="rh-review">{measured.avg}</b>
+                <span className="muted"> over {measured.reviewed} decision{measured.reviewed === 1 ? '' : 's'}</span>
+              </span>
+            )}
           </div>
           {files.length > 0 && (
             <div className={`rem-risk risk-${risk.level}`}><b>Business risk:</b> {risk.text}</div>
@@ -840,7 +890,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 <div>
                   <b>Remediation plan</b>
                   <div className="muted" style={{ marginTop: 2 }}>
-                    ≈ <b style={{ color: 'var(--ink)' }}>{hrs(plan.remediateMin)}</b> across {plan.remediableDocs} documents · <b style={{ color: '#3B6D11' }}>{plan.autoPct}% fully automatic</b> · saves ≈ <b style={{ color: '#3B6D11' }}>{hrs(plan.savedMin)}</b> vs. manual
+                    <b style={{ color: 'var(--ink)' }} title={EFFORT_BASIS}>{fmtEffort(plan.remediateMin)}</b> across {plan.remediableDocs} documents · <b style={{ color: '#3B6D11' }}>{plan.autoPct}% fully automatic</b>
                   </div>
                 </div>
                 <div className="plandec">
@@ -863,7 +913,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                     <div className="plancard" key={b.action} style={{ background: bg }} tabIndex={0} aria-label={`${label}: ${ACTION_DESC[b.action]}`}>
                       <div className="plancardtop" style={{ color: fg }}><span>{icon}</span><b>{b.n}</b></div>
                       <div className="plancardlbl" style={{ color: fg }}>{label}</div>
-                      <div className="muted plancardeta">{b.action === 'manual' ? `~${hrs(b.min)} manual` : `~${hrs(b.min)}`}</div>
+                      <div className="muted plancardeta" title={EFFORT_BASIS}>{b.action === 'manual' ? `${fmtEffort(b.min)} manual` : fmtEffort(b.min)}</div>
                       <div className="plantip" role="tooltip"><b style={{ color: fg }}>{icon} {label}</b>{ACTION_DESC[b.action]}</div>
                     </div>
                   )

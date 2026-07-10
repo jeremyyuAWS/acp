@@ -104,10 +104,11 @@ def folders(request: Request, parent: str = "root"):
 
 @router.post("/drive/upload")
 async def drive_upload(request: Request):
-    """Upload a remediated file to Google Drive → Remediated/ folder.
+    """Upload a remediated file to the configured Drive mirror folder.
     Body: multipart/form-data with fields: scan_id, file (filename), blob (file bytes)."""
     from fastapi import UploadFile
     import io
+    import handlers
     from googleapiclient.http import MediaIoBaseUpload
 
     form = await request.form()
@@ -130,16 +131,12 @@ async def drive_upload(request: Request):
         creds = Credentials(token=token, scopes=["https://www.googleapis.com/auth/drive.file"])
         svc = build("drive", "v3", credentials=creds, cache_discovery=False)
 
-        # Find or create the Remediated/ folder
-        q = "name='Remediated' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        folders = svc.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
-        if folders:
-            folder_id = folders[0]["id"]
-        else:
-            folder_id = svc.files().create(
-                body={"name": "Remediated", "mimeType": "application/vnd.google-apps.folder"},
-                fields="id"
-            ).execute()["id"]
+        # The folder name is admin-configurable (settings.drive_mirror_folder). This route used
+        # to hardcode 'Remediated', so an operator who renamed the mirror got their per-file
+        # uploads scattered into a folder the rest of the system does not read. Reuse the one
+        # find-or-create: it honours the setting, escapes quotes in the name, and picks the
+        # OLDEST folder when legacy duplicates exist rather than an arbitrary one.
+        folder_id = handlers.ensure_remediated_folder(svc)
 
         media = MediaIoBaseUpload(io.BytesIO(content), mimetype=content_type, resumable=False)
         result = svc.files().create(

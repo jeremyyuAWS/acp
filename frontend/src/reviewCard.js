@@ -59,6 +59,16 @@ export function reviewTelemetry({ editable, status, value, aiDraft, elapsedMs })
 export const proposalsOf = (item) => (Array.isArray(item?.proposals) ? item.proposals : [])
 export const firstProposed = (item) => proposalsOf(item)[0]?.proposed_value ?? null
 
+// The base64 thumbnail of the OFFENDING IMAGE, captured server-side when the vision model
+// looked at it (remediate_office._vision_alt passes thumb=_thumb_b64(img)). This is not the
+// document's page-1 render — a PPTX cannot be rasterized at all (api/render.py is PDF-only),
+// so for a deck this is the only picture a reviewer can be shown.
+export const firstThumb = (item) => proposalsOf(item)[0]?.thumb ?? null
+
+// The rationale + the model that produced the draft, so the reviewer sees WHY, not just WHAT.
+export const firstRationale = (item) => proposalsOf(item)[0]?.rationale ?? null
+export const firstSource = (item) => proposalsOf(item)[0]?.source ?? null
+
 export function proposalMeta(item) {
   const list = proposalsOf(item)
   if (!list.length) return null
@@ -99,10 +109,27 @@ export function buildEvidenceCard(item, diffs = []) {
     confidence: confidenceForFinding({ sc, proposal }),
     // Real before→after for THIS criterion (nothing illustrative).
     diffs: (diffs || []).filter((d) => scOf(d.rule_id) === sc),
-    impact: { before: 'Fail', after: 'Pass' },
+    // Does approving this item actually resolve the criterion?
+    //
+    // JUDGEMENT finding (a contrast ratio accepted, a link text deemed adequate): yes. The
+    // sign-off IS the resolution — a re-scan can never clear it — so the backend
+    // (store.mark_file_compliant_if_reviewed) certifies the file on approval.
+    //
+    // VALUE-FIX finding (alt text, a title, a label): NO. Approving stores approved_value as
+    // compliance evidence and stops there; no remediator consumes it and no job is enqueued
+    // (api/routes/hitl.py). The document is never modified, so the criterion still fails.
+    // This was a hardcoded `{ before: 'Fail', after: 'Pass' }`, which promised a Pass the
+    // backend now refuses to grant — and which certified a PPTX 100/100 while its ten images
+    // were still undescribed.
+    certifiesOnApprove: !isValueFix(sc),
+    impact: { before: 'Fail', after: isValueFix(sc) ? 'Fail' : 'Pass' },
     findingCount: item?.finding_count || 1,
     // Where in the document to look — null when the analyser attributed nothing.
     location: locationLabel(item),
     page: item?.page ?? null,
+    // The actual image the reviewer must judge, and the evidence behind the draft.
+    thumb: firstThumb(item),
+    rationale: firstRationale(item),
+    proposalSource: firstSource(item),
   }
 }
