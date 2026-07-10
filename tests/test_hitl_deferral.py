@@ -26,7 +26,7 @@ def test_deferral_lands_in_queue_and_is_idempotent(store):
     items = store.list_hitl_queue(status="pending", scan_id="s1")
     assert len(items) == 1
     it = items[0]
-    assert it["rule_id"] == "1.1.1/deferred"
+    assert it["rule_id"] == "1.1.1"          # a deferral is not a separate criterion
     assert it["finding_count"] == 2
     assert "faithful alt source" in it["rule_name"]
     # retried remediation job → same (scan, file, rule) never duplicates
@@ -39,8 +39,9 @@ def test_deferral_lands_in_queue_and_is_idempotent(store):
 
 def test_verify_item_for_fully_automatic_fix(store):
     # User decision 2026-07-02: fully-automatic remediate-now runs also queue a
-    # human VERIFICATION item, under its own rule id so it never collides with
-    # a deferral for the same file.
+    # human VERIFICATION item. 'auto/verify' is a pseudo-rule ("an automatic fix was
+    # applied, please eyeball it"), NOT a WCAG criterion — so unlike '1.1.1/deferred'
+    # it keeps a row of its own and never merges into 1.1.1.
     a = store.queue_hitl_deferral("s3", "auto.pdf", "Automatic fix applied — verify the result", 1,
                                   rule_id="auto/verify")
     assert a
@@ -48,15 +49,16 @@ def test_verify_item_for_fully_automatic_fix(store):
     b = store.queue_hitl_deferral("s3", "auto.pdf", "2 image(s) lack a faithful alt source", 2)
     assert b                                       # distinct rule ids coexist per file
     ids = {i["rule_id"] for i in store.list_hitl_queue(scan_id="s3")}
-    assert ids == {"auto/verify", "1.1.1/deferred"}
+    assert ids == {"auto/verify", "1.1.1"}
 
 
-def test_deferral_does_not_collide_with_ai_assisted_pull(store):
-    # A real 1.1.1 ai-assisted item and a deferral for the same file coexist —
-    # distinct rule ids keep queue_hitl_items' dedupe from swallowing either.
+def test_a_deferral_occupies_the_criterion_row_not_a_second_one(store):
+    # A deferral and an ai-assisted 1.1.1 item are the SAME criterion for the same file.
+    # They used to sit in two rows, both rendering as "WCAG 1.1.1", and the one a reviewer
+    # opened was not necessarily the one holding the AI proposals.
     store.queue_hitl_deferral("s2", "doc.docx", "1 image(s) lack a faithful alt source", 1)
     ids = {i["rule_id"] for i in store.list_hitl_queue(scan_id="s2")}
-    assert ids == {"1.1.1/deferred"}
+    assert ids == {"1.1.1"}
 
 
 def test_no_commercial_llm_surface():

@@ -298,7 +298,11 @@ def _remediate_file(payload: dict, job: dict) -> None:
                         except ValueError:
                             _n = 1
                         try:
-                            core.store.queue_hitl_deferral(scan_id, filename, _msg, _n)
+                            # Merges into this file's 1.1.1 row when one already exists (the
+                            # proposals row queued just above). rule_name so a row created here
+                            # is headed "Non-text Content", not the raw deferral note.
+                            core.store.queue_hitl_deferral(scan_id, filename, _msg, _n,
+                                                           rule_name="Non-text Content")
                         except Exception:
                             pass
                 # Attach the deferred images to whichever 1.1.1 row now exists — the

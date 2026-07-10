@@ -28,12 +28,12 @@ def _deferral(st, sid="s1", f="deck.pptx", n=19):
     st.queue_hitl_deferral(sid, f, f"{n} image(s) lack a faithful alt source", n)
 
 
-def test_evidence_attaches_to_the_deferral_row_and_round_trips(st):
+def test_evidence_attaches_to_the_criterion_row_and_round_trips(st):
     _deferral(st)
     assert st.attach_hitl_evidence("s1", "deck.pptx", "1.1.1", _EV) is not None
     item = next(i for i in st.list_hitl_queue(scan_id="s1"))
     assert item["evidence"] == _EV                       # a real list, not a JSON string
-    assert item["rule_id"] == "1.1.1/deferred"           # matched across the suffix
+    assert item["rule_id"] == "1.1.1"                    # the deferral merged into it
 
 
 def test_evidence_does_not_masquerade_as_a_proposal(st):
