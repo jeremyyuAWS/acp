@@ -215,6 +215,24 @@ varying quality across every supported file type) lets you run a full scan with 
 Drive connection — use the "run a scan on the bundled sample corpus" link on the
 Sources screen.
 
+## Pushing to the Azure DevOps remote
+
+`origin` is Azure DevOps. Rather than storing a PAT, mint a short-lived AAD token from the
+`az` CLI on every git call:
+
+```bash
+az login
+./scripts/setup-ado-auth.sh          # idempotent; --check reports state, changes nothing
+```
+
+If `git fetch` ever reports `fatal: Authentication failed for 'https://dev.azure.com/...'`,
+**your credential is probably fine.** macOS ships `credential.helper = osxkeychain` in Xcode's
+system gitconfig; it runs before any helper you configure, and git caches each minted token
+there. The token expires in ~90 minutes and the keychain entry never does, so git goes on
+serving a stale one. `setup-ado-auth.sh` scopes an empty `helper =` reset to `dev.azure.com`
+to stop that, and clears any token already cached. GitHub and other hosts keep using the
+keychain.
+
 ## Tests
 
 ```bash
