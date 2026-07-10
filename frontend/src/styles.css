@@ -1745,6 +1745,18 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 /* Where a queued finding lives — slide/page chip on the evidence card header. */
 .evcard-loc { font-size: 11.5px; white-space: nowrap; }
 
+/* On-demand "Draft with AI" — offered only when nothing was proposed for this item. */
+.evcard-rec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.evcard-draft-btn { background: none; border: 1px solid var(--line); border-radius: 6px;
+  padding: 2px 9px; font-size: 11.5px; font-weight: 500; color: var(--plum);
+  cursor: pointer; white-space: nowrap; }
+.evcard-draft-btn:hover:not(:disabled) { background: var(--bg); }
+.evcard-draft-btn:disabled { opacity: 0.6; cursor: default; }
+.evcard-draft-msg { display: block; font-size: 11.5px; margin-top: 4px; line-height: 1.4; }
+.evcard-draft-ai { color: #3B6D11; }        /* a genuine model-authored value */
+.evcard-draft-template { color: #8A5A00; }  /* a fill-in template, NOT a description */
+.evcard-draft-error { color: #B43A2A; }
+
 /* "What you need to do" — shown when approving does NOT resolve the criterion (a value-fix
    finding: ACP records the value but never writes it into the document). */
 .evcard-todo { margin: 6px 0 8px; padding: 9px 12px; border-radius: 9px;
@@ -1752,4 +1764,3 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .evcard-todo b { font-weight: 600; }
 .evcard-todo p { margin: 4px 0 0; }
 .evcard-todo p.muted { font-size: 11.5px; }
-
