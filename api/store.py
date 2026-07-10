@@ -151,6 +151,10 @@ _SCHEMA = [
     # tell a validated proposal from an unvalidated one.
     "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS proposals TEXT",
     "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS validated INT",
+    # [{locator, thumb}] for each image this row asks a human to describe. NOT a proposal:
+    # there is no value to approve. It is the picture — a 1.1.1 card without it asks someone
+    # to write alt text for an image they cannot see. Populated whether or not the AI ran.
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS evidence TEXT",
     # Per-file, per-rule-id (from rule-catalog.json) execution manifest.
     # PASS = rule ran, no findings; FAIL = findings found; ERROR = engine error.
     """CREATE TABLE IF NOT EXISTS scan_file_manifests (
@@ -1888,6 +1892,34 @@ class Store:
                 (item_id, now, scan_id, file, sc, rule_name or sc, count, blob, vflag))
         return item_id
 
+    def attach_hitl_evidence(self, scan_id: str, file: str, sc: str,
+                             evidence: list[dict]) -> str | None:
+        """Attach the images a HITL row asks a human to describe: [{locator, thumb}, …].
+
+        Evidence is not a proposal — there is no value to approve, so it must not ride in the
+        `proposals` column, where its presence would make confidence.js report an AI proposal
+        that does not exist.
+
+        Matches the row for this SC whether it was queued as '1.1.1' (queue_hitl_review_for_file
+        / enqueue_proposals) or as '1.1.1/deferred' (queue_hitl_deferral) — the deferral suffix
+        is precisely the alt-text case that most needs the picture. Idempotent: a repeat
+        remediate REPLACES the evidence rather than appending. Returns the row id, or None when
+        there is nothing to attach or no row to attach it to."""
+        if not evidence:
+            return None
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id FROM hitl_queue WHERE scan_id=%s AND file=%s "
+                "AND (rule_id=%s OR rule_id LIKE %s) ORDER BY created_at LIMIT 1",
+                (scan_id, file, sc, f"{sc}/%"))
+            row = self._db.fetchone(cur)
+            if not row:
+                return None
+            self._db.execute(cur, "UPDATE hitl_queue SET evidence=%s WHERE id=%s",
+                             (_json.dumps(evidence), row["id"]))
+            return row["id"]
+
     def count_unapplied_approved_values(self, scan_id: str, file: str) -> int:
         """Approved items whose resolution is CONTENT the reviewer supplied, and which was
         never written into the document.
@@ -1970,14 +2002,18 @@ class Store:
 
     @staticmethod
     def _decode_proposals(row: dict | None) -> dict | None:
-        """Parse the hitl_queue `proposals` JSON column into a real list so callers/the API
-        get [{locator, proposed_value, …}], not a raw string. No-op when absent/legacy."""
-        if row and row.get("proposals"):
-            import json as _json
-            try:
-                row["proposals"] = _json.loads(row["proposals"])
-            except (ValueError, TypeError):
-                row["proposals"] = []
+        """Parse the hitl_queue `proposals` and `evidence` JSON columns into real lists so
+        callers/the API get [{locator, proposed_value, …}] / [{locator, thumb}], not raw
+        strings. No-op when absent/legacy."""
+        if not row:
+            return row
+        import json as _json
+        for col in ("proposals", "evidence"):
+            if row.get(col):
+                try:
+                    row[col] = _json.loads(row[col])
+                except (ValueError, TypeError):
+                    row[col] = []
         return row
 
     def update_hitl_item(self, item_id: str, status: str, reviewer_note: str | None = None,

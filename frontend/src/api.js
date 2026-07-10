@@ -334,9 +334,15 @@ export const getHitlAnalytics = (scanId = null) => (SIM
   : fetch(`${BASE}/hitl/analytics${scanId ? `?scan_id=${encodeURIComponent(scanId)}` : ''}`, { headers: headers() }).then(j).catch(() => null))
 // Draft a concrete fix value (alt text / link text / title) via the local AI model
 // for one semantic finding. Reviewer accepts/edits it — never auto-applied here.
-export const suggestFix = (scanId, file, ruleId) => (SIM
+//
+// `locator` names WHICH embedded image to describe (hitl_queue.evidence[].locator). Without it
+// a 1.1.1 suggestion can only ever be a fill-in template: the endpoint has no image to hand a
+// vision model, so the text model guesses from the filename. Omitted for the other criteria,
+// which need no picture.
+export const suggestFix = (scanId, file, ruleId, locator = null) => (SIM
   ? sim({ suggestion: 'AI draft unavailable in demo mode — edit manually', kind: 'fix', is_template: true })
-  : fetch(`${BASE}/ai/suggest?scan_id=${encodeURIComponent(scanId)}&file=${encodeURIComponent(file)}&rule_id=${encodeURIComponent(ruleId)}`,
+  : fetch(`${BASE}/ai/suggest?scan_id=${encodeURIComponent(scanId)}&file=${encodeURIComponent(file)}&rule_id=${encodeURIComponent(ruleId)}`
+      + (locator ? `&locator=${encodeURIComponent(locator)}` : ''),
       { headers: headers() }).then(j))
 
 // Re-download and re-score ONE file the user fixed externally. Returns {job_id} for polling.

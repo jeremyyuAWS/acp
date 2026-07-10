@@ -517,8 +517,20 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
         if not text:
             return None
         kind = _SUGGEST_KIND.get(rule_id, ("fix", ""))[0]
-        return {"suggestion": text, "kind": kind,
-                "is_template": rule_id == "1.1.1", "model": OLLAMA_MODEL}
+        out = {"suggestion": text, "kind": kind,
+               "is_template": rule_id == "1.1.1", "model": OLLAMA_MODEL}
+        if out["is_template"]:
+            # Be exact about WHY this is a blank to fill rather than a description. The card
+            # used to say "no vision model described this image" in both cases, which reads as
+            # "llava looked and failed" even when no image was ever handed to a vision model.
+            out["reason"] = (
+                "Template only — no vision model is available to look at this image. "
+                "Rewrite it before approving."
+                if image_bytes else
+                "Template only — this text model cannot see the image, so it guessed from the "
+                "filename. Pick the image above and draft again, or write the value yourself."
+            )
+        return out
     except Exception:
         return None
 

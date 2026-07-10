@@ -265,9 +265,11 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 from remediate_office import remediate_office
                 _applied_fixes: list = []
                 _proposals: list = []
+                _evidence: list = []
                 out_path, applied, _skipped = remediate_office(
                     src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
-                    applied_fixes=_applied_fixes, proposals=_proposals, diffs=rem_diffs)
+                    applied_fixes=_applied_fixes, proposals=_proposals,
+                    evidence=_evidence, diffs=rem_diffs)
                 mimetype = _OFFICE_MIME[ext]
                 _record_applied_fixes(scan_id, filename, _applied_fixes)
                 # AI-proposed (but not auto-applied) alt: an ungrounded vision guess is
@@ -289,6 +291,13 @@ def _remediate_file(payload: dict, job: dict) -> None:
                             core.store.queue_hitl_deferral(scan_id, filename, _msg, _n)
                         except Exception:
                             pass
+                # Attach the deferred images to whichever 1.1.1 row now exists — the
+                # deferral queued just above, or the proposals row. Last, because there is
+                # nothing to attach to until one of them has been created.
+                try:
+                    core.store.attach_hitl_evidence(scan_id, filename, "1.1.1", _evidence)
+                except Exception:
+                    pass   # evidence is a nicety; never fail a remediation job for a thumbnail
             if not out_path or not _Path(out_path).exists():
                 core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
                                         file=filename, detail=f".{ext}: no deterministic fixes applied")
