@@ -83,18 +83,44 @@ echo "== 2/5 build image in ACR (remote; no local docker) =="
 # Two separate `date` calls could straddle UTC midnight and stamp tomorrow's date with
 # today's time-of-day.
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-# Build ordinal (.HHMMSS, UTC time-of-day). It increases strictly with wall-clock time and
-# does NOT depend on which commit is deployed, so (date, ordinal) always sorts in deploy
-# order. The previous ordinal counted commits whose UTC committer date was today AND that
-# were reachable from HEAD, which had two defects:
+# Build ordinal (.N) — the number of DEPLOYS today, not commits: the count of acp-app
+# revisions already created this UTC day, plus one. Readable (v2026.7.10.5) and monotonic.
+#
+# It must not be derived from git. The original ordinal counted commits whose UTC committer
+# date was today AND that were reachable from HEAD, which had two observed defects:
 #   1. it went BACKWARDS on the same day when a deploy ran from a branch behind main
-#      (observed: main was live at .28 while a deploy from a stale base stamped .26);
+#      (main was live at .28 while a deploy from a stale base stamped .26);
 #   2. two rebuilds of the same commit produced the same version, so a redeploy was
 #      indistinguishable from the build it replaced.
+# Counting revisions has neither problem: every deploy creates exactly one revision, whatever
+# branch it came from, so the ordinal only ever increases and a rebuild gets a fresh number.
+#
+# Known race: two deploys computing N before either has created its revision get the same N.
+# The image TAG carries a timestamp so the images stay distinct; only the display version
+# collides. With several sessions deploying at once, prefer the later `built_at`.
+#
+# Known limit: ACA keeps maxInactiveRevisions (100) inactive revisions. More than ~100 deploys
+# in one UTC day would prune the day's earliest revisions and the ordinal could repeat. At that
+# volume the timestamp fallback below is the better ordinal.
+#
 # Month/day stay unpadded (2026.7.9) for readability; compare versions as a numeric tuple,
 # not as a string — "2026.7.10" sorts before "2026.7.9" lexicographically.
 BUILD_DATE="${BUILD_TIME:0:4}.$(( 10#${BUILD_TIME:5:2} )).$(( 10#${BUILD_TIME:8:2} ))"
-BUILD_SEQ="${BUILD_TIME:11:2}${BUILD_TIME:14:2}${BUILD_TIME:17:2}"
+BUILD_DAY="${BUILD_TIME:0:10}"                       # YYYY-MM-DD, UTC
+# `--all` is REQUIRED: the app runs in Single revision mode, where `revision list` returns
+# only the ACTIVE revision. Without it the count is always 1 and every deploy stamps .1.
+# `|| true` twice: the app may not exist yet (first deploy) and grep -c exits 1 on zero
+# matches — either would kill the script under `set -euo pipefail` before the fallback runs.
+REV_TIMES="$(az containerapp revision list -n "$APP" -g "$RG" --all \
+              --query "[].properties.createdTime" -o tsv 2>/dev/null || true)"
+BUILD_SEQ="$(printf '%s\n' "$REV_TIMES" | grep -c "^${BUILD_DAY}" || true)"
+BUILD_SEQ=$(( BUILD_SEQ + 1 ))
+# Fallback: seconds since UTC midnight. Still monotonic within the day, and independent of
+# both git and Azure, so a throttled/failed revision query never stamps a duplicate .1.
+if [ -z "$REV_TIMES" ]; then
+  BUILD_SEQ=$(( 10#${BUILD_TIME:11:2} * 3600 + 10#${BUILD_TIME:14:2} * 60 + 10#${BUILD_TIME:17:2} ))
+  echo "   (revision query returned nothing — ordinal falls back to seconds-since-midnight)"
+fi
 BUILD_VERSION="${BUILD_DATE}.${BUILD_SEQ}"
 echo "   version $BUILD_VERSION · built $BUILD_TIME"
 az acr build -r "$ACR" -t "$IMAGE" -f deploy/public/Dockerfile \
