@@ -14,6 +14,7 @@ import { confidenceForFinding, confClass } from './confidence.js'
 import { metaFor } from './hitlMeta.js'
 import { firstProposed, firstThumb, firstKind, firstRationale, firstSource, thumbAlt, thumbSize, appliedFixAlt } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
+import { remediableFiles, emptyScopeReason } from './remediableScope.js'
 import { measuredReviewTime, REVIEW_TIME_BASIS } from './reviewerTime.js'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
@@ -436,12 +437,27 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
   const runServerRemediation = async (scopeFiles) => {
     if (!runId || remBusy || remStartRef.current) return
+    // Say why nothing will happen, BEFORE the round trip. The old path posted an empty scope,
+    // the server answered enqueued:0, and the UI said "no eligible files with issues" — true,
+    // useless, and indistinguishable from a button that did nothing at all.
+    if (!scopeFiles || scopeFiles.length === 0) {
+      setRemMsg(emptyScopeReason(files, scopeOpts))
+      return
+    }
     remStartRef.current = true
     setRemBusy(true); setRemMsg(''); setRemProg(null)
     const scope = scopeFiles?.map((f) => f.file)
     try {
       const r = await remediateScan(runId, scope)
-      if (!r.enqueued) { setRemMsg('Nothing to remediate — no eligible files with issues.'); setRemBusy(false); return }
+      if (!r.enqueued) {
+        // We sent a non-empty scope and the server enqueued nothing: the client's view of
+        // eligibility is stale (another session remediated them, or the scan moved on). Say
+        // that, rather than repeating the empty-scope line and implying the user chose wrong.
+        setRemMsg(`Nothing to remediate — the server found no eligible work in the ${scope.length} `
+                  + `document${scope.length === 1 ? '' : 's'} sent. They may already have been `
+                  + `remediated elsewhere; re-scan to refresh.`)
+        setRemBusy(false); return
+      }
       if (!r.workers) { setRemMsg(`Enqueued ${r.enqueued}, but no workers are running. Add some in the Monitor tab.`); setRemBusy(false); return }
       const total = r.enqueued
       setRemProg({ total, done: 0, latest: null, failed: 0 })
@@ -555,14 +571,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // then the AI risk triage breaks ties.
   const ontRank = (f) => f.ont?.priority ? PRI_RANK[f.ont.priority] : 9
   const hasInscopeSelections = Object.values(triage).some((v) => v === 'inscope')
-  const remediable = files.filter((f) => {
-    if (f.remediated_at || f.drive_write_url) return false  // already fixed — don't re-offer it
-    if (!f.rec || !REM_ACTIONS.includes(f.rec.action)) return false
-    if (triage[f.file] === 'na' || triage[f.file] === 'defer') return false
-    // If the user has explicitly marked any files inscope, only remediate those files.
-    if (hasInscopeSelections && triage[f.file] !== 'inscope') return false
-    return true
-  }).sort((a, b) => (ontRank(a) - ontRank(b)) || (priority(b) - priority(a)))
+  // One eligibility test, shared with emptyScopeReason() — so what the button acts on and what
+  // it says when it can't act on anything are derived from the same rules, in the same order.
+  const scopeOpts = { triage, hasInscopeSelections, remActions: REM_ACTIONS }
+  const remediable = remediableFiles(files, scopeOpts)
+    .sort((a, b) => (ontRank(a) - ontRank(b)) || (priority(b) - priority(a)))
   const ontCount = remediable.filter((f) => f.ont).length
   const autoFiles = remediable.filter((f) => {
     const eff = decisions[f.file]?.state === 'override' ? decisions[f.file].action : f.rec?.action
@@ -645,10 +658,17 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     : { level: 'low', text: 'Internal content only · overall risk LOW' }
 
   // One primary action at a time (§11): review → run → verify → publish.
+  // Remediation is offered whenever a document is ELIGIBLE for it — `remediable` already
+  // excludes anything with a fixed copy. It used to be gated on `!remStarted`, and remStarted
+  // is true as soon as `acted.approved + acted.rejected + acted.deferred > 0`. So clearing the
+  // review queue — the step that unblocks remediation — was exactly what removed the button
+  // that runs it. The two branches were mutually exclusive and nobody could reach the second.
+  const remRunning = remBusy || (remProg != null && remProg.done < remProg.total)
   const primary = readOnly ? null
     : queue.length > 0 ? { label: `Review ${queue.length} Remaining Issue${queue.length === 1 ? '' : 's'} →`, onClick: () => window.dispatchEvent(new Event('acp:open-inbox')) }
+    : remRunning ? { label: '⏳ Remediating…', disabled: true }
     : verifyState === 'running' ? { label: '⏳ Verifying…', disabled: true }
-    : (!remStarted && remediable.length > 0) ? { label: '⚡ Run Remediation →', onClick: () => runServerRemediation(remediable), disabled: remBusy || !runId }
+    : remediable.length > 0 ? { label: '⚡ Run Remediation →', onClick: () => runServerRemediation(remediable), disabled: !runId }
     : (verifyState === 'complete' || revalidated.length > 0) ? { label: 'Publish Certified Copy →', onClick: () => onNavigate?.('publish') }
     : null
 
@@ -1040,7 +1060,19 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               {dcount('accepted') + dcount('override') > 0
                 ? <span>✓ <b>{dcount('accepted') + dcount('override')}</b> file{(dcount('accepted') + dcount('override')) !== 1 ? 's' : ''} accepted — ready to remediate</span>
                 : <span className="muted">Accept files above, then run remediation</span>}
-              {remMsg && <span role="status" aria-live="polite" style={{ marginLeft: 12, color: remMsg.startsWith('✓') ? '#3B6D11' : 'var(--muted)' }}>{remMsg}</span>}
+              {/* A refusal is not chatter. "Nothing to remediate — of 3 documents: 3 already
+                  remediated." answers the question the click asked, and must read like an
+                  answer; only success stays green, only progress stays muted. */}
+              {remMsg && (
+                <span role="status" aria-live="polite"
+                      style={{ marginLeft: 12,
+                               color: remMsg.startsWith('✓') ? '#3B6D11'
+                                    : remMsg.startsWith('Nothing to remediate') ? '#8A4B00'
+                                    : 'var(--muted)',
+                               fontWeight: remMsg.startsWith('Nothing to remediate') ? 600 : undefined }}>
+                  {remMsg}
+                </span>
+              )}
             </div>
             <button disabled={remBusy || !runId || readOnly} onClick={() => runServerRemediation(remediable)}
                     title="Run deterministic HTML remediation server-side, in the durable worker queue. Fixed copies are written to a Remediated/ folder; results trace to Langfuse."
