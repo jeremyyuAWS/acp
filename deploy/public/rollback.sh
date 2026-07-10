@@ -15,13 +15,38 @@ set -euo pipefail
 
 RG="${ACP_RG:-mdk-accessibility}"
 APP="${ACP_APP:-acp-app}"
-SUB_ARG=()
-[ -n "${ACP_SUBSCRIPTION:-}" ] && SUB_ARG=(--subscription "$ACP_SUBSCRIPTION")
+
+# Resolve the subscription ONCE and scope every `az` call to it (see deploy.sh's preflight and
+# tests/test_deploy_subscription_scope.py). This replaces:
+#
+#     SUB_ARG=()
+#     [ -n "${ACP_SUBSCRIPTION:-}" ] && SUB_ARG=(--subscription "$ACP_SUBSCRIPTION")
+#
+# which left SUB_ARG EMPTY whenever ACP_SUBSCRIPTION was unset — the normal case, since nobody
+# exports it before an emergency rollback. That was wrong in two different ways depending on the
+# shell `#!/usr/bin/env bash` happens to find:
+#   * bash 3.2 (still /bin/bash on macOS): "${SUB_ARG[@]}" on an empty array is an UNBOUND
+#     variable under `set -u`, so even `rollback.sh --list` died at the first az call;
+#   * bash >= 4.4: it expands to nothing, so every call silently followed the machine-global
+#     default subscription in ~/.azure/azureProfile.json — which any concurrent process can
+#     change with `az account set`. A rollback is what you run when a deploy already went
+#     wrong; it must never guess which subscription it is repointing.
+# Pinning the immutable ID (not the name) also means a rename cannot retarget a rollback midway.
+if [ -n "${ACP_SUBSCRIPTION:-}" ]; then
+  SUB="$(az account show --subscription "$ACP_SUBSCRIPTION" --query id -o tsv 2>/dev/null || true)"
+  [ -n "$SUB" ] || { echo "refusing to roll back: ACP_SUBSCRIPTION='$ACP_SUBSCRIPTION' does not resolve to a subscription you can see (az login?)" >&2; exit 1; }
+else
+  SUB="$(az account show --query id -o tsv 2>/dev/null || true)"
+  [ -n "$SUB" ] || { echo "refusing to roll back: no active Azure subscription -- run 'az login', or set ACP_SUBSCRIPTION" >&2; exit 1; }
+fi
+AZ=(--subscription "$SUB")   # always non-empty; splice into EVERY az call
+echo "subscription: $(az account show "${AZ[@]}" --query name -o tsv 2>/dev/null || echo '?') ($SUB)"
+echo "target:       $APP in $RG"
 
 revisions() {
   # --all includes deactivated revisions (single-revision mode deactivates the
   # old one on every deploy) — without it there is nothing to roll back to.
-  az containerapp revision list -n "$APP" -g "$RG" "${SUB_ARG[@]}" --all \
+  az containerapp revision list -n "$APP" -g "$RG" "${AZ[@]}" --all \
     --query "reverse(sort_by([].{rev:name, img:properties.template.containers[0].image, created:properties.createdTime, traffic:properties.trafficWeight, state:properties.runningState}, &created))" -o json
 }
 
@@ -48,11 +73,11 @@ print(next(r['img'] for r in rs if r['img'] != cur))")
 fi
 echo "rolling back to: ${TARGET##*/}"
 
-az containerapp update -n "$APP" -g "$RG" "${SUB_ARG[@]}" --image "$TARGET" --output none
+az containerapp update -n "$APP" -g "$RG" "${AZ[@]}" --image "$TARGET" --output none
 
 echo -n "waiting for the new revision to reach Running "
 for _ in $(seq 1 60); do
-  STATE=$(az containerapp revision list -n "$APP" -g "$RG" "${SUB_ARG[@]}" \
+  STATE=$(az containerapp revision list -n "$APP" -g "$RG" "${AZ[@]}" \
     --query "[?properties.trafficWeight==\`100\`] | [0].properties.runningState" -o tsv)
   [ "$STATE" = "Running" ] && break
   echo -n "."; sleep 5
@@ -60,9 +85,9 @@ done
 echo " $STATE"
 [ "$STATE" = "Running" ] || { echo "✗ revision never reached Running — check the portal"; exit 1; }
 
-FQDN=$(az containerapp show -n "$APP" -g "$RG" "${SUB_ARG[@]}" --query properties.configuration.ingress.fqdn -o tsv)
+FQDN=$(az containerapp show -n "$APP" -g "$RG" "${AZ[@]}" --query properties.configuration.ingress.fqdn -o tsv)
 CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://$FQDN/healthz")
-LIVE=$(az containerapp revision list -n "$APP" -g "$RG" "${SUB_ARG[@]}" \
+LIVE=$(az containerapp revision list -n "$APP" -g "$RG" "${AZ[@]}" \
   --query "[?properties.trafficWeight==\`100\`] | [0].properties.template.containers[0].image" -o tsv)
 echo "healthz: $CODE · serving: ${LIVE##*/}"
 [ "$CODE" = "200" ] && [ "$LIVE" = "$TARGET" ] && echo "✓ rollback complete" || { echo "✗ verification failed"; exit 1; }
