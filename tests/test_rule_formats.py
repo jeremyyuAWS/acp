@@ -89,15 +89,33 @@ def test_rule_formats_matches_derived_ground_truth():
 
 
 def test_no_html_only_rule_shows_pass_on_a_non_html_file():
-    """The actual bug this fix closes: an HTML-only rule must read NOT_APPLICABLE,
+    """The actual bug this fix closes: an HTML-only rule must read NOT_EVALUATED,
     never PASS, for a format it was never evaluated against."""
     html_only = [rid for rid, fmts in store.RULE_FORMATS.items() if fmts == frozenset({"html"})]
     assert html_only, "expected at least one HTML-only rule to exist"
     for rid in html_only:
         for fmt, filename in (("docx", "x.docx"), ("pptx", "x.pptx"), ("xlsx", "x.xlsx"), ("pdf", "x.pdf")):
-            assert store._rule_outcome(rid, fmt, 0) == "NOT_APPLICABLE", (
-                f"{rid} should be NOT_APPLICABLE on a .{fmt} file, not silently PASS"
+            assert store._rule_outcome(rid, fmt, 0) == "NOT_EVALUATED", (
+                f"{rid} should be NOT_EVALUATED on a .{fmt} file, not silently PASS"
             )
+
+
+def test_an_unrun_check_never_claims_the_criterion_is_inapplicable():
+    """We may say "we did not check this". We may not say "this does not apply".
+
+    2.4.3 Focus Order and 4.1.2 Name/Role/Value are html-only in RULE_FORMATS, but both
+    genuinely apply to a tagged PDF — PDF/UA specifies them. Emitting NOT_APPLICABLE there
+    asserted they were out of scope, which nothing in this codebase ever determined. The
+    outcome token must state only the fact we hold: no validator ran.
+    """
+    assert store.NOT_EVALUATED == "NOT_EVALUATED"
+    for rid in ("2.4.3", "4.1.2"):
+        assert store._rule_outcome(rid, "pdf", 0) == store.NOT_EVALUATED
+    # A rule with no format restriction at all still evaluates where it has a validator.
+    assert store._rule_outcome("1.1.1", "pdf", 0) == "PASS"
+    assert store._rule_outcome("1.1.1", "pdf", 3) == "FAIL"
+    # An unknown format is unevaluated, never a pass.
+    assert store._rule_outcome("1.1.1", None, 0) == store.NOT_EVALUATED
 
 
 def test_rule_outcome_still_computes_pass_fail_for_applicable_formats():

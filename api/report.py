@@ -227,8 +227,9 @@ def _scope_section(files, facts, h2, body, cell, muted) -> list:
     The single most important section for an auditor, and the report's guard against its own
     headline number. A 100/100 score means "no blocking findings among the criteria we
     actually evaluated" — NOT "fully WCAG 2.1 AA conformant". Most criteria have no validator
-    for most file formats; those are reported as not-applicable and are never asserted to
-    pass. This section says so explicitly, and names them.
+    for most file formats; those are reported as not-evaluated and are never asserted to
+    pass — nor asserted to be inapplicable, which is a different claim we do not make. This
+    section says so explicitly, and names them.
     """
     if not facts or not facts.get("documents"):
         return []
@@ -240,14 +241,16 @@ def _scope_section(files, facts, h2, body, cell, muted) -> list:
         "That is <b>not</b> the full WCAG 2.1 AA criteria set: many criteria require human or "
         "assistive-technology judgement and are routed to review rather than asserted here. For each "
         "document, only the criteria that have a validator <i>for that file format</i> are evaluated — "
-        "the remainder are reported as <b>not applicable</b>, meaning they were <b>never evaluated</b>. "
+        "the remainder are reported as <b>not evaluated</b>: no check was run. That is deliberately "
+        "not the same as <i>not applicable</i> — some of these criteria do apply to the format (a "
+        "tagged PDF has focus order and name/role/value); we simply do not check them yet. "
         "A zero finding-count on an unevaluated criterion is not a pass.", muted))
     el.append(Spacer(1, 8))
 
     rows = [["Document", "Evaluated", "Not evaluated", "Deterministic", "AI-assisted", "Human-only"]]
     for d in docs:
         bm = d["by_mode"]
-        rows.append([Paragraph(_esc(d["file"]), cell), d["evaluated"], d["not_applicable"],
+        rows.append([Paragraph(_esc(d["file"]), cell), d["evaluated"], d["not_evaluated"],
                      bm.get("auto", 0), bm.get("ai-assisted", 0), bm.get("human-only", 0)])
     t = Table(rows, colWidths=[2.6 * inch, 0.85 * inch, 0.95 * inch, 0.95 * inch, 0.9 * inch, 0.85 * inch],
               repeatRows=1)
@@ -260,14 +263,18 @@ def _scope_section(files, facts, h2, body, cell, muted) -> list:
     el.append(t)
     el.append(Spacer(1, 8))
 
-    na = scope.get("not_applicable_criteria") or []
+    # Criteria we never ran on these formats. Deliberately NOT called "not applicable":
+    # some of them do apply (2.4.3 and 4.1.2 apply to a tagged PDF), we just don't check
+    # them. This section exists so the omission is stated rather than inferred from silence.
+    ne = scope.get("not_evaluated_criteria") or []
     hu = scope.get("human_only_criteria") or []
     el.append(Paragraph("<b>This report makes no assertion about:</b>", body))
-    if na:
+    if ne:
         el.append(Paragraph(
-            "<b>Not evaluated for these file formats</b> — " +
-            _esc(", ".join(f"{c['sc']} {c['name']}" for c in na[:18]))
-            + (f", and {len(na) - 18} more." if len(na) > 18 else "."), muted))
+            "<b>Not evaluated for these file formats</b> — no check was run; this is not a "
+            "statement that the criterion does not apply — " +
+            _esc(", ".join(f"{c['sc']} {c['name']}" for c in ne[:18]))
+            + (f", and {len(ne) - 18} more." if len(ne) > 18 else "."), muted))
     if hu:
         el.append(Paragraph(
             "<b>Requires human or assistive-technology judgement</b> (routed to review, never "

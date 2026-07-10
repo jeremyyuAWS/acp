@@ -178,13 +178,35 @@ def test_certification_facts_counts_are_grounded_and_add_up(isolated_store):
     sid, _, _ = _seed_traces(s)
     facts = s.get_certification_facts(sid)
     d = facts["documents"][0]
-    # every catalog criterion is either evaluated for this format or explicitly not applicable
-    assert d["evaluated"] + d["not_applicable"] == facts["scope"]["catalog_size"]
+    # every catalog criterion is either evaluated for this format or explicitly not evaluated
+    assert d["evaluated"] + d["not_evaluated"] == facts["scope"]["catalog_size"]
     assert d["failing"] == 2 and d["remediated"] == 1 and d["remaining"] == 1
     assert d["approvals"] == 1
-    # not_applicable means NEVER EVALUATED — pptx has no validator for these
-    assert "1.4.10" in d["na_criteria"]          # Reflow: web-only
+    # not_evaluated means NEVER RUN — pptx has no validator for these. It is deliberately NOT
+    # called "not applicable": that would assert the criterion is out of scope, which we
+    # never determined. The report says only what we know.
+    assert "1.4.10" in d["not_evaluated_criteria"]          # Reflow: no validator on pptx
     assert sum(d["by_mode"].values()) == d["evaluated"]
+
+
+def test_a_scan_stored_before_the_rename_still_adds_up(isolated_store):
+    """Rows written by an older image (or by a rolled-back one) say NOT_APPLICABLE.
+
+    If the reader only matched the new token those criteria would be counted as neither
+    evaluated nor skipped, and `evaluated + not_evaluated == catalog_size` would quietly
+    stop holding — a certification report that silently under-reports its own scope.
+    """
+    s = isolated_store
+    sid, f, _ = _seed_traces(s, sid="legacy")
+    with s._db.cursor() as cur:
+        s._db.execute(cur,
+            "UPDATE scan_rule_traces SET outcome='NOT_APPLICABLE' "
+            "WHERE scan_id=%s AND outcome='NOT_EVALUATED'", (sid,))
+    facts = s.get_certification_facts(sid)
+    d = facts["documents"][0]
+    assert d["not_evaluated"] > 0, "the fixture must contain criteria with no validator"
+    assert d["evaluated"] + d["not_evaluated"] == facts["scope"]["catalog_size"]
+    assert "1.4.10" in d["not_evaluated_criteria"]
 
 
 def test_approvals_are_deduped_and_read_from_the_immutable_log(isolated_store):
@@ -228,6 +250,17 @@ def test_decision_block_and_scope_of_assertion_are_honest(isolated_store):
     # R-A: the guard against reading 100/100 as full conformance
     assert "does not mean the document is fully WCAG 2.1 AA conformant" in t
     assert "This report makes no assertion about" in t
+    # The not-evaluated criteria are actually LISTED, and framed as "we didn't check", never
+    # "doesn't apply" — a pptx has no reflow validator, but the report must not assert reflow
+    # is inapplicable. (Guards against the scope section silently reading a renamed-away key
+    # and rendering empty.)
+    assert "Not evaluated for these file formats" in t
+    assert "not a statement that the criterion does not apply" in t
+    assert "1.4.10" in t                                       # Reflow: listed, not omitted
+    # The word "applicable" may appear — but only to DISTINGUISH from it ("not the same as not
+    # applicable"), never to report a criterion AS not-applicable.
+    assert "reported as not applicable" not in t.lower()
+    assert "deliberately not the same as not applicable" in t.lower()
     # never claims the platform validates the whole standard
     assert "automated validator for 37 success criteria" in t
 

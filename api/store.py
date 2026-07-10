@@ -114,6 +114,10 @@ _SCHEMA = [
     )""",
     # plain-English label (ADR: non-technical surfaces). Backfilled per scan.
     "ALTER TABLE scan_rule_traces ADD COLUMN IF NOT EXISTS plain_name TEXT",
+    # Historic rows said NOT_APPLICABLE where the truth was "we never ran this check".
+    # Idempotent, and readers accept both tokens anyway, so a rollback to an older image
+    # (which would write the old token again) degrades to mixed rows, not wrong counts.
+    "UPDATE scan_rule_traces SET outcome='NOT_EVALUATED' WHERE outcome='NOT_APPLICABLE'",
     """CREATE TABLE IF NOT EXISTS hitl_queue (
       id TEXT PRIMARY KEY,
       created_at TEXT,
@@ -377,11 +381,27 @@ def _file_format(filename: str) -> str | None:
     return None
 
 
+# The outcome for a criterion this platform has no validator for, on this file's format.
+#
+# It used to be "NOT_APPLICABLE", which is a claim we cannot support. All the code knows is
+# that no validator ran. Whether the criterion *applies* is a WCAG judgement no line of this
+# module makes: 2.4.3 Focus Order and 4.1.2 Name/Role/Value genuinely do apply to a tagged
+# PDF (PDF/UA specifies both), and we simply don't check them there. Telling an auditor
+# "not applicable" asserts the criterion is out of scope; the truth is only that we didn't
+# look. The weaker statement is the true one, so it is the only one we make.
+#
+# Anything genuinely out of scope must be curated by an accessibility specialist and stated
+# explicitly — never inferred from the absence of an implementation.
+NOT_EVALUATED = "NOT_EVALUATED"
+_LEGACY_NOT_EVALUATED = "NOT_APPLICABLE"   # rows written before this rename; see _SCHEMA
+
+
 def _rule_outcome(rule_id: str, fmt: str | None, count: int) -> str:
-    """PASS/FAIL if the rule actually has a validator for this file's format,
-    else NOT_APPLICABLE — the rule was never evaluated, not silently passed."""
+    """PASS/FAIL if the rule actually has a validator for this file's format, else
+    NOT_EVALUATED — the rule was never run, which is neither a pass nor a statement
+    that the criterion does not apply."""
     if fmt is None or fmt not in RULE_FORMATS.get(rule_id, _ALL_FORMATS):
-        return "NOT_APPLICABLE"
+        return NOT_EVALUATED
     return "FAIL" if count > 0 else "PASS"
 
 
@@ -692,7 +712,7 @@ class Store:
                         "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
                         (sid, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
                          i.get("page"), i.get("location")))
-                # Per-rule trace: one row per catalog rule per file — PASS/FAIL/NOT_APPLICABLE.
+                # Per-rule trace: one row per catalog rule per file — PASS/FAIL/NOT_EVALUATED.
                 sc_counts: dict[str, int] = {}
                 for i in f["issues"]:
                     sc = _extract_sc(i.get("wcag", ""))
@@ -1427,8 +1447,9 @@ class Store:
 
         Per document:
           evaluated       — criteria that actually ran for this file's format (PASS or FAIL).
-          not_applicable  — criteria with NO validator for this format. They were never
-                            evaluated; a zero finding-count is not a pass (see _rule_outcome).
+          not_evaluated   — criteria with NO validator for this format. They were never run;
+                            a zero finding-count is not a pass, and their absence is NOT a
+                            claim that the criterion does not apply (see _rule_outcome).
           failing         — criteria still failing.
           remediated      — criteria whose fix VERIFIABLY cleared the post-fix re-scan
                             (distinct SCs in remediation_diff — the truthfulness gate).
@@ -1462,13 +1483,17 @@ class Store:
         per_file: dict[str, dict] = {}
         for t in traces:
             f = per_file.setdefault(t["file"], {
-                "file": t["file"], "evaluated": 0, "not_applicable": 0, "failing": 0,
-                "findings": 0, "na_criteria": [], "by_mode": {},
+                "file": t["file"], "evaluated": 0, "not_evaluated": 0, "failing": 0,
+                "findings": 0, "not_evaluated_criteria": [], "by_mode": {},
             })
             outcome = t.get("outcome")
-            if outcome == "NOT_APPLICABLE":
-                f["not_applicable"] += 1
-                f["na_criteria"].append(t["rule_id"])
+            # Both tokens: a scan run before the rename, or by a rolled-back image, wrote the
+            # old one. Reading only the new token would silently count those criteria as
+            # neither evaluated nor skipped, and `evaluated + not_evaluated == catalog_size`
+            # would quietly stop holding.
+            if outcome in (NOT_EVALUATED, _LEGACY_NOT_EVALUATED):
+                f["not_evaluated"] += 1
+                f["not_evaluated_criteria"].append(t["rule_id"])
                 continue
             if outcome not in ("PASS", "FAIL"):
                 continue                       # ERROR: the rule could not evaluate — assert nothing
@@ -1485,23 +1510,23 @@ class Store:
             f["remediated"] = len(remediated)
             f["remaining"] = max(0, f["failing"] - len(remediated))
             f["approvals"] = approvals.get(f["file"], 0)
-            f["na_criteria"] = sorted(f["na_criteria"])
+            f["not_evaluated_criteria"] = sorted(f["not_evaluated_criteria"])
             docs.append(f)
 
         scope_modes: dict[str, int] = {}
-        na_union: set[str] = set()
+        not_evaluated_union: set[str] = set()
         for f in docs:
             for m, n in f["by_mode"].items():
                 scope_modes[m] = scope_modes.get(m, 0) + n
-            na_union.update(f["na_criteria"])
+            not_evaluated_union.update(f["not_evaluated_criteria"])
 
         return {
             "documents": docs,
             "scope": {
                 "catalog_size": len(RULE_CATALOG),
                 "by_mode": scope_modes,
-                "not_applicable_criteria": [
-                    {"sc": sc, "name": rules.get(sc, {}).get("name", sc)} for sc in sorted(na_union)],
+                "not_evaluated_criteria": [
+                    {"sc": sc, "name": rules.get(sc, {}).get("name", sc)} for sc in sorted(not_evaluated_union)],
                 "human_only_criteria": [
                     {"sc": r["id"], "name": r["name"]} for r in RULE_CATALOG
                     if r["fix_mode"] == "human-only"],
