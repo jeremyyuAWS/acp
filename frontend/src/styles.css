@@ -284,12 +284,17 @@ input:focus-visible, [role="tab"]:focus-visible {
 .heatrow:not(.heathdr) { border-top: 1px solid var(--line); }
 /* Recent-jobs cards (Monitor queue) — owner-scoped per-job visibility */
 .jobcards { display: flex; flex-direction: column; gap: 5px; }
-.jobcard { display: grid; grid-template-columns: 82px minmax(0, 1fr) auto auto auto; align-items: center; gap: 10px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12.5px; animation: auditslide 0.4s ease; }
+/* 7 tracks: type | file+phase | status | attempts? | stalled? | duration | trace.
+   attempts and stalled are conditional; their `auto` tracks collapse when absent. */
+.jobcard { display: grid; grid-template-columns: 82px minmax(0, 1fr) auto auto auto auto auto; align-items: center; gap: 10px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12.5px; animation: auditslide 0.4s ease; }
 .jobtype { font-weight: 600; color: var(--plum); }
 .jobfile { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
 .jobstatus { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 7px; white-space: nowrap; }
 .jobstatus.flash { animation: tickflash 0.6s ease; }
 .jobdur { font-size: 11px; white-space: nowrap; }
+/* The live per-job line (jobs.phase). Its own overflow rules — the parent .jobfile is a
+   single ellipsised line, and this sits beneath it as a second, quieter one. */
+.jobphase { font-size: 11px; font-weight: 400; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .workerdots { display: flex; gap: 3px; align-items: center; }
 .idledot { width: 7px; height: 7px; border-radius: 50%; background: #d8d3dc; display: inline-block; }
 .activedot { width: 7px; height: 7px; border-radius: 50%; background: #BF8C00; display: inline-block; animation: livepulse 1.1s ease-in-out infinite; }
@@ -1603,12 +1608,6 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .rc-progress .track { flex: 1; }
 .rc-foot { padding: 14px 4px 4px; font-size: 12px; }
 
-/* Automation-level legend (Remediate) — mental model for what needs review */
-.autolevels { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; margin: 0 0 12px;
-  padding: 9px 13px; border: 1px solid var(--line); border-radius: 10px; background: #faf8fb; font-size: 12.5px; }
-.autolevel { display: inline-flex; align-items: center; gap: 6px; }
-.autolevel b { font-weight: 600; }
-
 /* Phase 2 — Remediation hero + recent-fixes list + advanced disclosure */
 .rem-hero { display: flex; align-items: center; justify-content: space-between; gap: 16px;
   flex-wrap: wrap; padding: 16px 20px; margin-bottom: 12px; border-radius: 12px;
@@ -1742,3 +1741,6 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 /* In the HITL review detail the preview sits alongside dense text — cap it tighter. */
 .rc-thumb { max-width: 260px; margin: 2px 0 12px; }
 .drawer-thumb { margin-top: 2px; }
+
+/* Where a queued finding lives — slide/page chip on the evidence card header. */
+.evcard-loc { font-size: 11.5px; white-space: nowrap; }

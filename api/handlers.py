@@ -82,6 +82,17 @@ def _scan(payload: dict, job: dict) -> None:
     core.clear_scan_tokens(scan_id)
 
 
+def _phase(job: dict, msg: str) -> None:
+    """Report what this job is doing right now — the queue panel's per-row line reads it.
+
+    Only ever called where the job genuinely changes activity, so the line stays true. Never
+    raises: progress reporting must not be able to fail the work it reports on.
+    """
+    jid = (job or {}).get("id")
+    if jid:
+        core.store.set_job_phase(jid, msg)
+
+
 def _verify_residual_scs(fixed_bytes: bytes, filename: str):
     """Re-scan the remediated bytes; return the set of WCAG SCs STILL failing, so a reported
     fix that did not actually clear is never credited. Delegates to the single shared
@@ -171,6 +182,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
     if not token:
         raise FatalJobError("no Drive token for this scan (expired/restarted) — re-trigger")
 
+    _phase(job, f"downloading {filename}")
     svc = _drive_client(token)
     data = svc.files().get_media(fileId=drive_file_id).execute()
 
@@ -190,6 +202,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
     # with an honest `validated` flag (True only when the applied fix actually cleared).
     inline_proposals: list[dict] = []
 
+    _phase(job, f"applying fixes to {filename}")
     if ext in ("html", "htm"):
         fixed_html, applied, _deferred = remediate_html(
             data.decode("utf-8", errors="replace"),
@@ -261,11 +274,13 @@ def _remediate_file(payload: dict, job: dict) -> None:
     # read-only Drive access. Drive becomes a best-effort MIRROR below: failure there no
     # longer fails the whole remediation, since Blob already has the durable copy.
     import blob as _blob
+    _phase(job, "storing the corrected copy")
     owner = (core.store.get_scan(scan_id) or {}).get("run", {}).get("owner_email")
     blob_url = _blob.upload_remediated(owner, scan_id, filename, fixed_bytes, mimetype)
 
     web_url = None
     if core.store.get_drive_mirror_enabled():
+        _phase(job, "writing the corrected copy to Drive")
         import io
         from googleapiclient.http import MediaIoBaseUpload
         from googleapiclient.errors import HttpError
@@ -314,6 +329,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
     # a field it does not touch). Re-scan the fixed bytes and only credit criteria that
     # ACTUALLY cleared; the rest stay failing for review, so the app never shows a fix
     # that did not take.
+    _phase(job, "re-verifying the corrected copy")
     residual = _verify_residual_scs(fixed_bytes, filename)
     # Enqueue the inline AI proposals (2.4.4 link text …) now that the re-scan has run, so a
     # deterministic fix that verifiably cleared carries validated=True (confidence.js reads

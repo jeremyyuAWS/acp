@@ -1,21 +1,27 @@
 import { useState, useEffect, useRef } from 'react'
-import { updateHitlItem, getFileRemediationDiffs } from './api.js'
+import { getFileRemediationDiffs } from './api.js'
 import { confClass } from './confidence.js'
 import Thumbnail from './Thumbnail.jsx'
-import { buildEvidenceCard } from './reviewCard.js'
+import { buildEvidenceCard, firstProposed, isValueFix, reviewTelemetry } from './reviewCard.js'
 
 // Evidence Card (PRD v2) — a PR-style review of ONE accessibility issue. The human APPROVES
 // ACP's recommendation; ACP applies it. Assembles only shipped primitives (confidence basis,
 // remediationTrack, remediation_diff, thumbnail) and records review telemetry (edited flag +
 // review time) so the workspace can report reviewer time saved and calibrate confidence.
 //
-// onResolved(id, status) — parent refreshes the queue (drain stays wired via acp:hitl-changed).
-export default function EvidenceCard({ item, onResolved }) {
+// onAct(id, status, note, approvedValue, telemetry) — the parent owns the write, so its
+// optimistic update and the queue-drain event stay wired. traceUrl is optional.
+export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null }) {
   const [diffs, setDiffs] = useState([])
-  const [value, setValue] = useState(item?.approved_value ?? '')
+  // Prefill from the server-side AI proposal when there is one — that is what turns a 30s
+  // "write the alt text" into a 5s "confirm this". Falls back to a previously-approved value.
+  const [value, setValue] = useState(firstProposed(item) ?? item?.approved_value ?? '')
+  const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const shownAt = useRef(Date.now())               // reviewer-time metric starts when the card mounts
-  const aiDraft = useRef(item?.approved_value ?? null)
+  // The value the AI actually proposed — reviewTelemetry diffs the human's final value against
+  // this to derive the `edited` calibration signal, so it must be the proposal, not the draft.
+  const aiDraft = useRef(firstProposed(item) ?? item?.approved_value ?? null)
 
   useEffect(() => {
     let live = true
@@ -26,18 +32,23 @@ export default function EvidenceCard({ item, onResolved }) {
   }, [item?.scan_id, item?.file])
 
   const card = buildEvidenceCard(item, diffs)
-  const editable = card.track.track !== 'auto' && aiDraft.current != null   // a value the reviewer can edit
+  // An editor appears for every value-fix criterion, draft or not — a reviewer must be able to
+  // author alt text the AI could not draft. Keying off `aiDraft != null` (as this once did)
+  // silently hid the box exactly when the human was most needed.
+  // An item carrying a proposal always takes a value, even if its SC isn't a classic VALUE_FIX
+  // (e.g. a 1.3.3 sensory rewrite) — otherwise the reviewer sees a proposal they cannot accept.
+  const editable = card.track.track !== 'auto' && (isValueFix(card.sc) || !!card.proposal)
   const primaryLabel = card.track.action                                    // "Approve & Apply" | "Review & edit"
 
   const decide = async (status) => {
     if (busy) return
     setBusy(true)
-    const finalVal = editable && status === 'approved' ? (value || null) : null
-    const edited = editable && status === 'approved' && (value || '') !== (aiDraft.current || '')
+    const t = reviewTelemetry({
+      editable, status, value, aiDraft: aiDraft.current, elapsedMs: Date.now() - shownAt.current,
+    })
     try {
-      await updateHitlItem(card.id, status, null, finalVal, {
-        edited, reviewMs: Date.now() - shownAt.current, aiValue: aiDraft.current,
-      })
+      await onAct(card.id, status, note || null, t.finalValue,
+                  { edited: t.edited, reviewMs: t.reviewMs, aiValue: t.aiValue })
       onResolved && onResolved(card.id, status)
     } finally {
       setBusy(false)
@@ -52,6 +63,13 @@ export default function EvidenceCard({ item, onResolved }) {
         <span className="fmtchip">{card.fmt}</span>
         <b className="evcard-wcag">{card.wcag}</b>
         <span className="muted">{card.name}</span>
+        {/* Where to look. Rendered only when the analysers attributed a page — the reviewer
+            gets no location rather than a wrong one. */}
+        {card.location && (
+          <span className="evcard-loc muted" title={`This criterion fails on ${card.location.toLowerCase()}`}>
+            📍 {card.location}
+          </span>
+        )}
         <span className={`conf conf-${card.track.badge.tone}`} style={{ marginLeft: 'auto' }}>{card.track.badge.label}</span>
       </header>
 
@@ -62,12 +80,27 @@ export default function EvidenceCard({ item, onResolved }) {
 
           {editable ? (
             <label className="evcard-rec">
-              <span className="muted" style={{ fontSize: 12 }}>AI recommendation {aiDraft.current ? '(edit before approving if needed)' : ''}</span>
-              <textarea className="evcard-rec-input" rows={2} value={value} onChange={(e) => setValue(e.target.value)} />
+              <span className="muted" style={{ fontSize: 12 }}>
+                {aiDraft.current ? 'AI recommendation (edit before approving if needed)' : 'No AI draft — type the value a screen reader should announce'}
+              </span>
+              <textarea className="evcard-rec-input" rows={2} value={value}
+                        placeholder={aiDraft.current ? '' : 'Type the value a screen reader should announce…'}
+                        onChange={(e) => setValue(e.target.value)} />
             </label>
           ) : card.recommendation ? (
             <p className="evcard-rec-static"><b>AI recommendation:</b> {card.recommendation}</p>
           ) : null}
+
+          {/* Why the AI proposed this value — evidence, not a score. A proposal is a draft the
+              reviewer confirms; it was never auto-applied, so the reason matters more than the
+              value. When one criterion has several proposed instances, say so rather than
+              silently showing only the first. */}
+          {card.proposal && (
+            <p className="evcard-rec-why muted" style={{ fontSize: 12, margin: '2px 0 6px' }}>
+              {card.proposal.list[0]?.rationale}
+              {card.proposal.list.length > 1 && ` · ${card.proposal.list.length} instances proposed on this criterion`}
+            </p>
+          )}
 
           {b && (
             <p className="evcard-why">
@@ -91,10 +124,16 @@ export default function EvidenceCard({ item, onResolved }) {
             Compliance: <span className="conf conf-low">{card.impact.before}</span> → <span className="conf conf-high">{card.impact.after}</span> after approval
           </p>
 
+          <input className="rc-note" placeholder="Reviewer note (optional)" value={note}
+                 onChange={(e) => setNote(e.target.value)} />
+
           <div className="evcard-actions">
             <button className="qbtn approve" disabled={busy} onClick={() => decide('approved')}>✓ {primaryLabel}</button>
+            <button className="qbtn self" disabled={busy}
+                    title="Take ownership — fix it yourself, then re-scan to confirm"
+                    onClick={() => decide('skipped')}>✋ I’ll fix it</button>
             <button className="qbtn reject" disabled={busy} onClick={() => decide('rejected')}>✕ Reject</button>
-            <button className="ghost small" disabled={busy} onClick={() => decide('skipped')}>Skip</button>
+            {traceUrl && <a className="rc-trace" href={traceUrl} target="_blank" rel="noopener noreferrer">📊 View trace</a>}
           </div>
         </div>
       </div>
