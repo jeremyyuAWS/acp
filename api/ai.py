@@ -27,10 +27,28 @@ OLLAMA_MODEL    = os.environ.get("OLLAMA_MODEL", "llama3.2")
 OLLAMA_VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "llava:7b")
 # Vision inference on CPU is heavier than text: a cold single-image describe can take
 # 30-90s. Bound it so a wedged model can't stall a remediation job.
-try:
-    OLLAMA_VISION_TIMEOUT = float(os.environ.get("OLLAMA_VISION_TIMEOUT", "120"))
-except ValueError:
-    OLLAMA_VISION_TIMEOUT = 120.0
+def _envf(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+OLLAMA_VISION_TIMEOUT = _envf("OLLAMA_VISION_TIMEOUT", 120.0)
+# Availability probe. The warm path answers in milliseconds; the long budget only ever
+# applies after the fast probe TIMES OUT, which is how a Container App scaling up from
+# minReplicas=0 behaves (ACA holds the request while the replica activates).
+OLLAMA_PROBE_TIMEOUT = _envf("OLLAMA_PROBE_TIMEOUT", 3.0)
+OLLAMA_COLD_START_TIMEOUT = _envf("OLLAMA_COLD_START_TIMEOUT", 90.0)
+# Memoise the probe: it is called once per remediated file, and a cold/absent Ollama must
+# not cost the cold-start budget on every one of them.
+OLLAMA_PROBE_TTL = _envf("OLLAMA_PROBE_TTL", 300.0)
+_TAGS_CACHE: dict = {"at": 0.0, "tags": None}
+
+
+def reset_probe_cache() -> None:
+    """Drop the memoised probe (tests, and after an operator changes the Ollama config)."""
+    _TAGS_CACHE.update(at=0.0, tags=None)
 
 # Per-rule plain-English context injected into the prompt so the model
 # produces grounded, file-type-aware explanations rather than generic advice.
@@ -154,33 +172,74 @@ def explain_finding(
         return None
 
 
-def is_available() -> bool:
-    """Quick ping to check if Ollama is reachable."""
+def _fetch_tags() -> list[dict] | None:
+    """GET /api/tags, tolerating an Ollama that is scaling up from zero.
+
+    The demo's Ollama runs as a Container App with minReplicas=0. A cold start of an 8 GiB
+    llava image takes far longer than a snappy liveness ping, and ACA holds the request open
+    while the replica activates — so a cold Ollama shows up as a TIMEOUT, not a refusal.
+    The old 3s probe could never survive that, so vision_is_available() returned False and
+    every image fell through to "needs human alt text" instead of getting an AI draft.
+
+    Probe fast first (OLLAMA_PROBE_TIMEOUT, warm path), and on a timeout retry once with a
+    cold-start budget (OLLAMA_COLD_START_TIMEOUT). A ConnectError means nothing is listening
+    (local dev with no Ollama) — that is not a cold start, so fail immediately rather than
+    make every caller wait out the long budget.
+
+    Returns the model list, or None when Ollama is unreachable.
+    """
     import httpx
     try:
-        httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=3).raise_for_status()
-        return True
+        r = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=OLLAMA_PROBE_TIMEOUT)
+        r.raise_for_status()
+        return r.json().get("models", []) or []
+    except httpx.ConnectError:
+        return None                       # no listener — not a cold start; don't wait
+    except httpx.TimeoutException:
+        pass                              # possibly activating from zero — retry below
     except Exception:
-        return False
+        return None
+    try:
+        r = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=OLLAMA_COLD_START_TIMEOUT)
+        r.raise_for_status()
+        return r.json().get("models", []) or []
+    except Exception:
+        return None
+
+
+def _tags_cached() -> list[dict] | None:
+    """Memoise the probe for OLLAMA_PROBE_TTL seconds.
+
+    vision_is_available() is called once per remediated FILE. Without this, a scan of 50
+    documents against a cold or absent Ollama would pay the cold-start budget 50 times.
+    """
+    import time
+    now = time.monotonic()
+    if _TAGS_CACHE["at"] and (now - _TAGS_CACHE["at"]) < OLLAMA_PROBE_TTL:
+        return _TAGS_CACHE["tags"]
+    tags = _fetch_tags()
+    _TAGS_CACHE.update(at=now, tags=tags)
+    return tags
+
+
+def is_available() -> bool:
+    """Quick ping to check if Ollama is reachable (tolerates a scale-from-zero cold start)."""
+    return _tags_cached() is not None
 
 
 def vision_is_available() -> bool:
     """True only when Ollama is reachable AND a vision (llava-class) model is pulled.
     Distinct from is_available(): a text-only Ollama is 'available' but cannot describe
     images, so the alt-text remediator must gate genuine captioning on this, not is_available."""
-    import httpx
-    try:
-        r = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=3)
-        r.raise_for_status()
-        want = OLLAMA_VISION_MODEL
-        base = want.split(":", 1)[0]
-        for m in r.json().get("models", []) or []:
-            name = m.get("name", "")
-            if name == want or name.split(":", 1)[0] == base:
-                return True
+    tags = _tags_cached()
+    if not tags:
         return False
-    except Exception:
-        return False
+    base = OLLAMA_VISION_MODEL.split(":", 1)[0]
+    for m in tags:
+        name = m.get("name", "")
+        if name == OLLAMA_VISION_MODEL or name.split(":", 1)[0] == base:
+            return True
+    return False
 
 
 # ── Vision alt text (llava-class model) ───────────────────────────────────────

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { getFileRemediationDiffs } from './api.js'
+import { getFileRemediationDiffs, suggestFix } from './api.js'
 import { confClass } from './confidence.js'
 import Thumbnail from './Thumbnail.jsx'
 import { buildEvidenceCard, firstProposed, isValueFix, reviewTelemetry } from './reviewCard.js'
@@ -19,6 +19,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   const [value, setValue] = useState(firstProposed(item) ?? item?.approved_value ?? '')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
+  const [drafting, setDrafting] = useState(false)
+  const [draftMsg, setDraftMsg] = useState(null)   // { kind: 'ai' | 'template' | 'error', text }
   const shownAt = useRef(Date.now())               // reviewer-time metric starts when the card mounts
   // The value the AI actually proposed — reviewTelemetry diffs the human's final value against
   // this to derive the `edited` calibration signal, so it must be the proposal, not the draft.
@@ -31,6 +33,34 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
     }
     return () => { live = false }
   }, [item?.scan_id, item?.file])
+
+  // Draft on demand. Most items reach the inbox with a server-side proposal already attached,
+  // but an image whose alt text the vision model could not produce arrives with nothing — and
+  // the reviewer had no way to ask for one. This is that ask.
+  const draftWithAi = async () => {
+    if (!item?.scan_id || !item?.file || !item?.rule_id) return
+    setDrafting(true); setDraftMsg(null)
+    try {
+      const r = await suggestFix(item.scan_id, item.file, item.rule_id)
+      const s = (r?.suggestion || '').trim()
+      if (!s) { setDraftMsg({ kind: 'error', text: 'The model returned nothing — write the value yourself.' }); return }
+      setValue(s)
+      if (r.is_template) {
+        // A fill-in-the-blank template, NOT a description of this image (api/ai.py returns
+        // is_template for 1.1.1 when no vision model produced image-derived alt text). It is
+        // deliberately NOT recorded as aiDraft: approving it verbatim must count as
+        // human-authored, and reviewTelemetry must not log a template as an accepted AI value.
+        setDraftMsg({ kind: 'template', text: 'Template only — no vision model described this image. Rewrite it before approving.' })
+      } else {
+        aiDraft.current = s   // a genuine AI value: `edited` now means the human changed it
+        setDraftMsg({ kind: 'ai', text: `AI draft${r.model ? ` · ${r.model}` : ''} — edit if it misses the meaning.` })
+      }
+    } catch (e) {
+      setDraftMsg({ kind: 'error', text: e?.message || 'AI draft unavailable — write the value yourself.' })
+    } finally {
+      setDrafting(false)
+    }
+  }
 
   const card = buildEvidenceCard(item, diffs)
   // An editor appears for every value-fix criterion, draft or not — a reviewer must be able to
@@ -90,12 +120,29 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
 
           {editable ? (
             <label className="evcard-rec">
-              <span className="muted" style={{ fontSize: 12 }}>
-                {aiDraft.current ? 'AI recommendation (edit before approving if needed)' : 'No AI draft — type the value a screen reader should announce'}
+              <span className="evcard-rec-head">
+                <span className="muted" style={{ fontSize: 12 }}>
+                  {aiDraft.current ? 'AI recommendation (edit before approving if needed)' : 'No AI draft — type the value a screen reader should announce'}
+                </span>
+                {/* Ask the model for a draft on demand. Only offered when nothing was proposed —
+                    with a proposal present the box is already filled and re-drafting would
+                    silently overwrite the value the rationale below explains. */}
+                {!aiDraft.current && item?.scan_id && item?.file && item?.rule_id && (
+                  <button type="button" className="evcard-draft-btn" disabled={drafting}
+                          title="Ask the local model to draft this value — you still approve it"
+                          onClick={draftWithAi}>
+                    {drafting ? 'Drafting…' : '✨ Draft with AI'}
+                  </button>
+                )}
               </span>
               <textarea className="evcard-rec-input" rows={2} value={value}
                         placeholder={aiDraft.current ? '' : 'Type the value a screen reader should announce…'}
                         onChange={(e) => setValue(e.target.value)} />
+              {draftMsg && (
+                <span className={`evcard-draft-msg evcard-draft-${draftMsg.kind}`} role="status">
+                  {draftMsg.text}
+                </span>
+              )}
             </label>
           ) : card.recommendation ? (
             <p className="evcard-rec-static"><b>AI recommendation:</b> {card.recommendation}</p>
