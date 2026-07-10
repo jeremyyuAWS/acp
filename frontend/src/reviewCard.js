@@ -59,6 +59,16 @@ export function reviewTelemetry({ editable, status, value, aiDraft, elapsedMs })
 export const proposalsOf = (item) => (Array.isArray(item?.proposals) ? item.proposals : [])
 export const firstProposed = (item) => proposalsOf(item)[0]?.proposed_value ?? null
 
+// The base64 thumbnail of the OFFENDING IMAGE, captured server-side when the vision model
+// looked at it (remediate_office._vision_alt passes thumb=_thumb_b64(img)). This is not the
+// document's page-1 render — a PPTX cannot be rasterized at all (api/render.py is PDF-only),
+// so for a deck this is the only picture a reviewer can be shown.
+export const firstThumb = (item) => proposalsOf(item)[0]?.thumb ?? null
+
+// The rationale + the model that produced the draft, so the reviewer sees WHY, not just WHAT.
+export const firstRationale = (item) => proposalsOf(item)[0]?.rationale ?? null
+export const firstSource = (item) => proposalsOf(item)[0]?.source ?? null
+
 export function proposalMeta(item) {
   const list = proposalsOf(item)
   if (!list.length) return null
@@ -104,5 +114,9 @@ export function buildEvidenceCard(item, diffs = []) {
     // Where in the document to look — null when the analyser attributed nothing.
     location: locationLabel(item),
     page: item?.page ?? null,
+    // The actual image the reviewer must judge, and the evidence behind the draft.
+    thumb: firstThumb(item),
+    rationale: firstRationale(item),
+    proposalSource: firstSource(item),
   }
 }

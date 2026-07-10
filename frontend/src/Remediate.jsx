@@ -12,6 +12,8 @@ import QueuePanel from './QueuePanel.jsx'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
 import { confidenceForFinding, confClass } from './confidence.js'
 import { metaFor } from './hitlMeta.js'
+import { firstProposed, firstThumb, firstRationale, firstSource } from './reviewCard.js'
+import ProposalThumb from './ProposalThumb.jsx'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
 // (what to fix, prioritized, accept/reject/modify), the HITL queue, and self-remediation.
@@ -93,7 +95,19 @@ function dbItemToUi(it, files) {
     source: fileRec.sourceName,
     rule: `WCAG ${sc}${it.rule_name ? ' — ' + it.rule_name : ITEM_NAME[sc] ? ' — ' + ITEM_NAME[sc] : ''}`,
     before: ba.before(issue.detail, fileRec),
-    after: it.approved_value || ba.after(fileRec, issue),
+    // The AI's actual draft, from hitl_queue.proposals — what the vision model wrote for THIS
+    // image. `approved_value` only ever holds what a REVIEWER typed back (nothing writes it
+    // server-side), so the old `it.approved_value || template` fell through to the template on
+    // every item: "AI-generated alt text added — confirm or reword" rendered identically for
+    // every image in every document, whether or not a model had said anything.
+    after: firstProposed(it) || it.approved_value || ba.after(fileRec, issue),
+    // The offending image itself + why the model said what it said. Null when no proposal.
+    thumb: firstThumb(it),
+    rationale: firstRationale(it),
+    proposalSource: firstSource(it),
+    // Distinguishes a real model draft from the canned fallback, so the UI never labels a
+    // template as a suggestion the AI made.
+    hasProposal: !!firstProposed(it),
   }
 }
 
@@ -158,19 +172,38 @@ function ProgressRail({ steps }) {
 // "Why am I reviewing this?" (§3) — the honest evidence a compliance officer needs to act:
 // the confidence.js level + its concrete basis (never a fabricated %), the plain-language
 // escalation reason, and the value the AI is suggesting they approve.
-function WhyReview({ sc, suggested }) {
+function WhyReview({ sc, suggested, thumb, rationale, proposalSource, hasProposal, file }) {
   const conf = confidenceForFinding({ sc })
   const reason = metaFor({ rule_id: sc }).reason
   return (
     <div className="whyreview">
       <div className="whyreview-hd">Why am I reviewing this?</div>
-      <div className="whyreview-row">
-        <span className="muted">AI confidence</span>
-        <span className={confClass(conf.level)}>{conf.level.label}</span>
-        <span className="muted">— {conf.basis}</span>
+      <div className="whyreview-body" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+        {/* The actual image the reviewer must judge. A deck cannot be rasterized, so this
+            base64 thumb — captured when the vision model looked at it — is the only picture
+            we can ever show. Renders nothing when no proposal carried one. */}
+        <ProposalThumb thumb={thumb} alt={`Image needing alt text in ${file || 'the document'}`} size={84} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="whyreview-row">
+            <span className="muted">AI confidence</span>
+            <span className={confClass(conf.level)}>{conf.level.label}</span>
+            <span className="muted">— {conf.basis}</span>
+          </div>
+          <div className="whyreview-row"><span className="muted">Reason</span><span>{reason}</span></div>
+          {suggested && (
+            <div className="whyreview-row">
+              <span className="muted">{hasProposal ? 'AI suggested value' : 'Next step'}</span>
+              <span className="whyreview-sugg">{suggested}</span>
+            </div>
+          )}
+          {rationale && (
+            <div className="whyreview-row">
+              <span className="muted">Why this draft</span>
+              <span>{rationale}{proposalSource ? ` · ${proposalSource}` : ''}</span>
+            </div>
+          )}
+        </div>
       </div>
-      <div className="whyreview-row"><span className="muted">Reason</span><span>{reason}</span></div>
-      {suggested && <div className="whyreview-row"><span className="muted">Suggested value</span><span className="whyreview-sugg">{suggested}</span></div>}
     </div>
   )
 }
@@ -191,7 +224,8 @@ function ReviewItemCard({ item, onOpen, onApprove, onSelf, onReject, disabled })
         </div>
         <AutoBadge kind={badgeKind} />
       </div>
-      <WhyReview sc={sc} suggested={item.after} />
+      <WhyReview sc={sc} suggested={item.after} thumb={item.thumb} rationale={item.rationale}
+                 proposalSource={item.proposalSource} hasProposal={item.hasProposal} file={item.file} />
       <div className="reviewcard-actions">
         <button className="qbtn approve" disabled={disabled} onClick={onApprove}>✓ Approve</button>
         <button className="qbtn self" disabled={disabled} onClick={onSelf} title="Take ownership — fix it yourself, then re-scan to confirm">✋ I’ll fix it</button>

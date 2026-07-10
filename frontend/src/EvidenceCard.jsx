@@ -3,6 +3,7 @@ import { getFileRemediationDiffs } from './api.js'
 import { confClass } from './confidence.js'
 import Thumbnail from './Thumbnail.jsx'
 import { buildEvidenceCard, firstProposed, isValueFix, reviewTelemetry } from './reviewCard.js'
+import ProposalThumb from './ProposalThumb.jsx'
 
 // Evidence Card (PRD v2) — a PR-style review of ONE accessibility issue. The human APPROVES
 // ACP's recommendation; ACP applies it. Assembles only shipped primitives (confidence basis,
@@ -74,7 +75,11 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
       </header>
 
       <div className="evcard-body" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-        {card.scanId && card.file && <Thumbnail scanId={card.scanId} file={card.file} className="evcard-thumb" />}
+        {/* The offending image itself when the vision model captured one; otherwise the
+            document's page-1 render (PDF only — a deck cannot be rasterized). */}
+        {card.thumb
+          ? <ProposalThumb thumb={card.thumb} alt={`Image needing alt text in ${card.file}`} className="evcard-thumb" />
+          : (card.scanId && card.file && <Thumbnail scanId={card.scanId} file={card.file} className="evcard-thumb" />)}
         <div className="evcard-main" style={{ flex: 1, minWidth: 0 }}>
           <p className="evcard-problem">{card.problem}</p>
 
@@ -99,6 +104,13 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
             <p className="evcard-rec-why muted" style={{ fontSize: 12, margin: '2px 0 6px' }}>
               {card.proposal.list[0]?.rationale}
               {card.proposal.list.length > 1 && ` · ${card.proposal.list.length} instances proposed on this criterion`}
+            </p>
+          )}
+
+          {card.rationale && (
+            <p className="evcard-rationale muted" style={{ fontSize: 12, margin: '2px 0 6px' }}>
+              <b>Why this draft:</b> {card.rationale}
+              {card.proposalSource && <span> · {card.proposalSource}</span>}
             </p>
           )}
 
