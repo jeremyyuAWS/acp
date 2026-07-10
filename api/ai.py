@@ -383,6 +383,33 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     return {"alt": alt, "grounded": grounded, "evidence": evidence, "model": OLLAMA_VISION_MODEL}
 
 
+_ORDER_FIRST_ITEM = re.compile(r"(?:^|\s)(1\s*[.)]\s+\S)")
+
+
+def _strip_order_preamble(order: str) -> str:
+    """Drop a vision model's throat-clearing before an enumerated reading order.
+
+    Observed verbatim from llava:7b on a real discharge-instructions page:
+
+        "The image shows a document with text and graphics. To provide an accurate reading
+         order for this page, I would describe the content in a linear fashion from top to
+         bottom: 1. Logo at the top left corner 2. Title 3. ..."
+
+    The reviewer's card renders this string as the proposed reading order, so those first two
+    sentences sit in front of the answer. When an enumerated list is present the list IS the
+    order — start there. When it is not, the prose is all we have; return it untouched rather
+    than guess where the answer begins. Deterministic: no prompt change, nothing invented, and
+    a model that never enumerates is unaffected."""
+    if not order:
+        return order
+    m = _ORDER_FIRST_ITEM.search(order)
+    if not m:
+        return order
+    trimmed = order[m.start(1):].strip()
+    # Refuse to trim away the answer: a trailing "1." with no items behind it is not an order.
+    return trimmed if len(trimmed) >= 12 else order
+
+
 def describe_reading_order(page_bytes: bytes, *, filename: str = "",
                            scan_id: str | None = None, file: str | None = None) -> dict | None:
     """Vision-proposed reading order for a scanned / multi-column page (WCAG 1.3.2).
@@ -411,7 +438,8 @@ def describe_reading_order(page_bytes: bytes, *, filename: str = "",
             timeout=OLLAMA_VISION_TIMEOUT,
         )
         r.raise_for_status()
-        order = re.sub(r"\s+", " ", (r.json().get("response", "") or "").strip())[:400]
+        order = re.sub(r"\s+", " ", (r.json().get("response", "") or "").strip())
+        order = _strip_order_preamble(order)[:400]
         ok = bool(order) and len(order) >= 12
         _trace_ai("vision", prompt, order, _t0, ok=ok,
                   model=OLLAMA_VISION_MODEL, scan_id=scan_id, file=file)
