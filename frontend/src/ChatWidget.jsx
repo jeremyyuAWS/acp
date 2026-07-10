@@ -230,8 +230,8 @@ export default function ChatWidget({ files = [], run, trend = [], trendDates = [
                 {m._sid && <span className="chatcursor" aria-hidden="true">▍</span>}
                 {m.chart && <ChatChart chart={m.chart} />}
                 {m.role === 'bot' && m.ai !== undefined && (
-                  <span className={`aibadge ${m.ai ? 'on' : 'off'}`} title={m.ai ? 'Answered by Claude (live AI)' : 'Answered offline from your scan data — no live AI'}>
-                    {m.ai ? '✦ Claude' : '◴ offline'}
+                  <span className={`aibadge ${m.ai ? 'on' : 'off'}`} title={m.ai ? 'Answered by the configured language model' : 'Answered offline from your scan data — no live AI'}>
+                    {m.ai ? '✦ live AI' : '◴ offline'}
                   </span>
                 )}
               </div>

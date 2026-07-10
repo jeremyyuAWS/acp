@@ -1,9 +1,11 @@
 // Client bridge to the real AI remediation endpoints. The browser never sees the
-// Anthropic key — it POSTs to the serverless function, which calls Claude. Every call
+// NOTE: every function below POSTs to /.netlify/functions/*, which exist only in the Netlify
+// prototype. The ACP deployment has no such endpoints — these calls 404 and fall back. They
+// do NOT run in production, and ACP's real AI path is the local Ollama model (api/ai.py).
 // degrades gracefully to null so the demo still works with no key (local dev), exactly
 // like the chat path.
 
-// Generate genuine alt text for an image via Claude vision (WCAG 1.1.1).
+// Alt text for an image (WCAG 1.1.1) — Netlify-prototype path only; see the note above.
 export async function generateAltText({ data, mediaType, hint } = {}) {
   if (!data) return null
   try {
@@ -34,7 +36,7 @@ export async function aiTextFix({ kind, text, context } = {}) {
   } catch { return null }
 }
 
-// Real captions/transcript (1.2.2/1.2.3) via the Whisper-backed serverless function.
+// Captions/transcript (1.2.2/1.2.3) — Netlify-prototype path only. ACP itself never transcribes.
 // Returns WebVTT text, or null offline. `audio` is base64 (or a data URL).
 export async function generateCaptions({ audio, mediaType, audioUrl } = {}) {
   if (!audio && !audioUrl) return null

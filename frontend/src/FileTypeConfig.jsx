@@ -9,8 +9,9 @@ const KNOWN = [
   { ext: 'pptx',  label: 'PowerPoint (.pptx)',          note: 'Slide titles, alt text, reading order, language' },
   { ext: 'xlsx',  label: 'Excel spreadsheets (.xlsx)',  note: 'Table headers, sheet names, language' },
   { ext: 'html',  label: 'HTML / web pages',            note: 'Full axe-core WCAG 2.1 + 2.2 scan' },
-  { ext: 'video', label: 'Video (.mp4, .mov, .webm)',   note: 'Whisper captions, audio description check' },
-  { ext: 'audio', label: 'Audio (.mp3, .m4a, .wav)',    note: 'Whisper captions only — no visual output' },
+  // ACP runs no transcription pipeline; 1.2.x findings are detected and routed to a human.
+  { ext: 'video', label: 'Video (.mp4, .mov, .webm)',   note: 'caption + audio-description checks · human review' },
+  { ext: 'audio', label: 'Audio (.mp3, .m4a, .wav)',    note: 'transcript check only — no visual output' },
 ]
 
 const DEFAULTS = Object.fromEntries(KNOWN.map((k) => [k.ext, true]))
