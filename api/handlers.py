@@ -332,20 +332,33 @@ def _remediate_file(payload: dict, job: dict) -> None:
             # truth. Diagnostic only: a missing stamp never fails the mirror (the in-document
             # content stamp still catches the copy).
             if existing:
+                _mode = "updated"
                 result = svc.files().update(fileId=existing[0]["id"], media_body=media,
                                             body={"properties": props},
                                             fields="id,webViewLink,properties").execute()
             else:
+                _mode = "created"
                 result = svc.files().create(body={"name": filename, "parents": [folder_id],
                                                   "properties": props},
                                             media_body=media,
                                             fields="id,webViewLink,properties").execute()
             web_url = result.get("webViewLink", "")
-            if not provenance.is_acp_generated(result):
+            # ALWAYS one greppable line, stamped or not. Silence used to be ambiguous: this
+            # branch only spoke up on failure, so "no stamp line in the logs" meant either the
+            # stamp round-tripped, or the mirror never ran at all — and on the day it mattered
+            # it was the second. A log that only reports failure cannot tell you a thing about
+            # a system that is quiet.
+            _stamped = provenance.is_acp_generated(result)
+            print(f"[remediate] drive mirror: {filename} {_mode} id={result.get('id')} "
+                  f"stamp={'persisted' if _stamped else 'MISSING'} "
+                  f"properties={result.get('properties')!r}", flush=True)
+            if not _stamped:
+                # The audit trail records only the anomaly — one row per unstamped copy, not a
+                # row per successful write. Diagnostic: a missing stamp never fails the mirror
+                # (Blob holds the durable copy; the in-document content stamp still catches it).
                 _detail = (f"Drive did not echo the ACP provenance stamp on {filename} "
                            f"(got properties={result.get('properties')!r}); the next scan will "
                            f"not skip this copy by provenance")
-                print(f"[remediate] {_detail}", flush=True)
                 core.store.log_decision("system", "remediate.stamp_not_persisted",
                                         scan_id=scan_id, file=filename, detail=_detail[:200])
         except HttpError as e:
@@ -354,11 +367,21 @@ def _remediate_file(payload: dict, job: dict) -> None:
             reason = ("Drive write denied (403) — the signed-in user hasn't granted write "
                      "access (drive.file)." if getattr(e, "resp", None) is not None and e.resp.status == 403
                      else f"Drive mirror failed: {type(e).__name__}: {e}")
+            # To stdout as well as the decisions table: a mirror failure recorded only in the
+            # database is invisible to anyone reading logs, which is where you look first.
+            print(f"[remediate] drive mirror: {filename} FAILED — {reason}", flush=True)
             core.store.log_decision("system", "remediate.drive_mirror_failed", scan_id=scan_id,
                                     file=filename, detail=reason[:200])
         except Exception as e:
+            print(f"[remediate] drive mirror: {filename} FAILED — "
+                  f"{type(e).__name__}: {e}", flush=True)
             core.store.log_decision("system", "remediate.drive_mirror_failed", scan_id=scan_id,
                                     file=filename, detail=f"{type(e).__name__}: {e}"[:200])
+    else:
+        # The third silence: with the mirror switched off nothing was written and nothing was
+        # said, so "no mirror line" could also mean "the operator turned it off". Say it.
+        print(f"[remediate] drive mirror: {filename} skipped — disabled "
+              f"(settings.drive_mirror_enabled=false)", flush=True)
 
     core.store.record_remediation(scan_id, filename, drive_write_url=web_url, blob_url=blob_url)
     core.emit_remediation_span(scan_id, filename, drive_write_url=web_url)

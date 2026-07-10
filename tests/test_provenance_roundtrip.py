@@ -67,7 +67,10 @@ def test_the_mirror_asks_drive_to_echo_properties_back():
 
 def test_the_mirror_logs_when_the_stamp_does_not_round_trip():
     code = _code("handlers.py")
-    assert "if not provenance.is_acp_generated(result):" in code
+    # The result is captured once and reported unconditionally; the audit row is written only
+    # when it is missing. See tests/test_drive_mirror_logging.py for the full log contract.
+    assert "_stamped = provenance.is_acp_generated(result)" in code
+    assert "if not _stamped:" in code
     assert "remediate.stamp_not_persisted" in code
 
 
@@ -75,7 +78,7 @@ def test_a_missing_stamp_never_fails_the_mirror():
     # Diagnostic only: the in-document content stamp still catches the copy, and Blob already
     # holds the durable output. Raising here would turn an observability gap into an outage.
     code = _code("handlers.py")
-    block = code[code.index("if not provenance.is_acp_generated(result):"):]
+    block = code[code.index("if not _stamped:"):]
     block = block[:block.index("core.store.record_remediation")]
     assert "raise" not in block
 
