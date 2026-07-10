@@ -1745,6 +1745,16 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 /* Where a queued finding lives — slide/page chip on the evidence card header. */
 .evcard-loc { font-size: 11.5px; white-space: nowrap; }
 
+/* The recommendation editor. The label must be a block and the textarea width:100%, or the
+   textarea falls back to its default `cols` sizing (~20 chars) and the reviewer writes alt
+   text through a slit — the box is where the human does the actual work, so give it the card. */
+.evcard-rec { display: block; }
+.evcard-rec-input { display: block; box-sizing: border-box; width: 100%; min-height: 72px;
+  resize: vertical; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--card, #fff); color: inherit;
+  font: inherit; font-size: 13px; line-height: 1.5; }
+.evcard-rec-input:focus-visible { outline: 2px solid var(--plum); outline-offset: 1px; }
+
 /* On-demand "Draft with AI" — offered only when nothing was proposed for this item. */
 .evcard-rec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .evcard-draft-btn { background: none; border: 1px solid var(--line); border-radius: 6px;
