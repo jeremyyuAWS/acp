@@ -96,6 +96,15 @@ BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 BUILD_DATE="${BUILD_TIME:0:4}.$(( 10#${BUILD_TIME:5:2} )).$(( 10#${BUILD_TIME:8:2} ))"
 BUILD_SEQ="${BUILD_TIME:11:2}${BUILD_TIME:14:2}${BUILD_TIME:17:2}"
 BUILD_VERSION="${BUILD_DATE}.${BUILD_SEQ}"
+# Refuse to ship an unstamped image. The Dockerfile falls back to ARG BUILD_VERSION=dev,
+# which is right for a local `docker build` but must never reach the demo: a "dev" version
+# in /healthz makes a rollout unattributable. Fail here rather than after the image is
+# built and pushed. (The app enforces the other half: /healthz reports ok=false for an
+# unstamped image, see api/routes/system.py:_build_info.)
+if ! [[ "$BUILD_VERSION" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{6}$ ]]; then
+  echo "refusing to deploy: BUILD_VERSION '$BUILD_VERSION' is not a CalVer stamp (YYYY.M.D.HHMMSS)" >&2
+  exit 1
+fi
 echo "   version $BUILD_VERSION · built $BUILD_TIME"
 az acr build -r "$ACR" -t "$IMAGE" -f deploy/public/Dockerfile \
   --build-arg BUILD_VERSION="$BUILD_VERSION" --build-arg BUILD_TIME="$BUILD_TIME" . -o none
