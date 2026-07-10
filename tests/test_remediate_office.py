@@ -234,17 +234,24 @@ def _make_docx_with_image(path, body_xml, img_bytes=b"\x89PNG\r\n\x1a\n" + b"x" 
         z.writestr("word/media/image1.png", img_bytes)
 
 
-def _stub_vision(monkeypatch, alt="A red barn in a green field under a blue sky", available=True):
+def _stub_vision(monkeypatch, alt="A red barn in a green field under a blue sky",
+                 available=True, grounded=True):
+    """Stub the structured vision model offline. `grounded` drives the honesty split: a
+    grounded (OCR-anchored) description is auto-applied inline; an ungrounded one is
+    surfaced as a proposal, not written."""
     import ai
     calls = {"n": 0, "bytes": None}
 
     def fake_describe(image_bytes, **kw):
         calls["n"] += 1
         calls["bytes"] = image_bytes
-        return {"alt": alt, "model": "llava:7b"} if alt else None
+        if not alt:
+            return None
+        return {"alt": alt, "grounded": grounded,
+                "evidence": "stub evidence", "model": "llava:7b"}
 
     monkeypatch.setattr(ai, "vision_is_available", lambda: available)
-    monkeypatch.setattr(ai, "describe_image", fake_describe)
+    monkeypatch.setattr(ai, "describe_image_structured", fake_describe)
     return calls
 
 
@@ -341,3 +348,37 @@ def test_applied_fixes_sink_empty_without_vision(tmp_path, monkeypatch):
     sink = []
     remediate_office.remediate_office(src, ai_enabled=False, applied_fixes=sink)
     assert sink == []
+
+
+# ── Grounded → auto-apply, ungrounded → proposal (WCAG 1.1.1 intent stays human) ──
+
+def test_grounded_vision_alt_is_applied_inline(tmp_path, monkeypatch):
+    # OCR-anchored (grounded) description → written into the file, recorded as an applied fix.
+    _stub_vision(monkeypatch, alt="Bar chart of 2026 sales by region", grounded=True)
+    src = tmp_path / "grounded.docx"
+    _make_docx_with_image(src, _DRAWING, img_bytes=b"\x89PNG\r\n\x1a\n" + b"real" * 60)
+    applied_fixes, proposals = [], []
+    out, applied, skipped = remediate_office.remediate_office(
+        src, ai_enabled=True, applied_fixes=applied_fixes, proposals=proposals)
+    assert 'descr="Bar chart of 2026 sales by region"' in _doc_xml(out)
+    assert len(applied_fixes) == 1 and proposals == []            # applied, not proposed
+    assert not any("faithful alt source" in s for s in skipped)
+
+
+def test_ungrounded_vision_alt_becomes_proposal(tmp_path, monkeypatch):
+    # A textless-photo guess (ungrounded) is NOT written; it is surfaced as a one-click
+    # proposal, and the image stays deferred so the 1.1.1 finding remains open for review.
+    _stub_vision(monkeypatch, alt="A person standing near a building", grounded=False)
+    src = tmp_path / "ungrounded.docx"
+    _make_docx_with_image(src, _DRAWING, img_bytes=b"\x89PNG\r\n\x1a\n" + b"real" * 60)
+    applied_fixes, proposals = [], []
+    out, applied, skipped = remediate_office.remediate_office(
+        src, ai_enabled=True, applied_fixes=applied_fixes, proposals=proposals)
+    # no faithful source and vision guess withheld → nothing to write on the alt front
+    assert applied_fixes == []
+    assert len(proposals) == 1
+    p = proposals[0]
+    assert p["proposed_value"] == "A person standing near a building"
+    assert p["source"] == "AI vision model (llava)"
+    assert p["locator"].endswith("#rId9")
+    assert any("faithful alt source" in s for s in skipped)       # finding stays open

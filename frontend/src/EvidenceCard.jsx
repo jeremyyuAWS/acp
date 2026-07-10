@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { getFileRemediationDiffs } from './api.js'
 import { confClass } from './confidence.js'
 import Thumbnail from './Thumbnail.jsx'
-import { buildEvidenceCard, isValueFix, reviewTelemetry } from './reviewCard.js'
+import { buildEvidenceCard, firstProposed, isValueFix, reviewTelemetry } from './reviewCard.js'
 
 // Evidence Card (PRD v2) — a PR-style review of ONE accessibility issue. The human APPROVES
 // ACP's recommendation; ACP applies it. Assembles only shipped primitives (confidence basis,
@@ -13,11 +13,15 @@ import { buildEvidenceCard, isValueFix, reviewTelemetry } from './reviewCard.js'
 // optimistic update and the queue-drain event stay wired. traceUrl is optional.
 export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null }) {
   const [diffs, setDiffs] = useState([])
-  const [value, setValue] = useState(item?.approved_value ?? '')
+  // Prefill from the server-side AI proposal when there is one — that is what turns a 30s
+  // "write the alt text" into a 5s "confirm this". Falls back to a previously-approved value.
+  const [value, setValue] = useState(firstProposed(item) ?? item?.approved_value ?? '')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const shownAt = useRef(Date.now())               // reviewer-time metric starts when the card mounts
-  const aiDraft = useRef(item?.approved_value ?? null)
+  // The value the AI actually proposed — reviewTelemetry diffs the human's final value against
+  // this to derive the `edited` calibration signal, so it must be the proposal, not the draft.
+  const aiDraft = useRef(firstProposed(item) ?? item?.approved_value ?? null)
 
   useEffect(() => {
     let live = true
@@ -31,7 +35,9 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // An editor appears for every value-fix criterion, draft or not — a reviewer must be able to
   // author alt text the AI could not draft. Keying off `aiDraft != null` (as this once did)
   // silently hid the box exactly when the human was most needed.
-  const editable = card.track.track !== 'auto' && isValueFix(card.sc)
+  // An item carrying a proposal always takes a value, even if its SC isn't a classic VALUE_FIX
+  // (e.g. a 1.3.3 sensory rewrite) — otherwise the reviewer sees a proposal they cannot accept.
+  const editable = card.track.track !== 'auto' && (isValueFix(card.sc) || !!card.proposal)
   const primaryLabel = card.track.action                                    // "Approve & Apply" | "Review & edit"
 
   const decide = async (status) => {
@@ -84,6 +90,17 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
           ) : card.recommendation ? (
             <p className="evcard-rec-static"><b>AI recommendation:</b> {card.recommendation}</p>
           ) : null}
+
+          {/* Why the AI proposed this value — evidence, not a score. A proposal is a draft the
+              reviewer confirms; it was never auto-applied, so the reason matters more than the
+              value. When one criterion has several proposed instances, say so rather than
+              silently showing only the first. */}
+          {card.proposal && (
+            <p className="evcard-rec-why muted" style={{ fontSize: 12, margin: '2px 0 6px' }}>
+              {card.proposal.list[0]?.rationale}
+              {card.proposal.list.length > 1 && ` · ${card.proposal.list.length} instances proposed on this criterion`}
+            </p>
+          )}
 
           {b && (
             <p className="evcard-why">

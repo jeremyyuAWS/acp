@@ -226,19 +226,14 @@ def _vision_prompt(filename: str, context: str) -> str:
     )
 
 
-def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
-                   scan_id: str | None = None, file: str | None = None) -> dict | None:
-    """Generate genuine alt text for one image via the local vision model.
-
-    Sends the raw image bytes (base64) to Ollama /api/generate with OLLAMA_VISION_MODEL
-    and an alt-text prompt. Returns {"alt", "model"} or None when the model is
-    unavailable / errors / returns nothing usable. Traced through Langfuse (surface
-    'vision') exactly like explain/suggest/digest — model, latency, prompt size, ok."""
-    if not image_bytes:
-        return None
+def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = None,
+                     file: str | None = None) -> str | None:
+    """One bounded, Langfuse-traced vision call → a cleaned single-line alt string, or None.
+    Shared by describe_image and describe_image_structured so there is exactly one HTTP
+    path, timeout, and honesty guard (a one-word reply won't clear WCAG 1.1.1 → treated as
+    a miss so the caller falls back rather than writing junk that fails re-scan)."""
     import base64
     import time as _t
-    prompt = _vision_prompt(filename, context)
     b64 = base64.b64encode(image_bytes).decode("ascii")
     _t0 = _t.monotonic()
     try:
@@ -251,12 +246,117 @@ def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
         )
         r.raise_for_status()
         alt = _clean_alt(r.json().get("response", ""))
-        # A one-word or empty reply won't clear WCAG 1.1.1 — treat it as a miss so the
-        # caller falls back rather than writing junk that fails re-scan.
         ok = bool(alt) and len(alt) >= 8 and " " in alt
         _trace_ai("vision", prompt, alt, _t0, ok=ok,
                   model=OLLAMA_VISION_MODEL, scan_id=scan_id, file=file)
-        return {"alt": alt, "model": OLLAMA_VISION_MODEL} if ok else None
+        return alt if ok else None
+    except Exception:
+        _trace_ai("vision", prompt, None, _t0, ok=False,
+                  model=OLLAMA_VISION_MODEL, scan_id=scan_id, file=file)
+        return None
+
+
+def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
+                   scan_id: str | None = None, file: str | None = None) -> dict | None:
+    """Generate genuine alt text for one image via the local vision model.
+
+    Sends the raw image bytes (base64) to Ollama /api/generate with OLLAMA_VISION_MODEL
+    and an alt-text prompt. Returns {"alt", "model"} or None when the model is
+    unavailable / errors / returns nothing usable. Traced through Langfuse (surface
+    'vision') exactly like explain/suggest/digest — model, latency, prompt size, ok."""
+    if not image_bytes:
+        return None
+    alt = _vision_generate(_vision_prompt(filename, context), image_bytes,
+                           scan_id=scan_id, file=file)
+    return {"alt": alt, "model": OLLAMA_VISION_MODEL} if alt else None
+
+
+def _structured_vision_prompt(filename: str, ocr_text: str, context: str) -> str:
+    """A structured alt-text prompt for a data-bearing image (chart, diagram, screenshot).
+    Feeds the OCR-read text so the description is ANCHORED in the image's real labels
+    (headline, categories) instead of a free vision guess."""
+    where = f" It appears in the document '{filename}'." if filename else ""
+    seen = re.sub(r"\s+", " ", (ocr_text or "").strip())[:400]
+    read = f"\nText read from the image (OCR): {seen}" if seen else ""
+    near = f"\nNearby document text: {context.strip()[:200]}" if context and context.strip() else ""
+    return (
+        "You are writing alternative text for a chart, diagram, or screenshot so a screen-"
+        "reader user understands what it conveys. Using the text read from the image, write "
+        "ONE concise sentence (under 25 words) that states the image's headline/subject, its "
+        "type (e.g. bar chart, line graph, table, screenshot), and the single key takeaway. "
+        "Do not begin with 'image of', 'picture of', or 'this image shows'."
+        f"{where}{read}{near}\nAlt text:"
+    )
+
+
+def describe_image_structured(image_bytes: bytes, *, filename: str = "", context: str = "",
+                              scan_id: str | None = None, file: str | None = None) -> dict | None:
+    """Structured, OCR-anchored alt text (WCAG 1.1.1). Returns
+    {"alt", "grounded", "evidence", "model"} or None.
+
+    `grounded` is True when OCR read real text from the image (a chart's headline/labels, a
+    screenshot's words): the description is then anchored in extractable content, a High-
+    confidence derivation a remediator may auto-apply. When OCR finds nothing (a textless
+    photo) the description is a pure vision guess — `grounded` is False and the caller
+    surfaces it as a Medium proposal for human confirmation rather than auto-applying, since
+    a machine cannot judge whether a guessed description conveys the author's intent."""
+    if not image_bytes:
+        return None
+    ocr_txt = ""
+    try:
+        import ocr as _ocr
+        ocr_txt = _ocr.ocr_text(image_bytes)
+    except Exception:
+        ocr_txt = ""
+    grounded = len(re.findall(r"[A-Za-z]{2,}", ocr_txt)) >= 2
+    if grounded:
+        prompt = _structured_vision_prompt(filename, ocr_txt, context)
+    else:
+        prompt = _vision_prompt(filename, context)
+    alt = _vision_generate(prompt, image_bytes, scan_id=scan_id, file=file)
+    if not alt:
+        return None
+    if grounded:
+        snippet = re.sub(r"\s+", " ", ocr_txt).strip()[:80]
+        evidence = f"anchored in text read from the image (OCR: “{snippet}”)"
+    else:
+        evidence = "vision description only — no text in the image to anchor it; confirm it matches the intent"
+    return {"alt": alt, "grounded": grounded, "evidence": evidence, "model": OLLAMA_VISION_MODEL}
+
+
+def describe_reading_order(page_bytes: bytes, *, filename: str = "",
+                           scan_id: str | None = None, file: str | None = None) -> dict | None:
+    """Vision-proposed reading order for a scanned / multi-column page (WCAG 1.3.2).
+    Returns {"order", "model"} — a short human-readable reading sequence — or None. Bounded
+    and traced like describe_image. This is only ever a PROPOSAL a human confirms (a machine
+    cannot be trusted to fix reading order on an untagged scan), never an auto-fix."""
+    if not page_bytes:
+        return None
+    import base64
+    import time as _t
+    where = f" from the document '{filename}'" if filename else ""
+    prompt = (
+        f"This is one page{where}. A screen reader reads content in a single linear order. "
+        "In one or two short sentences, state the correct reading order of this page's blocks "
+        "(columns, headings, sidebars, captions, tables) — e.g. 'Read the left column top to "
+        "bottom, then the right column, then the footer.' Be specific to the layout you see."
+    )
+    b64 = base64.b64encode(page_bytes).decode("ascii")
+    _t0 = _t.monotonic()
+    try:
+        import httpx
+        r = httpx.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={"model": OLLAMA_VISION_MODEL, "prompt": prompt, "images": [b64],
+                  "stream": False, "options": {"temperature": 0.2, "num_predict": 140}},
+            timeout=OLLAMA_VISION_TIMEOUT,
+        )
+        r.raise_for_status()
+        order = re.sub(r"\s+", " ", (r.json().get("response", "") or "").strip())[:400]
+        ok = bool(order) and len(order) >= 12
+        _trace_ai("vision", prompt, order, _t0, ok=ok,
+                  model=OLLAMA_VISION_MODEL, scan_id=scan_id, file=file)
+        return {"order": order, "model": OLLAMA_VISION_MODEL} if ok else None
     except Exception:
         _trace_ai("vision", prompt, None, _t0, ok=False,
                   model=OLLAMA_VISION_MODEL, scan_id=scan_id, file=file)
@@ -274,6 +374,8 @@ _SUGGEST_KIND: dict[str, tuple[str, str]] = {
     "2.4.4": ("link text", "descriptive link text stating the destination or purpose without surrounding context"),
     "2.4.9": ("link text", "descriptive link text understandable from the link alone"),
     "2.4.2": ("title", "a concise, descriptive document title"),
+    "1.3.3": ("rewrite", "a rewrite of the instruction that does not rely on shape, colour, size, or "
+                         "on-screen position — refer to controls by their visible label or name instead"),
 }
 
 
@@ -284,11 +386,16 @@ def _suggest_prompt(rule_id: str, rule_name: str, filename: str, detail: str) ->
     if rule_id == "1.1.1":
         vision_note = ("\nYou cannot see the image. Produce a SHORT fill-in-the-blank template the author "
                        "completes, e.g. 'Describe: [what the image shows and why it matters here]'.")
+    elif rule_id == "1.3.3":
+        vision_note = ("\nThe instruction above relies on a sensory characteristic (shape / colour / size / "
+                       "position such as 'the green button' or 'the box on the right'). Rewrite it to identify "
+                       "the control by its visible text label or name instead, keeping the same meaning. If the "
+                       "label is unknown, use a clearly-marked placeholder like '[button label]'.")
     return (
         f"You are an accessibility remediation assistant. A WCAG {rule_id} ({rule_name}) issue was found "
         f"in the document '{filename}'.{ctx}\n"
         f"Draft {want}.{vision_note}\n"
-        f"Reply with ONLY the suggested {kind} — no preamble, no quotes, under 20 words."
+        f"Reply with ONLY the suggested {kind} — no preamble, no quotes, under 30 words."
     )
 
 

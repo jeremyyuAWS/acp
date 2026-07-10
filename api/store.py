@@ -140,6 +140,17 @@ _SCHEMA = [
     # compliance evidence of what was actually approved, distinct from the
     # ai.py-generated draft (which is regenerated on demand, not persisted).
     "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS approved_value TEXT",
+    # AI-proposes → validate → one-click-approve lane. `proposals` is a JSON array of
+    # {locator, before, proposed_value, rationale, source, thumb?} — one entry per
+    # finding instance (3 vague links → 3 entries), so the reviewer sees a concrete,
+    # pre-computed value to approve in one click instead of an on-demand /ai/suggest
+    # blank. Distinct from approved_value (the human's final single value). `validated`
+    # is 1 only when the proposal batch cleared its SC on the file's post-apply re-scan
+    # — a persisted, honest signal confidence.js can key a Medium ("validated by
+    # re-scan — awaiting approval") off of, since detection-tier confidence alone can't
+    # tell a validated proposal from an unvalidated one.
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS proposals TEXT",
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS validated INT",
     # Per-file, per-rule-id (from rule-catalog.json) execution manifest.
     # PASS = rule ran, no findings; FAIL = findings found; ERROR = engine error.
     """CREATE TABLE IF NOT EXISTS scan_file_manifests (
@@ -1649,6 +1660,47 @@ class Store:
                                 "status": "pending", "created_at": now})
         return created
 
+    def enqueue_proposals(self, scan_id: str, file: str, sc: str, proposals: list[dict],
+                          *, validated: bool = False, rule_name: str | None = None,
+                          finding_count: int | None = None) -> str | None:
+        """Attach AI-proposed concrete fix values to the HITL row for (scan, file, sc), so the
+        reviewer approves a pre-computed value in one click instead of drafting from a blank.
+
+        `proposals` = [{locator, before, proposed_value, rationale, source, thumb?}, …], one
+        per finding instance. `validated` is True only when the batch cleared its SC on the
+        post-apply re-scan (an honest signal, persisted for confidence.js). Idempotent per
+        (scan, file, sc) like the other queue_* methods: a repeat remediate REPLACES the
+        proposals on the existing row rather than duplicating — the newest proposal wins.
+        Returns the item id, or None when `proposals` is empty (nothing to surface)."""
+        if not proposals:
+            return None
+        import json as _json
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        blob = _json.dumps(proposals)
+        vflag = 1 if validated else 0
+        count = finding_count if finding_count is not None else len(proposals)
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s",
+                (scan_id, file, sc))
+            row = self._db.fetchone(cur)
+            if row:
+                # Only refresh the proposal payload; never clobber a status the reviewer
+                # already moved off 'pending' (approved/rejected/skipped stays put).
+                self._db.execute(cur,
+                    "UPDATE hitl_queue SET proposals=%s, validated=%s, finding_count=%s "
+                    "WHERE id=%s",
+                    (blob, vflag, count, row["id"]))
+                return row["id"]
+            item_id = uuid.uuid4().hex[:12]
+            self._db.execute(cur,
+                "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,"
+                "finding_count,status,proposals,validated) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
+                (item_id, now, scan_id, file, sc, rule_name or sc, count, blob, vflag))
+        return item_id
+
     def mark_file_compliant_if_reviewed(self, scan_id: str, file: str) -> bool:
         """After a HITL resolution: a REMEDIATED file whose every HITL item is 'approved'
         (none pending / rejected / skipped) is fully conformant — its auto fixes verified
@@ -1694,12 +1746,24 @@ class Store:
         where = (" WHERE " + " AND ".join(conds)) if conds else ""
         with self._db.cursor() as cur:
             self._db.execute(cur, f"SELECT * FROM hitl_queue{where} ORDER BY created_at DESC", tuple(params))
-            return self._db.fetchall(cur)
+            return [self._decode_proposals(r) for r in self._db.fetchall(cur)]
 
     def get_hitl_item(self, item_id: str) -> dict | None:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT * FROM hitl_queue WHERE id=%s", (item_id,))
-            return self._db.fetchone(cur)
+            return self._decode_proposals(self._db.fetchone(cur))
+
+    @staticmethod
+    def _decode_proposals(row: dict | None) -> dict | None:
+        """Parse the hitl_queue `proposals` JSON column into a real list so callers/the API
+        get [{locator, proposed_value, …}], not a raw string. No-op when absent/legacy."""
+        if row and row.get("proposals"):
+            import json as _json
+            try:
+                row["proposals"] = _json.loads(row["proposals"])
+            except (ValueError, TypeError):
+                row["proposals"] = []
+        return row
 
     def update_hitl_item(self, item_id: str, status: str, reviewer_note: str | None = None,
                          approved_value: str | None = None) -> dict | None:

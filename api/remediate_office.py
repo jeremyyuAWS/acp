@@ -237,7 +237,8 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
                   part_name: str | None = None, vision_enabled: bool = False,
                   context_file: str = "", scan_id: str | None = None,
                   vision_budget: list | None = None,
-                  applied_fixes: list | None = None) -> tuple[str, list[tuple[str, str]], int]:
+                  applied_fixes: list | None = None,
+                  proposals: list | None = None) -> tuple[str, list[tuple[str, str]], int]:
     """Add descr= to every <tag …> lacking one, from a faithful source or (when
     vision_enabled) a genuine vision description of the image bytes.
 
@@ -278,10 +279,28 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
                         if _CAPTION_LEAD.match(cand):
                             caption = cand
             src = _derive_alt(attrs, caption)
+            # Decorative inference (heuristic — Low, human, NEVER auto). When the only faithful
+            # source is the shape NAME and that name reads decorative (a logo / divider / spacer
+            # / background flourish), don't announce the layer name as alt — propose "mark
+            # decorative" for the reviewer to confirm instead (marking noise as content is worse
+            # than a missing-alt finding). Runs even when vision is off (no model needed).
+            if proposals is not None and src and src[1] == "the shape's descriptive name":
+                import proposals as _prop
+                _deco = _prop.infer_decorative(filename=src[0])
+                if _deco:
+                    proposals.append(_prop.proposal(
+                        locator=f"{part_name}#{_ATTR(attrs, 'name').strip()}",
+                        before="(no alt text)",
+                        proposed_value="Mark as decorative — no alt text needed",
+                        rationale=_deco["rationale"],
+                        source="decorative-image inference (heuristic)", kind="decorative"))
+                    deferred += 1
+                    out.append(keep)
+                    continue
             if src is None:
                 src = _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name,
                                   vision_enabled, context_file, caption, scan_id, vision_budget,
-                                  applied_fixes)
+                                  applied_fixes, proposals)
             if src is None:
                 deferred += 1
                 out.append(keep); continue
@@ -295,12 +314,20 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
 
 
 def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_enabled,
-                context_file, caption, scan_id, vision_budget, applied_fixes=None) -> tuple[str, str] | None:
-    """Genuine alt text for an unlabelled image from the local vision model, or None.
+                context_file, caption, scan_id, vision_budget, applied_fixes=None,
+                proposals=None) -> tuple[str, str] | None:
+    """Structured, OCR-anchored alt text for an unlabelled image from the local vision model.
 
     Finds this drawing's r:embed (the blip follows the docPr/cNvPr within the same
     pic/drawing), resolves it to image bytes, and calls the vision model. Bounded by
-    vision_budget so a document with many images can't run unboundedly."""
+    vision_budget so a document with many images can't run unboundedly.
+
+    Honesty split (WCAG 1.1.1 intent stays human): a GROUNDED description — one anchored in
+    text OCR'd from the image (a chart's headline/labels) — is auto-applied inline and
+    returned like a faithful source. An UNGROUNDED description — a pure vision guess on a
+    textless image — is NOT written inline; it is collected into `proposals` (Medium) so the
+    finding stays open and the reviewer approves the machine's guess in one click rather than
+    the platform silently asserting alt a human never confirmed conveys the intended meaning."""
     if not (vision_enabled and entries is not None and part_name):
         return None
     if vision_budget is not None and vision_budget[0] <= 0:
@@ -321,22 +348,34 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
         return None
     try:
         import ai as _ai
-        res = _ai.describe_image(img, filename=context_file, context=caption or "",
-                                 scan_id=scan_id, file=context_file)
+        res = _ai.describe_image_structured(img, filename=context_file, context=caption or "",
+                                            scan_id=scan_id, file=context_file)
     except Exception:
         res = None
     if not res:
         return None
     if vision_budget is not None:
         vision_budget[0] -= 1
-    if applied_fixes is not None:
-        applied_fixes.append({
-            "rule_id": "SC_1_1_1",
-            "value": res["alt"],
-            "source": "AI vision model (llava)",
-            "thumb": _thumb_b64(img),
-        })
-    return res["alt"], "an AI vision description of the image"
+    if res.get("grounded"):
+        if applied_fixes is not None:
+            applied_fixes.append({
+                "rule_id": "SC_1_1_1",
+                "value": res["alt"],
+                "source": "AI vision model (llava), anchored in image text",
+                "thumb": _thumb_b64(img),
+            })
+        return res["alt"], "an AI vision description anchored in the image's own text"
+    # Ungrounded guess → surface for one-click approval instead of auto-writing it.
+    if proposals is not None:
+        import proposals as _prop
+        proposals.append(_prop.proposal(
+            locator=f"{part_name}#{rid_m.group(1)}",
+            before="(no alt text — image skipped by screen readers)",
+            proposed_value=res["alt"],
+            rationale=res.get("evidence") or "AI vision description — confirm it matches the intent",
+            source="AI vision model (llava)",
+            thumb=_thumb_b64(img)))
+    return None
 
 
 # part-glob → (tag, pic wrapper or None, captions?)
@@ -349,10 +388,13 @@ _ALT_TARGETS = [
 
 def _fix_image_alt(entries: dict, *, vision_enabled: bool = False,
                    context_file: str = "", scan_id: str | None = None,
-                   applied_fixes: list | None = None, diffs=None) -> tuple[list[str], int]:
+                   applied_fixes: list | None = None, proposals: list | None = None,
+                   diffs=None) -> tuple[list[str], int]:
     """Inject alt text across all image-bearing parts — faithful source first, then a
-    genuine vision description when vision_enabled. Returns (applied descriptions,
-    count of images deferred to human review)."""
+    genuine vision description when vision_enabled. Grounded (OCR-anchored) vision alt is
+    applied inline; an ungrounded vision guess is collected into `proposals` for one-click
+    approval, not written. Returns (applied descriptions, count of images deferred/proposed
+    to human review)."""
     applied: list[str] = []
     deferred = 0
     vision_budget = [_VISION_MAX_IMAGES]
@@ -368,7 +410,7 @@ def _fix_image_alt(entries: dict, *, vision_enabled: bool = False,
                 xml, tag, pic_only_within=wrapper, captions=captions,
                 entries=entries, part_name=name, vision_enabled=vision_enabled,
                 context_file=context_file, scan_id=scan_id, vision_budget=vision_budget,
-                applied_fixes=applied_fixes)
+                applied_fixes=applied_fixes, proposals=proposals)
             deferred += part_deferred
             if fixed:
                 entries[name] = new_xml.encode("utf-8")
@@ -572,6 +614,54 @@ def _remediate_docx_structure(entries: dict, diffs=None) -> list[str]:
     W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
     root = etree.fromstring(entries[name])
     applied: list[str] = []
+    val_attr = f"{{{W}}}val"
+
+    # Pseudo-heading promotion (1.3.1 / 2.4.6): a body-styled paragraph that is visually a
+    # heading (large/bold) becomes a real Heading N so assistive tech can navigate to it.
+    # Uses the SAME predicate the detector flags (office_structure.looks_like_pseudo_heading),
+    # so the fix clears the re-scan; the level comes from font-size rank and the outline
+    # normalisation below then guarantees one H1 and closes any skip. Runs first so promoted
+    # paragraphs are counted by the heading-collection that follows.
+    import office_structure as _osx
+    import proposals as _prop
+    pseudo: list = []                      # (pPr_or_None, p, max_half_pt)
+    for p in root.iter(f"{{{W}}}p"):
+        pPr = p.find(f"{{{W}}}pPr")
+        st = pPr.find(f"{{{W}}}pStyle") if pPr is not None else None
+        styled = st is not None and (st.get(val_attr) or "").startswith("Heading")
+        text = "".join(t.text or "" for t in p.iter(f"{{{W}}}t")).strip()
+        bold, max_hp = False, 0
+        for r in p.iter(f"{{{W}}}r"):
+            rPr = r.find(f"{{{W}}}rPr")
+            if rPr is None:
+                continue
+            bel = rPr.find(f"{{{W}}}b")
+            if bel is not None and (bel.get(val_attr) or "1") not in ("0", "false", "off"):
+                bold = True
+            szel = rPr.find(f"{{{W}}}sz")
+            if szel is not None:
+                try:
+                    max_hp = max(max_hp, int(szel.get(val_attr) or 0))
+                except (TypeError, ValueError):
+                    pass
+        if _osx.looks_like_pseudo_heading(text, bold=bold, max_half_pt=max_hp, styled_heading=styled):
+            pseudo.append((pPr, p, max_hp, text))
+    if pseudo:
+        _levels = _prop.infer_heading_levels([hp for _, _, hp, _ in pseudo])
+        for pPr, p, hp, text in pseudo:
+            lvl = _levels.get(float(hp), 2)
+            if pPr is None:
+                pPr = p.makeelement(f"{{{W}}}pPr", {})
+                p.insert(0, pPr)
+            st = pPr.find(f"{{{W}}}pStyle")
+            if st is None:
+                st = pPr.makeelement(f"{{{W}}}pStyle", {})
+                pPr.insert(0, st)
+            st.set(val_attr, f"Heading{lvl}")
+            _rec(diffs, "1.3.1", f'paragraph “{text[:40]}” was body text styled to look like a heading',
+                 f"promoted to Heading {lvl} style",
+                 "so it joins the heading outline assistive tech navigates by")
+        applied.append(f"Promoted {len(pseudo)} visually-styled pseudo-heading(s) to real headings · 1.3.1")
 
     # Table headers (1.3.1): the first row of every multi-row table gets w:tblHeader,
     # which is exactly what the analyser's HasHeaderRow() checks for.
@@ -762,7 +852,8 @@ def _remediate_xlsx_structure(entries: dict, diffs=None) -> list[str]:
 
 
 def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True,
-                     scan_id: str | None = None, applied_fixes: list | None = None, diffs=None):
+                     scan_id: str | None = None, applied_fixes: list | None = None,
+                     proposals: list | None = None, diffs=None):
     """Apply deterministic Office accessibility fixes to a copy of the file.
 
     ai_enabled — when True and a vision (llava-class) Ollama model is reachable,
@@ -813,7 +904,7 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
             vision_enabled = False
     alt_applied, alt_deferred = _fix_image_alt(
         entries, vision_enabled=vision_enabled, context_file=path.name, scan_id=scan_id,
-        applied_fixes=applied_fixes, diffs=diffs)
+        applied_fixes=applied_fixes, proposals=proposals, diffs=diffs)
     applied.extend(alt_applied)
     skipped: list[str] = []
     if alt_deferred:
