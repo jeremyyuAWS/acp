@@ -219,8 +219,31 @@ def test_setup_script_resets_the_inherited_helper_chain():
     assert re.search(r'git config --global --add "\$URL_KEY" \'\'', src), \
         "setup must add an empty helper value first, to reset the inherited chain"
     add_empty = src.index("""--add "$URL_KEY" ''""")
-    add_helper = src.index('--add "$URL_KEY" "!$HELPER"')
+    add_helper = src.index('--add "$URL_KEY" "!$DEST"')
     assert add_empty < add_helper, "the reset must come BEFORE the helper is added"
+
+
+def test_setup_points_git_outside_the_working_tree():
+    """A credential helper is machine-wide; a working tree is per-branch.
+
+    Pointing git at $ACP/scripts/git-credential-ado.sh breaks every `git fetch` against Azure
+    DevOps the moment someone checks out a branch created before the script existed -- including
+    the fetch they would need to get it back. Install a copy to a stable path instead.
+    """
+    src = SETUP.read_text()
+    assert 'DEST_DIR="${ACP_HELPER_DIR:-$HOME/.local/bin}"' in src, \
+        "the installed helper must live outside the repo"
+    assert 'git config --global --add "$URL_KEY" "!$DEST"' in src, \
+        "git must be pointed at the installed copy, not the in-repo path"
+    assert '--add "$URL_KEY" "!$SRC"' not in src, "must not point git into the working tree"
+    assert 'install -m 0755 "$SRC" "$DEST"' in src, "the repo copy must be installed, executable"
+
+
+def test_setup_reports_drift_between_repo_and_installed_copy():
+    """The repo is the source of truth. A stale installed copy must be visible, not silent."""
+    src = SETUP.read_text()
+    assert 'cmp -s "$SRC" "$DEST"' in src
+    assert "drift" in src.lower()
 
 
 def test_setup_script_clears_a_cached_keychain_token():
@@ -238,11 +261,46 @@ def test_setup_scopes_the_reset_to_azure_devops_only():
 @pytest.mark.skipif(not shutil.which("bash"), reason="bash required")
 def test_setup_check_mode_changes_nothing(tmp_path):
     """--check must be safe to run anywhere, including CI."""
-    env = dict(os.environ, HOME=str(tmp_path))
+    env = dict(os.environ, HOME=str(tmp_path), ACP_HELPER_DIR=str(tmp_path / "bin"))
     out = subprocess.run(["bash", str(SETUP), "--check"], capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stderr
     assert "no changes made" in out.stdout
     assert not (tmp_path / ".gitconfig").exists(), "--check wrote to ~/.gitconfig"
+    assert not (tmp_path / "bin").exists(), "--check installed the helper"
+
+
+# `git` is stubbed so the installer cannot touch the real ~/.gitconfig or the login keychain.
+_GIT_STUB = """#!/bin/sh
+case "$1" in
+  config) exit 0 ;;
+  credential-osxkeychain) exit 0 ;;
+  -C) shift 2; [ "$1" = "remote" ] && exit 1; exit 0 ;;
+  *) exit 0 ;;
+esac
+"""
+
+
+@pytest.mark.skipif(not shutil.which("bash"), reason="bash required")
+def test_setup_installs_a_copy_outside_the_repo(tmp_path):
+    """End-to-end: the installed helper is a real, executable copy at a stable path."""
+    binn = tmp_path / "stub"
+    binn.mkdir()
+    (binn / "az").write_text(AZ_OK)
+    (binn / "az").chmod(0o755)
+    (binn / "git").write_text(_GIT_STUB)
+    (binn / "git").chmod(0o755)
+
+    dest_dir = tmp_path / "installed"
+    env = dict(os.environ, HOME=str(tmp_path), ACP_HELPER_DIR=str(dest_dir),
+               PATH=f"{binn}:{os.environ['PATH']}")
+    out = subprocess.run(["bash", str(SETUP)], capture_output=True, text=True, env=env)
+    assert out.returncode == 0, out.stdout + out.stderr
+
+    dest = dest_dir / "git-credential-ado.sh"
+    assert dest.is_file(), "installer did not copy the helper"
+    assert os.access(dest, os.X_OK), "installed helper is not executable"
+    assert dest.read_text() == HELPER.read_text(), "installed copy differs from the repo copy"
+    assert ROOT not in dest.parents, "installed helper is inside the working tree"
 
 
 def test_both_scripts_are_executable():
