@@ -6,7 +6,7 @@ scan finishes (the "documents never retained" guarantee).
 """
 from __future__ import annotations
 import concurrent.futures as _cf
-import io, json, os, re, shutil, subprocess, sys, tempfile, uuid, zipfile
+import io, json, os, re, shutil, subprocess, sys, tempfile, time, uuid, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 import lf as _lf_mod
@@ -176,18 +176,9 @@ def _find_remediated_folder_id(svc) -> str | None:
     return folders[0]["id"] if folders else None
 
 
-def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False) -> list[dict]:
-    """Whole-Drive search — returns all scannable files regardless of folder."""
-    excl_id = _find_remediated_folder_id(svc) if exclude_remediated else None
-    q = f"({_DRIVE_MIME_Q}) and trashed=false"
-    if excl_id:
-        # Drive query syntax — files NOT in that folder. A file can have multiple
-        # parents, so this only excludes files whose ACP-remediated copy is their
-        # sole/primary location, which matches the actual upload behavior.
-        q += f" and not '{excl_id}' in parents"
+def _list_drive_page_all(svc, q: str, max_files: int) -> tuple[list[dict], bool]:
+    """One full paginated listing for `q`. Returns (raw files, hit_cap)."""
     files: list[dict] = []
-    listed = 0            # raw items Drive returned, before any filtering
-    skipped_acp = 0       # ACP's own output, skipped by provenance
     page_token = None
     while len(files) < max_files:
         resp = svc.files().list(
@@ -200,18 +191,90 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False) -
             includeItemsFromAllDrives=True,
             supportsAllDrives=True,
         ).execute(num_retries=5)             # backoff on 429/5xx instead of failing the file
-        batch = resp.get("files", [])
-        listed += len(batch)
-        if exclude_remediated:
-            # Provenance beats location: skip anything ACP itself wrote, wherever it sits.
-            kept = [f for f in batch if not provenance.is_acp_generated(f)]
-            skipped_acp += len(batch) - len(kept)
-            batch = kept
-        files.extend(batch)
+        files.extend(resp.get("files", []))
         page_token = resp.get("nextPageToken")
         if not page_token:
             break
-    if page_token:
+    return files, bool(page_token)
+
+
+def _debug_dump_account(svc, max_files: int = 60) -> None:
+    """Log EVERY file Drive returns for this account, filtered only by trashed=false — so a file
+    the scan missed because its MIME type isn't scannable (a legacy .doc, an .odt, an image),
+    or because it belongs to another owner (shared-with-me), is visible in the log instead of
+    silently absent. Gated behind ACP_DRIVE_DISCOVERY_DEBUG because it is an extra unfiltered
+    listing; turn it on to answer 'why did the scan only see N files?' and off again after.
+    A best-effort diagnostic: it must never break a scan."""
+    try:
+        scannable = set(_SCANNABLE_MIME) | {"application/vnd.google-apps.folder"}
+        resp = svc.files().list(
+            q="trashed=false", pageSize=max_files, orderBy="modifiedTime desc",
+            fields="files(id,name,mimeType,owners(emailAddress))",
+            corpora="allDrives", includeItemsFromAllDrives=True, supportsAllDrives=True,
+        ).execute(num_retries=3)
+        rows = resp.get("files", [])
+        print(f"[scan] discovery DEBUG: account holds {len(rows)} recent non-trashed item(s) "
+              f"(unfiltered, newest first):", flush=True)
+        for f in rows:
+            owner = (f.get("owners") or [{}])[0].get("emailAddress", "?")
+            mark = "scannable" if f.get("mimeType") in scannable else "SKIPPED (type not scanned)"
+            print(f"[scan] discovery DEBUG:   {f.get('name')!r} · {f.get('mimeType')} · "
+                  f"owner={owner} · {mark}", flush=True)
+    except Exception as e:  # noqa: BLE001 — a diagnostic must never fail the scan
+        print(f"[scan] discovery DEBUG: unfiltered listing failed: {e}", flush=True)
+
+
+def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False) -> list[dict]:
+    """Whole-Drive search — returns all scannable files regardless of folder.
+
+    Google's files.list search index is eventually consistent: a file uploaded or shared a few
+    seconds ago may not appear yet. When ACP_DRIVE_SETTLE_SECS>0 we re-list up to
+    ACP_DRIVE_SETTLE_PASSES times, sleeping between passes and UNIONING by file id, stopping
+    early once a pass surfaces nothing new — so a just-uploaded file gets a chance to be
+    indexed without adding latency once the listing has settled. This narrows, but cannot
+    close, the indexing lag: a file Drive has not indexed within the settle budget is still
+    missed, which is a Drive property, not a bug here.
+    """
+    if os.environ.get("ACP_DRIVE_DISCOVERY_DEBUG"):
+        _debug_dump_account(svc)
+    excl_id = _find_remediated_folder_id(svc) if exclude_remediated else None
+    q = f"({_DRIVE_MIME_Q}) and trashed=false"
+    if excl_id:
+        # Drive query syntax — files NOT in that folder. A file can have multiple
+        # parents, so this only excludes files whose ACP-remediated copy is their
+        # sole/primary location, which matches the actual upload behavior.
+        q += f" and not '{excl_id}' in parents"
+
+    settle_secs = float(os.environ.get("ACP_DRIVE_SETTLE_SECS", "0") or 0)
+    settle_passes = int(os.environ.get("ACP_DRIVE_SETTLE_PASSES", "2") or 0)
+    by_id: dict[str, dict] = {}      # union across settle passes, keyed by Drive file id
+    hit_cap = False
+    extra = 0
+    while True:
+        batch, cap = _list_drive_page_all(svc, q, max_files)
+        hit_cap = cap
+        before = len(by_id)
+        for f in batch:
+            by_id.setdefault(f["id"], f)
+        added = len(by_id) - before
+        # Stop: settle disabled, budget spent, or a follow-up pass found nothing new.
+        if settle_secs <= 0 or extra >= settle_passes or (extra > 0 and added == 0):
+            break
+        extra += 1
+        time.sleep(settle_secs)
+    if extra:
+        print(f"[scan] discovery settle: {extra} extra pass(es) over ~{extra * settle_secs:.0f}s "
+              f"to let Drive index recent uploads", flush=True)
+
+    listed = len(by_id)              # distinct raw items, before provenance filtering
+    files = list(by_id.values())
+    skipped_acp = 0
+    if exclude_remediated:
+        # Provenance beats location: skip anything ACP itself wrote, wherever it sits.
+        kept = [f for f in files if not provenance.is_acp_generated(f)]
+        skipped_acp = len(files) - len(kept)
+        files = kept
+    if hit_cap:
         print(f"[scan] whole-Drive listing hit the {max_files}-file cap — not all files were "
               f"scanned; raise ACP_FANOUT_MAX_FILES to cover the full estate", flush=True)
     result = _normalize(files[:max_files])
@@ -219,6 +282,8 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False) -
     # only place a file count exists is the UI, and "why 2 files?" can't be answered offline.
     print(f"[scan] discovery (whole-Drive): {listed} listed · {skipped_acp} skipped as "
           f"ACP-generated output · {len(result)} scannable", flush=True)
+    for it in result:
+        print(f"[scan] discovery:   kept {it['name']!r}", flush=True)
     return result
 
 
