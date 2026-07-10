@@ -27,13 +27,28 @@ ACP = Path(__file__).resolve().parent.parent
 # ── Config (env) ──────────────────────────────────────────────────────────────
 ACCESS_CODE = os.environ.get("ACP_ACCESS_CODE")
 GOOGLE_CLIENT_ID = os.environ.get("ACP_GOOGLE_CLIENT_ID") or None
-# Production mode: hard-disables the test/demo auth bypasses (X-E2E-Key, X-Demo-Key)
-# regardless of whether their keys are set — defence in depth, so a stray env var
-# can't reopen a backdoor in prod. Set ACP_ENV=production on production deployments.
-IS_PROD = os.environ.get("ACP_ENV", "").lower() in ("production", "prod")
-# Smoke/e2e test key: requests with X-E2E-Key bypass auth. Only honoured when
-# IS_PROD is false AND the key is set — inert in production.
-E2E_KEY = (os.environ.get("ACP_E2E_KEY") or None) if not IS_PROD else None
+# Deployment environment. ACP_DEPLOY_ENV is canonical; ACP_ENV is read only for backward
+# compatibility. Do NOT tell operators to set ACP_ENV: deploy.sh already uses that name for
+# the Container Apps *environment name* (ENVNAME="${ACP_ENV:-...}"), so exporting it to mean
+# "production" would silently misdirect the deploy at a non-existent ACA environment. That
+# collision is why nothing ever set it, and why IS_PROD was False on the public demo.
+IS_PROD = (os.environ.get("ACP_DEPLOY_ENV") or os.environ.get("ACP_ENV") or "").lower() in ("production", "prod")
+
+# Test/demo auth bypasses (X-E2E-Key, X-Demo-Key). FAIL-CLOSED: off unless an operator
+# explicitly opts in, and refused in production regardless of the opt-in.
+#
+# These were previously enabled whenever IS_PROD was false — i.e. enabled by the ABSENCE of
+# an env var. Since nothing set ACP_ENV on the container, IS_PROD was False in production and
+# the X-E2E-Key gate bypass was live on the public demo. A security control must not depend on
+# a variable being present; make the safe state the default and require an explicit opt-in for
+# the dangerous one, so no missing/renamed/typo'd variable can reopen the backdoor.
+TEST_BYPASS_ENABLED = (
+    os.environ.get("ACP_ENABLE_TEST_BYPASS", "").strip().lower() in ("1", "true", "yes")
+    and not IS_PROD
+)
+# Smoke/e2e test key: requests with X-E2E-Key bypass the access gate. Only when the bypass
+# is explicitly enabled AND the key is set.
+E2E_KEY = (os.environ.get("ACP_E2E_KEY") or None) if TEST_BYPASS_ENABLED else None
 # Comma-separated domains allowed in GIS mode. DENY-BY-DEFAULT: empty unless the
 # operator configures ACP_ALLOWED_DOMAINS, so a fresh deploy admits no one until
 # explicitly opened to a domain.
