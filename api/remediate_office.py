@@ -178,27 +178,38 @@ _R_EMBED = re.compile(r'r:embed="(rId\d+)"')
 
 
 def _thumb_b64(img_bytes: bytes, *, max_edge: int = 96) -> str | None:
-    """A tiny base64 PNG data-URL of an embedded image, for the "Recent AI fixes" UI so it
-    can show the actual picture that got alt text. Best-effort: any decode/resize/encode
-    error returns None — a missing thumbnail must never affect remediation."""
-    try:
-        import base64
-        import io as _io
-        from PIL import Image
-        im = Image.open(_io.BytesIO(img_bytes))
-        im.load()
-        if im.mode not in ("RGB", "RGBA"):
-            im = im.convert("RGB")
-        w, h = im.size
-        longest = max(w, h) or 1
-        if longest > max_edge:
-            r = max_edge / longest
-            im = im.resize((max(1, round(w * r)), max(1, round(h * r))), Image.LANCZOS)
-        buf = _io.BytesIO()
-        im.save(buf, format="PNG", optimize=True)
-        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
-    except Exception:
+    """Thin alias — the implementation moved to proposals.thumb_b64 when the PDF
+    reading-order proposal needed it too. Imported lazily, as everything else here
+    imports `proposals`."""
+    import proposals as _prop
+    return _prop.thumb_b64(img_bytes, max_edge=max_edge)
+
+
+def _image_bytes_for(xml: str, m, tag: str, pic_spans, entries, part_name):
+    """(r:embed id, image bytes) for the drawing that `m` matched, or None.
+
+    Finds this drawing's r:embed (the blip follows the docPr/cNvPr within the same pic block)
+    and resolves it through the part's .rels. Lifted out of `_vision_alt` because the
+    decorative-inference path needs the SAME image and must find it with vision switched off —
+    the reviewer confirming "this is decorative" has to see what "this" is.
+
+    Search window = to the end of this image's pic block (pptx/xlsx) or up to the next
+    same-tag drawing (docx), so we never grab a sibling image's blip."""
+    if entries is None or not part_name:
         return None
+    if pic_spans is not None:
+        region_end = next((b for a, b in pic_spans if a <= m.start() < b), m.end())
+    else:
+        nxt = xml.find(f"<{tag}", m.end())
+        region_end = nxt if nxt != -1 else len(xml)
+        region_end = min(region_end, m.end() + 8000)
+    rid_m = _R_EMBED.search(xml, m.end(), region_end)
+    if not rid_m:
+        return None
+    img = _resolve_media(entries, part_name, rid_m.group(1))
+    if not img or len(img) < _MIN_IMG_BYTES:
+        return None
+    return rid_m.group(1), img
 
 
 def _resolve_media(entries: dict, part_name: str, rid: str) -> bytes | None:
@@ -288,12 +299,19 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
                 import proposals as _prop
                 _deco = _prop.infer_decorative(filename=src[0])
                 if _deco:
+                    # Show the image. The inference reads only the shape's NAME ("logo",
+                    # "divider"), so the reviewer's whole job is to look at the picture and
+                    # say whether that guess is right — marking real content as decorative
+                    # hides it from screen readers permanently. No vision model needed; the
+                    # bytes are in the package. A thumb we can't build is simply omitted.
+                    _found = _image_bytes_for(xml, m, tag, pic_spans, entries, part_name)
                     proposals.append(_prop.proposal(
                         locator=f"{part_name}#{_ATTR(attrs, 'name').strip()}",
                         before="(no alt text)",
                         proposed_value="Mark as decorative — no alt text needed",
                         rationale=_deco["rationale"],
-                        source="decorative-image inference (heuristic)", kind="decorative"))
+                        source="decorative-image inference (heuristic)", kind="decorative",
+                        thumb=_prop.thumb_b64(_found[1]) if _found else None))
                     deferred += 1
                     out.append(keep)
                     continue
@@ -332,20 +350,10 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
         return None
     if vision_budget is not None and vision_budget[0] <= 0:
         return None
-    # Search window = to the end of this image's pic block (pptx/xlsx) or up to the next
-    # same-tag drawing (docx), so we never grab a sibling image's blip.
-    if pic_spans is not None:
-        region_end = next((b for a, b in pic_spans if a <= m.start() < b), m.end())
-    else:
-        nxt = xml.find(f"<{tag}", m.end())
-        region_end = nxt if nxt != -1 else len(xml)
-        region_end = min(region_end, m.end() + 8000)
-    rid_m = _R_EMBED.search(xml, m.end(), region_end)
-    if not rid_m:
+    found = _image_bytes_for(xml, m, tag, pic_spans, entries, part_name)
+    if not found:
         return None
-    img = _resolve_media(entries, part_name, rid_m.group(1))
-    if not img or len(img) < _MIN_IMG_BYTES:
-        return None
+    rid, img = found
     try:
         import ai as _ai
         res = _ai.describe_image_structured(img, filename=context_file, context=caption or "",
@@ -369,7 +377,7 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
     if proposals is not None:
         import proposals as _prop
         proposals.append(_prop.proposal(
-            locator=f"{part_name}#{rid_m.group(1)}",
+            locator=f"{part_name}#{rid}",
             before="(no alt text — image skipped by screen readers)",
             proposed_value=res["alt"],
             rationale=res.get("evidence") or "AI vision description — confirm it matches the intent",

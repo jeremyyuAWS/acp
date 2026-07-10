@@ -12,7 +12,7 @@ import QueuePanel from './QueuePanel.jsx'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
 import { confidenceForFinding, confClass } from './confidence.js'
 import { metaFor } from './hitlMeta.js'
-import { firstProposed, firstThumb, firstRationale, firstSource } from './reviewCard.js'
+import { firstProposed, firstThumb, firstKind, firstRationale, firstSource, thumbAlt, thumbSize } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 import { measuredReviewTime, REVIEW_TIME_BASIS } from './reviewerTime.js'
 
@@ -103,6 +103,7 @@ function dbItemToUi(it, files) {
     after: firstProposed(it) || it.approved_value || ba.after(fileRec, issue),
     // The offending image itself + why the model said what it said. Null when no proposal.
     thumb: firstThumb(it),
+    thumbKind: firstKind(it),
     rationale: firstRationale(it),
     proposalSource: firstSource(it),
     // Distinguishes a real model draft from the canned fallback, so the UI never labels a
@@ -172,17 +173,18 @@ function ProgressRail({ steps }) {
 // "Why am I reviewing this?" (§3) — the honest evidence a compliance officer needs to act:
 // the confidence.js level + its concrete basis (never a fabricated %), the plain-language
 // escalation reason, and the value the AI is suggesting they approve.
-function WhyReview({ sc, suggested, thumb, rationale, proposalSource, hasProposal, file }) {
+function WhyReview({ sc, suggested, thumb, thumbKind, rationale, proposalSource, hasProposal, file }) {
   const conf = confidenceForFinding({ sc })
   const reason = metaFor({ rule_id: sc }).reason
   return (
     <div className="whyreview">
       <div className="whyreview-hd">Why am I reviewing this?</div>
       <div className="whyreview-body" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-        {/* The actual image the reviewer must judge. A deck cannot be rasterized, so this
-            base64 thumb — captured when the vision model looked at it — is the only picture
-            we can ever show. Renders nothing when no proposal carried one. */}
-        <ProposalThumb thumb={thumb} alt={`Image needing alt text in ${file || 'the document'}`} size={84} />
+        {/* What the reviewer must judge: the embedded image, or — for a reading-order
+            proposal — the rendered page, which needs more room to be legible. A deck cannot
+            be rasterized, so this base64 thumb is the only picture we can ever show for one.
+            Renders nothing when no proposal carried a thumb. */}
+        <ProposalThumb thumb={thumb} alt={thumbAlt(thumbKind, file)} size={thumbSize(thumbKind)} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="whyreview-row">
             <span className="muted">AI confidence</span>
@@ -224,7 +226,7 @@ function ReviewItemCard({ item, onOpen, onApprove, onSelf, onReject, disabled })
         </div>
         <AutoBadge kind={badgeKind} />
       </div>
-      <WhyReview sc={sc} suggested={item.after} thumb={item.thumb} rationale={item.rationale}
+      <WhyReview sc={sc} suggested={item.after} thumb={item.thumb} thumbKind={item.thumbKind} rationale={item.rationale}
                  proposalSource={item.proposalSource} hasProposal={item.hasProposal} file={item.file} />
       <div className="reviewcard-actions">
         <button className="qbtn approve" disabled={disabled} onClick={onApprove}>✓ Approve</button>

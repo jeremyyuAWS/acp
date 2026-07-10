@@ -48,6 +48,38 @@ def proposal(locator, before, proposed_value, rationale, source, thumb=None, kin
     return p
 
 
+def thumb_b64(img_bytes: bytes, *, max_edge: int = 96) -> str | None:
+    """A small base64 PNG data-URL of an image, so a review card can show the thing being
+    judged. Promoted here from remediate_office because every VISUAL proposal needs it: the
+    reviewer is deciding *about an image* — is this logo decorative? is this the reading order
+    of this page? — and a card with no picture asks them to approve a claim they cannot check.
+
+    max_edge is the longest side in pixels. 96 suits an image embedded in a document and shown
+    at card size; a whole rendered page needs more to stay legible.
+
+    Best-effort: any decode/resize/encode failure returns None. A missing thumbnail must never
+    affect remediation, and a proposal without one still renders (ProposalThumb drops it) — it
+    just carries less evidence."""
+    try:
+        import base64
+        import io as _io
+        from PIL import Image
+        im = Image.open(_io.BytesIO(img_bytes))
+        im.load()
+        if im.mode not in ("RGB", "RGBA"):
+            im = im.convert("RGB")
+        w, h = im.size
+        longest = max(w, h) or 1
+        if longest > max_edge:
+            r = max_edge / longest
+            im = im.resize((max(1, round(w * r)), max(1, round(h * r))), Image.LANCZOS)
+        buf = _io.BytesIO()
+        im.save(buf, format="PNG", optimize=True)
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        return None
+
+
 # ── Shared residual re-scan validator (promoted from api/handlers.py) ──────────
 def verify_residual_scs(fixed_bytes: bytes, filename: str):
     """Re-scan the remediated bytes; return the set of WCAG SCs STILL failing, so a reported

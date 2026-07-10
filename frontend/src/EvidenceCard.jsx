@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { getFileRemediationDiffs } from './api.js'
 import { confClass } from './confidence.js'
 import Thumbnail from './Thumbnail.jsx'
-import { buildEvidenceCard, firstProposed, isValueFix, reviewTelemetry } from './reviewCard.js'
+import { buildEvidenceCard, firstProposed, isValueFix, reviewTelemetry, thumbAlt, thumbSize } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 
 // Evidence Card (PRD v2) — a PR-style review of ONE accessibility issue. The human APPROVES
@@ -75,10 +75,12 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
       </header>
 
       <div className="evcard-body" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-        {/* The offending image itself when the vision model captured one; otherwise the
-            document's page-1 render (PDF only — a deck cannot be rasterized). */}
+        {/* What the reviewer must judge — the offending image, or the rendered page for a
+            reading-order proposal. Falls back to the document's page-1 render (PDF only; a
+            deck cannot be rasterized). */}
         {card.thumb
-          ? <ProposalThumb thumb={card.thumb} alt={`Image needing alt text in ${card.file}`} className="evcard-thumb" />
+          ? <ProposalThumb thumb={card.thumb} alt={thumbAlt(card.thumbKind, card.file)}
+                           size={thumbSize(card.thumbKind, 96)} className="evcard-thumb" />
           : (card.scanId && card.file && <Thumbnail scanId={card.scanId} file={card.file} className="evcard-thumb" />)}
         <div className="evcard-main" style={{ flex: 1, minWidth: 0 }}>
           <p className="evcard-problem">{card.problem}</p>

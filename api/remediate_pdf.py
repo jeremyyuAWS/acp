@@ -29,6 +29,10 @@ _VISION_MAX_FIGURES = 25
 # Render at 150 DPI — enough detail for vision without excessive cost (mirrors the
 # vendored PdfAltTextFixer).
 _RENDER_SCALE = 150 / 72
+# A page thumbnail stands in for a whole page, not one embedded picture, so it needs more
+# pixels than the 96px default before the card can scale it up legibly. ~320px of a letter
+# page is ≈40KB of base64 in hitl_queue.proposals — one row per untagged PDF, not per finding.
+_PAGE_THUMB_EDGE = 320
 
 
 def _propose_reading_order(pdf, source_path: str, *, ai_enabled: bool, scan_id, file,
@@ -61,7 +65,13 @@ def _propose_reading_order(pdf, source_path: str, *, ai_enabled: bool, scan_id, 
         locator="page 1", before="(untagged PDF — reading order not defined for assistive tech)",
         proposed_value=res["order"],
         rationale="AI read the page layout and proposed a reading order — confirm it matches the intended flow",
-        source=f"AI vision model ({res['model']})"))
+        source=f"AI vision model ({res['model']})",
+        kind="reading-order",
+        # The same render the model looked at. Asking a human to confirm a reading order for a
+        # page they cannot see makes the approval meaningless. Rendered larger than an embedded
+        # image's thumb: a whole page shrunk to 96px is an unreadable grey rectangle. `kind`
+        # tells the card to show it at page size, and to describe it as a page, not an image.
+        thumb=_prop.thumb_b64(png, max_edge=_PAGE_THUMB_EDGE)))
 
 
 def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,

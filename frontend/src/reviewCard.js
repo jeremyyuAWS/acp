@@ -59,11 +59,28 @@ export function reviewTelemetry({ editable, status, value, aiDraft, elapsedMs })
 export const proposalsOf = (item) => (Array.isArray(item?.proposals) ? item.proposals : [])
 export const firstProposed = (item) => proposalsOf(item)[0]?.proposed_value ?? null
 
-// The base64 thumbnail of the OFFENDING IMAGE, captured server-side when the vision model
-// looked at it (remediate_office._vision_alt passes thumb=_thumb_b64(img)). This is not the
-// document's page-1 render — a PPTX cannot be rasterized at all (api/render.py is PDF-only),
-// so for a deck this is the only picture a reviewer can be shown.
+// The base64 thumbnail of what the reviewer is judging, captured server-side (proposals.thumb_b64).
+// Usually the OFFENDING IMAGE — the embedded picture that lacks alt text, or the logo the
+// heuristic wants marked decorative. For a reading-order proposal it is the rendered PDF page.
+// It is never a generic page-1 render: a PPTX cannot be rasterized at all (api/render.py is
+// PDF-only), so for a deck this is the only picture a reviewer can be shown.
 export const firstThumb = (item) => proposalsOf(item)[0]?.thumb ?? null
+
+// What the proposal is about, which decides how its thumbnail is sized and described:
+// 'decorative' (an image), 'reading-order' (a whole page), or absent (an image).
+export const firstKind = (item) => proposalsOf(item)[0]?.kind ?? null
+
+// A page must be shown big enough to read; an embedded image need not be. And the alt text on
+// the evidence image has to say what it actually depicts — this is an accessibility product,
+// and "Image needing alt text" on a rendered page is exactly the kind of wrong alt we flag.
+// These take the kind directly (not the item) because the card components are passed a thumb,
+// not the proposal it came from.
+export const PAGE_KINDS = new Set(['reading-order'])
+export const isPageThumb = (kind) => PAGE_KINDS.has(kind)
+export const thumbSize = (kind, imageSize = 84) => (isPageThumb(kind) ? 240 : imageSize)
+export const thumbAlt = (kind, file) => (isPageThumb(kind)
+  ? `Rendered page of ${file || 'the document'}, for confirming its reading order`
+  : `Image needing alt text in ${file || 'the document'}`)
 
 // The rationale + the model that produced the draft, so the reviewer sees WHY, not just WHAT.
 export const firstRationale = (item) => proposalsOf(item)[0]?.rationale ?? null
@@ -87,6 +104,7 @@ export function buildEvidenceCard(item, diffs = []) {
   return {
     id: item?.id,
     scanId: item?.scan_id,
+    thumbKind: firstKind(item),
     file: item?.file,
     sc,
     fmt,
