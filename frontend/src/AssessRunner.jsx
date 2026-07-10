@@ -25,16 +25,6 @@ const levelOf = (x) => x.level || SC_LEVEL[scOf(x.wcag)] || 'A'
 const autoOf = (x) => (x.auto != null ? x.auto : !!SC_AUTO[scOf(x.wcag)])
 
 // Engine label shown per file type during scanning — mirrors what the real pipeline uses
-const engineFor = (name = '') => {
-  const n = name.toLowerCase()
-  if (/\.docx?$/.test(n) || /\.pptx?$/.test(n)) return 'OOXML engine'
-  if (/\.pdf$/.test(n)) return 'PDF engine'
-  if (/\.html?$/.test(n)) return 'axe-core'
-  if (/\.mp3$|\.webm$|\.wav$/.test(n)) return 'Whisper transcription'
-  if (/\.xlsx?$/.test(n)) return 'OOXML engine'
-  if (/\.png$|\.jpe?g$|\.gif$|\.webp$/.test(n)) return 'Claude vision'
-  return 'WCAG rule engine'
-}
 
 
 

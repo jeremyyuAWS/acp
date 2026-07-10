@@ -100,8 +100,23 @@ def _normalize(files: list[dict]) -> list[dict]:
     """
     result = []
     seen: set[str] = set()
+    seen_ids: set[str] = set()
     skipped = 0
+    relisted = 0
     for f in files:
+        # IDENTITY dedup comes first. Drive can hand the SAME file back more than once in a
+        # single discovery: a file may have several parents (so a subtree BFS meets it twice),
+        # corpora="allDrives" can surface it from My Drive and a Shared Drive, and paged
+        # listings can overlap. Without this, the name-dedup below renames the second sighting
+        # to "Report (1).pptx" — a phantom document that the UI then shows as "x2 copies",
+        # inflates the file count, and gets downloaded and scanned a second time.
+        # A Drive file id IS the document's identity; two parents do not make two documents.
+        fid = f.get("id")
+        if fid is not None:
+            if fid in seen_ids:
+                relisted += 1
+                continue
+            seen_ids.add(fid)
         mime = f.get("mimeType", "")
         raw_name = f["name"]
         if mime in EXPORT_MAP:
@@ -115,7 +130,9 @@ def _normalize(files: list[dict]) -> list[dict]:
                 skipped += 1
                 continue
             name = _safe_name(raw_name)
-        # Deduplicate: Drive can have same-name files in different folders
+        # Disambiguate GENUINELY DISTINCT files that share a name (Drive allows two different
+        # file ids named the same; a filesystem wouldn't). Reaching here means the id is new,
+        # so a " (N)" suffix always denotes a real second document — never a re-listing.
         unique = name
         n = 1
         while unique in seen:
@@ -136,6 +153,9 @@ def _normalize(files: list[dict]) -> list[dict]:
         # mistaken for 'everything was covered'.
         print(f"[scan] {skipped} file(s) skipped as unsupported for accessibility scanning "
               f"(only pdf/docx/pptx/xlsx/html are analysed)", flush=True)
+    if relisted:
+        print(f"[scan] {relisted} duplicate listing(s) of the same Drive file id collapsed "
+              f"(multi-parent / shared-drive / paging overlap) — not extra documents", flush=True)
     return result
 
 
@@ -262,11 +282,21 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
 
 
 def _sp_list(token: str, max_files: int = 200) -> list[dict]:
-    """List scannable files from OneDrive personal via MS Graph search."""
+    """List scannable files from OneDrive personal via MS Graph search.
+
+    Identity dedup, same rule as _normalize's for Drive: a drive-item id IS the document,
+    and Graph's paged /search can return the same item on more than one page. Without this,
+    _dedupe_names (which every source funnels through) would rename the repeat to
+    "Deck (1).pptx" — a phantom document that inflates the file count, gets downloaded and
+    analysed a second time, and surfaces in the UI as "x2 copies". Each source is responsible
+    for yielding unique IDENTITIES; _dedupe_names only disambiguates genuine NAME collisions
+    between different items."""
     import httpx
     exts = {".docx", ".pptx", ".xlsx", ".pdf", ".html", ".htm"}
     hdrs = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     files: list[dict] = []
+    seen_ids: set[str] = set()
+    relisted = 0
     url = "https://graph.microsoft.com/v1.0/me/drive/root/search(q='')?$select=id,name,file&$top=200"
     while url and len(files) < max_files:
         r = httpx.get(url, headers=hdrs, timeout=30, follow_redirects=True)
@@ -275,10 +305,19 @@ def _sp_list(token: str, max_files: int = 200) -> list[dict]:
         for item in data.get("value", []):
             if "file" not in item:
                 continue
+            item_id = item.get("id")
+            if item_id is not None:
+                if item_id in seen_ids:
+                    relisted += 1
+                    continue
+                seen_ids.add(item_id)
             name = item.get("name", "")
             if Path(name).suffix.lower() in exts:
-                files.append({"name": _safe_name(name), "id": item["id"], "sp": True})
+                files.append({"name": _safe_name(name), "id": item_id, "sp": True})
         url = data.get("@odata.nextLink")
+    if relisted:
+        print(f"[scan] {relisted} duplicate listing(s) of the same OneDrive item id collapsed "
+              f"(paged /search overlap) — not extra documents", flush=True)
     return files[:max_files]
 
 

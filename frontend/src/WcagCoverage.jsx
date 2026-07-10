@@ -32,7 +32,7 @@ const LEVEL_MEANING = { A: 'must-have baseline', AA: 'should-have · the legal t
 // the LOE because Claude writes the checks, evals and review scaffolds directly.
 const ROADMAP_PHASES = [
   { id: 'P0', label: 'Foundation', when: 'Days 1–2', match: null, done: true, desc: 'Coverage audit vs. partner · lock the check contract · stand up the golden-corpus eval harness.' },
-  { id: 'P1', label: 'Agentic AI checks', when: 'Days 3–5', match: (p) => p.startsWith('Phase 1'), done: false, desc: 'Semantic LLM evaluators — sensory characteristics, images of text, language of parts. Claude authors prompt + evals. Not yet built.' },
+  { id: 'P1', label: 'Agentic AI checks', when: 'Days 3–5', match: (p) => p.startsWith('Phase 1'), done: false, desc: 'Semantic LLM evaluators — sensory characteristics, images of text, language of parts. Not yet built.' },
   { id: 'P2', label: 'Human-in-the-loop', when: 'Weeks 2–3', match: (p) => p.startsWith('Phase 2'), done: true, milestone: 'Level AA conformance', desc: 'Pre-screen detectors + reviewer workflow for the manual Required criteria (captions, focus order, errors…).' },
   { id: 'P3', label: 'AAA / optional', when: 'Weeks 4–6', match: (p) => p.startsWith('Phase 3'), desc: 'Everything not legally required — pursued selectively.' },
 ]

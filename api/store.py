@@ -9,6 +9,8 @@ serializing writes and survives container restarts across all replicas.
 from __future__ import annotations
 import contextlib
 import os
+import re
+import time
 import sqlite3
 import uuid
 from pathlib import Path
@@ -122,8 +124,17 @@ _SCHEMA = [
       finding_count INT,
       status TEXT DEFAULT 'pending',
       reviewed_at TEXT,
-      reviewer_note TEXT
+      reviewer_note TEXT,
+      page INT,
+      pages TEXT
     )""",
+    # WHERE this criterion fails in the document, so the reviewer never hunts for it.
+    # page  = the first (lowest) page/slide the analysers attributed — enough to jump to.
+    # pages = every distinct page, comma-separated; a criterion failing on 11 slides must not
+    #         be rendered as if it failed on one. Both NULL when nothing was attributed
+    #         (xlsx locates by cell; some rules are file-level) — we show no page, never a wrong one.
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS page INT",
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS pages TEXT",
     # ADR: AI-draft + human-approve lane. The reviewer's final, possibly-edited
     # value for a semantic finding (alt text / link text / title) — durable
     # compliance evidence of what was actually approved, distinct from the
@@ -176,8 +187,13 @@ _SCHEMA = [
       priority INT DEFAULT 100, attempts INT DEFAULT 0, max_attempts INT DEFAULT 5,
       run_after TEXT, locked_at TEXT, locked_by TEXT,
       campaign_id TEXT, batch_id TEXT, scan_id TEXT,
-      last_error TEXT, created_at TEXT, updated_at TEXT
+      last_error TEXT, created_at TEXT, updated_at TEXT,
+      phase TEXT
     )""",
+    # What the job is doing RIGHT NOW, written by the handler as it works. The queue panel
+    # used to render a hardcoded list of WCAG criteria cycled by a timer, which had nothing
+    # to do with the running job. Nullable: a handler that reports nothing shows nothing.
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS phase TEXT",
     # Column order matches the claim ORDER BY (priority, run_after) so Postgres reads the
     # top queued job index-only instead of sorting all queued rows every poll (audit P2).
     # New name + drop-old so this migrates once, not a rebuild every boot.
@@ -365,6 +381,11 @@ def _rule_outcome(rule_id: str, fmt: str | None, count: int) -> str:
     return "FAIL" if count > 0 else "PASS"
 
 
+def _pages_csv(pages: list[int]) -> str | None:
+    """Compact, capped rendering of the distinct pages a criterion fails on."""
+    return ",".join(str(p) for p in pages[:12]) if pages else None
+
+
 def _extract_sc(wcag: str) -> str:
     """Extract the 'X.Y.Z' SC number from any wcag field format.
     Handles: '1.1.1', '1.1.1 Non-text Content', 'SC_1_1_1', 'wcag111'."""
@@ -428,11 +449,73 @@ class _SQLiteAdapter:
         return dict(zip([d[0] for d in cur.description], row)) if row else None
 
 
+def logical_name(name: str) -> str:
+    """Strip the ' (N)' disambiguation suffix to recover the logical document name.
+
+    Drive appends it on a duplicate upload, and scanner._dedupe_names appends it when one
+    listing contains two files with the identical name (Drive permits that; a filesystem
+    doesn't).
+    """
+    return re.sub(r" \(\d+\)(\.[^.]+)$", r"\1", name or "")
+
+
+def shadowed_acp_outputs(files: list[dict]) -> set[str]:
+    """The file names in this scan that are ACP's OWN output shadowing the source document it
+    was made from — the "1 Drive document, 2 scanned files" bug.
+
+    Discriminated by the in-document ACP stamp (file_records.acp_stamped, set by
+    detect_acp_stamp over the real bytes), NEVER by the ' (N)' suffix: _dedupe_names renames
+    whichever item Drive happened to return second, which may just as easily be the user's
+    original.
+
+    A stamped file is shadowing only when an UNSTAMPED file shares its logical name. A
+    certified document published back into the estate stands alone under its own name, and
+    must still be scanned, counted, and monitored for drift — so it is never dropped here.
+    """
+    by_name: dict[str, list[dict]] = {}
+    for f in files:
+        by_name.setdefault(logical_name(f.get("file", "")), []).append(f)
+    shadowed: set[str] = set()
+    for group in by_name.values():
+        if len(group) < 2:
+            continue
+        if not any(not f.get("acp_stamped") for f in group):
+            continue        # every copy is ACP output — none of them shadows a source
+        shadowed.update(f["file"] for f in group if f.get("acp_stamped"))
+    return shadowed
+
+
+def db_max_conn(env: dict | None = None) -> int:
+    """How many Postgres connections this replica may hold.
+
+    Sized from the concurrency that actually exists: every scan/remediate worker thread can
+    hold a connection while it works, and every in-flight HTTP handler needs one on top of
+    that. The old fixed 5, against ACP_WORKERS=4, meant a dashboard poll landing while the
+    workers were busy raised `PoolError: connection pool exhausted` — /hitl/auto-queue 500'd
+    and the reviewer saw an empty review queue while items were waiting to be queued.
+
+    Still bounded well under Azure Postgres' max_connections (~50 on small SKUs); override
+    with ACP_DB_MAX_CONN if the worker count or replica count grows.
+    """
+    e = os.environ if env is None else env
+    explicit = e.get("ACP_DB_MAX_CONN")
+    if explicit:
+        return max(2, int(explicit))
+    try:
+        workers = int(e.get("ACP_WORKERS") or 4)
+    except ValueError:
+        workers = 4
+    return max(2, workers) + _API_HEADROOM_CONN
+
+
+# Concurrent HTTP handlers that may need a connection while every worker holds one.
+# The dashboard alone polls /jobs, /hitl/queue and /scans/{id}/remediation-status together.
+_API_HEADROOM_CONN = 8
+
+
 class _PgAdapter:
-    # Keep a small pool (2–5 connections) so ACA's single-replica container
-    # never exhausts the Azure Postgres max_connections limit (~50 on small SKUs).
     _MIN_CONN = 1
-    _MAX_CONN = 5
+    _MAX_CONN = db_max_conn()
 
     def __init__(self, url: str):
         # Strip query params that confuse psycopg2 (e.g. ?sslmode=require can
@@ -469,11 +552,27 @@ class _PgAdapter:
         finally:
             conn.close()
 
+    def _getconn(self, timeout: float = 5.0):
+        """psycopg2's ThreadedConnectionPool.getconn raises PoolError the moment the pool is
+        empty — it never waits. A request arriving during a burst should queue for a moment,
+        not fail. Beyond the timeout the error still surfaces: a pool that stays empty for
+        seconds is a real problem and must not be silently swallowed."""
+        import psycopg2.pool
+        pool = self._get_pool()
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                return pool.getconn()
+            except psycopg2.pool.PoolError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
+
     @contextlib.contextmanager
     def cursor(self):
         import psycopg2.extras
         pool = self._get_pool()
-        conn = pool.getconn()
+        conn = self._getconn()
         try:
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             yield cur
@@ -954,6 +1053,16 @@ class Store:
                 "SELECT file,engine,status,score,compliant,skipped_rules,remediated_at,drive_write_url,acp_stamped,published_at,size_kb,pages,sheets "
                 "FROM file_records WHERE scan_id=%s ORDER BY file", (sid,))
             files = self._db.fetchall(cur)
+            # Drop ACP's own remediated copies when they shadow the source document they were
+            # made from. They are artifacts, not documents in the estate: counting them
+            # inflated "total scanned", invented a "duplicate", and made a scan that
+            # remediated nothing report "remediated ✓ 1". Rows are kept in the table — this
+            # filters the read, it does not delete evidence.
+            shadowed = shadowed_acp_outputs(files)
+            if shadowed:
+                print(f"[scan] get_scan({sid}): hiding {len(shadowed)} ACP-generated file(s) "
+                      f"shadowing their source: {sorted(shadowed)}", flush=True)
+                files = [f for f in files if f["file"] not in shadowed]
             # file_records has no per-file source column (every file in one scan shares the
             # scan's single source) — derive the friendly sourceName here, at the single read
             # path, so every consumer (Overview/Dashboard/FileDrawer/Monitor/Publish/...) gets
@@ -1614,6 +1723,24 @@ class Store:
                 "WHERE scan_id=%s GROUP BY rule_id", (latest["id"],))
             return {r["rule_id"]: r["n"] for r in self._db.fetchall(cur)}
 
+    def _pages_for(self, cur, scan_id: str, file: str, rule_id: str) -> list[int]:
+        """Distinct pages/slides where this criterion fails in this file, ascending.
+
+        hitl_queue.rule_id is an SC ('1.1.1', or '1.1.1/deferred'); issue_records keys pages by
+        the ENGINE rule id and carries the SC in `wcag`. So the join goes through _extract_sc on
+        both sides rather than a direct rule_id match — comparing them raw would silently find
+        nothing and every item would show no page.
+        """
+        sc = _extract_sc(rule_id)
+        if not sc:
+            return []
+        self._db.execute(cur,
+            "SELECT wcag, page FROM issue_records WHERE scan_id=%s AND file=%s AND page IS NOT NULL",
+            (scan_id, file))
+        pages = {int(r["page"]) for r in self._db.fetchall(cur)
+                 if _extract_sc(r["wcag"]) == sc and r["page"]}
+        return sorted(pages)
+
     def queue_hitl_items(self, scan_id: str) -> list[dict]:
         """Auto-populate HITL queue from ai-assisted FAILs in a saved scan.
 
@@ -1640,13 +1767,16 @@ class Store:
                 continue  # idempotent — skip already-queued items
             item_id = uuid.uuid4().hex[:12]
             with self._db.cursor() as cur:
+                pages = self._pages_for(cur, scan_id, c["file"], c["rule_id"])
                 self._db.execute(cur,
-                    "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending')",
-                    (item_id, now, scan_id, c["file"], c["rule_id"], c["rule_name"], c["finding_count"]))
+                    "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status,page,pages) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
+                    (item_id, now, scan_id, c["file"], c["rule_id"], c["rule_name"], c["finding_count"],
+                     pages[0] if pages else None, _pages_csv(pages)))
             created.append({"id": item_id, "scan_id": scan_id, "file": c["file"],
                              "rule_id": c["rule_id"], "rule_name": c["rule_name"],
-                             "finding_count": c["finding_count"], "status": "pending", "created_at": now})
+                             "finding_count": c["finding_count"], "status": "pending", "created_at": now,
+                             "page": pages[0] if pages else None, "pages": _pages_csv(pages)})
         return created
 
     def queue_hitl_deferral(self, scan_id: str, file: str, note: str, count: int = 1,
@@ -1664,11 +1794,12 @@ class Store:
             if self._db.fetchone(cur):
                 return None
             item_id = uuid.uuid4().hex[:12]
+            pages = self._pages_for(cur, scan_id, file, rule_id)
             self._db.execute(cur,
-                "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending')",
+                "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status,page,pages) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
                 (item_id, datetime.now(timezone.utc).isoformat(), scan_id, file, rule_id,
-                 note[:200], count))
+                 note[:200], count, pages[0] if pages else None, _pages_csv(pages)))
         return item_id
 
     def queue_hitl_review_for_file(self, scan_id: str, file: str,
@@ -1696,10 +1827,12 @@ class Store:
                 item_id = uuid.uuid4().hex[:12]
                 name = r.get("rule_name") or rid
                 count = r.get("finding_count") or 1
+                pages = self._pages_for(cur, scan_id, file, rid)
                 self._db.execute(cur,
-                    "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending')",
-                    (item_id, now, scan_id, file, rid, name, count))
+                    "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status,page,pages) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
+                    (item_id, now, scan_id, file, rid, name, count,
+                     pages[0] if pages else None, _pages_csv(pages)))
                 already.add(rid)
                 created.append({"id": item_id, "scan_id": scan_id, "file": file,
                                 "rule_id": rid, "rule_name": name, "finding_count": count,
@@ -1955,11 +2088,25 @@ class Store:
             # Conditional update: only one worker can flip status from 'queued'.
             self._db.execute(cur,
                 "UPDATE jobs SET status='running', locked_at=%s, locked_by=%s, "
-                "attempts=attempts+1, updated_at=%s "
+                "attempts=attempts+1, updated_at=%s, phase=NULL "
                 "WHERE id=%s AND status='queued'",
                 (now, worker_id, now, jid))
             claimed = getattr(cur, "rowcount", 1) == 1
         return self.get_job(jid) if claimed else None
+
+    def set_job_phase(self, job_id: str, phase: str | None) -> None:
+        """Record what this job is doing right now, for the queue panel's per-row line.
+
+        Best-effort and never fatal: progress reporting must not be able to fail the work it
+        reports on. Bumps updated_at, which is also what the panel's elapsed timer reads — so
+        a job that stops reporting stops looking busy.
+        """
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur, "UPDATE jobs SET phase=%s, updated_at=%s WHERE id=%s",
+                                 (phase, self._now(), job_id))
+        except Exception as e:
+            print(f"[jobs] could not record phase for {job_id}: {e}", flush=True)
 
     _SECRET_PAYLOAD_KEYS = ("drive_token", "sp_token", "token")
 

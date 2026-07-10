@@ -30,7 +30,7 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
     remediatePdf(pdfBlob, { title: name.replace(/\.[^.]+$/, '') }).then((r) => { if (live) setRemPdf(r) }).catch(() => { /* fall back */ })
     return () => { live = false }
   }, [pdfBlob])
-  const [aiAlt, setAiAlt] = useState(null) // Claude-vision alt text for the embedded image(s)
+  const [aiAlt, setAiAlt] = useState(null) // AI-vision alt text for the embedded image(s)
   const [aiAltCount, setAiAltCount] = useState(0) // how many images got a real per-image description
   const [imgText, setImgText] = useState(null) // 1.4.5 — verbatim text extracted from an image-of-text
   useEffect(() => {
@@ -177,7 +177,7 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
                     <div className="rpbanner good" aria-hidden="true">
                       {remBlob
                         ? aiAlt
-                          ? <><span>⚡</span><b>Claude Vision described {aiAltCount > 1 ? `${aiAltCount} charts` : 'the chart'}</b><span className="rpbanner-count">alt text written in</span></>
+                          ? <><span>⚡</span><b>AI vision described {aiAltCount > 1 ? `${aiAltCount} charts` : 'the chart'}</b><span className="rpbanner-count">alt text written in</span></>
                           : <><span>✓</span><b>{issues.length} fix{issues.length !== 1 ? 'es' : ''} applied</b><span className="rpbanner-count">⚡ Vision reading…</span></>
                         : <><span>⟳</span><b>Applying fixes…</b></>}
                     </div>
@@ -191,19 +191,19 @@ export default function ResultPreview({ file, srcText, pdfUrl, pdfBlob, officeBl
       </div>
       {aiAlt && (
         <div className="aialtcallout">
-          <span className="aialtbadge">⚡ Claude vision</span>
-          <span>{aiAltCount > 1 ? <>Claude described all <b>{aiAltCount} embedded images</b> separately — e.g. <b>“{aiAlt}”</b> — each written into the remediated file.</> : <>AI-generated alt text for the embedded image: <b>“{aiAlt}”</b> — written into the remediated file.</>}</span>
+          <span className="aialtbadge">⚡ AI vision</span>
+          <span>{aiAltCount > 1 ? <>The model described all <b>{aiAltCount} embedded images</b> separately — e.g. <b>“{aiAlt}”</b> — each written into the remediated file.</> : <>AI-generated alt text for the embedded image: <b>“{aiAlt}”</b> — written into the remediated file.</>}</span>
         </div>
       )}
       {imgText && (
         <div className="aialtcallout">
-          <span className="aialtbadge">⚡ Claude vision · OCR</span>
+          <span className="aialtbadge">⚡ AI vision · OCR</span>
           <span><b>1.4.5 Images of Text</b> — the image is rendered text; AI extracted it as real text: <b>“{imgText}”</b></span>
         </div>
       )}
       {aiFixes.length > 0 && (
         <div className="aifixpanel">
-          <div className="aifixhd"><span className="aialtbadge">⚡ Claude · live AI remediation</span><span className="muted" style={{ fontSize: 12 }}>drafted for human approval</span></div>
+          <div className="aifixhd"><span className="aialtbadge">⚡ live AI remediation</span><span className="muted" style={{ fontSize: 12 }}>drafted for human approval</span></div>
           {aiFixes.map((f, i) => (
             <div className="aifixrow" key={i}>
               <span className="aifixsc">{f.label}{f.verify && <span className="aifixverify" title="AI drafts the fix; a human confirms by keyboard testing">human-verify</span>}</span>

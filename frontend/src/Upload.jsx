@@ -16,6 +16,7 @@ import { prescreenHtml } from './prescreen.js'
 import { useDialog } from './a11y.js'
 import GoogleDrive, { DriveUploadButton, saveDriveScore, uploadToDrive } from './GoogleDrive.jsx'
 import SharePoint, { SpUploadButton } from './SharePoint.jsx'
+import { loadAiModels, modelLabel, UNKNOWN_MODEL } from './aiModel.js'
 
 const isOffice = (name) => /\.(docx|pptx|xlsx)$/i.test(name || '')
 const HKEY = 'mova_upload_history'
@@ -23,7 +24,7 @@ const loadHistory = () => { try { return JSON.parse(localStorage.getItem(HKEY) |
 const SEV_BADGE2 = { CRITICAL: ['#E2EDFB', '#1F5FA8'], SERIOUS: ['#E6EFFB', '#2A5E9E'], MODERATE: ['#FAEEDA', '#854F0B'], MINOR: ['#F1EFE8', '#5F5E5A'] }
 const fmtDate = (iso) => { try { return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) } catch { return '' } }
 const FIX_PROPOSAL = {
-  '1.1.1': ['<img> with no alt text', 'AI-generated alt text written into the document (Claude Vision)'],
+  '1.1.1': ['<img> with no alt text', 'AI-generated alt text written into the document (local vision model)'],
   '1.3.1': ['table / control without programmatic structure', 'header cells tagged · form fields labelled'],
   '1.3.2': ['reading order differs from the visual layout', 're-tagged to follow the visual flow'],
   '1.3.3': ['instruction relies on shape/position ("the round button")', 'LLM rewords it to name the control — AI-drafted, human-approved'],
@@ -196,26 +197,27 @@ function CaptionsPanel({ blob, captions }) {
   const dl = () => { if (!vttUrl) return; const a = document.createElement('a'); a.href = vttUrl; a.download = 'captions.vtt'; document.body.appendChild(a); a.click(); a.remove() }
   return (
     <div className="capwrap">
-      <div className="bahd"><b>Captions &amp; transcript</b>{captions ? <span className="aialtbadge" style={{ marginLeft: 8 }}>⚡ Whisper</span> : <span className="muted" style={{ marginLeft: 8 }}>· transcribing…</span>}</div>
+      <div className="bahd"><b>Captions &amp; transcript</b>{captions ? <span className="aialtbadge" style={{ marginLeft: 8 }}>⚡ captions</span> : <span className="muted" style={{ marginLeft: 8 }}>· preparing…</span>}</div>
       {url && (/^video\//.test(blob?.type || '')
         ? <video controls src={url} style={{ width: '100%', maxHeight: 320, marginTop: 10, borderRadius: 8, background: '#000' }}>{vttUrl && <track default kind="captions" srcLang="en" label="English" src={vttUrl} />}</video>
         : <audio controls src={url} style={{ width: '100%', marginTop: 10 }}>{vttUrl && <track default kind="captions" srcLang="en" label="English" src={vttUrl} />}</audio>)}
       {captions ? (<>
         <div className="captranscript">{lines.map((l, i) => <p key={i}>{l}</p>)}</div>
         <button className="ghost small" onClick={dl} style={{ marginTop: 9 }}>⤓ Download captions (.vtt)</button>
-      </>) : <p className="muted" style={{ marginTop: 9, fontSize: 12 }}>Real speech-to-text runs on the deployed site via Whisper; offline it falls back.</p>}
+      </>) : <p className="muted" style={{ marginTop: 9, fontSize: 12 }}>ACP runs no transcription pipeline — missing captions are detected and routed to a human reviewer (1.2.2).</p>}
     </div>
   )
 }
 
-// Image result — real Claude-vision alt text (1.1.1) + image-of-text OCR (1.4.5).
-function ImagePanel({ blob, result }) {
+// Image result — alt text (1.1.1) + image-of-text OCR (1.4.5). The model is whatever the
+// deployment actually runs (GET /ai/status), never a brand name typed into the markup.
+function ImagePanel({ blob, result, visionModel = UNKNOWN_MODEL }) {
   const url = useMemo(() => (blob ? URL.createObjectURL(blob) : null), [blob])
   useEffect(() => () => { if (url) URL.revokeObjectURL(url) }, [url])
   const text = result?.text && result.text.trim()
   return (
     <div className="capwrap">
-      <div className="bahd"><b>Image · alt text &amp; text extraction</b>{result ? <span className="aialtbadge" style={{ marginLeft: 8 }}>⚡ Claude vision</span> : <span className="muted" style={{ marginLeft: 8 }}>· describing the image…</span>}</div>
+      <div className="bahd"><b>Image · alt text &amp; text extraction</b>{result ? <span className="aialtbadge" style={{ marginLeft: 8 }}>⚡ {visionModel}</span> : <span className="muted" style={{ marginLeft: 8 }}>· describing the image…</span>}</div>
       {url && <img src={url} alt={result?.alt || ''} style={{ maxWidth: '100%', maxHeight: 280, borderRadius: 8, marginTop: 10, border: '1px solid var(--line)' }} />}
       {result ? (<>
         <div className="aialtcallout" style={{ marginTop: 10 }}>
@@ -225,10 +227,10 @@ function ImagePanel({ blob, result }) {
         {text && (
           <div className="aialtcallout">
             <span className="aialtbadge">1.4.5 image of text · OCR</span>
-            <span>This image is rendered text. Claude extracted it as real, selectable text: <b>"{text.length > 260 ? text.slice(0, 260) + '…' : text}"</b></span>
+            <span>This image is rendered text, extracted as real, selectable text: <b>"{text.length > 260 ? text.slice(0, 260) + '…' : text}"</b></span>
           </div>
         )}
-      </>) : <p className="muted" style={{ marginTop: 9, fontSize: 12 }}>Real Claude-vision alt text + image-of-text OCR run on the deployed site; offline it falls back.</p>}
+      </>) : <p className="muted" style={{ marginTop: 9, fontSize: 12 }}>Alt text and image-of-text OCR are produced server-side by the local vision model during remediation — not in this browser.</p>}
     </div>
   )
 }
@@ -265,6 +267,9 @@ export default function Upload({ onCertified, me }) {
   const [pdfUrl, setPdfUrl] = useState(null)
   const [officeBlob, setOfficeBlob] = useState(null)
   const [realEngine, setRealEngine] = useState(null)
+  // The model this deployment actually runs, straight from GET /ai/status — never typed in.
+  const [visionModel, setVisionModel] = useState(UNKNOWN_MODEL)
+  useEffect(() => { loadAiModels().then((s) => setVisionModel(modelLabel(s, 'vision'))) }, [])
   const [history, setHistory] = useState(loadHistory)
   const [viewing, setViewing] = useState(null)
   const [reviewOutcome, setReviewOutcome] = useState(null)
@@ -294,7 +299,7 @@ export default function Upload({ onCertified, me }) {
     return () => { live = false }
   }, [audioBlob])
 
-  // Real Claude-vision alt text (1.1.1) + image-of-text OCR (1.4.5) when an image is uploaded.
+  // Alt text (1.1.1) + image-of-text OCR (1.4.5) come from the local vision model, server-side.
   useEffect(() => {
     if (!imageBlob) { setImgResult(null); return }
     let live = true
@@ -506,7 +511,7 @@ export default function Upload({ onCertified, me }) {
       : office
       ? ['Opening OOXML package…', 'Parsing document structure (headings, tables, images)…', 'Running accessibility checks…', 'Checking language, titles & link purpose…', 'Scoring against WCAG 2.1 AA…']
       : ['Connecting…', 'Reading document…', 'mova Agent classifying & tagging…',
-          html ? 'Analysing with axe-core (real WCAG engine)…' : audio ? (isVideo(f.name) ? 'Transcribing the video soundtrack with Whisper…' : 'Transcribing the audio with Whisper…') : image ? 'Describing the image with Claude vision…' : 'Analysing against WCAG 2.1 AA…',
+          html ? 'Analysing with axe-core (real WCAG engine)…' : audio ? 'Checking for a transcript or captions…' : image ? 'Checking the image for a text alternative…' : 'Analysing against WCAG 2.1 AA…',
           'Scoring…']
     let i = 0
     const finish = async () => {
@@ -516,7 +521,10 @@ export default function Upload({ onCertified, me }) {
       else if (/\.xlsx$/i.test(f.name) && office) { try { found = await auditXlsx(office); setRealEngine('XLSX engine') } catch { /* fall back */ } }
       else if (office) { try { found = await auditOffice(office); setRealEngine('OOXML engine') } catch { /* fall back */ } }
       else if (pdf) { try { found = await auditPdf(pdf); setRealEngine('PDF engine') } catch { /* fall back */ } }
-      else if (image) { setRealEngine('Claude vision') }
+      // No engine runs in-browser for an image: the other branches each call a real audit,
+      // this one only set a label. Claim nothing. Document alt text is produced server-side by
+      // the local vision model during remediation, not here.
+      
       setScanning(false); setIssues(found); setStep(1)
     }
     const tick = () => { if (i < phases.length) { setPhase(phases[i++]); setTimeout(tick, 640) } else { finish() } }
@@ -783,15 +791,15 @@ export default function Upload({ onCertified, me }) {
               <div className="muted" style={{ marginTop: 2, fontSize: 12 }}>⚡ HTML is analysed live with the axe-core WCAG engine · drop multiple files to switch to batch mode</div>
               <div className="dzsamples">
                 <span className="muted">or try a real multi-page sample:</span>
-                <button className="ghost small" onClick={() => sample('quarterly-town-hall.pptx')} title="Town hall deck with 3 embedded charts — Claude Vision reads each chart and writes alt text in real time">PowerPoint ★</button>
+                <button className="ghost small" onClick={() => sample('quarterly-town-hall.pptx')} title="Town hall deck with 3 embedded charts — the local vision model reads each chart and writes alt text">PowerPoint ★</button>
                 <button className="ghost small" onClick={() => sample('patient-health-portal.html')} title="Patient portal with contrast failures, unlabeled forms, and structural issues — watch the page visibly transform">HTML ★</button>
                 <button className="ghost small" onClick={() => sample('patient-discharge-instructions.pdf')} title="Multi-page discharge instructions — checks alt text, tags, titles & reading order in real time">PDF ★</button>
                 <button className="ghost small" onClick={() => sample('platform-evaluation.docx')} title="AI platform evaluation with 5 tables — detects missing headers, title & language then downloads as tracked changes">Word ★</button>
                 <button className="ghost small" onClick={() => sample('finance-metrics.xlsx')}>Excel</button>
                 <button className="ghost small" onClick={() => sample('careers-landing.html')}>HTML (alt)</button>
                 <button className="ghost small" onClick={() => sample('benefits-briefing.mp3')}>Audio</button>
-                <button className="ghost small" onClick={() => sample('benefits-briefing.webm')} title="A narrated video — Whisper transcribes the audio track into captions (1.2.2)">Video</button>
-                <button className="ghost small" onClick={() => sample('enrollment-notice.png')} title="An image of text — watch Claude read it back as real text (1.4.5)">Image of text</button>
+                <button className="ghost small" onClick={() => sample('benefits-briefing.webm')} title="A narrated video — missing captions are detected and routed to a human reviewer (1.2.2)">Video</button>
+                <button className="ghost small" onClick={() => sample('enrollment-notice.png')} title="An image of text — read back as real, selectable text (1.4.5)">Image of text</button>
               </div>
               <div style={{ marginTop: 12 }}>
                 <button className="ghost small" onClick={() => setBatchMode(true)}>⊞ Batch mode — process multiple files at once</button>
@@ -874,7 +882,7 @@ export default function Upload({ onCertified, me }) {
                   </div>
                 ))}
               </div>
-              {isImage(file?.name) ? <ImagePanel blob={imageBlob} result={imgResult} /> : isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <BeforeAfter file={file} issues={issues} srcText={srcText} pdfUrl={pdfUrl} officeBlob={officeBlob} />}
+              {isImage(file?.name) ? <ImagePanel blob={imageBlob} result={imgResult} visionModel={visionModel} /> : isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <BeforeAfter file={file} issues={issues} srcText={srcText} pdfUrl={pdfUrl} officeBlob={officeBlob} />}
               {prescreen.length > 0 && (
                 <div className="hitlpanel">
                   <div className="hitlhd"><b>⚑ Routed to human review</b><span className="hitlbadge">Phase 2 · HITL</span></div>
@@ -1047,7 +1055,7 @@ export default function Upload({ onCertified, me }) {
                   )}
                 </section>
               </div>
-              {isImage(file?.name) ? <ImagePanel blob={imageBlob} result={imgResult} /> : isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <ResultPreview file={file} srcText={srcText} pdfUrl={pdfUrl} pdfBlob={pdfBlob} officeBlob={officeBlob} issues={issues} wcagVersion={wcagVersion} assignee={assignee} />}
+              {isImage(file?.name) ? <ImagePanel blob={imageBlob} result={imgResult} visionModel={visionModel} /> : isAudio(file?.name) ? <CaptionsPanel blob={audioBlob} captions={captions} /> : <ResultPreview file={file} srcText={srcText} pdfUrl={pdfUrl} pdfBlob={pdfBlob} officeBlob={officeBlob} issues={issues} wcagVersion={wcagVersion} assignee={assignee} />}
             </>
           )}
         </>

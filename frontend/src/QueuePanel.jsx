@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { getJobs, setWorkers, clearDeadJobs } from './api.js'
 import { TraceChip } from './Transparency.jsx'
+import { phaseLine, isStalled, STALLED_AFTER_S } from './jobPhase.js'
 
 // Job-type → short human label for the recent-jobs cards.
 const JOBLABEL = {
@@ -61,13 +62,6 @@ const STATUS = {
 // title, language, reading order). Cycled next to the title while a file is in flight to
 // show the remediation is active — client-paced (a one-shot job streams no per-rule step),
 // the same representative animation the FileDrawer progress line uses.
-const REM_STEPS = [
-  'Images missing a text description (1.1.1)',
-  'Low colour contrast (1.4.3 / 1.4.6)',
-  'Missing document title (2.4.2)',
-  'Language of page not set (3.1.1)',
-  'Reading order may not match visual order (1.3.2)',
-]
 
 export default function QueuePanel() {
   const [q, setQ] = useState(null)
@@ -79,7 +73,6 @@ export default function QueuePanel() {
   // returns. Rate = delta(done) / delta(t) over the oldest-vs-newest sample in the window.
   const historyRef = useRef([])
   const [throughput, setThroughput] = useState(null)   // jobs/min, or null until 2+ samples
-  const [remStep, setRemStep] = useState(0)            // cycles the live "Remediating …" fix label
 
   useEffect(() => {
     let on = true
@@ -108,13 +101,6 @@ export default function QueuePanel() {
   // The file a worker is remediating right now (most recent running remediate job).
   const remJob = (q?.jobs || []).find((j) => j.status === 'running' && j.type === 'remediate_file')
   const remFile = remJob ? jobFile(remJob.payload) : null
-  // Cycle the fix label while a remediation is in flight.
-  useEffect(() => {
-    if (!remFile) { setRemStep(0); return }
-    const t = setInterval(() => setRemStep((i) => (i + 1) % REM_STEPS.length), 1600)
-    return () => clearInterval(t)
-  }, [remFile])
-
   const scaleWorkers = (next) => {
     const cur = q?.workers ?? 0
     const n = Math.max(0, Math.min(16, next))
@@ -186,7 +172,7 @@ export default function QueuePanel() {
           <span aria-live="polite" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#185FA5', fontWeight: 600 }}>
             <span className="pulsedot" aria-hidden="true" />
             Remediating <span className="fname" title={remFile} style={{ fontWeight: 700 }}>{remFile}</span>
-            <span className="muted" style={{ fontWeight: 400 }}>· {REM_STEPS[remStep]}</span>
+            {phaseLine(remJob) && <span className="muted" style={{ fontWeight: 400 }}>· {phaseLine(remJob)}</span>}
           </span>
         )}
       </div>
@@ -294,15 +280,29 @@ export default function QueuePanel() {
               const desc = jobDesc(jb)
               const dur = jb.created_at && jb.updated_at ? Math.max(0, (new Date(jb.updated_at) - new Date(jb.created_at)) / 1000) : null
               const [fg, bg] = STATUS[jb.status] || ['#555', '#eee']
+              const phase = phaseLine(jb)
+              const stalled = isStalled(jb, dur)
               return (
                 <div className="jobcard" key={jb.id}>
                   <span className="jobtype">{JOBLABEL[jb.type] || jb.type}</span>
                   <span className="jobfile" title={jb.scan_id ? `${desc} · scan ${jb.scan_id}` : desc}>
                     {desc}
+                    {/* What this job is doing right now, straight from jobs.phase. Absent
+                        phase renders nothing — never a placeholder standing in for work. */}
+                    {phase && <div className="jobphase muted" aria-live="polite">{phase}</div>}
+                    {jb.status === 'failed' && jb.last_error &&
+                      <div className="jobphase" style={{ color: '#B3261E' }} title={jb.last_error}>{jb.last_error.slice(0, 90)}</div>}
                   </span>
                   <span className="jobstatus flash" key={jb.status} style={{ color: fg, background: bg }}>
                     {jb.status === 'running' && <span className="pulsedot" aria-hidden="true" />}{jb.status}
                   </span>
+                  {jb.attempts > 1 && <span className="muted jobdur" title={`${jb.attempts} attempts`}>×{jb.attempts}</span>}
+                  {stalled && (
+                    <span className="jobstatus" style={{ color: '#8A4B00', background: '#FDF3E0' }}
+                          title={`No new phase reported for over ${Math.round(STALLED_AFTER_S / 60)} minutes. A large deck can legitimately take this long — but so can a hung job.`}>
+                      stalled?
+                    </span>
+                  )}
                   {dur != null && <span className="muted jobdur">{fmtDur(dur)}</span>}
                   {jb.scan_id && <TraceChip scanId={jb.scan_id} kind="session" label="trace" />}
                 </div>

@@ -83,7 +83,7 @@ export const getDigest = (scanId, refresh = false) => (SIM
     changed: ['Estate score rose 4 points to 79/100 since the last scan.', '3 documents regressed — worst: marketing-public-landing-page.html (100→82).', '9 documents improved.', '6 documents contain sensitive data flagged for review.'],
     top_issue: 'Images have alt text (1.1.1) fails on 89 documents — the biggest systemic gap.',
     next_action: 'Fix Images have alt text across the estate — it clears the most documents toward AA.',
-    ai: true, model: 'claude-opus-4-8',
+    ai: true, model: 'local model',   // SIM must not name a model the product never calls
   }, 1500)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/digest${refresh ? '?refresh=true' : ''}`, { headers: headers() }).then(j))
 // Regression diff vs a prior scan (ADR 0009) — which docs got worse/better + criteria that broke.
