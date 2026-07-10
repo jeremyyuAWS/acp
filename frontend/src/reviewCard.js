@@ -100,6 +100,20 @@ export const appliedFixAlt = (file) => (
     ? `Rendered page of ${file}, from which the AI wrote alt text`
     : `Image in ${file || 'the document'} that the AI wrote alt text for`)
 
+// The OFFENDING value the proposal is about to replace: the foreign-language passage, the
+// vague link text, the sensory phrase. It is the concrete "what was there" half of the
+// before → after a reviewer is approving. `dbItemToUi` used to synthesise a `before` from the
+// finding's generic detail text, which said the same thing for every instance of a criterion.
+export const firstBefore = (item) => proposalsOf(item)[0]?.before ?? null
+
+// The page the finding sits on (hitl_queue.page — the lowest page the analysers attributed),
+// so the card can show THAT page rather than the document's cover. Null when the analysers
+// never attributed one: we show no page rather than a wrong one, and never default to 1.
+export const pageOf = (item) => {
+  const p = item?.page
+  return Number.isInteger(p) && p > 0 ? p : null
+}
+
 // The rationale + the model that produced the draft, so the reviewer sees WHY, not just WHAT.
 export const firstRationale = (item) => proposalsOf(item)[0]?.rationale ?? null
 export const firstSource = (item) => proposalsOf(item)[0]?.source ?? null
@@ -125,6 +139,7 @@ export function buildEvidenceCard(item, diffs = []) {
     thumbKind: firstKind(item),
     // The images awaiting a description. Separate from `thumb`/`proposal` on purpose.
     evidence: evidenceOf(item),
+    page: pageOf(item),
     file: item?.file,
     sc,
     fmt,
@@ -164,7 +179,6 @@ export function buildEvidenceCard(item, diffs = []) {
     findingCount: item?.finding_count || 1,
     // Where in the document to look — null when the analyser attributed nothing.
     location: locationLabel(item),
-    page: item?.page ?? null,
     // The actual image the reviewer must judge, and the evidence behind the draft.
     thumb: firstThumb(item),
     rationale: firstRationale(item),

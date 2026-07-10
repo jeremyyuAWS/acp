@@ -133,7 +133,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
         {card.thumb
           ? <ProposalThumb thumb={card.thumb} alt={thumbAlt(card.thumbKind, card.file)}
                            size={thumbSize(card.thumbKind, 96)} className="evcard-thumb" />
-          : (card.scanId && card.file && <Thumbnail scanId={card.scanId} file={card.file} className="evcard-thumb" />)}
+          : (card.scanId && card.file && <Thumbnail scanId={card.scanId} file={card.file} page={card.page || 1} className="evcard-thumb" />)}
         <div className="evcard-main" style={{ flex: 1, minWidth: 0 }}>
           <p className="evcard-problem">{card.problem}</p>
 

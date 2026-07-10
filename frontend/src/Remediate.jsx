@@ -12,8 +12,9 @@ import QueuePanel from './QueuePanel.jsx'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
 import { confidenceForFinding, confClass } from './confidence.js'
 import { metaFor } from './hitlMeta.js'
-import { firstProposed, firstThumb, firstKind, firstRationale, firstSource, thumbAlt, thumbSize, appliedFixAlt } from './reviewCard.js'
+import { firstProposed, firstBefore, firstThumb, firstKind, firstRationale, firstSource, pageOf, thumbAlt, thumbSize, appliedFixAlt } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
+import Thumbnail from './Thumbnail.jsx'
 import { remediableFiles, emptyScopeReason } from './remediableScope.js'
 import { measuredReviewTime, REVIEW_TIME_BASIS } from './reviewerTime.js'
 
@@ -95,7 +96,14 @@ function dbItemToUi(it, files) {
     aiDraftable: AI_DRAFTABLE_SCS.has(sc),
     source: fileRec.sourceName,
     rule: `WCAG ${sc}${it.rule_name ? ' — ' + it.rule_name : ITEM_NAME[sc] ? ' — ' + ITEM_NAME[sc] : ''}`,
-    before: ba.before(issue.detail, fileRec),
+    // The passage the fix would replace. The proposal's own `before` is the literal offending
+    // text the analyser matched (`propose_language_parts` carries the actual sentence); fall
+    // back to the rule's description of the defect when no proposal names one.
+    before: firstBefore(it) || ba.before(issue.detail, fileRec),
+    beforeLiteral: !!firstBefore(it),
+    // The page the finding sits on, per the analysers (hitl_queue.page). Null when they could
+    // not attribute one — the card must then not claim a page.
+    page: pageOf(it),
     // The AI's actual draft, from hitl_queue.proposals — what the vision model wrote for THIS
     // image. `approved_value` only ever holds what a REVIEWER typed back (nothing writes it
     // server-side), so the old `it.approved_value || template` fell through to the template on
@@ -174,18 +182,27 @@ function ProgressRail({ steps }) {
 // "Why am I reviewing this?" (§3) — the honest evidence a compliance officer needs to act:
 // the confidence.js level + its concrete basis (never a fabricated %), the plain-language
 // escalation reason, and the value the AI is suggesting they approve.
-function WhyReview({ sc, suggested, thumb, thumbKind, rationale, proposalSource, hasProposal, file }) {
+function WhyReview({ sc, suggested, before, beforeLiteral, thumb, thumbKind, rationale, proposalSource, hasProposal, file, scanId, page }) {
   const conf = confidenceForFinding({ sc })
   const reason = metaFor({ rule_id: sc }).reason
   return (
     <div className="whyreview">
       <div className="whyreview-hd">Why am I reviewing this?</div>
       <div className="whyreview-body" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-        {/* What the reviewer must judge: the embedded image, or — for a reading-order
-            proposal — the rendered page, which needs more room to be legible. A deck cannot
-            be rasterized, so this base64 thumb is the only picture we can ever show for one.
-            Renders nothing when no proposal carried a thumb. */}
-        <ProposalThumb thumb={thumb} alt={thumbAlt(thumbKind, file)} size={thumbSize(thumbKind)} />
+        {/* What the reviewer must judge. Two sources, in order of specificity:
+            1. the proposal's own image — the embedded picture, or a reading-order page render;
+            2. failing that, the rendered PAGE the finding sits on.
+            (2) is what the AI Work Inbox has always shown and this card never did: a text
+            finding (3.1.2 language, 2.4.4 link text) carries no image, so ProposalThumb drew
+            nothing and the reviewer was asked to approve a change to a passage they could not
+            see. `page` comes from hitl_queue.page — the analysers' own attribution, absent
+            when they could not attribute one, never defaulted to the cover.
+            A PPTX renders neither: api/render.py is PDF-only, so a deck shows nothing here
+            rather than a picture of the wrong document. */}
+        {thumb
+          ? <ProposalThumb thumb={thumb} alt={thumbAlt(thumbKind, file)} size={thumbSize(thumbKind)} />
+          : (scanId && file && <Thumbnail scanId={scanId} file={file} page={page || 1}
+                                          className="whyreview-thumb" maxHeight={150} />)}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="whyreview-row">
             <span className="muted">AI confidence</span>
@@ -193,6 +210,19 @@ function WhyReview({ sc, suggested, thumb, thumbKind, rationale, proposalSource,
             <span className="muted">— {conf.basis}</span>
           </div>
           <div className="whyreview-row"><span className="muted">Reason</span><span>{reason}</span></div>
+          {/* Where to look. Only stated when the analysers attributed a page — a reviewer sent to
+              "page 1" for a finding on page 7 checks the wrong thing and approves blind. */}
+          {page && <div className="whyreview-row"><span className="muted">Found on</span><span>Page {page}</span></div>}
+          {/* Before → after. Shown only when the proposal carried the literal offending passage:
+              `ba.before()` is a description of the defect ("image / chart — no alt text"), not a
+              value, and labelling that "current text" would be a lie. When it is absent the
+              picture above, not a sentence, is what the reviewer judges. */}
+          {beforeLiteral && before && (
+            <div className="whyreview-row">
+              <span className="muted">Current text</span>
+              <span className="whyreview-before">{before}</span>
+            </div>
+          )}
           {suggested && (
             <div className="whyreview-row">
               <span className="muted">{hasProposal ? 'AI suggested value' : 'Next step'}</span>
@@ -227,8 +257,10 @@ function ReviewItemCard({ item, onOpen, onApprove, onSelf, onReject, disabled })
         </div>
         <AutoBadge kind={badgeKind} />
       </div>
-      <WhyReview sc={sc} suggested={item.after} thumb={item.thumb} thumbKind={item.thumbKind} rationale={item.rationale}
-                 proposalSource={item.proposalSource} hasProposal={item.hasProposal} file={item.file} />
+      <WhyReview sc={sc} suggested={item.after} before={item.before} beforeLiteral={item.beforeLiteral}
+                 thumb={item.thumb} thumbKind={item.thumbKind} rationale={item.rationale}
+                 proposalSource={item.proposalSource} hasProposal={item.hasProposal} file={item.file}
+                 scanId={item.scanId} page={item.page} />
       <div className="reviewcard-actions">
         <button className="qbtn approve" disabled={disabled} onClick={onApprove}>✓ Approve</button>
         <button className="qbtn self" disabled={disabled} onClick={onSelf} title="Take ownership — fix it yourself, then re-scan to confirm">✋ I’ll fix it</button>
