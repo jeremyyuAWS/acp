@@ -1,0 +1,27 @@
+# GPU variant of deploy/ollama/Dockerfile (ADR: GPU-backed Ollama, West US 3).
+#
+# Same base as the CPU image, but bakes in a real vision-language model instead of the
+# compact 'moondream' captioner the 8Gi CPU Consumption profile forced us down to. Only
+# viable with a GPU + VRAM headroom — DO NOT deploy this to the CPU (Consumption) profile.
+#
+# VRAM: a T4 has 16GB. llava:13b (~8GB) + llama3.1:8b (~5GB) ~= 13GB, so BOTH stay resident
+# with OLLAMA_MAX_LOADED_MODELS=2 (no reload cost between text + vision calls). If you swap
+# vision to llama3.2-vision:11b (~10GB) it no longer co-resides on a T4 — set
+# OLLAMA_MAX_LOADED_MODELS=1 (a reload per switch) or use the A100 profile (40/80GB).
+#
+# Wire the app: OLLAMA_BASE_URL=<this app's https FQDN>, OLLAMA_MODEL=llama3.1:8b,
+# OLLAMA_VISION_MODEL=llava:13b. Provisioning runbook: deploy/ollama/gpu-runbook.sh.
+FROM ollama/ollama:latest
+
+ENV OLLAMA_MAX_LOADED_MODELS=2
+
+# Start the server, pull both models into /root/.ollama (persisted in the layer), then stop.
+# The models ship inside the image so there's no multi-GB cold-start download at startup.
+RUN bash -c 'ollama serve & SP=$!; \
+    for i in $(seq 1 30); do curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 && break; sleep 1; done; \
+    ollama pull llama3.1:8b; \
+    ollama pull llava:13b; \
+    kill $SP 2>/dev/null; wait $SP 2>/dev/null || true'
+
+ENV OLLAMA_HOST=0.0.0.0:11434
+EXPOSE 11434
