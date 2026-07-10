@@ -114,12 +114,28 @@ def set_workers(request: Request, count: int = Query(..., ge=0, le=16)):
     return {"workers": new}
 
 
+def _build_info() -> dict:
+    """Build provenance, plus whether this image was actually stamped by deploy.sh.
+
+    deploy.sh stamps ACP_BUILD_VERSION with a CalVer string (e.g. 2026.7.10.005859) at
+    deploy time. The Dockerfile's `ARG BUILD_VERSION=dev` default is what a bare
+    `docker build` leaves behind, so an unstamped image is one that never went through
+    deploy.sh. Such an image must not pass for a release: /healthz reports ok=false, so
+    an operator sees it immediately instead of the app quietly serving "dev". ACA runs no
+    health probe on this route, so this signal is advisory, not a rollout gate.
+    """
+    import os
+    v = (os.environ.get("ACP_BUILD_VERSION") or "").strip()
+    return {"version": v or "dev",
+            "built_at": os.environ.get("ACP_BUILD_TIME") or None,
+            "version_stamped": v.lower() not in ("", "dev")}
+
+
 @router.get("/healthz")
 def healthz():
-    import os
-    return {"ok": True, "service": "acp", "rubric_hash": core.active_rubric().hash,
-            "version": os.environ.get("ACP_BUILD_VERSION", "dev"),
-            "built_at": os.environ.get("ACP_BUILD_TIME") or None}
+    info = _build_info()
+    return {"ok": info["version_stamped"], "service": "acp",
+            "rubric_hash": core.active_rubric().hash, **info}
 
 
 @router.get("/config")
@@ -135,8 +151,7 @@ def config():
     return {"google_client_id": core.GOOGLE_CLIENT_ID,
             "drive_scope": core.DRIVE_SCOPES[0],
             "auth": "gis" if core.GOOGLE_CLIENT_ID else "demo",
-            "version": os.environ.get("ACP_BUILD_VERSION", "dev"),
-            "built_at": os.environ.get("ACP_BUILD_TIME") or None,
+            **_build_info(),
             "langfuse_trace_base": (f"{lf_host}/project/{lf_project}/traces" if lf_host else None)}
 
 

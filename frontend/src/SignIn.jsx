@@ -30,10 +30,13 @@ function BuildStamp() {
   const iso = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : null
   if (!ver && !iso) return null
   const stamp = iso ? new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }) : null
+  // The version's date + ordinal are stamped in UTC (deploy.sh), while `stamp` renders the
+  // build instant in the VIEWER's zone. Without the "UTC" tag those disagree by a day for
+  // anyone west of Greenwich after their afternoon — e.g. v2026.7.10 next to "Jul 9, 5:12 PM PDT".
   return (
     <p style={{ margin: '10px 0 0', fontSize: 11, color: '#b0a8b4', textAlign: 'center', letterSpacing: 0.2 }}
-       title={stamp ? `Built ${stamp}` : undefined}>
-      {ver && <span>v{ver}</span>}
+       title={stamp ? `Version stamped in UTC · built ${stamp} (your local time)` : undefined}>
+      {ver && <span>v{ver}<span style={{ opacity: 0.7 }}>{' '}UTC</span></span>}
       {ver && iso && <span style={{ margin: '0 5px' }}>·</span>}
       {iso && <span>{stamp}</span>}
       {iso && <span style={{ margin: '0 5px' }}>·</span>}
