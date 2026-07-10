@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildEvidenceCard, comparisonFor, noDraftHint } from './reviewCard.js'
+import { buildEvidenceCard, comparisonFor, formatProposedValue, noDraftHint } from './reviewCard.js'
 
 describe('comparisonFor — current → remediated, or nothing', () => {
   const DIFF = { file: 'deck.pptx', rule_id: '1.1.1', before: '(no alt text)', after: 'A clinician at a desk.' }
@@ -47,10 +47,41 @@ describe('comparisonFor — current → remediated, or nothing', () => {
   })
 })
 
+describe('formatProposedValue — a raw value a reviewer can act on', () => {
+  it('turns a bare ISO code into the markup it becomes', () => {
+    // 3.1.2 proposes "es". On its own that tells a reviewer nothing about what changes.
+    expect(formatProposedValue('3.1.2', 'es')).toBe('lang="es" — Spanish')
+    expect(formatProposedValue('3.1.1', 'fr')).toBe('lang="fr" — French')
+    expect(formatProposedValue('3.1.2', 'pt-BR')).toBe('lang="pt-BR" — Portuguese')
+  })
+
+  it('names the language only when we know it, never inventing one', () => {
+    expect(formatProposedValue('3.1.2', 'xx')).toBe('lang="xx"')
+  })
+
+  it('leaves prose alone — alt text is already what gets written', () => {
+    expect(formatProposedValue('1.1.1', 'A clinician at a desk.')).toBe('A clinician at a desk.')
+    expect(formatProposedValue('2.4.4', 'Download the intake form')).toBe('Download the intake form')
+    // a two-letter word that is not a lang code for this criterion stays untouched
+    expect(formatProposedValue('2.4.4', 'go')).toBe('go')
+  })
+
+  it('never throws on an empty or missing value', () => {
+    for (const v of [null, undefined, '']) expect(formatProposedValue('3.1.2', v)).toBe('')
+  })
+})
+
 describe('noDraftHint — what to say when there is no fix to show', () => {
   it('asks a human to author the value for a value-fix criterion', () => {
     expect(noDraftHint('1.1.1')).toMatch(/write the description/i)
-    expect(noDraftHint('2.4.4')).toMatch(/write the description/i)
+    expect(noDraftHint('2.4.4')).toMatch(/write link text/i)
+  })
+
+  it('asks for the right KIND of content — not "a description" for a language marking', () => {
+    expect(noDraftHint('3.1.2')).toMatch(/name the language/i)
+    expect(noDraftHint('3.1.1')).toMatch(/language this document is written in/i)
+    expect(noDraftHint('1.3.3')).toMatch(/rewrite the instruction/i)
+    expect(noDraftHint('3.1.2')).not.toMatch(/description/i)
   })
 
   it('asks for judgement on everything else, and never claims a fix was applied', () => {

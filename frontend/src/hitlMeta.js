@@ -20,9 +20,19 @@ const RULE_META = {
   '2.4.9': { sev: 'medium', reason: 'Link-text rewrite needs human judgement to stay accurate.' },
   '3.3.2': { sev: 'medium', reason: 'A form-field label needs a person to name the field meaningfully.' },
   '3.1.1': { sev: 'low', reason: 'Language could not be set deterministically — confirm the document language.' },
+  '3.1.2': { sev: 'medium', reason: 'A passage is written in a different language from the rest of the document — confirm which, so a screen reader switches voice instead of reading it phonetically.' },
+  '1.3.3': { sev: 'medium', reason: 'An instruction relies on shape, colour or position alone — a person must rewrite it so it still makes sense without sight.' },
+  '1.3.1': { sev: 'medium', reason: 'Structure (a table header, a heading level) needs a person to confirm what the markup should say.' },
+  '1.3.2': { sev: 'medium', reason: 'The reading order is ambiguous — a person must confirm the intended sequence.' },
+  '2.4.6': { sev: 'low', reason: 'A heading or label needs a person to confirm it describes what follows.' },
 }
 
-const DEFAULT_META = { sev: 'medium', reason: 'The AI drafted a fix; a person must approve it before the document can be certified.' }
+// The fallback for a criterion this table does not name. It must NOT claim a draft exists: it
+// used to read "The AI drafted a fix; a person must approve it", which every unlisted criterion
+// printed whether or not anything had been drafted — 3.1.2 among them, on a card showing no
+// draft at all. Say only what is true of an unknown criterion. The draft, when there is one,
+// is shown from the proposals themselves.
+const DEFAULT_META = { sev: 'medium', reason: 'This finding could not be fixed automatically — it needs your decision before the document can be certified.' }
 
 // hitl_queue rows carry rule_id like "1.1.1" (WCAG SC) — normalise defensively.
 const scOf = (ruleId) => String(ruleId || '').replace(/^SC[_ ]?/i, '').replace(/_/g, '.').match(/^\d+\.\d+\.\d+/)?.[0] || ''

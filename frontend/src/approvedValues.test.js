@@ -16,10 +16,12 @@ describe('the approve payload carries one value per image', () => {
     expect(src).toMatch(/approved_value: approvedValue/)   // headline value still logged
   })
 
-  it('EvidenceCard seeds one editor per proposal, from that image\'s own draft', () => {
+  it('EvidenceCard seeds one editor per proposal, from that instance\'s own draft', () => {
     const src = read('EvidenceCard.jsx')
     expect(src).toMatch(/useState\(\(\) => seedValues\(proposalList\)\)/)
-    expect(src).toMatch(/const multi = proposalList\.length > 1/)
+    // ANY row with proposals gets the per-instance editor: it is the only surface that shows
+    // what is changing beside the value being written, and a one-proposal row needs that too.
+    expect(src).toMatch(/const multi = proposalList\.length > 0/)
   })
 
   it('EvidenceCard sends the per-image values, and only on approval', () => {
@@ -28,11 +30,21 @@ describe('the approve payload carries one value per image', () => {
     expect(src).toMatch(/approvedValues/)
   })
 
-  it('every image is rendered beside its own textarea — never a value for an unseen image', () => {
+  it('every instance is rendered beside its own textarea — never a value for unseen evidence', () => {
     const src = read('ProposalEditors.jsx')
     expect(src).toMatch(/proposals\.map\(\(p, i\) =>/)
-    expect(src).toMatch(/<ProposalThumb thumb=\{p\?\.thumb\}/)
+    expect(src).toMatch(/<ProposalThumb thumb=\{p\.thumb\}/)
     expect(src).toMatch(/onChange=\{\(e\) => onChange\(i, e\.target\.value\)\}/)
+  })
+
+  it('each row shows what is changing: the current value, and what gets written', () => {
+    // "The AI drafted a fix" told a reviewer nothing. The passage (or image) and the resulting
+    // markup are the only things that let them judge the value at all.
+    const src = read('ProposalEditors.jsx')
+    expect(src).toMatch(/<span className="difftag">current<\/span><code>\{p\.before\}<\/code>/)
+    expect(src).toMatch(/<span className="difftag">writes<\/span><code>\{after\}<\/code>/)
+    expect(src).toMatch(/formatProposedValue\(sc, values\[i\] \?\? ''\)/)
+    expect(src).toMatch(/\{p\?\.rationale && \(/)   // why this value, shown per instance
   })
 
   it('both review screens use the SAME editor, so the array index means the same proposal', () => {

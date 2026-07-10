@@ -251,6 +251,30 @@ def test_a_judgement_approval_schedules_no_write(store, monkeypatch):
     assert store.claim_job("w1") is None
 
 
+def test_approving_without_sending_values_still_counts_the_drafts_as_content(store, monkeypatch):
+    """Approving a row means accepting the drafts it was showing.
+
+    A client that approves without sending approved_values (a bulk approve, an older build)
+    left every proposal valueless. The row then held no "content", the gate counted nothing,
+    and the file certified with the drafts never written in — the original bug, reintroduced
+    through a different door.
+    """
+    item_id = _seed(store)
+    store.update_hitl_item(item_id, "approved", None, None)   # note: no approve_proposal_values
+
+    assert store.count_unapplied_approved_values(SID, FILE) == 1
+    assert store.mark_file_compliant_if_reviewed(SID, FILE) is False
+    assert store.approved_alt_values(SID, FILE) == {
+        f"{SLIDE}#Picture 1": "AI draft for Picture 1",
+        f"{SLIDE}#Chart 2": "AI draft for Chart 2",
+    }
+    # …and the drafts are what actually get written
+    blob = _Blob(_deck("Picture 1", "Chart 2"))
+    _run_handler(monkeypatch, store, blob, residual=set())
+    assert 'descr="AI draft for Picture 1"' in _slide_xml(blob.data)
+    assert store.get_file_record(SID, FILE)["compliant"] == 1
+
+
 def test_link_purpose_approvals_have_no_applier_and_keep_the_file_out_of_publish(store):
     """2.4.4 carries no alt-text applier. It must not be silently dropped: the file stays
     uncertified rather than certifying with the link text still unwritten."""

@@ -15,13 +15,41 @@ import { metaFor } from './hitlMeta.js'
 const scOf = (ruleId) =>
   String(ruleId || '').replace(/^SC[_ ]?/i, '').replace(/_/g, '.').match(/^\d+\.\d+\.\d+/)?.[0] || ''
 
-// Criteria whose fix IS a value a screen reader will announce (alt text, link text, a title).
-// The reviewer approves that text; everything else is a judgement call with nothing to type.
-// Single source of truth — ReviewCenter and EvidenceCard must agree on which items get an
-// editor, or a reviewer would approve an empty value on one screen and not the other.
-export const VALUE_FIX = new Set(['1.1.1', '2.4.4', '2.4.9', '2.4.2', '3.3.2'])
+// Criteria whose fix is CONTENT the document must carry — alt text, link text, a title, a
+// `lang` marking. Approving one is not the resolution: the value still has to be written in
+// and the file re-scanned. Everything else (a contrast ratio accepted, a link deemed adequate
+// as it stands) is a judgement call whose resolution IS the human sign-off.
+//
+// Single source of truth. It decides three things at once, so a criterion missing from it goes
+// wrong three ways: no editor appears, the card promises "Fail → Pass after approval", and
+// "Approve all judgement items" sweeps it up in bulk. 3.1.2 was missing, so a Language-of-Parts
+// finding certified its file while the passage was still unmarked.
+export const VALUE_FIX = new Set([
+  '1.1.1',   // alt text
+  '2.4.4', '2.4.9',   // link text
+  '2.4.2',   // document / page title
+  '3.3.2',   // form-field label
+  '3.1.1',   // document language — a `lang` attribute, written not merely agreed to
+  '3.1.2',   // language of parts — a `lang` marking on each foreign passage
+  '1.3.3',   // sensory characteristics — the sentence itself is rewritten
+])
 
 export const isValueFix = (sc) => VALUE_FIX.has(sc)
+
+// What a proposal's raw value means once written. 3.1.2 proposes a bare ISO code ("es"), which
+// tells a reviewer nothing on its own; show the markup it becomes.
+const LANG_NAMES = { en: 'English', es: 'Spanish', fr: 'French', de: 'German', pt: 'Portuguese',
+                     it: 'Italian', nl: 'Dutch', zh: 'Chinese', ja: 'Japanese', ko: 'Korean',
+                     ar: 'Arabic', hi: 'Hindi', ru: 'Russian', pl: 'Polish', tr: 'Turkish' }
+
+export function formatProposedValue(sc, value) {
+  const v = String(value ?? '')
+  if ((sc === '3.1.2' || sc === '3.1.1') && /^[a-z]{2}(-[A-Za-z]{2,4})?$/.test(v)) {
+    const name = LANG_NAMES[v.slice(0, 2).toLowerCase()]
+    return `lang="${v}"${name ? ` — ${name}` : ''}`
+  }
+  return v
+}
 
 // A deck fails on slides; a PDF fails on pages. Same idea to a reviewer: "go here".
 export const pageNoun = (file) => (String(file || '').split('.').pop().toLowerCase() === 'pptx' ? 'Slide' : 'Page')
@@ -142,12 +170,23 @@ export function comparisonFor(item, scanDiffs = []) {
   return null
 }
 
-// What to tell a reviewer when nothing was drafted or applied. A value-fix criterion needs a
-// human to author the text a screen reader announces; everything else is a judgement call.
-// This replaced canned strings ("AI-generated alt text added") that the card printed whether
-// or not a model had written anything — see comparisonFor.
+// What to tell a reviewer when nothing was drafted or applied. Content criteria need a human to
+// supply the missing content — and WHICH content differs, so say so rather than telling someone
+// staring at a Language-of-Parts finding to "write a description". Everything else is a
+// judgement call. This replaced canned strings ("AI-generated alt text added") that the card
+// printed whether or not a model had written anything — see comparisonFor.
+const NO_DRAFT_HINT = {
+  '3.1.1': 'No draft yet — confirm the language this document is written in.',
+  '3.1.2': 'No draft yet — name the language of the passage so screen readers switch voice.',
+  '1.3.3': 'No draft yet — rewrite the instruction without relying on shape, colour or position.',
+  '2.4.2': 'No draft yet — give the document a title that identifies it.',
+  '2.4.4': 'No draft yet — write link text that says where the link goes.',
+  '2.4.9': 'No draft yet — write link text that says where the link goes.',
+  '3.3.2': 'No draft yet — name the form field so its purpose is clear.',
+}
+
 export const noDraftHint = (sc) => (isValueFix(sc)
-  ? 'No draft yet — write the description a screen reader should announce.'
+  ? (NO_DRAFT_HINT[sc] || 'No draft yet — write the description a screen reader should announce.')
   : 'No automated fix was recorded — this needs your judgement.')
 
 export function proposalMeta(item) {

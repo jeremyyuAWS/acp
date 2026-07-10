@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import Drawer from './Drawer.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import { proposalsOf } from './reviewCard.js'
+import { scOf } from './fixSummary.js'
 
 export default function ReviewDrawer({ item, onClose, onAct, onDraft }) {
   const [afterText, setAfterText] = useState(item?.after || '')
@@ -11,7 +12,7 @@ export default function ReviewDrawer({ item, onClose, onAct, onDraft }) {
   // locator, so the reviewer must see every picture they are describing — the single
   // `afterText` box below can only ever speak for the first one.
   const proposals = proposalsOf(item)
-  const multi = proposals.length > 1
+  const multi = proposals.length > 0
   const [values, setValues] = useState(() => seedValues(proposals))
   const setValueAt = (i, v) => setValues((prev) => prev.map((x, j) => (j === i ? v : x)))
 
@@ -44,7 +45,8 @@ export default function ReviewDrawer({ item, onClose, onAct, onDraft }) {
       {multi ? (
         <>
           <h4 className="drawerh">Proposed fix &middot; one description per image</h4>
-          <ProposalEditors proposals={proposals} values={values} onChange={setValueAt} file={item.file} />
+          <ProposalEditors proposals={proposals} values={values} sc={scOf(item.ruleId || item.rule)}
+                           onChange={setValueAt} file={item.file} />
         </>
       ) : item.before && (
         <>

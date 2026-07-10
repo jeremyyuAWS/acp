@@ -34,7 +34,12 @@ describe('EvidenceCard — on-demand AI draft', () => {
       proposals: [{ proposed_value: 'A nurse reviews a chart with a patient.', rationale: 'vision model' }],
     })
     expect(html).not.toContain('Draft with AI')
-    expect(html).toContain('AI recommendation')
+    // A row carrying a proposal renders the per-instance editor, which shows the drafted value
+    // and the reasoning behind it — not a bare textarea labelled "AI recommendation" with no
+    // evidence of what is changing.
+    expect(html).toContain('A nurse reviews a chart with a patient.')
+    expect(html).toContain('vision model')
+    expect(html).toContain('becomes')
   })
 
   it('does NOT offer a draft when a value was previously approved', () => {

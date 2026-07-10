@@ -88,13 +88,19 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // An item carrying a proposal always takes a value, even if its SC isn't a classic VALUE_FIX
   // (e.g. a 1.3.3 sensory rewrite) — otherwise the reviewer sees a proposal they cannot accept.
   const editable = card.track.track !== 'auto' && (isValueFix(card.sc) || !!card.proposal)
-  // "Approve & Apply" is only truthful when approval genuinely resolves the criterion. For a
-  // value-fix finding nothing is applied — approving records the value as evidence and leaves
-  // the document untouched — so the button must not say Apply. See card.certifiesOnApprove.
-  const primaryLabel = card.certifiesOnApprove ? card.track.action : 'Approve — record sign-off'
-  // One text box cannot describe N different images. Give each its own — and its own picture,
-  // because a reviewer cannot honestly approve a description of an image they were never shown.
-  const multi = proposalList.length > 1
+  // What approving actually does, in three honest cases:
+  //   judgement (contrast)      → the sign-off IS the resolution        → the track's own verb
+  //   content WITH an applier   → the value is written into the document → say so
+  //   content with no applier   → the value is recorded, nothing written → say that instead
+  // Alt text on an Office file is the only thing ACP can write back today (api/apply_alt.py).
+  const hasApplier = card.sc === '1.1.1' && /\.(docx|pptx|xlsx)$/i.test(card.file || '')
+  const primaryLabel = card.certifiesOnApprove
+    ? card.track.action
+    : hasApplier ? 'Approve & write into the document' : 'Approve — record sign-off'
+  // Any row carrying proposals gets the per-instance editor. It is the only surface that shows
+  // WHAT is changing — the image, or the passage of text — beside the value being written, and
+  // a reviewer cannot honestly approve a description of something they were never shown.
+  const multi = proposalList.length > 0
   // A row with many findings but no per-instance proposals still cannot be expressed in one
   // box; there is nothing to render per image, so keep warning rather than implying it can.
   const manyInstances = !multi && card.findingCount > 1 && isValueFix(card.sc)
@@ -191,7 +197,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
           )}
 
           {editable && multi ? (
-            <ProposalEditors proposals={proposalList} values={values}
+            <ProposalEditors proposals={proposalList} values={values} sc={card.sc}
                              onChange={setValueAt} file={card.file} />
           ) : editable ? (
             <label className="evcard-rec">

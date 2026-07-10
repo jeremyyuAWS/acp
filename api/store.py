@@ -1937,16 +1937,21 @@ class Store:
         """{locator: final text} for one approved row — the values that must reach the document.
 
         Prefers the per-proposal `approved_value` (one image, one description; a single column
-        could never express a ten-image deck). Falls back to the proposal's own draft only when
-        the reviewer approved the row without editing it, which IS an acceptance of that draft.
-        Proposals with no locator are skipped: unaddressable content cannot be written.
+        could never express a ten-image deck), and falls back to the proposal's own draft. That
+        fallback is not a guess: approving a row means accepting the drafts it was showing, and
+        a reviewer who edits nothing has agreed to exactly them. It also closes a hole — a
+        client that approved without sending approved_values left every proposal valueless, so
+        the row held no "content", the gate below counted nothing, and the file certified with
+        the drafts never written in.
+
+        Proposals with no locator are skipped: unaddressable content cannot be written anywhere.
         """
         out: dict[str, str] = {}
         for p in (row.get("proposals") or []):
             if not isinstance(p, dict):
                 continue
             loc = (p.get("locator") or "").strip()
-            val = (p.get("approved_value") or "").strip()
+            val = (p.get("approved_value") or "").strip() or (p.get("proposed_value") or "").strip()
             if loc and val:
                 out[loc] = val
         return out
