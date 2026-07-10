@@ -1301,6 +1301,185 @@ class Store:
                 "WHERE scan_id=%s ORDER BY rule_id, file, seq LIMIT %s", (scan_id, limit))
             return self._db.fetchall(cur)
 
+    def get_remediation_evidence(self, scan_id: str) -> list[dict]:
+        """Per-file remediation evidence for the certification report's evidence appendix.
+
+        Returns [{file, applied: [...], proposed: [...]}], files with neither omitted.
+
+        `applied` — fixes that VERIFIABLY cleared the post-fix re-scan. `remediation_diff` is
+        only ever written for those (the truthfulness gate in handlers._remediate_file), so
+        every entry here is genuinely validated; each is enriched with the concrete value the
+        AI wrote + its image thumbnail (`applied_fixes`) and the human sign-off that resolved
+        it (`hitl_queue` + the immutable `decision_log`).
+
+        `proposed` — AI proposals still awaiting human approval (`hitl_queue.proposals`,
+        status 'pending'). These are NOT fixes: they must never be rendered as remediated or
+        as PASS. Keeping the two lists separate is what stops the report claiming work the
+        platform has not actually done.
+
+        Attribution comes from `decision_log.actor`, which for a review is the authenticated
+        reviewer's email (routes/hitl.py). It falls back to the literal 'reviewer' only when
+        there is no signed-in identity (the demo/SSO-less path) — we surface exactly what was
+        recorded and never invent a name.
+        """
+        rule_names = {r["id"]: r["name"] for r in RULE_CATALOG}
+
+        # applied_fixes.rule_id is 'SC_1_1_1'; remediation_diff/hitl_queue use dotted '1.1.1'
+        # (and hitl deferrals carry a '1.1.1/deferred' suffix). Normalise to the dotted SC.
+        def _sc(rule_id: str) -> str:
+            r = (rule_id or "").split("/", 1)[0]
+            if r.upper().startswith("SC_"):
+                r = r[3:].replace("_", ".")
+            return r
+
+        applied_fixes = self.list_applied_fixes(scan_id, limit=1000)
+        fixes = {(f["file"], _sc(f["rule_id"]), f.get("seq") or 0): f for f in applied_fixes}
+
+        hitl: dict[tuple, dict] = {}
+        for h in self.list_hitl_queue(scan_id=scan_id):
+            hitl.setdefault((h["file"], _sc(h["rule_id"])), h)
+
+        reviews: dict[tuple, dict] = {}
+        for d in self.list_decisions(scan_id, limit=1000):
+            if (d.get("action") or "").startswith("hitl.") and d.get("file"):
+                reviews.setdefault((d["file"], _sc(d.get("rule_id") or "")), d)
+
+        # list_remediation_diffs returns every verified-cleared diff scan-wide WITH its file,
+        # so one query replaces a per-file fan-out (and the DISTINCT-file helper this method
+        # used to carry before that method existed).
+        diffs_by_file: dict[str, list] = {}
+        for d in self.list_remediation_diffs(scan_id):
+            diffs_by_file.setdefault(d["file"], []).append(d)
+
+        files = sorted({k[0] for k in hitl} | {f["file"] for f in applied_fixes}
+                       | set(diffs_by_file))
+        out: list[dict] = []
+        for file in files:
+            applied: list[dict] = []
+            for d in diffs_by_file.get(file, []):
+                sc = _sc(d["rule_id"])
+                fx = fixes.get((file, sc, d.get("seq") or 0)) or {}
+                hq = hitl.get((file, sc)) or {}
+                rv = reviews.get((file, sc)) or {}
+                # A criterion auto-cleared by a deterministic fixer has no HITL row at all;
+                # one signed off by a human has a row and/or a decision_log entry. Prefer the
+                # queue's status, else derive it from the immutable log ('hitl.approved' →
+                # 'approved'), else leave None — meaning "no human decision was recorded",
+                # which is the truth for an auto-applied deterministic fix.
+                decision = hq.get("status") or ((rv.get("action") or "").split(".", 1)[1]
+                                                if rv.get("action") else None)
+                applied.append({
+                    "sc": sc, "criterion": rule_names.get(sc, sc),
+                    "before": d.get("before"), "after": d.get("after"), "note": d.get("note"),
+                    "value": fx.get("value"), "source": fx.get("source"), "thumb": fx.get("thumb"),
+                    "decision": decision, "approved_value": hq.get("approved_value"),
+                    "reviewer": rv.get("actor"), "reviewed_at": rv.get("ts") or hq.get("reviewed_at"),
+                    "validated": True,   # in remediation_diff ⇒ it cleared the re-scan
+                })
+            proposed: list[dict] = []
+            for (f_, sc), h in hitl.items():
+                if f_ != file or h.get("status") != "pending" or not h.get("proposals"):
+                    continue
+                proposed.append({
+                    "sc": sc, "criterion": rule_names.get(sc, h.get("rule_name") or sc),
+                    "validated": bool(h.get("validated")),
+                    "proposals": h["proposals"],
+                })
+            if applied or proposed:
+                out.append({"file": file, "applied": applied,
+                            "proposed": sorted(proposed, key=lambda p: p["sc"])})
+        return out
+
+    def get_certification_facts(self, scan_id: str) -> dict:
+        """Facts backing the certification-decision block, the richer file inventory, and the
+        scope-of-assertion statement (backlog R2 / R6 / R-A). Every number is COUNTED from
+        stored rows — none is estimated, and none is a percentage of an invented denominator.
+
+        Per document:
+          evaluated       — criteria that actually ran for this file's format (PASS or FAIL).
+          not_applicable  — criteria with NO validator for this format. They were never
+                            evaluated; a zero finding-count is not a pass (see _rule_outcome).
+          failing         — criteria still failing.
+          remediated      — criteria whose fix VERIFIABLY cleared the post-fix re-scan
+                            (distinct SCs in remediation_diff — the truthfulness gate).
+          remaining       — failing criteria with no verified fix.
+          approvals       — HITL items a human approved for this file.
+          by_mode         — how the evaluated criteria split across deterministic /
+                            AI-assisted / human-only checks. This is what stops a reader
+                            treating "100%" as "fully WCAG conformant": it shows how much of
+                            the assertion rests on deterministic evidence.
+
+        `scope.catalog_size` is the number of criteria this platform has a validator for —
+        NOT the 87 success criteria of WCAG 2.1 AA. The report must never imply the two are
+        the same.
+        """
+        rules = {r["id"]: r for r in RULE_CATALOG}
+        traces = self.get_scan_traces(scan_id)
+        evidence = {e["file"]: e for e in self.get_remediation_evidence(scan_id)}
+
+        # Approvals are counted from the IMMUTABLE decision_log, not from hitl_queue's current
+        # status, so this figure and the evidence appendix's per-fix sign-off line (which also
+        # reads the log) can never disagree. Distinct per (file, criterion): re-approving the
+        # same finding is one approval, not two.
+        approved: set[tuple] = set()
+        for d in self.list_decisions(scan_id, limit=1000):
+            if d.get("action") == "hitl.approved" and d.get("file"):
+                approved.add((d["file"], d.get("rule_id") or ""))
+        approvals: dict[str, int] = {}
+        for file, _rule in approved:
+            approvals[file] = approvals.get(file, 0) + 1
+
+        per_file: dict[str, dict] = {}
+        for t in traces:
+            f = per_file.setdefault(t["file"], {
+                "file": t["file"], "evaluated": 0, "not_applicable": 0, "failing": 0,
+                "findings": 0, "na_criteria": [], "by_mode": {},
+            })
+            outcome = t.get("outcome")
+            if outcome == "NOT_APPLICABLE":
+                f["not_applicable"] += 1
+                f["na_criteria"].append(t["rule_id"])
+                continue
+            if outcome not in ("PASS", "FAIL"):
+                continue                       # ERROR: the rule could not evaluate — assert nothing
+            f["evaluated"] += 1
+            mode = (rules.get(t["rule_id"], {}) or {}).get("fix_mode", "unknown")
+            f["by_mode"][mode] = f["by_mode"].get(mode, 0) + 1
+            if outcome == "FAIL":
+                f["failing"] += 1
+                f["findings"] += t.get("finding_count") or 0
+
+        docs = []
+        for f in sorted(per_file.values(), key=lambda x: x["file"]):
+            remediated = {a["sc"] for a in evidence.get(f["file"], {}).get("applied", [])}
+            f["remediated"] = len(remediated)
+            f["remaining"] = max(0, f["failing"] - len(remediated))
+            f["approvals"] = approvals.get(f["file"], 0)
+            f["na_criteria"] = sorted(f["na_criteria"])
+            docs.append(f)
+
+        scope_modes: dict[str, int] = {}
+        na_union: set[str] = set()
+        for f in docs:
+            for m, n in f["by_mode"].items():
+                scope_modes[m] = scope_modes.get(m, 0) + n
+            na_union.update(f["na_criteria"])
+
+        return {
+            "documents": docs,
+            "scope": {
+                "catalog_size": len(RULE_CATALOG),
+                "by_mode": scope_modes,
+                "not_applicable_criteria": [
+                    {"sc": sc, "name": rules.get(sc, {}).get("name", sc)} for sc in sorted(na_union)],
+                "human_only_criteria": [
+                    {"sc": r["id"], "name": r["name"]} for r in RULE_CATALOG
+                    if r["fix_mode"] == "human-only"],
+            },
+            "approvals_total": sum(approvals.values()),
+            "remediated_total": sum(d["remediated"] for d in docs),
+        }
+
     def get_trace_row(self, scan_id: str, file: str, rule_id: str) -> dict | None:
         """Return a single scan_rule_traces row for the AI explain endpoint."""
         with self._db.cursor() as cur:

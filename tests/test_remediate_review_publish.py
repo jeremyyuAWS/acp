@@ -119,9 +119,13 @@ def test_rejected_item_blocks_certification(store):
     assert store.get_file_record("s1", "deck.pptx")["compliant"] == 0
 
 
-def test_hitl_approve_endpoint_certifies_file(store, monkeypatch):
-    """The real PUT /hitl/queue/{id} handler must drive the compliant flip — not just the
-    store method in isolation. Wire the test store into core and call the route directly."""
+def _req(user_email=None):
+    """Stand-in for the FastAPI Request the auth middleware has already annotated."""
+    from types import SimpleNamespace
+    return SimpleNamespace(state=SimpleNamespace(user_email=user_email))
+
+
+def _approve(store, monkeypatch, user_email):
     import core
     monkeypatch.setattr(core, "store", store)
     monkeypatch.setattr(core, "fire_webhook", lambda *a, **k: None)
@@ -131,11 +135,34 @@ def test_hitl_approve_endpoint_certifies_file(store, monkeypatch):
     created = store.queue_hitl_review_for_file(
         "s1", "deck.pptx", _residual_review_rules(store, "s1", "deck.pptx", cleared={"1.4.3"}))
     assert len(created) == 1                                   # just the link-purpose residual
+    return hitl_update(created[0]["id"], HitlUpdate(status="approved"), _req(user_email))
 
-    res = hitl_update(created[0]["id"], HitlUpdate(status="approved"))
+
+def _approval_actor(store):
+    return next(d for d in store.list_decisions("s1") if d["action"] == "hitl.approved")["actor"]
+
+
+def test_hitl_approve_endpoint_certifies_file(store, monkeypatch):
+    """The real PUT /hitl/queue/{id} handler must drive the compliant flip — not just the
+    store method in isolation. Wire the test store into core and call the route directly."""
+    res = _approve(store, monkeypatch, "ada@movate.com")
     assert res["status"] == "approved"
     rec = store.get_file_record("s1", "deck.pptx")
     assert rec["compliant"] == 1 and rec["score"] == 100       # certified & bound for Publish
+
+
+def test_approval_records_the_authenticated_reviewer_identity(store, monkeypatch):
+    """Chain of custody: a report that says a human signed off must be able to say WHICH
+    human. The immutable decision_log actor is the authenticated reviewer's email."""
+    _approve(store, monkeypatch, "ada@movate.com")
+    assert _approval_actor(store) == "ada@movate.com"
+
+
+def test_approval_without_signed_in_identity_falls_back_to_reviewer(store, monkeypatch):
+    """No authenticated identity (the demo / SSO-less path) → record the literal 'reviewer'.
+    We log what we actually know, and never invent a name."""
+    _approve(store, monkeypatch, None)
+    assert _approval_actor(store) == "reviewer"
 
 
 def test_unremediated_file_never_certifies_on_approval(store):

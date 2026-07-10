@@ -77,17 +77,8 @@ def test_propose_language_parts_single_language_is_empty():
 
 # ── store.enqueue_proposals — persistence, JSON round-trip, idempotency ────────
 
-def _store():
-    import os
-    os.environ["ACP_SQLITE_PATH"] = tempfile.mktemp(suffix=".db")
-    import importlib
-    import store as _store
-    importlib.reload(_store)
-    return _store.Store()
-
-
-def test_enqueue_proposals_roundtrip_and_idempotent():
-    s = _store()
+def test_enqueue_proposals_roundtrip_and_idempotent(isolated_store):
+    s = isolated_store
     props = [P.proposal("#l1", "click here", "Download Annual Report (PDF)", "from target", "derived"),
              P.proposal("#l2", "more", "Leadership Team", "from path", "derived")]
     i1 = s.enqueue_proposals("scan1", "a.html", "2.4.4", props, validated=True, rule_name="Link Purpose")
@@ -103,10 +94,10 @@ def test_enqueue_proposals_roundtrip_and_idempotent():
     assert len(row2["proposals"]) == 1 and row2["validated"] == 0
 
 
-def test_enqueue_proposals_empty_is_noop():
-    s = _store()
-    assert s.enqueue_proposals("scanEmpty", "e.html", "1.1.1", []) is None
-    assert s.list_hitl_queue(scan_id="scanEmpty") == []
+def test_enqueue_proposals_empty_is_noop(isolated_store):
+    s = isolated_store
+    assert s.enqueue_proposals("scan1", "a.html", "1.1.1", []) is None
+    assert s.list_hitl_queue(scan_id="scan1") == []   # a truly isolated store starts empty
 
 
 # ── HTML 2.4.4 link expansion (proposer, not a FIXER — no fix_mode change) ─────
