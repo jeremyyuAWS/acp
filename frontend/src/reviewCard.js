@@ -200,12 +200,12 @@ export function buildEvidenceCard(item, diffs = []) {
     // sign-off IS the resolution — a re-scan can never clear it — so the backend
     // (store.mark_file_compliant_if_reviewed) certifies the file on approval.
     //
-    // VALUE-FIX finding (alt text, a title, a label): NO. Approving stores approved_value as
-    // compliance evidence and stops there; no remediator consumes it and no job is enqueued
-    // (api/routes/hitl.py). The document is never modified, so the criterion still fails.
-    // This was a hardcoded `{ before: 'Fail', after: 'Pass' }`, which promised a Pass the
-    // backend now refuses to grant — and which certified a PPTX 100/100 while its ten images
-    // were still undescribed.
+    // VALUE-FIX finding (alt text, a title, a label): NOT on the approval itself. Approving
+    // schedules the write (api/routes/hitl.py → apply_approved_values), which applies each
+    // value at its locator, re-scans the written copy, and certifies only if the criterion
+    // actually cleared. So the card must not promise a Pass here: at the moment the reviewer
+    // clicks, the document still fails. This was a hardcoded `{ before: 'Fail', after: 'Pass' }`,
+    // which certified a PPTX 100/100 while its ten images were still undescribed.
     certifiesOnApprove: !isValueFix(sc),
     impact: { before: 'Fail', after: isValueFix(sc) ? 'Fail' : 'Pass' },
     findingCount: item?.finding_count || 1,

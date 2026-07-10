@@ -1785,6 +1785,13 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
   border-radius: 8px; background: var(--card, #fff); color: inherit;
   font: inherit; font-size: 13px; line-height: 1.5; }
 .evcard-rec-input:focus-visible { outline: 2px solid var(--plum); outline-offset: 1px; }
+/* One image, one description. Each row pairs the picture the reviewer must judge with the
+   text that will be written for it — approving a description of an unseen image is exactly
+   what the single-value editor used to invite. */
+.evcard-multi { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.evcard-multi-row { display: flex; gap: 10px; align-items: flex-start; }
+.evcard-multi-thumb { flex-shrink: 0; }
+.evcard-multi-row textarea { width: 100%; }
 
 /* On-demand "Draft with AI" — offered only when nothing was proposed for this item. */
 .evcard-rec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

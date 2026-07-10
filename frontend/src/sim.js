@@ -504,22 +504,59 @@ const scOfWcag = (w) => String(w || '').replace(/^SC_/, '').replace(/_/g, '.')
 // Criteria whose fix IS a value a model drafts and a human approves — the live proposal lane
 // (api/proposals.py). A draft is NEVER applied until the reviewer accepts it, so these render
 // as "AI draft · not applied until you approve".
+// A logo mark — the second image in the deck. Two proposals, not one: a real file has several
+// images, and the review UI must show EACH one beside its own description rather than let a
+// single Approve stand in for pictures the reviewer never saw.
+export const SIM_THUMB_LOGO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAFQAAABUCAIAAACTCYeWAAABg0lEQVR42u3bMXLCMBCF4WUHzkCTIpegypXSpeEIadLlSqlyASrGhRqfgSZ9Ap4Y71svo18tWKNPWmxrtWzOp2a9tq2ZPT3vO5S3YXTruIEHDx48ePDgwYMHDx48ePD2uMmM5HZ8+7710fvHIXMkm/Op5WRyJsyrzEIbRjl+ljlzFuRprIXykB5WCPvwQYeHgCrsp+UTjLsvrIK/BZg19JBOsvFXB333iGN7097wwsd69drAu4mXlSf4hY+6qPjUPepdtOyxI/7bW8jie325zu9loz2hZ/bzcTGv3o396n9h5Kfu578+d//52svrhUxObXxyzIdHPisPHjx48ODBg094085/s+KgMqul7ViSVj458mN3E9zwap/S6Xr2sqnVhDSpV04tqxPEXvlwXv07cmleWVScEJUycnVefYlfKjdFZUa/5/O9V2b0XpMTOwWijLi8FE1UnEAF5iNUYJatvV0Hb/yLmgQmePDgwYMHDx48ePDgwYMHDx48eJtVk9OGsU/8DyzI5mDcSu/uAAAAAElFTkSuQmCC'
+
 const SIM_PROPOSAL = {
-  '1.1.1': {
-    before: '(no alt text)',
-    proposed_value: 'Bar chart of monthly clinic visits, rising from 120 in January to 310 in June.',
-    rationale: 'No text found in the image; described from its visual content.',
-    source: 'AI vision model (llava:7b) · simulated',
-    thumb: SIM_THUMB,
-  },
-  '2.4.4': {
-    before: '"click here"',
-    proposed_value: 'Download the cardiology intake form (PDF, 240 KB)',
-    rationale: 'Derived from the link target and the sentence around it.',
-    source: 'AI text model (llama3.2) · simulated',
-  },
+  '1.1.1': [
+    {
+      locator: '#Picture 1',
+      before: '(no alt text)',
+      proposed_value: 'Bar chart of monthly clinic visits, rising from 120 in January to 310 in June.',
+      rationale: 'No text found in the image; described from its visual content.',
+      source: 'AI vision model (llava:7b) · simulated',
+      thumb: SIM_THUMB,
+    },
+    {
+      locator: '#Picture 2',
+      before: '(no alt text)',
+      proposed_value: 'The clinic logo: a violet ring around a gold square.',
+      rationale: 'Small, square, appears on every slide — described rather than assumed decorative.',
+      source: 'AI vision model (llava:7b) · simulated',
+      thumb: SIM_THUMB_LOGO,
+    },
+  ],
+  '2.4.4': [
+    {
+      locator: '#a[3]',
+      before: '"click here"',
+      proposed_value: 'Download the cardiology intake form (PDF, 240 KB)',
+      rationale: 'Derived from the link target and the sentence around it.',
+      source: 'AI text model (llama3.2) · simulated',
+    },
+  ],
 }
-export const simProposalsFor = (sc) => (SIM_PROPOSAL[sc] ? [{ ...SIM_PROPOSAL[sc] }] : null)
+// The OPC part an image lives in, per format — so a demo locator names a place that document
+// could actually have. A pptx locator on an xlsx card is the kind of detail a reviewer notices.
+const SIM_PART = {
+  pptx: 'ppt/slides/slide3.xml',
+  docx: 'word/document.xml',
+  xlsx: 'xl/drawings/drawing1.xml',
+  html: 'index.html',
+  pdf: 'page 3',
+}
+
+// A fresh copy each call: a reviewer editing one card must not mutate the fixture. `file` fixes
+// the locator prefix to that document's format; fixtures store only the '#element' suffix.
+export const simProposalsFor = (sc, file = '') => {
+  const list = SIM_PROPOSAL[sc]
+  if (!list) return null
+  const ext = String(file).split('.').pop().toLowerCase()
+  const part = SIM_PART[ext] || 'document'
+  return list.map((p) => ({ ...p, locator: `${part}${p.locator}` }))
+}
 
 // Criteria the pipeline fixes deterministically and writes INTO the document. These become
 // remediation_diff rows, so "after" is what the file says now — not a suggestion. Criteria

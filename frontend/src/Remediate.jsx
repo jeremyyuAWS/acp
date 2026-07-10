@@ -144,7 +144,7 @@ function buildHumanQueue(files, triage = {}) {
     // drafts a value for; the rest either carry an applied remediation_diff (simRemediationDiffs,
     // once the demo has run remediation) or are a judgement call with nothing to show. No card
     // gets a canned "AI fix applied" string — see WhyReview.
-    const proposals = simProposalsFor(sc)
+    const proposals = simProposalsFor(sc, f.file)
     const p = proposals?.[0]
     return {
       id: idx + 1,
@@ -301,6 +301,8 @@ function ReviewItemCard({ item, scanDiffs = [], onOpen, onApprove, onSelf, onRej
   // Derived here, not at fetch time: the remediation_diff rows load in parallel with the queue,
   // so an item mapped before they land would hold an empty comparison forever.
   const comparison = comparisonFor(item, scanDiffs)
+  // More images than this card can show. Its Approve must not stand in for all of them.
+  const multiImage = (item.proposals?.length || 0) > 1
   return (
     <div className="reviewcard">
       <div className="reviewcard-top">
@@ -317,7 +319,16 @@ function ReviewItemCard({ item, scanDiffs = [], onOpen, onApprove, onSelf, onRej
                  proposalSource={item.proposalSource} hasProposal={item.hasProposal} file={item.file}
                  scanId={item.scanId} page={item.page} />
       <div className="reviewcard-actions">
-        <button className="qbtn approve" disabled={disabled} onClick={onApprove}>✓ Approve</button>
+        {/* This card shows ONE image. Approving from here would accept a description for every
+            other image in the file that the reviewer never saw — and the server now writes
+            those descriptions into the document. Send them to the drawer, which shows each
+            image beside its own text. */}
+        {multiImage
+          ? <button className="qbtn approve" disabled={disabled} onClick={onOpen}
+                    title="Each image needs its own description — review them side by side">
+              Review {item.proposals.length} images →
+            </button>
+          : <button className="qbtn approve" disabled={disabled} onClick={onApprove}>✓ Approve</button>}
         <button className="qbtn self" disabled={disabled} onClick={onSelf} title="Take ownership — fix it yourself, then re-scan to confirm">✋ I’ll fix it</button>
         <button className="qbtn reject" disabled={disabled} onClick={onReject}>✕ Reject</button>
       </div>
@@ -576,7 +587,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 + `${err?.message || err}. It is back in the queue — try again.`)
   }
 
-  const act = (id, kind, editedValue) => {
+  const act = (id, kind, editedValue, approvedValues) => {
     const item = queue.find((x) => x.id === id)
     setActError(null)
     setQueue((q) => q.filter((x) => x.id !== id))
@@ -591,11 +602,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     setActed((a) => ({ ...a, [kind]: a[kind] + 1 }))
     window.dispatchEvent(new Event('acp:hitl-changed'))
     const apiStatus = kind === 'approved' ? 'approved' : kind === 'rejected' ? 'rejected' : null
-    // approved_value: the reviewer's final AI-drafted/hand-edited text, persisted as
-    // durable compliance evidence of what was actually approved (not auto-applied to
-    // the file yet — that needs a per-instance locator, a later increment).
+    // approved_value is the headline text (audit log, telemetry); approvedValues carries one
+    // final text per image, keyed by position to the row's proposals. The server writes those
+    // into the document at each proposal's locator, re-scans the result, and only then lets
+    // the file certify — so what is approved here is what the document ends up saying.
     if (!SIM && item?.id && apiStatus) {
-      const p = updateHitlItem(item.id, apiStatus, null, apiStatus === 'approved' ? (editedValue || null) : null)
+      const p = updateHitlItem(item.id, apiStatus, null,
+                               apiStatus === 'approved' ? (editedValue || null) : null,
+                               { approvedValues: apiStatus === 'approved' ? (approvedValues || null) : null })
       // On approval the server re-validates the file: once its every review item is
       // approved it flips to compliant and enters the publish queue. Refresh the scan so
       // "Re-validated & ready to publish" (and the Publish tab) pick that up immediately.

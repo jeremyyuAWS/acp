@@ -329,12 +329,16 @@ export const listHitlQueue = (scanId, status = null) => (SIM
 // { edited } — reviewer changed the AI draft before approving (confidence-calibration signal);
 // { reviewMs } — time from card-open to decision (the reviewer-time-saved metric);
 // { aiValue } — the AI-proposed value shown, so the server stores proposed-vs-final.
+// opts.approvedValues — one final text per proposal, positionally (the row holds one proposal
+// per image). A null/'' entry accepts that proposal's own draft. The server writes them into
+// the document; approved_value stays the single headline value, for the audit log.
 export const updateHitlItem = (itemId, status, reviewerNote = null, approvedValue = null, opts = {}) => (SIM
   ? sim({ id: itemId, status })
   : fetch(`${BASE}/hitl/queue/${encodeURIComponent(itemId)}`, {
       method: 'PUT',
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ status, reviewer_note: reviewerNote, approved_value: approvedValue,
+        approved_values: opts.approvedValues ?? null,
         edited: !!opts.edited, review_ms: opts.reviewMs ?? null, ai_value: opts.aiValue ?? null }),
     }).then(j))
 // HITL review telemetry for the workspace dashboard — decisions by action, approval rate,

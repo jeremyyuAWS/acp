@@ -2,8 +2,9 @@ import { useState, useEffect, useRef } from 'react'
 import { getFileRemediationDiffs, suggestFix } from './api.js'
 import { confClass } from './confidence.js'
 import Thumbnail from './Thumbnail.jsx'
-import { buildEvidenceCard, evidenceOf, firstProposed, isValueFix, reviewTelemetry, thumbAlt, thumbSize } from './reviewCard.js'
+import { buildEvidenceCard, evidenceOf, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
+import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 
 // Evidence Card (PRD v2) — a PR-style review of ONE accessibility issue. The human APPROVES
 // ACP's recommendation; ACP applies it. Assembles only shipped primitives (confidence basis,
@@ -14,6 +15,13 @@ import ProposalThumb from './ProposalThumb.jsx'
 // optimistic update and the queue-drain event stay wired. traceUrl is optional.
 export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null }) {
   const [diffs, setDiffs] = useState([])
+  // One editor per proposal: the row carries one proposal per image, and a single text box
+  // could never describe ten different pictures. Seeded from each image's own draft, so
+  // approving without touching anything means "the drafts I was shown are correct" — the
+  // server applies exactly these, per locator.
+  const proposalList = proposalsOf(item)
+  const [values, setValues] = useState(() => seedValues(proposalList))
+  const setValueAt = (i, v) => setValues((prev) => prev.map((x, j) => (j === i ? v : x)))
   // Prefill from the server-side AI proposal when there is one — that is what turns a 30s
   // "write the alt text" into a 5s "confirm this". Falls back to a previously-approved value.
   const [value, setValue] = useState(firstProposed(item) ?? item?.approved_value ?? '')
@@ -84,19 +92,32 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // value-fix finding nothing is applied — approving records the value as evidence and leaves
   // the document untouched — so the button must not say Apply. See card.certifiesOnApprove.
   const primaryLabel = card.certifiesOnApprove ? card.track.action : 'Approve — record sign-off'
-  // One text box cannot describe N different images. Say so rather than imply it can.
-  const manyInstances = card.findingCount > 1 && isValueFix(card.sc)
+  // One text box cannot describe N different images. Give each its own — and its own picture,
+  // because a reviewer cannot honestly approve a description of an image they were never shown.
+  const multi = proposalList.length > 1
+  // A row with many findings but no per-instance proposals still cannot be expressed in one
+  // box; there is nothing to render per image, so keep warning rather than implying it can.
+  const manyInstances = !multi && card.findingCount > 1 && isValueFix(card.sc)
 
   const decide = async (status) => {
     if (busy) return
     setBusy(true)
     setActError(null)
+    // The headline value (audit log, telemetry) is the first image's text when the row carries
+    // proposals — the same one the collapsed card shows.
+    const headline = multi ? (values[0] || '') : value
     const t = reviewTelemetry({
-      editable, status, value, aiDraft: aiDraft.current, elapsedMs: Date.now() - shownAt.current,
+      editable, status, value: headline, aiDraft: aiDraft.current,
+      elapsedMs: Date.now() - shownAt.current,
     })
+    // What actually gets written into the document, one entry per image. Only on approval:
+    // rejecting approves no content.
+    const approvedValues = (status === 'approved' && proposalList.length)
+      ? (multi ? values : [value || ''])
+      : null
     try {
       await onAct(card.id, status, note || null, t.finalValue,
-                  { edited: t.edited, reviewMs: t.reviewMs, aiValue: t.aiValue })
+                  { edited: t.edited, reviewMs: t.reviewMs, aiValue: t.aiValue, approvedValues })
       onResolved && onResolved(card.id, status)
     } catch (e) {
       // HitlBell rolls the optimistic list back and rethrows. Without this catch the rejection
@@ -137,11 +158,16 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
         <div className="evcard-main" style={{ flex: 1, minWidth: 0 }}>
           <p className="evcard-problem">{card.problem}</p>
 
-          {/* The images this row is asking for descriptions of. One row can carry nineteen, so
-              show them all: a lone thumbnail beside "19 findings" would say "describe this one".
-              Selecting one is what "Draft with AI" describes — the model can only look at a
-              single image, and silently picking the first would caption the wrong picture. */}
-          {evidence.length > 0 && (
+          {/* The images this row is asking for descriptions of, when the AI drafted none. One row
+              can carry nineteen, so show them all: a lone thumbnail beside "19 findings" would
+              say "describe this one". Selecting one is what "Draft with AI" describes — the model
+              can only look at a single image, and silently picking the first would caption the
+              wrong picture.
+
+              Suppressed when the row carries proposals: ProposalEditors below already pairs every
+              image with its own draft and its own editor, so the strip would show the same
+              pictures twice and its picker would have nothing left to disambiguate. */}
+          {evidence.length > 0 && !multi && (
             <div className="evcard-evidence">
               <span className="muted evcard-evidence-hd">
                 {evidence.length === 1
@@ -164,7 +190,10 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
             </div>
           )}
 
-          {editable ? (
+          {editable && multi ? (
+            <ProposalEditors proposals={proposalList} values={values}
+                             onChange={setValueAt} file={card.file} />
+          ) : editable ? (
             <label className="evcard-rec">
               <span className="evcard-rec-head">
                 <span className="muted" style={{ fontSize: 12 }}>

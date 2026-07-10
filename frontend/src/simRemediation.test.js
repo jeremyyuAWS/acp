@@ -20,6 +20,30 @@ describe('simProposalsFor — drafts awaiting approval', () => {
     expect(isSafeThumb(SIM_THUMB)).toBe(true)
   })
 
+  it('a file has SEVERAL images, each with its own locator, picture and draft', () => {
+    // One Approve must never stand in for images the reviewer was not shown, so the demo has
+    // to exercise the multi-image path rather than the comfortable one-image case.
+    const ps = simProposalsFor('1.1.1')
+    expect(ps.length).toBeGreaterThan(1)
+    expect(new Set(ps.map((p) => p.locator)).size).toBe(ps.length)      // distinct targets
+    expect(new Set(ps.map((p) => p.thumb)).size).toBe(ps.length)        // distinct pictures
+    expect(new Set(ps.map((p) => p.proposed_value)).size).toBe(ps.length)
+    ps.forEach((p) => expect(isSafeThumb(p.thumb)).toBe(true))
+  })
+
+  it('every proposal carries a locator, or the server could not write it anywhere', () => {
+    for (const sc of ['1.1.1', '2.4.4']) {
+      simProposalsFor(sc).forEach((p) => expect(p.locator).toMatch(/#/))
+    }
+  })
+
+  it('the locator names a part the document could actually have', () => {
+    // A "ppt/slides/…" locator on an xlsx card is exactly the detail a reviewer notices.
+    expect(simProposalsFor('1.1.1', 'deck.pptx')[0].locator).toMatch(/^ppt\/slides\/.*#Picture 1$/)
+    expect(simProposalsFor('1.1.1', 'sheet.xlsx')[0].locator).toMatch(/^xl\/drawings\/.*#Picture 1$/)
+    expect(simProposalsFor('1.1.1', 'report.docx')[0].locator).toMatch(/^word\/document\.xml#/)
+  })
+
   it('names itself simulated, so a demo screenshot never reads as a real model run', () => {
     for (const sc of ['1.1.1', '2.4.4']) expect(simProposalsFor(sc)[0].source).toMatch(/simulated/)
   })
