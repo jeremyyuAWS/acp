@@ -488,3 +488,60 @@ export function simRules() {
   }
   return out
 }
+
+// ── Simulated remediation evidence (SIM only) ────────────────────────────────────────────
+// The demo runs no engine, so nothing is ever really remediated. These fixtures reproduce the
+// SHAPES the live backend persists — store.list_remediation_diffs rows and hitl_queue.proposals
+// entries — so the review card's before→after evidence demonstrates itself against the
+// simulated estate. Invented values for invented documents; unreachable when VITE_SIM=false.
+
+// The offending image a reviewer is asked to describe. Inlined so the demo needs no asset
+// server, and shaped to pass ProposalThumb's data-URL allowlist (PNG/JPEG/GIF/WEBP only).
+export const SIM_THUMB = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAFQAAABUCAIAAACTCYeWAAAAz0lEQVR42u3cMQrCQBAF0Il4BxsLG09kbSeIJxIhnbX3CQghxTa5hRcQK4U486ZN9fiQP5vAduPQouqsI2K72xSUt2leReGBh4eHL1V1aWZ/fnx4+rwdJA8PDw8PDw8PDw8P71T3Jyc2ycPDw8PDL6jqflFjkoeHh4eHh4eHt94mWl0lDw8PDw//hapbco1JHh4eHh4e3pKTcoGRPDw8PDw8PDw8PDw8PDw8PHym6cahlb0h6c03vP56zwo+XY6SdzeWtz08fBT8XdWmuSb+BZ4VKTMgfAKeAAAAAElFTkSuQmCC'
+
+const scOfWcag = (w) => String(w || '').replace(/^SC_/, '').replace(/_/g, '.')
+
+// Criteria whose fix IS a value a model drafts and a human approves — the live proposal lane
+// (api/proposals.py). A draft is NEVER applied until the reviewer accepts it, so these render
+// as "AI draft · not applied until you approve".
+const SIM_PROPOSAL = {
+  '1.1.1': {
+    before: '(no alt text)',
+    proposed_value: 'Bar chart of monthly clinic visits, rising from 120 in January to 310 in June.',
+    rationale: 'No text found in the image; described from its visual content.',
+    source: 'AI vision model (llava:7b) · simulated',
+    thumb: SIM_THUMB,
+  },
+  '2.4.4': {
+    before: '"click here"',
+    proposed_value: 'Download the cardiology intake form (PDF, 240 KB)',
+    rationale: 'Derived from the link target and the sentence around it.',
+    source: 'AI text model (llama3.2) · simulated',
+  },
+}
+export const simProposalsFor = (sc) => (SIM_PROPOSAL[sc] ? [{ ...SIM_PROPOSAL[sc] }] : null)
+
+// Criteria the pipeline fixes deterministically and writes INTO the document. These become
+// remediation_diff rows, so "after" is what the file says now — not a suggestion. Criteria
+// absent from both maps (contrast 1.4.3, captions 1.2.x) are human judgement with nothing to
+// show, and the card says so rather than inventing a fix.
+const SIM_APPLIED = {
+  '1.3.1': { before: '<td>Appointment date</td>', after: '<th scope="col">Appointment date</th>' },
+  '1.3.2': { before: 'sidebar → body text → heading', after: 'heading → body text → sidebar' },
+  '2.4.2': { before: '(untitled document)', after: 'Cardiology — Patient Handbook' },
+  '3.1.1': { before: '<html>', after: '<html lang="en">' },
+}
+
+// Every applied fix across the simulated estate — one row per (file, criterion), the shape
+// store.list_remediation_diffs returns. Callers gate this on the demo having actually run
+// remediation, so the view never opens claiming work it has not done.
+export function simRemediationDiffs(files = CORPUS) {
+  const out = []
+  files.forEach((f) => (f.issues || []).forEach((i) => {
+    const sc = scOfWcag(i.wcag)
+    const fix = SIM_APPLIED[sc]
+    if (!fix || out.some((r) => r.file === f.file && r.rule_id === sc)) return
+    out.push({ file: f.file, rule_id: sc, seq: 1, before: fix.before, after: fix.after, note: null })
+  }))
+  return out
+}

@@ -118,6 +118,38 @@ export const pageOf = (item) => {
 export const firstRationale = (item) => proposalsOf(item)[0]?.rationale ?? null
 export const firstSource = (item) => proposalsOf(item)[0]?.source ?? null
 
+// Queue rows reach us in two shapes: the raw DB row (rule_id, file) and the mapped UI item
+// (ruleId, file). Read both so one comparison helper serves the card and the drawer.
+const ruleOf = (item) => item?.rule_id ?? item?.ruleId ?? ''
+
+// The current→remediated comparison a reviewer approves against, in order of evidential
+// strength. NEVER a template: if neither source has a real value this returns null and the
+// card must say so, rather than assert a fix nobody made.
+//
+//   applied:true  — a remediation_diff row: verified, already written into the document.
+//   applied:false — an AI proposal (hitl_queue.proposals): a draft awaiting this approval.
+//
+// remediation_diff is scan-wide, so it is matched on BOTH file and criterion: matching on
+// rule alone would show one document's fix on another document's card.
+export function comparisonFor(item, scanDiffs = []) {
+  const sc = scOf(ruleOf(item))
+  if (!sc) return null
+  const applied = (scanDiffs || []).find(
+    (d) => d && d.file === item?.file && scOf(d.rule_id) === sc && (d.before || d.after))
+  if (applied) return { before: applied.before ?? null, after: applied.after ?? null, applied: true }
+  const proposed = firstProposed(item)
+  if (proposed) return { before: firstBefore(item), after: proposed, applied: false }
+  return null
+}
+
+// What to tell a reviewer when nothing was drafted or applied. A value-fix criterion needs a
+// human to author the text a screen reader announces; everything else is a judgement call.
+// This replaced canned strings ("AI-generated alt text added") that the card printed whether
+// or not a model had written anything — see comparisonFor.
+export const noDraftHint = (sc) => (isValueFix(sc)
+  ? 'No draft yet — write the description a screen reader should announce.'
+  : 'No automated fix was recorded — this needs your judgement.')
+
 export function proposalMeta(item) {
   const list = proposalsOf(item)
   if (!list.length) return null

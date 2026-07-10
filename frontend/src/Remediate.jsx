@@ -6,13 +6,14 @@ import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
 import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics } from './api.js'
-import { SIM } from './sim.js'
+import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
 import QueuePanel from './QueuePanel.jsx'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
 import { confidenceForFinding, confClass } from './confidence.js'
 import { metaFor } from './hitlMeta.js'
-import { firstProposed, firstBefore, firstThumb, firstKind, firstRationale, firstSource, pageOf, pageNoun, thumbAlt, thumbSize, appliedFixAlt } from './reviewCard.js'
+import { firstProposed, firstBefore, firstThumb, firstKind, firstRationale, firstSource, pageOf,
+         pageNoun, thumbAlt, thumbSize, appliedFixAlt, comparisonFor, noDraftHint } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 import Thumbnail from './Thumbnail.jsx'
 import { remediableFiles, emptyScopeReason } from './remediableScope.js'
@@ -65,14 +66,14 @@ const FIX_WCAG_LABELS = {
 const ITEM_ICON = { '1.1.1': '▦', '1.2.1': '🎧', '1.2.2': '🎬', '1.2.5': '🎬', '1.3.1': '⊞', '1.3.2': '¶', '1.4.3': '◑', '2.4.2': '¶', '2.4.4': '↗', '3.1.1': '✦' }
 const ITEM_NAME = { '1.1.1': 'non-text content', '1.2.1': 'audio-only & video-only', '1.2.2': 'captions', '1.2.5': 'audio description', '1.3.1': 'info & relationships', '1.3.2': 'meaningful sequence', '1.4.3': 'contrast minimum', '2.4.2': 'page titled', '2.4.4': 'link purpose', '3.1.1': 'language of page' }
 const ITEM_BA = {
-  '1.1.1': { meta: 'AI alt text — review accuracy', before: (d) => d || 'image / chart — no alt text', after: () => 'AI-generated alt text added — confirm or reword before certifying' },
-  '1.2.1': { meta: 'transcript draft — verify accuracy', before: () => 'audio — no transcript', after: () => 'AI transcript drafted (speech-to-text) — review for accuracy' },
-  '1.2.2': { meta: 'ASR captions — review timing & accuracy', before: () => 'video — no caption track', after: () => 'Synchronized captions drafted (speech-to-text) — review timing & accuracy' },
-  '1.2.5': { meta: 'audio description script — needs review', before: () => 'video — no audio description', after: () => 'Audio description script drafted — human review required' },
-  '1.3.1': { meta: 'table structure — human judgement needed', before: (d) => d || 'table without header row', after: () => 'Header row tagged <th scope="col"> — confirm column labels are correct' },
-  '1.3.2': { meta: 'two plausible reading orders', before: () => 'multi-column layout — reading order ambiguous', after: () => 'Reordered left→right — review if this matches the intended flow' },
-  '1.4.3': { meta: 'contrast fix needs design sign-off', before: (d) => d || 'text below 4.5:1 contrast ratio', after: () => 'Recoloured to 4.8:1 — confirm with design before publishing' },
-  '2.4.4': { meta: 'link text — needs human rewrite', before: (d) => d || 'non-descriptive link text ("click here")', after: () => 'Link text rewritten — review in context before certifying' },
+  '1.1.1': { meta: 'AI alt text — review accuracy', before: (d) => d || 'image / chart — no alt text' },
+  '1.2.1': { meta: 'transcript draft — verify accuracy', before: () => 'audio — no transcript' },
+  '1.2.2': { meta: 'ASR captions — review timing & accuracy', before: () => 'video — no caption track' },
+  '1.2.5': { meta: 'audio description script — needs review', before: () => 'video — no audio description' },
+  '1.3.1': { meta: 'table structure — human judgement needed', before: (d) => d || 'table without header row' },
+  '1.3.2': { meta: 'two plausible reading orders', before: () => 'multi-column layout — reading order ambiguous' },
+  '1.4.3': { meta: 'contrast fix needs design sign-off', before: (d) => d || 'text below 4.5:1 contrast ratio' },
+  '2.4.4': { meta: 'link text — needs human rewrite', before: (d) => d || 'non-descriptive link text ("click here")' },
 }
 const SEV_RANK = { CRITICAL: 0, SERIOUS: 1, MODERATE: 2, MINOR: 3 }
 // SCs the local Ollama model can draft a concrete replacement value for (api/ai.py
@@ -82,7 +83,7 @@ const AI_DRAFTABLE_SCS = new Set(['1.1.1', '2.4.4', '2.4.9'])
 
 function dbItemToUi(it, files) {
   const sc = (it.rule_id || '').replace(/^(WCAG_?|SC_)/, '').replace(/_/g, '.')
-  const ba = ITEM_BA[sc] || { meta: 'review AI proposal', before: (d) => d || 'issue found', after: () => 'AI fix applied — review before certifying' }
+  const ba = ITEM_BA[sc] || { meta: 'review AI proposal', before: (d) => d || 'issue found' }
   const fileRec = (files || []).find((f) => f.file === it.file) || {}
   const issue = ((fileRec.issues || []).find((i) => (i.wcag || '').replace(/^SC_/, '').replace(/_/g, '.') === sc)) || {}
   return {
@@ -108,8 +109,13 @@ function dbItemToUi(it, files) {
     // image. `approved_value` only ever holds what a REVIEWER typed back (nothing writes it
     // server-side), so the old `it.approved_value || template` fell through to the template on
     // every item: "AI-generated alt text added — confirm or reword" rendered identically for
-    // every image in every document, whether or not a model had said anything.
-    after: firstProposed(it) || it.approved_value || ba.after(fileRec, issue),
+    // every image in every document, whether or not a model had said anything. There is no
+    // template fallback now: null means nothing was drafted, and the card says exactly that.
+    after: firstProposed(it) || it.approved_value || null,
+    // Carried through so the card can build its current→remediated comparison at RENDER time.
+    // The remediation_diff rows load in parallel with this queue, so a comparison baked in
+    // here would be empty on first paint and never refresh.
+    proposals: it.proposals,
     // The offending image itself + why the model said what it said. Null when no proposal.
     thumb: firstThumb(it),
     thumbKind: firstKind(it),
@@ -133,18 +139,30 @@ function buildHumanQueue(files, triage = {}) {
     const issue = [...(f.issues || [])].sort((a, b) => (SEV_RANK[a.severity] || 3) - (SEV_RANK[b.severity] || 3))[0]
     if (!issue) return null
     const sc = (issue.wcag || '').replace(/^SC_/, '').replace(/_/g, '.')
-    const ba = ITEM_BA[sc] || { meta: 'review AI proposal', before: (d) => d || 'issue found', after: () => 'AI fix applied — review before certifying' }
+    const ba = ITEM_BA[sc] || { meta: 'review AI proposal', before: (d) => d || 'issue found' }
+    // The demo's stand-in for hitl_queue.proposals. Present only for the criteria the model
+    // drafts a value for; the rest either carry an applied remediation_diff (simRemediationDiffs,
+    // once the demo has run remediation) or are a judgement call with nothing to show. No card
+    // gets a canned "AI fix applied" string — see WhyReview.
+    const proposals = simProposalsFor(sc)
+    const p = proposals?.[0]
     return {
       id: idx + 1,
       icon: ITEM_ICON[sc] || '◈',
       title: `${(f.file.split('.').pop() || 'DOC').toUpperCase()} · ${issue.detail || ITEM_NAME[sc] || sc}`,
       meta: ba.meta,
       file: f.file,
+      ruleId: sc,
       aiDraftable: AI_DRAFTABLE_SCS.has(sc),
       source: f.sourceName,
       rule: `WCAG ${sc}${ITEM_NAME[sc] ? ' — ' + ITEM_NAME[sc] : ''}`,
       before: ba.before(issue.detail, f),
-      after: ba.after(f, issue),
+      after: p?.proposed_value ?? null,
+      proposals,
+      thumb: p?.thumb ?? null,
+      rationale: p?.rationale ?? null,
+      proposalSource: p?.source ?? null,
+      hasProposal: !!p,
     }
   }).filter(Boolean)
 }
@@ -179,10 +197,33 @@ function ProgressRail({ steps }) {
   )
 }
 
+// The current→remediated comparison, so a reviewer approves against evidence rather than a
+// promise. `applied` distinguishes a fix already written into the document (remediation_diff,
+// verified-cleared) from an AI draft that this very approval would accept — the reviewer must
+// never confuse "this is what the file says now" with "this is what the model would like it
+// to say". Both halves are real values; there is no template branch.
+export function ReviewComparison({ comparison }) {
+  const { before, after, applied } = comparison
+  return (
+    <div className="whyreview-ba" aria-label={applied ? 'Before and after the applied fix' : 'Current value and the AI draft'}>
+      <div className="diffbox before">
+        <span className="difftag">{applied ? 'before' : 'current'}</span>
+        <code>{before || '— nothing (the value is absent)'}</code>
+      </div>
+      <div className="diffbox after">
+        <span className="difftag">{applied ? 'after · applied to the document' : 'AI draft · not applied until you approve'}</span>
+        <code>{after}</code>
+      </div>
+    </div>
+  )
+}
+
 // "Why am I reviewing this?" (§3) — the honest evidence a compliance officer needs to act:
 // the confidence.js level + its concrete basis (never a fabricated %), the plain-language
-// escalation reason, and the value the AI is suggesting they approve.
-function WhyReview({ sc, suggested, before, beforeLiteral, thumb, thumbKind, rationale, proposalSource, hasProposal, file, scanId, page }) {
+// escalation reason, the page the finding sits on, and — the point of the panel — what the
+// document says now versus what it would say once remediated.
+function WhyReview({ sc, suggested, before, beforeLiteral, comparison, thumb, thumbKind,
+                    rationale, proposalSource, hasProposal, file, scanId, page }) {
   const conf = confidenceForFinding({ sc })
   const reason = metaFor({ rule_id: sc }).reason
   return (
@@ -212,22 +253,32 @@ function WhyReview({ sc, suggested, before, beforeLiteral, thumb, thumbKind, rat
           <div className="whyreview-row"><span className="muted">Reason</span><span>{reason}</span></div>
           {/* Where to look. Only stated when the analysers attributed a page — a reviewer sent to
               "page 1" for a finding on page 7 checks the wrong thing and approves blind. */}
+          {/* A deck has slides, not pages — pageNoun keeps the card honest about the format. */}
           {page && <div className="whyreview-row"><span className="muted">Found on</span><span>{pageNoun(file)} {page}</span></div>}
-          {/* Before → after. Shown only when the proposal carried the literal offending passage:
-              `ba.before()` is a description of the defect ("image / chart — no alt text"), not a
-              value, and labelling that "current text" would be a lie. When it is absent the
-              picture above, not a sentence, is what the reviewer judges. */}
-          {beforeLiteral && before && (
-            <div className="whyreview-row">
-              <span className="muted">Current text</span>
-              <span className="whyreview-before">{before}</span>
-            </div>
-          )}
-          {suggested && (
-            <div className="whyreview-row">
-              <span className="muted">{hasProposal ? 'AI suggested value' : 'Next step'}</span>
-              <span className="whyreview-sugg">{suggested}</span>
-            </div>
+          {/* What the document says now versus what it would say once remediated. Both halves are
+              real values — a remediation_diff row, or the proposal's own literal `before` and
+              drafted value — so this renders only when such a pair exists. */}
+          {comparison ? <ReviewComparison comparison={comparison} /> : (
+            <>
+              {/* No comparison. Show the offending passage ONLY when the proposal carried a
+                  literal one: `ba.before()` is a description of the defect ("image / chart — no
+                  alt text"), not a value, and labelling that "current text" would put a sentence
+                  the document does not contain in front of a reviewer. When it is absent the
+                  page render above, not a sentence, is what they judge. */}
+              {beforeLiteral && before && (
+                <div className="whyreview-row">
+                  <span className="muted">Current text</span>
+                  <span className="whyreview-before">{before}</span>
+                </div>
+              )}
+              {/* Nothing was applied and no model drafted a value. Say so. This line used to
+                  print a canned "AI-generated alt text added" on every card, claiming a fix
+                  whether or not one had happened. */}
+              <div className="whyreview-row">
+                <span className="muted">{suggested && hasProposal ? 'AI suggested value' : 'Next step'}</span>
+                <span className="whyreview-sugg">{suggested || noDraftHint(sc)}</span>
+              </div>
+            </>
           )}
           {rationale && (
             <div className="whyreview-row">
@@ -243,10 +294,13 @@ function WhyReview({ sc, suggested, before, beforeLiteral, thumb, thumbKind, rat
 
 // One human-review card. Dominant surface (§3): the card leads with WHAT and WHY, carries
 // its own badge (§4), and exposes the review actions inline — no competing top-level buttons.
-function ReviewItemCard({ item, onOpen, onApprove, onSelf, onReject, disabled }) {
+function ReviewItemCard({ item, scanDiffs = [], onOpen, onApprove, onSelf, onReject, disabled }) {
   const sc = scOf(item.ruleId || item.rule || item.title)
   const conf = confidenceForFinding({ sc })
   const badgeKind = conf.level.rank <= 1 ? 'human' : 'review'   // Low → human required, else review suggested
+  // Derived here, not at fetch time: the remediation_diff rows load in parallel with the queue,
+  // so an item mapped before they land would hold an empty comparison forever.
+  const comparison = comparisonFor(item, scanDiffs)
   return (
     <div className="reviewcard">
       <div className="reviewcard-top">
@@ -258,6 +312,7 @@ function ReviewItemCard({ item, onOpen, onApprove, onSelf, onReject, disabled })
         <AutoBadge kind={badgeKind} />
       </div>
       <WhyReview sc={sc} suggested={item.after} before={item.before} beforeLiteral={item.beforeLiteral}
+                 comparison={comparison}
                  thumb={item.thumb} thumbKind={item.thumbKind} rationale={item.rationale}
                  proposalSource={item.proposalSource} hasProposal={item.hasProposal} file={item.file}
                  scanId={item.scanId} page={item.page} />
@@ -787,7 +842,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         ) : (
           <div className="reviewlist">
             {queue.map((q) => (
-              <ReviewItemCard key={q.id} item={q} disabled={readOnly}
+              <ReviewItemCard key={q.id} item={q} scanDiffs={scanDiffs} disabled={readOnly}
                 onOpen={() => setSelItem(q)}
                 onApprove={() => act(q.id, 'approved')}
                 onSelf={() => act(q.id, 'self')}
