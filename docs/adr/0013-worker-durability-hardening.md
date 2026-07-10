@@ -120,8 +120,11 @@ REDIS_URL="rediss://:$(az redis list-keys -g mdk-accessibility -n acp-redis --qu
 # 2. deploy both tiers (worker up first, API flipped to 0) in one run
 ACP_GOOGLE_CLIENT_ID=<gis-id> REDIS_URL="$REDIS_URL" ACP_DEPLOY_WORKER=1 bash deploy/public/deploy.sh
 
-# 3. one-time (first create only): the deploy prints the exact commands to grant the worker's
-#    managed identity 'Storage Blob Data Contributor' on the remediated-output account.
+# 3. one-time (first create only): grant the worker's managed identity Blob access, else its
+#    remediation writes 403 (run against the Customer Demos subscription used for the deploy):
+MI=$(az containerapp show --subscription "Customer Demos" -g mdk-accessibility -n acp-worker --query identity.principalId -o tsv)
+SCOPE=$(az storage account show --subscription "Customer Demos" -n acpremediatedstore -g mdk-accessibility --query id -o tsv)
+az role assignment create --assignee "$MI" --role "Storage Blob Data Contributor" --scope "$SCOPE"
 ```
 
 To roll back to co-located workers: redeploy without `ACP_DEPLOY_WORKER` and pass

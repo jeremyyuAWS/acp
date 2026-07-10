@@ -380,10 +380,9 @@ if [ "${ACP_DEPLOY_WORKER:-}" = "1" ]; then
       --secrets "${SECRETS[@]}" \
       --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DB_ENV $LF_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV ACP_WORKERS=$WK_N \
       --system-assigned --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 3 -o none
-    echo "   one-time — grant the worker Blob access (else remediation writes 403):"
-    echo "     MI=\$(az containerapp show ${AZ[*]} -g $RG -n $WORKER_APP --query identity.principalId -o tsv)"
-    echo "     SCOPE=\$(az storage account show -n $BLOB_ACCOUNT -g $RG --query id -o tsv)"
-    echo "     az role assignment create --assignee \$MI --role 'Storage Blob Data Contributor' --scope \$SCOPE"
+    echo "   one-time: grant the worker's managed identity 'Storage Blob Data Contributor' on"
+    echo "   the '$BLOB_ACCOUNT' account so its remediation Blob writes don't 403 — exact"
+    echo "   commands are in docs/adr/0013-worker-durability-hardening.md (§2 runbook)."
   fi
   # ADR 0013 §2: hand job processing to the worker tier — flip the API to serve-only.
   WORKERS_ENV="ACP_WORKERS=0"
