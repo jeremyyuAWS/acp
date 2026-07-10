@@ -158,6 +158,16 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
                                    scan_id=scan_id, file=path.name, proposals=proposals)
         except Exception:
             pass
+        # 2.4.1 bypass blocks — deterministically build a bookmark outline from the document's
+        # headings when a long PDF has none (no AI; only when confident).
+        try:
+            _outline_msg = _generate_pdf_outline(pdf, str(path))
+            if _outline_msg:
+                applied.append(_outline_msg)
+                _rec("2.4.1", "(no bookmark outline — no way to skip past repeated content)",
+                     "bookmark outline", "screen-reader/keyboard users can jump between sections")
+        except Exception:
+            pass
         pdf.save(str(mid_path))
     finally:
         pdf.close()
@@ -376,3 +386,95 @@ def _unlink(p: Path) -> None:
         p.unlink()
     except Exception:
         pass
+
+
+# ── 2.4.1 Bypass Blocks — build a bookmark outline from the document's own headings ──
+# The scan flags a long PDF (>= office_structure._MIN_PAGES_FOR_OUTLINE) with an empty
+# outline. When the document's text carries visually-distinct headings we can rebuild the
+# outline deterministically (no AI): a screen-reader/keyboard user then has the skip
+# mechanism 2.4.1 requires. Auto-applied ONLY when confident — a heading-less or scanned
+# PDF (no larger-than-body text) yields nothing and stays a human-authoring finding, so we
+# never fabricate a junk "Page 1/2/3" outline that reads as done without being useful.
+_MIN_OUTLINE_ENTRIES = 2        # fewer than this isn't a navigational outline worth adding
+_HEADING_SIZE_RATIO = 1.2       # a line >= 1.2x the modal body size reads as a heading
+_HEADING_MAX_CHARS = 100        # a heading is a short label, not a paragraph
+_OUTLINE_SCAN_PAGE_CAP = 120    # bound worst-case parse cost on a huge PDF
+_OUTLINE_ENTRY_CAP = 200        # a sane ceiling on bookmark count
+
+
+def _extract_pdf_headings(source_path: str) -> list[tuple[str, int]]:
+    """Heading candidates by font size. The modal rounded char size is body text; a line
+    whose largest char is >= _HEADING_SIZE_RATIO x that, is short, and has letters reads as a
+    heading. Returns [(title, page_index)] in document order, deduped by text, capped. Empty
+    on any failure or when nothing stands out (uniform-font / scanned PDF)."""
+    try:
+        import pdfplumber
+        from collections import Counter
+    except Exception:
+        return []
+    try:
+        with pdfplumber.open(source_path) as doc:
+            pages = doc.pages[:_OUTLINE_SCAN_PAGE_CAP]
+            sizes = [round(ch.get("size", 0)) for pg in pages for ch in (pg.chars or [])]
+            sizes = [s for s in sizes if s > 0]
+            if not sizes:
+                return []
+            body = Counter(sizes).most_common(1)[0][0]
+            if body <= 0:
+                return []
+            out: list[tuple[str, int]] = []
+            seen: set[str] = set()
+            for i, pg in enumerate(pages):
+                lines: dict[int, dict] = {}
+                for ch in (pg.chars or []):
+                    key = round(ch.get("top", 0))       # group chars sharing a baseline into a line
+                    line = lines.setdefault(key, {"text": [], "size": 0})
+                    line["text"].append(ch.get("text", ""))
+                    line["size"] = max(line["size"], round(ch.get("size", 0)))
+                for key in sorted(lines):
+                    line = lines[key]
+                    text = "".join(line["text"]).strip()
+                    if (not text or len(text) > _HEADING_MAX_CHARS
+                            or not any(c.isalpha() for c in text)):
+                        continue
+                    if line["size"] >= body * _HEADING_SIZE_RATIO:
+                        norm = text.lower()
+                        if norm in seen:
+                            continue
+                        seen.add(norm)
+                        out.append((text[:120], i))
+                        if len(out) >= _OUTLINE_ENTRY_CAP:
+                            return out
+            return out
+    except Exception:
+        return []
+
+
+def _generate_pdf_outline(pdf, source_path: str) -> str | None:
+    """Build a pikepdf outline in-place (WCAG 2.4.1) for a long PDF that has none, from its
+    own headings. Returns a description when it applied, else None (short doc / existing
+    outline / too few headings). Operates on the open stage-1 `pdf`, so the entries persist
+    through the stage's save. Deterministic — no model."""
+    try:
+        import pikepdf
+    except Exception:
+        return None
+    try:
+        from office_structure import _MIN_PAGES_FOR_OUTLINE
+    except Exception:
+        _MIN_PAGES_FOR_OUTLINE = 5
+    try:
+        if len(pdf.pages) < _MIN_PAGES_FOR_OUTLINE:
+            return None
+        with pdf.open_outline() as outline:
+            if outline.root:                       # already navigable — leave it untouched
+                return None
+            headings = _extract_pdf_headings(source_path)
+            if len(headings) < _MIN_OUTLINE_ENTRIES:
+                return None                        # nothing confident to build; stays HITL
+            for title, page_idx in headings:
+                outline.root.append(pikepdf.OutlineItem(title, page_idx))
+    except Exception:
+        return None
+    return (f"Built a {len(headings)}-entry bookmark outline from the document's headings, "
+            "so assistive tech can skip between sections · 2.4.1")
