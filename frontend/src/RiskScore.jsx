@@ -1,5 +1,6 @@
 import { severityItems } from './charts.jsx'
 import { recommendationSummary } from './sim.js'
+import { fmtEffort, EFFORT_BASIS } from './effort.js'
 
 // Risk Scoring & Findings header for the "Risk & findings" view — the unified, leadership-
 // readable summary the marketing card promises: compliance score, issue breakdown, WCAG
@@ -13,7 +14,9 @@ export default function RiskScore({ run, files = [] }) {
   const exposure = publicCrit >= 8 ? ['High', '#1F5FA8'] : publicCrit >= 3 ? ['Elevated', '#854F0B'] : ['Moderate', '#3B6D11']
   const score = run?.avg_score ?? '—'
   const scoreColor = score >= 90 ? '#3B6D11' : score >= 50 ? '#854F0B' : '#1F5FA8'
-  const effortH = Math.round((rec.remediateMin || 0) / 60)
+  // A planning heuristic (sim.js recommendFor multiplies findings by fixed constants), not a
+  // measurement. Labelled as such wherever it renders — see effort.js.
+  const effortEst = fmtEffort(rec.remediateMin)
 
   return (
     <section className="panel riskscore">
@@ -43,7 +46,7 @@ export default function RiskScore({ run, files = [] }) {
         </div>
         <div className="risktile">
           <span className="risklabel">Remediation effort</span>
-          <b className="risknum">{effortH}h</b>
+          <b className="risknum" title={EFFORT_BASIS}>{effortEst}</b>
           <em className="risksub">{rec.autoPct}% automated · {rec.remediableDocs} docs</em>
         </div>
       </div>

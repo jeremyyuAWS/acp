@@ -102,7 +102,10 @@ export async function generateScanReport({ scanId, files = [], org = 'your organ
     deferred: bucketN('archive') + bucketN('keep'),
     buckets: rec.buckets,
   }
-  const effort = { remediateMin: rec.remediateMin, savedMin: rec.savedMin, autoPct: rec.autoPct, remediableDocs: rec.remediableDocs }
+  // No savedMin. It was manualMin - remediateMin, both invented per-finding constants, and
+  // this object is an exported report model. autoPct is a real classification (which actions
+  // the recommender chose), not a duration, so it stays.
+  const effort = { remediateMin: rec.remediateMin, autoPct: rec.autoPct, remediableDocs: rec.remediableDocs }
 
   // ── HITL queue status ─────────────────────────────────────────────────────
   const hc = { pending: 0, approved: 0, rejected: 0, skipped: 0 }
