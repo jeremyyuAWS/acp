@@ -87,3 +87,42 @@ def test_shadow_filter_logs_once_per_scan(tmp_path, capsys):
 
     lines = [l for l in capsys.readouterr().out.splitlines() if "hiding" in l]
     assert len(lines) == 1, f"expected one line for ten polls, got {len(lines)}"
+
+
+# ── the incremental-reuse path, which the first fix missed entirely ──
+
+def test_shadow_check_also_runs_when_prior_analysis_is_reused():
+    """With incremental=true, find_prior_analysis() short-circuits the download+analyse block.
+
+    The pre-analysis skip lives inside that block, so on a re-scan the phantom sailed through
+    with its reused issues, wrote scan_rule_traces, and reappeared in the human review queue.
+    Observed live 2026-07-10T01:53:06Z: get_scan hid it 2s after discovery and no "skipping"
+    line was ever printed. The convergent check must sit AFTER both branches.
+    """
+    src = HANDLERS.read_text()
+    # the dedup branch
+    dedup = src.index('if dedup:')
+    # the convergent check
+    check = src.index('and fdict.get("acp_stamped") and fdict.get("status") != "skipped"')
+    # the single persist call
+    save = src.index('core.store.save_file_result(scan_id, fdict, now)')
+    assert dedup < check < save, "the check must run after the dedup branch and before persist"
+
+
+def test_reused_shadow_record_is_stripped_of_its_issues():
+    src = HANDLERS.read_text()
+    start = src.index('and fdict.get("acp_stamped") and fdict.get("status") != "skipped"')
+    # NB: 'if fdict is None:' also appears earlier, inside the fresh-analysis branch. Anchor on
+    # the error-record line that follows the convergent check.
+    end = src.index('# fetch/analyse failed', start)
+    block = src[start:end]
+    assert '"issues": []' in block, "reused issues must be dropped -> no traces -> no HITL item"
+    assert '"status": "skipped"' in block
+    assert 'pinfo = None' in block, "reused PII must not be carried onto a skipped file"
+
+
+def test_the_convergent_check_does_not_re_wrap_the_pre_analysis_skip():
+    # The fresh-analysis path already produced status='skipped'; re-wrapping would be harmless
+    # but the guard makes the intent explicit and keeps the log line printing once.
+    src = HANDLERS.read_text()
+    assert 'fdict.get("status") != "skipped"' in src

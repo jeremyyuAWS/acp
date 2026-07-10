@@ -554,6 +554,24 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                             "re-run the scan to cover this file")
                 core.store.log_decision("system", "scan.file_error", scan_id=scan_id, file=name,
                                         detail=_msg[:200])
+        # Both branches converge here. The pre-analysis skip above only runs on a FRESH
+        # analysis; with incremental=true, find_prior_analysis() reuses the previous scan's
+        # record and short-circuits the whole download+analyse block — so the phantom sailed
+        # straight through with all its issues, wrote scan_rule_traces, and landed back in the
+        # human review queue. Observed live: get_scan hid it 2s after discovery, and no
+        # "skipping" line was ever printed.
+        #
+        # The reused record carries acp_stamped (that is how get_scan recognises it), so one
+        # check here covers reuse, fresh analysis, and any future path that produces an fdict.
+        if (item.get("shadow_candidate") and item.get("exclude_remediated")
+                and fdict and fdict.get("acp_stamped") and fdict.get("status") != "skipped"):
+            print(f"[scan] skipping {name}: ACP-generated output shadowing its source "
+                  f"(reused analysis discarded, not queued for review)", flush=True)
+            fdict = {"file": name, "engine": "n/a", "status": "skipped", "score": None,
+                     "compliant": 0, "skipped_rules": 0, "issues": [],
+                     "acp_stamped": fdict.get("acp_stamped")}
+            pinfo = None
+
         if fdict is None:                              # fetch/analyse failed → error record
             fdict = {"file": name, "engine": "n/a", "status": "error", "score": None,
                      "compliant": 0, "skipped_rules": 0, "issues": []}
