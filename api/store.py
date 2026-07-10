@@ -2024,6 +2024,13 @@ class Store:
         the drafts never written in.
 
         Proposals with no locator are skipped: unaddressable content cannot be written anywhere.
+
+        Also folds in `evidence` entries the reviewer described. A deferred 1.1.1 row (Office
+        images with no faithful alt source, and no vision draft) carries `evidence`
+        [{locator, thumb}] and NO proposals, so a reviewer's alt text had nowhere per-image to
+        live: the value went into the single legacy column with no locator, could never be
+        written, and blocked the file forever. Evidence has no draft, so there is no fallback —
+        an undescribed evidence image contributes nothing.
         """
         out: dict[str, str] = {}
         for p in (row.get("proposals") or []):
@@ -2031,6 +2038,13 @@ class Store:
                 continue
             loc = (p.get("locator") or "").strip()
             val = (p.get("approved_value") or "").strip() or (p.get("proposed_value") or "").strip()
+            if loc and val:
+                out[loc] = val
+        for e in (row.get("evidence") or []):
+            if not isinstance(e, dict):
+                continue
+            loc = (e.get("locator") or "").strip()
+            val = (e.get("approved_value") or "").strip()   # no proposed_value: evidence is undrafted
             if loc and val:
                 out[loc] = val
         return out
@@ -2075,34 +2089,47 @@ class Store:
         return out
 
     def approve_proposal_values(self, item_id: str, values: list[str | None]) -> int:
-        """Record the reviewer's final text per proposal, positionally.
+        """Record the reviewer's final text per instance, positionally.
 
-        `values[i]` is the text for proposal i: an edited string, or None/"" meaning "accept
-        proposal i's draft as written". Returns the number of proposals now carrying an
-        approved value. Extra values are ignored; missing ones fall back to the draft, so a
-        reviewer who approves without touching anything accepts exactly what they were shown.
+        `values[i]` is the text for instance i: an edited string, or None/"" meaning "accept
+        instance i's draft as written". Returns the number of instances now carrying an approved
+        value. Extra values are ignored; missing ones fall back to the draft.
+
+        A row's instances are its `proposals` (AI-drafted images) when it has any. When it does
+        NOT — a deferred 1.1.1 row that carries only `evidence` thumbnails, because the vision
+        model produced no draft — the values are written onto the evidence entries instead, in
+        the SAME positional order the card rendered them. Evidence has no draft, so an empty value
+        stays empty (the image is still undescribed) rather than falling back to anything.
         """
         import json as _json
         with self._db.cursor() as cur:
-            self._db.execute(cur, "SELECT proposals FROM hitl_queue WHERE id=%s", (item_id,))
+            self._db.execute(cur, "SELECT proposals, evidence FROM hitl_queue WHERE id=%s", (item_id,))
             row = self._db.fetchone(cur)
-            if not row or not row.get("proposals"):
+            if not row:
+                return 0
+            if row.get("proposals"):
+                col, has_draft = "proposals", True
+            elif row.get("evidence"):
+                col, has_draft = "evidence", False
+            else:
                 return 0
             try:
-                proposals = _json.loads(row["proposals"])
+                items = _json.loads(row[col])
             except (ValueError, TypeError):
                 return 0
             n = 0
-            for i, p in enumerate(proposals):
+            for i, p in enumerate(items):
                 if not isinstance(p, dict):
                     continue
-                supplied = (values[i] if i < len(values) else None) or ""
-                final = supplied.strip() or (p.get("proposed_value") or "").strip()
+                supplied = ((values[i] if i < len(values) else None) or "").strip()
+                final = (supplied or (p.get("proposed_value") or "").strip()) if has_draft else supplied
                 if final:
                     p["approved_value"] = final
                     n += 1
-            self._db.execute(cur, "UPDATE hitl_queue SET proposals=%s WHERE id=%s",
-                             (_json.dumps(proposals), item_id))
+                elif not has_draft:
+                    p.pop("approved_value", None)   # cleared: the image is undescribed again
+            self._db.execute(cur, f"UPDATE hitl_queue SET {col}=%s WHERE id=%s",
+                             (_json.dumps(items), item_id))
         return n
 
     def mark_row_applied(self, item_id: str) -> None:

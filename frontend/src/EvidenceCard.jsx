@@ -20,8 +20,6 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // approving without touching anything means "the drafts I was shown are correct" — the
   // server applies exactly these, per locator.
   const proposalList = proposalsOf(item)
-  const [values, setValues] = useState(() => seedValues(proposalList))
-  const setValueAt = (i, v) => setValues((prev) => prev.map((x, j) => (j === i ? v : x)))
   // Prefill from the server-side AI proposal when there is one — that is what turns a 30s
   // "write the alt text" into a 5s "confirm this". Falls back to a previously-approved value.
   const [value, setValue] = useState(firstProposed(item) ?? item?.approved_value ?? '')
@@ -36,7 +34,18 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // a row carrying nineteen must say which — defaulting to the first silently captions the
   // wrong picture and the reviewer approves alt text for an image they never saw.
   const evidence = evidenceOf(item)
-  const [picked, setPicked] = useState(0)
+  // The per-image editors are driven by proposals when the AI drafted any. When it drafted none
+  // — a DEFERRED 1.1.1 row that carries only `evidence` thumbnails — the same editors are driven
+  // by the evidence instead, so a deck's nineteen undescribed images each get a box rather than a
+  // picker that could only ever record one value. Evidence has no draft, hence proposed_value ''.
+  const usingEvidence = proposalList.length === 0 && evidence.length > 0
+  const instances = proposalList.length
+    ? proposalList
+    : evidence.map((e) => ({ locator: e.locator, thumb: e.thumb, proposed_value: '',
+                             approved_value: e.approved_value }))
+  const [values, setValues] = useState(() => seedValues(instances))
+  const setValueAt = (i, v) => setValues((prev) => prev.map((x, j) => (j === i ? v : x)))
+  const [draftingIdx, setDraftingIdx] = useState(null)
   const shownAt = useRef(Date.now())               // reviewer-time metric starts when the card mounts
   // The value the AI actually proposed — reviewTelemetry diffs the human's final value against
   // this to derive the `edited` calibration signal, so it must be the proposal, not the draft.
@@ -57,9 +66,10 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
     if (!item?.scan_id || !item?.file || !item?.rule_id) return
     setDrafting(true); setDraftMsg(null)
     try {
-      // Which image to describe. Without this the endpoint has no image at all and 1.1.1 can
-      // only ever come back as a fill-in template — the model never sees a pixel.
-      const r = await suggestFix(item.scan_id, item.file, item.rule_id, evidence[picked]?.locator)
+      // This box is only shown for a single value-fix finding with no proposals and no evidence
+      // (e.g. one link-text finding), so there is no per-image locator to pass — a deferred image
+      // row uses draftInstance instead. evidence[0] is undefined here, which is correct.
+      const r = await suggestFix(item.scan_id, item.file, item.rule_id, evidence[0]?.locator)
       const s = (r?.suggestion || '').trim()
       if (!s) { setDraftMsg({ kind: 'error', text: 'The model returned nothing — write the value yourself.' }); return }
       setValue(s)
@@ -78,6 +88,26 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
       setDraftMsg({ kind: 'error', text: e?.message || 'AI draft unavailable — write the value yourself.' })
     } finally {
       setDrafting(false)
+    }
+  }
+
+  // Draft one deferred image, by its own row. Unlike draftWithAi (single box), this writes the
+  // result into instance i's value — the model saw image i, so its description belongs to image i.
+  const draftInstance = async (i) => {
+    if (draftingIdx != null || !item?.scan_id || !item?.file || !item?.rule_id) return
+    setDraftingIdx(i); setDraftMsg(null)
+    try {
+      const r = await suggestFix(item.scan_id, item.file, item.rule_id, instances[i]?.locator)
+      const s = (r?.suggestion || '').trim()
+      if (!s) { setDraftMsg({ kind: 'error', text: `Image ${i + 1}: the model returned nothing — write it yourself.` }); return }
+      setValueAt(i, s)
+      setDraftMsg(r.is_template
+        ? { kind: 'template', text: r.reason || 'Template only — no vision model was available. Rewrite it before approving.' }
+        : { kind: 'ai', text: `Image ${i + 1} drafted${r.model ? ` · ${r.model}` : ''} — edit if it misses the meaning.` })
+    } catch (e) {
+      setDraftMsg({ kind: 'error', text: e?.message || 'AI draft unavailable — write the value yourself.' })
+    } finally {
+      setDraftingIdx(null)
     }
   }
 
@@ -100,9 +130,12 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // Any row carrying proposals gets the per-instance editor. It is the only surface that shows
   // WHAT is changing — the image, or the passage of text — beside the value being written, and
   // a reviewer cannot honestly approve a description of something they were never shown.
-  const multi = proposalList.length > 0
-  // A row with many findings but no per-instance proposals still cannot be expressed in one
-  // box; there is nothing to render per image, so keep warning rather than implying it can.
+  // Per-instance editors render for a row with proposals (drafted images) OR a deferred row with
+  // evidence (undrafted images) — either way `instances` has the entries and `values` is
+  // positionally aligned with them.
+  const multi = instances.length > 0
+  // Only a row with many findings and NO per-image instances at all still can't be expressed in
+  // one box — keep warning rather than implying it can. (Now rare: deferred rows carry evidence.)
   const manyInstances = !multi && card.findingCount > 1 && isValueFix(card.sc)
 
   const decide = async (status) => {
@@ -116,9 +149,10 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
       editable, status, value: headline, aiDraft: aiDraft.current,
       elapsedMs: Date.now() - shownAt.current,
     })
-    // What actually gets written into the document, one entry per image. Only on approval:
-    // rejecting approves no content.
-    const approvedValues = (status === 'approved' && proposalList.length)
+    // What actually gets written into the document, one entry per image, positionally aligned
+    // with `instances` (proposals or deferred evidence). Only on approval: rejecting approves no
+    // content. The server routes these to proposals[] or evidence[] as the row demands.
+    const approvedValues = (status === 'approved' && instances.length)
       ? (multi ? values : [value || ''])
       : null
     try {
@@ -164,41 +198,22 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
         <div className="evcard-main" style={{ flex: 1, minWidth: 0 }}>
           <p className="evcard-problem">{card.problem}</p>
 
-          {/* The images this row is asking for descriptions of, when the AI drafted none. One row
-              can carry nineteen, so show them all: a lone thumbnail beside "19 findings" would
-              say "describe this one". Selecting one is what "Draft with AI" describes — the model
-              can only look at a single image, and silently picking the first would caption the
-              wrong picture.
-
-              Suppressed when the row carries proposals: ProposalEditors below already pairs every
-              image with its own draft and its own editor, so the strip would show the same
-              pictures twice and its picker would have nothing left to disambiguate. */}
-          {evidence.length > 0 && !multi && (
-            <div className="evcard-evidence">
-              <span className="muted evcard-evidence-hd">
-                {evidence.length === 1
-                  ? 'The image needing a description'
-                  : `${evidence.length} images need a description — pick one to draft or describe`}
-              </span>
-              <ul className="evcard-evidence-strip">
-                {evidence.map((ev, i) => (
-                  <li key={ev.locator || i}>
-                    <button type="button" aria-pressed={i === picked}
-                            className={`evcard-evidence-thumb${i === picked ? ' is-picked' : ''}`}
-                            title={ev.locator || `Image ${i + 1}`}
-                            onClick={() => { setPicked(i); setDraftMsg(null) }}>
-                      <ProposalThumb thumb={ev.thumb} size={64} square
-                                     alt={`Image ${i + 1} of ${evidence.length} in ${card.file} — needs alt text`} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+          {/* Deferred images (evidence, no AI draft) now render through ProposalEditors below —
+              one editable row per image, each with its own "Draft with AI". The old thumbnail
+              picker fed one shared textarea, so it could record only a single value; it is gone. */}
 
           {editable && multi ? (
-            <ProposalEditors proposals={proposalList} values={values} sc={card.sc}
-                             onChange={setValueAt} file={card.file} />
+            <>
+              <ProposalEditors proposals={instances} values={values} sc={card.sc}
+                               onChange={setValueAt} file={card.file}
+                               onDraft={usingEvidence ? draftInstance : undefined}
+                               draftingIdx={usingEvidence ? draftingIdx : null} />
+              {usingEvidence && draftMsg && (
+                <span className={`evcard-draft-msg evcard-draft-${draftMsg.kind}`} role="status">
+                  {draftMsg.text}
+                </span>
+              )}
+            </>
           ) : editable ? (
             <label className="evcard-rec">
               <span className="evcard-rec-head">

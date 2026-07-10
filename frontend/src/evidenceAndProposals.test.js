@@ -32,11 +32,14 @@ const PROPOSALS = [
 const markup = (item) => renderToStaticMarkup(createElement(EvidenceCard, { item, onAct: () => {} }))
 
 describe('evidence strip vs per-proposal editors', () => {
-  it('no drafts → the strip, so the reviewer can see and pick an image', () => {
+  it('no drafts → one editor row per deferred image, not a picker', () => {
+    // Evidence images now get the same per-instance editor proposals do — the only way to record
+    // one value per image. The old thumbnail picker fed a single shared box and is gone.
     const html = markup({ ...base, evidence: EVIDENCE })
-    expect(html).toContain('evcard-evidence-strip')
-    expect(html).toContain('images need a description')
-    expect(html).not.toContain('evcard-multi-row')
+    expect(html).toContain('evcard-multi-row')
+    expect(html.split('evcard-multi-row').length - 1).toBe(2)   // one row per image
+    expect(html).not.toContain('evcard-evidence-strip')
+    expect(html).toContain('Draft with AI')                     // each row can draft its own image
   })
 
   it('drafts → the editors, each image beside its own value', () => {

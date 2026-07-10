@@ -35,7 +35,10 @@ const mount = async (props = {}) => {
   root = createRoot(container)
   await act(async () => { root.render(createElement(EvidenceCard, { item, onAct: () => {}, ...props })) })
 }
-const thumbs = () => [...container.querySelectorAll('.evcard-evidence-thumb')]
+// The picker is gone: each deferred image has its own editor row and its own draft button, so
+// the draft targets THAT image by construction — there is no "picked" image to get wrong.
+const drafts = () => [...container.querySelectorAll('.evcard-draft-btn')]
+const inputs = () => [...container.querySelectorAll('.evcard-rec-input')]
 const click = async (el) => { await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }
 
 beforeEach(() => {
@@ -43,31 +46,23 @@ beforeEach(() => {
   suggestFix.mockResolvedValue({ suggestion: 'A nurse reviews a chart.', is_template: false, model: 'llava:7b' })
 })
 
-describe('EvidenceCard — the drafted image is the picked image', () => {
-  it('drafts the FIRST image by default', async () => {
+describe('EvidenceCard — the drafted image is its own row', () => {
+  it('a row draft describes that row’s image', async () => {
     await mount()
-    await click(container.querySelector('.evcard-draft-btn'))
+    await click(drafts()[0])
     expect(suggestFix).toHaveBeenCalledWith('s1', 'deck.pptx', '1.1.1', 'ppt/slides/slide1.xml#rId2')
   })
 
-  it('drafts the image the reviewer selected, not the first', async () => {
+  it('a later row draft describes that image, not the first', async () => {
     await mount()
-    await click(thumbs()[2])
-    await click(container.querySelector('.evcard-draft-btn'))
+    await click(drafts()[2])
     expect(suggestFix).toHaveBeenCalledWith('s1', 'deck.pptx', '1.1.1', 'ppt/slides/slide3.xml#rId4')
   })
 
-  it('moves the picked marker to the clicked thumbnail', async () => {
+  it('puts the draft into that row only, never another image’s box', async () => {
     await mount()
-    await click(thumbs()[1])
-    const pressed = thumbs().map((t) => t.getAttribute('aria-pressed'))
-    expect(pressed).toEqual(['false', 'true', 'false'])
-  })
-
-  it('puts the returned alt text into the editor', async () => {
-    await mount()
-    await click(container.querySelector('.evcard-draft-btn'))
-    expect(container.querySelector('.evcard-rec-input').value).toBe('A nurse reviews a chart.')
+    await click(drafts()[2])
+    expect(inputs().map((t) => t.value)).toEqual(['', '', 'A nurse reviews a chart.'])
   })
 
   it('shows the server reason when the model could only produce a template', async () => {
@@ -76,13 +71,14 @@ describe('EvidenceCard — the drafted image is the picked image', () => {
       reason: 'Template only — no vision model is available to look at this image.',
     })
     await mount()
-    await click(container.querySelector('.evcard-draft-btn'))
+    await click(drafts()[0])
     expect(container.textContent).toContain('no vision model is available')
     expect(container.textContent).not.toContain('no vision model described this image')
   })
 
-  it('sends no locator for an item with no images', async () => {
-    await mount({ item: { ...item, evidence: [] } })
+  it('sends no locator for a single-value item with no images', async () => {
+    // No evidence and no proposals → the single-value editor, whose draft has no per-image target.
+    await mount({ item: { ...item, evidence: [], finding_count: 1 } })
     await click(container.querySelector('.evcard-draft-btn'))
     expect(suggestFix).toHaveBeenCalledWith('s1', 'deck.pptx', '1.1.1', undefined)
   })

@@ -1794,6 +1794,13 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .evcard-multi-row:last-child { border-bottom: none; padding-bottom: 0; }
 .evcard-multi-thumb { flex-shrink: 0; }
 .evcard-multi-row textarea { width: 100%; }
+.evcard-multi-loc { display: block; word-break: break-word; }
+/* A described deferred image reads as done at a glance. Colour is not the only signal — the
+   locator also carries a ✓ (evcard-imagerow-tick), so this survives a monochrome or colour-blind
+   reading (WCAG 1.4.1). Applied only on evidence rows; a proposal row always has a value. */
+.evcard-multi-row.is-described { border-left: 3px solid #b9d3a3; padding-left: 8px;
+  margin-left: -11px; border-radius: 0 6px 6px 0; }
+.evcard-imagerow-tick { color: #3B6D11; font-weight: 700; }
 /* current → writes, inside a proposal row: tighter than the standalone diffbox */
 .evcard-ba { margin: 0 0 5px; padding: 6px 9px; }
 .evcard-ba .difftag { margin-bottom: 2px; }

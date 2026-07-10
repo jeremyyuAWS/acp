@@ -16,17 +16,17 @@ describe('the approve payload carries one value per image', () => {
     expect(src).toMatch(/approved_value: approvedValue/)   // headline value still logged
   })
 
-  it('EvidenceCard seeds one editor per proposal, from that instance\'s own draft', () => {
+  it('EvidenceCard seeds one editor per instance, from that instance\'s own draft', () => {
     const src = read('EvidenceCard.jsx')
-    expect(src).toMatch(/useState\(\(\) => seedValues\(proposalList\)\)/)
-    // ANY row with proposals gets the per-instance editor: it is the only surface that shows
-    // what is changing beside the value being written, and a one-proposal row needs that too.
-    expect(src).toMatch(/const multi = proposalList\.length > 0/)
+    // `instances` is the proposals when the AI drafted any, else the deferred evidence images —
+    // so the per-image editor drives both the drafted and the from-scratch (no-draft) case.
+    expect(src).toMatch(/useState\(\(\) => seedValues\(instances\)\)/)
+    expect(src).toMatch(/const multi = instances\.length > 0/)
   })
 
   it('EvidenceCard sends the per-image values, and only on approval', () => {
     const src = read('EvidenceCard.jsx')
-    expect(src).toMatch(/status === 'approved' && proposalList\.length/)
+    expect(src).toMatch(/status === 'approved' && instances\.length/)
     expect(src).toMatch(/approvedValues/)
   })
 
