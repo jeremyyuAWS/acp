@@ -15,13 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 
 @pytest.fixture()
-def st():
+def st(monkeypatch):
     import store as store_mod
-    store_mod._SQLITE_PATH = Path(tempfile.mkdtemp()) / "finalize-test.db"
-    # SQLite can't run "ALTER TABLE ... ADD COLUMN IF NOT EXISTS" — the base CREATE TABLE
-    # carries every column (incl. finalized_at), so drop the Postgres-only ALTERs here.
-    store_mod._SCHEMA[:] = [s for s in store_mod._SCHEMA
-                            if not s.strip().upper().startswith("ALTER TABLE")]
+    monkeypatch.setattr(store_mod, "_SQLITE_PATH", Path(tempfile.mkdtemp()) / "finalize-test.db")
     return store_mod.Store()
 
 

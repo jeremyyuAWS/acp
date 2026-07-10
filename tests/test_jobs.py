@@ -1,8 +1,6 @@
 """Durable job-queue tests (ADR 0004) — store methods + JobWorker.
 
-Runs against a fresh SQLite database. The schema's Postgres-only
-`ALTER TABLE ... ADD COLUMN IF NOT EXISTS` migration statements are filtered out
-for SQLite (their columns already exist in the CREATE TABLE for a fresh DB).
+Runs against a fresh SQLite database.
 """
 from __future__ import annotations
 import sys
@@ -16,12 +14,10 @@ sys.path.insert(0, str(ACP / "api"))
 
 
 @pytest.fixture()
-def store():
+def store(monkeypatch):
     import store as store_mod
     tmp = Path(tempfile.mkdtemp()) / "jobs-test.db"
-    store_mod._SQLITE_PATH = tmp
-    store_mod._SCHEMA[:] = [s for s in store_mod._SCHEMA
-                            if not s.strip().upper().startswith("ALTER TABLE")]
+    monkeypatch.setattr(store_mod, "_SQLITE_PATH", tmp)
     return store_mod.Store()
 
 

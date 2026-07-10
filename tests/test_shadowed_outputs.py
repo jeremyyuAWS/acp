@@ -78,9 +78,7 @@ def test_empty_input():
 
 def test_get_scan_hides_the_shadowing_copy_and_its_findings(tmp_path, monkeypatch):
     import store as store_mod
-    store_mod._SQLITE_PATH = tmp_path / "shadow.db"
-    store_mod._SCHEMA[:] = [x for x in store_mod._SCHEMA
-                            if not x.strip().upper().startswith("ALTER TABLE")]
+    monkeypatch.setattr(store_mod, "_SQLITE_PATH", tmp_path / "shadow.db")
     st = store_mod.Store()
     st.init_scan_run("s1", "drive", total=2, started_at="t0", rubric_name="r", rubric_hash="h")
 

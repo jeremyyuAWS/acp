@@ -14,11 +14,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
 
 @pytest.fixture()
-def st():
+def st(monkeypatch):
     import store as store_mod
-    store_mod._SQLITE_PATH = Path(tempfile.mkdtemp()) / "hp.db"
-    store_mod._SCHEMA[:] = [x for x in store_mod._SCHEMA
-                            if not x.strip().upper().startswith("ALTER TABLE")]
+    monkeypatch.setattr(store_mod, "_SQLITE_PATH", Path(tempfile.mkdtemp()) / "hp.db")
     s = store_mod.Store()
     s.init_scan_run("s1", "drive", total=1, started_at="t0", rubric_name="r", rubric_hash="h")
     return s

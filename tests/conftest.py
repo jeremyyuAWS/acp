@@ -18,37 +18,59 @@ ACP = Path(__file__).resolve().parent.parent
 os.environ.setdefault("ACP_LOCAL_CORPUS", str(ACP / "test-corpus/oracle"))
 sys.path.insert(0, str(ACP / "api"))
 
-# Columns that exist ONLY as ALTER statements in store._SCHEMA. tests/test_hitl_deferral.py's
-# fixture strips every ALTER out of that shared module-level list *in place*, so any Store
-# built after it runs is missing them. Re-add defensively so DB-backed tests stay
-# order-independent (same posture as tests/test_remediate_review_publish.py's fixture).
-_MIGRATION_DDL = (
-    "ALTER TABLE hitl_queue ADD COLUMN approved_value TEXT",
-    "ALTER TABLE hitl_queue ADD COLUMN proposals TEXT",
-    "ALTER TABLE hitl_queue ADD COLUMN validated INT",
-)
+# store._SQLITE_PATH defaults to <repo>/acp.db and there is no env var for it, so anything
+# that constructs Store() outside a fixture opens the developer's real database. Two do:
+# api/core.py builds `store = Store()` at import, and test modules that `import core` at
+# module level trigger that during collection, before any fixture can run. Repoint the module
+# default once, here, because conftest is imported before every test module — a per-test
+# monkeypatch.setattr then restores to THIS temp path rather than to the real acp.db.
+# Session-scoped and deliberately never restored.
+import store as _store_mod  # noqa: E402 — must follow the sys.path.insert above
+
+_store_mod._SQLITE_PATH = Path(tempfile.mkdtemp()) / "acp-session.db"
+
+_REAL_DB = (ACP / "acp.db").resolve()
+
+
+def _forbid_opening_the_real_db(store_mod):
+    """Turn any Store() opened against <repo>/acp.db into an immediate hard failure.
+
+    The default above already keeps every Store on a temp file, but it is one assignment away
+    from regressing: the old unrestored `store_mod._SQLITE_PATH = ...` in each fixture was what
+    accidentally protected the real database, and restoring that attribute properly re-armed
+    the module default. Checksumming acp.db does NOT catch this — Store.__init__ runs
+    init_schema(), which opens the file for write and emits DDL without changing a byte, so a
+    regression stays invisible until something finally writes. Assert on the open itself.
+
+    _SQLiteAdapter is the single seam: store.py builds exactly one, from _SQLITE_PATH.
+    """
+    original = store_mod._SQLiteAdapter.__init__
+
+    def __init__(self, path, *args, **kwargs):
+        if Path(path).resolve() == _REAL_DB:
+            raise RuntimeError(
+                f"a test opened the real database at {_REAL_DB}. Point store._SQLITE_PATH at a "
+                f"temp file (monkeypatch.setattr, as the isolated_store fixture does) — never "
+                f"let a Store() fall through to the module default."
+            )
+        return original(self, path, *args, **kwargs)
+
+    store_mod._SQLiteAdapter.__init__ = __init__
+
+
+_forbid_opening_the_real_db(_store_mod)
 
 
 @pytest.fixture()
-def isolated_store():
-    """A Store backed by its own temp SQLite file.
+def isolated_store(monkeypatch):
+    """A Store backed by its own temp SQLite file, isolated from the other tests' stores.
 
-    store._SQLITE_PATH is hardcoded to <repo>/acp.db — there is no env var for it — so a test
-    that just constructs Store() silently shares one on-disk database with every other test
-    (and with the developer's real data). Point the module at a temp file instead. Never
-    reload the store module to achieve this: reload swaps the module object out from under
-    anything that did `from store import ...`.
+    Never reload the store module to achieve this: reload swaps the module object out from
+    under anything that did `from store import ...`.
     """
     import store as store_mod
-    store_mod._SQLITE_PATH = Path(tempfile.mkdtemp()) / "acp-test.db"
-    st = store_mod.Store()
-    for ddl in _MIGRATION_DDL:
-        with st._db.cursor() as cur:
-            try:
-                st._db.execute(cur, ddl)
-            except Exception:
-                pass   # already present
-    return st
+    monkeypatch.setattr(store_mod, "_SQLITE_PATH", Path(tempfile.mkdtemp()) / "acp-test.db")
+    return store_mod.Store()
 
 
 def pdf_engine_available() -> bool:

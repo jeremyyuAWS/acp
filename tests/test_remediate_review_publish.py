@@ -17,21 +17,11 @@ sys.path.insert(0, str(ACP / "api"))
 
 
 @pytest.fixture()
-def store():
+def store(monkeypatch):
     import store as store_mod
     tmp = Path(tempfile.mkdtemp()) / "rrp-test.db"
-    store_mod._SQLITE_PATH = tmp
-    st = store_mod.Store()
-    # hitl_queue.approved_value lives only in a migration ALTER (not the base CREATE) and
-    # is touched by update_hitl_item. Ensure it defensively so this test is order-
-    # independent: a sibling fixture (test_hitl_deferral) strips every ALTER from the
-    # shared module-level _SCHEMA in place, which would otherwise drop the column here.
-    with st._db.cursor() as cur:
-        try:
-            st._db.execute(cur, "ALTER TABLE hitl_queue ADD COLUMN approved_value TEXT")
-        except Exception:
-            pass   # already present
-    return st
+    monkeypatch.setattr(store_mod, "_SQLITE_PATH", tmp)
+    return store_mod.Store()
 
 
 def _seed_pptx(store, scan_id="s1", file="deck.pptx"):
