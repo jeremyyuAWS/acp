@@ -160,6 +160,14 @@ const scId = (w) => (String(w || '').replace(/^SC_/, '').replace(/_/g, '.').matc
 // (ASR), but a human always finalizes; never silently auto-applied. Kept separate
 // because a media finding wants its own rationale, not the generic format one.
 const MEDIA_SC = new Set(['1.2.1', '1.2.2', '1.2.3', '1.2.5'])
+// RECOMMENDATION POLICY (distinct from technical capability): colour-contrast fixes are
+// deterministic in the engine — so the capability marks them "auto" on docx/xlsx/html,
+// and Assess/FileDrawer count them auto-fixable — but recolouring text/brand colours is a
+// judgement call, so the RECOMMENDED mode routes any contrast finding to human review
+// regardless of format. This layer only shifts the recommended mode; it never contradicts
+// the capability (a contrast finding stays auto-fixable there, it just isn't auto-APPLIED
+// unreviewed). 1.4.3 Contrast (Min) + 1.4.6 Contrast (Enhanced).
+const REVIEW_POLICY_SC = new Set(['1.4.3', '1.4.6'])
 // Which findings a file's remediator can fix WITHOUT a human is answered by the ONE
 // remediation-capability table (capability.js → api/remediation_capability.py), keyed
 // by format — the same source Assess + FileDrawer read, so a SIM recommendation can't
@@ -181,6 +189,8 @@ function recommendFor(f) {
   const scIds = issues.map((x) => scId(x.wcag)).filter(Boolean)
   const hasCritical = issues.some((x) => x.severity === 'CRITICAL')
   const mediaFinding = scIds.some((s) => MEDIA_SC.has(s))
+  // Policy: a contrast finding always gets a human in the loop (see REVIEW_POLICY_SC).
+  const contrastFinding = scIds.some((s) => REVIEW_POLICY_SC.has(s))
   // Escalate when any finding falls outside what THIS format's remediator can fix
   // deterministically (capability "auto") — e.g. a PDF's contrast/structure findings,
   // or any format's alt text (assisted). Format-aware: docx contrast is auto and doesn't
@@ -228,19 +238,19 @@ function recommendFor(f) {
     return { action: 'review', mode: 'assisted', etaMin: eta, manualMin, savingsPct: sav(eta), rationale: `${f.skipped_rules} rule(s) couldn’t be auto-evaluated — a reviewer confirms before this can be certified.` }
   }
 
-  // Escalate to a human when the content is legally frozen, a critical finding sits on
-  // a public high-traffic page, OR the format has findings its deterministic remediator
-  // can't touch (formatBlocksAuto — now capability-driven, so it covers both the old
-  // "contrast/link needs judgement" and "format can't fix this" cases, per format).
-  // Everything else is mechanical and safe to auto-remediate + re-validate.
-  const escalate = mediaFinding || legalHold || (hasCritical && publicDoc) || formatBlocksAuto
+  // Escalate to a human when a contrast fix wants confirmation (policy), the content is
+  // legally frozen, a critical finding sits on a public high-traffic page, OR the format
+  // has findings its deterministic remediator can't touch (formatBlocksAuto — capability-
+  // driven, per format). Everything else is mechanical and safe to auto-remediate.
+  const escalate = mediaFinding || contrastFinding || legalHold || (hasCritical && publicDoc) || formatBlocksAuto
   if (!escalate) {
     const eta = Math.max(1, Math.round(n * (f.type === 'pdf' ? 1.6 : 1.0)))
-    return { action: 'auto', mode: 'auto', etaMin: eta, manualMin, savingsPct: sav(eta), rationale: `All ${n} finding${n === 1 ? '' : 's'} are mechanical (headings, language, titles, contrast) — fixed automatically and re-validated. No human needed.` }
+    return { action: 'auto', mode: 'auto', etaMin: eta, manualMin, savingsPct: sav(eta), rationale: `All ${n} finding${n === 1 ? '' : 's'} are mechanical (headings, titles, language, structure) — fixed automatically and re-validated. No human needed.` }
   }
   const eta = issues.reduce((a, x) => a + (ASSIST_MIN[x.severity] || 5), 0) + 6
   const fmt = String(f.type || 'file').toUpperCase()
   const reason = mediaFinding ? 'Captions / audio description are AI-drafted, then finalized by a human'
+    : contrastFinding ? 'A colour-contrast fix is deterministic, but a human confirms the recoloured text still reads as intended'
     : legalHold ? 'Legal-hold content is never auto-edited'
     : formatBlocksAuto ? `Only ${autoCount} of ${n} finding${n === 1 ? '' : 's'} are mechanically fixable in a ${fmt} (e.g. language, title); the rest (alt text, contrast where unsupported) need a human`
     : 'A critical finding on a public, high-traffic page'

@@ -44,12 +44,16 @@ describe('recommendFor — remediation mode', () => {
     expect(r.mode).toBe('auto')
   })
 
-  it('is format-aware about contrast: auto on docx (deterministic recolour), human on pptx', () => {
-    // docx contrast is a deterministic, engine-verified fix -> no human needed.
-    expect(recommendFor(mk('docx', ['1.4.3 Contrast (Minimum)', '2.4.2 Page Titled'])).mode).toBe('auto')
-    // pptx contrast has no verified remediator -> routes to a human.
-    const p = recommendFor(mk('pptx', ['1.4.3 Contrast (Minimum)', '2.4.2 Page Titled']))
-    expect(p.mode).toBe('assisted')
+  it('routes contrast to human review in the RECOMMENDATION on every format (policy)', () => {
+    // Contrast is technically auto-fixable on docx (the capability says so, and Assess /
+    // FileDrawer count it), but recolouring is a judgement call, so the recommended MODE
+    // routes a human in regardless of format — docx (capability: auto) and pptx (human) alike.
+    const d = recommendFor(mk('docx', ['1.4.3 Contrast (Minimum)', '2.4.2 Page Titled']))
+    expect(d.mode).toBe('assisted')
+    expect(d.rationale).toMatch(/contrast/i)
+    expect(recommendFor(mk('pptx', ['1.4.3 Contrast (Minimum)', '2.4.2 Page Titled'])).mode).toBe('assisted')
+    // A file with only non-contrast mechanical fixes is still fully automatic.
+    expect(recommendFor(mk('docx', ['2.4.2 Page Titled', '1.3.1 Info and Relationships'])).mode).toBe('auto')
   })
 
   it('still recognizes the SC_-prefixed sim wcag format', () => {
