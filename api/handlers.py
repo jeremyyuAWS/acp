@@ -331,6 +331,24 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
         pass
 
 
+def _propose_form_fields(scan_id: str, filename: str, file_bytes: bytes, ai_enabled: bool) -> None:
+    """AI-assisted labels for unlabeled docx content-control form fields (WCAG 3.3.2 Labels or
+    Instructions — the SC the scanner flags them under). Self-gates: yields a proposal only for
+    an interactive content control that lacks a title, so it's safe to run on every docx. The
+    label is derived from the field's adjacent prompt text (deterministic) and falls back to the
+    local text model where there's no adjacent prompt — always a one-click value a human
+    approves, never auto-applied. Enqueued only under 3.3.2 (never a fabricated 4.1.2 row).
+    Never fails the remediation job."""
+    try:
+        import io as _io
+        import propose_forms as _pf
+        props = _pf.form_field_proposals(_io.BytesIO(file_bytes), filename=filename,
+                                         ai_enabled=ai_enabled)
+    except Exception:
+        return
+    _enqueue_proposals(scan_id, filename, "3.3.2", "Labels or Instructions", props)
+
+
 def _record_applied_fixes(scan_id: str, filename: str, fixes: list) -> None:
     """Persist the concrete values the AI actually wrote — the alt text and the picture it
     was written for — so "Recent AI fixes" and the certification evidence show what really
@@ -437,6 +455,12 @@ def _remediate_file(payload: dict, job: dict) -> None:
     # here (not after the format branch) means they still surface even when a file has no
     # deterministic fixes and would hit the no-fixes early return below. Both self-gate.
     _propose_text_findings(scan_id, filename, data, core.store.get_ai_enabled())
+
+    # docx form-field label proposals (3.3.2) — prefills the unlabeled-content-control
+    # deferral with one-click labels derived from each field's adjacent prompt text (or the
+    # local model where none). Self-gating like the text proposers; runs on the original bytes.
+    if ext == "docx":
+        _propose_form_fields(scan_id, filename, data, core.store.get_ai_enabled())
 
     # Per-fix before→after evidence for the certification report's "Before → After"
     # section. Each remediator appends {rule_id (SC), before, after, note}; we persist
