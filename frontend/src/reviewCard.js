@@ -82,6 +82,16 @@ export const thumbAlt = (kind, file) => (isPageThumb(kind)
   ? `Rendered page of ${file || 'the document'}, for confirming its reading order`
   : `Image needing alt text in ${file || 'the document'}`)
 
+// An applied-fix receipt ("Recent AI fixes") carries no `kind` — the applied_fixes table has no
+// such column — so the FORMAT decides. A PDF figure's alt text is written from a render of its
+// PAGE (remediate_pdf._fix_pdf_figure_alt); an Office image's is written from the embedded image
+// itself. Calling a page render "the image" would be inaccurate alt text, in the product whose
+// job is to find inaccurate alt text.
+export const appliedFixAlt = (file) => (
+  String(file || '').split('.').pop().toLowerCase() === 'pdf'
+    ? `Rendered page of ${file}, from which the AI wrote alt text`
+    : `Image in ${file || 'the document'} that the AI wrote alt text for`)
+
 // The rationale + the model that produced the draft, so the reviewer sees WHY, not just WHAT.
 export const firstRationale = (item) => proposalsOf(item)[0]?.rationale ?? null
 export const firstSource = (item) => proposalsOf(item)[0]?.source ?? null

@@ -12,7 +12,7 @@ import QueuePanel from './QueuePanel.jsx'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
 import { confidenceForFinding, confClass } from './confidence.js'
 import { metaFor } from './hitlMeta.js'
-import { firstProposed, firstThumb, firstKind, firstRationale, firstSource, thumbAlt, thumbSize } from './reviewCard.js'
+import { firstProposed, firstThumb, firstKind, firstRationale, firstSource, thumbAlt, thumbSize, appliedFixAlt } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 import { measuredReviewTime, REVIEW_TIME_BASIS } from './reviewerTime.js'
 
@@ -270,8 +270,12 @@ function GroupedFixes({ fixGroups, appliedFixes = [], impact }) {
             return (
               <details className="recentfix" key={i}>
                 <summary>
-                  {a.thumb && <img src={a.thumb} alt="" width="36" height="36"
-                                   style={{ borderRadius: 4, objectFit: 'cover', border: '1px solid var(--line)', flex: '0 0 auto', background: '#fff' }} />}
+                  {/* Through ProposalThumb, not a raw <img>: it is the one place that checks a
+                      thumb is really a base64 image data-URL before it reaches an `src`, and it
+                      letterboxes rather than cover-cropping — a PDF's thumb is a whole rendered
+                      page, which a cover-crop would reduce to a slice of margin. */}
+                  <ProposalThumb thumb={a.thumb} size={36} alt={appliedFixAlt(a.file)}
+                                 className="recentfix-thumb" />
                   <span className="fmtchip">{((a.file || '').split('.').pop() || 'DOC').toUpperCase()}</span>
                   <span className="muted" style={{ fontSize: 12 }}>WCAG {sc} · {ITEM_NAME[sc] || 'non-text content'} · {a.file}</span>
                   <span className="fixauto" style={{ marginLeft: 'auto', fontSize: 12 }}>⚡ auto-applied</span>

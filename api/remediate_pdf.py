@@ -33,6 +33,10 @@ _RENDER_SCALE = 150 / 72
 # pixels than the 96px default before the card can scale it up legibly. ~320px of a letter
 # page is ≈40KB of base64 in hitl_queue.proposals — one row per untagged PDF, not per finding.
 _PAGE_THUMB_EDGE = 320
+# An applied-fix thumbnail is a receipt, not evidence a reviewer must read: "Recent AI fixes"
+# renders it at 36px. Matches remediate_office's 96px default so both formats store the same
+# size of row, and keeps a 25-figure document's applied_fixes well under a megabyte.
+_FIX_THUMB_EDGE = 96
 
 
 def _propose_reading_order(pdf, source_path: str, *, ai_enabled: bool, scan_id, file,
@@ -75,7 +79,8 @@ def _propose_reading_order(pdf, source_path: str, *, ai_enabled: bool, scan_id, 
 
 
 def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
-                  scan_id: str | None = None, diffs=None, proposals=None):
+                  scan_id: str | None = None, diffs=None, proposals=None,
+                  applied_fixes=None):
     """Apply deterministic PDF accessibility fixes to a copy of the file.
 
     ai_enabled — when True and a vision (llava-class) Ollama model is reachable, tagged
@@ -141,7 +146,8 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
         # Genuine alt text for tagged figures (WCAG 1.1.1) — vision when AI is on and a
         # vision model is reachable; unfixed figures defer to review via the re-scan.
         alt_applied, alt_deferred = _fix_pdf_figure_alt(
-            pdf, str(path), ai_enabled=ai_enabled, scan_id=scan_id, file=path.name)
+            pdf, str(path), ai_enabled=ai_enabled, scan_id=scan_id, file=path.name,
+            applied_fixes=applied_fixes)
         applied.extend(alt_applied)
         if alt_deferred:
             skipped.append(f"{alt_deferred} figure(s) need human alt text "
@@ -206,10 +212,18 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
 
 
 def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
-                        scan_id: str | None, file: str) -> tuple[list[str], int]:
+                        scan_id: str | None, file: str,
+                        applied_fixes=None) -> tuple[list[str], int]:
     """Set /Alt on tagged /Figure struct elements that lack it, from a vision description
     of the figure's page. Returns (applied messages, deferred_count). Mutates pdf in place;
-    the caller saves. Never raises — a figure we can't caption is just deferred."""
+    the caller saves. Never raises — a figure we can't caption is just deferred.
+
+    `applied_fixes` receives one evidence row per figure captioned, in the SAME shape the
+    office remediator emits — {rule_id, value, source, thumb}. That list is what
+    store.record_applied_fix persists and what "Recent AI fixes" and the certification
+    evidence read. Until now this function only returned prose, so a PDF's AI-written alt
+    text left no row at all: no value, no provenance, no picture. The message strings are
+    still returned for the job log; they are not the record."""
     import pikepdf
     root = pdf.Root
     if "/StructTreeRoot" not in root:
@@ -265,6 +279,20 @@ def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
             deferred += 1
             continue
         budget -= 1
+        if applied_fixes is not None:
+            import proposals as _prop
+            applied_fixes.append({
+                "rule_id": "SC_1_1_1",
+                "value": res["alt"],
+                # Say what the model actually looked at. Office alt text is anchored in the
+                # embedded image; this one is anchored in a render of the whole page, and the
+                # thumbnail below is that page. Claiming "the image" would misdescribe both.
+                "source": f"AI vision model (llava), from a render of page {page_num}",
+                # Small: this is a receipt shown at 36px in "Recent AI fixes", not a review
+                # surface. A budget of 25 figures at the reading-order card's 320px would put
+                # ~1 MB of base64 into applied_fixes for one document.
+                "thumb": _prop.thumb_b64(img, max_edge=_FIX_THUMB_EDGE),
+            })
         applied.append(f"Alt text \"{res['alt'][:60]}\" set on figure (page {page_num}) "
                        "from an AI vision description of the image · 1.1.1")
     return applied, deferred

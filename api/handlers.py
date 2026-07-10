@@ -143,6 +143,26 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
         pass
 
 
+def _record_applied_fixes(scan_id: str, filename: str, fixes: list) -> None:
+    """Persist the concrete values the AI actually wrote — the alt text and the picture it
+    was written for — so "Recent AI fixes" and the certification evidence show what really
+    happened, per format, identically.
+
+    Every remediator emits the same row shape: {rule_id, value, source, thumb}. `seq` orders
+    them within a (scan, file, rule) so several figures on one criterion each keep a row —
+    the table's primary key is (scan_id, file, rule_id, seq).
+
+    Best-effort per row: a telemetry failure must never fail the remediation job, and one bad
+    row must not discard the rest."""
+    for i, fx in enumerate(fixes or []):
+        try:
+            core.store.record_applied_fix(
+                scan_id, filename, fx["rule_id"], fx["value"],
+                source=fx.get("source"), thumb=fx.get("thumb"), seq=i)
+        except Exception:
+            pass
+
+
 def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
                        proposals: list, *, validated: bool = False) -> None:
     """Best-effort: attach AI-proposed (not auto-applied) fix values to the file's HITL row
@@ -229,10 +249,15 @@ def _remediate_file(payload: dict, job: dict) -> None:
             if ext == "pdf":
                 from remediate_pdf import remediate_pdf
                 _pdf_proposals: list = []
+                _applied_fixes: list = []
                 out_path, applied, _skipped = remediate_pdf(
                     src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
-                    diffs=rem_diffs, proposals=_pdf_proposals)
+                    diffs=rem_diffs, proposals=_pdf_proposals, applied_fixes=_applied_fixes)
                 mimetype = "application/pdf"
+                # A PDF's AI-written alt text is evidence exactly like an Office document's.
+                # It used to be dropped: remediate_pdf returned only prose, so no row reached
+                # applied_fixes and the certification record showed the fix had never happened.
+                _record_applied_fixes(scan_id, filename, _applied_fixes)
                 # 1.3.2 reading-order vision proposal (untagged/scanned PDF) — surfaced for
                 # one-click confirm, never auto-applied. Before the no-fixes early return.
                 _enqueue_proposals(scan_id, filename, "1.3.2", "Meaningful Sequence", _pdf_proposals)
@@ -244,16 +269,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
                     src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
                     applied_fixes=_applied_fixes, proposals=_proposals, diffs=rem_diffs)
                 mimetype = _OFFICE_MIME[ext]
-                # Persist the concrete values the AI wrote (vision alt text + image
-                # thumbnail) so "Recent AI fixes" shows what was really applied. Best-effort:
-                # a telemetry failure must never fail the remediation job.
-                for _i, _fx in enumerate(_applied_fixes):
-                    try:
-                        core.store.record_applied_fix(
-                            scan_id, filename, _fx["rule_id"], _fx["value"],
-                            source=_fx.get("source"), thumb=_fx.get("thumb"), seq=_i)
-                    except Exception:
-                        pass
+                _record_applied_fixes(scan_id, filename, _applied_fixes)
                 # AI-proposed (but not auto-applied) alt: an ungrounded vision guess is
                 # surfaced for one-click approval rather than silently written (WCAG 1.1.1
                 # intent stays human). Attach the prefilled drafts to the file's 1.1.1 HITL
