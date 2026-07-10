@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { generateCaptions, blobToBase64, generateAltText, generateInsights } from './aiRemediate.js'
+import { generateCaptions, generateAltText, generateInsights } from './aiRemote.js'
+import { blobToBase64 } from './mediaExtract.js'
 import { Bars } from './charts.jsx'
 import { IDENTITY, PERSONAS, SIM } from './sim.js'
 import Logo from './Logo.jsx'

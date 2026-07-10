@@ -4,7 +4,8 @@ import OfficePreview from './OfficePreview.jsx'
 import { remediateHtml } from './BeforeAfter.jsx'
 import { remediateOffice } from './officeAudit.js'
 import { remediatePdf } from './pdfAudit.js'
-import { generateAltText, allOfficeImages, aiTextFix } from './aiRemediate.js'
+import { generateAltText, aiTextFix } from './aiRemote.js'
+import { allOfficeImages } from './mediaExtract.js'
 
 const isHtml = (n) => /\.html?$/i.test(n || '')
 const isPdf = (n) => /\.pdf$/i.test(n || '')

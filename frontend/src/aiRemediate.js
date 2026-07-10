@@ -10,6 +10,9 @@
 //
 // Therefore NOTHING here may be labelled with a hardcoded model name. Each function returns
 // the model that actually answered, and the UI renders that — see aiModel.js.
+//
+// Reached ONLY through aiRemote.js, which gates this module behind SIM so the Azure build
+// never bundles it. Pure helpers (blobToBase64, allOfficeImages) moved to mediaExtract.js.
 
 // Alt text for an image (WCAG 1.1.1) — Netlify-prototype path only; see the note above.
 export async function generateAltText({ data, mediaType, hint } = {}) {
@@ -73,42 +76,4 @@ export async function generateInsights({ file, score, finalScore, engine, findin
     // provider marks this as a THIRD-PARTY call, so the report never claims otherwise.
     return j?.insight ? { ...j.insight, model: j?.model || null, provider: 'anthropic' } : null
   } catch { return null }
-}
-
-// Read a Blob/File as base64 (no data-URL prefix) for posting to a function.
-export function blobToBase64(blob) {
-  return new Promise((resolve) => {
-    const r = new FileReader()
-    r.onload = () => resolve(String(r.result).replace(/^data:[^;]+;base64,/, ''))
-    r.onerror = () => resolve(null)
-    r.readAsDataURL(blob)
-  })
-}
-
-// Pull the first embedded raster image out of an Office (OOXML) blob → { data(base64), mediaType }.
-export async function firstOfficeImage(blob) {
-  try {
-    const JSZip = (await import('jszip')).default
-    const zip = await JSZip.loadAsync(blob)
-    const name = Object.keys(zip.files).find((n) => /\/media\/[^/]+\.(png|jpe?g|gif|webp)$/i.test(n))
-    if (!name) return null
-    const ext = name.split('.').pop().toLowerCase()
-    const mediaType = /jpe?g/.test(ext) ? 'image/jpeg' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/png'
-    return { data: await zip.file(name).async('base64'), mediaType, name }
-  } catch { return null }
-}
-
-// All embedded raster images in an Office (OOXML) blob → [{ data(base64), mediaType, name(basename) }].
-// Used to generate per-image alt text rather than one description for the whole document.
-export async function allOfficeImages(blob) {
-  try {
-    const JSZip = (await import('jszip')).default
-    const zip = await JSZip.loadAsync(blob)
-    const names = Object.keys(zip.files).filter((n) => /\/media\/[^/]+\.(png|jpe?g|gif|webp)$/i.test(n))
-    return Promise.all(names.map(async (n) => {
-      const ext = n.split('.').pop().toLowerCase()
-      const mediaType = /jpe?g/.test(ext) ? 'image/jpeg' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/png'
-      return { data: await zip.file(n).async('base64'), mediaType, name: n.split('/').pop() }
-    }))
-  } catch { return [] }
 }

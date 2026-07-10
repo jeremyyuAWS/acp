@@ -118,3 +118,47 @@ describe('the two deployments are labelled by what actually answered', () => {
     expect(pdf).toMatch(/No content was sent to a third-party AI service/)
   })
 })
+
+// The Azure build is a compliance product promising document content never leaves the
+// environment. It must not merely avoid CALLING the Netlify AI functions — it must not
+// CONTAIN them. aiRemote.js is the only seam, gated on SIM (inlined at build time), so
+// Rollup drops aiRemediate.js from the graph entirely when VITE_SIM=false.
+// Proven by building both ways: see the `netlify-gate` assertions below plus
+//   VITE_SIM=false npm run build -> no "/.netlify/functions/" in dist
+//   VITE_SIM=true  npm run build -> all five present
+describe('the Azure bundle contains no third-party call site', () => {
+  it('nothing statically imports aiRemediate.js — that would defeat the gate', () => {
+    const importers = readdirSync(here)
+      .filter((f) => /\.(js|jsx)$/.test(f) && f !== 'aiRemote.js' && !f.endsWith('.test.js'))
+      .filter((f) => /^import .*from '\.\/aiRemediate\.js'/m.test(read(f)))
+    expect(importers).toEqual([])
+  })
+
+  it('aiRemote gates every remote call on SIM and imports dynamically', () => {
+    const g = read('aiRemote.js')
+    expect(g).toMatch(/import \{ SIM \} from '\.\/sim\.js'/)
+    expect(g).toMatch(/const remote = \(\) => import\('\.\/aiRemediate\.js'\)/)
+    for (const fn of ['generateAltText', 'aiTextFix', 'generateCaptions', 'generateInsights']) {
+      const body = g.slice(g.indexOf(`export async function ${fn}`))
+      expect(body.slice(0, 200), fn).toMatch(/if \(!SIM\) return null/)
+    }
+  })
+
+  it('the pure helpers carry no network call, so they may be imported freely', () => {
+    const pure = read('mediaExtract.js')
+    expect(pure).not.toMatch(/fetch\(/)
+    expect(pure).not.toMatch(/netlify/)
+  })
+
+  it('ChatWidget declares SIM before using it', () => {
+    // A bare `SIM` identifier compiled fine and would have thrown ReferenceError at runtime.
+    const cw = read('ChatWidget.jsx')
+    if (/[^.\w]SIM\b/.test(cw.replace(/^import .*$/gm, ''))) {
+      expect(cw).toMatch(/import \{ SIM \} from '\.\/sim\.js'/)
+    }
+  })
+
+  it('aiRemediate.js is reached only through the gate', () => {
+    expect(read('aiRemediate.js')).toMatch(/Reached ONLY through aiRemote\.js/)
+  })
+})

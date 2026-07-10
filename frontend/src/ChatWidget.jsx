@@ -3,6 +3,7 @@ import { critLabel } from './FileDrawer.jsx'
 import { statusSegments, severityItems } from './charts.jsx'
 import { remediableCount } from './sim.js'
 import ChatChart from './ChatChart.jsx'
+import { SIM } from './sim.js'
 
 const PLUM = '#7a5c8e'
 
@@ -50,7 +51,11 @@ function chartAnswer(q, files, run, trend, trendDates) {
   return null
 }
 
-const LLM_ENDPOINT = import.meta.env.VITE_ASK_ENDPOINT || (typeof location !== 'undefined' && /netlify\.app$/.test(location.hostname) ? '/.netlify/functions/ask' : null)
+// The /.netlify/functions/ask endpoint POSTs the question + scan summary to Anthropic. It is
+// reachable only on the Netlify demo, and the literal must not ship in the Azure compliance
+// bundle at all — SIM is inlined at build time, so this whole branch folds away there.
+const LLM_ENDPOINT = import.meta.env.VITE_ASK_ENDPOINT
+  || (SIM && typeof location !== 'undefined' && /netlify\.app$/.test(location.hostname) ? '/.netlify/functions/ask' : null)
 const delay = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function matchAnswer(q, files, run) {
