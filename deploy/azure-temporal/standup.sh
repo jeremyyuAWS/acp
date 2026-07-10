@@ -4,7 +4,11 @@
 # (SQL) visibility on Postgres. Idempotent-ish; safe to re-run.
 #
 #   bash standup.sh           # provision
-#   bash standup.sh teardown  # delete the whole resource group
+#   bash standup.sh teardown  # delete the whole resource group (confirms first)
+#
+# Overrides are ACP_TEMPORAL_* — ACP_TEMPORAL_RG / _ACR / _APP / _ACA_ENV. The unprefixed
+# ACP_RG / ACP_ACR / ACP_APP / ACP_ACA_ENV address the PUBLIC DEMO stack (deploy/public/) and are
+# refused here: pointing `teardown` at the demo's resource group would delete the demo.
 #
 # Security posture:
 #   - Temporal frontend ingress is INTERNAL — reachable only from inside the
@@ -27,15 +31,19 @@
 #     via Google's Docker Hub mirror (mirror.gcr.io), pull authenticated from ACR.
 set -euo pipefail
 
+# This script provisions the TEMPORAL stack. deploy/public/{deploy,rollback}.sh operate on the
+# PUBLIC DEMO stack. They are different resource groups, registries and apps, so they must not
+# share environment-variable names -- see the ACP_RG guard below for what that cost.
+# ACP_SUBSCRIPTION is deliberately shared: one subscription holds both stacks.
 SUB_NAME="${ACP_SUBSCRIPTION:-${ACP_SUB:-Azure subscription 1}}"
 LOC="${ACP_LOC:-eastus}"
 RLOCS="${ACP_RLOCS:-eastus2 centralus westus2 southcentralus westus3 canadacentral eastus}"
-RG="${ACP_RG:-rg-acp-temporal}"
+RG="${ACP_TEMPORAL_RG:-rg-acp-temporal}"
 PG="${ACP_PG:-acp-temporal-pg-3a51d3}"
 PGADMIN="${ACP_PGADMIN:-tmpladmin}"
-ENVNAME="${ACP_ACA_ENV:-acp-temporal-env}"   # ACA environment NAME; ACP_ENV is refused below
-APP="${ACP_APP:-temporal-frontend}"
-ACR="${ACP_ACR:-acptemporalacr3a51d3}"
+ENVNAME="${ACP_TEMPORAL_ACA_ENV:-acp-temporal-env}"   # ACA environment NAME (not ACP_ENV)
+APP="${ACP_TEMPORAL_APP:-temporal-frontend}"
+ACR="${ACP_TEMPORAL_ACR:-acptemporalacr3a51d3}"
 IMAGE="${ACP_IMAGE:-temporalio/auto-setup:1.25.2}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ENVFILE="$HERE/.env.local"
@@ -45,12 +53,41 @@ ENVFILE="$HERE/.env.local"
 # `export ACP_ENV=production` -- which this script would have read as an environment NAME, then
 # happily CREATED an empty ACA environment called "production" (env show fails -> env create),
 # while IS_PROD stayed false because ACP_ENV never reaches the container. Refuse the ambiguous
-# name; the ACA environment is now ACP_ACA_ENV.
+# name; the ACA environment is now ACP_TEMPORAL_ACA_ENV.
 if [ -n "${ACP_ENV:-}" ]; then
   cat >&2 <<EOF
 refusing to run: ACP_ENV is set ('$ACP_ENV'), and that name is ambiguous.
-  - to name the Container Apps environment:  export ACP_ACA_ENV=<aca-env-name>
+  - to name the Container Apps environment:  export ACP_TEMPORAL_ACA_ENV=<aca-env-name>
   - to mark an app as production:            export ACP_DEPLOY_ENV=production
+EOF
+  exit 1
+fi
+
+# ACP_RG, ACP_ACR, ACP_APP and ACP_ACA_ENV address the PUBLIC DEMO stack in
+# deploy/public/{deploy,rollback}.sh. This script used to read the same four names for the
+# TEMPORAL stack, with different defaults. The dangerous one was ACP_RG:
+#
+#     export ACP_RG=mdk-accessibility      # entirely reasonable, for a deploy
+#     bash deploy/azure-temporal/standup.sh teardown
+#
+# -> `az group delete -n mdk-accessibility --yes --no-wait`, taking acp-app, the ACR, Postgres,
+# Langfuse, Ollama, Redis and the blob store with it. The teardown confirmation added alongside
+# this catches a human at the prompt; namespacing removes the ambiguity that created it.
+#
+# Refuse rather than silently ignore: a set ACP_RG means the operator believes it is addressing
+# THIS script. Tell them it is not, and name the variable that does.
+_AMBIGUOUS=""
+for _v in ACP_RG ACP_ACR ACP_APP ACP_ACA_ENV; do
+  [ -n "${!_v:-}" ] && _AMBIGUOUS="$_AMBIGUOUS $_v"
+done
+if [ -n "$_AMBIGUOUS" ]; then
+  cat >&2 <<EOF
+refusing to run: these name the PUBLIC DEMO stack, not the Temporal stack:$_AMBIGUOUS
+This script provisions Temporal. Use the ACP_TEMPORAL_* names instead:
+  ACP_RG       -> ACP_TEMPORAL_RG        (resource group;  default rg-acp-temporal)
+  ACP_ACR      -> ACP_TEMPORAL_ACR       (registry;        default acptemporalacr3a51d3)
+  ACP_APP      -> ACP_TEMPORAL_APP       (container app;   default temporal-frontend)
+  ACP_ACA_ENV  -> ACP_TEMPORAL_ACA_ENV   (ACA environment; default acp-temporal-env)
 EOF
   exit 1
 fi
@@ -70,11 +107,11 @@ AZ=(--subscription "$SUB")   # always non-empty; splice into EVERY az call
 echo "subscription: $(az account show "${AZ[@]}" --query name -o tsv 2>/dev/null || echo '?') ($SUB)"
 
 if [[ "${1:-}" == "teardown" ]]; then
-  # `az group delete --yes --no-wait` is irreversible and asks nothing. It also reads RG from
-  # $ACP_RG -- the SAME variable deploy/public/deploy.sh reads, where it defaults to the
-  # PRODUCTION group `mdk-accessibility` (acp-app, the ACR, Postgres, Langfuse, Ollama, Redis,
-  # the blob store). Export ACP_RG for a deploy, run `standup.sh teardown` in that same shell,
-  # and the demo is gone. Nothing automated calls this script, so confirm before destroying.
+  # `az group delete --yes --no-wait` is irreversible and asks nothing. RG now comes from
+  # $ACP_TEMPORAL_RG, and a stray $ACP_RG (the public demo's group) is refused in preflight --
+  # but namespacing only removes ONE way to point this at the wrong group. Typing the wrong
+  # ACP_TEMPORAL_RG still does. Nothing automated calls this script, so confirm before
+  # destroying, and show exactly what is about to be destroyed.
   echo "About to DELETE resource group '$RG' and everything in it:"
   az resource list "${AZ[@]}" -g "$RG" --query "[].name" -o tsv 2>/dev/null | sed 's/^/    - /' || true
   if [ "${ACP_CONFIRM_TEARDOWN:-}" != "$RG" ]; then

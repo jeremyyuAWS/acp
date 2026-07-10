@@ -237,10 +237,11 @@ def test_rollback_fails_closed_when_the_subscription_does_not_resolve(tmp_path, 
 
 # ---------------------------------------------------------------- standup.sh teardown guard
 # `bash standup.sh teardown` runs `az group delete --yes --no-wait`: irreversible, asks nothing.
-# It reads RG from $ACP_RG -- the SAME variable deploy/public/deploy.sh reads, where it defaults
-# to the PRODUCTION group `mdk-accessibility` (acp-app, the ACR, Postgres, Langfuse, Ollama,
-# Redis, the blob store). Export ACP_RG for a deploy, run teardown in that shell, and the demo
-# is gone. These tests run the real script against a stubbed `az` -- nothing is ever deleted.
+# It used to read RG from $ACP_RG -- the SAME variable deploy/public/deploy.sh reads, where it
+# defaults to the PRODUCTION group `mdk-accessibility`. RG now comes from $ACP_TEMPORAL_RG and a
+# stray $ACP_RG is refused outright (tests/test_deploy_env_namespacing.py), but namespacing only
+# removes one way to aim at the wrong group; a mistyped ACP_TEMPORAL_RG still does. Hence the
+# confirmation. These tests run the real script against a stubbed `az` -- nothing is ever deleted.
 
 _STUB_AZ_STANDUP = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$AZ_LOG"
@@ -268,8 +269,16 @@ def stub_standup(tmp_path, monkeypatch):
     return log
 
 
+# standup.sh addresses the Temporal stack through ACP_TEMPORAL_*, and REFUSES to run when a
+# public-demo name (ACP_RG, ACP_ACR, ACP_APP, ACP_ACA_ENV) is exported -- see
+# tests/test_deploy_env_namespacing.py. Drive it by the right variable, and scrub the others from
+# the inherited environment, or these tests exercise the ambiguity guard instead of the
+# confirmation guard and pass for the wrong reason.
+_PUBLIC_NAMES = ("ACP_RG", "ACP_ACR", "ACP_APP", "ACP_ACA_ENV", "ACP_ENV")
+
+
 def _run_standup(env_extra=None):
-    env = dict(os.environ)
+    env = {k: v for k, v in os.environ.items() if k not in _PUBLIC_NAMES}
     env.update(env_extra or {})
     # stdin closed => non-interactive, the shape a stray `bash standup.sh teardown` takes in a
     # script or an agent's shell.
@@ -289,16 +298,23 @@ def test_teardown_refuses_non_interactively_without_confirmation(stub_standup):
 
 @pytest.mark.skipif(not shutil.which("bash"), reason="bash required")
 def test_teardown_refuses_when_confirmation_names_a_different_group(stub_standup):
-    """Confirming `rg-acp-temporal` must not authorise deleting `mdk-accessibility`."""
-    out = _run_standup({"ACP_RG": "mdk-accessibility", "ACP_CONFIRM_TEARDOWN": "rg-acp-temporal"})
+    """Confirming one group must not authorise deleting another.
+
+    Drive the wrong group through ACP_TEMPORAL_RG, not ACP_RG: the latter is refused earlier by
+    the namespacing guard, which would make this pass without ever reaching the confirmation.
+    """
+    out = _run_standup({"ACP_TEMPORAL_RG": "mdk-accessibility",
+                        "ACP_CONFIRM_TEARDOWN": "rg-acp-temporal"})
     assert out.returncode == 1
+    assert "refusing to tear down" in out.stderr, out.stderr   # the CONFIRMATION guard, not the other
     assert "group delete" not in stub_standup.read_text()
 
 
 @pytest.mark.skipif(not shutil.which("bash"), reason="bash required")
 def test_teardown_proceeds_when_confirmation_matches_and_is_scoped(stub_standup):
     """With an explicit, matching confirmation it proceeds -- scoped to the resolved subscription."""
-    out = _run_standup({"ACP_RG": "rg-acp-temporal", "ACP_CONFIRM_TEARDOWN": "rg-acp-temporal"})
+    out = _run_standup({"ACP_TEMPORAL_RG": "rg-acp-temporal",
+                        "ACP_CONFIRM_TEARDOWN": "rg-acp-temporal"})
     assert out.returncode == 0, out.stderr
     deletes = [c for c in stub_standup.read_text().splitlines() if c.startswith("group delete")]
     assert len(deletes) == 1, f"expected exactly one group delete, got {deletes}"
@@ -308,5 +324,6 @@ def test_teardown_proceeds_when_confirmation_matches_and_is_scoped(stub_standup)
 
 @pytest.mark.skipif(not shutil.which("bash"), reason="bash required")
 def test_standup_never_mutates_the_global_default(stub_standup):
-    _run_standup({"ACP_RG": "rg-acp-temporal", "ACP_CONFIRM_TEARDOWN": "rg-acp-temporal"})
+    _run_standup({"ACP_TEMPORAL_RG": "rg-acp-temporal",
+                  "ACP_CONFIRM_TEARDOWN": "rg-acp-temporal"})
     assert "account set" not in stub_standup.read_text()
