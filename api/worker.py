@@ -31,6 +31,48 @@ class FatalJobError(Exception):
     """Raise from a handler to dead-letter the job immediately (no retry)."""
 
 
+# Shown to the person, not to the log. The queue panel renders `last_error` verbatim, so a
+# dead-letter reason has to say what happened and what to do — never quote a library's
+# internals. It replaced: "The credentials do not contain the necessary fields need to refresh
+# the access token. You must specify refresh_token, token_uri, client_id, and client_secret."
+DRIVE_SESSION_EXPIRED = ("Your Google Drive session expired while this job was queued. "
+                         "Reconnect Drive in Settings → Integrations, then re-run the scan.")
+
+
+def drive_session_expired(exc: BaseException) -> str | None:
+    """The human reason when `exc` means "this job's Drive token is dead", else None.
+
+    A Drive token cannot come back to life inside a job: the GIS implicit flow issues an
+    access token with no refresh_token, so every retry re-sends the same dead credential.
+    Retrying is guaranteed waste — five attempts with backoff, then a dead-letter quoting
+    google-auth at the user. Both shapes are terminal:
+
+      * RefreshError — google-auth tried to refresh a credential that cannot be refreshed.
+        After the `expiry` fix this should be unreachable from our own call sites; it stays
+        classified because any future caller that sets an expiry would resurrect it.
+      * HttpError 401 — Drive itself rejected the token. This is the real path now.
+
+    Deliberately NOT terminal: 403 (rate limit / quota — retry works), 5xx, timeouts. And an
+    unrecognised error returns None, so it keeps its retries. Misclassifying a transient
+    failure as terminal loses work; the default must be to retry."""
+    try:
+        from google.auth.exceptions import RefreshError
+        if isinstance(exc, RefreshError):
+            return DRIVE_SESSION_EXPIRED
+    except ImportError:                      # google-auth absent (unit tests, no-Drive deploy)
+        pass
+    try:
+        from googleapiclient.errors import HttpError
+        if isinstance(exc, HttpError) and getattr(exc, "status_code", None) == 401:
+            return DRIVE_SESSION_EXPIRED
+        # Older google-api-python-client exposes the code only on the response.
+        if isinstance(exc, HttpError) and getattr(getattr(exc, "resp", None), "status", None) == 401:
+            return DRIVE_SESSION_EXPIRED
+    except ImportError:
+        pass
+    return None
+
+
 def handler(job_type: str):
     """Decorator registering a handler for a job type."""
     def _wrap(fn):
@@ -78,9 +120,16 @@ class JobWorker:
             self.store.complete_job(job["id"])
         except FatalJobError as e:
             self.store.fail_job(job["id"], f"fatal: {e}", force_dead=True)
-        except Exception as e:  # retryable
-            self.store.fail_job(job["id"], str(e),
-                                backoff_seconds=_backoff_seconds(job["attempts"]))
+        except Exception as e:
+            # An expired Drive token is terminal: the same dead credential is re-sent on every
+            # retry, so the only thing backoff buys is four more failures and a confusing
+            # dead-letter. Dead-letter it once, in words the reviewer can act on.
+            expired = drive_session_expired(e)
+            if expired:
+                self.store.fail_job(job["id"], expired, force_dead=True)
+            else:  # retryable
+                self.store.fail_job(job["id"], str(e),
+                                    backoff_seconds=_backoff_seconds(job["attempts"]))
         finally:
             stop_hb.set()
         return True

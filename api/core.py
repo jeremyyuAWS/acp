@@ -181,14 +181,14 @@ def drive_service(request=None):
     from googleapiclient.discovery import build
     token = request.headers.get("x-drive-token") if request is not None else None
     if token:
-        import datetime as _dt
         from google.oauth2.credentials import Credentials
+        # GIS tokens are short-lived (1 h) and carry no refresh_token, so leave `expiry` None:
+        # google-auth reports `expired` False for a credential without an expiry and never
+        # attempts a refresh. Drive answers 401 if the token really has expired — the honest
+        # signal. Setting `expiry = now + 1h` (as this did, while claiming the opposite) invited
+        # google-auth to refresh the instant that hour lapsed, raising "credentials do not
+        # contain the necessary fields need to refresh the access token".
         creds = Credentials(token=token, scopes=DRIVE_SCOPES)
-        # GIS tokens are short-lived (1 h) and have no refresh_token. Set an expiry
-        # so the client never attempts refresh; Drive returns 401 if it actually
-        # expired. google-auth stores expiry as NAIVE UTC and compares it to a
-        # naive utcnow() — an aware value raises an offset-naive/aware TypeError.
-        creds.expiry = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None) + _dt.timedelta(hours=1)
     elif GOOGLE_CLIENT_ID:
         raise HTTPException(401, "sign in with Google to connect your Drive")
     else:

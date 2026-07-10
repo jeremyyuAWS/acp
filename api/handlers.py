@@ -22,14 +22,24 @@ from remediate import remediate_html
 
 
 def _drive_client(token: str):
-    """Drive client for a worker (no request). GIS token → far-future expiry so the
-    client never attempts the (impossible) refresh."""
-    import datetime as _dt
+    """Drive client for a worker (no request), from a bare GIS access token.
+
+    NO expiry is set, and that is the point. google-auth attempts a refresh only when
+    `credentials.expired` is True, and `expired` is False whenever `expiry` is None — so a
+    credential with no expiry is sent as-is, forever. This used to set `expiry = now + 1h`
+    under a comment claiming it PREVENTED the refresh; it caused it. Once that hour passed
+    (a job queued behind a backlog, a long remediation), `expired` flipped True, google-auth
+    called refresh(), and a GIS token has no refresh_token/client_id/client_secret — so the
+    job died on "The credentials do not contain the necessary fields need to refresh the
+    access token", five retries deep, against a failure nothing could fix.
+
+    A GIS implicit-flow token genuinely cannot be refreshed. When it has really expired Drive
+    answers 401, and worker.drive_session_expired turns that into one actionable dead-letter.
+    Outliving the token needs a refresh token (the auth-code flow) — an auth change that wants
+    an ADR, not a fabricated expiry."""
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
     creds = Credentials(token=token, scopes=core.DRIVE_SCOPES)
-    # NAIVE UTC: google-auth compares expiry to a naive utcnow() (aware → TypeError).
-    creds.expiry = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None) + _dt.timedelta(hours=1)
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 

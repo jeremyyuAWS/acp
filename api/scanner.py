@@ -77,15 +77,17 @@ def _drive_service(drive_token: str | None = None):
     scans that user's Drive; with no token it falls back to ADC (the demo identity)."""
     from googleapiclient.discovery import build
     if drive_token:
-        import datetime as _dt
         from google.oauth2.credentials import Credentials
+        # GIS tokens are short-lived and carry no refresh_token, so leave `expiry` None: a
+        # credential without an expiry reports `expired` False and google-auth never tries to
+        # refresh it. Drive returns 401 on its own if the token really expired.
+        #
+        # Setting `expiry = now + 1h` did the opposite of what its comment claimed. The hour is
+        # measured from when this client is BUILT, not from when Google issued the token, so a
+        # scan queued behind a backlog crossed it, google-auth called refresh(), and the job
+        # died on "credentials do not contain the necessary fields need to refresh the access
+        # token" — five retries deep. See worker.drive_session_expired.
         creds = Credentials(token=drive_token, scopes=SCOPES)
-        # GIS tokens are short-lived and carry no refresh_token. Set an expiry so
-        # the client library never tries to refresh; Drive returns 401 on its own
-        # if the token actually expired. NOTE: google-auth stores expiry as a
-        # NAIVE UTC datetime and compares it against a naive utcnow() — an aware
-        # value raises "can't compare offset-naive and offset-aware datetimes".
-        creds.expiry = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None) + _dt.timedelta(hours=1)
     else:
         import google.auth
         creds, _ = google.auth.default(scopes=SCOPES)
