@@ -244,6 +244,12 @@ _inherit_env() {  # $1 = var name → echoes "NAME=value" if currently set, else
 WORKERS_ENV="${ACP_WORKERS:+ACP_WORKERS=$ACP_WORKERS}"; [ -z "$WORKERS_ENV" ] && WORKERS_ENV="$(_inherit_env ACP_WORKERS)"
 EMAILS_ENV="${ACP_ALLOWED_EMAILS:+ACP_ALLOWED_EMAILS=$ACP_ALLOWED_EMAILS}"; [ -z "$EMAILS_ENV" ] && EMAILS_ENV="$(_inherit_env ACP_ALLOWED_EMAILS)"
 BLOB_ENV="ACP_BLOB_ACCOUNT=$BLOB_ACCOUNT"
+# This script only ever deploys the public demo, so the app it produces IS production.
+# Stamp it so core.IS_PROD is true, which refuses the X-E2E-Key / X-Demo-Key bypasses even
+# if someone later sets ACP_ENABLE_TEST_BYPASS on the app. Deliberately NOT named ACP_ENV:
+# that name is already taken above for the Container Apps environment name (ENVNAME).
+DEPLOY_ENV_ENV="ACP_DEPLOY_ENV=production"
+echo "   deploy env = production (test/demo auth bypasses refused)"
 echo "   workers = ${ACP_WORKERS:-${WORKERS_ENV:+inherited}}${WORKERS_ENV:+}"
 echo "   allowed emails = ${ACP_ALLOWED_EMAILS:-${EMAILS_ENV:+inherited}}"
 echo "   blob account = $BLOB_ACCOUNT"
@@ -253,14 +259,14 @@ if az containerapp show -g "$RG" -n "$APP" -o none 2>/dev/null; then
   _retry az containerapp registry set -g "$RG" -n "$APP" \
     --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
   _retry az containerapp update -g "$RG" -n "$APP" --image "$ACRSERVER/$IMAGE" \
-    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV -o none
+    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV -o none
 else
   az containerapp create -g "$RG" -n "$APP" --environment "$ENVNAME" \
     --image "$ACRSERVER/$IMAGE" \
     --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
     --target-port 8077 --ingress external \
     --secrets "${SECRETS[@]}" \
-    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV \
+    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV \
     --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 1 -o none
 fi
 

@@ -39,7 +39,12 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // An item carrying a proposal always takes a value, even if its SC isn't a classic VALUE_FIX
   // (e.g. a 1.3.3 sensory rewrite) — otherwise the reviewer sees a proposal they cannot accept.
   const editable = card.track.track !== 'auto' && (isValueFix(card.sc) || !!card.proposal)
-  const primaryLabel = card.track.action                                    // "Approve & Apply" | "Review & edit"
+  // "Approve & Apply" is only truthful when approval genuinely resolves the criterion. For a
+  // value-fix finding nothing is applied — approving records the value as evidence and leaves
+  // the document untouched — so the button must not say Apply. See card.certifiesOnApprove.
+  const primaryLabel = card.certifiesOnApprove ? card.track.action : 'Approve — record sign-off'
+  // One text box cannot describe N different images. Say so rather than imply it can.
+  const manyInstances = card.findingCount > 1 && isValueFix(card.sc)
 
   const decide = async (status) => {
     if (busy) return
@@ -134,9 +139,35 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
             </div>
           )}
 
-          <p className="evcard-impact muted" style={{ fontSize: 12 }}>
-            Compliance: <span className="conf conf-low">{card.impact.before}</span> → <span className="conf conf-high">{card.impact.after}</span> after approval
-          </p>
+          {/* What approval actually does. A judgement sign-off resolves the criterion; a
+              value-fix approval only records evidence — ACP has no write-back yet, so the
+              criterion keeps failing until the file is fixed and re-scanned. */}
+          {card.certifiesOnApprove ? (
+            <p className="evcard-impact muted" style={{ fontSize: 12 }}>
+              Compliance: <span className="conf conf-low">{card.impact.before}</span> → <span className="conf conf-high">{card.impact.after}</span> after approval
+            </p>
+          ) : (
+            <div className="evcard-todo">
+              <b>What you need to do</b>
+              {manyInstances ? (
+                <p>
+                  These <b>{card.findingCount} images</b> each need their own description — one sentence
+                  cannot describe them all. Open the file, write alt text on each image, then
+                  <b> ✋ I’ll fix it</b> to re-scan and confirm.
+                </p>
+              ) : (
+                <p>
+                  Write the text a screen reader should announce, then approve it. ACP records
+                  your value as compliance evidence.
+                </p>
+              )}
+              <p className="muted">
+                Approving records your sign-off — it does <b>not</b> write the value into the document,
+                so <span className="conf conf-low">{card.sc}</span> keeps failing until the file is
+                fixed and re-scanned.
+              </p>
+            </div>
+          )}
 
           <input className="rc-note" placeholder="Reviewer note (optional)" value={note}
                  onChange={(e) => setNote(e.target.value)} />
