@@ -344,6 +344,47 @@ def propose_sensory_rewrite(text: str, *, filename: str = "", ai_enabled: bool =
     return out
 
 
+# ── 1.4.5 Images of Text (OCR the text back out — reviewer pastes it as real text) ─
+def propose_images_of_text(path, ext: str) -> list[dict]:
+    """One WCAG 1.4.5 proposal per embedded image that bakes in substantial text: the text is
+    OCR'd out and surfaced so the reviewer can paste it back as real, selectable text (or
+    confirm the picture is decorative). NEVER auto-applied — swapping an image for live text is
+    an authoring decision, and OCR misreads — so this is a Medium-confidence card, not a silent
+    fix. Deterministic (tesseract, api/ocr.py), no model. Returns [] when OCR is
+    unavailable/disabled or nothing text-bearing is found, so it is safe to run on every
+    remediated file. The detection floor is exactly ocr.images_of_text's (`_MIN_WORDS` real
+    words above the `_MIN_PIXELS` size floor), so a proposal appears for precisely the images
+    that fail 1.4.5 — the scan finding and the fix card never disagree."""
+    import ocr as _ocr
+    if not _ocr.is_available():
+        return []
+    try:
+        images = _ocr._embedded_images(path, (ext or "").lower())
+    except Exception:
+        return []
+    out: list[dict] = []
+    for i, img in enumerate(images):
+        try:
+            if _ocr._ocr_words(img, _ocr._MIN_PIXELS) < _ocr._MIN_WORDS:
+                continue                       # icon / logo / short caption — not an image of text
+            text = " ".join(_ocr.ocr_text(img).split())
+            if not text:
+                continue                       # OCR gave nothing usable — no fabricated value
+            out.append(proposal(
+                locator=f"image {i + 1}",
+                before="text baked into an image — assistive technology cannot read it",
+                proposed_value=text,
+                rationale="WCAG 1.4.5: text presented as an image should be real, selectable "
+                          "text. Paste this back into the document (or mark the image "
+                          "decorative if the text is duplicated nearby).",
+                source="OCR (tesseract) — human confirmation required",
+                thumb=thumb_b64(img),
+            ))
+        except Exception:
+            continue                           # one bad image never sinks the rest
+    return out
+
+
 # ── 1.3.1 / 2.4.6 Heading level inference (deterministic — from font-size rank) ─
 def infer_heading_levels(sizes) -> dict:
     """Map a set of pseudo-heading font sizes → heading levels by descending rank: the

@@ -113,11 +113,12 @@ def _verify_residual_scs(fixed_bytes: bytes, filename: str):
 
 
 def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_enabled: bool) -> None:
-    """Format-agnostic text proposers (WCAG 3.1.2 language-of-parts + 1.3.3 sensory rewrite).
-    Both self-gate: they yield proposals ONLY when the document actually mixes languages /
-    carries a sensory instruction, so this is safe to run on every remediated file. Runs on
-    the extracted text (same source as the scan-time detectors), enqueues prefilled one-click
-    values onto the file's HITL rows, and never fails the remediation job."""
+    """Format-agnostic proposers (WCAG 3.1.2 language-of-parts, 1.3.3 sensory rewrite, and
+    1.4.5 images-of-text). All self-gate: they yield proposals ONLY when the document actually
+    mixes languages / carries a sensory instruction / bakes text into an image, so this is safe
+    to run on every remediated file. The text proposers run on the extracted text (same source
+    as the scan-time detectors); the 1.4.5 proposer OCRs the embedded images off the temp path.
+    Enqueues prefilled one-click values onto the file's HITL rows, and never fails the job."""
     try:
         import tempfile
         from pathlib import Path as _P
@@ -127,18 +128,25 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
             p = _P(_d) / filename
             p.write_bytes(file_bytes)
             text = _pii.extract_text(p)
+            # 1.4.5 needs the file on disk (it OCRs embedded images), so compute it here while
+            # the temp path is alive — and independently of `text`, since an image-only doc
+            # carries no extractable text yet still fails 1.4.5.
+            image_text = _prop.propose_images_of_text(p, p.suffix)
     except Exception:
         return
-    if not text:
-        return
+    if text:
+        try:
+            _enqueue_proposals(scan_id, filename, "3.1.2", "Language of Parts",
+                               _prop.propose_language_parts(text))
+        except Exception:
+            pass
+        try:
+            _enqueue_proposals(scan_id, filename, "1.3.3", "Sensory Characteristics",
+                               _prop.propose_sensory_rewrite(text, filename=filename, ai_enabled=ai_enabled))
+        except Exception:
+            pass
     try:
-        _enqueue_proposals(scan_id, filename, "3.1.2", "Language of Parts",
-                           _prop.propose_language_parts(text))
-    except Exception:
-        pass
-    try:
-        _enqueue_proposals(scan_id, filename, "1.3.3", "Sensory Characteristics",
-                           _prop.propose_sensory_rewrite(text, filename=filename, ai_enabled=ai_enabled))
+        _enqueue_proposals(scan_id, filename, "1.4.5", "Images of Text", image_text)
     except Exception:
         pass
 
