@@ -35,9 +35,18 @@ def _ordinal_block() -> str:
 def run(build_time: str, revision_times: str) -> str:
     """Execute the real block with `az` replaced by a stub printing `revision_times`."""
     block = _ordinal_block()
+    # The lifted block calls `az containerapp revision list "${AZ[@]}" ...`. AZ is the
+    # subscription-scope array that deploy.sh's preflight builds (see
+    # tests/test_deploy_subscription_scope.py); the block reads it just as it reads APP and RG,
+    # so the harness must supply it too or `set -u` aborts on an unbound variable.
+    #
+    # It must be NON-EMPTY: under `set -u`, bash 3.2 (still /bin/bash on macOS, and PATH below
+    # pins us to it) treats "${EMPTY[@]}" as unbound. deploy.sh's preflight likewise guarantees
+    # two elements or exits, so a non-empty stub mirrors production. The `az` stub ignores args.
     script = f"""
 set -euo pipefail
 APP=acp-app; RG=rg
+AZ=(--subscription 00000000-0000-0000-0000-000000000000)
 az() {{ printf '%s' "$FAKE_REVS"; }}
 BUILD_TIME="{build_time}"
 {block}
