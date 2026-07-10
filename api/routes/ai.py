@@ -3,11 +3,32 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 import core
 
 router = APIRouter()
+
+
+def _image_for_locator(request: Request, scan_id: str, file: str, locator: str) -> bytes | None:
+    """The embedded image a 1.1.1 review item is asking about, fetched at REVIEW time.
+
+    Without this the vision model can never be reached from the inbox: suggest_fix only
+    consults it when handed image bytes, so 1.1.1 always fell through to the text model's
+    fill-in template — a guess from the filename, never a look at the picture.
+
+    Reuses the preview's source-bytes ladder (local corpus → Drive original → remediated blob),
+    so it needs no new credentials. Best-effort by construction: every failure returns None and
+    the caller degrades to the template it would have produced anyway."""
+    if not locator:
+        return None
+    try:
+        from remediate_office import image_bytes_for_locator
+        from routes.scans import _owner, _source_bytes_for_render
+        data = _source_bytes_for_render(request, scan_id, file, _owner(request))
+        return image_bytes_for_locator(data, locator) if data else None
+    except Exception:
+        return None
 
 
 @router.get("/ai/explain")
@@ -49,10 +70,15 @@ def ai_explain(scan_id: str = Query(...), file: str = Query(...), rule_id: str =
 
 
 @router.get("/ai/suggest")
-def ai_suggest(scan_id: str = Query(...), file: str = Query(...), rule_id: str = Query(...)):
+def ai_suggest(request: Request, scan_id: str = Query(...), file: str = Query(...),
+               rule_id: str = Query(...), locator: str | None = Query(None)):
     """Draft a concrete, human-approvable fix value (alt text / link text / title) for a
     semantic finding. Same AI gates as /ai/explain; 503 when Ollama is unavailable. The
-    reviewer accepts or edits the draft in the HITL queue — it is never auto-applied."""
+    reviewer accepts or edits the draft in the HITL queue — it is never auto-applied.
+
+    `locator` ('part#rId', from hitl_queue.evidence) names WHICH embedded image to describe.
+    With it, 1.1.1 reaches the vision model and returns genuine image-derived alt text; without
+    it the text model can only emit a fill-in template, because it cannot see."""
     if not core.store.get_ai_enabled():
         raise HTTPException(403, "AI is disabled (deterministic-only mode) — findings route to human review")
     import os
@@ -70,6 +96,7 @@ def ai_suggest(scan_id: str = Query(...), file: str = Query(...), rule_id: str =
         level=trace["level"],
         filename=file,
         detail=trace.get("detail", "") or "",
+        image_bytes=_image_for_locator(request, scan_id, file, locator) if rule_id == "1.1.1" else None,
     )
     if result is None:
         raise HTTPException(503, "AI suggestion unavailable — is Ollama running?")

@@ -66,6 +66,14 @@ export const firstProposed = (item) => proposalsOf(item)[0]?.proposed_value ?? n
 // PDF-only), so for a deck this is the only picture a reviewer can be shown.
 export const firstThumb = (item) => proposalsOf(item)[0]?.thumb ?? null
 
+// The images this row asks a human to describe (hitl_queue.evidence): [{locator, thumb}, …],
+// one per deferred image, captured at remediation time whether or not the vision model ran.
+// NOT proposals — there is no value to approve — so they never reach proposalMeta or
+// confidence.js. A 1.1.1 row routinely carries nineteen of these, which is why the card shows
+// a STRIP: a single thumbnail beside "19 findings" would tell the reviewer they are describing
+// that one image.
+export const evidenceOf = (item) => (Array.isArray(item?.evidence) ? item.evidence : [])
+
 // What the proposal is about, which decides how its thumbnail is sized and described:
 // 'decorative' (an image), 'reading-order' (a whole page), or absent (an image).
 export const firstKind = (item) => proposalsOf(item)[0]?.kind ?? null
@@ -115,6 +123,8 @@ export function buildEvidenceCard(item, diffs = []) {
     id: item?.id,
     scanId: item?.scan_id,
     thumbKind: firstKind(item),
+    // The images awaiting a description. Separate from `thumb`/`proposal` on purpose.
+    evidence: evidenceOf(item),
     file: item?.file,
     sc,
     fmt,

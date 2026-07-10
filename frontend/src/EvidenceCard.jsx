@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { getFileRemediationDiffs, suggestFix } from './api.js'
 import { confClass } from './confidence.js'
 import Thumbnail from './Thumbnail.jsx'
-import { buildEvidenceCard, firstProposed, isValueFix, reviewTelemetry, thumbAlt, thumbSize } from './reviewCard.js'
+import { buildEvidenceCard, evidenceOf, firstProposed, isValueFix, reviewTelemetry, thumbAlt, thumbSize } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 
 // Evidence Card (PRD v2) — a PR-style review of ONE accessibility issue. The human APPROVES
@@ -24,6 +24,11 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   const [actError, setActError] = useState(null)
   const [drafting, setDrafting] = useState(false)
   const [draftMsg, setDraftMsg] = useState(null)   // { kind: 'ai' | 'template' | 'error', text }
+  // Which deferred image the reviewer is looking at. The vision model describes ONE image, so
+  // a row carrying nineteen must say which — defaulting to the first silently captions the
+  // wrong picture and the reviewer approves alt text for an image they never saw.
+  const evidence = evidenceOf(item)
+  const [picked, setPicked] = useState(0)
   const shownAt = useRef(Date.now())               // reviewer-time metric starts when the card mounts
   // The value the AI actually proposed — reviewTelemetry diffs the human's final value against
   // this to derive the `edited` calibration signal, so it must be the proposal, not the draft.
@@ -44,16 +49,19 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
     if (!item?.scan_id || !item?.file || !item?.rule_id) return
     setDrafting(true); setDraftMsg(null)
     try {
-      const r = await suggestFix(item.scan_id, item.file, item.rule_id)
+      // Which image to describe. Without this the endpoint has no image at all and 1.1.1 can
+      // only ever come back as a fill-in template — the model never sees a pixel.
+      const r = await suggestFix(item.scan_id, item.file, item.rule_id, evidence[picked]?.locator)
       const s = (r?.suggestion || '').trim()
       if (!s) { setDraftMsg({ kind: 'error', text: 'The model returned nothing — write the value yourself.' }); return }
       setValue(s)
       if (r.is_template) {
-        // A fill-in-the-blank template, NOT a description of this image (api/ai.py returns
-        // is_template for 1.1.1 when no vision model produced image-derived alt text). It is
-        // deliberately NOT recorded as aiDraft: approving it verbatim must count as
-        // human-authored, and reviewTelemetry must not log a template as an accepted AI value.
-        setDraftMsg({ kind: 'template', text: 'Template only — no vision model described this image. Rewrite it before approving.' })
+        // A fill-in-the-blank template, NOT a description of this image. It is deliberately
+        // NOT recorded as aiDraft: approving it verbatim must count as human-authored, and
+        // reviewTelemetry must not log a template as an accepted AI value. Say WHY it is a
+        // template — "no vision model described this image" read as "llava looked and failed"
+        // even when no vision model was ever consulted.
+        setDraftMsg({ kind: 'template', text: r.reason || 'Template only — no vision model was available to look at this image. Rewrite it before approving.' })
       } else {
         aiDraft.current = s   // a genuine AI value: `edited` now means the human changed it
         setDraftMsg({ kind: 'ai', text: `AI draft${r.model ? ` · ${r.model}` : ''} — edit if it misses the meaning.` })
@@ -128,6 +136,33 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
           : (card.scanId && card.file && <Thumbnail scanId={card.scanId} file={card.file} className="evcard-thumb" />)}
         <div className="evcard-main" style={{ flex: 1, minWidth: 0 }}>
           <p className="evcard-problem">{card.problem}</p>
+
+          {/* The images this row is asking for descriptions of. One row can carry nineteen, so
+              show them all: a lone thumbnail beside "19 findings" would say "describe this one".
+              Selecting one is what "Draft with AI" describes — the model can only look at a
+              single image, and silently picking the first would caption the wrong picture. */}
+          {evidence.length > 0 && (
+            <div className="evcard-evidence">
+              <span className="muted evcard-evidence-hd">
+                {evidence.length === 1
+                  ? 'The image needing a description'
+                  : `${evidence.length} images need a description — pick one to draft or describe`}
+              </span>
+              <ul className="evcard-evidence-strip">
+                {evidence.map((ev, i) => (
+                  <li key={ev.locator || i}>
+                    <button type="button" aria-pressed={i === picked}
+                            className={`evcard-evidence-thumb${i === picked ? ' is-picked' : ''}`}
+                            title={ev.locator || `Image ${i + 1}`}
+                            onClick={() => { setPicked(i); setDraftMsg(null) }}>
+                      <ProposalThumb thumb={ev.thumb} size={64} square
+                                     alt={`Image ${i + 1} of ${evidence.length} in ${card.file} — needs alt text`} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {editable ? (
             <label className="evcard-rec">

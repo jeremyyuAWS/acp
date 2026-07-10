@@ -244,3 +244,69 @@ def test_reading_order_proposal_absent_when_the_page_will_not_render(monkeypatch
     remediate_pdf._propose_reading_order(_Pdf(), "x.pdf", ai_enabled=True, scan_id=None,
                                          file="x.pdf", proposals=props)
     assert props == []
+
+
+# ── deferred alt: the reviewer must see the image they are asked to describe ───
+# The same bug the decorative path had, one branch over. An image with no faithful alt
+# source and no vision description is handed to a human — and the card showed them nothing.
+
+# A GENERIC name (so _derive_alt finds no faithful source and infer_decorative declines),
+# on a drawing whose blip embeds rId9 → this image defers to review.
+_DEFER_DRAWING = ('<w:p><w:r><w:drawing><wp:docPr id="1" name="Picture 3"/>'
+                  '<a:blip r:embed="rId9"/></w:drawing></w:r></w:p>')
+
+
+def test_deferred_image_carries_a_thumbnail_with_vision_OFF(tmp_path):
+    """The reviewer who most needs the picture is the one the vision model could not help."""
+    src = tmp_path / "d.docx"
+    _make_docx(src, _DEFER_DRAWING, img=_png())
+    ev: list = []
+    _, _, skipped = remediate_office.remediate_office(src, ai_enabled=False, evidence=ev)
+    assert any("faithful alt source" in s for s in skipped)   # it really did defer
+    assert len(ev) == 1
+    assert ev[0]["thumb"].startswith("data:image/png;base64,")
+    assert ev[0]["locator"] == "word/document.xml#rId9"
+
+
+def test_deferred_evidence_thumb_is_the_embedded_image(tmp_path):
+    """Not a placeholder: decode it and find the pixels that are actually in the package."""
+    import base64
+    from PIL import Image
+    src = tmp_path / "d.docx"
+    _make_docx(src, _DEFER_DRAWING, img=_png(240, 60, colour=(9, 121, 77)))
+    ev: list = []
+    remediate_office.remediate_office(src, ai_enabled=False, evidence=ev)
+    raw = base64.b64decode(ev[0]["thumb"].split(",", 1)[1])
+    im = Image.open(io.BytesIO(raw))
+    assert max(im.size) == 96                       # shrunk to card size
+    assert im.convert("RGB").getpixel((im.width // 2, im.height // 2)) == (9, 121, 77)
+
+
+def test_no_evidence_when_the_image_has_a_faithful_alt_source(tmp_path):
+    """A described image is fixed inline, never deferred — so it is not the reviewer's problem."""
+    described = ('<w:p><w:r><w:drawing><wp:docPr id="1" name="Q3 revenue chart" '
+                 'descr="Bar chart of Q3 revenue by region"/>'
+                 '<a:blip r:embed="rId9"/></w:drawing></w:r></w:p>')
+    src = tmp_path / "d.docx"
+    _make_docx(src, described, img=_png())
+    ev: list = []
+    remediate_office.remediate_office(src, ai_enabled=False, evidence=ev)
+    assert ev == []
+
+
+def test_missing_image_bytes_never_break_remediation(tmp_path):
+    """No .rels → no bytes → no thumbnail. The deferral still happens; nothing raises."""
+    src = tmp_path / "d.docx"
+    _make_docx(src, _DEFER_DRAWING, img=None, rels=False)
+    ev: list = []
+    _, _, skipped = remediate_office.remediate_office(src, ai_enabled=False, evidence=ev)
+    assert any("faithful alt source" in s for s in skipped)
+    assert ev == []
+
+
+def test_evidence_is_optional_and_off_by_default(tmp_path):
+    """Callers that pass no `evidence` list must behave exactly as before."""
+    src = tmp_path / "d.docx"
+    _make_docx(src, _DEFER_DRAWING, img=_png())
+    _, _, skipped = remediate_office.remediate_office(src, ai_enabled=False)
+    assert any("faithful alt source" in s for s in skipped)

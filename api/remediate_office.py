@@ -232,19 +232,19 @@ def _img_size(img: bytes) -> tuple[int, int] | None:
         return None
 
 
-def _resolve_media(entries: dict, part_name: str, rid: str) -> bytes | None:
-    """Resolve a drawing's r:embed relationship id to the embedded image bytes.
-
-    Reads the part's sibling .rels (word/_rels/document.xml.rels etc.), finds the
-    Relationship with this Id, and returns the referenced media part's bytes. Returns
-    None for external (linked) images or anything that can't be resolved locally."""
+def _rels_name_for(part_name: str) -> tuple[str, str]:
+    """(directory, sibling .rels part name) for an OPC part — word/document.xml →
+    ('word', 'word/_rels/document.xml.rels')."""
     d, base = (part_name.rsplit("/", 1) if "/" in part_name else ("", part_name))
-    rels_name = f"{d}/_rels/{base}.rels" if d else f"_rels/{base}.rels"
-    rels = entries.get(rels_name)
-    if not rels:
-        return None
+    return d, (f"{d}/_rels/{base}.rels" if d else f"_rels/{base}.rels")
+
+
+def _media_path(rels_bytes: bytes, d: str, rid: str) -> str | None:
+    """The package path a drawing's r:embed id points at, or None for external/linked images.
+    Split out of _resolve_media so a caller holding a zip (rather than a dict of every part)
+    can resolve one image without inflating the whole package."""
     try:
-        txt = rels.decode("utf-8", "ignore")
+        txt = rels_bytes.decode("utf-8", "ignore")
     except Exception:
         return None
     rel = re.search(rf'<Relationship\b[^>]*\bId="{re.escape(rid)}"[^>]*?/?>', txt)
@@ -259,8 +259,49 @@ def _resolve_media(entries: dict, part_name: str, rid: str) -> bytes | None:
     target = tm.group(1)
     if target.startswith(("http:", "https:", "file:", "/")):
         return None
-    resolved = posixpath.normpath(posixpath.join(d, target) if d else target)
-    return entries.get(resolved)
+    return posixpath.normpath(posixpath.join(d, target) if d else target)
+
+
+def _resolve_media(entries: dict, part_name: str, rid: str) -> bytes | None:
+    """Resolve a drawing's r:embed relationship id to the embedded image bytes.
+
+    Reads the part's sibling .rels (word/_rels/document.xml.rels etc.), finds the
+    Relationship with this Id, and returns the referenced media part's bytes. Returns
+    None for external (linked) images or anything that can't be resolved locally."""
+    d, rels_name = _rels_name_for(part_name)
+    rels = entries.get(rels_name)
+    if not rels:
+        return None
+    resolved = _media_path(rels, d, rid)
+    return entries.get(resolved) if resolved else None
+
+
+def image_bytes_for_locator(doc_bytes: bytes, locator: str) -> bytes | None:
+    """The embedded image named by a `part_name#rId` locator, straight out of the package.
+
+    Public because the REVIEW-TIME AI draft needs the very image the remediator deferred:
+    /ai/suggest can only produce genuine alt text for 1.1.1 if it can hand a vision model the
+    pixels, and hitl_queue.evidence[].locator is the only durable name that image has.
+
+    Reads exactly two parts (the .rels and the media it points at) — never inflate a 50MB deck
+    to fetch one picture. Best-effort: a malformed locator, an external/linked image, or an
+    unreadable package all return None, and the caller falls back to the text template."""
+    if not doc_bytes or not locator or "#" not in locator:
+        return None
+    part_name, rid = locator.rsplit("#", 1)
+    d, rels_name = _rels_name_for(part_name)
+    try:
+        import io as _io
+        with zipfile.ZipFile(_io.BytesIO(doc_bytes)) as z:
+            names = set(z.namelist())
+            if rels_name not in names:
+                return None
+            media = _media_path(z.read(rels_name), d, rid)
+            if not media or media not in names:
+                return None
+            return z.read(media)
+    except Exception:
+        return None
 
 
 def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
@@ -269,7 +310,8 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
                   context_file: str = "", scan_id: str | None = None,
                   vision_budget: list | None = None,
                   applied_fixes: list | None = None,
-                  proposals: list | None = None) -> tuple[str, list[tuple[str, str]], int]:
+                  proposals: list | None = None,
+                  evidence: list | None = None) -> tuple[str, list[tuple[str, str]], int]:
     """Add descr= to every <tag …> lacking one, from a faithful source or (when
     vision_enabled) a genuine vision description of the image bytes.
 
@@ -279,6 +321,12 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
     vision path resolve the image bytes via the part's .rels; vision_budget is a
     single-element mutable [n] shared across parts so one document's total vision
     calls stay bounded. Returns (new_xml, [(alt, source)…], deferred_count).
+
+    `evidence` collects {locator, thumb} for every image that ends up deferred to a human.
+    It is NOT a proposal — there is no value to approve — it is the picture the reviewer is
+    being asked to describe. Extracting it is deterministic (the bytes are in the package,
+    reached through the part's .rels), so it does not depend on vision_enabled: the reviewer
+    who most needs to see the image is exactly the one the vision model could not help.
     """
     fixed: list[tuple[str, str]] = []
     deferred = 0
@@ -359,6 +407,16 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
                                   vision_enabled, context_file, caption, scan_id, vision_budget,
                                   applied_fixes, proposals)
             if src is None:
+                # This image is going to a human. Hand them the picture: without it the card
+                # asks someone to write alt text for an image they cannot see. Deterministic —
+                # same lookup the decorative branch above already does, no model involved.
+                if evidence is not None:
+                    _ev = _image_bytes_for(xml, m, tag, pic_spans, entries, part_name)
+                    if _ev:
+                        import proposals as _prop
+                        _rid, _img = _ev
+                        evidence.append({"locator": f"{part_name}#{_rid}",
+                                         "thumb": _prop.thumb_b64(_img)})
                 deferred += 1
                 out.append(keep); continue
             alt, origin = src
@@ -440,6 +498,7 @@ _ALT_TARGETS = [
 def _fix_image_alt(entries: dict, *, vision_enabled: bool = False,
                    context_file: str = "", scan_id: str | None = None,
                    applied_fixes: list | None = None, proposals: list | None = None,
+                   evidence: list | None = None,
                    diffs=None) -> tuple[list[str], int]:
     """Inject alt text across all image-bearing parts — faithful source first, then a
     genuine vision description when vision_enabled. Grounded (OCR-anchored) vision alt is
@@ -461,7 +520,7 @@ def _fix_image_alt(entries: dict, *, vision_enabled: bool = False,
                 xml, tag, pic_only_within=wrapper, captions=captions,
                 entries=entries, part_name=name, vision_enabled=vision_enabled,
                 context_file=context_file, scan_id=scan_id, vision_budget=vision_budget,
-                applied_fixes=applied_fixes, proposals=proposals)
+                applied_fixes=applied_fixes, proposals=proposals, evidence=evidence)
             deferred += part_deferred
             if fixed:
                 entries[name] = new_xml.encode("utf-8")
@@ -904,13 +963,16 @@ def _remediate_xlsx_structure(entries: dict, diffs=None) -> list[str]:
 
 def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True,
                      scan_id: str | None = None, applied_fixes: list | None = None,
-                     proposals: list | None = None, diffs=None):
+                     proposals: list | None = None, evidence: list | None = None, diffs=None):
     """Apply deterministic Office accessibility fixes to a copy of the file.
 
     ai_enabled — when True and a vision (llava-class) Ollama model is reachable,
     unlabelled images get genuine vision-generated alt text; otherwise only faithful
     sources are used and the rest defer to human review (AI-off degrades gracefully).
     scan_id threads the vision calls into that scan's Langfuse session.
+
+    evidence — collects {locator, thumb} for each image deferred to a human, so the review
+    card can show the picture it is asking someone to describe. Filled whether or not AI ran.
 
     Returns (fixed_path, applied, skipped). fixed_path is None if nothing applied.
     """
@@ -955,7 +1017,7 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
             vision_enabled = False
     alt_applied, alt_deferred = _fix_image_alt(
         entries, vision_enabled=vision_enabled, context_file=path.name, scan_id=scan_id,
-        applied_fixes=applied_fixes, proposals=proposals, diffs=diffs)
+        applied_fixes=applied_fixes, proposals=proposals, evidence=evidence, diffs=diffs)
     applied.extend(alt_applied)
     skipped: list[str] = []
     if alt_deferred:

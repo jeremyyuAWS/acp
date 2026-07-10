@@ -12,7 +12,11 @@ const SAFE_DATA_URL = /^data:image\/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+$
 
 export const isSafeThumb = (thumb) => typeof thumb === 'string' && SAFE_DATA_URL.test(thumb)
 
-export default function ProposalThumb({ thumb, alt = '', className = '', size = 96 }) {
+// `square` pins the picture into a size×size box instead of letting it keep its own height.
+// A grid of document images — every aspect ratio there is — otherwise renders ragged rows,
+// and a strip capped to whole rows has no single row height to cap by. object-fit: contain
+// means the image is letterboxed, never distorted or cropped.
+export default function ProposalThumb({ thumb, alt = '', className = '', size = 96, square = false }) {
   if (!isSafeThumb(thumb)) return null
   return (
     <img
@@ -20,7 +24,7 @@ export default function ProposalThumb({ thumb, alt = '', className = '', size = 
       alt={alt}
       className={className}
       width={size}
-      style={{ width: size, height: 'auto', maxHeight: size, objectFit: 'contain',
+      style={{ width: size, height: square ? size : 'auto', maxHeight: size, objectFit: 'contain',
                borderRadius: 6, border: '1px solid var(--line)', display: 'block', flexShrink: 0 }}
     />
   )

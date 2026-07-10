@@ -1745,6 +1745,25 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 /* Where a queued finding lives — slide/page chip on the evidence card header. */
 .evcard-loc { font-size: 11.5px; white-space: nowrap; }
 
+/* The images awaiting a description. A 1.1.1 row can carry nineteen, so they wrap and scroll
+   rather than stretching the card; the picked one drives "Draft with AI". */
+.evcard-evidence { margin: 2px 0 10px; }
+.evcard-evidence-hd { display: block; font-size: 12px; margin-bottom: 6px; }
+/* Cap in WHOLE rows. A raw pixel max-height slices the last row of thumbnails in half, which
+   reads as a rendering bug rather than as "there are more below". 64px image + 2px padding +
+   2px border on each side = a 72px row; --ev-gap separates them. */
+.evcard-evidence-strip { --ev-thumb: 64px; --ev-gap: 8px;
+  --ev-row: calc(var(--ev-thumb) + 8px);
+  display: flex; flex-wrap: wrap; gap: var(--ev-gap); margin: 0; padding: 0; list-style: none;
+  max-height: calc(3 * var(--ev-row) + 2 * var(--ev-gap)); overflow-y: auto; }
+/* The tile is a fixed square (ProposalThumb `square`), so every row is --ev-row tall and the
+   whole-row cap above holds for any mix of document image aspect ratios. */
+.evcard-evidence-thumb { padding: 2px; border: 2px solid transparent; border-radius: 8px;
+  background: none; cursor: pointer; line-height: 0; }
+.evcard-evidence-thumb:hover { border-color: var(--line); }
+.evcard-evidence-thumb.is-picked { border-color: var(--plum); }
+.evcard-evidence-thumb:focus-visible { outline: 2px solid var(--plum); outline-offset: 1px; }
+
 /* The recommendation editor. The label must be a block and the textarea width:100%, or the
    textarea falls back to its default `cols` sizing (~20 chars) and the reviewer writes alt
    text through a slit — the box is where the human does the actual work, so give it the card. */
