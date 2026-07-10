@@ -2,7 +2,11 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 const now = new Date()
-const calver = `${now.getFullYear()}.${now.getMonth() + 1}.${now.getDate()}`
+// UTC, to match the authoritative stamp deploy.sh bakes into ACP_BUILD_VERSION. This is
+// only the fallback shown when the server hasn't reported its version yet; using local
+// getters made it silently disagree with the real version whenever the builder's zone
+// was behind UTC (e.g. a 5pm PDT build is already the next day in UTC).
+const calver = `${now.getUTCFullYear()}.${now.getUTCMonth() + 1}.${now.getUTCDate()}`
 
 export default defineConfig({
   plugins: [react()],
