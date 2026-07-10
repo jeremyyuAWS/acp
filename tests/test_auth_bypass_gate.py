@@ -21,6 +21,27 @@ sys.path.insert(0, str(ACP / "api"))
 _KEYS = ("ACP_E2E_KEY", "ACP_ENABLE_TEST_BYPASS", "ACP_DEPLOY_ENV", "ACP_ENV")
 
 
+@pytest.fixture(autouse=True)
+def _restore_core_module():
+    """Put the ORIGINAL `core` module back after every test in this file.
+
+    `_core()` re-imports core to re-read env at import time, which replaces
+    sys.modules["core"] with a brand-new module object owning its own Store and its own
+    in-memory scan-token registry. Modules that already did `import core` (handlers, worker)
+    keep a reference to the OLD object. Leaving the new one installed means a later test
+    registers a Drive token on one `core` while the worker reads another — which is exactly
+    how this file turned tests/test_jobs.py red on main (drive_token=None, job='dead') while
+    still passing when run in isolation, because import order differs between a single-file
+    run and the full suite.
+    """
+    original = sys.modules.get("core")
+    yield
+    if original is not None:
+        sys.modules["core"] = original
+    else:
+        sys.modules.pop("core", None)
+
+
 def _core(monkeypatch, **env):
     """Re-import core with a clean, explicit environment (it reads env at import time)."""
     for k in _KEYS:
