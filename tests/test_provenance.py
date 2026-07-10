@@ -151,16 +151,20 @@ def test_whole_drive_logs_what_it_listed_skipped_and_kept(capsys):
     scanner._search_drive(svc, max_files=50, exclude_remediated=True)
     line = [ln for ln in capsys.readouterr().out.splitlines() if "discovery (whole-Drive)" in ln]
     assert line, "discovery emitted no audit line"
-    assert "2 listed" in line[0]
+    # New wording after the client-side-type-filter fix: raw items seen · scannable (post type
+    # filter) · skipped by provenance · kept. Both source and acp-copy are .pptx, so both are
+    # scannable; provenance skips the acp-copy, leaving one kept.
+    assert "2 raw" in line[0]
+    assert "2 scannable" in line[0]
     assert "1 skipped as ACP-generated output" in line[0]
-    assert "1 scannable" in line[0]
+    assert "1 kept" in line[0]
 
 
 def test_whole_drive_logs_zero_skips_when_exclusion_is_off(capsys):
     svc = FakeDrive(all_files=[_source(), _acp_copy()], folder_lookup=[])
     scanner._search_drive(svc, max_files=50, exclude_remediated=False)
     line = [ln for ln in capsys.readouterr().out.splitlines() if "discovery (whole-Drive)" in ln][0]
-    assert "0 skipped as ACP-generated output" in line and "2 scannable" in line
+    assert "0 skipped as ACP-generated output" in line and "2 kept" in line
 
 
 def test_folder_walk_logs_folders_walked_and_both_skip_reasons(capsys):

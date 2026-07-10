@@ -45,6 +45,59 @@ class _FakeSvc:
         return self._files
 
 
+FOLDER = "application/vnd.google-apps.folder"
+IMAGE = "image/png"
+DOC = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def _typed(fid, name, mime):
+    return {"id": fid, "name": name, "mimeType": mime, "md5Checksum": f"md5-{fid}"}
+
+
+def test_type_filtering_is_client_side_not_a_drive_query(monkeypatch):
+    """The core fix: we query only trashed=false (fresh from Drive's live store) and keep the
+    scannable types OURSELVES. A mimeType='…' query is served by Drive's search index, which
+    lagged so badly that an unfiltered listing saw 60 files while the filtered one saw 2 in the
+    same second. So the plain listing returns everything and we drop the non-scannable here."""
+    monkeypatch.delenv("ACP_DRIVE_SETTLE_SECS", raising=False)
+    svc = _FakeSvc([[
+        _typed("A", "brief.docx", DOC),          # scannable
+        _typed("B", "deck.pptx", PPTX),          # scannable
+        _typed("F", "Legal", FOLDER),            # a folder — not a document
+        _typed("I", "logo.png", IMAGE),          # an image — out of scope
+    ]])
+    out = scanner._search_drive(svc, max_files=100)
+    assert {o["id"] for o in out} == {"A", "B"}   # only the two scannable documents
+
+    # and the Drive query carried NO mimeType clause — that is the whole point
+    assert "mimeType" not in (svc._files._kw.get("q") or "")
+    assert svc._files._kw.get("q") == "trashed=false"
+
+
+def test_non_scannable_files_do_not_crowd_out_documents_under_the_cap(monkeypatch):
+    """Why the type filter runs BEFORE the max_files slice, not only in _normalize afterward:
+    if junk (images, folders) filled the first max_files raw items, the slice would be all junk
+    and the real documents behind it would be lost. Pre-filtering keeps the slice all-documents."""
+    monkeypatch.delenv("ACP_DRIVE_SETTLE_SECS", raising=False)
+    batch = ([_typed(f"I{i}", f"pic{i}.png", IMAGE) for i in range(10)] +   # 10 images first…
+             [_typed("A", "brief.docx", DOC), _typed("B", "deck.pptx", PPTX)])  # …docs behind them
+    svc = _FakeSvc([batch])
+    out = scanner._search_drive(svc, max_files=2)                 # cap smaller than the junk run
+    assert {o["id"] for o in out} == {"A", "B"}                   # documents survive the slice
+
+
+def test_a_freshly_bulk_uploaded_corpus_is_all_picked_up(monkeypatch):
+    """The reported live case: dozens of docx/pptx/pdf just uploaded. The plain listing sees
+    them immediately; every scannable one must be kept, none dropped for lack of an index."""
+    monkeypatch.delenv("ACP_DRIVE_SETTLE_SECS", raising=False)
+    corpus = [_typed(f"L{i}", f"Legal-{i}.docx", DOC) for i in range(40)]
+    corpus.append(_typed("P", "Tax-Motion.pptx", PPTX))
+    corpus.append(_typed("D", "Estates.pdf", "application/pdf"))
+    svc = _FakeSvc([corpus])
+    out = scanner._search_drive(svc, max_files=500)
+    assert len(out) == 42
+
+
 def test_settle_off_is_a_single_listing_pass(monkeypatch):
     """Default behavior is unchanged: one pass, whatever Drive returned that once."""
     monkeypatch.delenv("ACP_DRIVE_SETTLE_SECS", raising=False)
