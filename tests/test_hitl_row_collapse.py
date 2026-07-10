@@ -126,9 +126,17 @@ def test_auto_verify_coexists_with_the_criterion_row(st):
 
 # ── certification is not blocked by a phantom sibling ─────────────────────────
 
-def test_approving_the_one_row_certifies_the_file(st):
-    """Two rows meant two approvals. mark_file_compliant_if_reviewed counts EVERY row for the
-    file, so a sibling the reviewer never saw would block certification forever."""
+def test_the_one_collapsed_row_is_the_only_gate_no_phantom_sibling(st):
+    """The one collapsed row is the ONLY thing gating the file — there is no phantom sibling
+    the reviewer never saw sitting in 'pending' and blocking certification forever. That is
+    the row-collapse bug this test guards against.
+
+    It no longer asserts that approval *certifies*: since the write-back landed
+    (apply_approved_values), a value-fix approval records the alt text but does not write it
+    into the document, and mark_file_compliant_if_reviewed correctly withholds certification
+    until the value is applied and 1.1.1 re-verifies clear — the anti-overclaim gate. The full
+    approve -> apply -> certify path lives in test_apply_approved_values.py; here we assert only
+    the collapse invariant: one row, no hidden sibling."""
     st.save_file_result("s1", {"file": "d.pptx", "engine": "office", "status": "pass",
                                "score": 39, "compliant": 0, "skipped_rules": 0, "issues": []}, "t1")
     st.record_remediation("s1", "d.pptx", drive_write_url=None, blob_url="blob://x")
@@ -137,4 +145,8 @@ def test_approving_the_one_row_certifies_the_file(st):
     rows = _rows(st)
     assert len(rows) == 1
     st.update_hitl_item(rows[0]["id"], "approved", None, None)
-    assert st.mark_file_compliant_if_reviewed("s1", "d.pptx") is True
+    # Every row for the file is resolved — no second row lingering in 'pending' to block.
+    assert all(r["status"] == "approved" for r in _rows(st))
+    # The remaining gate is the approved-but-unapplied alt text, NOT a phantom sibling.
+    assert st.count_unapplied_approved_values("s1", "d.pptx") == 1
+    assert st.mark_file_compliant_if_reviewed("s1", "d.pptx") is False
