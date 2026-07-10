@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { CAPABILITY_FALLBACK, fmtOf, modeFor, isAuto, autoSCs } from './capability.js'
+import { CAPABILITY_FALLBACK, fmtOf, modeFor, isAuto, autoSCs, reviewRecommended, REVIEW_RECOMMENDED_SC } from './capability.js'
 
 const CAP = CAPABILITY_FALLBACK
 
@@ -55,6 +55,25 @@ describe('remediation capability — format-aware single source of truth', () =>
       expect(isAuto(CAP, 'pdf', '3.1.1')).toBe(true)
       expect(isAuto(CAP, 'html', '3.1.1')).toBe(true)
       expect(isAuto(CAP, 'docx', '3.1.1')).toBe(false)
+    })
+  })
+
+  describe('contrast review-recommended policy (layered on top of the capability)', () => {
+    it('flags 1.4.3 and 1.4.6 as review-recommended', () => {
+      expect(reviewRecommended('1.4.3')).toBe(true)
+      expect(reviewRecommended('1.4.6')).toBe(true)
+      expect(REVIEW_RECOMMENDED_SC.has('1.4.3')).toBe(true)
+    })
+    it('does not touch other criteria', () => {
+      expect(reviewRecommended('2.4.2')).toBe(false)
+      expect(reviewRecommended('1.1.1')).toBe(false)
+    })
+    it('is a policy, NOT a capability change: contrast stays auto on docx/xlsx/html', () => {
+      // The review-recommended flag shifts wording/recommendation only — the capability
+      // still reports contrast as technically auto-fixable on the formats with a remediator.
+      expect(isAuto(CAP, 'docx', '1.4.3')).toBe(true)
+      expect(isAuto(CAP, 'xlsx', '1.4.3')).toBe(true)
+      expect(isAuto(CAP, 'html', '1.4.3')).toBe(true)
     })
   })
 

@@ -2,7 +2,7 @@
 // data so we can showcase agentic discovery, auto-tagging, and unified cross-source
 // compliance. Modeled on a health-system org (UT Southwestern) with departments.
 
-import { CAPABILITY_FALLBACK, autoSCs } from './capability.js'
+import { CAPABILITY_FALLBACK, autoSCs, REVIEW_RECOMMENDED_SC } from './capability.js'
 
 // SIM=true: all data is synthetic (no backend needed).
 // Set VITE_SIM=false in .env (+ VITE_API=http://...) to connect to the real backend.
@@ -160,14 +160,10 @@ const scId = (w) => (String(w || '').replace(/^SC_/, '').replace(/_/g, '.').matc
 // (ASR), but a human always finalizes; never silently auto-applied. Kept separate
 // because a media finding wants its own rationale, not the generic format one.
 const MEDIA_SC = new Set(['1.2.1', '1.2.2', '1.2.3', '1.2.5'])
-// RECOMMENDATION POLICY (distinct from technical capability): colour-contrast fixes are
-// deterministic in the engine — so the capability marks them "auto" on docx/xlsx/html,
-// and Assess/FileDrawer count them auto-fixable — but recolouring text/brand colours is a
-// judgement call, so the RECOMMENDED mode routes any contrast finding to human review
-// regardless of format. This layer only shifts the recommended mode; it never contradicts
-// the capability (a contrast finding stays auto-fixable there, it just isn't auto-APPLIED
-// unreviewed). 1.4.3 Contrast (Min) + 1.4.6 Contrast (Enhanced).
-const REVIEW_POLICY_SC = new Set(['1.4.3', '1.4.6'])
+// Contrast findings route to human review in the recommendation (REVIEW_RECOMMENDED_SC,
+// defined once in capability.js and shared with FileDrawer's coverage table): the fix is
+// deterministic — the capability still marks it auto-fixable — but recolouring is a
+// judgement call, so the recommended MODE puts a human in the loop regardless of format.
 // Which findings a file's remediator can fix WITHOUT a human is answered by the ONE
 // remediation-capability table (capability.js → api/remediation_capability.py), keyed
 // by format — the same source Assess + FileDrawer read, so a SIM recommendation can't
@@ -189,8 +185,8 @@ function recommendFor(f) {
   const scIds = issues.map((x) => scId(x.wcag)).filter(Boolean)
   const hasCritical = issues.some((x) => x.severity === 'CRITICAL')
   const mediaFinding = scIds.some((s) => MEDIA_SC.has(s))
-  // Policy: a contrast finding always gets a human in the loop (see REVIEW_POLICY_SC).
-  const contrastFinding = scIds.some((s) => REVIEW_POLICY_SC.has(s))
+  // Policy: a contrast finding always gets a human in the loop (REVIEW_RECOMMENDED_SC).
+  const contrastFinding = scIds.some((s) => REVIEW_RECOMMENDED_SC.has(s))
   // Escalate when any finding falls outside what THIS format's remediator can fix
   // deterministically (capability "auto") — e.g. a PDF's contrast/structure findings,
   // or any format's alt text (assisted). Format-aware: docx contrast is auto and doesn't

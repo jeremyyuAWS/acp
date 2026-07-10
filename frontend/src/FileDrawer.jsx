@@ -5,7 +5,7 @@ import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
 import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, getFileRemediationDiffs, downloadRemediated, getRules, getRubric, getConfig, getCapability } from './api.js'
-import { CAPABILITY_FALLBACK, fmtOf, autoSCs } from './capability.js'
+import { CAPABILITY_FALLBACK, fmtOf, autoSCs, reviewRecommended } from './capability.js'
 import PagePreview from './PagePreview.jsx'
 import { WCAG } from './wcagCatalog.js'
 import { confidenceForFinding, confidenceForCoverage, confClass } from './confidence.js'
@@ -48,6 +48,20 @@ const remStageLine = (pct) => REM_STAGE_LINES[Math.min(REM_STAGE_LINES.length - 
 // never in it, so it is never claimed as 'fixing'.
 const autoSetFor = (cap, file) => autoSCs(cap, fmtOf(file))
 const scOfWcag = (v) => ((v || '').replace(/^SC_/, '').replace(/_/g, '.').match(/^\d+\.\d+\.\d+/) || [''])[0]
+
+// The coverage table's "Fix" column label for a criterion. Contrast (REVIEW_RECOMMENDED_SC)
+// is deterministic where a remediator exists for the format (remAutoSet) but recolouring is
+// a judgement call, so it reads "auto-fixable · review recommended" — surfacing both the
+// capability (auto) and the recommendation policy (human confirms). Where no remediator
+// exists for the format (pptx/pdf), contrast is plain human review. Otherwise the criterion's
+// catalog tier drives the label. Shared by computeCoverageRows (cert export) and the on-screen
+// table so the two can't drift.
+const fixLabel = (c, remAutoSet, aiEnabled) => {
+  if (reviewRecommended(c.sc)) return remAutoSet.has(c.sc) ? '⚡ auto-fixable · review recommended' : '✋ human'
+  if ((c.tier || '').startsWith('Tier 1')) return '⚡ auto'
+  if ((c.tier || '').startsWith('Tier 2')) return aiEnabled ? '✎ AI' : '✋ human'
+  return '✋ human'
+}
 
 // Only PDFs can be rasterized server-side (api/render.py RENDERABLE_EXTS = ('.pdf',)).
 // Office formats would need a LibreOffice round-trip, so for a deck we show the slide
@@ -102,11 +116,7 @@ function computeCoverageRows(file, { catalogRules, targetLevel, remediatedRuleId
     : new Set((((catalogRules || {})[fmt]) || []).map(scFromRule).filter(Boolean))
   const isHuman = (c) => /Human/i.test(c.approach || '') || c.source === 'MDK HITL'
   const DOC_HUMAN_WHEN_UNCHECKED = new Set(['1.4.1', '1.3.5', '2.5.3', '4.1.2'])
-  const fixOf = (c) => {
-    if ((c.tier || '').startsWith('Tier 1')) return '⚡ auto'
-    if ((c.tier || '').startsWith('Tier 2')) return aiEnabled ? '✎ AI' : '✋ human'
-    return '✋ human'
-  }
+  const fixOf = (c) => fixLabel(c, remAutoSet, aiEnabled)
   const issuesBySc = {}
   ;(file.issues || []).forEach((i) => {
     const sc = scOfWcag(i.wcag)
@@ -781,11 +791,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         // as 'not auto-checked'. NOT a blanket flip: web-only criteria (Resize
         // Text, Reflow, Focus Order/Visible…) stay N-A for a static document.
         const DOC_HUMAN_WHEN_UNCHECKED = new Set(['1.4.1', '1.3.5', '2.5.3', '4.1.2'])
-        const fixOf = (c) => {
-          if ((c.tier || '').startsWith('Tier 1')) return '⚡ auto'
-          if ((c.tier || '').startsWith('Tier 2')) return aiEnabled ? '✎ AI' : '✋ human'
-          return '✋ human'
-        }
+        const fixOf = (c) => fixLabel(c, remAutoSet, aiEnabled)
         // An unreadable file ran ZERO checks — claiming any PASS would be false.
         if (st === 'unanalysable') {
           return (
@@ -867,7 +873,16 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                         <td className="covsc">{r.id}</td>
                         <td>{r.plain}<div className="muted" style={{ fontSize: 11 }}>{r.plain === r.name ? (r.req || '').slice(0, 90) : r.name}</div></td>
                         <td className="muted">{r.level}</td>
-                        <td className="muted">{r.fix}</td>
+                        {/* Split a "primary · note" fix label (e.g. contrast's "auto-fixable ·
+                            review recommended") onto two deliberate lines so it reads cleanly in
+                            this narrow column instead of wrapping raggedly. r.fix stays one string
+                            (the cert export renders it verbatim); this is on-screen presentation only. */}
+                        <td className="muted">{(() => {
+                          const [main, ...note] = String(r.fix).split(' · ')
+                          return note.length
+                            ? <><span>{main}</span><span style={{ display: 'block', fontSize: 10, opacity: 0.7 }}>{note.join(' · ')}</span></>
+                            : r.fix
+                        })()}</td>
                         <td className={`covoutcome ${r.outcome === 'FAIL' ? 'fail' : (r.outcome === 'PASS' || r.outcome === 'FIXED') ? 'pass' : 'skip'}`} title={OUT_TIP[r.outcome]}>
                           {(r.outcome === 'PASS' || r.outcome === 'FIXED') ? '✓' : r.outcome === 'FAIL' ? `✕ ${r.count}` : r.outcome === 'HUMAN' ? '👤' : '—'}
                           <span className="covouttxt">{r.outcome === 'PASS' && remediatedRuleIds.has(r.id) ? 'pass — remediated' : OUT_TXT[r.outcome]}</span>

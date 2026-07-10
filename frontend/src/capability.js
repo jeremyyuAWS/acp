@@ -77,6 +77,16 @@ export const fmtOf = (file) => {
   return null
 }
 
+// Recommendation POLICY, layered on top of the capability (not part of it): these criteria
+// are technically auto-fixable where a remediator exists (capability "auto"), but the fix is
+// a judgement call — recolouring text/brand colours — so the platform recommends a human
+// confirm the result. It shifts wording and the recommended mode only; it never changes the
+// capability mode (Assess + FileDrawer still count contrast auto-fixable). 1.4.3 Contrast
+// (Minimum) + 1.4.6 Contrast (Enhanced). One definition, shared by sim.js's recommendation
+// and FileDrawer's coverage table so they can't disagree.
+export const REVIEW_RECOMMENDED_SC = new Set(['1.4.3', '1.4.6'])
+export const reviewRecommended = (sc) => REVIEW_RECOMMENDED_SC.has(sc)
+
 // cap here is the {fmt: {sc: mode}} map (fetched or the fallback). Any unknown (fmt, sc)
 // is "human" — the conservative default, never a silent "auto".
 export const modeFor = (cap, fmt, sc) => (cap && cap[fmt] && cap[fmt][sc]) || 'human'
