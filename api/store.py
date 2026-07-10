@@ -1982,7 +1982,16 @@ class Store:
     def list_hitl_queue(self, status: str | None = None, scan_id: str | None = None,
                         owner: str | None = None) -> list[dict]:
         """List HITL items. `owner` scopes to the signed-in user's own documents (joined via
-        the scan's owner_email) — the inbox must not show another tenant's review items."""
+        the scan's owner_email) — the inbox must not show another tenant's review items.
+
+        Review items for ACP's OWN remediated copies are dropped, exactly as get_scan drops
+        those files from the dashboard. Without this a scan showing one document showed two
+        identical review cards, the second asking a human to write alt text for the file ACP
+        itself produced — and the vision proposals landed on that phantom's row, so opening the
+        real document's card showed no AI draft at all.
+
+        Same posture as get_scan: this filters the READ. The rows stay on disk, so the audit
+        trail of what was queued is never destroyed."""
         conds, params = [], []
         if status:
             conds.append("status=%s"); params.append(status)
@@ -1993,7 +2002,17 @@ class Store:
         where = (" WHERE " + " AND ".join(conds)) if conds else ""
         with self._db.cursor() as cur:
             self._db.execute(cur, f"SELECT * FROM hitl_queue{where} ORDER BY created_at DESC", tuple(params))
-            return [self._decode_proposals(r) for r in self._db.fetchall(cur)]
+            rows = [self._decode_proposals(r) for r in self._db.fetchall(cur)]
+            if not rows:
+                return rows
+            # Per scan, never globally: 'deck (1).pptx' shadows a source in one scan and is a
+            # document in its own right in another, where no unstamped sibling exists.
+            shadowed: set[tuple[str, str]] = set()
+            for sid in {r["scan_id"] for r in rows}:
+                self._db.execute(cur,
+                    "SELECT file, acp_stamped FROM file_records WHERE scan_id=%s", (sid,))
+                shadowed.update((sid, f) for f in shadowed_acp_outputs(self._db.fetchall(cur)))
+        return [r for r in rows if (r["scan_id"], r["file"]) not in shadowed]
 
     def get_hitl_item(self, item_id: str) -> dict | None:
         with self._db.cursor() as cur:
