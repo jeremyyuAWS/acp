@@ -131,6 +131,30 @@ def test_report_renders_evidence_with_before_after_value_and_signoff(isolated_st
         assert expected in t, expected
 
 
+def test_report_groups_fixes_by_human_category_before_the_wcag_appendix(isolated_store):
+    """The certification report leads with what a person reads — Images, Hyperlinks — not WCAG
+    ids, and only then drops into the per-finding detail. The counts are the SAME verified
+    evidence the appendix lists, so the two can never disagree, and the WCAG id is kept as a
+    parenthetical for the auditor rather than deleted."""
+    from report import build_report
+    s = isolated_store
+    sid, _ = _seed(s)
+    t = _flat(build_report(_RUN, _FILES, _META, evidence=s.get_remediation_evidence(sid)))
+
+    # the human-task summary exists and LEADS the per-finding appendix
+    assert "What we fixed" in t
+    assert t.index("What we fixed") < t.index("Remediation evidence")
+    # grouped by the category a person finds in the document, in plain language…
+    assert "Images" in t and "Missing image description" in t
+    assert "Hyperlinks" in t and "Link text is unclear" in t
+    # …with the WCAG id kept, demoted to a parenthetical, never removed
+    assert "WCAG 1.1.1" in t and "2.4.4" in t
+    # a PENDING proposal (1.3.3, Instructions) is NOT counted as fixed anywhere — its human
+    # name must never appear in the "what we fixed" roll-up. (The appendix still lists it under
+    # 'proposed', by its WCAG rule name, not this human category name.)
+    assert "Directions depend on shape or position" not in t
+
+
 def test_report_never_presents_a_pending_proposal_as_remediated(isolated_store):
     """The report's core honesty guarantee: a proposal awaiting approval is labelled
     'not remediated' and never carries the 'validated on re-scan' mark."""

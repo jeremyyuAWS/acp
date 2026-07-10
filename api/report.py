@@ -46,6 +46,8 @@ from reportlab.lib.units import inch
 from reportlab.platypus import (HRFlowable, Image, Paragraph,
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 
+import human_categories as _hc
+
 PLUM = colors.HexColor("#46303F")
 AMBER = colors.HexColor("#854F0B")
 GREEN = colors.HexColor("#3B6D11")
@@ -284,6 +286,76 @@ def _scope_section(files, facts, h2, body, cell, muted) -> list:
         "<b>A score of 100 therefore means: no blocking findings among the criteria evaluated for that "
         "document's format.</b> It does not mean the document is fully WCAG 2.1 AA conformant, and it "
         "must not be represented as such.", muted))
+    return el
+
+
+def _work_by_category_section(evidence: list, h2, body, cell, muted) -> list:
+    """What changed, grouped the way a person reads a document — Images, Tables, Reading Order —
+    not by WCAG id (backlog: the human-task view). An executive or the ops person who did the
+    work can read this; "1.3.1 Passed" they cannot.
+
+    Every count is the SAME verified-applied evidence the detailed appendix below lists — this
+    is a roll-up of that list, not a second source, so the summary and the detail can never
+    disagree. Only fixes that cleared the post-fix re-scan are counted; proposals awaiting
+    approval are excluded exactly as they are everywhere else in this report. The WCAG ids stay,
+    demoted to a parenthetical, because an auditor still needs them.
+    """
+    el: list = []
+    # One row per verified fix, tagged with its human category. Unknown criteria (no mapping)
+    # are skipped rather than shown under a wrong heading — the contract test guarantees every
+    # catalog criterion is mapped, so nothing real is dropped.
+    counts: dict[str, int] = {}
+    names: dict[str, dict[str, int]] = {}
+    for doc in evidence or []:
+        for e in doc.get("applied", []):
+            cat = _hc.category_of(e.get("sc") or "")
+            if not cat:
+                continue
+            counts[cat] = counts.get(cat, 0) + 1
+            hn = _hc.human_name(e.get("sc") or "") or e.get("criterion") or e.get("sc")
+            bucket = names.setdefault(cat, {})
+            bucket[hn] = bucket.get(hn, 0) + 1
+    if not counts:
+        return el
+
+    el.append(Paragraph("What we fixed · by section of your documents", h2))
+    el.append(Paragraph(
+        "Grouped the way you would find it in the document itself, not by standard. Each line is "
+        "a count of fixes that were re-scanned and verified — the detailed evidence, with before "
+        "&amp; after and who approved each one, follows. WCAG identifiers are kept in parentheses "
+        "for auditors.", muted))
+    el.append(Spacer(1, 8))
+
+    rows = []
+    for cat in sorted(counts, key=lambda k: _hc.CATEGORIES[k]["order"]):
+        c = _hc.CATEGORIES[cat]
+        n = counts[cat]
+        # The human names of the criteria fixed in this category, with the WCAG ids that back
+        # them, so the parenthetical is honest rather than decorative.
+        detail = ", ".join(
+            f"{hn}" + (f" ×{k}" if k > 1 else "")
+            for hn, k in sorted(names[cat].items(), key=lambda kv: (-kv[1], kv[0])))
+        wcags = ", ".join(sorted({sc for doc in evidence for e in doc.get("applied", [])
+                                  if _hc.category_of(e.get("sc") or "") == cat
+                                  for sc in [e.get("sc")] if sc}))
+        rows.append([
+            # No emoji here: reportlab's Helvetica has no emoji glyphs, so an icon would render
+            # as a tofu box in the PDF. The icon lives in human_categories for the web inbox,
+            # where the browser can draw it; the formal report uses the plain label.
+            Paragraph(f"<b>{_esc(c['label'])}</b>", cell),
+            Paragraph(f"<font color='#3B6D11'>✓ {n} fix{'es' if n != 1 else ''}</font>", cell),
+            Paragraph(f"{_esc(detail)} <font color='#6c6470'>(WCAG {_esc(wcags)})</font>", cell),
+        ])
+    t = Table(rows, colWidths=[1.9 * inch, 0.8 * inch, 4.4 * inch])
+    t.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, ZEBRA]),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.4, LINE),
+        ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    el.append(t)
+    el.append(Spacer(1, 6))
     return el
 
 
@@ -782,6 +854,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     # Sits before the conformance statement so the closing attestation is the last word.
     foot_style = ParagraphStyle("evfoot", parent=ss["Normal"], textColor=MUTED,
                                 fontSize=8, leading=11.5)
+    # The human-task roll-up leads: what changed, by section of the document, in plain language.
+    # The per-finding detail (with WCAG ids, before/after and sign-off) follows for the auditor.
+    el.extend(_work_by_category_section(evidence or [], h2, body, cell, _muted))
     el.extend(_evidence_section(evidence or [], h2, body, cell, foot_style))
 
     # ── Conformance statement & how to read this report ──────────────────────
