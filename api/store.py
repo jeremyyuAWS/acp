@@ -2009,10 +2009,28 @@ class Store:
             # document in its own right in another, where no unstamped sibling exists.
             shadowed: set[tuple[str, str]] = set()
             for sid in {r["scan_id"] for r in rows}:
-                self._db.execute(cur,
-                    "SELECT file, acp_stamped FROM file_records WHERE scan_id=%s", (sid,))
-                shadowed.update((sid, f) for f in shadowed_acp_outputs(self._db.fetchall(cur)))
+                shadowed.update((sid, f) for f in self._shadowed_files(cur, sid))
         return [r for r in rows if (r["scan_id"], r["file"]) not in shadowed]
+
+    def _shadowed_files(self, cur, scan_id: str) -> set[str]:
+        """The files in this scan that are ACP's own output shadowing their source."""
+        self._db.execute(cur,
+            "SELECT file, acp_stamped FROM file_records WHERE scan_id=%s", (scan_id,))
+        return shadowed_acp_outputs(self._db.fetchall(cur))
+
+    def is_shadowed_output(self, scan_id: str, file: str) -> bool:
+        """Is this file ACP's OWN remediated copy, shadowing the source it was made from?
+
+        The single predicate behind every "don't touch ACP's own artifact" decision, so the
+        dashboard (get_scan), the review inbox (list_hitl_queue) and the remediation worker
+        cannot drift apart on what counts as a shadow.
+
+        Note this is DATA-dependent: it reads file_records.acp_stamped, written by
+        detect_acp_stamp at scan time. A scan taken before stamping existed carries NULL
+        stamps, so its copies are indistinguishable from real documents and will be treated
+        as such — the filter cannot retroactively know what it never recorded."""
+        with self._db.cursor() as cur:
+            return file in self._shadowed_files(cur, scan_id)
 
     def get_hitl_item(self, item_id: str) -> dict | None:
         with self._db.cursor() as cur:
