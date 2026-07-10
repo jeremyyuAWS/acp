@@ -79,19 +79,23 @@ echo "== 2/5 build image in ACR (remote; no local docker) =="
 # Build provenance (ADR: CalVer-style) baked into the image → surfaced in /healthz +
 # the hub footer + the app header. Computed here so every deploy stamps a fresh version
 # (.git is excluded from the build context, so the image can't derive it itself).
-BUILD_DATE="$(date -u +%Y).$(( 10#$(date -u +%m) )).$(( 10#$(date -u +%d) ))"
-# Per-day build counter (.N) so same-day builds are distinguishable (e.g. v2026.7.7.40):
-# the number of commits whose committer date (UTC) is today. deploy.sh runs in the repo,
-# so git is available here even though .git is excluded from the Docker build context.
-BUILD_TODAY="$(date -u +%Y-%m-%d)"
-# NB: grep -c exits 1 when the count is 0 (no commit yet on the current UTC day —
-# happens just after UTC midnight). Under `set -euo pipefail` that non-zero exit would
-# kill the script BEFORE the `|| BUILD_DAY_N=1` fallback below could run, so guard the
-# pipeline with `|| true` and let the fallback floor it to 1.
-BUILD_DAY_N="$(TZ=UTC git log --date=format-local:'%Y-%m-%d' --pretty='%cd' 2>/dev/null | grep -cx "$BUILD_TODAY" || true)"
-{ [ "${BUILD_DAY_N:-0}" -ge 1 ]; } 2>/dev/null || BUILD_DAY_N=1
-BUILD_VERSION="${BUILD_DATE}.${BUILD_DAY_N}"
+# ONE UTC timestamp is the single source of truth for both the version and BUILD_TIME.
+# Two separate `date` calls could straddle UTC midnight and stamp tomorrow's date with
+# today's time-of-day.
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# Build ordinal (.HHMMSS, UTC time-of-day). It increases strictly with wall-clock time and
+# does NOT depend on which commit is deployed, so (date, ordinal) always sorts in deploy
+# order. The previous ordinal counted commits whose UTC committer date was today AND that
+# were reachable from HEAD, which had two defects:
+#   1. it went BACKWARDS on the same day when a deploy ran from a branch behind main
+#      (observed: main was live at .28 while a deploy from a stale base stamped .26);
+#   2. two rebuilds of the same commit produced the same version, so a redeploy was
+#      indistinguishable from the build it replaced.
+# Month/day stay unpadded (2026.7.9) for readability; compare versions as a numeric tuple,
+# not as a string — "2026.7.10" sorts before "2026.7.9" lexicographically.
+BUILD_DATE="${BUILD_TIME:0:4}.$(( 10#${BUILD_TIME:5:2} )).$(( 10#${BUILD_TIME:8:2} ))"
+BUILD_SEQ="${BUILD_TIME:11:2}${BUILD_TIME:14:2}${BUILD_TIME:17:2}"
+BUILD_VERSION="${BUILD_DATE}.${BUILD_SEQ}"
 echo "   version $BUILD_VERSION · built $BUILD_TIME"
 az acr build -r "$ACR" -t "$IMAGE" -f deploy/public/Dockerfile \
   --build-arg BUILD_VERSION="$BUILD_VERSION" --build-arg BUILD_TIME="$BUILD_TIME" . -o none
