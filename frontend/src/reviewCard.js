@@ -15,13 +15,41 @@ import { metaFor } from './hitlMeta.js'
 const scOf = (ruleId) =>
   String(ruleId || '').replace(/^SC[_ ]?/i, '').replace(/_/g, '.').match(/^\d+\.\d+\.\d+/)?.[0] || ''
 
-// Criteria whose fix IS a value a screen reader will announce (alt text, link text, a title).
-// The reviewer approves that text; everything else is a judgement call with nothing to type.
-// Single source of truth — ReviewCenter and EvidenceCard must agree on which items get an
-// editor, or a reviewer would approve an empty value on one screen and not the other.
-export const VALUE_FIX = new Set(['1.1.1', '2.4.4', '2.4.9', '2.4.2', '3.3.2'])
+// Criteria whose fix is CONTENT the document must carry — alt text, link text, a title, a
+// `lang` marking. Approving one is not the resolution: the value still has to be written in
+// and the file re-scanned. Everything else (a contrast ratio accepted, a link deemed adequate
+// as it stands) is a judgement call whose resolution IS the human sign-off.
+//
+// Single source of truth. It decides three things at once, so a criterion missing from it goes
+// wrong three ways: no editor appears, the card promises "Fail → Pass after approval", and
+// "Approve all judgement items" sweeps it up in bulk. 3.1.2 was missing, so a Language-of-Parts
+// finding certified its file while the passage was still unmarked.
+export const VALUE_FIX = new Set([
+  '1.1.1',   // alt text
+  '2.4.4', '2.4.9',   // link text
+  '2.4.2',   // document / page title
+  '3.3.2',   // form-field label
+  '3.1.1',   // document language — a `lang` attribute, written not merely agreed to
+  '3.1.2',   // language of parts — a `lang` marking on each foreign passage
+  '1.3.3',   // sensory characteristics — the sentence itself is rewritten
+])
 
 export const isValueFix = (sc) => VALUE_FIX.has(sc)
+
+// What a proposal's raw value means once written. 3.1.2 proposes a bare ISO code ("es"), which
+// tells a reviewer nothing on its own; show the markup it becomes.
+const LANG_NAMES = { en: 'English', es: 'Spanish', fr: 'French', de: 'German', pt: 'Portuguese',
+                     it: 'Italian', nl: 'Dutch', zh: 'Chinese', ja: 'Japanese', ko: 'Korean',
+                     ar: 'Arabic', hi: 'Hindi', ru: 'Russian', pl: 'Polish', tr: 'Turkish' }
+
+export function formatProposedValue(sc, value) {
+  const v = String(value ?? '')
+  if ((sc === '3.1.2' || sc === '3.1.1') && /^[a-z]{2}(-[A-Za-z]{2,4})?$/.test(v)) {
+    const name = LANG_NAMES[v.slice(0, 2).toLowerCase()]
+    return `lang="${v}"${name ? ` — ${name}` : ''}`
+  }
+  return v
+}
 
 // A deck fails on slides; a PDF fails on pages. Same idea to a reviewer: "go here".
 export const pageNoun = (file) => (String(file || '').split('.').pop().toLowerCase() === 'pptx' ? 'Slide' : 'Page')
@@ -118,6 +146,49 @@ export const pageOf = (item) => {
 export const firstRationale = (item) => proposalsOf(item)[0]?.rationale ?? null
 export const firstSource = (item) => proposalsOf(item)[0]?.source ?? null
 
+// Queue rows reach us in two shapes: the raw DB row (rule_id, file) and the mapped UI item
+// (ruleId, file). Read both so one comparison helper serves the card and the drawer.
+const ruleOf = (item) => item?.rule_id ?? item?.ruleId ?? ''
+
+// The current→remediated comparison a reviewer approves against, in order of evidential
+// strength. NEVER a template: if neither source has a real value this returns null and the
+// card must say so, rather than assert a fix nobody made.
+//
+//   applied:true  — a remediation_diff row: verified, already written into the document.
+//   applied:false — an AI proposal (hitl_queue.proposals): a draft awaiting this approval.
+//
+// remediation_diff is scan-wide, so it is matched on BOTH file and criterion: matching on
+// rule alone would show one document's fix on another document's card.
+export function comparisonFor(item, scanDiffs = []) {
+  const sc = scOf(ruleOf(item))
+  if (!sc) return null
+  const applied = (scanDiffs || []).find(
+    (d) => d && d.file === item?.file && scOf(d.rule_id) === sc && (d.before || d.after))
+  if (applied) return { before: applied.before ?? null, after: applied.after ?? null, applied: true }
+  const proposed = firstProposed(item)
+  if (proposed) return { before: firstBefore(item), after: proposed, applied: false }
+  return null
+}
+
+// What to tell a reviewer when nothing was drafted or applied. Content criteria need a human to
+// supply the missing content — and WHICH content differs, so say so rather than telling someone
+// staring at a Language-of-Parts finding to "write a description". Everything else is a
+// judgement call. This replaced canned strings ("AI-generated alt text added") that the card
+// printed whether or not a model had written anything — see comparisonFor.
+const NO_DRAFT_HINT = {
+  '3.1.1': 'No draft yet — confirm the language this document is written in.',
+  '3.1.2': 'No draft yet — name the language of the passage so screen readers switch voice.',
+  '1.3.3': 'No draft yet — rewrite the instruction without relying on shape, colour or position.',
+  '2.4.2': 'No draft yet — give the document a title that identifies it.',
+  '2.4.4': 'No draft yet — write link text that says where the link goes.',
+  '2.4.9': 'No draft yet — write link text that says where the link goes.',
+  '3.3.2': 'No draft yet — name the form field so its purpose is clear.',
+}
+
+export const noDraftHint = (sc) => (isValueFix(sc)
+  ? (NO_DRAFT_HINT[sc] || 'No draft yet — write the description a screen reader should announce.')
+  : 'No automated fix was recorded — this needs your judgement.')
+
 export function proposalMeta(item) {
   const list = proposalsOf(item)
   if (!list.length) return null
@@ -168,12 +239,12 @@ export function buildEvidenceCard(item, diffs = []) {
     // sign-off IS the resolution — a re-scan can never clear it — so the backend
     // (store.mark_file_compliant_if_reviewed) certifies the file on approval.
     //
-    // VALUE-FIX finding (alt text, a title, a label): NO. Approving stores approved_value as
-    // compliance evidence and stops there; no remediator consumes it and no job is enqueued
-    // (api/routes/hitl.py). The document is never modified, so the criterion still fails.
-    // This was a hardcoded `{ before: 'Fail', after: 'Pass' }`, which promised a Pass the
-    // backend now refuses to grant — and which certified a PPTX 100/100 while its ten images
-    // were still undescribed.
+    // VALUE-FIX finding (alt text, a title, a label): NOT on the approval itself. Approving
+    // schedules the write (api/routes/hitl.py → apply_approved_values), which applies each
+    // value at its locator, re-scans the written copy, and certifies only if the criterion
+    // actually cleared. So the card must not promise a Pass here: at the moment the reviewer
+    // clicks, the document still fails. This was a hardcoded `{ before: 'Fail', after: 'Pass' }`,
+    // which certified a PPTX 100/100 while its ten images were still undescribed.
     certifiesOnApprove: !isValueFix(sc),
     impact: { before: 'Fail', after: isValueFix(sc) ? 'Fail' : 'Pass' },
     findingCount: item?.finding_count || 1,

@@ -8,10 +8,17 @@ const here = dirname(fileURLToPath(import.meta.url))
 const read = (f) => readFileSync(join(here, f), 'utf8')
 
 describe('VALUE_FIX is shared, not duplicated', () => {
-  it('covers the criteria whose fix is a value a screen reader announces', () => {
-    expect([...VALUE_FIX].sort()).toEqual(['1.1.1', '2.4.2', '2.4.4', '2.4.9', '3.3.2'])
+  it('covers every criterion whose fix is CONTENT the document must carry', () => {
+    // Not only text a screen reader speaks: a `lang` marking is content too, and has to be
+    // written in. 3.1.2 was missing, so its card promised "Fail → Pass after approval" and
+    // "Approve all judgement items" swept it up — certifying files whose foreign passages
+    // were still unmarked.
+    expect([...VALUE_FIX].sort()).toEqual(
+      ['1.1.1', '1.3.3', '2.4.2', '2.4.4', '2.4.9', '3.1.1', '3.1.2', '3.3.2'])
     expect(isValueFix('1.1.1')).toBe(true)
+    expect(isValueFix('3.1.2')).toBe(true)    // a lang attribute is written, not merely agreed to
     expect(isValueFix('1.4.3')).toBe(false)   // contrast is a judgement call, nothing to type
+    expect(isValueFix('1.4.6')).toBe(false)
   })
 
   it('ReviewCenter no longer keeps its own copy', () => {

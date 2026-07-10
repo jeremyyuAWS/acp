@@ -9,6 +9,7 @@ imports no route module (no cycles).
 from __future__ import annotations
 import os
 import sys
+import threading
 import time as _time
 from pathlib import Path
 
@@ -83,23 +84,26 @@ def email_allowed(email: str) -> bool:
     if email and email == OWNER_EMAIL:
         return True
     try:
-        if email in store.get_allowlist():
+        if email in get_store().get_allowlist():
             return True
     except Exception:
         pass
     return any(email.endswith("@" + d.lower()) for d in ALLOWED_DOMAINS)
 
 
-def seed_allowlist_once() -> None:
+def seed_allowlist_once(st: Store) -> None:
     """One-time bootstrap: copy ACP_ALLOWED_EMAILS into the editable runtime list so
     pre-existing users appear in Settings → Test users and can be removed. Guarded by a
-    marker so it never resurrects a user the admin later deletes."""
+    marker so it never resurrects a user the admin later deletes.
+
+    Takes the Store explicitly: it runs from inside get_store(), before the singleton is
+    published, so it cannot reach it through the module attribute."""
     try:
-        if store.get_setting("allowlist_seeded") == "true":
+        if st.get_setting("allowlist_seeded") == "true":
             return
         if ALLOWED_EMAILS:
-            store.set_allowlist(sorted(set(store.get_allowlist()) | ALLOWED_EMAILS))
-        store.set_setting("allowlist_seeded", "true")
+            st.set_allowlist(sorted(set(st.get_allowlist()) | ALLOWED_EMAILS))
+        st.set_setting("allowlist_seeded", "true")
     except Exception:
         pass
 DRIVE_SCOPES = [
@@ -109,8 +113,45 @@ DRIVE_SCOPES = [
 HITL_WEBHOOK = os.environ.get("HITL_WEBHOOK_URL", "")
 
 # ── Shared singletons ─────────────────────────────────────────────────────────
-store = Store()
-seed_allowlist_once()   # bootstrap the editable test-user list from env (once)
+# `store` is built on FIRST USE, never at import. Store() opens — and creates — the database
+# in its constructor, so a module-level `store = Store()` meant that merely *importing* core
+# touched the disk: a CLI script, a test module collected by pytest, a tool reading the route
+# table. Worse, whatever store._SQLITE_PATH happened to say at that instant was frozen into
+# core.store for the life of the process, so anything that repointed the path afterwards was
+# silently talking to a different database than core was.
+#
+# Access it as `core.store` (PEP 562 __getattr__ below) or `core.get_store()`. Both resolve to
+# the same object; neither runs until someone actually needs a database.
+_store_lock = threading.Lock()
+
+
+def get_store() -> Store:
+    """The process-wide Store, constructed on first use.
+
+    Resolves through the module's own `store` attribute rather than a private slot, so a test
+    doing `monkeypatch.setattr(core, "store", fake)` is honoured by core's *internal* callers
+    too (finalize_scan, the scheduled scan, the job workers) — not just by the modules that
+    read `core.store` from outside.
+    """
+    st = globals().get("store")
+    if st is None:
+        with _store_lock:
+            st = globals().get("store")          # another thread may have won the race
+            if st is None:
+                st = Store()
+                globals()["store"] = st          # publish before seeding: seeding uses `st`
+                seed_allowlist_once(st)
+    return st
+
+
+def __getattr__(name: str):
+    """PEP 562: only consulted when normal attribute lookup fails. Once get_store() publishes
+    `store` into the module globals (or a test monkeypatches it), this stops being called."""
+    if name == "store":
+        return get_store()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 JOBS: dict[str, dict] = {}
 
 
@@ -227,7 +268,7 @@ def emit_remediation_span(scan_id: str, filename: str, drive_write_url: str | No
     Assess spans, so the file's full lifecycle lives in one place."""
     try:
         import lf as _lf
-        owner = (store.get_scan(scan_id) or {}).get("run", {}).get("owner_email")
+        owner = (get_store().get_scan(scan_id) or {}).get("run", {}).get("owner_email")
         trace = _lf.file_trace(scan_id, filename, user=owner)
         _lf.remediate_span(trace, drive_write_url)
         _lf.flush()
@@ -236,8 +277,28 @@ def emit_remediation_span(scan_id: str, filename: str, drive_write_url: str | No
 
 
 # ── Background scheduler (periodic local scans) ───────────────────────────────
+# Constructed at import (cheap, no thread), but NOT started: scheduler.start() spawns a
+# background thread, and importing a module should not. Every pytest process and every CLI
+# script that touched `import core` was running one. app.py starts it from its startup hook
+# and shuts it down again on SIGTERM.
+#
+# add_job()/remove_all_jobs()/get_job() all work on a stopped scheduler — APScheduler holds
+# them as pending jobs and runs them once started — so reload_scheduler() may arm it first.
 scheduler = BackgroundScheduler()
-scheduler.start()
+
+
+def start_scheduler() -> bool:
+    """Start the background scheduler. Idempotent; returns True if this call started it."""
+    if scheduler.running:
+        return False
+    scheduler.start()
+    return True
+
+
+def stop_scheduler() -> None:
+    """Stop the scheduler if running. Safe to call when it never started."""
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
 
 
 def _do_scheduled_scan():
@@ -245,14 +306,14 @@ def _do_scheduled_scan():
     ADC identity — no user token is available in the background), stamps it with the
     owner who set the schedule so it shows up in their scan list, and finalizes it.
     Falls back to the local corpus if the Drive/ADC path is unavailable."""
-    cfg = store.get_schedule()
+    cfg = get_store().get_schedule()
     owner = cfg.get("owner_email")
     source = cfg.get("source") or "drive"
-    ai = store.get_ai_enabled()
+    ai = get_store().get_ai_enabled()
 
     def _run(src):
         report = run_scan(src, drive_token=None, ai_enabled=ai, user=owner)  # ADC for drive
-        sid = store.save_scan(report)
+        sid = get_store().save_scan(report)
         finalize_scan(sid, ai, src)
         return report["summary"]["files"]
 
@@ -269,7 +330,7 @@ def _do_scheduled_scan():
 
 
 def reload_scheduler():
-    cfg = store.get_schedule()
+    cfg = get_store().get_schedule()
     scheduler.remove_all_jobs()
     if cfg["enabled"] and cfg["interval_minutes"] > 0:
         scheduler.add_job(_do_scheduled_scan, "interval",
@@ -278,7 +339,10 @@ def reload_scheduler():
                           coalesce=True, max_instances=1)
 
 
-reload_scheduler()
+# NOT called at import: reload_scheduler() reads the schedule out of the database, which would
+# build the Store as a side effect of `import core` and defeat the laziness above. app.py calls
+# it from its startup hook. This also stops a non-API process that merely imports core (a job
+# worker, a CLI script) from arming its own copy of the scheduled scan.
 
 
 # ── Async job-queue worker pool (ADR 0004) ────────────────────────────────────
@@ -295,7 +359,7 @@ def _spawn_worker() -> None:
     import threading
     from worker import JobWorker
     global _worker_seq
-    w = JobWorker(store, worker_id=f"w{_worker_seq}")
+    w = JobWorker(get_store(), worker_id=f"w{_worker_seq}")
     t = threading.Thread(target=w.run_forever, daemon=True, name=f"jobworker-{_worker_seq}")
     _worker_seq += 1
     t.start()
@@ -459,16 +523,16 @@ def finalize_scan(scan_id: str, effective_ai: bool, source: str) -> None:
     Finalize-once (ADR 0013): a crash between a fan-out file's bump and completion used to
     re-trigger and double-emit HITL/audit. mark_finalized claims the scan atomically, so
     only the first caller runs this body; duplicate/concurrent scan_finalize jobs no-op."""
-    if not store.mark_finalized(scan_id):
+    if not get_store().mark_finalized(scan_id):
         return
-    store.log_decision(
+    get_store().log_decision(
         "system", "scan.completed", scan_id=scan_id,
         detail=f"source={source} mode={'ai-assisted' if effective_ai else 'deterministic'}")
     if not effective_ai:
-        created = store.queue_hitl_items(scan_id)
+        created = get_store().queue_hitl_items(scan_id)
         if created:
             fire_webhook(created)
-            store.log_decision(
+            get_store().log_decision(
                 "system", "hitl.auto_routed", scan_id=scan_id,
                 detail=f"deterministic mode → {len(created)} ai-assisted findings routed to HITL")
 
@@ -499,12 +563,12 @@ def start_workers() -> int:
                 # 30-min lease: scans of large estates legitimately run ~10-15min,
                 # so reclaim only clearly-dead jobs. The worker heartbeat (best-effort)
                 # extends this further; this is the reliable floor if it can't.
-                n = store.reclaim_stuck_jobs(lease_seconds=1800)
+                n = get_store().reclaim_stuck_jobs(lease_seconds=1800)
                 if n:
                     print(f"[sweeper] reclaimed {n} stuck job(s)", flush=True)
                 ticks += 1
                 if ticks % 60 == 0:      # ~hourly: trim old completed jobs so the jobs
-                    d = store.purge_done_jobs(older_than_hours=24)   # table + claim index don't bloat (audit P2)
+                    d = get_store().purge_done_jobs(older_than_hours=24)   # table + claim index don't bloat (audit P2)
                     if d:
                         print(f"[sweeper] purged {d} old done job(s)", flush=True)
             except Exception as e:

@@ -16,6 +16,11 @@ class HitlUpdate(BaseModel):
     edited: bool = False                # reviewer changed the AI draft before approving (calibration signal)
     review_ms: int | None = None        # client-measured time from card-open to decision (reviewer-time metric)
     ai_value: str | None = None         # the AI-proposed value shown, so we store proposed-vs-final
+    # One final text per proposal, positionally: the row holds N proposals (one per image) and
+    # a single approved_value could never describe ten different pictures. An entry that is
+    # null/"" accepts that proposal's own draft, so approving an unedited card means exactly
+    # "the drafts I was shown are correct". Omit entirely for a judgement finding.
+    approved_values: list[str | None] | None = None
 
 
 @router.post("/hitl/queue/{scan_id}/auto")
@@ -78,6 +83,13 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     if body.status not in valid:
         raise HTTPException(422, f"status must be one of {sorted(valid)}")
     updated = core.store.update_hitl_item(item_id, body.status, body.reviewer_note, body.approved_value)
+    # Record the reviewer's final text per proposal, so the applier knows which image gets which
+    # description. Only on approval: rejecting or skipping approves no content.
+    if body.status == "approved" and body.approved_values is not None:
+        try:
+            core.store.approve_proposal_values(item_id, body.approved_values)
+        except Exception:
+            pass
     # Immutable audit trail: WHO decided what, when, on which finding — include the
     # approved value itself so the log is self-sufficient compliance evidence.
     #
@@ -131,10 +143,23 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
             core.store.upsert_remediation_state(doc_id, item["rule_id"], _STATE_FOR[body.status], scan_id)
         except Exception:
             pass
-    # Re-validate → certify: once a remediated file's every review item is approved, it is
-    # fully conformant (auto fixes verified + human findings signed off) and advances to
-    # Publish. This is the seam that closes the remediate → review → publish loop — without
-    # it an approved file stays compliant=0 forever and never reaches the publish queue.
+    # Write the approved content into the document. Approving alt text used to store the text
+    # and stop — the images stayed undescribed, so mark_file_compliant_if_reviewed below
+    # refused to certify and the file could never reach Publish. The job applies the values to
+    # the remediated copy, re-scans it, and only then marks the row applied; it re-runs the
+    # certify seam itself once the document actually carries the content.
+    if (body.status == "approved" and item.get("scan_id") and item.get("file")
+            and core.store.approved_alt_values(item["scan_id"], item["file"])):
+        try:
+            core.store.enqueue_job("apply_approved_values",
+                                   {"scan_id": item["scan_id"], "file": item["file"]},
+                                   scan_id=item["scan_id"])
+        except Exception:
+            pass
+    # Re-validate → certify: once a remediated file's every review item is approved AND every
+    # approved value has been written in, it is fully conformant (auto fixes verified + human
+    # findings signed off) and advances to Publish. A file still holding unwritten approved
+    # content returns False here and certifies later, from the apply job.
     if body.status == "approved" and item.get("scan_id") and item.get("file"):
         try:
             if core.store.mark_file_compliant_if_reviewed(item["scan_id"], item["file"]):

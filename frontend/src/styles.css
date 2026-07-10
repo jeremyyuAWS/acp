@@ -1701,6 +1701,11 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 /* The page render, when the proposal carried no image of its own. Narrower than the standalone
    preview so the reasoning beside it stays on one column. */
 .whyreview-thumb { margin: 0; flex: 0 0 auto; max-width: 130px; }
+/* Current → remediated, stacked rather than side-by-side: an alt-text sentence or a
+   marked-up language span is long, and two narrow columns wrap it into unreadable ribbons. */
+.whyreview-ba { margin-top: 7px; }
+.whyreview-ba .diffbox { margin: 0 0 5px; }
+.whyreview-ba .diffbox:last-child { margin-bottom: 0; }
 
 /* Verification (§8) */
 .verify-run { display: flex; align-items: center; gap: 12px; font-size: 13.5px; flex-wrap: wrap; }
@@ -1780,6 +1785,19 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
   border-radius: 8px; background: var(--card, #fff); color: inherit;
   font: inherit; font-size: 13px; line-height: 1.5; }
 .evcard-rec-input:focus-visible { outline: 2px solid var(--plum); outline-offset: 1px; }
+/* One image, one description. Each row pairs the picture the reviewer must judge with the
+   text that will be written for it — approving a description of an unseen image is exactly
+   what the single-value editor used to invite. */
+.evcard-multi { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+.evcard-multi-row { display: flex; gap: 10px; align-items: flex-start;
+  padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.evcard-multi-row:last-child { border-bottom: none; padding-bottom: 0; }
+.evcard-multi-thumb { flex-shrink: 0; }
+.evcard-multi-row textarea { width: 100%; }
+/* current → writes, inside a proposal row: tighter than the standalone diffbox */
+.evcard-ba { margin: 0 0 5px; padding: 6px 9px; }
+.evcard-ba .difftag { margin-bottom: 2px; }
+.evcard-why-draft { font-size: 11.5px; margin: 5px 0 0; line-height: 1.45; }
 
 /* On-demand "Draft with AI" — offered only when nothing was proposed for this item. */
 .evcard-rec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

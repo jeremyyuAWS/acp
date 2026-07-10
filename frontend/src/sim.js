@@ -488,3 +488,97 @@ export function simRules() {
   }
   return out
 }
+
+// ── Simulated remediation evidence (SIM only) ────────────────────────────────────────────
+// The demo runs no engine, so nothing is ever really remediated. These fixtures reproduce the
+// SHAPES the live backend persists — store.list_remediation_diffs rows and hitl_queue.proposals
+// entries — so the review card's before→after evidence demonstrates itself against the
+// simulated estate. Invented values for invented documents; unreachable when VITE_SIM=false.
+
+// The offending image a reviewer is asked to describe. Inlined so the demo needs no asset
+// server, and shaped to pass ProposalThumb's data-URL allowlist (PNG/JPEG/GIF/WEBP only).
+export const SIM_THUMB = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAFQAAABUCAIAAACTCYeWAAAAz0lEQVR42u3cMQrCQBAF0Il4BxsLG09kbSeIJxIhnbX3CQghxTa5hRcQK4U486ZN9fiQP5vAduPQouqsI2K72xSUt2leReGBh4eHL1V1aWZ/fnx4+rwdJA8PDw8PDw8PDw8P71T3Jyc2ycPDw8PDL6jqflFjkoeHh4eHh4eHt94mWl0lDw8PDw//hapbco1JHh4eHh4e3pKTcoGRPDw8PDw8PDw8PDw8PDw8PHym6cahlb0h6c03vP56zwo+XY6SdzeWtz08fBT8XdWmuSb+BZ4VKTMgfAKeAAAAAElFTkSuQmCC'
+
+const scOfWcag = (w) => String(w || '').replace(/^SC_/, '').replace(/_/g, '.')
+
+// Criteria whose fix IS a value a model drafts and a human approves — the live proposal lane
+// (api/proposals.py). A draft is NEVER applied until the reviewer accepts it, so these render
+// as "AI draft · not applied until you approve".
+// A logo mark — the second image in the deck. Two proposals, not one: a real file has several
+// images, and the review UI must show EACH one beside its own description rather than let a
+// single Approve stand in for pictures the reviewer never saw.
+export const SIM_THUMB_LOGO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAFQAAABUCAIAAACTCYeWAAABg0lEQVR42u3bMXLCMBCF4WUHzkCTIpegypXSpeEIadLlSqlyASrGhRqfgSZ9Ap4Y71svo18tWKNPWmxrtWzOp2a9tq2ZPT3vO5S3YXTruIEHDx48ePDgwYMHDx48ePD2uMmM5HZ8+7710fvHIXMkm/Op5WRyJsyrzEIbRjl+ljlzFuRprIXykB5WCPvwQYeHgCrsp+UTjLsvrIK/BZg19JBOsvFXB333iGN7097wwsd69drAu4mXlSf4hY+6qPjUPepdtOyxI/7bW8jie325zu9loz2hZ/bzcTGv3o396n9h5Kfu578+d//52svrhUxObXxyzIdHPisPHjx48ODBg094085/s+KgMqul7ViSVj458mN3E9zwap/S6Xr2sqnVhDSpV04tqxPEXvlwXv07cmleWVScEJUycnVefYlfKjdFZUa/5/O9V2b0XpMTOwWijLi8FE1UnEAF5iNUYJatvV0Hb/yLmgQmePDgwYMHDx48ePDgwYMHDx48eJtVk9OGsU/8DyzI5mDcSu/uAAAAAElFTkSuQmCC'
+
+const SIM_PROPOSAL = {
+  '1.1.1': [
+    {
+      locator: '#Picture 1',
+      before: '(no alt text)',
+      proposed_value: 'Bar chart of monthly clinic visits, rising from 120 in January to 310 in June.',
+      rationale: 'No text found in the image; described from its visual content.',
+      source: 'AI vision model (llava:7b) · simulated',
+      thumb: SIM_THUMB,
+    },
+    {
+      locator: '#Picture 2',
+      before: '(no alt text)',
+      proposed_value: 'The clinic logo: a violet ring around a gold square.',
+      rationale: 'Small, square, appears on every slide — described rather than assumed decorative.',
+      source: 'AI vision model (llava:7b) · simulated',
+      thumb: SIM_THUMB_LOGO,
+    },
+  ],
+  '2.4.4': [
+    {
+      locator: '#a[3]',
+      before: '"click here"',
+      proposed_value: 'Download the cardiology intake form (PDF, 240 KB)',
+      rationale: 'Derived from the link target and the sentence around it.',
+      source: 'AI text model (llama3.2) · simulated',
+    },
+  ],
+}
+// The OPC part an image lives in, per format — so a demo locator names a place that document
+// could actually have. A pptx locator on an xlsx card is the kind of detail a reviewer notices.
+const SIM_PART = {
+  pptx: 'ppt/slides/slide3.xml',
+  docx: 'word/document.xml',
+  xlsx: 'xl/drawings/drawing1.xml',
+  html: 'index.html',
+  pdf: 'page 3',
+}
+
+// A fresh copy each call: a reviewer editing one card must not mutate the fixture. `file` fixes
+// the locator prefix to that document's format; fixtures store only the '#element' suffix.
+export const simProposalsFor = (sc, file = '') => {
+  const list = SIM_PROPOSAL[sc]
+  if (!list) return null
+  const ext = String(file).split('.').pop().toLowerCase()
+  const part = SIM_PART[ext] || 'document'
+  return list.map((p) => ({ ...p, locator: `${part}${p.locator}` }))
+}
+
+// Criteria the pipeline fixes deterministically and writes INTO the document. These become
+// remediation_diff rows, so "after" is what the file says now — not a suggestion. Criteria
+// absent from both maps (contrast 1.4.3, captions 1.2.x) are human judgement with nothing to
+// show, and the card says so rather than inventing a fix.
+const SIM_APPLIED = {
+  '1.3.1': { before: '<td>Appointment date</td>', after: '<th scope="col">Appointment date</th>' },
+  '1.3.2': { before: 'sidebar → body text → heading', after: 'heading → body text → sidebar' },
+  '2.4.2': { before: '(untitled document)', after: 'Cardiology — Patient Handbook' },
+  '3.1.1': { before: '<html>', after: '<html lang="en">' },
+}
+
+// Every applied fix across the simulated estate — one row per (file, criterion), the shape
+// store.list_remediation_diffs returns. Callers gate this on the demo having actually run
+// remediation, so the view never opens claiming work it has not done.
+export function simRemediationDiffs(files = CORPUS) {
+  const out = []
+  files.forEach((f) => (f.issues || []).forEach((i) => {
+    const sc = scOfWcag(i.wcag)
+    const fix = SIM_APPLIED[sc]
+    if (!fix || out.some((r) => r.file === f.file && r.rule_id === sc)) return
+    out.push({ file: f.file, rule_id: sc, seq: 1, before: fix.before, after: fix.after, note: null })
+  }))
+  return out
+}

@@ -1,5 +1,96 @@
 import { describe, it, expect } from 'vitest'
-import { buildEvidenceCard } from './reviewCard.js'
+import { buildEvidenceCard, comparisonFor, formatProposedValue, noDraftHint } from './reviewCard.js'
+
+describe('comparisonFor — current → remediated, or nothing', () => {
+  const DIFF = { file: 'deck.pptx', rule_id: '1.1.1', before: '(no alt text)', after: 'A clinician at a desk.' }
+
+  it('prefers an applied remediation_diff and marks it applied', () => {
+    const c = comparisonFor({ rule_id: 'SC_1_1_1', file: 'deck.pptx' }, [DIFF])
+    expect(c).toEqual({ before: '(no alt text)', after: 'A clinician at a desk.', applied: true })
+  })
+
+  it('never shows one document\'s fix on another document\'s card', () => {
+    // remediation_diff is scan-wide. Matching on rule alone would attach deck.pptx's alt text
+    // to report.pdf's 1.1.1 card — a fabricated before/after for a file nobody remediated.
+    expect(comparisonFor({ rule_id: '1.1.1', file: 'report.pdf' }, [DIFF])).toBeNull()
+  })
+
+  it('falls back to the AI proposal, marked NOT applied', () => {
+    const c = comparisonFor({
+      rule_id: '1.1.1', file: 'deck.pptx',
+      proposals: [{ before: '(no alt text)', proposed_value: 'A parent signing a form.' }],
+    }, [])
+    expect(c).toEqual({ before: '(no alt text)', after: 'A parent signing a form.', applied: false })
+  })
+
+  it('an applied fix outranks a stale proposal on the same item', () => {
+    const c = comparisonFor({
+      rule_id: '1.1.1', file: 'deck.pptx',
+      proposals: [{ proposed_value: 'the draft nobody approved' }],
+    }, [DIFF])
+    expect(c.applied).toBe(true)
+    expect(c.after).toBe('A clinician at a desk.')
+  })
+
+  it('reads the mapped UI item shape (ruleId) as well as the raw row (rule_id)', () => {
+    expect(comparisonFor({ ruleId: '1.1.1', file: 'deck.pptx' }, [DIFF])?.applied).toBe(true)
+  })
+
+  it('returns null — never a template — when nothing was drafted or applied', () => {
+    for (const empty of [null, {}, { rule_id: '1.1.1', file: 'deck.pptx' },
+                         { rule_id: '1.1.1', file: 'deck.pptx', proposals: [] }]) {
+      expect(comparisonFor(empty, [])).toBeNull()
+    }
+    // a diff row carrying neither side is not a comparison
+    expect(comparisonFor({ rule_id: '1.1.1', file: 'deck.pptx' },
+                         [{ file: 'deck.pptx', rule_id: '1.1.1', before: '', after: '' }])).toBeNull()
+  })
+})
+
+describe('formatProposedValue — a raw value a reviewer can act on', () => {
+  it('turns a bare ISO code into the markup it becomes', () => {
+    // 3.1.2 proposes "es". On its own that tells a reviewer nothing about what changes.
+    expect(formatProposedValue('3.1.2', 'es')).toBe('lang="es" — Spanish')
+    expect(formatProposedValue('3.1.1', 'fr')).toBe('lang="fr" — French')
+    expect(formatProposedValue('3.1.2', 'pt-BR')).toBe('lang="pt-BR" — Portuguese')
+  })
+
+  it('names the language only when we know it, never inventing one', () => {
+    expect(formatProposedValue('3.1.2', 'xx')).toBe('lang="xx"')
+  })
+
+  it('leaves prose alone — alt text is already what gets written', () => {
+    expect(formatProposedValue('1.1.1', 'A clinician at a desk.')).toBe('A clinician at a desk.')
+    expect(formatProposedValue('2.4.4', 'Download the intake form')).toBe('Download the intake form')
+    // a two-letter word that is not a lang code for this criterion stays untouched
+    expect(formatProposedValue('2.4.4', 'go')).toBe('go')
+  })
+
+  it('never throws on an empty or missing value', () => {
+    for (const v of [null, undefined, '']) expect(formatProposedValue('3.1.2', v)).toBe('')
+  })
+})
+
+describe('noDraftHint — what to say when there is no fix to show', () => {
+  it('asks a human to author the value for a value-fix criterion', () => {
+    expect(noDraftHint('1.1.1')).toMatch(/write the description/i)
+    expect(noDraftHint('2.4.4')).toMatch(/write link text/i)
+  })
+
+  it('asks for the right KIND of content — not "a description" for a language marking', () => {
+    expect(noDraftHint('3.1.2')).toMatch(/name the language/i)
+    expect(noDraftHint('3.1.1')).toMatch(/language this document is written in/i)
+    expect(noDraftHint('1.3.3')).toMatch(/rewrite the instruction/i)
+    expect(noDraftHint('3.1.2')).not.toMatch(/description/i)
+  })
+
+  it('asks for judgement on everything else, and never claims a fix was applied', () => {
+    expect(noDraftHint('1.4.3')).toMatch(/judgement/i)
+    for (const sc of ['1.1.1', '1.4.3', '3.1.2']) {
+      expect(noDraftHint(sc)).not.toMatch(/applied|added|drafted/i)
+    }
+  })
+})
 
 describe('buildEvidenceCard — the Evidence Card model', () => {
   it('judgement item (contrast) → approval IS the resolution, so it certifies', () => {

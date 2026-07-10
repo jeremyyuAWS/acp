@@ -1,13 +1,24 @@
 import { useEffect, useState } from 'react'
 import Drawer from './Drawer.jsx'
+import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
+import { proposalsOf } from './reviewCard.js'
+import { scOf } from './fixSummary.js'
 
 export default function ReviewDrawer({ item, onClose, onAct, onDraft }) {
   const [afterText, setAfterText] = useState(item?.after || '')
   const [drafting, setDrafting] = useState(false)
   const [draftError, setDraftError] = useState(null)
+  // One editor per image. Approving now writes each value into the document at its own
+  // locator, so the reviewer must see every picture they are describing — the single
+  // `afterText` box below can only ever speak for the first one.
+  const proposals = proposalsOf(item)
+  const multi = proposals.length > 0
+  const [values, setValues] = useState(() => seedValues(proposals))
+  const setValueAt = (i, v) => setValues((prev) => prev.map((x, j) => (j === i ? v : x)))
 
   useEffect(() => {
     setAfterText(item?.after || '')
+    setValues(seedValues(proposalsOf(item)))
     setDraftError(null)
   }, [item?.id])
 
@@ -31,7 +42,13 @@ export default function ReviewDrawer({ item, onClose, onAct, onDraft }) {
         ⚑ Escalated to you: {item.meta || 'this finding type needs human judgement'} — deterministic fixes ran first; this one needs your approval.
       </div>
 
-      {item.before && (
+      {multi ? (
+        <>
+          <h4 className="drawerh">Proposed fix &middot; one description per image</h4>
+          <ProposalEditors proposals={proposals} values={values} sc={scOf(item.ruleId || item.rule)}
+                           onChange={setValueAt} file={item.file} />
+        </>
+      ) : item.before && (
         <>
           <h4 className="drawerh">Proposed fix &middot; before &rarr; after</h4>
           <div className="diffbox before"><span className="difftag">before</span><code>{item.before}</code></div>
@@ -62,7 +79,11 @@ export default function ReviewDrawer({ item, onClose, onAct, onDraft }) {
       <p className="muted" style={{ marginTop: 12 }}>{item.note || 'The agent proposes this fix; a human confirms because confidence is below the auto-apply threshold. Approving re-validates the file against all engines.'}</p>
 
       <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 16, flexWrap: 'wrap' }}>
-        <button onClick={() => onAct(item.id, 'approved', item.aiDraftable ? afterText : undefined)}>&#10003; approve fix</button>
+        {/* With per-image editors the array is what gets written; the headline value stays the
+            first image's text so the audit log and telemetry keep recording what was approved. */}
+        <button onClick={() => (multi
+          ? onAct(item.id, 'approved', values[0], values)
+          : onAct(item.id, 'approved', item.aiDraftable ? afterText : undefined))}>&#10003; approve fix</button>
         <button className="ghost" onClick={() => onAct(item.id, 'self')}>&#9995; I&apos;ll fix it myself</button>
         <button className="ghost" style={{ color: '#1F5FA8' }} onClick={() => onAct(item.id, 'deferred')}>&#9208; defer to next cycle</button>
         <button className="ghost" onClick={() => onAct(item.id, 'rejected')}>&#10005; reject</button>

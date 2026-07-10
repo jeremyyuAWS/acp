@@ -74,6 +74,16 @@ for _router in ROUTERS:
 
 @app.on_event("startup")
 def _start_job_workers():
+    """Open the database, arm and start the scheduler, then start the workers — in that order.
+
+    Nothing here happens at import any more. core.store is lazy (built on first use), so the
+    database is opened and the schema/allowlist bootstrap runs here rather than being paid for
+    by the first HTTP request — and a boot-time failure surfaces at startup instead of as a 500
+    on some route. reload_scheduler() reads the schedule out of that store, so it must follow
+    it; the scheduler thread then starts with its jobs already pending."""
+    core.get_store()
+    core.reload_scheduler()
+    core.start_scheduler()
     n = core.start_workers()
     if n:
         print(f"[acp] started {n} async job worker(s)", flush=True)
@@ -90,6 +100,13 @@ def _drain_job_workers():
         print("[acp] drained job workers for shutdown", flush=True)
     except Exception as e:
         print(f"[acp] shutdown drain error: {e}", flush=True)
+    # The scheduler owns a thread of its own; stop it in the same window rather than leaving
+    # uvicorn to be killed with it still running. Independent of the drain above: a failed
+    # drain must not leave the scheduler thread alive.
+    try:
+        core.stop_scheduler()
+    except Exception as e:
+        print(f"[acp] scheduler shutdown error: {e}", flush=True)
 
 
 @app.on_event("startup")
