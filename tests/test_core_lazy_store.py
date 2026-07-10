@@ -148,3 +148,45 @@ def test_core_does_not_arm_the_scheduler_at_import():
                "print('ARMED' if core.scheduler.get_jobs() else 'IDLE')\n"
                "print('BUILT' if _built else 'LAZY')\n")
     assert out.splitlines() == ["IDLE", "LAZY"]
+
+
+def test_core_does_not_start_a_scheduler_thread_at_import():
+    """scheduler.start() used to run at module level, so every pytest process and every CLI
+    script that imported core was running an APScheduler thread. app.py starts it at startup
+    and stops it on shutdown."""
+    out = _run("import threading\n"
+               "_before = threading.active_count()\n"
+               "import core\n"
+               "print('SPAWNED' if threading.active_count() > _before else 'NO_THREAD')\n"
+               "print('RUNNING' if core.scheduler.running else 'STOPPED')\n")
+    assert out.splitlines() == ["NO_THREAD", "STOPPED"]
+
+
+def test_start_scheduler_is_idempotent_and_stop_is_safe():
+    import core
+    assert core.stop_scheduler() is None          # never started: a no-op, not an error
+    try:
+        assert core.start_scheduler() is True     # this call started it
+        assert core.scheduler.running
+        assert core.start_scheduler() is False    # already running → no second thread
+    finally:
+        core.stop_scheduler()
+    assert not core.scheduler.running
+    core.stop_scheduler()                         # stopping twice is safe
+
+
+def test_reload_scheduler_arms_a_stopped_scheduler(monkeypatch):
+    """The load-bearing assumption behind starting the scheduler *after* arming it: APScheduler
+    holds jobs added before start() as pending, and get_job() (routes/system.py) finds them."""
+    import core
+
+    monkeypatch.setattr(core, "store", types.SimpleNamespace(
+        get_schedule=lambda: {"enabled": True, "interval_minutes": 15}))
+    assert not core.scheduler.running
+    try:
+        core.reload_scheduler()
+        assert len(core.scheduler.get_jobs()) == 1
+        assert core.scheduler.get_job("scheduled_local_scan") is not None
+    finally:
+        core.scheduler.remove_all_jobs()
+    assert not core.scheduler.running             # arming must not have started it

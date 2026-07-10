@@ -277,8 +277,28 @@ def emit_remediation_span(scan_id: str, filename: str, drive_write_url: str | No
 
 
 # ── Background scheduler (periodic local scans) ───────────────────────────────
+# Constructed at import (cheap, no thread), but NOT started: scheduler.start() spawns a
+# background thread, and importing a module should not. Every pytest process and every CLI
+# script that touched `import core` was running one. app.py starts it from its startup hook
+# and shuts it down again on SIGTERM.
+#
+# add_job()/remove_all_jobs()/get_job() all work on a stopped scheduler — APScheduler holds
+# them as pending jobs and runs them once started — so reload_scheduler() may arm it first.
 scheduler = BackgroundScheduler()
-scheduler.start()
+
+
+def start_scheduler() -> bool:
+    """Start the background scheduler. Idempotent; returns True if this call started it."""
+    if scheduler.running:
+        return False
+    scheduler.start()
+    return True
+
+
+def stop_scheduler() -> None:
+    """Stop the scheduler if running. Safe to call when it never started."""
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
 
 
 def _do_scheduled_scan():
