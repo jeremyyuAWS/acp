@@ -78,13 +78,20 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     if body.status not in valid:
         raise HTTPException(422, f"status must be one of {sorted(valid)}")
     updated = core.store.update_hitl_item(item_id, body.status, body.reviewer_note, body.approved_value)
-    # Immutable audit trail: who decided what, when, on which finding — include the
+    # Immutable audit trail: WHO decided what, when, on which finding — include the
     # approved value itself so the log is self-sufficient compliance evidence.
+    #
+    # The actor is the authenticated reviewer's email, not a generic "reviewer" label: a
+    # certification report that says a human signed off must be able to say WHICH human, or
+    # the chain of custody is unattributable. Falls back to the literal 'reviewer' when there
+    # is no authenticated identity (the demo/SSO-less path, and direct in-process callers for
+    # whom `request` is None) — we record what we actually know and never invent a name.
+    actor = getattr(getattr(request, "state", None), "user_email", None) or "reviewer"
     _detail = body.reviewer_note or None
     if body.approved_value:
         _detail = f"{_detail + ' | ' if _detail else ''}approved: {body.approved_value[:160]}"
     core.store.log_decision(
-        "reviewer", f"hitl.{body.status}",
+        actor, f"hitl.{body.status}",
         scan_id=item.get("scan_id"), file=item.get("file"), rule_id=item.get("rule_id"),
         detail=_detail)
     # Review telemetry (Intelligent Review Workspace): one event per decision so we can
