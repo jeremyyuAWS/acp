@@ -53,14 +53,20 @@ def _code(path: Path) -> str:
 
 # ---------------------------------------------------------------- the scripts
 
+# The two scripts name DIFFERENT ACA environments (public demo vs Temporal), so they must not
+# share one variable either -- see tests/test_deploy_env_namespacing.py.
+_ACA_ENV_VAR = {DEPLOY_SH.name: "ACP_ACA_ENV", STANDUP_SH.name: "ACP_TEMPORAL_ACA_ENV"}
+
+
 @pytest.mark.parametrize("script", DEPLOY_SCRIPTS, ids=lambda p: p.name)
 def test_aca_environment_name_no_longer_reads_acp_env(script):
-    """ENVNAME must come from ACP_ACA_ENV. Reading $ACP_ENV is what created the collision."""
+    """ENVNAME must not come from $ACP_ENV. Reading it is what created the collision."""
     src = _code(script)
     assert not re.search(r'ENVNAME="\$\{ACP_ENV[:-]', src), \
         f"{script.name} still resolves the ACA environment name from $ACP_ENV"
-    assert re.search(r'ENVNAME="\$\{ACP_ACA_ENV[:-]', src), \
-        f"{script.name} must resolve the ACA environment name from $ACP_ACA_ENV"
+    expected = _ACA_ENV_VAR[script.name]
+    assert re.search(rf'ENVNAME="\$\{{{expected}[:-]', src), \
+        f"{script.name} must resolve the ACA environment name from ${expected}"
 
 
 @pytest.mark.parametrize("script", DEPLOY_SCRIPTS, ids=lambda p: p.name)
@@ -135,6 +141,8 @@ def test_script_actually_exits_when_acp_env_is_set(script, tmp_path, monkeypatch
                          env=env, stdin=subprocess.DEVNULL)
     assert out.returncode == 1
     assert "ACP_ENV is set" in out.stderr, out.stderr
-    assert "ACP_ACA_ENV" in out.stderr and "ACP_DEPLOY_ENV" in out.stderr
+    # Each script names ITS OWN replacement: ACP_ACA_ENV for the demo, ACP_TEMPORAL_ACA_ENV here.
+    assert _ACA_ENV_VAR[script.name] in out.stderr, out.stderr
+    assert "ACP_DEPLOY_ENV" in out.stderr, out.stderr
     assert "STUB AZ WAS CALLED" not in out.stderr, \
         f"{script.name} reached an az call before refusing the ambiguous ACP_ENV"
