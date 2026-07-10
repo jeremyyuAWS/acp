@@ -102,3 +102,38 @@ def test_ordinal_is_not_derived_from_git():
     # Judge the code, not the comments — which mention git precisely to explain why it is absent.
     code = "\n".join(l for l in _ordinal_block().split("\n") if not l.lstrip().startswith("#"))
     assert not re.search(r"\bgit\b", code), "the ordinal must not depend on the deployed commit"
+
+
+# ── the "is this stamped?" guard ──
+
+def _guard_accepts(version: str) -> bool:
+    """Run deploy.sh's actual BUILD_VERSION regex against a candidate."""
+    src = DEPLOY_SH.read_text()
+    line = next(l for l in src.split("\n") if l.startswith('if ! [[ "$BUILD_VERSION" =~'))
+    script = f'set -u\nBUILD_VERSION="{version}"\n{line}\n  exit 1\nfi\nexit 0\n'
+    return subprocess.run(["bash", "-c", script], capture_output=True).returncode == 0
+
+
+@pytest.mark.parametrize("version", [
+    "2026.7.10.6",       # the deploy count — the normal case
+    "2026.7.10.1",       # first deploy of the day
+    "2026.7.10.4187",    # seconds-since-midnight fallback
+    "2026.7.10.005859",  # the timestamp scheme this replaced (still a valid stamp)
+    "2026.12.31.99",
+])
+def test_guard_accepts_every_stamp_this_script_can_produce(version):
+    # Pinning the ordinal to exactly 6 digits rejected .6 and aborted the deploy — safely, but
+    # it made the readable ordinal unshippable. The guard's job is catching an UNSTAMPED image.
+    assert _guard_accepts(version), f"{version} must be accepted"
+
+
+@pytest.mark.parametrize("version", [
+    "dev",               # the Dockerfile's ARG default — the whole reason the guard exists
+    "",
+    "2026.7.10",         # no ordinal
+    "v2026.7.10.6",
+    "2026.7.10.1234567", # 7 digits — not an ordinal this script emits
+    "2026.7.10.abc",
+])
+def test_guard_still_refuses_an_unstamped_or_malformed_version(version):
+    assert not _guard_accepts(version), f"{version} must be refused"

@@ -127,8 +127,12 @@ BUILD_VERSION="${BUILD_DATE}.${BUILD_SEQ}"
 # in /healthz makes a rollout unattributable. Fail here rather than after the image is
 # built and pushed. (The app enforces the other half: /healthz reports ok=false for an
 # unstamped image, see api/routes/system.py:_build_info.)
-if ! [[ "$BUILD_VERSION" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{6}$ ]]; then
-  echo "refusing to deploy: BUILD_VERSION '$BUILD_VERSION' is not a CalVer stamp (YYYY.M.D.HHMMSS)" >&2
+# The ordinal is 1..6 digits: a small deploy count (.6) normally, or seconds-since-midnight
+# (.4187) on the fallback path. Pinning it to exactly 6 digits would reject every real stamp
+# this script now produces — the guard exists to catch an UNSTAMPED image, not to police the
+# ordinal's width.
+if ! [[ "$BUILD_VERSION" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,6}$ ]]; then
+  echo "refusing to deploy: BUILD_VERSION '$BUILD_VERSION' is not a CalVer stamp (YYYY.M.D.N)" >&2
   exit 1
 fi
 echo "   version $BUILD_VERSION · built $BUILD_TIME"
