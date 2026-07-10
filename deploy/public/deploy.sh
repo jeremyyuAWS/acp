@@ -79,12 +79,12 @@ echo "== 2/5 build image in ACR (remote; no local docker) =="
 # Build provenance (ADR: CalVer-style) baked into the image → surfaced in /healthz +
 # the hub footer + the app header. Computed here so every deploy stamps a fresh version
 # (.git is excluded from the build context, so the image can't derive it itself).
-# ONE UTC timestamp is the single source of truth for both the version and BUILD_TIME.
-# Two separate `date` calls could straddle UTC midnight and stamp tomorrow's date with
-# today's time-of-day.
+# ONE timestamp is the single source of truth for BUILD_TIME and, via BUILD_TZ below, for the
+# version's date, its day boundary and the fallback ordinal. Two separate `date` calls could
+# straddle midnight and stamp tomorrow's date with today's time-of-day.
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # Build ordinal (.N) — the number of DEPLOYS today, not commits: the count of acp-app
-# revisions already created this UTC day, plus one. Readable (v2026.7.10.5) and monotonic.
+# revisions already created this PACIFIC day, plus one. Readable (v2026.7.9.5) and monotonic.
 #
 # It must not be derived from git. The original ordinal counted commits whose UTC committer
 # date was today AND that were reachable from HEAD, which had two observed defects:
@@ -100,25 +100,56 @@ BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # collides. With several sessions deploying at once, prefer the later `built_at`.
 #
 # Known limit: ACA keeps maxInactiveRevisions (100) inactive revisions. More than ~100 deploys
-# in one UTC day would prune the day's earliest revisions and the ordinal could repeat. At that
+# in one day would prune the day's earliest revisions and the ordinal could repeat. At that
 # volume the timestamp fallback below is the better ordinal.
 #
-# Month/day stay unpadded (2026.7.9) for readability; compare versions as a numeric tuple,
-# not as a string — "2026.7.10" sorts before "2026.7.9" lexicographically.
-BUILD_DATE="${BUILD_TIME:0:4}.$(( 10#${BUILD_TIME:5:2} )).$(( 10#${BUILD_TIME:8:2} ))"
-BUILD_DAY="${BUILD_TIME:0:10}"                       # YYYY-MM-DD, UTC
+# The version's DATE is the calendar day in Pacific time, not UTC. The team and the customer
+# are both US/Pacific: a build at 8:06 PM PDT on Jul 9 was stamped "2026.7.10" because UTC had
+# already rolled over, and everyone reading it — on a login screen that renders the build
+# instant in their own zone, right next to it — saw a version dated tomorrow.
+#
+# BUILD_TIME stays UTC. It is an instant, and an instant should not carry an offset nobody
+# reads. Only the human-facing date+ordinal is localised. Override with BUILD_TZ for a team
+# in another zone; the value is any IANA name, and DST is handled (PDT vs PST) by zoneinfo.
+BUILD_TZ="${BUILD_TZ:-America/Los_Angeles}"
+command -v python3 >/dev/null || { echo "python3 required to compute the build date" >&2; exit 1; }
+# Derived from the SAME instant as BUILD_TIME, so the date, the day boundary and the fallback
+# ordinal can never straddle midnight relative to one another.
+#   1: BUILD_DATE      YYYY.M.D in BUILD_TZ, month/day unpadded
+#   2: DAY_START_UTC   that Pacific day's 00:00, expressed in UTC — the ordinal's cutoff
+#   3: DAY_SECS        seconds elapsed since Pacific midnight — the fallback ordinal
+_CAL="$(python3 - "$BUILD_TIME" "$BUILD_TZ" <<'PY'
+import datetime as dt, sys
+from zoneinfo import ZoneInfo
+inst = dt.datetime.strptime(sys.argv[1], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+loc = inst.astimezone(ZoneInfo(sys.argv[2]))
+mid = loc.replace(hour=0, minute=0, second=0, microsecond=0)
+print(f"{loc.year}.{loc.month}.{loc.day}")
+print(mid.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+print(int((loc - mid).total_seconds()))
+PY
+)"
+BUILD_DATE="$(printf '%s\n' "$_CAL" | sed -n 1p)"
+DAY_START_UTC="$(printf '%s\n' "$_CAL" | sed -n 2p)"
+DAY_SECS="$(printf '%s\n' "$_CAL" | sed -n 3p)"
 # `--all` is REQUIRED: the app runs in Single revision mode, where `revision list` returns
 # only the ACTIVE revision. Without it the count is always 1 and every deploy stamps .1.
-# `|| true` twice: the app may not exist yet (first deploy) and grep -c exits 1 on zero
-# matches — either would kill the script under `set -euo pipefail` before the fallback runs.
+# `|| true`: the app may not exist yet (first deploy), which would kill the script under
+# `set -euo pipefail` before the fallback runs.
 REV_TIMES="$(az containerapp revision list -n "$APP" -g "$RG" --all \
               --query "[].properties.createdTime" -o tsv 2>/dev/null || true)"
-BUILD_SEQ="$(printf '%s\n' "$REV_TIMES" | grep -c "^${BUILD_DAY}" || true)"
+# Count revisions created at or after Pacific midnight. A UTC-date prefix match cannot express
+# that boundary — at 8 PM PDT the Pacific day holds revisions from two different UTC days.
+# createdTime is UTC ISO ("2026-07-10T03:09:09+00:00"), so the first 19 chars are fixed-width
+# and sort chronologically; comparing them to the cutoff's first 19 avoids Z vs +00:00.
+BUILD_SEQ="$(printf '%s\n' "$REV_TIMES" \
+             | awk -v cutoff="${DAY_START_UTC:0:19}" 'length($0) >= 19 && substr($0,1,19) >= cutoff' \
+             | wc -l | tr -d ' ')"
 BUILD_SEQ=$(( BUILD_SEQ + 1 ))
-# Fallback: seconds since UTC midnight. Still monotonic within the day, and independent of
+# Fallback: seconds since Pacific midnight. Still monotonic within the day, and independent of
 # both git and Azure, so a throttled/failed revision query never stamps a duplicate .1.
 if [ -z "$REV_TIMES" ]; then
-  BUILD_SEQ=$(( 10#${BUILD_TIME:11:2} * 3600 + 10#${BUILD_TIME:14:2} * 60 + 10#${BUILD_TIME:17:2} ))
+  BUILD_SEQ="$DAY_SECS"
   echo "   (revision query returned nothing — ordinal falls back to seconds-since-midnight)"
 fi
 BUILD_VERSION="${BUILD_DATE}.${BUILD_SEQ}"

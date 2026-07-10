@@ -463,11 +463,11 @@ export default function App() {
       <a className="skiplink" href="#main-content">Skip to main content</a>
       <header>
         <div className="brand"><Logo /><h1 className="sub">Accessibility Platform</h1>
-          {/* Version is stamped in UTC (deploy.sh); fmtStamp renders the build instant in the
-              viewer's zone. Tag the version so the two never read as contradictory. */}
-          <span className="muted" title={`Version stamped in UTC · built ${fmtStamp(__BUILD_TIME__)} (your local time)`}
+          {/* The version's DATE is Pacific (deploy.sh BUILD_TZ); fmtStamp renders the build
+              instant in the viewer's zone. Tag it so the two never read as contradictory. */}
+          <span className="muted" title={`Version dated in Pacific time · built ${fmtStamp(__BUILD_TIME__)} (your local time)`}
                 style={{ fontSize: 11, marginLeft: 10, fontFamily: 'ui-monospace, monospace', whiteSpace: 'nowrap' }}>
-            {void tick}v{platformVersion || __BUILD_VERSION__} UTC · updated {timeAgo(__BUILD_TIME__)}
+            {void tick}v{platformVersion || __BUILD_VERSION__} PT · updated {timeAgo(__BUILD_TIME__)}
           </span>
         </div>
         <div className="userbox">
