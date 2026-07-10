@@ -110,6 +110,15 @@ public class HiddenContentRule : IXlsxRule
 
     private static string? GetCellValue(Cell cell, SharedStringTable? sharedStrings)
     {
+        // Inline strings (t="inlineStr") carry their text in the cell's InlineString child,
+        // not CellValue — a writer such as openpyxl emits them by default. Reading only
+        // CellValue.Text left inline content looking empty, so hidden inline-string cells
+        // were never flagged.
+        if (cell.DataType?.Value == CellValues.InlineString)
+        {
+            return cell.InlineString?.InnerText;
+        }
+
         var value = cell.CellValue?.Text;
         if (value is null) return null;
 

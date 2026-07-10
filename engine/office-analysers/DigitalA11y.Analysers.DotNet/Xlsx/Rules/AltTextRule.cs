@@ -41,21 +41,22 @@ public class AltTextRule : IXlsxRule
                 var wsDr = drawingsPart.WorksheetDrawing;
                 if (wsDr is null) continue;
 
-                foreach (var anchor in wsDr.Descendants<TwoCellAnchor>())
+                // Walk pictures/frames regardless of anchor kind. Scoping to TwoCellAnchor
+                // silently skipped OneCellAnchor and AbsoluteAnchor images (a single-cell
+                // anchored image, openpyxl's default and common in hand-authored sheets),
+                // so those were never checked for alt text.
+                foreach (var picture in wsDr.Descendants<Picture>())
                 {
-                    foreach (var picture in anchor.Descendants<Picture>())
-                    {
-                        var nvPr = picture.NonVisualPictureProperties?.NonVisualDrawingProperties;
-                        var issue = CheckNonVisualProps(nvPr, sheetName);
-                        if (issue is not null) yield return issue;
-                    }
+                    var nvPr = picture.NonVisualPictureProperties?.NonVisualDrawingProperties;
+                    var issue = CheckNonVisualProps(nvPr, sheetName);
+                    if (issue is not null) yield return issue;
+                }
 
-                    foreach (var frame in anchor.Descendants<GraphicFrame>())
-                    {
-                        var nvPr = frame.NonVisualGraphicFrameProperties?.NonVisualDrawingProperties;
-                        var issue = CheckNonVisualProps(nvPr, sheetName);
-                        if (issue is not null) yield return issue;
-                    }
+                foreach (var frame in wsDr.Descendants<GraphicFrame>())
+                {
+                    var nvPr = frame.NonVisualGraphicFrameProperties?.NonVisualDrawingProperties;
+                    var issue = CheckNonVisualProps(nvPr, sheetName);
+                    if (issue is not null) yield return issue;
                 }
             }
         }
