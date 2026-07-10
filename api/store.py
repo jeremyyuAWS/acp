@@ -155,6 +155,11 @@ _SCHEMA = [
     # there is no value to approve. It is the picture — a 1.1.1 card without it asks someone
     # to write alt text for an image they cannot see. Populated whether or not the AI ran.
     "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS evidence TEXT",
+    # 1 once the approved values on this row were actually WRITTEN into the document
+    # (handlers.apply_approved_values → apply_alt.apply_alt_text → Blob/Drive). Until then an
+    # approved row holds content the document does not carry, and the file must not certify —
+    # see count_unapplied_approved_values. This is the difference between a promise and a fix.
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS applied INT",
     # Per-file, per-rule-id (from rule-catalog.json) execution manifest.
     # PASS = rule ran, no findings; FAIL = findings found; ERROR = engine error.
     """CREATE TABLE IF NOT EXISTS scan_file_manifests (
@@ -1920,21 +1925,115 @@ class Store:
                              (_json.dumps(evidence), row["id"]))
             return row["id"]
 
-    def count_unapplied_approved_values(self, scan_id: str, file: str) -> int:
-        """Approved items whose resolution is CONTENT the reviewer supplied, and which was
-        never written into the document.
+    # ── Approved content: the promise, and the write that keeps it ────────────────────────
+    #
+    # A value-fix approval (alt text, link text) resolves to CONTENT the document must carry.
+    # Storing it on the queue row is evidence of what a human agreed to, not a fix: until it is
+    # written in, the images are still undescribed. `applied` records that write. The gate
+    # below is what stops a file certifying on a promise.
 
-        Approving a HITL item stores `approved_value` as compliance evidence and nothing
-        more: no remediator consumes it and no job is enqueued (routes/hitl.py). An approved
-        alt-text value is therefore a promise, not a fix — the images are still undescribed.
+    @staticmethod
+    def _row_approved_values(row: dict) -> dict[str, str]:
+        """{locator: final text} for one approved row — the values that must reach the document.
+
+        Prefers the per-proposal `approved_value` (one image, one description; a single column
+        could never express a ten-image deck), and falls back to the proposal's own draft. That
+        fallback is not a guess: approving a row means accepting the drafts it was showing, and
+        a reviewer who edits nothing has agreed to exactly them. It also closes a hole — a
+        client that approved without sending approved_values left every proposal valueless, so
+        the row held no "content", the gate below counted nothing, and the file certified with
+        the drafts never written in.
+
+        Proposals with no locator are skipped: unaddressable content cannot be written anywhere.
         """
+        out: dict[str, str] = {}
+        for p in (row.get("proposals") or []):
+            if not isinstance(p, dict):
+                continue
+            loc = (p.get("locator") or "").strip()
+            val = (p.get("approved_value") or "").strip() or (p.get("proposed_value") or "").strip()
+            if loc and val:
+                out[loc] = val
+        return out
+
+    def _approved_unapplied_rows(self, scan_id: str, file: str) -> list[dict]:
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT COUNT(*) AS n FROM hitl_queue WHERE scan_id=%s AND file=%s "
-                "AND status='approved' AND approved_value IS NOT NULL "
-                "AND TRIM(approved_value) <> ''",
-                (scan_id, file))
-            return self._db.fetchone(cur)["n"]
+                "SELECT * FROM hitl_queue WHERE scan_id=%s AND file=%s AND status='approved' "
+                "AND (applied IS NULL OR applied=0)", (scan_id, file))
+            return [self._decode_proposals(r) for r in self._db.fetchall(cur)]
+
+    def count_unapplied_approved_values(self, scan_id: str, file: str) -> int:
+        """Approved items holding content the document does not yet carry.
+
+        A row counts while it has approved content and `applied` is unset. Once
+        handlers.apply_approved_values has written those values in and marked the row applied,
+        it stops counting and the file may certify — on a re-scan of the written copy, never on
+        the approval alone.
+
+        A row whose only approved content is the legacy single `approved_value` column, with no
+        proposals to locate it in the document, counts forever: we know a human agreed to some
+        text but not where it goes, so we cannot honestly call the file fixed.
+        """
+        n = 0
+        for row in self._approved_unapplied_rows(scan_id, file):
+            legacy = (row.get("approved_value") or "").strip()
+            if self._row_approved_values(row) or legacy:
+                n += 1
+        return n
+
+    def approved_alt_values(self, scan_id: str, file: str) -> dict[str, str]:
+        """{locator: alt text} awaiting a write into `file`, from its approved 1.1.1 rows.
+
+        Scoped to Non-text Content because apply_alt.py writes alt text and nothing else. A
+        link-purpose (2.4.4) approval has no applier yet, so it keeps the file out of Publish
+        rather than being quietly dropped — the gate above still counts it.
+        """
+        out: dict[str, str] = {}
+        for row in self._approved_unapplied_rows(scan_id, file):
+            if str(row.get("rule_id") or "").strip() == "1.1.1":
+                out.update(self._row_approved_values(row))
+        return out
+
+    def approve_proposal_values(self, item_id: str, values: list[str | None]) -> int:
+        """Record the reviewer's final text per proposal, positionally.
+
+        `values[i]` is the text for proposal i: an edited string, or None/"" meaning "accept
+        proposal i's draft as written". Returns the number of proposals now carrying an
+        approved value. Extra values are ignored; missing ones fall back to the draft, so a
+        reviewer who approves without touching anything accepts exactly what they were shown.
+        """
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT proposals FROM hitl_queue WHERE id=%s", (item_id,))
+            row = self._db.fetchone(cur)
+            if not row or not row.get("proposals"):
+                return 0
+            try:
+                proposals = _json.loads(row["proposals"])
+            except (ValueError, TypeError):
+                return 0
+            n = 0
+            for i, p in enumerate(proposals):
+                if not isinstance(p, dict):
+                    continue
+                supplied = (values[i] if i < len(values) else None) or ""
+                final = supplied.strip() or (p.get("proposed_value") or "").strip()
+                if final:
+                    p["approved_value"] = final
+                    n += 1
+            self._db.execute(cur, "UPDATE hitl_queue SET proposals=%s WHERE id=%s",
+                             (_json.dumps(proposals), item_id))
+        return n
+
+    def mark_row_applied(self, item_id: str) -> None:
+        """The approved values on this row are now in the document."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "UPDATE hitl_queue SET applied=1 WHERE id=%s", (item_id,))
+
+    def approved_unapplied_item_ids(self, scan_id: str, file: str, rule_id: str) -> list[str]:
+        return [r["id"] for r in self._approved_unapplied_rows(scan_id, file)
+                if str(r.get("rule_id") or "").strip() == rule_id]
 
     def mark_file_compliant_if_reviewed(self, scan_id: str, file: str) -> bool:
         """After a HITL resolution: a REMEDIATED file whose every HITL item is 'approved' AND
@@ -1947,11 +2046,12 @@ class Store:
         adequate as it stands). A plain re-scan of the fixed copy cannot clear those, so
         approval must.
 
-        Approval is NOT the gate for a VALUE-FIX finding. Approving an alt-text value stores
-        the text as evidence; nothing writes it into the document. Certifying on that approval
-        marked a PPTX 100/100 and conformant with WCAG 1.1.1 while its ten images were still
-        undescribed. A file carrying an approved-but-unapplied value stays non-conformant
-        until that value is actually applied and re-scanned.
+        Approval is NOT the gate for a VALUE-FIX finding. Approving an alt-text value records
+        the text; the document does not carry it until handlers.apply_approved_values writes it
+        in and a re-scan confirms the criterion cleared. Certifying on the approval alone marked
+        a PPTX 100/100 and conformant with WCAG 1.1.1 while its ten images were still
+        undescribed. A file carrying an approved-but-unapplied value stays non-conformant until
+        that value is actually applied and re-scanned — which is what `applied` records.
 
         Idempotent: an already-compliant file, an un-remediated file, one with any item still
         pending / rejected / skipped, or one with an approved-but-unapplied value returns

@@ -132,11 +132,14 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
                 return (
                   <div className={`rc-item${isOpen ? ' rc-item-open' : ''}${ordered[cursor]?.id === it.id ? ' rc-item-cursor' : ''}`} key={it.id}>
                     <button className="rc-item-row" onClick={() => setExpanded(isOpen ? null : it.id)} aria-expanded={isOpen}>
-                      <span className="rc-sevchip" style={{ background: s.bg, color: s.color }}>{s.label}</span>
+                      {/* Two chips, two different things. A bare "Medium" beside a bare "High"
+                          reads as a contradiction — say which is which. */}
+                      <span className="rc-sevchip" style={{ background: s.bg, color: s.color }}
+                            title={`WCAG severity of this criterion: ${s.label}`}>{s.label} severity</span>
                       <span className="rc-item-file">{it.file || 'document'}</span>
                       {it.finding_count > 1 && <span className="muted rc-item-count">{it.finding_count} findings</span>}
                       <span className="rc-item-reason">⚑ {reasonOf(it)}</span>
-                      <span className={confClass(conf.level)} title={`Detection confidence: ${conf.level.label} — ${conf.basis}`}>{conf.level.label}</span>
+                      <span className={confClass(conf.level)} title={`Detection confidence: ${conf.level.label} — ${conf.basis}`}>{conf.level.label} confidence</span>
                       <span className="rc-item-caret" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
                     </button>
                     {isOpen && (

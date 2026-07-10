@@ -59,16 +59,38 @@ describe('proposal accessors', () => {
 })
 
 describe('the review screens render the proposal, not a template', () => {
-  it('Remediate no longer falls through to the canned string when a proposal exists', () => {
+  it('Remediate never falls back to a canned "after" string', () => {
     // `after: it.approved_value || template` always hit the template: nothing server-side ever
-    // writes approved_value, so every image in every document showed the same sentence.
+    // writes approved_value, so every image in every document showed the same sentence. The
+    // fallback is gone — a missing draft must read as missing, not as a fix already applied.
     const src = read('Remediate.jsx')
-    expect(src).toMatch(/after: firstProposed\(it\) \|\| it\.approved_value \|\| ba\.after/)
+    expect(src).toMatch(/after: firstProposed\(it\) \|\| it\.approved_value \|\| null/)
+    expect(src).not.toMatch(/after: firstProposed\(it\)[^\n]*ba\.after/)
     expect(src).toMatch(/thumb: firstThumb\(it\)/)
   })
 
   it('Remediate labels a template as a next step, never as an AI suggestion', () => {
-    expect(read('Remediate.jsx')).toMatch(/hasProposal \? 'AI suggested value' : 'Next step'/)
+    expect(read('Remediate.jsx')).toMatch(/suggested && hasProposal \? 'AI suggested value' : 'Next step'/)
+  })
+
+  it('no canned "a fix was applied" string survives in either queue builder', () => {
+    // Both the DB-backed queue and the SIM queue used to hand the card a constant sentence
+    // claiming alt text had been added. Neither ITEM_BA nor its fallback carries an `after`.
+    const src = read('Remediate.jsx')
+      .replace(/\/\*[\s\S]*?\*\//g, '')                              // block + JSX comments
+      .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n')
+    expect(src).not.toMatch(/AI-generated alt text added/)
+    expect(src).not.toMatch(/'AI fix applied — review before certifying'/)
+    expect(src).not.toMatch(/after: \(\) =>/)
+  })
+
+  it('Remediate derives the comparison at render, so late-arriving diffs still show', () => {
+    // scanDiffs is fetched in parallel with the queue; baking the comparison into the mapped
+    // item would leave every card empty on first paint and never refresh.
+    const src = read('Remediate.jsx')
+    expect(src).toMatch(/const comparison = comparisonFor\(item, scanDiffs\)/)
+    expect(src).toMatch(/scanDiffs=\{scanDiffs\}/)
+    expect(src).toMatch(/proposals: it\.proposals/)   // carried through for comparisonFor
   })
 
   it('EvidenceCard prefers the offending image over the PDF-only page render', () => {

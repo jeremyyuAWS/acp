@@ -1,4 +1,4 @@
-import { SIM, simIdentity, simGetSources, simStartScan, simGetJob, simGetScan, simListScans, simRules } from './sim.js'
+import { SIM, simIdentity, simGetSources, simStartScan, simGetJob, simGetScan, simListScans, simRules, simRemediationDiffs } from './sim.js'
 
 const BASE = import.meta.env.VITE_API ?? 'http://localhost:8077'
 
@@ -129,19 +129,29 @@ export const getAppliedFixes = (scanId) => (SIM || !scanId
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/applied-fixes`, { headers: headers() }).then(j).catch(() => []))
 // Per-fix before→after evidence for one file — the original text/markup → remediated
 // version, persisted only for fixes that verifiably cleared. Feeds the certification PDF's
-// "Before → After" section. SIM has no real remediation to diff → returns nothing.
-export const getFileRemediationDiffs = (scanId, file) => (SIM || !scanId
-  ? sim([])
-  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/remediation-diffs`,
-          { headers: headers() }).then(j).catch(() => []))
+// "Before → After" section, and the review drawer's evidence card. SIM serves the same
+// fixtures as getScanRemediationDiffs, narrowed to the one file, on the same "only after the
+// demo has actually remediated" gate.
+export const getFileRemediationDiffs = (scanId, file) => {
+  if (SIM) return sim(_simRemed.total ? simRemediationDiffs().filter((d) => d.file === file) : [])
+  if (!scanId) return sim([])
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/remediation-diffs`,
+               { headers: headers() }).then(j).catch(() => [])
+}
 // Scan-wide before→after evidence — every verified-cleared fix across all files, so the
 // Remediation view can group REAL applied fixes by rule/category without fabricating counts.
 // Covers all fix types (reading order, titles, headings, tables), unlike applied-fixes
-// (image alt text only). Best-effort — [] on any error/SIM.
-export const getScanRemediationDiffs = (scanId) => (SIM || !scanId
-  ? sim([])
-  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation-diffs`,
-          { headers: headers() }).then(j).catch(() => []))
+// (image alt text only). Best-effort — [] on any error.
+//
+// SIM has no engine, so it serves fixtures — but only once the demo has actually run
+// remediation (_simRemed.total). Returning them unconditionally would open the Remediation
+// view already claiming "N issues fixed automatically" and marking the step done.
+export const getScanRemediationDiffs = (scanId) => {
+  if (SIM) return sim(_simRemed.total ? simRemediationDiffs() : [])
+  if (!scanId) return sim([])
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation-diffs`,
+               { headers: headers() }).then(j).catch(() => [])
+}
 export const getMe = () => (SIM ? sim(simIdentity()) : fetch(`${BASE}/me`, { headers: headers() }).then(j))
 export const getSources = () => (SIM ? sim(simGetSources()) : fetch(`${BASE}/sources`, { headers: headers() }).then(j))
 export const getRubric = () => (SIM
@@ -319,12 +329,16 @@ export const listHitlQueue = (scanId, status = null) => (SIM
 // { edited } — reviewer changed the AI draft before approving (confidence-calibration signal);
 // { reviewMs } — time from card-open to decision (the reviewer-time-saved metric);
 // { aiValue } — the AI-proposed value shown, so the server stores proposed-vs-final.
+// opts.approvedValues — one final text per proposal, positionally (the row holds one proposal
+// per image). A null/'' entry accepts that proposal's own draft. The server writes them into
+// the document; approved_value stays the single headline value, for the audit log.
 export const updateHitlItem = (itemId, status, reviewerNote = null, approvedValue = null, opts = {}) => (SIM
   ? sim({ id: itemId, status })
   : fetch(`${BASE}/hitl/queue/${encodeURIComponent(itemId)}`, {
       method: 'PUT',
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ status, reviewer_note: reviewerNote, approved_value: approvedValue,
+        approved_values: opts.approvedValues ?? null,
         edited: !!opts.edited, review_ms: opts.reviewMs ?? null, ai_value: opts.aiValue ?? null }),
     }).then(j))
 // HITL review telemetry for the workspace dashboard — decisions by action, approval rate,
