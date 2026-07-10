@@ -4,7 +4,7 @@ remediate_pdf sets /Alt on tagged /Figure struct elements that lack it, from a l
 vision-model description of the figure's page — exactly what the pdf.missing-alt-text
 analyser reads. The vision model is stubbed so these run offline; the live end-to-end
 (real llava → /Alt written → analyser re-scan clears 1.1.1) is exercised separately.
-Self-skips when pikepdf / pypdf / reportlab are unavailable.
+Self-skips when pikepdf / pypdf / reportlab, or the partner PDF engine, are unavailable.
 """
 from __future__ import annotations
 
@@ -21,6 +21,12 @@ from reportlab.pdfgen import canvas  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "api"))
 import ai  # noqa: E402
 import remediate_pdf as RP  # noqa: E402
+
+# remediate_pdf() imports the partner PDF engine, a separate repo located via scanner.WP /
+# $ACP_PDF_ENGINE and absent on a clean CI agent. Skip there rather than hard-fail.
+from conftest import requires_pdf_engine  # noqa: E402
+
+pytestmark = requires_pdf_engine
 
 
 def _tagged_pdf_with_figure(path: Path, *, tagged: bool = True, with_alt: bool = False) -> None:
