@@ -51,12 +51,29 @@ export function reviewTelemetry({ editable, status, value, aiDraft, elapsedMs })
   return { finalValue, edited, reviewMs: elapsedMs, aiValue: aiDraft ?? null }
 }
 
-// item: a HITL queue row { id, scan_id, file, rule_id, rule_name, finding_count, approved_value }
+// An AI proposal attached to the queue row (hitl_queue.proposals): a concrete, pre-computed
+// value the reviewer approves in one click, with the rationale that produced it. A proposal
+// is NEVER auto-applied — see api/proposals.py — so the card treats it as a draft to confirm.
+// `subjective` marks the values a re-scan can never validate (a decorative call, a sensory
+// rewrite, alt-text intent): those are a human judgement, not a machine result.
+export const proposalsOf = (item) => (Array.isArray(item?.proposals) ? item.proposals : [])
+export const firstProposed = (item) => proposalsOf(item)[0]?.proposed_value ?? null
+
+export function proposalMeta(item) {
+  const list = proposalsOf(item)
+  if (!list.length) return null
+  const subjective = list.some((p) => p && p.kind === 'decorative') || scOf(item?.rule_id) === '1.3.3'
+  return { list, validated: !!item?.validated, subjective }
+}
+
+// item: a HITL queue row { id, scan_id, file, rule_id, rule_name, finding_count, approved_value,
+//                          proposals, validated }
 // diffs: this file's remediation_diff rows (getFileRemediationDiffs) — filtered to this SC here.
 export function buildEvidenceCard(item, diffs = []) {
   const sc = scOf(item?.rule_id)
   const meta = metaFor(item)
   const fmt = ((item?.file || '').split('.').pop() || 'DOC').toUpperCase()
+  const proposal = proposalMeta(item)
   return {
     id: item?.id,
     scanId: item?.scan_id,
@@ -69,11 +86,17 @@ export function buildEvidenceCard(item, diffs = []) {
     // Plain-English problem (show, don't tell) — never "Missing Alt Text".
     problem: meta.reason,
     // The AI-drafted value proposed for approval; null → a judgement item with no draft value.
-    recommendation: item?.approved_value || null,
+    // A server-side proposal (hitl_queue.proposals) wins over a previously-approved value:
+    // it is the current recommendation, pre-computed at remediation time so the reviewer
+    // confirms a concrete value instead of drafting one from a blank.
+    recommendation: firstProposed(item) ?? item?.approved_value ?? null,
+    // The proposals themselves + their rationale, so the card can show WHY, not just what.
+    proposal,
     // { track: auto|assisted|human, action: 'Approve & Apply'|…, badge } — the primary CTA.
     track: remediationTrack({ sc }),
-    // { level: {key,label,rank}, basis } — the WHY, never a fabricated %.
-    confidence: confidenceForFinding({ sc }),
+    // { level: {key,label,rank}, basis } — the WHY, never a fabricated %. A proposal awaiting
+    // approval is never High: nothing an AI proposed is trusted until a human accepts it.
+    confidence: confidenceForFinding({ sc, proposal }),
     // Real before→after for THIS criterion (nothing illustrative).
     diffs: (diffs || []).filter((d) => scOf(d.rule_id) === sc),
     impact: { before: 'Fail', after: 'Pass' },

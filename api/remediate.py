@@ -492,13 +492,60 @@ def _fix_abbr(tree, diffs=None) -> list:
     return [f"Expanded {changed} abbreviation(s) with <abbr> · 3.1.4"] if changed else []
 
 
-def remediate_html(html_text: str, *, ai_enabled: bool = True, diffs=None) -> tuple[str, list, list]:
+# ── 2.4.4 Link Purpose — expand vague link text (proposer, not a FIXER) ──
+# Runs OUTSIDE the FIXERS registry so 2.4.4 keeps its catalog fix_mode 'ai-assisted' (it
+# still routes to HITL). A DETERMINISTIC derivation from the link target ("Annual-Report.pdf"
+# → "Download Annual Report (PDF)") is applied inline — a real fix that clears the re-scan —
+# and also surfaced as a High, one-click confirm; an opaque target with AI on gets a local
+# text-model DRAFT surfaced as a Medium proposal (never applied). `proposals` collects
+# {**proposal, "sc": "2.4.4", "applied": bool} for the worker to enqueue with a validated
+# flag once the residual re-scan confirms the applied ones cleared.
+def _propose_links(tree, proposals, *, ai_enabled: bool, diffs=None) -> None:
+    if proposals is None:
+        return
+    import proposals as _prop
+    drafted = 0
+    for el in tree.iter("a"):
+        if list(el):
+            continue  # links wrapping elements (e.g. an <img>) aren't a plain-text case
+        text = (el.text or "").strip()
+        if not _prop.is_vague_link_text(text):
+            continue
+        href = el.get("href") or ""
+        der = _prop.derive_link_text(href, "")
+        if der and der.get("deterministic"):
+            el.text = der["text"]
+            _rec(diffs, "2.4.4", f'link text "{text or "(empty)"}"', der["text"], der["rationale"])
+            proposals.append({**_prop.proposal(
+                locator=href or der["text"], before=text or "(empty link text)",
+                proposed_value=der["text"], rationale=der["rationale"],
+                source="derived from the link target"), "sc": "2.4.4", "applied": True})
+        elif ai_enabled and drafted < 20:
+            try:
+                import ai as _ai
+                res = _ai.suggest_fix("2.4.4", "Link Purpose (In Context)", "A", "",
+                                      detail=f'link text "{text}" → {href}') if _ai.is_available() else None
+            except Exception:
+                res = None
+            if res and res.get("suggestion"):
+                drafted += 1
+                proposals.append({**_prop.proposal(
+                    locator=href or text, before=text or "(empty link text)",
+                    proposed_value=res["suggestion"],
+                    rationale="link target is opaque; AI drafted descriptive text — confirm it names the destination",
+                    source=f"AI text model ({res.get('model', 'llama')})"), "sc": "2.4.4", "applied": False})
+
+
+def remediate_html(html_text: str, *, ai_enabled: bool = True, diffs=None,
+                   proposals=None) -> tuple[str, list, list]:
     """Apply server-side HTML remediation.
 
     Returns (fixed_html, applied_changes, deferred_rule_ids):
       - applied_changes: human-readable descriptions of every fix applied.
       - deferred_rule_ids: WCAG SCs that have a finding but are 'ai-assisted' /
         'human-only' (not auto-fixed) — route these to HITL.
+    `proposals` (optional out-list) collects AI-proposed one-click values (e.g. 2.4.4 link
+    text) for the worker to enqueue onto the HITL queue.
     """
     tree = _lh.fromstring(html_text)
     applied: list[str] = []
@@ -514,6 +561,13 @@ def remediate_html(html_text: str, *, ai_enabled: bool = True, diffs=None) -> tu
             # ai-assisted / human-only → defer (HITL). When AI is off this is the
             # only path; when AI is on a later step may draft a fix for approval.
             deferred.append(sc)
+    # 2.4.4 link-text expansion — deterministic fixes applied inline, drafts collected.
+    try:
+        _propose_links(tree, proposals, ai_enabled=ai_enabled, diffs=diffs)
+        if proposals and any(p.get("applied") for p in proposals):
+            applied.append("Expanded vague link text to describe its destination · 2.4.4")
+    except Exception:
+        pass
     # Provenance: self-identify the remediated HTML (generator meta + leading comment).
     if applied:
         from datetime import datetime, timezone

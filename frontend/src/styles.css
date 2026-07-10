@@ -1571,6 +1571,16 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .rc-escalation { font-size: 12.5px; margin: 10px 0; }
 .rc-escalation ul { margin: 5px 0 0; padding-left: 18px; color: var(--muted); }
 .rc-escalation li { margin: 2px 0; }
+.rc-proposals { font-size: 12.5px; margin: 10px 0; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 8px; background: color-mix(in srgb, var(--accent, #6b8e23) 6%, transparent); }
+.rc-proposals > b { font-size: 12px; }
+.rc-prop-badge { margin-left: 8px; font-size: 11px; color: #2F5310; background: #E7F0DC;
+  border: 1px solid #A6C98A; border-radius: 999px; padding: 1px 8px; }
+.rc-proposals ul { margin: 6px 0 0; padding-left: 16px; }
+.rc-proposals li { margin: 4px 0; }
+.rc-prop-before { text-decoration: line-through; color: var(--muted); margin-right: 6px; }
+.rc-prop-value { font-weight: 600; }
+.rc-prop-why { font-size: 12px; }
 .rc-valedit { display: block; margin: 8px 0; }
 .rc-valedit span { display: block; font-size: 12px; margin-bottom: 4px; }
 .rc-valedit textarea { width: 100%; min-height: 62px; border: 1px solid var(--line); border-radius: 8px;

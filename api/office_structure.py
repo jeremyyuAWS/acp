@@ -80,6 +80,34 @@ _HYPERLINK = re.compile(r'<w:hyperlink[^>]*r:id="(rId\w+)"[^>]*>(.*?)</w:hyperli
 _WT = re.compile(r"<w:t[^>]*>([^<]*)</w:t>")
 _RELATIONSHIP = re.compile(r'<Relationship\s+Id="(rId\w+)"[^>]*Target="([^"]+)"')
 
+# 1.3.1 / 2.4.6 — a paragraph visually styled as a heading (bold and/or a font clearly
+# larger than body text) but left in a body style, so assistive tech can't navigate to it.
+# The predicate is SHARED with the remediator (api/remediate_office.py imports it) so the
+# fix promotes exactly what this flags and the re-scan verifiably clears. Deliberately
+# conservative — gated on a clearly-larger font (≥14pt), since the fix auto-applies and a
+# false positive would restyle real body text as a heading.
+PSEUDO_HEADING_MIN_HALF_PT = 28       # 14pt (half-points); body text is ~22 (11pt)
+_PSEUDO_HEADING_MAX_WORDS = 12
+_HEADING_ANY = re.compile(r'<w:pStyle\s+w:val="Heading\d"')
+_W_SZ = re.compile(r'<w:sz\s+w:val="(\d+)"')
+_W_BOLD = re.compile(r'<w:b(?:\s*/>|\s+w:val="(?:1|true|on)"\s*/>)')
+_HAS_LETTER = re.compile(r"[^\W\d_]", re.UNICODE)
+
+
+def looks_like_pseudo_heading(text: str, *, bold: bool, max_half_pt: int,
+                              styled_heading: bool) -> bool:
+    """True when a paragraph reads as a heading but is not styled as one. Shared by the
+    detector below and the remediator's promoter so detection and fix stay in lock-step."""
+    if styled_heading:
+        return False
+    t = (text or "").strip()
+    if not t or not _HAS_LETTER.search(t) or len(t.split()) > _PSEUDO_HEADING_MAX_WORDS:
+        return False
+    if max_half_pt >= PSEUDO_HEADING_MIN_HALF_PT:
+        return True
+    # a slightly-smaller but bold-and-short line is still heading-like
+    return bool(bold and max_half_pt >= PSEUDO_HEADING_MIN_HALF_PT - 2)
+
 # Content control (structured document tag) blocks and their title/label.
 # w:sdt wraps a LOT of non-form Word content too (TOC blocks, citations,
 # building-block placeholders via w:docPartObj) that legitimately has no
@@ -153,6 +181,18 @@ def docx_checks(path: Path) -> list[dict]:
                     findings.append(_finding("DOCX_HEADING_SKIP", "2.4.6 Headings and Labels", "MODERATE"))
                     break
                 prev_level = level
+
+            # 1.3.1 — a paragraph visually styled as a heading (large/bold) but left in a
+            # body style, so it isn't in the heading outline AT navigates by. One per doc.
+            for p in _PARA.findall(doc):
+                text = "".join(_WT.findall(p)).strip()
+                szs = [int(s) for s in _W_SZ.findall(p)]
+                if looks_like_pseudo_heading(
+                        text, bold=bool(_W_BOLD.search(p)),
+                        max_half_pt=max(szs) if szs else 0,
+                        styled_heading=bool(_HEADING_ANY.search(p))):
+                    findings.append(_finding("DOCX_PSEUDO_HEADING", "1.3.1 Info and Relationships", "MODERATE"))
+                    break
 
             # 2.4.9 — hyperlink display text reused for a different destination
             rels = _relationships(zf, "word/_rels/document.xml.rels")

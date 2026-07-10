@@ -3,7 +3,9 @@ import { SEV, sevOf, reasonOf, priorityScore, groupLabel } from './hitlMeta.js'
 import { confidenceForFinding, confClass } from './confidence.js'
 import { openTraceUrl } from './api.js'
 import EvidenceCard from './EvidenceCard.jsx'
-import { VALUE_FIX } from './reviewCard.js'
+// proposalMeta / firstProposed live in reviewCard.js — the single source of truth for how a
+// hitl_queue.proposals row is read. EvidenceCard uses them too; don't fork the logic.
+import { VALUE_FIX, firstProposed, proposalMeta } from './reviewCard.js'
 
 // Rules whose fix IS a value a human writes/edits (alt text, link text, title, label) —
 // these get an editable "approved value" box (the AI draft, if any, prefilled). Judgement
@@ -48,7 +50,10 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
   // reviewer's note, the (possibly edited) value, and the review telemetry.
   const doAct = (it, status) => {
     setBusy(it.id)
-    const val = VALUE_FIX.has(scOf(it.rule_id)) ? (it.approved_value ?? null) : null
+    // An item carrying an AI proposal takes a value even if its SC isn't in VALUE_FIX, and
+    // the proposed value is what a bulk approve accepts (there is no per-item edit here).
+    const takesValue = VALUE_FIX.has(scOf(it.rule_id)) || !!(it.proposals && it.proposals.length)
+    const val = takesValue ? (firstProposed(it) ?? it.approved_value ?? null) : null
     Promise.resolve(onAct(it.id, status, null, status === 'approved' ? val : null))
       .catch(() => {})   // act() already reverts optimistic state on failure; avoid an unhandled rejection
       .finally(() => { setBusy(null); setExpanded(null) })
@@ -74,9 +79,10 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
     return () => document.removeEventListener('keydown', onKey)
   }, [ordered, cursor, onClose])
 
-  const approveGroup = (grp) => grp.items.forEach((it) => {
-    if (!VALUE_FIX.has(scOf(it.rule_id))) onAct(it.id, 'approved')   // bulk-approve only judgement items (no value needed)
-  })
+  // A "judgement" item has no value to type (no VALUE_FIX rule and no AI proposal) — only
+  // those are safe to bulk-approve; a proposal must be reviewed individually.
+  const isJudgement = (it) => !VALUE_FIX.has(scOf(it.rule_id)) && !(it.proposals && it.proposals.length)
+  const approveGroup = (grp) => grp.items.forEach((it) => { if (isJudgement(it)) onAct(it.id, 'approved') })
 
   return (
     <div className="rc-overlay" role="dialog" aria-modal="true" aria-label="Human review center">
@@ -111,18 +117,18 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
             <section className="rc-group" key={grp.label}>
               <div className="rc-group-head">
                 <span className="rc-group-title">{grp.label} <span className="muted">· {grp.items.length}</span></span>
-                {grp.items.some((it) => !VALUE_FIX.has(scOf(it.rule_id))) && (
+                {grp.items.some((it) => isJudgement(it)) && (
                   <button className="ghost small" onClick={() => approveGroup(grp)}>✓ Approve all judgement items</button>
                 )}
               </div>
               {grp.items.map((it) => {
                 const s = SEV[sevOf(it)] || SEV.medium
-                const isVal = VALUE_FIX.has(scOf(it.rule_id))
                 const isOpen = expanded === it.id
-                // Detection-method confidence (confidence.js) — helps a reviewer triage:
-                // a High item is a definite finding that just needs a fix approved; a
-                // Medium item came from a heuristic lane and is worth a closer look.
-                const conf = confidenceForFinding({ sc: scOf(it.rule_id) })
+                // Confidence (confidence.js) — helps a reviewer triage. When the item carries
+                // an AI proposal, the chip reflects it: a validated deterministic proposal is
+                // a fast Medium confirm; a subjective (decorative / sensory) one is Low and
+                // wants judgement. Otherwise it falls back to detection-method confidence.
+                const conf = confidenceForFinding({ sc: scOf(it.rule_id), proposal: proposalMeta(it) })
                 return (
                   <div className={`rc-item${isOpen ? ' rc-item-open' : ''}${ordered[cursor]?.id === it.id ? ' rc-item-cursor' : ''}`} key={it.id}>
                     <button className="rc-item-row" onClick={() => setExpanded(isOpen ? null : it.id)} aria-expanded={isOpen}>

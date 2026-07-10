@@ -244,6 +244,77 @@ restore mixed copy**.
 
 ---
 
+## P4 — Certification report as an audit artifact (report presentation)
+
+Theme (external feedback + review, 2026-07-09): the report is a solid *scan
+summary* but not yet persuasive to the three audiences that matter —
+**executives** ("are we compliant?"), **auditors** ("can I trust this?"),
+**remediation teams** ("what exactly changed?"). It states *what* happened but
+under-proves *why to trust it*. Most of the data already exists; the work is
+**consolidating it into one downloadable per-document certificate**, not new
+detection.
+
+**Hard rule for this whole section (ADR 0016 / `4fc6bc1`):** every number is a
+real, derivable ratio shown with its basis, or it is omitted. NO fabricated
+percentages ("96% effort saved", "AI 92%", invented "4.2s avg"). A fabricated
+figure on an evidence document is spotted instantly by an auditor and *lowers*
+trust — the honesty discipline is a feature to surface, not a gap to paper over.
+
+Where the data already lives (so these are consolidation, not net-new):
+`store.get_remediation_diffs` (before→after, `remediation_diff`),
+`store.list_applied_fixes` (real AI values + thumbnails, `applied_fixes`),
+`hitl_queue` (approvals, `approved_value`, `proposals`, `validated`),
+`decision_log` (immutable who/what/when), `confidence.js` (evidence-based
+High/Med/Low + basis), the stamped rubric hash + `RULE_FORMATS`/manifest
+(what actually ran), and `api/report.py` (the estate PDF to extend, or add a
+per-document certificate renderer alongside it).
+
+### Flagship
+| # | Item | Value | Effort | Notes |
+|---|---|---|---|---|
+| R1 | **Per-issue Remediation Evidence Portfolio** (consolidates the "per-issue appendix" + "before/after gallery" + "AI reasoning" asks). One mini-section per finding: thumbnail, WCAG + plain-English issue, **before → after**, AI recommendation **+ its rationale/OCR-grounding**, human decision (approved/edited/rejected), validation PASS, timestamp/reviewer/trace-id. | Highest — turns summary → audit artifact | M · 2–3 d | All data exists (`remediation_diff` + `applied_fixes` + `hitl_queue` + `decision_log`). Render into the PDF (`report.py`) and/or a per-doc HTML→PDF. Scope to remediated/failing findings, not all 87 SCs. |
+
+### Quick wins — data exists, mostly presentation (each XS–S)
+| # | Item | Notes |
+|---|---|---|
+| R2 | **Certification-decision block** at the top of each document (Status 🟢 CERTIFIABLE / WCAG 2.1 AA / date / reviewer / remediations applied / validation PASS / risk). | The first thing an exec reads. "Digital signature" must be a **real** SHA-256 of the artifact/bytes, never decorative. |
+| R3 | **Why-certifiable prose** — one sentence replacing bare "100%": "meets all *evaluated* AA criteria after remediation + re-scan validation; no blocking findings remain." | Cheap, high trust. Pair with R-A (scope). |
+| R4 | **Certification-metadata / chain-of-custody** section — surface prominently (not buried in the header): document SHA-256, scan SHA-256, rubric version + hash, model version, validator version, timestamp, reviewer. | Partly exists (scan hash + rubric version). Enterprise-critical; low effort. |
+| R5 | **AI reasoning inline** — show the fix rationale / OCR-grounding / confidence *basis* (not a number). | **Now shipped as data** via the proposal lane (`proposals[].rationale`, `describe_image_structured` grounding, `confidence.js` basis) — just render it. |
+| R6 | **Richer file inventory** — per file: ✓ Certified · N detected · N remediated · N remaining · N human approvals · validation PASS. | `report.py` inventory today shows only Status/Score/Findings. |
+| R7 | **Explain the score** — "100 = no blocking findings remain, all required remediations re-scan-validated, AA-certifiable." | One line. |
+| R8 | **POUR (Perceivable/Operable/Understandable/Robust) breakdown** — real per-principle pass ratios. | Deterministic → honest by construction. |
+
+### Honesty-gated — agree only if computed from real data
+| # | Item | Guardrail |
+|---|---|---|
+| R9 | **Human-review KPI block** (reviewed / auto-remediated / edited / rejected / effort). | Derive counts from `hitl_queue` + `decision_log`. "Avg review time" only if real timestamps exist; "effort saved" only as (auto-cleared ÷ total findings) with that basis shown — else OMIT. |
+| R10 | **Assurance/confidence bars** (deterministic vs AI vs human). | Reframe as real ratios: e.g. "fixes that cleared re-scan ÷ fixes attempted", "deterministic SCs ÷ evaluated SCs". No invented "92%". |
+| R11 | **"How ACP reached this decision" methodology** (rules executed, OCR, revalidation, approvals, final cert). | The rule count must be the **actual** number run for *this* document (from the manifest/`RULE_FORMATS`), not a marketing figure. |
+| R12 | **Compliance timeline** (scan → findings → AI recs → human review → remediations → validation → certified). | Narrative of the real pipeline; counts from the same sources. Cheap. |
+
+### Larger / has a dependency
+| # | Item | Notes |
+|---|---|---|
+| R13 | **Manual-verification instructions** — per-format independent-verification steps (Word/PowerPoint Accessibility Checker, macOS Accessibility Inspector, NVDA/VoiceOver/JAWS) with expected results. | Genuinely differentiating (lets an auditor independently confirm). Keep generic per-format — never doc-specific claims. Medium. |
+| R14 | **Per-criterion evidence-of-compliance rows** (rule executed · PASS · evidence/page/object · validation method). | Overlaps the coverage manifest; scope to failing/remediated criteria only or it's a 200-row dump. |
+| R15 | **QR code → immutable online report** (audit trail, remediation history, verification log, version history). | Needs a hosted **immutable** artifact + a versioned verification endpoint. Partially there via Blob remediated copies + publish; the immutability/versioning guarantee is the real work. Larger. |
+
+### My additions (review, 2026-07-09) — weighted toward *auditor* trust
+| # | Item | Why |
+|---|---|---|
+| R-A | **Scope-of-assertion / negative-assurance statement** (HIGH). Per document: "N of 87 SCs auto-validated, M human-reviewed, K not-applicable-to-this-format, and these SCs were NOT evaluated (captions, timing, keyboard-trap, …)." | The single most important auditor-trust item and an over-claim guard: prevents "100%" being mis-read as full WCAG conformance. On-brand with the certifiable/uncertain/unanalysable distinction already in `report.py`. |
+| R-B | **Immutable audit-log excerpt** — render this document's `decision_log` rows inline (who approved what, when, with the approved value). | The evidence backbone that directly answers "can I trust this." Data already immutable + append-only. |
+| R-C | **Per-fix assurance-level disclosure** — distinguish deterministic-and-re-scan-cleared vs AI-generated-and-human-approved vs AI-generated-and-re-scan-validated-but-not-human-confirmed. | Uses the proposal lane's `validated`/`subjective` signals + `remediation_state`; tells the reader exactly what assurance each fix carries instead of a flat "PASS". |
+| R-D | **Reproduce-this-result instructions** — "re-run: POST /scans with rubric hash `<h>`; expect identical findings." | Pairs with R4 chain-of-custody; makes reproducibility actionable, not just asserted. |
+| R-E | **"Supersedes" lineage** — "this certificate supersedes cert `<id>` from `<date>`" (per-document version chain). | Extends the estate-level velocity section already in `report.py` to a per-document custody chain. |
+
+Sequencing suggestion: R1 (flagship) + R2/R3/R6 + R-A first (they land the biggest
+trust jump on data that already exists), then R4/R5/R11/R-B/R-C, then the
+honesty-gated KPI/bars (R9/R10) once the real ratios are wired, then R13–R15/R-D/R-E.
+
+---
+
 ## Reference — where things live
 
 - `api/office_structure.py` — first-party docx/pptx/pdf/xlsx structural

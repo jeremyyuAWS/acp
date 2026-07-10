@@ -58,6 +58,28 @@ describe('evidence-based confidence model', () => {
       expect(confidenceForFinding({ sc: '9.9.9' }).level).toBe(CONFIDENCE.MEDIUM)
       expect(confidenceForFinding({}).level).toBe(CONFIDENCE.MEDIUM)
     })
+
+    describe('AI proposal awaiting one-click approval', () => {
+      it('a validated deterministic proposal is MEDIUM (never High — a human has not approved yet)', () => {
+        const c = confidenceForFinding({ sc: '2.4.4', proposal: { validated: true, subjective: false } })
+        expect(c.level).toBe(CONFIDENCE.MEDIUM)
+        expect(c.basis).toMatch(/validated by re-scan/)
+      })
+      it('an unvalidated proposal is MEDIUM (approve to apply)', () => {
+        const c = confidenceForFinding({ sc: '2.4.4', proposal: { validated: false, subjective: false } })
+        expect(c.level).toBe(CONFIDENCE.MEDIUM)
+        expect(c.basis).toMatch(/approve to apply/)
+      })
+      it('a subjective proposal (decorative / sensory) is LOW even if validated', () => {
+        const c = confidenceForFinding({ sc: '1.1.1', proposal: { validated: true, subjective: true } })
+        expect(c.level).toBe(CONFIDENCE.LOW)
+        expect(c.basis).toMatch(/human judgement/)
+      })
+      it('a verified re-scan clear still outranks a proposal', () => {
+        const c = confidenceForFinding({ sc: '2.4.4', verifiedCleared: true, proposal: { validated: true } })
+        expect(c.level).toBe(CONFIDENCE.HIGH)
+      })
+    })
   })
 
   describe('confidenceForPii — mirrors the api/pii.py validation gate', () => {

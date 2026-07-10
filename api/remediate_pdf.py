@@ -31,8 +31,41 @@ _VISION_MAX_FIGURES = 25
 _RENDER_SCALE = 150 / 72
 
 
+def _propose_reading_order(pdf, source_path: str, *, ai_enabled: bool, scan_id, file,
+                           proposals) -> None:
+    """WCAG 1.3.2 — for an UNTAGGED (scanned/flat) PDF, vision proposes the page reading
+    order for a human to confirm. Never auto-applied (a machine can't be trusted to fix
+    reading order on a scan) and bounded to the first page. No-op when tagged, AI off, or no
+    vision model — those degrade to the existing review path."""
+    if proposals is None or not ai_enabled:
+        return
+    try:
+        if "/StructTreeRoot" in pdf.Root:
+            return  # tagged → reading order comes from the structure tree, not a guess
+    except Exception:
+        return
+    try:
+        import ai as _ai
+        if not _ai.vision_is_available():
+            return
+    except Exception:
+        return
+    png = _render_page_png(source_path, 1)
+    if not png:
+        return
+    res = _ai.describe_reading_order(png, filename=file, scan_id=scan_id, file=file)
+    if not res:
+        return
+    import proposals as _prop
+    proposals.append(_prop.proposal(
+        locator="page 1", before="(untagged PDF — reading order not defined for assistive tech)",
+        proposed_value=res["order"],
+        rationale="AI read the page layout and proposed a reading order — confirm it matches the intended flow",
+        source=f"AI vision model ({res['model']})"))
+
+
 def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
-                  scan_id: str | None = None, diffs=None):
+                  scan_id: str | None = None, diffs=None, proposals=None):
     """Apply deterministic PDF accessibility fixes to a copy of the file.
 
     ai_enabled — when True and a vision (llava-class) Ollama model is reachable, tagged
@@ -103,6 +136,12 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
         if alt_deferred:
             skipped.append(f"{alt_deferred} figure(s) need human alt text "
                            "(no vision description) — routed to review · 1.1.1")
+        # 1.3.2 reading order — a vision proposal for an untagged (scanned) PDF (never auto).
+        try:
+            _propose_reading_order(pdf, str(path), ai_enabled=ai_enabled,
+                                   scan_id=scan_id, file=path.name, proposals=proposals)
+        except Exception:
+            pass
         pdf.save(str(mid_path))
     finally:
         pdf.close()
@@ -202,7 +241,11 @@ def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
         if not img:
             deferred += 1
             continue
-        res = _ai.describe_image(img, filename=file, scan_id=scan_id, file=file)
+        # Structured (OCR-anchored) alt: a rendered figure page carries the figure's own
+        # labels, so the description leads with the headline/chart type. The page render is
+        # inherently text-anchored, so this stays an inline auto-fix (unlike the office
+        # textless-photo case, which surfaces an ungrounded guess for approval).
+        res = _ai.describe_image_structured(img, filename=file, scan_id=scan_id, file=file)
         if not res:
             deferred += 1
             continue

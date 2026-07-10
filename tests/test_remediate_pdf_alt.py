@@ -86,10 +86,12 @@ def _stub_vision(monkeypatch, alt="A filled box representing the quarterly figur
 
     def fake(image_bytes, **kw):
         calls["n"] += 1
-        return {"alt": alt, "model": "llava:7b"} if alt else None
+        # A rendered PDF figure page is inherently text-anchored, so the remediator uses the
+        # returned alt inline regardless of `grounded`; include it for shape-parity with ai.py.
+        return {"alt": alt, "grounded": True, "evidence": "stub", "model": "llava:7b"} if alt else None
 
     monkeypatch.setattr(ai, "vision_is_available", lambda: available)
-    monkeypatch.setattr(ai, "describe_image", fake)
+    monkeypatch.setattr(ai, "describe_image_structured", fake)
     return calls
 
 
