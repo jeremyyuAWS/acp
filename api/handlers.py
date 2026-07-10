@@ -192,6 +192,16 @@ def _remediate_file(payload: dict, job: dict) -> None:
     if not (scan_id and filename and drive_file_id):
         raise FatalJobError("remediate_file job missing scan_id/file/drive_file_id")
 
+    # Never remediate ACP's own remediated copy. POST /scans/{sid}/remediate already can't
+    # enqueue one — it iterates get_scan's filtered file list — but jobs are DURABLE: a job
+    # queued before that filter existed, or retried from the dead-letter, still arrives here.
+    # This guard sits before the download, so a phantom costs nothing: no Drive fetch, no
+    # llava call, no HITL row asking a human to describe an image ACP itself produced.
+    if core.store.is_shadowed_output(scan_id, filename):
+        core.store.log_decision("system", "remediate.skipped", scan_id=scan_id, file=filename,
+                                detail="ACP-generated copy shadowing its source — not a document")
+        return
+
     _OFFICE_MIME = {
         "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -288,7 +298,11 @@ def _remediate_file(payload: dict, job: dict) -> None:
                         except ValueError:
                             _n = 1
                         try:
-                            core.store.queue_hitl_deferral(scan_id, filename, _msg, _n)
+                            # Merges into this file's 1.1.1 row when one already exists (the
+                            # proposals row queued just above). rule_name so a row created here
+                            # is headed "Non-text Content", not the raw deferral note.
+                            core.store.queue_hitl_deferral(scan_id, filename, _msg, _n,
+                                                           rule_name="Non-text Content")
                         except Exception:
                             pass
                 # Attach the deferred images to whichever 1.1.1 row now exists — the

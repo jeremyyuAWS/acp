@@ -495,6 +495,24 @@ def shadowed_acp_outputs(files: list[dict]) -> set[str]:
     return shadowed
 
 
+_SC_DEFERRED = re.compile(r"^(\d+\.\d+\.\d+)/deferred$")
+
+
+def _canonical_rule_id(rule_id: str) -> str:
+    """The one hitl_queue.rule_id a WCAG criterion may occupy for a given (scan, file).
+
+    '1.1.1/deferred' → '1.1.1'. A deferral is the same criterion as the proposals and the
+    residual-review rows; three writers used to open up to three rows for it, all rendering as
+    "WCAG 1.1.1" once scOf() strips the suffix.
+
+    Anything that is not a dotted SC with a '/deferred' suffix is returned untouched —
+    'auto/verify' is a pseudo-rule ("an automatic fix was applied, please eyeball it"), not a
+    criterion, and must keep a row of its own.
+    """
+    m = _SC_DEFERRED.match(rule_id or "")
+    return m.group(1) if m else rule_id
+
+
 def db_max_conn(env: dict | None = None) -> int:
     """How many Postgres connections this replica may hold.
 
@@ -1792,26 +1810,44 @@ class Store:
         return created
 
     def queue_hitl_deferral(self, scan_id: str, file: str, note: str, count: int = 1,
-                            rule_id: str = "1.1.1/deferred") -> str | None:
+                            rule_id: str = "1.1.1/deferred",
+                            rule_name: str | None = None) -> str | None:
         """Queue ONE human-review item for a remediation deferral — e.g. Office images
         with no faithful alt source (remediate_office). Those findings carry fix_mode
         'auto', so queue_hitl_items' ai-assisted pull never sees them; without this
         the deferral is reported in the job result and then silently dropped.
-        Idempotent per (scan, file, rule) like queue_hitl_items."""
+        Idempotent per (scan, file, criterion) like queue_hitl_items.
+
+        A deferral is NOT a separate criterion. '1.1.1/deferred' used to open its own row
+        beside the '1.1.1' row that enqueue_proposals / queue_hitl_review_for_file write, and
+        scOf() renders both as "WCAG 1.1.1" — so one file showed two identical review cards,
+        and the one a reviewer opened was not necessarily the one holding the AI proposals.
+        Deferrals now MERGE into the canonical row for their criterion.
+
+        'auto/verify' is not a WCAG criterion (it is "an automatic fix, please eyeball it"),
+        so it keeps its own row — see _canonical_rule_id."""
         from datetime import datetime, timezone
+        canonical = _canonical_rule_id(rule_id)
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT 1 FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s",
-                (scan_id, file, rule_id))
-            if self._db.fetchone(cur):
-                return None
+                "SELECT id, finding_count FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s",
+                (scan_id, file, canonical))
+            row = self._db.fetchone(cur)
+            if row:
+                # The criterion already has a row. Never shrink its finding count: the deferral
+                # knows how many images it gave up on, the proposals row knows how many it
+                # drafted, and the scan knows the true total. The largest is the safest floor.
+                if (count or 0) > (row.get("finding_count") or 0):
+                    self._db.execute(cur, "UPDATE hitl_queue SET finding_count=%s WHERE id=%s",
+                                     (count, row["id"]))
+                return None    # merged, not created — callers must not fire a "new item" webhook
             item_id = uuid.uuid4().hex[:12]
-            pages = self._pages_for(cur, scan_id, file, rule_id)
+            pages = self._pages_for(cur, scan_id, file, canonical)
             self._db.execute(cur,
                 "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,finding_count,status,page,pages) "
                 "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
-                (item_id, datetime.now(timezone.utc).isoformat(), scan_id, file, rule_id,
-                 note[:200], count, pages[0] if pages else None, _pages_csv(pages)))
+                (item_id, datetime.now(timezone.utc).isoformat(), scan_id, file, canonical,
+                 (rule_name or note)[:200], count, pages[0] if pages else None, _pages_csv(pages)))
         return item_id
 
     def queue_hitl_review_for_file(self, scan_id: str, file: str,
@@ -1830,11 +1866,23 @@ class Store:
         created: list[dict] = []
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT rule_id FROM hitl_queue WHERE scan_id=%s AND file=%s", (scan_id, file))
-            already = {r["rule_id"] for r in self._db.fetchall(cur)}
+                "SELECT id, rule_id, finding_count FROM hitl_queue WHERE scan_id=%s AND file=%s",
+                (scan_id, file))
+            existing = {r["rule_id"]: r for r in self._db.fetchall(cur)}
+            already = set(existing)
             for r in rules:
                 rid = r.get("rule_id")
-                if not rid or rid in already:
+                if not rid:
+                    continue
+                if rid in already:
+                    # The criterion already has its row — a deferral merged into it, or a
+                    # previous remediate created it. Don't duplicate, but don't let it keep a
+                    # smaller count than the scan knows: the deferral counts what it gave up
+                    # on, the scan counts every finding.
+                    prev = existing[rid]
+                    if (r.get("finding_count") or 0) > (prev.get("finding_count") or 0):
+                        self._db.execute(cur, "UPDATE hitl_queue SET finding_count=%s WHERE id=%s",
+                                         (r["finding_count"], prev["id"]))
                     continue
                 item_id = uuid.uuid4().hex[:12]
                 name = r.get("rule_name") or rid
@@ -1873,16 +1921,22 @@ class Store:
         count = finding_count if finding_count is not None else len(proposals)
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT id FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s",
+                "SELECT id, finding_count FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s",
                 (scan_id, file, sc))
             row = self._db.fetchone(cur)
             if row:
                 # Only refresh the proposal payload; never clobber a status the reviewer
                 # already moved off 'pending' (approved/rejected/skipped stays put).
+                #
+                # And never SHRINK the finding count. A deck with 19 unlabelled images whose
+                # vision model drafted 1 of them is still a 19-finding criterion; overwriting
+                # the count with len(proposals) made the card announce "1 finding" and told the
+                # reviewer 18 images had gone away. An explicit finding_count still wins.
+                merged = count if finding_count is not None else max(count, row.get("finding_count") or 0)
                 self._db.execute(cur,
                     "UPDATE hitl_queue SET proposals=%s, validated=%s, finding_count=%s "
                     "WHERE id=%s",
-                    (blob, vflag, count, row["id"]))
+                    (blob, vflag, merged, row["id"]))
                 return row["id"]
             item_id = uuid.uuid4().hex[:12]
             self._db.execute(cur,
@@ -1982,7 +2036,16 @@ class Store:
     def list_hitl_queue(self, status: str | None = None, scan_id: str | None = None,
                         owner: str | None = None) -> list[dict]:
         """List HITL items. `owner` scopes to the signed-in user's own documents (joined via
-        the scan's owner_email) — the inbox must not show another tenant's review items."""
+        the scan's owner_email) — the inbox must not show another tenant's review items.
+
+        Review items for ACP's OWN remediated copies are dropped, exactly as get_scan drops
+        those files from the dashboard. Without this a scan showing one document showed two
+        identical review cards, the second asking a human to write alt text for the file ACP
+        itself produced — and the vision proposals landed on that phantom's row, so opening the
+        real document's card showed no AI draft at all.
+
+        Same posture as get_scan: this filters the READ. The rows stay on disk, so the audit
+        trail of what was queued is never destroyed."""
         conds, params = [], []
         if status:
             conds.append("status=%s"); params.append(status)
@@ -1993,7 +2056,35 @@ class Store:
         where = (" WHERE " + " AND ".join(conds)) if conds else ""
         with self._db.cursor() as cur:
             self._db.execute(cur, f"SELECT * FROM hitl_queue{where} ORDER BY created_at DESC", tuple(params))
-            return [self._decode_proposals(r) for r in self._db.fetchall(cur)]
+            rows = [self._decode_proposals(r) for r in self._db.fetchall(cur)]
+            if not rows:
+                return rows
+            # Per scan, never globally: 'deck (1).pptx' shadows a source in one scan and is a
+            # document in its own right in another, where no unstamped sibling exists.
+            shadowed: set[tuple[str, str]] = set()
+            for sid in {r["scan_id"] for r in rows}:
+                shadowed.update((sid, f) for f in self._shadowed_files(cur, sid))
+        return [r for r in rows if (r["scan_id"], r["file"]) not in shadowed]
+
+    def _shadowed_files(self, cur, scan_id: str) -> set[str]:
+        """The files in this scan that are ACP's own output shadowing their source."""
+        self._db.execute(cur,
+            "SELECT file, acp_stamped FROM file_records WHERE scan_id=%s", (scan_id,))
+        return shadowed_acp_outputs(self._db.fetchall(cur))
+
+    def is_shadowed_output(self, scan_id: str, file: str) -> bool:
+        """Is this file ACP's OWN remediated copy, shadowing the source it was made from?
+
+        The single predicate behind every "don't touch ACP's own artifact" decision, so the
+        dashboard (get_scan), the review inbox (list_hitl_queue) and the remediation worker
+        cannot drift apart on what counts as a shadow.
+
+        Note this is DATA-dependent: it reads file_records.acp_stamped, written by
+        detect_acp_stamp at scan time. A scan taken before stamping existed carries NULL
+        stamps, so its copies are indistinguishable from real documents and will be treated
+        as such — the filter cannot retroactively know what it never recorded."""
+        with self._db.cursor() as cur:
+            return file in self._shadowed_files(cur, scan_id)
 
     def get_hitl_item(self, item_id: str) -> dict | None:
         with self._db.cursor() as cur:
