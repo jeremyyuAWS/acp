@@ -2,12 +2,12 @@ import { useState, useMemo, useEffect } from 'react'
 import { SEV, sevOf, reasonOf, priorityScore, groupLabel } from './hitlMeta.js'
 import { confidenceForFinding, confClass } from './confidence.js'
 import { openTraceUrl } from './api.js'
-import Thumbnail from './Thumbnail.jsx'
+import EvidenceCard from './EvidenceCard.jsx'
+import { VALUE_FIX } from './reviewCard.js'
 
 // Rules whose fix IS a value a human writes/edits (alt text, link text, title, label) —
 // these get an editable "approved value" box (the AI draft, if any, prefilled). Judgement
 // rules (contrast) have no value to type, just approve/reject.
-const VALUE_FIX = new Set(['1.1.1', '2.4.4', '2.4.9', '2.4.2', '3.3.2'])
 const scOf = (r) => String(r || '').replace(/^SC[_ ]?/i, '').replace(/_/g, '.').match(/^\d+\.\d+\.\d+/)?.[0] || ''
 const isToday = (iso) => { if (!iso) return false; const d = new Date(iso), n = new Date(); return d.toDateString() === n.toDateString() }
 
@@ -16,8 +16,6 @@ const isToday = (iso) => { if (!iso) return false; const d = new Date(iso), n = 
 // one-click approve / reject / skip (and inline edit of the AI-drafted value).
 export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }) {
   const [expanded, setExpanded] = useState(null)
-  const [edits, setEdits] = useState({})       // itemId -> edited approved value
-  const [notes, setNotes] = useState({})       // itemId -> reviewer note
   const [busy, setBusy] = useState(null)        // itemId currently acting
 
   const pending = useMemo(() => items.filter((i) => i.status === 'pending'), [items])
@@ -46,10 +44,12 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
   const ordered = useMemo(() => groups.flatMap((g) => g.items), [groups])
   const [cursor, setCursor] = useState(0)
 
+  // Bulk path only. A single item is decided inside its EvidenceCard, which carries the
+  // reviewer's note, the (possibly edited) value, and the review telemetry.
   const doAct = (it, status) => {
     setBusy(it.id)
-    const val = VALUE_FIX.has(scOf(it.rule_id)) ? (edits[it.id] ?? it.approved_value ?? null) : null
-    Promise.resolve(onAct(it.id, status, notes[it.id] || null, status === 'approved' ? val : null))
+    const val = VALUE_FIX.has(scOf(it.rule_id)) ? (it.approved_value ?? null) : null
+    Promise.resolve(onAct(it.id, status, null, status === 'approved' ? val : null))
       .catch(() => {})   // act() already reverts optimistic state on failure; avoid an unhandled rejection
       .finally(() => { setBusy(null); setExpanded(null) })
   }
@@ -135,39 +135,18 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
                     </button>
                     {isOpen && (
                       <div className="rc-item-detail">
-                        <Thumbnail scanId={it.scan_id} file={it.file} className="rc-thumb" />
-                        <div className="rc-escalation">
-                          <b>Escalated because</b>
-                          <ul>
-                            <li>{reasonOf(it)}</li>
-                            <li>Deterministic fixes ran first and could not resolve this criterion.</li>
-                            <li>Human approval is required before the document can be certified.</li>
-                          </ul>
-                        </div>
-                        <p className="muted" style={{ fontSize: 12, margin: '2px 0 8px' }}>Detection confidence <span className={confClass(conf.level)}>{conf.level.label}</span> · {conf.basis}</p>
-                        {isVal && (
-                          <label className="rc-valedit">
-                            <span className="muted">Approved value {it.approved_value ? '(AI draft — edit as needed)' : ''}</span>
-                            <textarea
-                              value={edits[it.id] ?? it.approved_value ?? ''}
-                              placeholder="Type the value a screen reader should announce…"
-                              onChange={(e) => setEdits((m) => ({ ...m, [it.id]: e.target.value }))} />
-                          </label>
-                        )}
-                        <input className="rc-note" placeholder="Reviewer note (optional)"
-                               value={notes[it.id] || ''}
-                               onChange={(e) => setNotes((m) => ({ ...m, [it.id]: e.target.value }))} />
-                        <div className="rc-actions">
-                          <button className="qbtn approve" disabled={busy === it.id} onClick={() => doAct(it, 'approved')}>✓ approve</button>
-                          <button className="qbtn self" disabled={busy === it.id}
-                                  title="Take ownership — fix it yourself, then re-scan to confirm"
-                                  onClick={() => doAct(it, 'skipped')}>✋ I’ll fix it</button>
-                          <button className="qbtn reject" disabled={busy === it.id} onClick={() => doAct(it, 'rejected')}>✕ reject</button>
-                          {it.scan_id && openTraceUrl(it.scan_id, 'file', it.file) && (
-                            <a className="rc-trace" href={openTraceUrl(it.scan_id, 'file', it.file)}
-                               target="_blank" rel="noopener noreferrer">📊 View trace</a>
-                          )}
-                        </div>
+                        {/* The reviewer reviews the REMEDIATION, not a description of it:
+                            thumbnail, the AI's proposed value, the evidence behind the
+                            confidence level, and the real before/after diff for this
+                            criterion. EvidenceCard owns the write so review telemetry
+                            (edited / review_ms / ai_value) is recorded — that is how
+                            "review in seconds" gets measured rather than asserted. */}
+                        <EvidenceCard
+                          item={it}
+                          onAct={onAct}
+                          onResolved={() => setExpanded(null)}
+                          traceUrl={it.scan_id ? openTraceUrl(it.scan_id, 'file', it.file) : null}
+                        />
                       </div>
                     )}
                   </div>

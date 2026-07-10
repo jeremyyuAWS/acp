@@ -43,14 +43,14 @@ export default function HitlBell() {
     return () => window.removeEventListener('acp:open-inbox', open)
   }, [load])
 
-  const act = useCallback((itemId, status, note = null, approvedValue = null) => {
+  const act = useCallback((itemId, status, note = null, approvedValue = null, telemetry = {}) => {
     // Optimistic: mark resolved locally so it leaves `pending` (and the metrics update)
     // immediately — the inbox feels instant. load() reconciles with server truth; a
     // failure reverts to the snapshot so nothing is silently lost.
     let prev
     const nowIso = new Date().toISOString()
     setItems((cur) => { prev = cur; return cur.map((i) => (i.id === itemId ? { ...i, status, reviewed_at: nowIso } : i)) })
-    return updateHitlItem(itemId, status, note, approvedValue)
+    return updateHitlItem(itemId, status, note, approvedValue, telemetry)
       .then(() => { load(); window.dispatchEvent(new Event('acp:hitl-changed')) })
       .catch((e) => { if (prev) setItems(prev); throw e })
   }, [load])
