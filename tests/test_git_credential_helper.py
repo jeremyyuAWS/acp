@@ -153,6 +153,48 @@ def test_helper_writes_no_files(tmp_path):
     assert set(home.rglob("*")) == before, "helper created files under HOME"
 
 
+# ---------------------------------------------------------------- portability
+# The helper runs on developer macs (BSD userland) and in CI containers (GNU userland).
+
+# GNU mktemp rejects a template with no XXXXXX; BSD mktemp accepts a bare prefix after -t.
+# `mktemp -t gitcredado` therefore worked on macOS and died on the CI agent with
+# "mktemp: too few X's in template".
+_GNU_MKTEMP = r"""#!/bin/sh
+for a in "$@"; do
+  case "$a" in
+    -*) echo "mktemp: gnu stub does not accept $a" >&2; exit 1 ;;
+    *XXXXXX*) f=$(printf '%s' "$a" | sed "s/XXXXXX$/$$/"); : > "$f"; echo "$f"; exit 0 ;;
+    *) echo "mktemp: too few X's in template '$a'" >&2; exit 1 ;;
+  esac
+done
+echo "mktemp: no template" >&2; exit 1
+"""
+
+
+def test_helper_works_with_gnu_mktemp(tmp_path):
+    """Regression: `mktemp -t NAME` is BSD-only. CI is GNU, and the helper died before az ran."""
+    env = _stub_az(tmp_path, AZ_OK)
+    mk = tmp_path / "bin" / "mktemp"
+    mk.write_text(_GNU_MKTEMP)
+    mk.chmod(0o755)
+    out = _run(env, "get")
+    assert "too few X's" not in out.stderr, out.stderr
+    assert out.returncode == 0, out.stderr
+    assert f"password={FAKE_TOKEN}" in out.stdout
+
+
+def test_mktemp_template_is_portable():
+    # Match INVOCATIONS -- `$(mktemp ...)` or a bare `mktemp ...` command -- not every line that
+    # merely mentions mktemp, such as the "mktemp failed" error message.
+    src = HELPER.read_text()
+    mk = [ln for ln in src.splitlines()
+          if re.search(r"(?:\$\(|^|;|&&|\|\|)\s*mktemp\s", ln) and not ln.lstrip().startswith("#")]
+    assert mk, "no mktemp invocation found"
+    for ln in mk:
+        assert "XXXXXX" in ln, f"mktemp needs an explicit XXXXXX template (GNU): {ln.strip()}"
+        assert not re.search(r"mktemp\s+-t\s+\S", ln), f"`mktemp -t NAME` is BSD-only: {ln.strip()}"
+
+
 def test_helper_source_does_not_swallow_az_stderr():
     """`2>/dev/null` on the az call is the defect. It must not come back.
 

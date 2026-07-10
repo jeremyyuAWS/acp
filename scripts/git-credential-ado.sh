@@ -40,7 +40,13 @@ command -v az >/dev/null 2>&1 || {
   exit 1
 }
 
-err=$(mktemp -t gitcredado) || { echo "git-credential-ado: mktemp failed" >&2; exit 1; }
+# An explicit XXXXXX template, not `mktemp -t NAME`: BSD mktemp (macOS) accepts a bare prefix,
+# GNU mktemp (Linux, and the CI agent) rejects it with "too few X's in template". This form works
+# on both.
+err=$(mktemp "${TMPDIR:-/tmp}/gitcredado.XXXXXX") || {
+  echo "git-credential-ado: mktemp failed; cannot capture az's stderr" >&2
+  exit 1
+}
 trap 'rm -f "$err"' EXIT HUP INT TERM
 
 # Retry once or twice: when several tools share ~/.azure/azureProfile.json, a concurrent write
