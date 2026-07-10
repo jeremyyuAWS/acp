@@ -27,11 +27,18 @@ ACP = Path(__file__).resolve().parent.parent
 # ── Config (env) ──────────────────────────────────────────────────────────────
 ACCESS_CODE = os.environ.get("ACP_ACCESS_CODE")
 GOOGLE_CLIENT_ID = os.environ.get("ACP_GOOGLE_CLIENT_ID") or None
-# Deployment environment. ACP_DEPLOY_ENV is canonical; ACP_ENV is read only for backward
-# compatibility. Do NOT tell operators to set ACP_ENV: deploy.sh already uses that name for
-# the Container Apps *environment name* (ENVNAME="${ACP_ENV:-...}"), so exporting it to mean
-# "production" would silently misdirect the deploy at a non-existent ACA environment. That
-# collision is why nothing ever set it, and why IS_PROD was False on the public demo.
+# Deployment environment. ACP_DEPLOY_ENV is canonical; ACP_ENV is a legacy alias, still read.
+#
+# ACP_ENV used to mean two different things: this, and the Container Apps *environment name* in
+# deploy.sh / standup.sh. docs/production-hardening.md told operators to set ACP_ENV=production,
+# which the deploy scripts read as an ACA environment name -- so it never reached the container,
+# IS_PROD stayed False on the public demo, and the X-E2E-Key bypass stayed live. The scripts now
+# use ACP_ACA_ENV for the environment name and refuse ACP_ENV outright, so the name has exactly
+# one meaning again.
+#
+# The alias is kept because reading it can only make IS_PROD *more* likely true, which is the
+# safe direction: an existing container that sets ACP_ENV=production must not silently drop out
+# of production mode on upgrade. Set ACP_DEPLOY_ENV in anything new.
 IS_PROD = (os.environ.get("ACP_DEPLOY_ENV") or os.environ.get("ACP_ENV") or "").lower() in ("production", "prod")
 
 # Test/demo auth bypasses (X-E2E-Key, X-Demo-Key). FAIL-CLOSED: off unless an operator

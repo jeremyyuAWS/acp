@@ -33,12 +33,27 @@ RLOCS="${ACP_RLOCS:-eastus2 centralus westus2 southcentralus westus3 canadacentr
 RG="${ACP_RG:-rg-acp-temporal}"
 PG="${ACP_PG:-acp-temporal-pg-3a51d3}"
 PGADMIN="${ACP_PGADMIN:-tmpladmin}"
-ENVNAME="${ACP_ENV:-acp-temporal-env}"
+ENVNAME="${ACP_ACA_ENV:-acp-temporal-env}"   # ACA environment NAME; ACP_ENV is refused below
 APP="${ACP_APP:-temporal-frontend}"
 ACR="${ACP_ACR:-acptemporalacr3a51d3}"
 IMAGE="${ACP_IMAGE:-temporalio/auto-setup:1.25.2}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ENVFILE="$HERE/.env.local"
+
+# $ACP_ENV named the ACA environment here, and api/core.py reads the same name to mean the
+# *deployment* environment (IS_PROD). docs/production-hardening.md told operators to
+# `export ACP_ENV=production` -- which this script would have read as an environment NAME, then
+# happily CREATED an empty ACA environment called "production" (env show fails -> env create),
+# while IS_PROD stayed false because ACP_ENV never reaches the container. Refuse the ambiguous
+# name; the ACA environment is now ACP_ACA_ENV.
+if [ -n "${ACP_ENV:-}" ]; then
+  cat >&2 <<EOF
+refusing to run: ACP_ENV is set ('$ACP_ENV'), and that name is ambiguous.
+  - to name the Container Apps environment:  export ACP_ACA_ENV=<aca-env-name>
+  - to mark an app as production:            export ACP_DEPLOY_ENV=production
+EOF
+  exit 1
+fi
 
 # Resolve the subscription ONCE and scope every `az` call to it (as deploy.sh and rollback.sh do;
 # see tests/test_az_subscription_scope.py). This replaces `az account set --subscription "$SUB"`,

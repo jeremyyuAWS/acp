@@ -2,17 +2,29 @@
 
 ACP is designed to be deployed **one instance per organization** (single-tenant).
 Before a production deployment, work through this checklist. The single most
-important switch is `ACP_ENV=production`.
+important switch is `ACP_DEPLOY_ENV=production`.
 
 ## 1. Set production mode
 
 ```
-ACP_ENV=production
+ACP_DEPLOY_ENV=production
 ```
 
 This **hard-disables the test/demo auth bypasses** (`X-E2E-Key` and `X-Demo-Key`)
 regardless of whether their keys are present (`core.IS_PROD`). Defence in depth —
 a leftover `ACP_E2E_KEY`/`ACP_DEMO_DRIVE_KEY` env var can't reopen a backdoor.
+
+`deploy/public/deploy.sh` already stamps this on the container; set it yourself only
+for deployments that do not go through that script.
+
+> **This page used to say `ACP_ENV=production`, and that was wrong.** The deploy
+> scripts read `ACP_ENV` as the *Container Apps environment name*, not as the
+> deployment environment. Following the old instruction never reached the container:
+> `IS_PROD` stayed false, the `X-E2E-Key` bypass stayed live on the public demo, and
+> `standup.sh` would have created an empty ACA environment literally named
+> `production`. The scripts now use `ACP_ACA_ENV` for the environment name and
+> **refuse to run** if `ACP_ENV` is set. `core.IS_PROD` still reads `ACP_ENV` as a
+> legacy alias, so an existing container that sets it keeps production mode.
 
 Also unset them entirely:
 
