@@ -2,6 +2,18 @@ import { describe, it, expect } from 'vitest'
 import { buildEvidenceCard } from './reviewCard.js'
 
 describe('buildEvidenceCard — the Evidence Card model', () => {
+  it('judgement item (contrast) → approval IS the resolution, so it certifies', () => {
+    // 1.4.3 has no value to write: a re-scan can never clear a "this ratio is acceptable"
+    // sign-off, so approval is legitimately the gate and the criterion flips to Pass.
+    const c = buildEvidenceCard({
+      id: 'i2', scan_id: 's1', file: 'page.html', rule_id: 'SC_1_4_3',
+      rule_name: 'Contrast (Minimum)',
+    })
+    expect(c.sc).toBe('1.4.3')
+    expect(c.certifiesOnApprove).toBe(true)
+    expect(c.impact).toEqual({ before: 'Fail', after: 'Pass' })
+  })
+
   it('alt-text item → assisted track, Approve & Apply, real recommendation + confidence basis', () => {
     const c = buildEvidenceCard({
       id: 'i1', scan_id: 's1', file: 'deck.pptx', rule_id: 'SC_1_1_1',
@@ -14,7 +26,11 @@ describe('buildEvidenceCard — the Evidence Card model', () => {
     expect(c.recommendation).toBe('A guide dog in a harness')
     expect(c.confidence.basis).toBeTruthy()          // evidence, never a %
     expect(c.problem).toMatch(/alt-text|description/i)
-    expect(c.impact).toEqual({ before: 'Fail', after: 'Pass' })
+    // Approving an alt-text value does NOT resolve 1.1.1: routes/hitl.py stores the value as
+    // evidence and no remediator ever writes it into the document. The card must not promise a
+    // Pass the backend (store.mark_file_compliant_if_reviewed) now refuses to grant.
+    expect(c.certifiesOnApprove).toBe(false)
+    expect(c.impact).toEqual({ before: 'Fail', after: 'Fail' })
   })
 
   it('keyboard item → human track (detect ≠ fix)', () => {

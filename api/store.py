@@ -1888,16 +1888,42 @@ class Store:
                 (item_id, now, scan_id, file, sc, rule_name or sc, count, blob, vflag))
         return item_id
 
+    def count_unapplied_approved_values(self, scan_id: str, file: str) -> int:
+        """Approved items whose resolution is CONTENT the reviewer supplied, and which was
+        never written into the document.
+
+        Approving a HITL item stores `approved_value` as compliance evidence and nothing
+        more: no remediator consumes it and no job is enqueued (routes/hitl.py). An approved
+        alt-text value is therefore a promise, not a fix — the images are still undescribed.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM hitl_queue WHERE scan_id=%s AND file=%s "
+                "AND status='approved' AND approved_value IS NOT NULL "
+                "AND TRIM(approved_value) <> ''",
+                (scan_id, file))
+            return self._db.fetchone(cur)["n"]
+
     def mark_file_compliant_if_reviewed(self, scan_id: str, file: str) -> bool:
-        """After a HITL resolution: a REMEDIATED file whose every HITL item is 'approved'
-        (none pending / rejected / skipped) is fully conformant — its auto fixes verified
-        and its human-judgment findings signed off. Flip file_records.compliant=1 and set
-        score=100 so it advances to Publish (Publish gates on f.compliant), then refresh
-        the scan aggregate (certifiable = Σcompliant). Composite by design: a plain re-scan
-        of the fixed copy can't clear a finding whose resolution IS the human approval
-        (e.g. an approved link-text rewrite), so approval — not re-analysis — is the gate.
-        Idempotent: an already-compliant file, an un-remediated file, or one with any
-        item still pending / rejected / skipped returns False and changes nothing."""
+        """After a HITL resolution: a REMEDIATED file whose every HITL item is 'approved' AND
+        whose approvals required no unwritten content is fully conformant. Flip
+        file_records.compliant=1 and set score=100 so it advances to Publish (Publish gates on
+        f.compliant), then refresh the scan aggregate (certifiable = Σcompliant).
+
+        Approval is the gate ONLY for a JUDGEMENT finding — one whose resolution IS the human
+        sign-off, with no new content to write (a contrast ratio accepted, a link text deemed
+        adequate as it stands). A plain re-scan of the fixed copy cannot clear those, so
+        approval must.
+
+        Approval is NOT the gate for a VALUE-FIX finding. Approving an alt-text value stores
+        the text as evidence; nothing writes it into the document. Certifying on that approval
+        marked a PPTX 100/100 and conformant with WCAG 1.1.1 while its ten images were still
+        undescribed. A file carrying an approved-but-unapplied value stays non-conformant
+        until that value is actually applied and re-scanned.
+
+        Idempotent: an already-compliant file, an un-remediated file, one with any item still
+        pending / rejected / skipped, or one with an approved-but-unapplied value returns
+        False and changes nothing."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT compliant, remediated_at FROM file_records WHERE scan_id=%s AND file=%s",
@@ -1912,6 +1938,8 @@ class Store:
         total = sum(counts.values())
         if total == 0 or counts.get("approved", 0) != total:
             return False   # still items pending / rejected / skipped — not fully resolved
+        if self.count_unapplied_approved_values(scan_id, file):
+            return False   # approved content that no remediator ever wrote into the document
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "UPDATE file_records SET compliant=1, score=100, status='pass' "
