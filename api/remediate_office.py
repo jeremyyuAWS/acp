@@ -207,9 +207,29 @@ def _image_bytes_for(xml: str, m, tag: str, pic_spans, entries, part_name):
     if not rid_m:
         return None
     img = _resolve_media(entries, part_name, rid_m.group(1))
-    if not img or len(img) < _MIN_IMG_BYTES:
+    if not img:
         return None
+    # No _MIN_IMG_BYTES floor here. That floor is a VISION concern — a 1x1 spacer is an image
+    # the model cannot describe — and it lives with the vision caller. To decorative inference a
+    # degenerate image is not noise, it is the signal: a 37-byte 1x1 GIF spacer is the single
+    # clearest "this is decorative" a document can offer, and this lookup used to discard it.
     return rid_m.group(1), img
+
+
+def _img_size(img: bytes) -> tuple[int, int] | None:
+    """(width, height) in the image's own pixels, or None if it will not decode.
+
+    INTRINSIC size, not the rendered extent (a:ext cx/cy in EMU). A spacer is intrinsically
+    1x1 or a hairline however it is stretched, and a photo scaled small in the layout is still
+    a photo. Reading the bytes needs no XML archaeology and no unit conversion. The trade: an
+    image whose only decorative quality is being rendered tiny is not caught here."""
+    try:
+        import io as _io
+        from PIL import Image
+        with Image.open(_io.BytesIO(img)) as im:
+            return im.size
+    except Exception:
+        return None
 
 
 def _resolve_media(entries: dict, part_name: str, rid: str) -> bytes | None:
@@ -290,21 +310,40 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
                         if _CAPTION_LEAD.match(cand):
                             caption = cand
             src = _derive_alt(attrs, caption)
-            # Decorative inference (heuristic — Low, human, NEVER auto). When the only faithful
-            # source is the shape NAME and that name reads decorative (a logo / divider / spacer
-            # / background flourish), don't announce the layer name as alt — propose "mark
-            # decorative" for the reviewer to confirm instead (marking noise as content is worse
-            # than a missing-alt finding). Runs even when vision is off (no model needed).
-            if proposals is not None and src and src[1] == "the shape's descriptive name":
+            # Decorative inference (heuristic — Low, human, NEVER auto). Two signals now reach it:
+            #
+            #   NAME  — the shape is called "logo" / "divider" / "spacer". Announcing that layer
+            #           name as alt is worse than a missing-alt finding, so propose "mark
+            #           decorative" instead and let a human confirm.
+            #   SIZE  — the image is intrinsically a 1x1 spacer, a hairline, an extreme-aspect
+            #           divider, or an icon-sized glyph. infer_decorative has always accepted
+            #           width/height; nothing ever passed them, so those three signals were dead
+            #           code. Real documents name images "Picture 3", which is precisely the case
+            #           the name signal cannot see.
+            #
+            # SIZE is consulted ONLY when no faithful alt source exists. A title, a caption, or a
+            # descriptive shape name is authored by a human and outranks a size heuristic: a wide
+            # banner photo named "Team Photo" has an extreme aspect ratio and is NOT decorative.
+            # Overriding a faithful source would trade a mediocre alt for a proposal to erase the
+            # image — the expensive direction of the error.
+            _faithful = src[1] if src else None
+            if proposals is not None and _faithful in (None, "the shape's descriptive name"):
                 import proposals as _prop
-                _deco = _prop.infer_decorative(filename=src[0])
+                # Resolve the image once: its bytes give both the size signal and the thumbnail.
+                _found = _image_bytes_for(xml, m, tag, pic_spans, entries, part_name)
+                # Size is passed ONLY when there is no faithful source. With a descriptive name
+                # in hand the name is the evidence, and a size that disagrees must not overrule
+                # it — otherwise "Team Photo" (1200x100, ratio 12) is proposed for erasure.
+                _size = _img_size(_found[1]) if (_found and _faithful is None) else None
+                _deco = _prop.infer_decorative(
+                    filename=(src[0] if src else _ATTR(attrs, "name").strip()),
+                    width=_size[0] if _size else None,
+                    height=_size[1] if _size else None)
                 if _deco:
-                    # Show the image. The inference reads only the shape's NAME ("logo",
-                    # "divider"), so the reviewer's whole job is to look at the picture and
-                    # say whether that guess is right — marking real content as decorative
-                    # hides it from screen readers permanently. No vision model needed; the
-                    # bytes are in the package. A thumb we can't build is simply omitted.
-                    _found = _image_bytes_for(xml, m, tag, pic_spans, entries, part_name)
+                    # Show the image. The reviewer's whole job is to look at the picture and say
+                    # whether the guess is right — marking real content as decorative hides it
+                    # from screen readers permanently. No vision model needed; the bytes are in
+                    # the package. A thumb we can't build is simply omitted.
                     proposals.append(_prop.proposal(
                         locator=f"{part_name}#{_ATTR(attrs, 'name').strip()}",
                         before="(no alt text)",
@@ -354,6 +393,10 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
     if not found:
         return None
     rid, img = found
+    # Degenerate images (1x1 spacers etc.) have nothing for a vision model to describe. The
+    # floor lives here rather than in the lookup, because the decorative heuristic wants them.
+    if len(img) < _MIN_IMG_BYTES:
+        return None
     try:
         import ai as _ai
         res = _ai.describe_image_structured(img, filename=context_file, context=caption or "",
