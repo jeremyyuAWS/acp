@@ -87,6 +87,10 @@ describe('the Remediate review card shows the reviewer the page and the passage'
     expect(src).toMatch(/page: pageOf\(it\)/)
   })
 
+  it('calls a slide a slide — a deck has no page 3', () => {
+    expect(src).toMatch(/Found on<\/span><span>\{pageNoun\(file\)\} \{page\}/)
+  })
+
   it('shows the current text only when the proposal supplied a literal one', () => {
     // `ba.before()` is a description of the defect ("image / chart — no alt text"). Labelling
     // that "Current text" would put a sentence the document does not contain on the card.

@@ -12,7 +12,7 @@ import QueuePanel from './QueuePanel.jsx'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
 import { confidenceForFinding, confClass } from './confidence.js'
 import { metaFor } from './hitlMeta.js'
-import { firstProposed, firstBefore, firstThumb, firstKind, firstRationale, firstSource, pageOf, thumbAlt, thumbSize, appliedFixAlt } from './reviewCard.js'
+import { firstProposed, firstBefore, firstThumb, firstKind, firstRationale, firstSource, pageOf, pageNoun, thumbAlt, thumbSize, appliedFixAlt } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 import Thumbnail from './Thumbnail.jsx'
 import { remediableFiles, emptyScopeReason } from './remediableScope.js'
@@ -212,7 +212,7 @@ function WhyReview({ sc, suggested, before, beforeLiteral, thumb, thumbKind, rat
           <div className="whyreview-row"><span className="muted">Reason</span><span>{reason}</span></div>
           {/* Where to look. Only stated when the analysers attributed a page — a reviewer sent to
               "page 1" for a finding on page 7 checks the wrong thing and approves blind. */}
-          {page && <div className="whyreview-row"><span className="muted">Found on</span><span>Page {page}</span></div>}
+          {page && <div className="whyreview-row"><span className="muted">Found on</span><span>{pageNoun(file)} {page}</span></div>}
           {/* Before → after. Shown only when the proposal carried the literal offending passage:
               `ba.before()` is a description of the defect ("image / chart — no alt text"), not a
               value, and labelling that "current text" would be a lie. When it is absent the
