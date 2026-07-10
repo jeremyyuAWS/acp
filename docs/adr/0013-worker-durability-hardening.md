@@ -1,6 +1,6 @@
 # ADR 0013 — Worker durability hardening: idempotent finalize + worker-process isolation
 
-Status: Partially accepted — finalize-once SHIPPED 2026-07-08; worker-process isolation still Proposed
+Status: Partially accepted — finalize-once SHIPPED 2026-07-08; worker-process isolation code + deploy path CODIFIED 2026-07-10 (dormant behind `ACP_DEPLOY_WORKER=1`, live spin-up greenlit separately when load warrants — billable Redis + second app)
 Date: 2026-07-08
 
 ## Context
@@ -101,14 +101,31 @@ applied as a blind three-file dance.
 implemented + committed (dormant until wired) — it calls `core.start_workers()`, blocks the
 main thread, and on SIGTERM runs a graceful `core.stop_workers()` drain; no HTTP port. The
 Redis token plumbing already exists (`core.REDIS_URL` → `_get_redis()` → register/get_scan_
-tokens). Remaining is pure provisioning + topology (billable → greenlit separately):
-  1. Provision Redis (Azure Cache for Redis, or a small Redis container app); set `REDIS_URL`
-     as a secret on BOTH apps.
-  2. Create the worker Container App from the SAME image, command `python -m worker_main`,
-     env `ACP_WORKERS=N` + `REDIS_URL` + the same DB/Blob/Langfuse secrets; no external
-     ingress; min-replicas ≥1 (workers poll).
-  3. Flip the API app to `ACP_WORKERS=0` — ONLY after the worker app is live, or queued scans
-     stop processing.
+tokens).
+
+**Deploy path codified (2026-07-10):** `deploy/public/deploy.sh` now carries the whole
+topology behind `ACP_DEPLOY_WORKER=1` (billable → still greenlit separately, so it stays off
+by default and this path is not yet exercised against live infra). When set, one deploy run:
+brings up (or updates) an `acp-worker` Container App from the SAME image with command
+`python -m worker_main`, `ACP_WORKERS=N` (`ACP_WORKER_COUNT`, default 2), the same
+DB/Blob/Langfuse secrets + `REDIS_URL`, no ingress, min-replicas 1 — FIRST; then flips the
+API to `ACP_WORKERS=0`. `REDIS_URL` is a new inheritable secret wired onto both tiers; the
+run refuses `ACP_DEPLOY_WORKER=1` without it. To actually spin it up (greenlit):
+
+```
+# 1. one-time: provision Redis (cheapest tier is fine for tokens) and capture the SSL DSN
+az redis create -g mdk-accessibility -n acp-redis --sku Basic --vm-size c0 --enable-non-ssl-port false
+REDIS_URL="rediss://:$(az redis list-keys -g mdk-accessibility -n acp-redis --query primaryKey -o tsv)@acp-redis.redis.cache.windows.net:6380/0"
+
+# 2. deploy both tiers (worker up first, API flipped to 0) in one run
+ACP_GOOGLE_CLIENT_ID=<gis-id> REDIS_URL="$REDIS_URL" ACP_DEPLOY_WORKER=1 bash deploy/public/deploy.sh
+
+# 3. one-time (first create only): the deploy prints the exact commands to grant the worker's
+#    managed identity 'Storage Blob Data Contributor' on the remediated-output account.
+```
+
+To roll back to co-located workers: redeploy without `ACP_DEPLOY_WORKER` and pass
+`ACP_WORKERS=4` (the API reclaims job processing; the idle `acp-worker` app can be deleted).
 
 ## Consequences
 

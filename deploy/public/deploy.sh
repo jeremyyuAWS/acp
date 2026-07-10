@@ -33,6 +33,7 @@ ADC_FILE="${ACP_GOOGLE_ADC_FILE:-${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config
 CODE="${ACP_ACCESS_CODE:-$(openssl rand -hex 6)}"
 CLIENT_ID="${ACP_GOOGLE_CLIENT_ID:-}"   # set => per-user GIS sign-in, passcode gate off
 DATABASE_URL="${ACP_DATABASE_URL:-}"    # set => Postgres backend; unset => SQLite (single-instance only)
+REDIS_URL="${REDIS_URL:-}"              # set => cross-replica scan-token durability; REQUIRED once the worker tier is split off (ACP_DEPLOY_WORKER=1, ADR 0013 §2)
 LF_HOST="${LANGFUSE_HOST:-https://acp-langfuse.greenwater-4bf2c997.eastus2.azurecontainerapps.io}"
 LF_PK="${LANGFUSE_PUBLIC_KEY:-pk-lf-655083d12dacf12febf1f1e8d2293905}"  # acp-compliance project — the one the demo VIEWS (must match LANGFUSE_INIT_PROJECT_* on acp-langfuse, pairs with sk-lf-d1cd10699…). Override via env if needed.
 LF_SK="${LANGFUSE_SECRET_KEY:-}"       # secret — must be passed via env; not baked in
@@ -297,6 +298,21 @@ else
   E2E_ENV="${EXISTING_E2E:+ACP_E2E_KEY=secretref:$EXISTING_E2E}"
   echo "   e2e key = inherited"
 fi
+# Redis — cross-replica scan-token durability (core.register_scan_tokens / get_scan_tokens).
+# Harmless when absent on the single-container default (tokens fall back to per-process memory),
+# but REQUIRED once the worker tier is split off: a separate worker process can't see the
+# in-memory tokens the API registered. Inherit on a bare redeploy so it isn't dropped.
+if [ -n "$REDIS_URL" ]; then
+  SECRETS+=("redis-url=$REDIS_URL")
+  REDIS_ENV="REDIS_URL=secretref:redis-url"
+  echo "   redis = set (cross-replica scan tokens)"
+else
+  EXISTING_REDIS="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" \
+    --query "properties.template.containers[0].env[?name=='REDIS_URL'].secretRef | [0]" \
+    -o tsv 2>/dev/null || echo "")"
+  REDIS_ENV="${EXISTING_REDIS:+REDIS_URL=secretref:$EXISTING_REDIS}"
+  echo "   redis = ${EXISTING_REDIS:+inherited}${EXISTING_REDIS:-disabled (single-process tokens)}"
+fi
 # Async worker pool — ACP_WORKERS=N runs N in-process job workers. Plain (non-secret)
 # env vars; inherit when not passed so a bare redeploy keeps them.
 _inherit_env() {  # $1 = var name → echoes "NAME=value" if currently set, else ""
@@ -320,20 +336,74 @@ echo "   deploy env = production (test/demo auth bypasses refused)"
 echo "   workers = ${ACP_WORKERS:-${WORKERS_ENV:+inherited}}${WORKERS_ENV:+}"
 echo "   allowed emails = ${ACP_ALLOWED_EMAILS:-${EMAILS_ENV:+inherited}}"
 echo "   blob account = $BLOB_ACCOUNT"
+# ── Optional: split worker tier (ADR 0013 §2) ────────────────────────────────
+# ACP_DEPLOY_WORKER=1 stands up (or updates) a separate `acp-worker` Container App that drains
+# the job queue via `python -m worker_main` with NO HTTP ingress, then flips the API to
+# ACP_WORKERS=0 below so the two tiers scale independently. It reuses the SAME image + secrets
+# built above; only the command + a couple of env vars differ (ADR 0013 §2 "code-ready").
+#
+# Ordering matters (ADR 0013 §2): the worker app is brought up FIRST, here, and the API is
+# flipped to ACP_WORKERS=0 only afterwards — never leave the queue with no drainer.
+#
+# Requires REDIS_URL: once API and workers are different processes the per-process token
+# fallback can't share scan/remediate tokens, so refuse without it.
+#
+# ONE-TIME after the first create: the worker writes remediated output to Blob via managed
+# identity, so grant its identity Storage Blob Data Contributor (commands printed below), else
+# remediation blob writes 403 from the worker tier.
+#
+# NOTE: this path is codified but not yet exercised against live infra (it's gated behind the
+# billable Redis + second app, greenlit separately) — shake out az-CLI specifics (notably the
+# --command quoting) on the first real spin-up.
+WORKER_APP="acp-worker"
+# Same ADC bootstrap as the API's Dockerfile CMD, but exec the worker entrypoint instead of uvicorn.
+WORKER_CMD='if [ -n "$ACP_GOOGLE_ADC" ]; then printf "%s" "$ACP_GOOGLE_ADC" > /tmp/adc.json && export GOOGLE_APPLICATION_CREDENTIALS=/tmp/adc.json; fi; exec python -m worker_main'
+if [ "${ACP_DEPLOY_WORKER:-}" = "1" ]; then
+  if [ -z "$REDIS_ENV" ]; then
+    echo "refusing: ACP_DEPLOY_WORKER=1 requires REDIS_URL (cross-replica scan tokens, ADR 0013 §2)" >&2
+    exit 1
+  fi
+  WK_N="${ACP_WORKER_COUNT:-2}"
+  echo "== worker tier: (re)deploy $WORKER_APP — python -m worker_main, $WK_N workers, no ingress =="
+  if az containerapp show "${AZ[@]}" -g "$RG" -n "$WORKER_APP" -o none 2>/dev/null; then
+    _retry az containerapp secret set "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --secrets "${SECRETS[@]}" -o none
+    _retry az containerapp registry set "${AZ[@]}" -g "$RG" -n "$WORKER_APP" \
+      --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
+    _retry az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --image "$ACRSERVER/$IMAGE" \
+      --command "/bin/sh" "-c" "$WORKER_CMD" \
+      --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DB_ENV $LF_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV ACP_WORKERS=$WK_N -o none
+  else
+    az containerapp create "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --environment "$ENVNAME" \
+      --image "$ACRSERVER/$IMAGE" \
+      --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
+      --command "/bin/sh" "-c" "$WORKER_CMD" \
+      --secrets "${SECRETS[@]}" \
+      --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DB_ENV $LF_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV ACP_WORKERS=$WK_N \
+      --system-assigned --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 3 -o none
+    echo "   one-time — grant the worker Blob access (else remediation writes 403):"
+    echo "     MI=\$(az containerapp show ${AZ[*]} -g $RG -n $WORKER_APP --query identity.principalId -o tsv)"
+    echo "     SCOPE=\$(az storage account show -n $BLOB_ACCOUNT -g $RG --query id -o tsv)"
+    echo "     az role assignment create --assignee \$MI --role 'Storage Blob Data Contributor' --scope \$SCOPE"
+  fi
+  # ADR 0013 §2: hand job processing to the worker tier — flip the API to serve-only.
+  WORKERS_ENV="ACP_WORKERS=0"
+  echo "   API → ACP_WORKERS=0 (job processing handed to $WORKER_APP)"
+fi
+
 if az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" -o none 2>/dev/null; then
   _retry az containerapp secret set "${AZ[@]}" -g "$RG" -n "$APP" \
     --secrets "${SECRETS[@]}" -o none
   _retry az containerapp registry set "${AZ[@]}" -g "$RG" -n "$APP" \
     --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
   _retry az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$ACRSERVER/$IMAGE" \
-    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV -o none
+    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV -o none
 else
   az containerapp create "${AZ[@]}" -g "$RG" -n "$APP" --environment "$ENVNAME" \
     --image "$ACRSERVER/$IMAGE" \
     --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
     --target-port 8077 --ingress external \
     --secrets "${SECRETS[@]}" \
-    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV \
+    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV \
     --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 1 -o none
 fi
 
