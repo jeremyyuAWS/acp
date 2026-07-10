@@ -21,21 +21,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
 
 @pytest.fixture()
-def st():
+def st(monkeypatch):
     import store as store_mod
-    store_mod._SQLITE_PATH = Path(tempfile.mkdtemp()) / "certify.db"
-    # sqlite has no `ADD COLUMN IF NOT EXISTS`, so the harness drops the ALTER migrations —
-    # but `approved_value` (the column this whole split turns on) arrives via one. Re-apply
-    # the hitl_queue columns the code under test reads.
-    store_mod._SCHEMA[:] = [s for s in store_mod._SCHEMA if not s.strip().upper().startswith("ALTER TABLE")]
-    s = store_mod.Store()
-    with s._db.cursor() as cur:
-        for col in ("approved_value TEXT", "proposals TEXT", "validated INT"):
-            try:
-                s._db.execute(cur, f"ALTER TABLE hitl_queue ADD COLUMN {col}")
-            except Exception:
-                pass   # already present
-    return s
+    monkeypatch.setattr(store_mod, "_SQLITE_PATH", Path(tempfile.mkdtemp()) / "certify.db")
+    return store_mod.Store()
 
 
 def _remediated_file(st, scan_id="s1", file="deck.pptx"):

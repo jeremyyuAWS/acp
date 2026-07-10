@@ -13,11 +13,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
 
 @pytest.fixture()
-def st():
+def st(monkeypatch):
     import store as store_mod
-    store_mod._SQLITE_PATH = Path(tempfile.mkdtemp()) / "phase.db"
-    store_mod._SCHEMA[:] = [x for x in store_mod._SCHEMA
-                            if not x.strip().upper().startswith("ALTER TABLE")]
+    monkeypatch.setattr(store_mod, "_SQLITE_PATH", Path(tempfile.mkdtemp()) / "phase.db")
     return store_mod.Store()
 
 

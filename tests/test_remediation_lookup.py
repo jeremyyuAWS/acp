@@ -20,12 +20,10 @@ sys.path.insert(0, str(ACP / "api"))
 
 
 @pytest.fixture()
-def store():
+def store(monkeypatch):
     import store as store_mod
     tmp = Path(tempfile.mkdtemp()) / "remlookup-test.db"
-    store_mod._SQLITE_PATH = tmp
-    store_mod._SCHEMA[:] = [s for s in store_mod._SCHEMA
-                            if not s.strip().upper().startswith("ALTER TABLE")]
+    monkeypatch.setattr(store_mod, "_SQLITE_PATH", tmp)
     return store_mod.Store()
 
 

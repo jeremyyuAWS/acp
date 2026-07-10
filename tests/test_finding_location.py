@@ -49,11 +49,9 @@ def test_issue_with_loc_omits_unknown_keys():
 # ── persistence round-trip ──
 
 @pytest.fixture()
-def st():
+def st(monkeypatch):
     import store as store_mod
-    store_mod._SQLITE_PATH = Path(tempfile.mkdtemp()) / "loc.db"
-    store_mod._SCHEMA[:] = [x for x in store_mod._SCHEMA
-                            if not x.strip().upper().startswith("ALTER TABLE")]
+    monkeypatch.setattr(store_mod, "_SQLITE_PATH", Path(tempfile.mkdtemp()) / "loc.db")
     return store_mod.Store()
 
 
