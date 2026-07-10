@@ -45,17 +45,31 @@ E2E_KEY="${ACP_E2E_KEY:-}"                # set => X-E2E-Key bypass for smoke te
 BLOB_ACCOUNT="${ACP_BLOB_ACCOUNT:-acpremediatedstore}"
 
 echo "== 0/5 preflight =="
-# Pin the subscription when asked (matches rollback.sh) -- the az default can
-# point elsewhere when other work shares this machine. NOTE: az has no
-# per-invocation profile, so this updates the az CLI's global default.
+# Resolve the subscription ONCE, then pass it explicitly to every `az` call below via "${AZ[@]}".
+#
+# This used to be `az account set --subscription`, which writes the choice into
+# ~/.azure/azureProfile.json -- a GLOBAL default shared by every shell, every CI step and every
+# concurrent agent on this machine. That produced failures in both directions:
+#   1. another process ran `az account set` midway through a deploy; this script built and
+#      pushed the image, then died at "3/5 registry creds" with "The resource with name
+#      'mdkaccessibilityacr' ... could not be found in subscription <someone else's>";
+#   2. conversely, a plain `bash deploy.sh` silently repointed the operator's own shell at the
+#      demo subscription and left it there after the script exited.
+# `--subscription` is per-invocation, so neither can happen. We also pin the immutable
+# subscription ID rather than the name, so a rename cannot retarget a running deploy.
 if [ -n "${ACP_SUBSCRIPTION:-}" ]; then
-  az account set --subscription "$ACP_SUBSCRIPTION"
-  echo "   subscription = $ACP_SUBSCRIPTION (az default updated)"
+  SUB="$(az account show --subscription "$ACP_SUBSCRIPTION" --query id -o tsv 2>/dev/null || true)"
+  [ -n "$SUB" ] || { echo "refusing to deploy: ACP_SUBSCRIPTION='$ACP_SUBSCRIPTION' does not resolve to a subscription you can see (az login?)" >&2; exit 1; }
+else
+  SUB="$(az account show --query id -o tsv 2>/dev/null || true)"
+  [ -n "$SUB" ] || { echo "refusing to deploy: no active Azure subscription -- run 'az login', or set ACP_SUBSCRIPTION" >&2; exit 1; }
 fi
+AZ=(--subscription "$SUB")   # splice into EVERY az call: az foo "${AZ[@]}" ...
+echo "   subscription = $(az account show "${AZ[@]}" --query name -o tsv 2>/dev/null || echo '?') ($SUB)"
 # Inherit ACP_GOOGLE_CLIENT_ID from the existing ACA if not provided locally, so a plain
 # redeploy doesn't accidentally clear or overwrite the already-configured OAuth client id.
-if [ -z "$CLIENT_ID" ] && az containerapp show -g "$RG" -n "$APP" -o none 2>/dev/null; then
-  CLIENT_ID="$(az containerapp show -g "$RG" -n "$APP" \
+if [ -z "$CLIENT_ID" ] && az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" -o none 2>/dev/null; then
+  CLIENT_ID="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" \
     --query "properties.template.containers[0].env[?name=='ACP_GOOGLE_CLIENT_ID'].value | [0]" \
     -o tsv 2>/dev/null || echo "")"
   [ -n "$CLIENT_ID" ] && echo "   client_id = inherited from existing deployment ($CLIENT_ID)"
@@ -63,7 +77,7 @@ fi
 [ -f "$ADC_FILE" ] || { echo "no Drive ADC at $ADC_FILE — run: gcloud auth application-default login ..."; exit 1; }
 RELEASE="spike/dotnet/AcpScan.Cli/bin/Release/net10.0/AcpScan.Cli.dll"
 [ -f "$RELEASE" ] || { echo "missing .NET Office CLI at $RELEASE — build it first (dotnet build -c Release)"; exit 1; }
-ENVNAME="${ACP_ENV:-$(az containerapp env list -g "$RG" --query '[0].name' -o tsv)}"
+ENVNAME="${ACP_ENV:-$(az containerapp env list "${AZ[@]}" -g "$RG" --query '[0].name' -o tsv)}"
 [ -n "$ENVNAME" ] || { echo "no Container Apps environment in $RG"; exit 1; }
 echo "   rg=$RG acr=$ACR env=$ENVNAME app=$APP image=$IMAGE"
 
@@ -136,7 +150,7 @@ DAY_SECS="$(printf '%s\n' "$_CAL" | sed -n 3p)"
 # only the ACTIVE revision. Without it the count is always 1 and every deploy stamps .1.
 # `|| true`: the app may not exist yet (first deploy), which would kill the script under
 # `set -euo pipefail` before the fallback runs.
-REV_TIMES="$(az containerapp revision list -n "$APP" -g "$RG" --all \
+REV_TIMES="$(az containerapp revision list "${AZ[@]}" -n "$APP" -g "$RG" --all \
               --query "[].properties.createdTime" -o tsv 2>/dev/null || true)"
 # Count revisions created at or after Pacific midnight. A UTC-date prefix match cannot express
 # that boundary — at 8 PM PDT the Pacific day holds revisions from two different UTC days.
@@ -167,13 +181,13 @@ if ! [[ "$BUILD_VERSION" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,6}$ ]]; t
   exit 1
 fi
 echo "   version $BUILD_VERSION · built $BUILD_TIME"
-az acr build -r "$ACR" -t "$IMAGE" -f deploy/public/Dockerfile \
+az acr build "${AZ[@]}" -r "$ACR" -t "$IMAGE" -f deploy/public/Dockerfile \
   --build-arg BUILD_VERSION="$BUILD_VERSION" --build-arg BUILD_TIME="$BUILD_TIME" . -o none
 
 echo "== 3/5 registry creds =="
-ACRSERVER="$(az acr show -n "$ACR" --query loginServer -o tsv)"
-ACRUSER="$(az acr credential show -n "$ACR" --query username -o tsv)"
-ACRPW="$(az acr credential show -n "$ACR" --query 'passwords[0].value' -o tsv)"
+ACRSERVER="$(az acr show "${AZ[@]}" -n "$ACR" --query loginServer -o tsv)"
+ACRUSER="$(az acr credential show "${AZ[@]}" -n "$ACR" --query username -o tsv)"
+ACRPW="$(az acr credential show "${AZ[@]}" -n "$ACR" --query 'passwords[0].value' -o tsv)"
 
 echo "== 4/5 (re)deploy Container App with external ingress =="
 ADC_JSON="$(cat "$ADC_FILE")"
@@ -198,7 +212,7 @@ if [ -n "$DATABASE_URL" ]; then
   DB_ENV="DATABASE_URL=secretref:database-url"
   echo "   db = Postgres (DATABASE_URL set)"
 else
-  EXISTING_DB="$(az containerapp show -g "$RG" -n "$APP" \
+  EXISTING_DB="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" \
     --query "properties.template.containers[0].env[?name=='DATABASE_URL'].secretRef | [0]" \
     -o tsv 2>/dev/null || echo "")"
   if [ -n "$EXISTING_DB" ]; then
@@ -218,11 +232,11 @@ if [ -n "$LF_SK" ]; then
   LF_ENV="LANGFUSE_HOST=$LF_HOST LANGFUSE_PUBLIC_KEY=secretref:langfuse-pk LANGFUSE_SECRET_KEY=secretref:langfuse-sk"
   echo "   langfuse = enabled ($LF_HOST)"
 else
-  EXISTING_LF_SK="$(az containerapp show -g "$RG" -n "$APP" \
+  EXISTING_LF_SK="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" \
     --query "properties.template.containers[0].env[?name=='LANGFUSE_SECRET_KEY'].secretRef | [0]" -o tsv 2>/dev/null || echo "")"
-  EXISTING_LF_PK="$(az containerapp show -g "$RG" -n "$APP" \
+  EXISTING_LF_PK="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" \
     --query "properties.template.containers[0].env[?name=='LANGFUSE_PUBLIC_KEY'].secretRef | [0]" -o tsv 2>/dev/null || echo "")"
-  EXISTING_LF_HOST="$(az containerapp show -g "$RG" -n "$APP" \
+  EXISTING_LF_HOST="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" \
     --query "properties.template.containers[0].env[?name=='LANGFUSE_HOST'].value | [0]" -o tsv 2>/dev/null || echo "")"
   if [ -n "$EXISTING_LF_SK" ]; then
     LF_ENV="LANGFUSE_HOST=${EXISTING_LF_HOST:-$LF_HOST} LANGFUSE_PUBLIC_KEY=secretref:$EXISTING_LF_PK LANGFUSE_SECRET_KEY=secretref:$EXISTING_LF_SK"
@@ -247,7 +261,7 @@ if [ -n "$DEMO_DRIVE_KEY" ]; then
   echo "   demo drive key = set (E2E Drive scan enabled)"
 else
   # Inherit from existing deployment so a plain redeploy doesn't clear it.
-  EXISTING_DEMO_KEY="$(az containerapp show -g "$RG" -n "$APP" \
+  EXISTING_DEMO_KEY="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" \
     --query "properties.template.containers[0].env[?name=='ACP_DEMO_DRIVE_KEY'].secretRef | [0]" \
     -o tsv 2>/dev/null || echo "")"
   DEMO_ENV="${EXISTING_DEMO_KEY:+ACP_DEMO_DRIVE_KEY=secretref:$EXISTING_DEMO_KEY}"
@@ -259,7 +273,7 @@ if [ -n "$E2E_KEY" ]; then
   E2E_ENV="ACP_E2E_KEY=secretref:e2e-key"
   echo "   e2e key = set"
 else
-  EXISTING_E2E="$(az containerapp show -g "$RG" -n "$APP" \
+  EXISTING_E2E="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" \
     --query "properties.template.containers[0].env[?name=='ACP_E2E_KEY'].secretRef | [0]" \
     -o tsv 2>/dev/null || echo "")"
   E2E_ENV="${EXISTING_E2E:+ACP_E2E_KEY=secretref:$EXISTING_E2E}"
@@ -268,9 +282,13 @@ fi
 # Async worker pool — ACP_WORKERS=N runs N in-process job workers. Plain (non-secret)
 # env vars; inherit when not passed so a bare redeploy keeps them.
 _inherit_env() {  # $1 = var name → echoes "NAME=value" if currently set, else ""
-  local v; v="$(az containerapp show -g "$RG" -n "$APP" \
+  local v; v="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" \
     --query "properties.template.containers[0].env[?name=='$1'].value | [0]" -o tsv 2>/dev/null || echo "")"
-  [ -n "$v" ] && echo "$1=$v"
+  # `if`, not `[ -n "$v" ] && echo ...`: the && form returns 1 when $v is empty, and the caller
+  # assigns it as the LAST command of an && list, so `set -e` aborted the whole deploy whenever
+  # the variable was absent. Nothing inherits on a first-ever deploy, so the `containerapp create`
+  # path below was unreachable. Absent is a normal outcome here, not an error.
+  if [ -n "$v" ]; then echo "$1=$v"; fi
 }
 WORKERS_ENV="${ACP_WORKERS:+ACP_WORKERS=$ACP_WORKERS}"; [ -z "$WORKERS_ENV" ] && WORKERS_ENV="$(_inherit_env ACP_WORKERS)"
 EMAILS_ENV="${ACP_ALLOWED_EMAILS:+ACP_ALLOWED_EMAILS=$ACP_ALLOWED_EMAILS}"; [ -z "$EMAILS_ENV" ] && EMAILS_ENV="$(_inherit_env ACP_ALLOWED_EMAILS)"
@@ -284,15 +302,15 @@ echo "   deploy env = production (test/demo auth bypasses refused)"
 echo "   workers = ${ACP_WORKERS:-${WORKERS_ENV:+inherited}}${WORKERS_ENV:+}"
 echo "   allowed emails = ${ACP_ALLOWED_EMAILS:-${EMAILS_ENV:+inherited}}"
 echo "   blob account = $BLOB_ACCOUNT"
-if az containerapp show -g "$RG" -n "$APP" -o none 2>/dev/null; then
-  _retry az containerapp secret set -g "$RG" -n "$APP" \
+if az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" -o none 2>/dev/null; then
+  _retry az containerapp secret set "${AZ[@]}" -g "$RG" -n "$APP" \
     --secrets "${SECRETS[@]}" -o none
-  _retry az containerapp registry set -g "$RG" -n "$APP" \
+  _retry az containerapp registry set "${AZ[@]}" -g "$RG" -n "$APP" \
     --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
-  _retry az containerapp update -g "$RG" -n "$APP" --image "$ACRSERVER/$IMAGE" \
+  _retry az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$ACRSERVER/$IMAGE" \
     --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV -o none
 else
-  az containerapp create -g "$RG" -n "$APP" --environment "$ENVNAME" \
+  az containerapp create "${AZ[@]}" -g "$RG" -n "$APP" --environment "$ENVNAME" \
     --image "$ACRSERVER/$IMAGE" \
     --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
     --target-port 8077 --ingress external \
@@ -302,7 +320,7 @@ else
 fi
 
 echo "== 5/5 done =="
-FQDN="$(az containerapp show -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)"
+FQDN="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)"
 
 # ── Optional: standalone ACP Grafana ─────────────────────────────────────────
 # Build + deploy only when ACP_DATABASE_URL (Postgres) is set — Grafana needs
@@ -317,14 +335,14 @@ if [ -n "$DATABASE_URL" ]; then
   _PG_PASS="$(echo "$DATABASE_URL" | sed 's|.*://[^:]*:\([^@]*\)@.*|\1|')"
   _PG_HOST="$(echo "$DATABASE_URL" | sed 's|.*@\([^/]*\)/.*|\1|')"
   _PG_DB="$(echo "$DATABASE_URL"   | sed 's|.*/\([^?]*\).*|\1|')"
-  az acr build -r "$ACR" -t "$GF_IMAGE" -f deploy/grafana/Dockerfile deploy/grafana -o none
-  if az containerapp show -g "$RG" -n "$GF_APP" -o none 2>/dev/null; then
+  az acr build "${AZ[@]}" -r "$ACR" -t "$GF_IMAGE" -f deploy/grafana/Dockerfile deploy/grafana -o none
+  if az containerapp show "${AZ[@]}" -g "$RG" -n "$GF_APP" -o none 2>/dev/null; then
     # Ensure the Grafana app can pull from the private ACR before updating its
     # image (an older acp-grafana may have been created without these creds,
     # which fails the revision with UNAUTHORIZED).
-    _retry az containerapp registry set -g "$RG" -n "$GF_APP" \
+    _retry az containerapp registry set "${AZ[@]}" -g "$RG" -n "$GF_APP" \
       --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
-    _retry az containerapp update -g "$RG" -n "$GF_APP" --image "$ACRSERVER/$GF_IMAGE" \
+    _retry az containerapp update "${AZ[@]}" -g "$RG" -n "$GF_APP" --image "$ACRSERVER/$GF_IMAGE" \
       --set-env-vars \
         ACP_GRAFANA_PG_HOST="$_PG_HOST" \
         ACP_GRAFANA_PG_DB="$_PG_DB" \
@@ -335,7 +353,7 @@ if [ -n "$DATABASE_URL" ]; then
         GF_AUTH_DISABLE_LOGIN_FORM=false \
       -o none
   else
-    az containerapp create -g "$RG" -n "$GF_APP" --environment "$ENVNAME" \
+    az containerapp create "${AZ[@]}" -g "$RG" -n "$GF_APP" --environment "$ENVNAME" \
       --image "$ACRSERVER/$GF_IMAGE" \
       --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
       --target-port 3000 --ingress external \
@@ -349,7 +367,7 @@ if [ -n "$DATABASE_URL" ]; then
         GF_AUTH_DISABLE_LOGIN_FORM=false \
       --cpu 0.5 --memory 1.0Gi --min-replicas 1 --max-replicas 1 -o none
   fi
-  GF_FQDN="$(az containerapp show -g "$RG" -n "$GF_APP" --query properties.configuration.ingress.fqdn -o tsv)"
+  GF_FQDN="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$GF_APP" --query properties.configuration.ingress.fqdn -o tsv)"
   echo "   Grafana:    https://$GF_FQDN   (anonymous viewer; sign in as admin for edits)"
 else
   echo "   Grafana:    skipped — ACP_DATABASE_URL not set (SQLite mode)"
