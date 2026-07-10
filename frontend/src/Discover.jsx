@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import ScanTheater from './ScanTheater.jsx'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import WindowedRows from './WindowedRows.jsx'
 import FileDrawer, { retentionOf } from './FileDrawer.jsx'
@@ -243,8 +242,6 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
         </div>
         <button disabled={busy} onClick={() => onScan('all')}>{busy ? 'scanning…' : 'Re-scan all sources'}</button>
       </div>
-
-      <ScanTheater busy={busy} progress={progress} pct={scanPct} status={scanStatus} />
 
       {files.length === 0 ? (
         <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Integrations.</p>
