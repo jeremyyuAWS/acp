@@ -2,6 +2,8 @@
 // data so we can showcase agentic discovery, auto-tagging, and unified cross-source
 // compliance. Modeled on a health-system org (UT Southwestern) with departments.
 
+import { CAPABILITY_FALLBACK, autoSCs } from './capability.js'
+
 // SIM=true: all data is synthetic (no backend needed).
 // Set VITE_SIM=false in .env (+ VITE_API=http://...) to connect to the real backend.
 export const SIM = import.meta.env.VITE_SIM !== 'false'
@@ -154,24 +156,19 @@ const fmtAge = (days) => days < 45 ? `${days}d ago` : days < 600 ? `${Math.round
 // comparing against the raw 'SC_'-prefixed strings silently missed every real
 // finding, so contrast/link/media files were mislabelled 'fully automatic'.
 const scId = (w) => (String(w || '').replace(/^SC_/, '').replace(/_/g, '.').match(/^\d+\.\d+\.\d+/) || [''])[0]
-// Fixability is about the rule, not the severity: alt text, language, titles,
-// headings and reading order are mechanical (auto); contrast and link-purpose
-// are judgement calls (human). Legal-hold docs are never auto-edited.
-const NEEDS_HUMAN_SC = new Set(['1.4.3', '2.4.4'])
 // Time-based media — captions, audio description, transcripts. AI can draft them
-// (ASR), but a human always finalizes; never silently auto-applied.
+// (ASR), but a human always finalizes; never silently auto-applied. Kept separate
+// because a media finding wants its own rationale, not the generic format one.
 const MEDIA_SC = new Set(['1.2.1', '1.2.2', '1.2.3', '1.2.5'])
-// What each server-side remediator can ACTUALLY fix deterministically. HTML runs
-// the full rule orchestrator (broad — treat all non-hard/non-media findings as
-// auto, as before). PDF/Office remediators are narrow: a file is only 'fully
-// automatic' if EVERY finding is in its format's set — otherwise the rest need a
-// human, so it must not read as "all mechanical, no human needed".
-const AUTO_FIX_SC_BY_TYPE = {
-  pdf: new Set(['3.1.1', '2.4.2']),                    // remediate_pdf: language + display-title
-  docx: new Set(['3.1.1', '2.4.2', '1.1.1']),          // remediate_office: + faithful-source alt text
-  pptx: new Set(['3.1.1', '2.4.2', '1.1.1']),
-  xlsx: new Set(['3.1.1', '2.4.2', '1.1.1']),
-}
+// Which findings a file's remediator can fix WITHOUT a human is answered by the ONE
+// remediation-capability table (capability.js → api/remediation_capability.py), keyed
+// by format — the same source Assess + FileDrawer read, so a SIM recommendation can't
+// disagree with them. "auto" = deterministic, no human; "assisted"/"human" both need a
+// person (so they block a "fully automatic" recommendation). This replaces the two
+// format-BLIND sets that used to live here (an alt-text-is-auto set and a
+// contrast-is-always-human set) — both wrong per format: contrast is auto on
+// docx/xlsx/html but human on pptx/pdf, and alt text is assisted everywhere.
+const autoFixSCsFor = (type) => autoSCs(CAPABILITY_FALLBACK, type)
 // No `confidence` field. It used to return `90 + (n % 9)` and `70 + (n % 14)` — a confidence
 // PERCENTAGE derived from the finding count modulo a number. Nothing rendered it, but it sat
 // here waiting to be wired to a UI. Evidence-based confidence lives in confidence.js
@@ -184,12 +181,14 @@ function recommendFor(f) {
   const scIds = issues.map((x) => scId(x.wcag)).filter(Boolean)
   const hasCritical = issues.some((x) => x.severity === 'CRITICAL')
   const mediaFinding = scIds.some((s) => MEDIA_SC.has(s))
-  const hardFinding = scIds.some((s) => NEEDS_HUMAN_SC.has(s))
-  // For PDF/Office, escalate when any finding falls outside what that format's
-  // remediator can mechanically fix (e.g. a PDF's contrast or structure findings).
-  const autoSet = AUTO_FIX_SC_BY_TYPE[f.type]
-  const formatBlocksAuto = !!autoSet && scIds.some((s) => !autoSet.has(s))
-  const autoCount = autoSet ? scIds.filter((s) => autoSet.has(s)).length : n
+  // Escalate when any finding falls outside what THIS format's remediator can fix
+  // deterministically (capability "auto") — e.g. a PDF's contrast/structure findings,
+  // or any format's alt text (assisted). Format-aware: docx contrast is auto and doesn't
+  // block; pptx/pdf contrast is human and does. autoSet is empty for a format the table
+  // doesn't cover (media files), whose findings are all non-auto anyway.
+  const autoSet = autoFixSCsFor(f.type)
+  const formatBlocksAuto = scIds.some((s) => !autoSet.has(s))
+  const autoCount = scIds.filter((s) => autoSet.has(s)).length
   const legalHold = (f.tags || []).includes('legal-hold')
   const sensitive = (f.tags || []).some((t) => t === 'PII' || t === 'legal-hold')
   const publicDoc = (f.tags || []).some((t) => t === 'public-facing' || t === 'high-traffic')
@@ -229,22 +228,21 @@ function recommendFor(f) {
     return { action: 'review', mode: 'assisted', etaMin: eta, manualMin, savingsPct: sav(eta), rationale: `${f.skipped_rules} rule(s) couldn’t be auto-evaluated — a reviewer confirms before this can be certified.` }
   }
 
-  // Escalate to a human when the fix needs judgement (contrast / link), the content
-  // is legally frozen, a critical finding sits on a public high-traffic page, OR the
-  // file's format has findings its deterministic remediator can't touch (e.g. a PDF
-  // whose only mechanical fixes are language + title). Everything else is mechanical
-  // and safe to auto-remediate + re-validate.
-  const escalate = mediaFinding || hardFinding || legalHold || (hasCritical && publicDoc) || formatBlocksAuto
+  // Escalate to a human when the content is legally frozen, a critical finding sits on
+  // a public high-traffic page, OR the format has findings its deterministic remediator
+  // can't touch (formatBlocksAuto — now capability-driven, so it covers both the old
+  // "contrast/link needs judgement" and "format can't fix this" cases, per format).
+  // Everything else is mechanical and safe to auto-remediate + re-validate.
+  const escalate = mediaFinding || legalHold || (hasCritical && publicDoc) || formatBlocksAuto
   if (!escalate) {
     const eta = Math.max(1, Math.round(n * (f.type === 'pdf' ? 1.6 : 1.0)))
-    return { action: 'auto', mode: 'auto', etaMin: eta, manualMin, savingsPct: sav(eta), rationale: `All ${n} finding${n === 1 ? '' : 's'} are mechanical (alt text, headings, language, titles) — fixed automatically and re-validated. No human needed.` }
+    return { action: 'auto', mode: 'auto', etaMin: eta, manualMin, savingsPct: sav(eta), rationale: `All ${n} finding${n === 1 ? '' : 's'} are mechanical (headings, language, titles, contrast) — fixed automatically and re-validated. No human needed.` }
   }
   const eta = issues.reduce((a, x) => a + (ASSIST_MIN[x.severity] || 5), 0) + 6
   const fmt = String(f.type || 'file').toUpperCase()
   const reason = mediaFinding ? 'Captions / audio description are AI-drafted, then finalized by a human'
-    : hardFinding ? 'A contrast / link-purpose finding needs a human judgement call'
     : legalHold ? 'Legal-hold content is never auto-edited'
-    : formatBlocksAuto ? `Only ${autoCount} of ${n} finding${n === 1 ? '' : 's'} are mechanically fixable in a ${fmt} (e.g. language, title); the rest need a human`
+    : formatBlocksAuto ? `Only ${autoCount} of ${n} finding${n === 1 ? '' : 's'} are mechanically fixable in a ${fmt} (e.g. language, title); the rest (alt text, contrast where unsupported) need a human`
     : 'A critical finding on a public, high-traffic page'
   return { action: 'assisted', mode: 'assisted', etaMin: eta, manualMin, savingsPct: sav(eta), rationale: `${reason} — a human approves the AI fix before publish.` }
 }

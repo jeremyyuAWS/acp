@@ -1,8 +1,11 @@
 // Contract for the per-file remediation recommendation (sim.js recommendFor).
-// Regression guard for the mislabel bug: real backend findings carry wcag as
-// '1.4.3 Contrast (Minimum)', not the SC_-prefixed form the fixability sets used,
-// so contrast/link/media files were silently classed 'fully automatic'. Also
-// guards the format-awareness: a PDF's only mechanical fixes are language + title.
+// The fixability split is now sourced from the ONE remediation-capability table
+// (capability.js), the same source Assess + FileDrawer read — so a recommendation
+// can't disagree with them. Regression guards:
+//  - real backend findings carry wcag as '1.4.3 Contrast (Minimum)', not the SC_
+//    form, and both must parse (the mislabel bug that classed files 'fully automatic');
+//  - fixability is FORMAT-AWARE: a PDF's only mechanical fixes are language + title;
+//    contrast is auto on docx/xlsx/html but human on pptx/pdf; alt text is assisted.
 import { describe, it, expect } from 'vitest'
 import { recommendFor } from './sim.js'
 
@@ -31,17 +34,26 @@ describe('recommendFor — remediation mode', () => {
     expect(r.rationale).toMatch(/mechanically fixable in a PDF/i)
   })
 
-  it('escalates HTML contrast in the real wcag format (was silently auto before)', () => {
-    const r = recommendFor(mk('html', ['1.4.3 Contrast (Minimum)', '1.1.1 Non-text Content']))
+  it('escalates a file with an alt-text finding — 1.1.1 is assisted (AI drafts, human approves), never silent auto', () => {
+    const r = recommendFor(mk('html', ['1.1.1 Non-text Content', '2.4.2 Page Titled']))
     expect(r.mode).toBe('assisted')
   })
 
-  it('still auto-fixes mechanical-only HTML', () => {
-    const r = recommendFor(mk('html', ['1.1.1 Non-text Content', '2.4.2 Page Titled', '3.1.1 Language of Page']))
+  it('still auto-fixes mechanical-only findings (titles, language, structure)', () => {
+    const r = recommendFor(mk('html', ['2.4.2 Page Titled', '3.1.1 Language of Page', '1.3.1 Info and Relationships']))
     expect(r.mode).toBe('auto')
   })
 
-  it('still recognizes the SC_-prefixed sim format', () => {
-    expect(recommendFor(mk('html', ['SC_1_4_3'])).mode).toBe('assisted')
+  it('is format-aware about contrast: auto on docx (deterministic recolour), human on pptx', () => {
+    // docx contrast is a deterministic, engine-verified fix -> no human needed.
+    expect(recommendFor(mk('docx', ['1.4.3 Contrast (Minimum)', '2.4.2 Page Titled'])).mode).toBe('auto')
+    // pptx contrast has no verified remediator -> routes to a human.
+    const p = recommendFor(mk('pptx', ['1.4.3 Contrast (Minimum)', '2.4.2 Page Titled']))
+    expect(p.mode).toBe('assisted')
+  })
+
+  it('still recognizes the SC_-prefixed sim wcag format', () => {
+    // pptx contrast (1.4.3) is human, so this both exercises SC_ parsing and stays assisted.
+    expect(recommendFor(mk('pptx', ['SC_1_4_3'])).mode).toBe('assisted')
   })
 })
