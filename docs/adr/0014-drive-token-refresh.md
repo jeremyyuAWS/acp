@@ -1,15 +1,24 @@
 # ADR 0014 — Keep long-running scans authenticated (Drive token refresh)
 
-Status: Accepted (Tier 1 shipped); Tier 2 (offline refresh) Proposed
+Status: Accepted (Tier 1 shipped); Tier 2 (offline refresh) superseded by [ADR 0017](0017-drive-offline-refresh-auth-code-flow.md)
 Date: 2026-07-09
 
 ## Context
 
 Drive scans authenticate with a per-user Google Identity Services (GIS) **access token**
 passed as `x-drive-token`. GIS access tokens are short-lived (~1h) and, in the implicit
-token flow the app uses, carry **no refresh token** — so the backend cannot refresh them
-(`scanner._drive_service` / `handlers._drive_client` deliberately set a fake expiry and
-never attempt the impossible refresh).
+token flow the app uses, carry **no refresh token** — so the backend cannot refresh them.
+
+> **Correction (2026-07-09).** This ADR originally read: "`scanner._drive_service` /
+> `handlers._drive_client` deliberately set a fake expiry and never attempt the impossible
+> refresh." The second half was false, and the first half caused the failure. google-auth
+> attempts a refresh precisely when `credentials.expired` is true, and `expired` is false only
+> while `expiry` is `None`. Setting `expiry = now + 1h` therefore *scheduled* the impossible
+> refresh for one hour after the client was built — not from when Google issued the token — and
+> jobs that crossed it died on `RefreshError`, were retried five times, and dead-lettered
+> quoting google-auth at the user. The fabricated expiry is now removed from all four Drive
+> clients, and `worker.drive_session_expired()` classifies an unusable token as terminal.
+> A regression test asserts `.expiry` appears in no Drive-client source.
 
 The fan-out scan captures the token once at kickoff (`register_scan_tokens`) and each
 `scan_file` / `scan_batch` worker reads it from the ephemeral per-scan token store. On an
@@ -42,7 +51,8 @@ Chosen because it fits the existing architecture (frontend already silent-refres
 already has a per-scan token store), needs no new OAuth client secret, and touches no
 security-sensitive server code.
 
-**Tier 2 — server-side offline refresh (proposed, the complete fix):** move Drive auth to the
+**Tier 2 — server-side offline refresh (superseded by ADR 0017, which owns this decision):**
+move Drive auth to the
 GIS **authorization-code flow with `access_type=offline`**, exchange the code server-side (needs
 a `GOOGLE_CLIENT_SECRET`) for a **refresh token**, persist it, and build
 `google.oauth2.credentials.Credentials` **with** the refresh token + token URI + client

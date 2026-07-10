@@ -14,6 +14,7 @@ header). Match the structure of the latest ADR when adding a new one.
 - [0012 — Own the Office analysers; fix the language rules](0012-own-office-analysers.md) — **Accepted** (2026-07-08)
 - [0013 — Worker durability hardening: idempotent finalize + worker-process isolation](0013-worker-durability-hardening.md) — **Proposed** (2026-07-08)
 
-- [0014 — Keep long-running scans authenticated (Drive token refresh)](0014-drive-token-refresh.md) — **Accepted** (Tier 1) / **Proposed** (Tier 2) (2026-07-09)
+- [0014 — Keep long-running scans authenticated (Drive token refresh)](0014-drive-token-refresh.md) — **Accepted** (Tier 1); Tier 2 superseded by 0017 (2026-07-09)
 - [0015 — Page-render / thumbnail seam (lazy PDF→PNG, blob-cached)](0015-page-render-thumbnail-seam.md) — **Accepted** (PDF) / **Proposed** (Office) (2026-07-09)
 - [0016 — Evidence-based confidence signal (derived, never a fabricated %)](0016-evidence-based-confidence.md) — **Accepted** (2026-07-09)
+- [0017 — Server-side Drive refresh via the OAuth authorization-code flow](0017-drive-offline-refresh-auth-code-flow.md) — **Proposed** (2026-07-09)
