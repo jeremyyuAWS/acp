@@ -429,6 +429,17 @@ def _scan_discover(payload: dict, job: dict) -> None:
     items = _list(source, svc, folder=effective_folder, sp_token=toks.get("sp"),
                   max_files=FANOUT_MAX_FILES,
                   exclude_remediated=bool(payload.get("exclude_remediated", False)))
+    # Which discovered files share a logical name with another? Only those can be ACP's own
+    # output SHADOWING a source document. A stamped file standing alone under its own name is
+    # a certified document published back into the estate — it must still be scanned.
+    # The content stamp needs the bytes, so the final call happens per-file in scan_file; this
+    # just tells that job whether the question is even worth asking.
+    from store import logical_name as _logical_name
+    _name_counts: dict[str, int] = {}
+    for _it in items:
+        _name_counts[_logical_name(_it["name"])] = _name_counts.get(_logical_name(_it["name"]), 0) + 1
+    _exclude_rem = bool(payload.get("exclude_remediated", False))
+
     started = _dt.datetime.now(_dt.timezone.utc).isoformat()
     core.store.init_scan_run(scan_id, source, len(items), started, rb.name, rb.hash, owner=user)
     if not items:
@@ -451,7 +462,9 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 "incremental": bool(payload.get("incremental", True)),
                 "items": [{"file": it["name"], "drive_file_id": it.get("id"),
                            "mime": it.get("mime"), "path": it.get("path"),
-                           "checksum": it.get("checksum")} for it in chunk],
+                           "checksum": it.get("checksum"),
+                           "shadow_candidate": _name_counts[_logical_name(it["name"])] > 1,
+                           "exclude_remediated": _exclude_rem} for it in chunk],
             }, scan_id=scan_id)
     else:
         for it in items:
@@ -459,6 +472,8 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 "scan_id": scan_id, "source": source, "file": it["name"],
                 "drive_file_id": it.get("id"), "mime": it.get("mime"), "path": it.get("path"),
                 "checksum": it.get("checksum"),
+                "shadow_candidate": _name_counts[_logical_name(it["name"])] > 1,
+                "exclude_remediated": _exclude_rem,
                 "ai": ai, "pii": pii, "user": user,
                 "incremental": bool(payload.get("incremental", True))}, scan_id=scan_id)
 
@@ -505,7 +520,29 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                 if item.get("path"):                       # local source — read from disk
                     it["path"] = item["path"]
                 _download(it, tmp, svc, sp_token=toks.get("sp"))
-                fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii)
+                # Stop BEFORE the expensive analysis. This file shares its logical name with
+                # another discovered file and carries ACP's in-document stamp, so it is our own
+                # remediated copy shadowing its source. Scanning it ran the Office/PDF engine,
+                # the PII pass and the AI pass, then produced a phantom document, a phantom
+                # duplicate, and a HITL item asking a reviewer to approve alt text for ACP's own
+                # output. detect_acp_stamp only reads the document's properties — cheap.
+                #
+                # A row is still persisted: count_files_done() counts file_records rows against
+                # scan_runs.files, so a missing row would leave the scan permanently unfinalized.
+                # It carries acp_stamped, so get_scan's shadow filter hides it from every reader,
+                # and it has no issues -> no scan_rule_traces -> it never reaches the HITL queue.
+                if item.get("shadow_candidate") and item.get("exclude_remediated"):
+                    from scanner import detect_acp_stamp
+                    stamp = detect_acp_stamp(tmp / name, _Path(name).suffix.lower())
+                    if stamp:
+                        print(f"[scan] skipping {name}: ACP-generated output shadowing its "
+                              f"source (not analysed, not queued for review)", flush=True)
+                        fdict = {"file": name, "engine": "n/a", "status": "skipped",
+                                 "score": None, "compliant": 0, "skipped_rules": 0,
+                                 "issues": [], "acp_stamped": stamp}
+                        pinfo = None
+                if fdict is None:
+                    fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii)
             except Exception as e:
                 # Classify Drive auth expiry distinctly: GIS access tokens live ~1h and
                 # cannot be refreshed server-side, so on a long scan every remaining file

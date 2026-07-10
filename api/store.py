@@ -459,6 +459,12 @@ def logical_name(name: str) -> str:
     return re.sub(r" \(\d+\)(\.[^.]+)$", r"\1", name or "")
 
 
+# get_scan is a READ path the dashboard polls every second or two. Logging the shadow filter
+# on every call printed the same line 26 times in five minutes. Remember which scans have
+# already been reported; a restart re-reports once, which is the point of the line.
+_shadow_logged: set[str] = set()
+
+
 def shadowed_acp_outputs(files: list[dict]) -> set[str]:
     """The file names in this scan that are ACP's OWN output shadowing the source document it
     was made from — the "1 Drive document, 2 scanned files" bug.
@@ -1060,8 +1066,10 @@ class Store:
             # filters the read, it does not delete evidence.
             shadowed = shadowed_acp_outputs(files)
             if shadowed:
-                print(f"[scan] get_scan({sid}): hiding {len(shadowed)} ACP-generated file(s) "
-                      f"shadowing their source: {sorted(shadowed)}", flush=True)
+                if sid not in _shadow_logged:      # once per scan, not once per poll
+                    _shadow_logged.add(sid)
+                    print(f"[scan] get_scan({sid}): hiding {len(shadowed)} ACP-generated file(s) "
+                          f"shadowing their source: {sorted(shadowed)}", flush=True)
                 files = [f for f in files if f["file"] not in shadowed]
             # file_records has no per-file source column (every file in one scan shares the
             # scan's single source) — derive the friendly sourceName here, at the single read
