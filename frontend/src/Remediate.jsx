@@ -456,15 +456,33 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const triageFile = (file, st) => setTriage((t) => { const n = { ...t }; if (st == null) delete n[file]; else n[file] = st; return n })
   const revalidated = files.filter((f) => f.compliant)
 
+  // A review decision that fails to reach the server must NOT look like one that succeeded.
+  // The optimistic update pulls the card out of the queue and bumps the counter before the
+  // write; every write used to end in `.catch(() => {})`, so a 401 or a 500 left the reviewer
+  // believing they had signed something off that the server never recorded. In a compliance
+  // product an unrecorded approval is worse than a visible failure. Put the card back, undo
+  // the count, and say so.
+  const undoAct = (item, kind, err) => {
+    if (item) {
+      setQueue((q) => (q.some((x) => x.id === item.id) ? q : [item, ...q]))
+      if (kind === 'deferred') setDeferredItems((d) => d.filter((x) => x.id !== item.id))
+    }
+    setActed((a) => ({ ...a, [kind]: Math.max(0, (a[kind] || 0) - 1) }))
+    window.dispatchEvent(new Event('acp:hitl-changed'))
+    setActError(`Your ${kind === 'deferred' ? 'skip' : kind} of “${item?.file || 'this finding'}” was NOT saved: `
+                + `${err?.message || err}. It is back in the queue — try again.`)
+  }
+
   const act = (id, kind, editedValue) => {
     const item = queue.find((x) => x.id === id)
+    setActError(null)
     setQueue((q) => q.filter((x) => x.id !== id))
     setSelItem(null)
     if (kind === 'self') { if (item) setSelf((s) => [{ ...item, status: 'awaiting' }, ...s]); return }
     if (kind === 'deferred') {
       if (item) setDeferredItems((d) => [...d, item])
       setActed((a) => ({ ...a, deferred: a.deferred + 1 }))
-      if (!SIM && item?.id) updateHitlItem(item.id, 'skipped').catch(() => {})
+      if (!SIM && item?.id) updateHitlItem(item.id, 'skipped').catch((e) => undoAct(item, 'deferred', e))
       return
     }
     setActed((a) => ({ ...a, [kind]: a[kind] + 1 }))
@@ -478,8 +496,17 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       // On approval the server re-validates the file: once its every review item is
       // approved it flips to compliant and enters the publish queue. Refresh the scan so
       // "Re-validated & ready to publish" (and the Publish tab) pick that up immediately.
-      if (apiStatus === 'approved') p.then(() => onRefresh?.()).catch(() => {})
-      else p.catch(() => {})
+      // Two-arg then, NOT .then().catch(): a chained catch would also see a rejection from
+      // onRefresh() and roll back a decision the server had already accepted. The refresh is
+      // cosmetic; only the write's own failure may undo the decision.
+      p.then(
+        () => {
+          if (apiStatus !== 'approved') return
+          try { const r = onRefresh?.(); if (r && typeof r.catch === 'function') r.catch(() => {}) }
+          catch { /* the refresh is cosmetic — never let it disturb a saved decision */ }
+        },
+        (e) => undoAct(item, kind, e),
+      )
     }
   }
   const draftAi = (item) => suggestFix(item.scanId || runId, item.file, item.ruleId).then((r) => r?.suggestion)
@@ -581,6 +608,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // Reviewer time, MEASURED (hitl_events.review_ms). Replaces "est. savings", which was one
   // invented constant (35 min/finding by hand) minus another (~1 min/finding automated).
   // A saving needs a counterfactual nobody ever timed; an average review time is a fact.
+  // A review decision the server refused. Loud, and sticky until the next attempt.
+  const [actError, setActError] = useState(null)
   const [reviewStats, setReviewStats] = useState(null)
   useEffect(() => {
     if (!runId || SIM) { setReviewStats(null); return }
@@ -689,6 +718,16 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             </div>
           )}
         </div>
+        {/* A decision the server refused. It rolled back, so the card is in the queue again —
+            say so loudly, because a reviewer who thinks they signed something off and did not
+            is the worst outcome this screen can produce. */}
+        {actError && (
+          <p role="alert" className="rem-act-error"
+             style={{ margin: '0 0 12px', padding: '10px 12px', borderRadius: 8, fontSize: 13,
+                      background: '#FDECEC', color: '#8A1F1F', border: '1px solid #E9A8A8' }}>
+            {actError}
+          </p>
+        )}
         {queue.length === 0 ? (
           <p className="muted">{totalHitl === 0
             ? 'Nothing needs your review — every fix was applied automatically. Items needing an AI-assisted fix or human sign-off will appear here.'

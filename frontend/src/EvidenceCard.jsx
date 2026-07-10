@@ -19,6 +19,9 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   const [value, setValue] = useState(firstProposed(item) ?? item?.approved_value ?? '')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
+  // A decision the server refused. Rendered as an alert — a silent failure here is a
+  // reviewer believing they signed something off that was never recorded.
+  const [actError, setActError] = useState(null)
   const [drafting, setDrafting] = useState(false)
   const [draftMsg, setDraftMsg] = useState(null)   // { kind: 'ai' | 'template' | 'error', text }
   const shownAt = useRef(Date.now())               // reviewer-time metric starts when the card mounts
@@ -79,6 +82,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   const decide = async (status) => {
     if (busy) return
     setBusy(true)
+    setActError(null)
     const t = reviewTelemetry({
       editable, status, value, aiDraft: aiDraft.current, elapsedMs: Date.now() - shownAt.current,
     })
@@ -86,6 +90,11 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
       await onAct(card.id, status, note || null, t.finalValue,
                   { edited: t.edited, reviewMs: t.reviewMs, aiValue: t.aiValue })
       onResolved && onResolved(card.id, status)
+    } catch (e) {
+      // HitlBell rolls the optimistic list back and rethrows. Without this catch the rejection
+      // was unhandled: the reviewer saw the card sit there with no error, having signed off on
+      // nothing. An unrecorded approval must never look like a recorded one.
+      setActError(`Not saved: ${e?.message || e}. Nothing was recorded — try again.`)
     } finally {
       setBusy(false)
     }
@@ -218,6 +227,16 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
 
           <input className="rc-note" placeholder="Reviewer note (optional)" value={note}
                  onChange={(e) => setNote(e.target.value)} />
+
+          {/* Beside the buttons that failed, not in a corner. role=alert so a screen-reader
+              user is told too — this card is the accessibility product's own review surface. */}
+          {actError && (
+            <p role="alert" className="evcard-act-error"
+               style={{ margin: '0 0 8px', padding: '9px 11px', borderRadius: 8, fontSize: 13,
+                        background: '#FDECEC', color: '#8A1F1F', border: '1px solid #E9A8A8' }}>
+              {actError}
+            </p>
+          )}
 
           <div className="evcard-actions">
             <button className="qbtn approve" disabled={busy} onClick={() => decide('approved')}>✓ {primaryLabel}</button>

@@ -67,7 +67,10 @@ function LockIcon() {
   )
 }
 
-export default function SignIn({ onSignedIn }) {
+// `notice` explains why this screen appeared. On a first visit it is null and nothing renders.
+// After a 401 it carries the reason, because a user dropped back to sign-in mid-review with no
+// explanation cannot tell an expired token from an app that lost their work.
+export default function SignIn({ onSignedIn, notice = null }) {
   const [cfg, setCfg] = useState(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -129,6 +132,13 @@ export default function SignIn({ onSignedIn }) {
         <div className="signin-card wide">
           <Logo big />
           <p className="signin-sub">Accessibility Platform</p>
+          {notice && (
+            <p role="status" aria-live="polite" className="signin-notice"
+               style={{ fontSize: 13, margin: '10px 0 0', padding: '10px 12px', borderRadius: 8,
+                        background: '#FFF4E5', color: '#7A4A00', border: '1px solid #F0C77E' }}>
+              {notice}
+            </p>
+          )}
           {err && <p style={{ color: 'var(--red, #dc2626)', fontSize: 13, margin: '8px 0 0' }}>{err}</p>}
           <div className="ssorow" style={{ marginTop: 24 }}>
             <button className="ssobtn google-sso" onClick={signInWithGoogle} disabled={busy}>
@@ -152,6 +162,13 @@ export default function SignIn({ onSignedIn }) {
       <div className="signin-card wide">
         <Logo big />
         <p className="signin-sub">Accessibility Platform</p>
+        {notice && (
+          <p role="status" aria-live="polite" className="signin-notice"
+             style={{ fontSize: 13, margin: '10px 0 0', padding: '10px 12px', borderRadius: 8,
+                      background: '#FFF4E5', color: '#7A4A00', border: '1px solid #F0C77E' }}>
+            {notice}
+          </p>
+        )}
 
         <div className="ssorow">
           <button className="ssobtn" onClick={() => onSignedIn(def)}>

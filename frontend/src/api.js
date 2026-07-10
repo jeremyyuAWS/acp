@@ -17,11 +17,18 @@ const headers = (extra = {}) => ({
   ...(spToken ? { 'X-SP-Token': spToken } : {}),
 })
 
+// Why the user was bounced to the sign-in screen. Carried on the event so that screen can SAY
+// it. Being silently returned to sign-in, mid-task, with no explanation is indistinguishable
+// from the app having lost your work: the token lives only in this module, so a reload or an
+// expiry drops it, and every subsequent click quietly 401s.
+export const SESSION_EXPIRED =
+  'Your session expired, so you were signed out. Sign in again to pick up where you left off — anything already saved is safe.'
+
 const j = async (r) => {
   if (r.status === 401) {
     googleToken = null
-    window.dispatchEvent(new CustomEvent('acp:session-expired'))
-    throw new Error('Session expired — please sign in again')
+    window.dispatchEvent(new CustomEvent('acp:session-expired', { detail: { reason: SESSION_EXPIRED } }))
+    throw new Error(SESSION_EXPIRED)
   }
   if (!r.ok) {
     let detail = `${r.status} ${r.statusText}`
