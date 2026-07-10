@@ -1,9 +1,9 @@
-"""Every `az` call in deploy.sh and rollback.sh must be scoped to one explicitly-resolved
-subscription, and neither script may mutate the machine-global default.
+"""Every `az` call in deploy.sh, rollback.sh and standup.sh must be scoped to one
+explicitly-resolved subscription, and no script may mutate the machine-global default.
 
 `az` has no per-invocation profile: `az account set` writes the chosen subscription into
 ~/.azure/azureProfile.json, a default shared by every shell, CI step and concurrent agent on
-the box. Both scripts got this wrong, in different ways.
+the box. All three scripts got this wrong, in three different ways.
 
 deploy.sh pinned its target with `az account set`. Observed failure (2026-07-09): a deploy
 built and pushed its image, then died at "3/5 registry creds" with
@@ -27,8 +27,15 @@ and the outcome depended on which bash `#!/usr/bin/env bash` found:
     so even the read-only `rollback.sh --list` died at the first az call;
   * bash >= 4.4: it expanded to nothing, so every call followed the global default.
 
-Both now resolve the subscription once, to its immutable ID (a rename cannot retarget a running
-deploy), fail closed when nothing resolves, and splice `--subscription <id>` into every call.
+standup.sh called `az account set` like deploy.sh, but with far more at stake: `bash standup.sh
+teardown` runs `az group delete --yes --no-wait` -- irreversible, and it asks nothing. RG comes
+from $ACP_RG, the SAME variable deploy.sh reads, where it defaults to the PRODUCTION group
+`mdk-accessibility`. Export ACP_RG for a deploy, run teardown in that shell, and acp-app, the
+ACR, Postgres, Langfuse, Ollama, Redis and the blob store go with it. It now confirms first.
+
+All three now resolve the subscription once, to its immutable ID (a rename cannot retarget a
+running deploy), fail closed when nothing resolves, and splice `--subscription <id>` into every
+call. The destructive path is exercised only against a stubbed `az` -- never against Azure.
 """
 from __future__ import annotations
 import os
@@ -42,7 +49,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 DEPLOY_SH = ROOT / "deploy" / "public" / "deploy.sh"
 ROLLBACK_SH = ROOT / "deploy" / "public" / "rollback.sh"
-SCRIPTS = [DEPLOY_SH, ROLLBACK_SH]
+STANDUP_SH = ROOT / "deploy" / "azure-temporal" / "standup.sh"
+SCRIPTS = [DEPLOY_SH, ROLLBACK_SH, STANDUP_SH]
 
 # An `az ...` invocation, matched only in COMMAND position: at the start of a line, or right
 # after a construct that begins a command (`$(`, `&&`, `||`, `;`, `|`, `if`, `then`, `do`,
@@ -115,11 +123,21 @@ def test_scope_pins_the_immutable_id_not_the_name(script):
 
 @pytest.mark.parametrize("script", SCRIPTS, ids=_ids(SCRIPTS))
 def test_preflight_fails_closed_when_no_subscription_resolves(script):
-    """A script that cannot name its target must abort, not use whatever az defaults to."""
-    guards = re.findall(r'\[ -n "\$SUB" \] \|\| \{[^}]*exit 1', _src(script))
-    assert len(guards) == 2, (
-        f"{script.name}: both the explicit (ACP_SUBSCRIPTION) and implicit (az default) paths "
-        f"must abort when the subscription does not resolve; found {len(guards)} guard(s)"
+    """A script that cannot name its target must abort, not use whatever az defaults to.
+
+    Every resolver (`SUB="$(az account show ...)"`, which swallows failure with `|| true`) must be
+    followed by a guard that exits. deploy.sh and rollback.sh have two resolvers -- one for the
+    explicit ACP_SUBSCRIPTION path, one for the implicit az-default path. standup.sh always has a
+    subscription name (it defaults one), so it has a single resolver. Tie the counts together
+    rather than hard-coding 2, so a new resolver cannot be added without its guard.
+    """
+    src = _src(script)
+    resolvers = re.findall(r'SUB="\$\(az account show', src)
+    guards = re.findall(r'\[ -n "\$SUB" \] \|\| \{[^}]*exit 1', src)
+    assert len(resolvers) >= 1, f"{script.name}: no subscription resolver found"
+    assert len(guards) == len(resolvers), (
+        f"{script.name}: {len(resolvers)} resolver(s) but {len(guards)} guard(s) -- every "
+        f"resolver must abort when the subscription does not resolve"
     )
 
 
@@ -132,10 +150,16 @@ def test_the_scope_array_is_never_empty(script):
 
 @pytest.mark.parametrize("script", SCRIPTS, ids=_ids(SCRIPTS))
 def test_write_path_calls_are_scoped(script):
-    """The calls that actually mutate Azure are the ones a mis-scope would damage."""
+    """The calls that actually mutate Azure are the ones a mis-scope would damage.
+
+    `group delete` heads the list deliberately: it is the only irreversible one.
+    """
     src = _src(script)
-    for verb in ("containerapp update", "containerapp create", "containerapp secret set",
-                 "containerapp registry set", "acr build"):
+    for verb in ("group delete", "group create",
+                 "containerapp update", "containerapp create", "containerapp secret set",
+                 "containerapp registry set", "containerapp env create",
+                 "acr build", "acr create", "acr import",
+                 "postgres flexible-server create", "postgres flexible-server parameter set"):
         for m in re.finditer(rf"az {re.escape(verb)}(.*)", src):
             assert "${AZ[@]}" in m.group(0), f"{script.name}: unscoped write call: az {verb}"
 
@@ -209,3 +233,80 @@ def test_rollback_fails_closed_when_the_subscription_does_not_resolve(tmp_path, 
     out = subprocess.run(["bash", str(ROLLBACK_SH), "--list"], capture_output=True, text=True)
     assert out.returncode == 1
     assert "refusing to roll back" in out.stderr
+
+
+# ---------------------------------------------------------------- standup.sh teardown guard
+# `bash standup.sh teardown` runs `az group delete --yes --no-wait`: irreversible, asks nothing.
+# It reads RG from $ACP_RG -- the SAME variable deploy/public/deploy.sh reads, where it defaults
+# to the PRODUCTION group `mdk-accessibility` (acp-app, the ACR, Postgres, Langfuse, Ollama,
+# Redis, the blob store). Export ACP_RG for a deploy, run teardown in that shell, and the demo
+# is gone. These tests run the real script against a stubbed `az` -- nothing is ever deleted.
+
+_STUB_AZ_STANDUP = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$AZ_LOG"
+case "$*" in
+  *"account show"*"--query id"*)   echo "11111111-2222-3333-4444-555555555555" ;;
+  *"account show"*"--query name"*) echo "Stub Subscription" ;;
+  *"resource list"*)               echo "some-precious-resource" ;;
+  *) : ;;
+esac
+exit 0
+"""
+
+
+@pytest.fixture()
+def stub_standup(tmp_path, monkeypatch):
+    binn = tmp_path / "bin"
+    binn.mkdir()
+    (binn / "az").write_text(_STUB_AZ_STANDUP)
+    (binn / "az").chmod(0o755)
+    log = tmp_path / "az.log"
+    log.touch()
+    monkeypatch.setenv("AZ_LOG", str(log))
+    monkeypatch.setenv("PATH", f"{binn}:{os.environ['PATH']}")
+    monkeypatch.delenv("ACP_CONFIRM_TEARDOWN", raising=False)
+    return log
+
+
+def _run_standup(env_extra=None):
+    env = dict(os.environ)
+    env.update(env_extra or {})
+    # stdin closed => non-interactive, the shape a stray `bash standup.sh teardown` takes in a
+    # script or an agent's shell.
+    return subprocess.run(["bash", str(STANDUP_SH), "teardown"],
+                          capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+
+
+@pytest.mark.skipif(not shutil.which("bash"), reason="bash required")
+def test_teardown_refuses_non_interactively_without_confirmation(stub_standup):
+    """The catastrophic path: unconfirmed, non-interactive teardown must delete nothing."""
+    out = _run_standup()
+    assert out.returncode == 1
+    assert "refusing to tear down" in out.stderr
+    calls = stub_standup.read_text()
+    assert "group delete" not in calls, "teardown deleted a resource group without confirmation"
+
+
+@pytest.mark.skipif(not shutil.which("bash"), reason="bash required")
+def test_teardown_refuses_when_confirmation_names_a_different_group(stub_standup):
+    """Confirming `rg-acp-temporal` must not authorise deleting `mdk-accessibility`."""
+    out = _run_standup({"ACP_RG": "mdk-accessibility", "ACP_CONFIRM_TEARDOWN": "rg-acp-temporal"})
+    assert out.returncode == 1
+    assert "group delete" not in stub_standup.read_text()
+
+
+@pytest.mark.skipif(not shutil.which("bash"), reason="bash required")
+def test_teardown_proceeds_when_confirmation_matches_and_is_scoped(stub_standup):
+    """With an explicit, matching confirmation it proceeds -- scoped to the resolved subscription."""
+    out = _run_standup({"ACP_RG": "rg-acp-temporal", "ACP_CONFIRM_TEARDOWN": "rg-acp-temporal"})
+    assert out.returncode == 0, out.stderr
+    deletes = [c for c in stub_standup.read_text().splitlines() if c.startswith("group delete")]
+    assert len(deletes) == 1, f"expected exactly one group delete, got {deletes}"
+    assert f"--subscription {RESOLVED_ID}" in deletes[0]
+    assert "-n rg-acp-temporal" in deletes[0]
+
+
+@pytest.mark.skipif(not shutil.which("bash"), reason="bash required")
+def test_standup_never_mutates_the_global_default(stub_standup):
+    _run_standup({"ACP_RG": "rg-acp-temporal", "ACP_CONFIRM_TEARDOWN": "rg-acp-temporal"})
+    assert "account set" not in stub_standup.read_text()
