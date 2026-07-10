@@ -35,8 +35,10 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
     # ADC Drive scan without needing per-user GIS — pass as X-Demo-Key header.
     DEMO_KEY = os.environ.get("ACP_DEMO_DRIVE_KEY", "")
     demo_key = request.headers.get("x-demo-key", "")
-    # The demo/ADC scan bypass is disabled in production (see core.IS_PROD).
-    is_demo_drive = (not core.IS_PROD) and source == "drive" and DEMO_KEY and demo_key == DEMO_KEY
+    # The demo/ADC scan bypass is FAIL-CLOSED (core.TEST_BYPASS_ENABLED): off unless an
+    # operator explicitly opts in, and refused in production regardless. It used to key off
+    # `not core.IS_PROD`, which was True in production because nothing ever set the env var.
+    is_demo_drive = core.TEST_BYPASS_ENABLED and source == "drive" and DEMO_KEY and demo_key == DEMO_KEY
     if source == "drive" and core.GOOGLE_CLIENT_ID and not token and not is_demo_drive:
         raise HTTPException(401, "sign in with Google to scan your Drive")
     if source == "sharepoint" and not sp_token:
