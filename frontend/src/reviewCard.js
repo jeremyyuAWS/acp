@@ -109,7 +109,20 @@ export function buildEvidenceCard(item, diffs = []) {
     confidence: confidenceForFinding({ sc, proposal }),
     // Real before→after for THIS criterion (nothing illustrative).
     diffs: (diffs || []).filter((d) => scOf(d.rule_id) === sc),
-    impact: { before: 'Fail', after: 'Pass' },
+    // Does approving this item actually resolve the criterion?
+    //
+    // JUDGEMENT finding (a contrast ratio accepted, a link text deemed adequate): yes. The
+    // sign-off IS the resolution — a re-scan can never clear it — so the backend
+    // (store.mark_file_compliant_if_reviewed) certifies the file on approval.
+    //
+    // VALUE-FIX finding (alt text, a title, a label): NO. Approving stores approved_value as
+    // compliance evidence and stops there; no remediator consumes it and no job is enqueued
+    // (api/routes/hitl.py). The document is never modified, so the criterion still fails.
+    // This was a hardcoded `{ before: 'Fail', after: 'Pass' }`, which promised a Pass the
+    // backend now refuses to grant — and which certified a PPTX 100/100 while its ten images
+    // were still undescribed.
+    certifiesOnApprove: !isValueFix(sc),
+    impact: { before: 'Fail', after: isValueFix(sc) ? 'Fail' : 'Pass' },
     findingCount: item?.finding_count || 1,
     // Where in the document to look — null when the analyser attributed nothing.
     location: locationLabel(item),

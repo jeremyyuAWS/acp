@@ -1744,3 +1744,12 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 
 /* Where a queued finding lives — slide/page chip on the evidence card header. */
 .evcard-loc { font-size: 11.5px; white-space: nowrap; }
+
+/* "What you need to do" — shown when approving does NOT resolve the criterion (a value-fix
+   finding: ACP records the value but never writes it into the document). */
+.evcard-todo { margin: 6px 0 8px; padding: 9px 12px; border-radius: 9px;
+  background: #FDF3E0; border: 1px solid #ecd9a3; font-size: 12.5px; line-height: 1.5; }
+.evcard-todo b { font-weight: 600; }
+.evcard-todo p { margin: 4px 0 0; }
+.evcard-todo p.muted { font-size: 11.5px; }
+
