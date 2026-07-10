@@ -70,7 +70,6 @@ def test_shadow_candidate_marks_only_colliding_names():
 def test_shadow_filter_logs_once_per_scan(tmp_path, capsys, monkeypatch):
     import store as store_mod
     monkeypatch.setattr(store_mod, "_SQLITE_PATH", tmp_path / "spam.db")
-    store_mod._shadow_logged.clear()
     st = store_mod.Store()
     st.init_scan_run("s1", "drive", total=2, started_at="t0", rubric_name="r", rubric_hash="h")
 

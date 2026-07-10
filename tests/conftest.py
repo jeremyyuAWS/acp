@@ -61,6 +61,19 @@ def _forbid_opening_the_real_db(store_mod):
 _forbid_opening_the_real_db(_store_mod)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_shadow_log_dedupe(monkeypatch):
+    """Give every test its own store._shadow_logged.
+
+    It is a process-global set that get_scan() writes to, to log "hiding N shadowing file(s)"
+    once per scan rather than once per dashboard poll. Nothing resets it, so a test that trips
+    the shadow filter leaves its scan id behind and a later test reusing that id — 's1' is the
+    house style — silently never sees the line it asserts on. Resetting it in the one test that
+    noticed is not enough: the write happens in the code under test, not in the test.
+    """
+    monkeypatch.setattr(_store_mod, "_shadow_logged", set())
+
+
 @pytest.fixture()
 def isolated_store(monkeypatch):
     """A Store backed by its own temp SQLite file, isolated from the other tests' stores.
