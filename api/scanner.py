@@ -1062,11 +1062,26 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             return (name, r, pinfo)
 
         progress({"phase": "analysing", "files_found": n, "files_done": 0, "current": None})
+        # as_completed, not map: `map` yields nothing until the whole batch finishes, so the
+        # analysing phase — the long one — reported "0 documents" for its entire duration and
+        # the UI looked stalled. Report each document as it lands. Order is not load-bearing:
+        # `raw`/`assessed` are keyed by filename and `aggregate` sums over values.
+        analysed = []
         with _cf.ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as _ex:
-            analysed = [x for x in _ex.map(_analyse_one, items) if x is not None]
+            _futs = [_ex.submit(_analyse_one, it) for it in items]
+            for _done_n, _fut in enumerate(_cf.as_completed(_futs), start=1):
+                _res = _fut.result()
+                if _res is not None:
+                    analysed.append(_res)
+                progress({"phase": "analysing", "files_found": n, "files_done": _done_n,
+                          "current": _res[0] if _res else None})
 
         for done_i, (name, r, pinfo) in enumerate(analysed):
-            progress({"phase": "scoring", "files_found": n, "files_done": done_i, "current": name})
+            # files_done stays at n through scoring: every document has been analysed by now,
+            # and scoring is a fast post-pass over results already in memory. Reporting the
+            # scoring index here would make the counter fall from n back to 0 — the UI read as
+            # "0 documents" while the Score stage was lit, which is what it did before.
+            progress({"phase": "scoring", "files_found": n, "files_done": n, "current": name})
             raw[name] = r
             engine = r["engine"]
             pii_total = 0

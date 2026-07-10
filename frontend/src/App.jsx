@@ -31,7 +31,7 @@ import Upload from './Upload.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
 import A11ySelfCheck from './A11ySelfCheck.jsx'
-import { discoverLine } from './phaseNarration.js'
+import { scanPhaseLine } from './phaseNarration.js'
 
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
 const SHOW_A11Y = import.meta.env.DEV || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('a11y'))
@@ -582,8 +582,13 @@ export default function App() {
             {progress.blocked ? <span className="lockwarn"> · 🔒 {progress.blocked} password-protected / couldn’t open</span> : null}
           </div>
           <div className="track"><i style={{ width: `${progressPct(progress)}%`, background: '#BF8C00', transition: 'width .3s' }} /></div>
-          {progress.elapsed != null && (
-            <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>{discoverLine(progress.elapsed, deepScan)}</div>
+          {/* Narrate the phase the scanner reports, or say nothing. The old line came from a
+              timer, so it could never be absent — and it was wrong whenever the timer and the
+              phase disagreed. Silence beats a plausible sentence. */}
+          {scanPhaseLine(progress.phase, { deepScan }) && (
+            <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+              {scanPhaseLine(progress.phase, { deepScan })}
+            </div>
           )}
         </div>
       )}
@@ -597,7 +602,7 @@ export default function App() {
           excludeRemediated={excludeRemediated} setExcludeRemediated={setExcludeRemediated}
           incremental={incremental} setIncremental={setIncremental} scanId={run?.id} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? discoverLine(progress.elapsed || 0, deepScan) : ''} scanId={run?.id} decisions={decisions} setDecisions={setDecisions} />}
+        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? (scanPhaseLine(progress.phase, { deepScan }) || '') : ''} scanId={run?.id} decisions={decisions} setDecisions={setDecisions} />}
 
         {view === 'assess' && (run ? (
           <>
@@ -617,7 +622,7 @@ export default function App() {
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
 
-        {view === 'monitor' && (run ? (assessed ? <Monitor me={me} run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? discoverLine(progress.elapsed || 0, deepScan) : ''} /> : assessGate) : placeholder)}
+        {view === 'monitor' && (run ? (assessed ? <Monitor me={me} run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? (scanPhaseLine(progress.phase, { deepScan }) || '') : ''} /> : assessGate) : placeholder)}
 
         {view === 'upload' && <Upload me={me} onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
 
