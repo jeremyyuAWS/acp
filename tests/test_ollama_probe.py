@@ -49,7 +49,7 @@ def _clear_cache():
 
 def test_warm_ollama_with_vision_model(monkeypatch):
     seen = []
-    monkeypatch.setattr(httpx, "get", _fake_get(["ok"], ["llava:7b"], seen))
+    monkeypatch.setattr(httpx, "get", _fake_get(["ok"], ["moondream"], seen))
     assert ai.vision_is_available() is True
     assert seen == [("ok", ai.OLLAMA_PROBE_TIMEOUT)]      # one fast probe, no long wait
 
@@ -57,7 +57,7 @@ def test_warm_ollama_with_vision_model(monkeypatch):
 def test_cold_start_is_tolerated(monkeypatch):
     """The regression: fast probe times out while ACA activates, retry with the long budget."""
     seen = []
-    monkeypatch.setattr(httpx, "get", _fake_get(["timeout", "ok"], ["llava:7b"], seen))
+    monkeypatch.setattr(httpx, "get", _fake_get(["timeout", "ok"], ["moondream"], seen))
     assert ai.vision_is_available() is True
     assert [t for _, t in seen] == [ai.OLLAMA_PROBE_TIMEOUT, ai.OLLAMA_COLD_START_TIMEOUT]
 
@@ -91,7 +91,7 @@ def test_probe_is_memoised_across_files(monkeypatch):
     """vision_is_available() runs once per remediated file; a 50-doc scan against a cold or
     absent Ollama must not pay the probe 50 times."""
     seen = []
-    monkeypatch.setattr(httpx, "get", _fake_get(["ok", "ok", "ok"], ["llava:7b"], seen))
+    monkeypatch.setattr(httpx, "get", _fake_get(["ok", "ok", "ok"], ["moondream"], seen))
     assert ai.vision_is_available() is True
     assert ai.vision_is_available() is True
     assert ai.is_available() is True

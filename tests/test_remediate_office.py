@@ -248,7 +248,7 @@ def _stub_vision(monkeypatch, alt="A red barn in a green field under a blue sky"
         if not alt:
             return None
         return {"alt": alt, "grounded": grounded,
-                "evidence": "stub evidence", "model": "llava:7b"}
+                "evidence": "stub evidence", "model": "moondream"}
 
     monkeypatch.setattr(ai, "vision_is_available", lambda: available)
     monkeypatch.setattr(ai, "describe_image_structured", fake_describe)
@@ -379,6 +379,6 @@ def test_ungrounded_vision_alt_becomes_proposal(tmp_path, monkeypatch):
     assert len(proposals) == 1
     p = proposals[0]
     assert p["proposed_value"] == "A person standing near a building"
-    assert p["source"] == "AI vision model (llava)"
+    assert p["source"] == "AI vision model (moondream)"   # derived from res["model"]
     assert p["locator"].endswith("#rId9")
     assert any("faithful alt source" in s for s in skipped)       # finding stays open

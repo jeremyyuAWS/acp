@@ -34,7 +34,9 @@ from urllib.parse import unquote, urlparse
 #   proposed_value — the concrete value to approve in one click.
 #   rationale      — the "why" shown next to the value (evidence, not a score).
 #   source         — human-readable provenance ("derived from the link target",
-#                    "AI vision model (llava)"), which also encodes the honesty tier.
+#                    "AI vision model (<model>)"), which also encodes the honesty tier.
+#                    The vision provenance names the model that actually ran (res["model"]),
+#                    never a hardcoded name — so a model swap can't leave a lie in the trail.
 #   thumb          — optional base64 image thumbnail for image proposals.
 
 

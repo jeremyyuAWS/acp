@@ -470,7 +470,7 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
             applied_fixes.append({
                 "rule_id": "SC_1_1_1",
                 "value": res["alt"],
-                "source": "AI vision model (llava), anchored in image text",
+                "source": f"AI vision model ({res['model']}), anchored in image text",
                 "thumb": _thumb_b64(img),
             })
         return res["alt"], "an AI vision description anchored in the image's own text"
@@ -482,7 +482,7 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
             before="(no alt text — image skipped by screen readers)",
             proposed_value=res["alt"],
             rationale=res.get("evidence") or "AI vision description — confirm it matches the intent",
-            source="AI vision model (llava)",
+            source=f"AI vision model ({res['model']})",
             thumb=_thumb_b64(img)))
     return None
 

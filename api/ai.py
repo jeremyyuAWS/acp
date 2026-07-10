@@ -8,7 +8,7 @@ Ollama model; the layer degrades to deterministic prose when it is unreachable.
 Config (env vars):
   OLLAMA_BASE_URL      — default http://localhost:11434
   OLLAMA_MODEL         — default llama3.2 (text: explain / suggest / digest)
-  OLLAMA_VISION_MODEL  — default llava:7b (vision: genuine alt text from image bytes)
+  OLLAMA_VISION_MODEL  — default moondream (vision: genuine alt text from image bytes)
   OLLAMA_VISION_TIMEOUT— default 120s (CPU vision inference is heavier than text)
 
 Fails gracefully: every public function returns None (deterministic prose for the
@@ -22,9 +22,12 @@ import re
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL    = os.environ.get("OLLAMA_MODEL", "llama3.2")
-# A separate vision (llava-class) model — the text model cannot see images, so genuine
-# alt text needs this. Same local-Ollama backend, so the "no third-party AI" claim holds.
-OLLAMA_VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "llava:7b")
+# A separate vision model — the text model cannot see images, so genuine alt text needs this.
+# Same local-Ollama backend, so the "no third-party AI" claim holds. Default is moondream (a
+# compact ~1.7GB captioner) rather than llava:7b (~4.5GB): with llama3.1:8b it fits the 8Gi
+# Consumption box with both models resident (no swap, no OOM), and infers faster on CPU. Set
+# OLLAMA_VISION_MODEL to override — the deploy wires it, and nothing here assumes a model name.
+OLLAMA_VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "moondream")
 # Vision inference on CPU is heavier than text: a cold single-image describe can take
 # 30-90s. Bound it so a wedged model can't stall a remediation job.
 def _envf(name: str, default: float) -> float:
@@ -228,7 +231,7 @@ def is_available() -> bool:
 
 
 def vision_is_available() -> bool:
-    """True only when Ollama is reachable AND a vision (llava-class) model is pulled.
+    """True only when Ollama is reachable AND the configured vision model is pulled.
     Distinct from is_available(): a text-only Ollama is 'available' but cannot describe
     images, so the alt-text remediator must gate genuine captioning on this, not is_available."""
     tags = _tags_cached()

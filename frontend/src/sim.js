@@ -516,7 +516,7 @@ const SIM_PROPOSAL = {
       before: '(no alt text)',
       proposed_value: 'Bar chart of monthly clinic visits, rising from 120 in January to 310 in June.',
       rationale: 'No text found in the image; described from its visual content.',
-      source: 'AI vision model (llava:7b) · simulated',
+      source: 'AI vision model (moondream) · simulated',
       thumb: SIM_THUMB,
     },
     {
@@ -524,7 +524,7 @@ const SIM_PROPOSAL = {
       before: '(no alt text)',
       proposed_value: 'The clinic logo: a violet ring around a gold square.',
       rationale: 'Small, square, appears on every slide — described rather than assumed decorative.',
-      source: 'AI vision model (llava:7b) · simulated',
+      source: 'AI vision model (moondream) · simulated',
       thumb: SIM_THUMB_LOGO,
     },
   ],

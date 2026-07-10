@@ -287,7 +287,7 @@ def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
                 # Say what the model actually looked at. Office alt text is anchored in the
                 # embedded image; this one is anchored in a render of the whole page, and the
                 # thumbnail below is that page. Claiming "the image" would misdescribe both.
-                "source": f"AI vision model (llava), from a render of page {page_num}",
+                "source": f"AI vision model ({res['model']}), from a render of page {page_num}",
                 # Small: this is a receipt shown at 36px in "Recent AI fixes", not a review
                 # surface. A budget of 25 figures at the reading-order card's 320px would put
                 # ~1 MB of base64 into applied_fixes for one document.
