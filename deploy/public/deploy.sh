@@ -45,6 +45,23 @@ E2E_KEY="${ACP_E2E_KEY:-}"                # set => X-E2E-Key bypass for smoke te
 BLOB_ACCOUNT="${ACP_BLOB_ACCOUNT:-acpremediatedstore}"
 
 echo "== 0/5 preflight =="
+# $ACP_ENV is ambiguous and must not be honoured. It named the Container Apps environment here,
+# and api/core.py reads the same name to mean the *deployment* environment (IS_PROD).
+# docs/production-hardening.md told operators to `export ACP_ENV=production` as step 1 -- which
+# this script read as an ACA environment name, and which never reached the container at all. So
+# IS_PROD stayed false on the public demo and the X-E2E-Key bypass stayed live, while standup.sh
+# would have CREATED an empty ACA environment called "production". Refuse rather than guess which
+# meaning was intended. Checked before anything else: it needs no Azure, and a failing `az` must
+# not mask it.
+if [ -n "${ACP_ENV:-}" ]; then
+  cat >&2 <<EOF
+refusing to deploy: ACP_ENV is set ('$ACP_ENV'), and that name is ambiguous.
+  - to name the Container Apps environment:  export ACP_ACA_ENV=<aca-env-name>
+  - to mark the app as production:           export ACP_DEPLOY_ENV=production
+    (this script already stamps ACP_DEPLOY_ENV=production on the container)
+EOF
+  exit 1
+fi
 # Resolve the subscription ONCE, then pass it explicitly to every `az` call below via "${AZ[@]}".
 #
 # This used to be `az account set --subscription`, which writes the choice into
@@ -77,7 +94,8 @@ fi
 [ -f "$ADC_FILE" ] || { echo "no Drive ADC at $ADC_FILE — run: gcloud auth application-default login ..."; exit 1; }
 RELEASE="spike/dotnet/AcpScan.Cli/bin/Release/net10.0/AcpScan.Cli.dll"
 [ -f "$RELEASE" ] || { echo "missing .NET Office CLI at $RELEASE — build it first (dotnet build -c Release)"; exit 1; }
-ENVNAME="${ACP_ENV:-$(az containerapp env list "${AZ[@]}" -g "$RG" --query '[0].name' -o tsv)}"
+# The Container Apps environment NAME, from $ACP_ACA_ENV (see the ACP_ENV guard in preflight).
+ENVNAME="${ACP_ACA_ENV:-$(az containerapp env list "${AZ[@]}" -g "$RG" --query '[0].name' -o tsv)}"
 [ -n "$ENVNAME" ] || { echo "no Container Apps environment in $RG"; exit 1; }
 echo "   rg=$RG acr=$ACR env=$ENVNAME app=$APP image=$IMAGE"
 
@@ -295,8 +313,8 @@ EMAILS_ENV="${ACP_ALLOWED_EMAILS:+ACP_ALLOWED_EMAILS=$ACP_ALLOWED_EMAILS}"; [ -z
 BLOB_ENV="ACP_BLOB_ACCOUNT=$BLOB_ACCOUNT"
 # This script only ever deploys the public demo, so the app it produces IS production.
 # Stamp it so core.IS_PROD is true, which refuses the X-E2E-Key / X-Demo-Key bypasses even
-# if someone later sets ACP_ENABLE_TEST_BYPASS on the app. Deliberately NOT named ACP_ENV:
-# that name is already taken above for the Container Apps environment name (ENVNAME).
+# if someone later sets ACP_ENABLE_TEST_BYPASS on the app. ACP_DEPLOY_ENV is the only name for
+# this; the ACA environment name is now ACP_ACA_ENV, and ACP_ENV is refused outright (preflight).
 DEPLOY_ENV_ENV="ACP_DEPLOY_ENV=production"
 echo "   deploy env = production (test/demo auth bypasses refused)"
 echo "   workers = ${ACP_WORKERS:-${WORKERS_ENV:+inherited}}${WORKERS_ENV:+}"
