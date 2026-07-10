@@ -711,11 +711,15 @@ def _remediate_xlsx_contrast(entries: dict, diffs=None) -> list[str]:
     return [f"Recoloured {changed} low-contrast cell style(s) to reach AA/AAA · 1.4.3 / 1.4.6"]
 
 
-def _remediate_docx_structure(entries: dict, diffs=None) -> list[str]:
+def _remediate_docx_structure(entries: dict, diffs=None, skipped=None) -> list[str]:
     """Deterministic docx structural fixes that clear the analyser (WCAG 1.3.1):
     mark the first row of every multi-row table as a header row (w:tblHeader), and ensure
     the heading outline has exactly one Heading 1. Uses lxml so every OOXML namespace in
-    word/document.xml round-trips untouched."""
+    word/document.xml round-trips untouched.
+
+    skipped — optional list the caller collects deferrals in; a BARE form field (an
+    unlabelled content control with no adjacent text to borrow) is appended here so it
+    is surfaced as routed-to-review rather than silently left."""
     from lxml import etree
 
     name = "word/document.xml"
@@ -883,6 +887,26 @@ def _remediate_docx_structure(entries: dict, diffs=None) -> list[str]:
     if contrast_fixed:
         applied.append(f"Recoloured {contrast_fixed} low-contrast run(s) to ≥4.5:1 · 1.4.3")
 
+    # Form-field labels (3.3.2): an unlabelled content-control input (checkbox, date
+    # picker, dropdown, combo box, picture) usually has its label sitting right next to
+    # it as ordinary text — "Name:" in the run before it, or the left cell of its row.
+    # Borrow that text deterministically into the control's <w:alias> so a screen reader
+    # announces it; a genuinely BARE field (no adjacent text) is never labelled here — it
+    # stays a finding and routes to review.
+    import form_labels as _fl
+    labelled, bare = _fl.plan_labels(root)
+    for sdt, label in labelled:
+        _fl.set_alias(sdt, label)
+        _rec(diffs, "3.3.2",
+             "form field had no label a screen reader could announce (content control with no title/alias)",
+             f'labelled “{label}” from the adjacent text',
+             "so assistive tech names the field when the user tabs into it")
+    if labelled:
+        applied.append(f"Labelled {len(labelled)} form field(s) from adjacent text · 3.3.2")
+    if bare and skipped is not None:
+        skipped.append(f"{bare} form field(s) have no adjacent label text to borrow — "
+                       "needs a human/AI-supplied label (routed to review)")
+
     if applied:
         entries[name] = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
     return applied
@@ -1027,7 +1051,7 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
     # docx structural fixes (table header rows + heading outline) — WCAG 1.3.1.
     if path.suffix.lower() == ".docx":
         try:
-            applied.extend(_remediate_docx_structure(entries, diffs))
+            applied.extend(_remediate_docx_structure(entries, diffs, skipped))
         except Exception:
             skipped.append("docx structural fixes (table headers / heading outline) could not be applied")
 
