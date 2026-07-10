@@ -38,7 +38,7 @@ def _patch(monkeypatch, *, alt="Bar chart: Q3 revenue by region", page=1, render
     import ai
     monkeypatch.setattr(ai, "vision_is_available", lambda: True)
     monkeypatch.setattr(ai, "describe_image_structured",
-                        lambda b, **k: {"alt": alt, "grounded": True} if alt else None)
+                        lambda b, **k: {"alt": alt, "grounded": True, "model": "moondream"} if alt else None)
     monkeypatch.setattr(remediate_pdf, "_collect_figures", lambda root: [_Figure()])
     monkeypatch.setattr(remediate_pdf, "_fig_alt", lambda f: None)     # unlabelled
     monkeypatch.setattr(remediate_pdf, "_resolve_page_number", lambda f, p: page)
@@ -93,7 +93,7 @@ def test_the_source_names_the_page_render_not_the_image(monkeypatch):
     fixes, _, _ = _run(monkeypatch, page=7)
     src = fixes[0]["source"]
     assert "page 7" in src and "render" in src
-    assert "llava" in src
+    assert "moondream" in src   # provenance names the model that ran
 
 
 def test_the_thumb_is_a_real_png_data_url_sized_for_a_receipt(monkeypatch):
