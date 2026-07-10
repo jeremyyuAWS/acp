@@ -379,12 +379,18 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         # No specific folder chosen: search the whole Drive
         result = _search_drive(svc, max_files or 500, exclude_remediated=exclude_remediated)
     else:
-        # ADC/demo mode with a pinned folder
+        # ADC/demo mode with a pinned folder. Requests provenance.DRIVE_FIELDS and honours
+        # exclude_remediated like the two GIS paths above: this branch asked for a narrower
+        # field set, so `properties` never came back and `is_acp_generated` was structurally
+        # incapable of firing — ACP's own output would be re-ingested as a source document.
         resp = svc.files().list(q=f"'{_DEMO_FOLDER}' in parents and trashed=false",
-                                fields="files(id,name,mimeType,md5Checksum)", pageSize=200,
+                                fields=f"files({provenance.DRIVE_FIELDS})", pageSize=200,
                                 orderBy="name", includeItemsFromAllDrives=True,
                                 supportsAllDrives=True).execute(num_retries=5)
-        result = _normalize(resp.get("files", []))
+        batch = resp.get("files", [])
+        if exclude_remediated:
+            batch = [f for f in batch if not provenance.is_acp_generated(f)]
+        result = _normalize(batch)
     return _dedupe_names(result)
 
 

@@ -324,15 +324,30 @@ def _remediate_file(payload: dict, job: dict) -> None:
             # Stamp ACP's own output so a later scan skips it by provenance rather than by
             # which folder it happens to live in (api/provenance.py).
             props = provenance.stamp(filename)
+            # Ask Drive to echo `properties` back. A stamp that does not round-trip is invisible
+            # to the next scan's provenance filter, which then re-ingests ACP's own output as if
+            # it were a source document. That has been the observed state — every discovery logs
+            # "0 skipped as ACP-generated output" — and nothing told us whether the write set the
+            # property, or the read never saw it. Now the write says so, once, at the moment of
+            # truth. Diagnostic only: a missing stamp never fails the mirror (the in-document
+            # content stamp still catches the copy).
             if existing:
                 result = svc.files().update(fileId=existing[0]["id"], media_body=media,
                                             body={"properties": props},
-                                            fields="id,webViewLink").execute()
+                                            fields="id,webViewLink,properties").execute()
             else:
                 result = svc.files().create(body={"name": filename, "parents": [folder_id],
                                                   "properties": props},
-                                            media_body=media, fields="id,webViewLink").execute()
+                                            media_body=media,
+                                            fields="id,webViewLink,properties").execute()
             web_url = result.get("webViewLink", "")
+            if not provenance.is_acp_generated(result):
+                _detail = (f"Drive did not echo the ACP provenance stamp on {filename} "
+                           f"(got properties={result.get('properties')!r}); the next scan will "
+                           f"not skip this copy by provenance")
+                print(f"[remediate] {_detail}", flush=True)
+                core.store.log_decision("system", "remediate.stamp_not_persisted",
+                                        scan_id=scan_id, file=filename, detail=_detail[:200])
         except HttpError as e:
             # A 403 here means the user's Drive grant lacks write access (drive.file) --
             # no longer fatal now that Blob has the durable copy; log and move on.
