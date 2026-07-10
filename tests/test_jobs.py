@@ -144,7 +144,7 @@ def test_scan_handler_runs_persists_finalizes(store, monkeypatch):
     import core, scanner, handlers  # noqa: F401 — registers the 'scan' handler
     import worker
 
-    core.store = store  # handler + finalize use core.store
+    monkeypatch.setattr(core, "store", store)  # handler + finalize use core.store
 
     captured = {}
 
@@ -186,7 +186,7 @@ def test_remediate_file_handler(store, monkeypatch):
     import core, handlers  # noqa: F401 — registers the handler
     import worker
 
-    core.store = store
+    monkeypatch.setattr(core, "store", store)
     monkeypatch.setattr(store, "get_ai_enabled", lambda: True)
 
     written = {}
@@ -255,7 +255,7 @@ def test_remediate_file_handler(store, monkeypatch):
 def test_remediate_file_non_html_deferred(store, monkeypatch):
     import core, handlers  # noqa: F401
     import worker
-    core.store = store
+    monkeypatch.setattr(core, "store", store)
     sid = "scan-rem-2"
     # HTML, PDF, and Office (docx/pptx/xlsx) are all remediated server-side now
     # (ADR 0005). An unsupported type (e.g. .rtf) still defers to human review.
