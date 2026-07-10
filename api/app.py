@@ -74,6 +74,15 @@ for _router in ROUTERS:
 
 @app.on_event("startup")
 def _start_job_workers():
+    """Open the database, arm the scheduler, then start the workers — in that order.
+
+    core.store is lazy (built on first use, never at import), so the database is opened and the
+    schema/allowlist bootstrap runs here rather than being paid for by the first HTTP request —
+    and a boot-time failure surfaces at startup instead of as a 500 on some route.
+    reload_scheduler() reads the schedule out of that store, so it arms here too; core no longer
+    calls it at import, where it would have forced the Store into existence."""
+    core.get_store()
+    core.reload_scheduler()
     n = core.start_workers()
     if n:
         print(f"[acp] started {n} async job worker(s)", flush=True)
