@@ -1,0 +1,59 @@
+"""Native-chart alt text (chart_data.py): the exact values, read from the file — never guessed.
+
+Builds a real native PowerPoint chart with KNOWN data via python-pptx, then asserts the extracted
+alt states those exact values (the whole point: no llava confabulation for native charts).
+"""
+import io
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
+import chart_data  # noqa: E402
+
+pptx = pytest.importorskip("pptx")
+
+
+def _native_chart_pptx(cats, vals, title="Q4 Revenue by Region") -> bytes:
+    from pptx import Presentation
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Inches
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[5])
+    data = CategoryChartData()
+    data.categories = cats
+    data.add_series("Revenue", vals)
+    gf = slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED,
+                                Inches(1), Inches(1), Inches(6), Inches(4), data)
+    gf.chart.has_title = True
+    gf.chart.chart_title.text_frame.text = title
+    buf = io.BytesIO(); prs.save(buf); return buf.getvalue()
+
+
+def test_reads_the_real_values_high_and_low():
+    data = _native_chart_pptx(["North", "South", "East", "West"], [120, 70, 150, 50])
+    charts = chart_data.charts_in(data, ".pptx")
+    assert len(charts) == 1
+    alt = chart_data.describe_chart(charts[0])
+    # The exact truth: East is highest at 150, West lowest at 50 — stated because it was READ.
+    assert "East" in alt and "150" in alt
+    assert "West" in alt and "50" in alt
+    assert "highest" in alt.lower() and "lowest" in alt.lower()
+    assert "Q4 Revenue by Region" in alt
+
+
+def test_chart_alts_convenience_and_type():
+    data = _native_chart_pptx(["A", "B", "C"], [10, 30, 20])
+    alts = chart_data.chart_alts(data, ".pptx")
+    assert len(alts) == 1
+    assert alts[0].lower().startswith(("bar chart", "column", "chart"))
+    assert "B" in alts[0] and "30" in alts[0]      # the real max
+
+
+def test_non_office_and_garbage_return_empty_never_raise():
+    assert chart_data.charts_in(b"", ".pptx") == []
+    assert chart_data.charts_in(b"not a zip", ".pptx") == []
+    assert chart_data.charts_in(b"%PDF-1.7", ".pdf") == []
+    assert chart_data.chart_alts(b"junk", ".docx") == []

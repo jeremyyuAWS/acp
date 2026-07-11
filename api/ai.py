@@ -374,28 +374,37 @@ def _vision_prompt(filename: str, context: str, style: str = "") -> str:
 
 
 def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = None,
-                     file: str | None = None) -> str | None:
+                     file: str | None = None, model: str | None = None, clean: bool = True) -> str | None:
     """One bounded, Langfuse-traced vision call → a cleaned single-line alt string, or None.
     Shared by describe_image and describe_image_structured so there is exactly one HTTP
     path, timeout, and honesty guard (a one-word reply won't clear WCAG 1.1.1 → treated as
-    a miss so the caller falls back rather than writing junk that fails re-scan)."""
+    a miss so the caller falls back rather than writing junk that fails re-scan).
+
+    `model` overrides the vision model for this one call (the validator uses a SECOND model for a
+    genuine cross-check). `clean=False` returns the raw reply (the validator parses its own format
+    rather than an alt string)."""
     import base64
     import time as _t
+    mdl = model or OLLAMA_VISION_MODEL
     b64 = base64.b64encode(image_bytes).decode("ascii")
     _t0 = _t.monotonic()
     try:
         import httpx
         r = httpx.post(
             f"{OLLAMA_BASE_URL}/api/generate",
-            json={"model": OLLAMA_VISION_MODEL, "prompt": prompt, "images": [b64],
+            json={"model": mdl, "prompt": prompt, "images": [b64],
                   "stream": False, "options": {"temperature": 0.2, "num_predict": 128}},
             timeout=OLLAMA_VISION_TIMEOUT,
         )
         r.raise_for_status()
-        alt = _clean_alt(r.json().get("response", ""))
+        raw = (r.json().get("response", "") or "").strip()
+        if not clean:
+            _trace_ai("vision", prompt, raw, _t0, ok=bool(raw), model=mdl, scan_id=scan_id, file=file)
+            return raw or None
+        alt = _clean_alt(raw)
         ok = bool(alt) and len(alt) >= 8 and " " in alt
         _trace_ai("vision", prompt, alt, _t0, ok=ok,
-                  model=OLLAMA_VISION_MODEL, scan_id=scan_id, file=file)
+                  model=mdl, scan_id=scan_id, file=file)
         return alt if ok else None
     except Exception:
         _trace_ai("vision", prompt, None, _t0, ok=False,
@@ -417,6 +426,72 @@ def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
     alt = _vision_generate(_vision_prompt(filename, context, style), image_bytes,
                            scan_id=scan_id, file=file)
     return {"alt": alt, "model": OLLAMA_VISION_MODEL} if alt else None
+
+
+# An optional SECOND vision model for the validator — a different model catches a confident-but-wrong
+# draft that the drafting model would rubber-stamp (genuine model agreement, ADR 0019 §3). Unset →
+# self-check with the same model (still useful: flags obvious omissions/mismatches).
+_ALT_VALIDATOR_MODEL = os.environ.get("ACP_ALT_VALIDATOR_MODEL", "")
+
+
+
+
+_STOP = frozenset((
+    "the", "a", "an", "of", "in", "on", "and", "or", "for", "to", "with", "is", "are", "it", "its",
+    "this", "that", "these", "those", "image", "picture", "photo", "shows", "showing", "displays",
+    "displaying", "depicts", "there", "which", "each", "at", "by", "as", "from", "into", "about",
+    "key", "takeaway", "represents", "representing", "different", "various", "titled", "title",
+))
+
+
+def _content_terms(text: str) -> set:
+    """Significant content words (lowercased, stopwords + short words dropped) — the nouns/verbs that
+    carry meaning, so two descriptions of the same thing overlap and of different things don't."""
+    return {w for w in re.findall(r"[a-z]{3,}", (text or "").lower()) if w not in _STOP}
+
+
+def validate_alt_text(image_bytes: bytes, alt: str, *, filename: str = "", model: str | None = None,
+                      scan_id: str | None = None, file: str | None = None) -> dict | None:
+    """Second-opinion validation of a drafted alt text by CONSISTENCY cross-check (ADR 0019 §3
+    acceptance / #123) — the honest, robust design after finding that asking a weak VLM "is this ok?"
+    is unreliable (it rubber-stamps, then nitpicks). Instead the model INDEPENDENTLY re-describes the
+    image, and we compare content-word overlap with the proposed alt:
+
+      - two independent descriptions that agree on the subject/type → 'consistent' (a real signal the
+        draft is on the right track — feeds the auto-apply/auto-approve tier);
+      - a strong divergence → 'divergent' (route to a human, and hand them the second description as
+        concrete evidence: "the model independently saw: '…'").
+
+    Using a DIFFERENT model (ACP_ALT_VALIDATOR_MODEL / `model`) makes it genuine model agreement. The
+    verdict is an enum + the two descriptions — NOT a fabricated score (ADR 0016). It reliably catches
+    a WRONG subject/type (the common gross error); it does NOT catch a wrong chart NUMBER (both
+    generations mis-read equally — that limit is why charts still get human review). Returns
+    {verdict, agrees, second_opinion, shared_terms, validator_model} or None when unavailable."""
+    if not image_bytes or not (alt or "").strip():
+        return None
+    vmodel = model or _ALT_VALIDATOR_MODEL or None
+    prompt = (
+        "In one sentence, describe what this image is and what it shows, for someone who cannot see "
+        "it. Name the kind of image (e.g. bar chart, flowchart, photo) and its subject."
+    )
+    second = _vision_generate(prompt, image_bytes, scan_id=scan_id, file=file, model=vmodel)
+    if not second:
+        return None
+    a, b = _content_terms(alt), _content_terms(second)
+    shared = sorted(a & b)
+    # Measure how much of the ALT the independent description CONFIRMS (recall of the alt's own
+    # content words), not raw overlap — so a short correct alt vs a long re-description isn't
+    # falsely flagged. Back it with a Jaccard floor so a 1-word alt can't trivially "confirm".
+    alt_recall = len(shared) / (len(a) or 1)
+    jaccard = len(shared) / (len(a | b) or 1)
+    # Consistent when the two independent descriptions agree on the subject/type; divergent on a
+    # gross mismatch. Thresholds are internal heuristics; the reviewer sees the enum + both
+    # descriptions, never a number (ADR 0016).
+    consistent = (len(shared) >= 2 and alt_recall >= 0.4) or jaccard >= 0.22
+    verdict = "consistent" if consistent else "divergent"
+    return {"verdict": verdict, "agrees": verdict == "consistent",
+            "second_opinion": second, "shared_terms": shared,
+            "validator_model": vmodel or OLLAMA_VISION_MODEL}
 
 
 def _structured_vision_prompt(filename: str, ocr_text: str, context: str) -> str:
