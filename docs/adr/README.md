@@ -19,3 +19,4 @@ header). Match the structure of the latest ADR when adding a new one.
 - [0016 — Evidence-based confidence signal (derived, never a fabricated %)](0016-evidence-based-confidence.md) — **Accepted** (2026-07-09)
 - [0017 — Server-side Drive refresh via the OAuth authorization-code flow](0017-drive-offline-refresh-auth-code-flow.md) — **Proposed** (2026-07-09)
 - [0018 — Slide/page rasterization + per-shape geometry (the visual-evidence seam)](0018-slide-page-rasterization-and-shape-geometry.md) — **Proposed** (2026-07-11)
+- [0019 — AI provider gateway + governance (local-first, quality-verified, auditable)](0019-ai-provider-gateway-and-governance.md) — **Proposed** (2026-07-11)
