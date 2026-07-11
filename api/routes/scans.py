@@ -402,6 +402,17 @@ def scan_applied_fixes(sid: str, request: Request):
     return core.store.list_applied_fixes(sid)
 
 
+@router.get("/scans/{sid}/ai_calls")
+def scan_ai_calls(sid: str, request: Request):
+    """The AI provenance ledger for a scan (ADR 0019 Phase 0b) — one row per model call with its
+    surface, provider, model, privacy zone (local vs cloud), latency, and outcome, newest first.
+    This is the auditable answer to 'what model saw my document, where did it run, how long did it
+    take?' that the review card's audit panel and the certification record surface. Owner-scoped."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    return core.store.list_ai_calls(sid)
+
+
 @router.get("/scans/{sid}/files/{filename:path}/remediation-diffs")
 def file_remediation_diffs(sid: str, filename: str, request: Request):
     """Per-fix before→after evidence for one file — the original text/markup and the

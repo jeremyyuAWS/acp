@@ -133,6 +133,12 @@ export const getScanTraces = (scanId) => {
 export const getAppliedFixes = (scanId) => (SIM || !scanId
   ? sim([])
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/applied-fixes`, { headers: headers() }).then(j).catch(() => []))
+// The AI provenance ledger for a scan (ADR 0019 Phase 0b): one row per model call with surface /
+// provider / model / privacy zone / latency / outcome — the auditable "what model saw my document,
+// where did it run?" record behind the review card's audit panel. Best-effort — [] on any error/SIM.
+export const getScanAiCalls = (scanId) => (SIM || !scanId
+  ? sim([])
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/ai_calls`, { headers: headers() }).then(j).catch(() => []))
 // Per-fix before→after evidence for one file — the original text/markup → remediated
 // version, persisted only for fixes that verifiably cleared. Feeds the certification PDF's
 // "Before → After" section, and the review drawer's evidence card. SIM serves the same

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { aiProvenance, getFileRemediationDiffs, suggestFix } from './api.js'
+import { aiProvenance, getFileRemediationDiffs, getScanAiCalls, suggestFix } from './api.js'
 import Thumbnail from './Thumbnail.jsx'
 import { buildEvidenceCard, evidenceOf, evidenceSignals, explainFinding, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
@@ -36,6 +36,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // reviewer believing they signed something off that was never recorded.
   const [actError, setActError] = useState(null)
   const [showExplain, setShowExplain] = useState(false)   // "✨ Explain this finding" toggle
+  const [showAudit, setShowAudit] = useState(false)       // "🔎 AI audit trail" toggle (#129)
+  const [aiCalls, setAiCalls] = useState(null)            // null = unloaded, [] = loaded-empty
   const [drafting, setDrafting] = useState(false)
   const [draftMsg, setDraftMsg] = useState(null)   // { kind: 'ai' | 'template' | 'error', text }
   // Which deferred image the reviewer is looking at. The vision model describes ONE image, so
@@ -128,6 +130,19 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   const whyReview = whyHumanReview(card)
   // AI provenance (ADR 0019 Phase 0): which model produced this + where the bytes were processed.
   const aiProv = aiProvenance()
+
+  // The AI audit trail (#129) — the real per-call provenance ledger, lazily fetched on first open
+  // and narrowed to this file. Every row is a logged model call (surface/model/zone/latency), so the
+  // reviewer (and an auditor) can see exactly what ran, where, and how long — no fabrication.
+  const toggleAudit = () => {
+    setShowAudit((s) => !s)
+    if (aiCalls === null && item?.scan_id) {
+      getScanAiCalls(item.scan_id)
+        .then((r) => setAiCalls(Array.isArray(r) ? r : []))
+        .catch(() => setAiCalls([]))
+    }
+  }
+  const auditRows = (aiCalls || []).filter((c) => !c.file || c.file === item?.file)
   // Verifiable trust states (ADR 0019 §3a) — grounding + validation, the evidence-based replacement
   // for a confidence label. No number, no opaque level; the review-requirement axis is whyReview.
   const trust = trustStates(card)
@@ -346,6 +361,46 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
               <span className="muted">{aiProv.zone === 'local'
                 ? 'processed on your infrastructure — no document left your network'
                 : `sent to ${aiProv.host}`}</span>
+              {item?.scan_id && (
+                <button type="button" className="evcard-audit-btn" aria-pressed={showAudit}
+                        onClick={toggleAudit}>
+                  {showAudit ? 'Hide audit trail' : '🔎 AI audit trail'}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* The AI audit trail (#129) — the real ledger of model calls for THIS file: what model
+              ran, on which surface, in which privacy zone, how long it took, and whether it
+              succeeded. Every row is a persisted ai_calls record (ADR 0019 Phase 0b) — nothing here
+              is fabricated; an empty ledger says so honestly rather than inventing activity. */}
+          {showAudit && (
+            <div className="evcard-audit" style={{ margin: '2px 0 10px' }}>
+              {aiCalls === null ? (
+                <div className="muted" style={{ fontSize: 12 }}>Loading audit trail…</div>
+              ) : auditRows.length === 0 ? (
+                <div className="muted" style={{ fontSize: 12 }}>
+                  No AI calls recorded for this file — it was handled deterministically (no model saw it).
+                </div>
+              ) : (
+                <table className="evcard-audit-table">
+                  <thead>
+                    <tr><th>Surface</th><th>Model</th><th>Zone</th><th>Latency</th><th>Result</th></tr>
+                  </thead>
+                  <tbody>
+                    {auditRows.map((c, i) => (
+                      <tr key={c.id || i}>
+                        <td>{c.surface || '—'}</td>
+                        <td>{c.provider ? `${c.provider} · ${c.model}` : (c.model || '—')}</td>
+                        <td><span className={`audit-zone audit-zone-${c.zone === 'local' ? 'local' : 'cloud'}`}>
+                          {c.zone === 'local' ? '🟢 local' : '🟡 cloud'}</span></td>
+                        <td>{Number.isFinite(c.latency_ms) ? `${(c.latency_ms / 1000).toFixed(1)}s` : '—'}</td>
+                        <td>{c.ok === false ? '✗ failed' : '✓ ok'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           )}
 
