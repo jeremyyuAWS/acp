@@ -1,6 +1,10 @@
 # ADR 0018 — Slide/page rasterization + per-shape geometry (the visual-evidence seam)
 
-Status: Accepted — **Slice 1 shipped** (2026-07-11): Office (docx/pptx/xlsx) + PDF page rasterization via headless LibreOffice → pypdfium2 (`render.py`, Office-aware `can_render` + `/thumbnail` + `/page/{n}` endpoints, LibreOffice in the deploy image), and the large page-preview HERO on `EvidenceCard`. Verified locally (showcase-deck.pptx → PNG). REMAINING: per-shape geometry (normalized bbox) → bounding-box overlay + zoom + crop + visual-diff + mini-map.
+Status: Accepted — **Slices 1–3 shipped** (2026-07-11):
+- **Slice 1** — Office (docx/pptx/xlsx) + PDF page rasterization via headless LibreOffice → pypdfium2 (`render.py`, Office-aware `can_render` + `/thumbnail` + `/page/{n}` endpoints, LibreOffice in the deploy image) + the large page-preview HERO on `EvidenceCard`.
+- **Slice 2** — real per-shape geometry: `api/geometry.py` reads the offending pptx `<p:pic>`'s `<a:xfrm>` from its `part#rId` locator → normalized `{page,x,y,w,h}` (slide `<p:sldSz>` + `<p:sldIdLst>` order), served by `GET …/geometry?locator=`; `Thumbnail` overlays the red box + a derived location string. Grouped/inherited/non-pptx → None (honest, ADR 0016).
+- **Slice 3** — zoom-to-object: a toggle reveals a pure-CSS cropped close-up of the box (no second fetch).
+Verified locally against showcase-deck.pptx (box lands exactly on each chart/diagram; crop isolates the Q4 chart). REMAINING: visual before/after diff (#11) + per-document heatmap/mini-map (#17/#121), and PDF/docx/xlsx geometry (pptx-only today).
 Date: 2026-07-11
 Related: [ADR 0015](0015-page-render-thumbnail-seam.md) (extends the render seam it built), [ADR 0012](0012-own-office-analysers.md) (the .NET OpenXML analysers that will emit geometry), [ADR 0016](0016-evidence-based-confidence.md) (the no-fabricated-number honesty rule this must respect), [ADR 0010](0010-remediated-output-object-store.md) (blob cache reused)
 

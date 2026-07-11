@@ -41,6 +41,18 @@ describe('the overlay is a measured box or nothing (ADR 0016 honesty)', () => {
     expect(src).toMatch(/left: `\$\{box\.x \* 100\}%`/)
   })
 
+  it('Slice 3 — a zoom-to-object toggle reveals a CSS crop close-up (only when a box exists)', () => {
+    const src = read('Thumbnail.jsx')
+    // The toggle and the crop are gated on `box` — no box, no zoom control.
+    expect(src).toMatch(/\{box && \(\s*<div className="thumb-tools">/)
+    expect(src).toMatch(/\{box && zoom && \(/)
+    // The close-up is a pure CSS crop of the render already fetched — no second network call.
+    expect(src).toMatch(/cropStyle\(url, box\)/)
+    expect(src).toMatch(/backgroundSize: `\$\{100 \/ w\}%`/)
+    // aria-pressed reflects the toggle state (accessible control).
+    expect(src).toMatch(/aria-pressed=\{zoom\}/)
+  })
+
   it('getFileGeometry hits the geometry endpoint and unwraps bbox (null on any miss)', () => {
     const src = read('api.js')
     expect(src).toMatch(/getFileGeometry = \(scanId, file, locator\)/)

@@ -1758,6 +1758,26 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
   color: #b91c1c; margin-top: 8px; text-align: center; line-height: 1.3; }
 @media (prefers-color-scheme: dark) { .thumb-loc { color: #f87171; } }
 
+/* Slice 3 — zoom-to-object controls + the cropped close-up. */
+.thumb-tools { display: flex; align-items: center; justify-content: center; gap: 12px;
+  flex-wrap: wrap; margin-top: 8px; }
+.thumb-tools .thumb-loc { margin-top: 0; }
+.thumb-zoom-btn { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card, #fff); color: var(--ink, #2b2330);
+  cursor: pointer; transition: background .15s, border-color .15s; }
+.thumb-zoom-btn:hover { border-color: #dc2626; color: #b91c1c; }
+.thumb-zoom-btn[aria-pressed="true"] { background: #fef2f2; border-color: #dc2626; color: #b91c1c; }
+.thumb-crop { margin: 10px 0 0; padding: 0; width: 100%; display: flex; flex-direction: column;
+  align-items: center; gap: 6px; }
+.thumb-crop-img { width: 100%; max-width: 420px; border-radius: 8px; border: 2px solid #dc2626;
+  box-shadow: 0 2px 12px rgba(220, 38, 38, .25); background-color: var(--card, #fff); }
+.thumb-crop figcaption { font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .02em; color: #b91c1c; }
+@media (prefers-color-scheme: dark) {
+  .thumb-zoom-btn[aria-pressed="true"] { background: #3b1a1a; }
+  .thumb-crop figcaption { color: #f87171; }
+}
+
 /* Where a queued finding lives — slide/page chip on the evidence card header. */
 .evcard-loc { font-size: 11.5px; white-space: nowrap; }
 
