@@ -379,27 +379,56 @@ export function evidenceSignals(card) {
 // The third axis, "review requirement", is the `whyHumanReview` callout — kept separate because it
 // carries a full explanation, not just a label. Returns { grounding: {state,label,tone}|null,
 // validation: {state,label,tone} }.
+// The three verifiable trust-state axes (ADR 0019 §3a) that REPLACE a confidence label in the AI
+// context — each an evidence-based enum, none a fabricated number. Every state is derived from a
+// real signal the card already carries: the grounded flag / rationale text (Grounding), the
+// re-scan + applied flags (Validation), and the track + subjectivity + grounding (Review
+// requirement). `code` is the ADR §3a vocabulary (for the audit + envelope); `state` is kept for
+// backward-compat with explainFinding; `label`/`tone` drive the chips.
 export function trustStates(card) {
   const c = card || {}
   const p0 = c.proposal && c.proposal.list && c.proposal.list[0]
   const rat = String(c.rationale || (p0 && p0.rationale) || '').toLowerCase()
-  // Prefer an explicit `grounded` boolean threaded from describe_image_structured; fall back to the
-  // evidence/rationale text, which already states whether the description was OCR-anchored or a guess.
   const explicit = p0 && typeof p0.grounded === 'boolean' ? p0.grounded : null
   let grounding = null
   if (explicit === true || /\b(ocr|anchored|read from the image|chart label|text read)\b/.test(rat)) {
-    grounding = { state: 'grounded', label: 'Grounded in text read from the source', tone: 'ok' }
+    const chart = /chart label|axis|legend/.test(rat)
+    grounding = { state: 'grounded', code: chart ? 'grounded_in_chart_labels' : 'grounded_in_ocr',
+                  label: chart ? 'Grounded in the chart’s own labels' : 'Grounded in text read from the source', tone: 'ok' }
   } else if (explicit === false || /vision description only|no text in the image|visual (guess|interpretation)/.test(rat)) {
-    grounding = { state: 'visual_only', label: 'Visual interpretation — no text anchor', tone: 'warn' }
+    grounding = { state: 'visual_only', code: 'visual_interpretation_required',
+                  label: 'Visual interpretation — no text anchor', tone: 'warn' }
   } else if (c.sc && c.sc !== '1.1.1' && (p0 || c.recommendation)) {
-    // a text-model value on a text finding (link text, title, sensory rewrite) is read from the doc
-    grounding = { state: 'document_text', label: 'Grounded in document text', tone: 'ok' }
+    grounding = { state: 'document_text', code: 'grounded_in_document_text', label: 'Grounded in document text', tone: 'ok' }
+  } else if (c.sc === '1.1.1' && (p0 || c.recommendation)) {
+    grounding = { state: 'visual_only', code: 'no_reliable_anchor', label: 'No reliable text anchor — confirm the wording', tone: 'warn' }
   }
   let validation
-  if (c.proposal && c.proposal.validated) validation = { state: 're_scan_passed', label: 'Re-scan passed', tone: 'ok' }
-  else if (c.certifiesOnApprove) validation = { state: 'deterministic_passed', label: 'Deterministic check — your sign-off certifies', tone: 'ok' }
-  else validation = { state: 'not_yet_written', label: 'Not yet written to document', tone: 'todo' }
-  return { grounding, validation }
+  if (c.proposal && c.proposal.validated) validation = { state: 're_scan_passed', code: 're_scan_passed', label: 'Re-scan passed', tone: 'ok' }
+  else if (c.certifiesOnApprove) validation = { state: 'deterministic_passed', code: 'deterministic_checks_passed', label: 'Deterministic check — your sign-off certifies', tone: 'ok' }
+  else validation = { state: 'not_yet_written', code: 'not_yet_written', label: 'Not yet written to document', tone: 'todo' }
+  return { grounding, validation, review: reviewRequirement(c, grounding, validation) }
+}
+
+// The Review-requirement axis (ADR 0019 §3a) — WHY this needs (or doesn't need) a human, as a
+// checkable enum, not a score. Derived from whether a draft exists, how anchored it is, and whether
+// validation has already cleared it.
+export function reviewRequirement(card, grounding, validation) {
+  const c = card || {}
+  const hasDraft = !!(c.recommendation || (c.proposal && c.proposal.list && c.proposal.list.length))
+  if (!hasDraft) {
+    return { code: 'manual_remediation', label: 'Needs a human to author the fix', tone: 'warn' }
+  }
+  if (validation && validation.code === 're_scan_passed') {
+    return { code: 'safe_to_auto_apply', label: 'Evidence complete — safe to approve', tone: 'ok' }
+  }
+  if (grounding && (grounding.tone === 'warn')) {
+    return { code: 'human_wording_review', label: 'Human wording review — the description is a visual interpretation', tone: 'warn' }
+  }
+  if (c.certifiesOnApprove) {
+    return { code: 'human_wording_review', label: 'Human judgement — your sign-off resolves it', tone: 'todo' }
+  }
+  return { code: 'human_wording_review', label: 'Confirm the drafted wording before it is written', tone: 'todo' }
 }
 
 // "✨ Explain this finding" — a deterministic, keyless plain-English explanation of ONE finding.

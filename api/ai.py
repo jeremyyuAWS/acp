@@ -83,6 +83,39 @@ def provenance() -> dict:
         "host": host,
     }
 
+
+def build_envelope(result: dict, *, model: str | None = None, grounded: bool | None = None,
+                   grounding_sources: list[str] | None = None, latency_ms: float | None = None,
+                   cost_usd: float = 0.0, trace_id: str | None = None,
+                   prompt_version: str | None = None) -> dict:
+    """The normalized `{result, provenance, trust}` envelope (ADR 0019 §3b).
+
+    A pure assembler, deliberately NOT wired into the hot-path `ai.*` signatures (rule 4/22 — callers
+    keep reading `result` unchanged): it composes the provenance the module already produces
+    (`provenance()` + the per-call model/latency) with the grounding signal `describe_image_structured`
+    already returns, into the single shape the card + certification will read once Phase 1 threads it
+    through the provider adapters. `processing_zone` is honest ('local' for the keyless Ollama build,
+    else the provider's zone). No fabricated number lives here — every field is a measurement or an
+    evidence flag (ADR 0016)."""
+    prov = provenance()
+    zone = prov.get("zone", "local")
+    return {
+        "result": result,
+        "provenance": {
+            "provider": prov.get("provider"),
+            "model": model or prov.get("vision_model"),
+            "processing_zone": "local" if zone == "local" else "customer_cloud",
+            "latency_ms": latency_ms,
+            "cost_usd": cost_usd,          # 0 for local Ollama; a real per-token cost when a cloud adapter runs
+            "trace_id": trace_id,
+            "prompt_version": prompt_version,
+        },
+        "trust": {
+            "grounded": grounded,
+            "grounding_sources": grounding_sources or [],
+        },
+    }
+
 # Per-rule plain-English context injected into the prompt so the model
 # produces grounded, file-type-aware explanations rather than generic advice.
 _RULE_CONTEXT: dict[str, str] = {

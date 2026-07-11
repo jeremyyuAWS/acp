@@ -1,6 +1,6 @@
 # ADR 0019 — AI provider gateway + governance (local-first, quality-verified, fully auditable)
 
-Status: Proposed
+Status: Accepted (2026-07-11). **Phase 0 shipped** (model name + 🟢/🟡 zone badge + `ai_calls` provenance row + #129 audit-trail panel). **§3a + §3b shipped** (2026-07-11): the three verifiable trust axes — Grounding / Validation / Review-requirement, each an evidence-based enum with the §3a vocabulary — now render on the review card in place of a confidence label (`reviewCard.trustStates`/`reviewRequirement`), and `ai.build_envelope()` assembles the normalized `{result, provenance, trust}` shape (pure, non-breaking — callers keep reading `result`). REMAINING (Phase 1, gated on secret-store work): the `VisionProvider` Protocol + Azure OpenAI adapter + Settings→AI-Providers page + secret-ref storage + escalation trace. The assistant never handles a key — the admin enters it in the product UI.
 Date: 2026-07-11
 Related: [ADR 0016](0016-evidence-based-confidence.md) (no fabricated numbers — the routing must obey it), [ADR 0102 prompt-version identity](../../docs) (prompt_hash provenance), [ADR 0006](0006-pii-sensitive-data.md) (data-leaving-network is a governance concern), [ADR 0018](0018-slide-page-rasterization-and-shape-geometry.md) (a sibling seam), movate-cli `BaseLLMProvider` (the adapter-behind-Protocol precedent this mirrors)
 

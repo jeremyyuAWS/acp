@@ -378,9 +378,12 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
           {(trust.grounding || trust.validation) && (
             <div className="evcard-trust" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '4px 0 8px' }}>
               {trust.grounding && (
-                <span style={trustPill(trust.grounding.tone)}>{trustIcon(trust.grounding.tone)} {trust.grounding.label}</span>
+                <span style={trustPill(trust.grounding.tone)} title="Grounding — what the value is anchored in">{trustIcon(trust.grounding.tone)} {trust.grounding.label}</span>
               )}
-              <span style={trustPill(trust.validation.tone)}>{trustIcon(trust.validation.tone)} {trust.validation.label}</span>
+              <span style={trustPill(trust.validation.tone)} title="Validation — whether an objective check has passed">{trustIcon(trust.validation.tone)} {trust.validation.label}</span>
+              {trust.review && (
+                <span style={trustPill(trust.review.tone)} title="Review requirement — why a human is (or isn’t) needed">{trustIcon(trust.review.tone)} {trust.review.label}</span>
+              )}
               {card.proposal && card.proposal.list.length > 1 && (
                 <span className="muted" style={{ fontSize: 12 }}>· {card.proposal.list.length} instances on this criterion</span>
               )}
