@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildEvidenceCard, comparisonFor, formatProposedValue, noDraftHint } from './reviewCard.js'
+import { buildEvidenceCard, comparisonFor, evidenceSignals, formatProposedValue, noDraftHint, verificationLadder } from './reviewCard.js'
 
 describe('comparisonFor — current → remediated, or nothing', () => {
   const DIFF = { file: 'deck.pptx', rule_id: '1.1.1', before: '(no alt text)', after: 'A clinician at a desk.' }
@@ -207,6 +207,46 @@ describe('buildEvidenceCard — AI proposals (hitl_queue.proposals)', () => {
     for (const c of [withProposal(), withProposal({ validated: 1 })]) {
       expect(JSON.stringify(c.confidence)).not.toMatch(/%/)
     }
+  })
+})
+
+describe('verificationLadder — honest lifecycle, never a fix the doc lacks', () => {
+  it('value-fix with an unvalidated proposal: validation is still pending on approval', () => {
+    const l = verificationLadder({ certifiesOnApprove: false, proposal: { list: [{}], validated: false } })
+    expect(l.map((s) => s.label)).toEqual(['AI draft generated', 'Validates on approval', 'Your approval', 'Ready for certification'])
+    expect(l[0].state).toBe('done')
+    expect(l[1].state).toBe('todo')     // NOT a green pass — the doc still fails until approve + re-scan
+    expect(l[2].state).toBe('current')
+  })
+
+  it('value-fix with a validated proposal: step 2 is a done re-scan pass', () => {
+    const l = verificationLadder({ certifiesOnApprove: false, proposal: { list: [{}], validated: true } })
+    expect(l[1]).toEqual({ label: 'Validated by re-scan', state: 'done' })
+  })
+
+  it('judgement finding: shorter ladder — the sign-off IS the resolution', () => {
+    const l = verificationLadder({ certifiesOnApprove: true })
+    expect(l.map((s) => s.label)).toEqual(['Issue detected', 'Your sign-off', 'Ready for certification'])
+  })
+})
+
+describe('evidenceSignals — real checkable signals, never a fabricated score', () => {
+  it('surfaces the detection basis + the reasoning, and flags subjective wording', () => {
+    const sig = evidenceSignals({
+      confidence: { basis: 'AI / heuristic detection — semantic judgement' },
+      rationale: 'OCR read the title text inside the image',
+      proposal: { list: [{ before: '(no alt text)' }], subjective: true },
+      diffs: [],
+    })
+    const texts = sig.map((s) => s.text)
+    expect(texts).toContain('AI / heuristic detection — semantic judgement')
+    expect(texts).toContain('OCR read the title text inside the image')
+    expect(texts).toContain('No existing value on the element')
+    expect(sig.find((s) => s.tone === 'warn').text).toMatch(/human wording/i)
+  })
+
+  it('is empty when the finding carried no evidence — never invents one', () => {
+    expect(evidenceSignals({})).toEqual([])
   })
 })
 

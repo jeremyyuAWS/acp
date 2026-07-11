@@ -262,3 +262,59 @@ export function buildEvidenceCard(item, diffs = []) {
     proposalSource: firstSource(item),
   }
 }
+
+// The verification ladder — the honest lifecycle of ONE finding, each step derived from a real
+// signal so the reviewer sees exactly how far the pipeline got before handing off. It never claims
+// a step that hasn't happened: for a value-fix the re-scan validation runs ON approval (the write
+// is scheduled then), so it reads 'validates on approval' until `proposal.validated` is true — it
+// must not show a green "validator passed" while the document still fails.
+// Returns [{ label, state: 'done' | 'current' | 'todo' }] in lifecycle order.
+export function verificationLadder(card) {
+  const c = card || {}
+  const hasProposal = !!(c.proposal && c.proposal.list && c.proposal.list.length)
+  const validated = !!(c.proposal && c.proposal.validated)
+  // A judgement finding (contrast accepted, link text deemed adequate) is resolved by the sign-off
+  // itself — there is no value to write and nothing to re-scan, so its ladder is shorter and honest.
+  if (c.certifiesOnApprove) {
+    return [
+      { label: 'Issue detected', state: 'done' },
+      { label: 'Your sign-off', state: 'current' },
+      { label: 'Ready for certification', state: 'todo' },
+    ]
+  }
+  return [
+    { label: hasProposal ? 'AI draft generated' : 'Issue detected', state: 'done' },
+    validated
+      ? { label: 'Validated by re-scan', state: 'done' }
+      : { label: 'Validates on approval', state: 'todo' },
+    { label: 'Your approval', state: 'current' },
+    { label: 'Ready for certification', state: 'todo' },
+  ]
+}
+
+// The concrete, independently-checkable signals behind a finding — the EVIDENCE, never a fabricated
+// score (ADR 0016 forbids a %). Every item is a real field the pipeline produced: the detection
+// method/basis, the model's reasoning for this draft (e.g. OCR-anchored evidence), the prior empty
+// state we're replacing, and the subjective caveat. Nothing here is templated or invented — an
+// empty list is correct when the finding carried no evidence, and we show nothing rather than fake it.
+// Returns [{ tone: 'ok' | 'warn', text }].
+export function evidenceSignals(card) {
+  const c = card || {}
+  const out = []
+  const seen = new Set()
+  const add = (tone, text) => {
+    const t = (text || '').trim()
+    if (t && !seen.has(t)) { seen.add(t); out.push({ tone, text: t }) }
+  }
+  // how it was detected — deterministic rule vs AI/heuristic — straight from the confidence basis
+  if (c.confidence && c.confidence.basis) add('ok', c.confidence.basis)
+  // the model's reasoning for THIS draft (OCR-anchored evidence etc.), when present
+  add('ok', c.rationale || (c.proposal && c.proposal.list && c.proposal.list[0] && c.proposal.list[0].rationale))
+  // the prior state we're replacing — a genuinely empty "before" is real evidence the value was missing
+  const before = (c.diffs && c.diffs[0] && c.diffs[0].before)
+    || (c.proposal && c.proposal.list && c.proposal.list[0] && c.proposal.list[0].before)
+  if (before && /\b(no|empty|none|missing)\b/i.test(String(before))) add('ok', 'No existing value on the element')
+  // subjective → a human must own the wording; a re-scan can never validate it
+  if (c.proposal && c.proposal.subjective) add('warn', 'Human wording review recommended')
+  return out
+}

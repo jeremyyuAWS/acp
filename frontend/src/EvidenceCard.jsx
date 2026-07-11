@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { getFileRemediationDiffs, suggestFix } from './api.js'
 import { confClass } from './confidence.js'
 import Thumbnail from './Thumbnail.jsx'
-import { buildEvidenceCard, evidenceOf, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize } from './reviewCard.js'
+import { buildEvidenceCard, evidenceOf, evidenceSignals, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, verificationLadder } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import HowToConfirm from './HowToConfirm.jsx'
@@ -113,6 +113,11 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   }
 
   const card = buildEvidenceCard(item, diffs)
+  // Reviewer-trust primitives (all derived from real fields — never a fabricated score):
+  //   ladder  — how far the pipeline got before handing off (detected → validated → your approval)
+  //   signals — the concrete evidence behind the finding (detection basis, reasoning, subjective flag)
+  const ladder = verificationLadder(card)
+  const signals = evidenceSignals(card)
   // An editor appears for every value-fix criterion, draft or not — a reviewer must be able to
   // author alt text the AI could not draft. Keying off `aiDraft != null` (as this once did)
   // silently hid the box exactly when the human was most needed.
@@ -188,6 +193,21 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
         <span className={`conf conf-${card.track.badge.tone}`} style={{ marginLeft: 'auto' }}>{card.track.badge.label}</span>
       </header>
 
+      {/* Verification ladder — the honest lifecycle of this finding. Each step reflects a real
+          pipeline state; a value-fix reads "validates on approval" (not a green pass) because the
+          write + re-scan happen when you approve, so the card never claims a fix the doc still lacks. */}
+      <div className="evcard-ladder" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', margin: '0 0 12px' }}>
+        {ladder.map((s, i) => (
+          <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {i > 0 && <span className="muted" aria-hidden="true">→</span>}
+            <span className={s.state === 'done' ? 'conf conf-high' : s.state === 'current' ? 'conf conf-medium' : 'conf'}
+                  style={s.state === 'todo' ? { opacity: 0.55 } : undefined}>
+              {s.state === 'done' ? '✓ ' : s.state === 'current' ? '● ' : ''}{s.label}
+            </span>
+          </span>
+        ))}
+      </div>
+
       <div className="evcard-body" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
         {/* What the reviewer must judge — the offending image, or the rendered page for a
             reading-order proposal. Falls back to the document's page-1 render (PDF only; a
@@ -245,29 +265,37 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
             <p className="evcard-rec-static"><b>AI recommendation:</b> {card.recommendation}</p>
           ) : null}
 
-          {/* Why the AI proposed this value — evidence, not a score. A proposal is a draft the
-              reviewer confirms; it was never auto-applied, so the reason matters more than the
-              value. When one criterion has several proposed instances, say so rather than
-              silently showing only the first. */}
-          {card.proposal && (
-            <p className="evcard-rec-why muted" style={{ fontSize: 12, margin: '2px 0 6px' }}>
-              {card.proposal.list[0]?.rationale}
-              {card.proposal.list.length > 1 && ` · ${card.proposal.list.length} instances proposed on this criterion`}
-            </p>
-          )}
-
-          {card.rationale && (
-            <p className="evcard-rationale muted" style={{ fontSize: 12, margin: '2px 0 6px' }}>
-              <b>Why this draft:</b> {card.rationale}
-              {card.proposalSource && <span> · {card.proposalSource}</span>}
-            </p>
-          )}
-
+          {/* Two distinct trust axes, side by side: how confident the MODEL is (a bounded enum,
+              never a %), and whether the fix has been VALIDATED by an objective re-scan. Different
+              questions — the reviewer needs both. A value-fix reads "on approval" because the write
+              + re-scan run when you approve; only a proposal already cleared reads re-scan PASS. */}
           {b && (
-            <p className="evcard-why">
-              <span className={confClass(b.level)}>{b.level.label} confidence</span>
-              <span className="muted"> · why: {b.basis}</span>
-            </p>
+            <div className="evcard-conf-split" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '4px 0 8px' }}>
+              <span className={confClass(b.level)}>AI confidence · {b.level.label.toLowerCase()}</span>
+              {card.certifiesOnApprove
+                ? <span className="conf conf-medium">Your sign-off resolves it</span>
+                : card.proposal && card.proposal.validated
+                  ? <span className="conf conf-high">✓ Validation · re-scan PASS</span>
+                  : <span className="conf" style={{ opacity: 0.75 }}>Validation · on approval</span>}
+              {card.proposal && card.proposal.list.length > 1 && (
+                <span className="muted" style={{ fontSize: 12 }}>· {card.proposal.list.length} instances on this criterion</span>
+              )}
+            </div>
+          )}
+
+          {/* The evidence behind the finding — concrete, independently-checkable signals the
+              pipeline actually produced (detection basis, the model's reasoning, the empty prior
+              state, a subjective caveat), never an invented score. Empty → nothing shown rather
+              than a fabricated checklist. */}
+          {signals.length > 0 && (
+            <ul className="evcard-evidence" style={{ listStyle: 'none', padding: 0, margin: '0 0 8px' }}>
+              {signals.map((s, i) => (
+                <li key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 12, margin: '3px 0' }}>
+                  <span aria-hidden="true" style={{ color: s.tone === 'warn' ? '#BA7517' : '#0F6E56', flexShrink: 0 }}>{s.tone === 'warn' ? '⚠' : '✓'}</span>
+                  <span className="muted">{s.text}</span>
+                </li>
+              ))}
+            </ul>
           )}
 
           {card.diffs.length > 0 && (
