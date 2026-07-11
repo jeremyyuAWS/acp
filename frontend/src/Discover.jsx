@@ -3,6 +3,7 @@ import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilter
 import WindowedRows from './WindowedRows.jsx'
 import FileDrawer, { retentionOf } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
+import FolderPicker from './FolderPicker.jsx'
 import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
 import { dupeCountOf, duplicateFiles } from './dedupe.js'
@@ -70,8 +71,9 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 // makes decide()/undoDec() below actually survive a reload instead of resetting on every
 // visit to this tab, and is also what feeds the campaign "resolved" counts (ADR 0003
 // Phase 4) real data instead of always reading 0.
-export default function Discover({ sources, files, busy, onScan, delegations = {}, fileTypeConfig = {}, onAdvance, progress = null, scanPct = 0, scanStatus = '', scanId = null, decisions: decisionsProp, setDecisions: setDecisionsProp }) {
+export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, fileTypeConfig = {}, onAdvance, progress = null, scanPct = 0, scanStatus = '', scanId = null, decisions: decisionsProp, setDecisions: setDecisionsProp }) {
   const [sel, setSel] = useState(null)
+  const [showPicker, setShowPicker] = useState(false)   // Drive folder picker modal (Choose folder to scan)
   const [open, setOpen] = useState(() => new Set())
   const toggle = (d) => setOpen((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n })
   // Cross-department search + facet filters — a match auto-expands ITS department
@@ -240,8 +242,22 @@ export default function Discover({ sources, files, busy, onScan, delegations = {
           <b>{files.length} documents</b> discovered across {sources.length} sources · {Object.keys(groups).length} departments
           <div className="muted" style={{ marginTop: 2 }}>the agent crawls metadata, proposes a classification &amp; a lifecycle action — you confirm or override{lockedCount ? <> · <span className="lockwarn">🔒 {lockedCount} could not be opened (password-protected / unsupported)</span></> : null}{excludedCount > 0 ? <> · <span className="muted">{excludedCount} file{excludedCount !== 1 ? 's' : ''} excluded by file-type settings</span></> : null}</div>
         </div>
-        <button disabled={busy} onClick={() => onScan('all')}>{busy ? 'scanning…' : 'Re-scan all sources'}</button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {hasDriveToken && (
+            <button className="ghost" disabled={busy} onClick={() => setShowPicker(true)}
+                    title="Browse your Google Drive and scan just one folder (and its subfolders)">
+              Choose folder to scan…
+            </button>
+          )}
+          <button disabled={busy} onClick={() => onScan('all')}>{busy ? 'scanning…' : 'Re-scan all sources'}</button>
+        </div>
       </div>
+
+      {showPicker && (
+        <FolderPicker
+          onScan={(folder) => { setShowPicker(false); onScan('drive', folder) }}
+          onClose={() => setShowPicker(false)} />
+      )}
 
       {files.length === 0 ? (
         <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Integrations.</p>
