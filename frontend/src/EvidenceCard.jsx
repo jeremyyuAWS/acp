@@ -56,6 +56,10 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   const [values, setValues] = useState(() => seedValues(instances))
   const setValueAt = (i, v) => setValues((prev) => prev.map((x, j) => (j === i ? v : x)))
   const [draftingIdx, setDraftingIdx] = useState(null)
+  // Which flagged image the HERO is showing (#122 multi-image pager). A 1.1.1 row can carry many
+  // undescribed images across several slides; the pager steps the large preview + its bounding box
+  // through each one, so a reviewer verifies every finding in place, not just the first.
+  const [heroIdx, setHeroIdx] = useState(0)
   const shownAt = useRef(Date.now())               // reviewer-time metric starts when the card mounts
   // The value the AI actually proposed — reviewTelemetry diffs the human's final value against
   // this to derive the `edited` calibration signal, so it must be the proposal, not the draft.
@@ -122,6 +126,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   }
 
   const card = buildEvidenceCard(item, diffs)
+  // The locator the hero shows — the paged instance's, defaulting to the card's first (#122 pager).
+  const heroLocator = (instances[heroIdx] && instances[heroIdx].locator) || card.locator
   // Reviewer-trust primitives (all derived from real fields — never a fabricated score):
   //   ladder  — how far the pipeline got before handing off (detected → validated → your approval)
   //   signals — the concrete evidence behind the finding (detection basis, reasoning, subjective flag)
@@ -250,7 +256,16 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
           bounding-box overlay pinpointing the object is the next slice (needs per-shape geometry). */}
       {card.scanId && card.file && (
         <div className="evcard-hero" style={{ margin: '0 0 12px' }}>
-          <Thumbnail scanId={card.scanId} file={card.file} page={card.page || 1} locator={card.locator} maxHeight={360} />
+          {instances.length > 1 && (
+            <div className="evcard-hero-pager">
+              <button type="button" aria-label="Previous flagged image"
+                      onClick={() => setHeroIdx((i) => (i - 1 + instances.length) % instances.length)}>‹</button>
+              <span>Image {heroIdx + 1} of {instances.length}</span>
+              <button type="button" aria-label="Next flagged image"
+                      onClick={() => setHeroIdx((i) => (i + 1) % instances.length)}>›</button>
+            </div>
+          )}
+          <Thumbnail scanId={card.scanId} file={card.file} page={card.page || 1} locator={heroLocator} maxHeight={360} />
         </div>
       )}
 

@@ -99,9 +99,12 @@ describe('the review screens render the proposal, not a template', () => {
     const src = read('EvidenceCard.jsx')
     // The finding's page rendered large is the HERO (Principle 2) — no longer a mere fallback:
     // rendered whenever scanId+file are present (self-hides if the backend can't rasterize).
-    expect(src).toMatch(/evcard-hero[\s\S]{0,200}<Thumbnail scanId=\{card\.scanId\} file=\{card\.file\} page=\{card\.page \|\| 1\}/)
+    expect(src).toMatch(/evcard-hero[\s\S]{0,600}<Thumbnail scanId=\{card\.scanId\} file=\{card\.file\} page=\{card\.page \|\| 1\}/)
     // Slice 2: the hero passes the finding's locator so the page render carries the bounding box.
-    expect(src).toMatch(/<Thumbnail[^>]*locator=\{card\.locator\}[^>]*maxHeight=\{360\}/)
+    // (heroLocator = the paged instance's locator, defaulting to card.locator — #122 pager.)
+    expect(src).toMatch(/<Thumbnail[^>]*locator=\{heroLocator\}[^>]*maxHeight=\{360\}/)
+    // #122 pager: with many flagged images the hero steps through each one.
+    expect(src).toMatch(/instances\.length > 1 &&[\s\S]{0,500}Image \{heroIdx \+ 1\} of \{instances\.length\}/)
     // The offending image (proposals[0].thumb) still renders as the object beside the text.
     expect(src).toMatch(/\{card\.thumb && \([\s\S]{0,80}<ProposalThumb/)
   })

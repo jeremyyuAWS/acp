@@ -1853,6 +1853,14 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .audit-zone { white-space: nowrap; font-weight: 600; }
 .audit-zone-local { color: #0F6E56; }
 .audit-zone-cloud { color: #854F0B; }
+
+/* Multi-image hero pager (#122) — step the large preview through each flagged image. */
+.evcard-hero-pager { display: flex; align-items: center; justify-content: center; gap: 12px;
+  margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.evcard-hero-pager button { width: 26px; height: 26px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--card, #fff); color: var(--ink, #2b2330); font-size: 15px; line-height: 1;
+  cursor: pointer; transition: background .15s, border-color .15s; }
+.evcard-hero-pager button:hover { border-color: #dc2626; color: #b91c1c; }
 .evcard-draft-ai { color: #3B6D11; }        /* a genuine model-authored value */
 .evcard-draft-template { color: #8A5A00; }  /* a fill-in template, NOT a description */
 .evcard-draft-error { color: #B43A2A; }
