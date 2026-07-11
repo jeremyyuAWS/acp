@@ -373,10 +373,13 @@ export const getHitlAnalytics = (scanId = null) => (SIM
 // a 1.1.1 suggestion can only ever be a fill-in template: the endpoint has no image to hand a
 // vision model, so the text model guesses from the filename. Omitted for the other criteria,
 // which need no picture.
-export const suggestFix = (scanId, file, ruleId, locator = null) => (SIM
+// `style` ('shorter' | 'detailed' | 'regenerate') lets a reviewer re-draft an image description at a
+// different length (#131) — a bounded steer the backend allowlists; anything else is ignored.
+export const suggestFix = (scanId, file, ruleId, locator = null, style = null) => (SIM
   ? sim({ suggestion: 'AI draft unavailable in demo mode — edit manually', kind: 'fix', is_template: true })
   : fetch(`${BASE}/ai/suggest?scan_id=${encodeURIComponent(scanId)}&file=${encodeURIComponent(file)}&rule_id=${encodeURIComponent(ruleId)}`
-      + (locator ? `&locator=${encodeURIComponent(locator)}` : ''),
+      + (locator ? `&locator=${encodeURIComponent(locator)}` : '')
+      + (style ? `&style=${encodeURIComponent(style)}` : ''),
       { headers: headers() }).then(j))
 
 // Re-download and re-score ONE file the user fixed externally. Returns {job_id} for polling.

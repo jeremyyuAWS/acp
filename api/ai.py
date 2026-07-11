@@ -314,17 +314,26 @@ def _clean_alt(text: str) -> str:
     return t.strip()
 
 
-def _vision_prompt(filename: str, context: str) -> str:
+def _vision_prompt(filename: str, context: str, style: str = "") -> str:
     where = f" It appears in the document '{filename}'." if filename else ""
     near = f" Nearby text for context: {context.strip()[:200]}" if context and context.strip() else ""
+    # Reviewer-directed refinement (#131) — a length steer only; the description stays grounded in
+    # what the model actually sees. Unknown/absent style → the default concise sentence.
+    length = {
+        "shorter": "Reply with ONE very short phrase (under 10 words) — just the essential subject. ",
+        "detailed": "Reply with ONE fuller sentence (up to 40 words) that also describes the key visual "
+                    "elements and any data values or labels. ",
+    }.get(style,
+          "Reply with ONE concise sentence (under 30 words) that includes the key text verbatim where "
+          "it carries meaning. ")
     return (
         "You are writing alternative text so a person using a screen reader understands what this "
         "image conveys. First READ any text inside the image — a headline, labels, axis names, "
         "legend, or data values are often the whole point and must not be lost. If it is a chart, "
         "graph, or diagram, name the type and state what it compares and the single most important "
         "figure or takeaway. If it is a photo or illustration, describe the content and its meaning. "
-        "Reply with ONE concise sentence (under 30 words) that includes the key text verbatim where "
-        "it carries meaning. Do not begin with 'image of', 'picture of', or 'this image shows'."
+        f"{length}"
+        "Do not begin with 'image of', 'picture of', or 'this image shows'."
         f"{where}{near}\nAlt text:"
     )
 
@@ -359,17 +368,18 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
         return None
 
 
-def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
+def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "", style: str = "",
                    scan_id: str | None = None, file: str | None = None) -> dict | None:
     """Generate genuine alt text for one image via the local vision model.
 
     Sends the raw image bytes (base64) to Ollama /api/generate with OLLAMA_VISION_MODEL
-    and an alt-text prompt. Returns {"alt", "model"} or None when the model is
-    unavailable / errors / returns nothing usable. Traced through Langfuse (surface
-    'vision') exactly like explain/suggest/digest — model, latency, prompt size, ok."""
+    and an alt-text prompt. `style` ('shorter' | 'detailed' | '') lets a reviewer re-draft at a
+    different length (#131) — a length steer only, the description stays grounded in the image.
+    Returns {"alt", "model"} or None when the model is unavailable / errors / returns nothing
+    usable. Traced through Langfuse (surface 'vision') — model, latency, prompt size, ok."""
     if not image_bytes:
         return None
-    alt = _vision_generate(_vision_prompt(filename, context), image_bytes,
+    alt = _vision_generate(_vision_prompt(filename, context, style), image_bytes,
                            scan_id=scan_id, file=file)
     return {"alt": alt, "model": OLLAMA_VISION_MODEL} if alt else None
 
@@ -531,15 +541,16 @@ def _suggest_prompt(rule_id: str, rule_name: str, filename: str, detail: str) ->
 
 
 def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
-                detail: str = "", image_bytes: bytes | None = None) -> dict | None:
+                detail: str = "", image_bytes: bytes | None = None, style: str = "") -> dict | None:
     """Draft a concrete, human-approvable fix value (alt text / link text / title) for a
     semantic finding via the local model. Returns None when Ollama is unavailable.
 
     For 1.1.1 with the image's bytes in hand, uses the VISION model to produce real,
     image-derived alt text (is_template=False) instead of the text model's fill-in
-    template — the reviewer then approves genuine alt text rather than a blank to fill."""
+    template — the reviewer then approves genuine alt text rather than a blank to fill.
+    `style` re-drafts an image description shorter/longer at the reviewer's request (#131)."""
     if rule_id == "1.1.1" and image_bytes:
-        res = describe_image(image_bytes, filename=filename, context=detail)
+        res = describe_image(image_bytes, filename=filename, context=detail, style=style)
         if res:
             return {"suggestion": res["alt"], "kind": "alt text",
                     "is_template": False, "model": res["model"]}

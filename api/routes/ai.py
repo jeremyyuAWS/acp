@@ -71,7 +71,8 @@ def ai_explain(scan_id: str = Query(...), file: str = Query(...), rule_id: str =
 
 @router.get("/ai/suggest")
 def ai_suggest(request: Request, scan_id: str = Query(...), file: str = Query(...),
-               rule_id: str = Query(...), locator: str | None = Query(None)):
+               rule_id: str = Query(...), locator: str | None = Query(None),
+               style: str | None = Query(None)):
     """Draft a concrete, human-approvable fix value (alt text / link text / title) for a
     semantic finding. Same AI gates as /ai/explain; 503 when Ollama is unavailable. The
     reviewer accepts or edits the draft in the HITL queue — it is never auto-applied.
@@ -90,6 +91,9 @@ def ai_suggest(request: Request, scan_id: str = Query(...), file: str = Query(..
     trace = core.store.get_trace_row(scan_id, file, rule_id)
     if trace is None:
         raise HTTPException(404, "trace not found")
+    # Reviewer refinement (#131): only a bounded length steer reaches the model — never free text —
+    # so a caption can be re-drafted shorter/longer/afresh without opening a prompt-injection path.
+    safe_style = style if style in ("shorter", "detailed", "regenerate") else ""
     result = _ai.suggest_fix(
         rule_id=rule_id,
         rule_name=trace["rule_name"],
@@ -97,6 +101,7 @@ def ai_suggest(request: Request, scan_id: str = Query(...), file: str = Query(..
         filename=file,
         detail=trace.get("detail", "") or "",
         image_bytes=_image_for_locator(request, scan_id, file, locator) if rule_id == "1.1.1" else None,
+        style="" if safe_style == "regenerate" else safe_style,
     )
     if result is None:
         raise HTTPException(503, "AI suggestion unavailable — is Ollama running?")

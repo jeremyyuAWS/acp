@@ -114,17 +114,18 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
 
   // Draft one deferred image, by its own row. Unlike draftWithAi (single box), this writes the
   // result into instance i's value — the model saw image i, so its description belongs to image i.
-  const draftInstance = async (i) => {
+  const draftInstance = async (i, style = '') => {
     if (draftingIdx != null || !item?.scan_id || !item?.file || !item?.rule_id) return
     setDraftingIdx(i); setDraftMsg(null)
     try {
-      const r = await suggestFix(item.scan_id, item.file, item.rule_id, instances[i]?.locator)
+      const r = await suggestFix(item.scan_id, item.file, item.rule_id, instances[i]?.locator, style || null)
       const s = (r?.suggestion || '').trim()
       if (!s) { setDraftMsg({ kind: 'error', text: `Image ${i + 1}: the model returned nothing — write it yourself.` }); return }
       setValueAt(i, s)
+      const styleWord = style === 'shorter' ? ' (shorter)' : style === 'detailed' ? ' (more detail)' : style === 'regenerate' ? ' (regenerated)' : ''
       setDraftMsg(r.is_template
         ? { kind: 'template', text: r.reason || 'Template only — no vision model was available. Rewrite it before approving.' }
-        : { kind: 'ai', text: `Image ${i + 1} drafted${r.model ? ` · ${r.model}` : ''} — edit if it misses the meaning.` })
+        : { kind: 'ai', text: `Image ${i + 1} drafted${styleWord}${r.model ? ` · ${r.model}` : ''} — edit if it misses the meaning.` })
     } catch (e) {
       setDraftMsg({ kind: 'error', text: e?.message || 'AI draft unavailable — write the value yourself.' })
     } finally {

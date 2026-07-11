@@ -72,6 +72,18 @@ export default function ProposalEditors({ proposals, values, onChange, file, sc,
                   {draftingIdx === i ? 'Drafting…' : '✨ Draft with AI'}
                 </button>
               )}
+              {/* Refine the draft (#131) — re-ask the vision model for a shorter or fuller
+                  description, or a fresh take. A bounded length steer, not a free prompt; shown
+                  only once there's a draft to refine. The reviewer still approves the result. */}
+              {onDraft && filled && (
+                <span className="evcard-refine">
+                  {[['shorter', 'Shorter'], ['detailed', 'More detail'], ['regenerate', '↻ Regenerate']].map(([k, label]) => (
+                    <button key={k} type="button" className="evcard-refine-btn" disabled={draftingIdx != null}
+                            title={`Re-draft this description — ${label.toLowerCase()}`}
+                            onClick={() => onDraft(i, k)}>{label}</button>
+                  ))}
+                </span>
+              )}
               {/* Approve-similar (#132): this exact image appears more than once in the document, so
                   one description can fill every identical copy. Shown only once there's a value to
                   copy and a real duplicate to copy it to — honest, byte-identical grouping. */}

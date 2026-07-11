@@ -54,13 +54,13 @@ describe('EvidenceCard — the drafted image is its own row', () => {
   it('a row draft describes that row’s image', async () => {
     await mount()
     await click(drafts()[0])
-    expect(suggestFix).toHaveBeenCalledWith('s1', 'deck.pptx', '1.1.1', 'ppt/slides/slide1.xml#rId2')
+    expect(suggestFix).toHaveBeenCalledWith('s1', 'deck.pptx', '1.1.1', 'ppt/slides/slide1.xml#rId2', null)
   })
 
   it('a later row draft describes that image, not the first', async () => {
     await mount()
     await click(drafts()[2])
-    expect(suggestFix).toHaveBeenCalledWith('s1', 'deck.pptx', '1.1.1', 'ppt/slides/slide3.xml#rId4')
+    expect(suggestFix).toHaveBeenCalledWith('s1', 'deck.pptx', '1.1.1', 'ppt/slides/slide3.xml#rId4', null)
   })
 
   it('puts the draft into that row only, never another image’s box', async () => {
