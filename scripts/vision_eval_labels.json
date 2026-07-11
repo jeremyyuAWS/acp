@@ -1,0 +1,27 @@
+{
+  "_doc": "Vision alt-text quality labels for scripts/vision_eval.py (ADR 0019 acceptance policy). Each entry: the image (a member of an Office file in the corpus dir), the type keywords one must appear, the subject keywords (>= min_subject must appear), whether the app's structured path should report grounded, and — the honesty gate — whether asserting specific numeric values is a FAILURE (true for data charts: llava cannot read bar->value reliably, so a good draft must NOT state figures).",
+  "corpus_default": "~/Downloads/acp-showcase",
+  "images": [
+    {"file": "showcase-deck.pptx", "member": "ppt/media/image1.png",
+     "type_any": ["bar chart", "chart", "graph"], "subject_any": ["revenue", "region"], "min_subject": 2,
+     "expect_grounded": true, "forbid_values": true},
+    {"file": "showcase-deck.pptx", "member": "ppt/media/image2.png",
+     "type_any": ["line", "chart", "graph"], "subject_any": ["users", "active", "monthly"], "min_subject": 1,
+     "expect_grounded": true, "forbid_values": true},
+    {"file": "showcase-deck.pptx", "member": "ppt/media/image3.png",
+     "type_any": ["flowchart", "diagram", "workflow", "process"], "subject_any": ["remediation", "scan", "assess", "publish"], "min_subject": 2,
+     "expect_grounded": true, "forbid_values": false},
+    {"file": "showcase-deck.pptx", "member": "ppt/media/image4.png",
+     "type_any": ["bar chart", "chart", "graph"], "subject_any": ["spend", "distribution", "categor", "budget"], "min_subject": 1,
+     "expect_grounded": true, "forbid_values": true},
+    {"file": "showcase-deck.pptx", "member": "ppt/media/image5.png",
+     "type_any": ["screenshot", "slide"], "subject_any": ["revenue", "report", "q4", "2026"], "min_subject": 1,
+     "expect_grounded": true, "forbid_values": false},
+    {"file": "showcase-report.docx", "member": "word/media/image1.png",
+     "type_any": ["bar chart", "chart", "graph"], "subject_any": ["compliance", "department", "score", "legal", "finance"], "min_subject": 2,
+     "expect_grounded": true, "forbid_values": true},
+    {"file": "showcase-report.docx", "member": "word/media/image2.png",
+     "type_any": ["flowchart", "diagram", "process"], "subject_any": ["certif", "discover", "score", "fix"], "min_subject": 2,
+     "expect_grounded": true, "forbid_values": false}
+  ]
+}
