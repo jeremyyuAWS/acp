@@ -63,5 +63,12 @@ rubric/coverage).
   (rule `PPTX-TABLE-001`, the analogue of the docx/xlsx `TableHeaderRule`) — no duplicate
   first-party detector was added; the behaviour is pinned by
   `tests/test_pptx_engine_detection.py`. See https://github.com/mova-io/acp/pull/7.
+- Deploy build verified from `main` after that merge: `deploy/public/deploy.sh` requires the
+  .NET Office CLI pre-built in Release (`spike/dotnet/AcpScan.Cli/bin/Release/net10.0/`, its
+  line-65 prereq gate), which the image then copies into `/app/engine/office/`. Rebuilt from
+  `origin/main` — `dotnet build -c Release` clean (0 errors), the DLL landed at the gated path,
+  and a functional scan of a headerless-table pptx through the freshly-built CLI fired
+  `PPTX-TABLE-001` / `SC_1_3_1`. The test-only + docs-only merge leaves the deploy artifact
+  unchanged, as expected (neither `tests/` nor `docs/` enters the build context).
 - The Python remediator's `dc:language` stuffing is now largely redundant for well-authored
   files; it remains a valid fallback and is unchanged here.
