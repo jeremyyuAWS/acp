@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { aiProvenance, getFileRemediationDiffs, suggestFix } from './api.js'
 import Thumbnail from './Thumbnail.jsx'
-import { buildEvidenceCard, evidenceOf, evidenceSignals, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, trustStates, verificationLadder, whyHumanReview } from './reviewCard.js'
+import { buildEvidenceCard, evidenceOf, evidenceSignals, explainFinding, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, trustStates, verificationLadder, whyHumanReview } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import HowToConfirm from './HowToConfirm.jsx'
@@ -35,6 +35,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // A decision the server refused. Rendered as an alert — a silent failure here is a
   // reviewer believing they signed something off that was never recorded.
   const [actError, setActError] = useState(null)
+  const [showExplain, setShowExplain] = useState(false)   // "✨ Explain this finding" toggle
   const [drafting, setDrafting] = useState(false)
   const [draftMsg, setDraftMsg] = useState(null)   // { kind: 'ai' | 'template' | 'error', text }
   // Which deferred image the reviewer is looking at. The vision model describes ONE image, so
@@ -130,6 +131,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // Verifiable trust states (ADR 0019 §3a) — grounding + validation, the evidence-based replacement
   // for a confidence label. No number, no opaque level; the review-requirement axis is whyReview.
   const trust = trustStates(card)
+  // Deterministic, keyless plain-English explanation (the "✨ Explain this finding" answer).
+  const explanation = explainFinding(card, { trust, whyReview })
   // Cluster the evidence by group (Detection / Reasoning / Document state) in a stable order — the
   // way a reviewer scans it — rather than one flat list.
   const signalGroups = signals.reduce((m, s) => { (m[s.group] = m[s.group] || []).push(s); return m }, {})
@@ -233,6 +236,26 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
           : (card.scanId && card.file && <Thumbnail scanId={card.scanId} file={card.file} page={card.page || 1} className="evcard-thumb" />)}
         <div className="evcard-main" style={{ flex: 1, minWidth: 0 }}>
           <p className="evcard-problem">{card.problem}</p>
+
+          {/* "✨ Explain this finding" — a deterministic, keyless plain-English primer (what the
+              criterion requires, who is blocked, what ACP drafted + how anchored, why you're here).
+              Composed from real catalog + finding fields; no model call, no fabricated number. */}
+          {explanation && (
+            <div className="evcard-explain" style={{ margin: '2px 0 8px' }}>
+              <button type="button" className="evcard-draft-btn"
+                      aria-expanded={showExplain}
+                      onClick={() => setShowExplain((v) => !v)}>
+                {showExplain ? '× Hide explanation' : '✨ Explain this finding'}
+              </button>
+              {showExplain && (
+                <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.55, margin: '7px 0 0',
+                     padding: '9px 11px', background: 'var(--surface-1, #f6f5f2)',
+                     border: '1px solid var(--line)', borderRadius: 8 }}>
+                  {explanation}
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Deferred images (evidence, no AI draft) now render through ProposalEditors below —
               one editable row per image, each with its own "Draft with AI". The old thumbnail

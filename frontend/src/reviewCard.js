@@ -10,6 +10,17 @@
 
 import { confidenceForFinding } from './confidence.js'
 import { remediationTrack } from './remediationTrack.js'
+import { WCAG } from './wcagCatalog.js'
+
+const _WCAG_BY_SC = Object.fromEntries(WCAG.map((c) => [c.sc, c]))
+// Who is blocked when a criterion under each WCAG principle fails — a plain-English impact clause,
+// composed from the maintained catalog, never invented per finding.
+const _PRINCIPLE_IMPACT = {
+  Perceivable: 'people using a screen reader or other assistive technology cannot access this content',
+  Operable: 'people navigating by keyboard or assistive technology cannot operate it',
+  Understandable: 'the content is harder to understand, and assistive technology may mishandle it',
+  Robust: 'assistive technology may fail to interpret it correctly',
+}
 import { metaFor } from './hitlMeta.js'
 
 const scOf = (ruleId) =>
@@ -356,6 +367,39 @@ export function trustStates(card) {
   else if (c.certifiesOnApprove) validation = { state: 'deterministic_passed', label: 'Deterministic check — your sign-off certifies', tone: 'ok' }
   else validation = { state: 'not_yet_written', label: 'Not yet written to document', tone: 'todo' }
   return { grounding, validation }
+}
+
+// "✨ Explain this finding" — a deterministic, keyless plain-English explanation of ONE finding.
+// Composed entirely from real catalog + finding fields (the WCAG requirement, its principle → who
+// is blocked, the drafted value, the grounding + validation states, the human-review reason). No
+// model call, so it works with no key and offline; no fabricated number. This is the radiologist-
+// style "what / why / what changes / what next" primer a reviewer reads before deciding.
+export function explainFinding(card, { trust = null, whyReview = null } = {}) {
+  const c = card || {}
+  const cat = _WCAG_BY_SC[c.sc] || {}
+  const parts = []
+  // 1. what the criterion requires + who is blocked while it fails
+  const req = String(cat.req || c.problem || '').replace(/\s*\.\s*$/, '')
+  const impact = _PRINCIPLE_IMPACT[cat.principle] || 'some users cannot access this content'
+  if (req) parts.push(`WCAG ${c.sc}${cat.name ? ` (${cat.name})` : ''} requires: ${req}. It currently fails, so ${impact}.`)
+  // 2. what ACP did + how well anchored the draft is
+  const rec = c.recommendation
+  if (rec) {
+    const g = trust && trust.grounding
+    const anchor = g && g.state === 'grounded' ? ' It is anchored in text read from the source.'
+      : g && g.state === 'visual_only' ? ' It is a visual interpretation, so the wording may need a human eye.'
+      : ''
+    parts.push(`ACP drafted a correction — “${String(rec).slice(0, 160)}”.${anchor}`)
+  } else {
+    parts.push('ACP could not draft this automatically, so it needs your input.')
+  }
+  // 3. why a human is here + what approving actually does
+  if (whyReview) parts.push(whyReview)
+  const v = trust && trust.validation
+  if (v && v.state === 're_scan_passed') parts.push('A re-scan already confirmed the fix, so approving certifies it.')
+  else if (v && v.state === 'not_yet_written') parts.push('It has not been written to the document yet — approving writes it and re-scans to confirm.')
+  else if (v && v.state === 'deterministic_passed') parts.push('This is a deterministic finding, so your sign-off resolves it.')
+  return parts.join(' ')
 }
 
 // "Why am I reviewing this?" — the honest reason a human is in the loop for this finding, derived

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildEvidenceCard, comparisonFor, evidenceSignals, formatProposedValue, noDraftHint, trustStates, verificationLadder, whyHumanReview } from './reviewCard.js'
+import { buildEvidenceCard, comparisonFor, evidenceSignals, explainFinding, formatProposedValue, noDraftHint, trustStates, verificationLadder, whyHumanReview } from './reviewCard.js'
 
 describe('comparisonFor — current → remediated, or nothing', () => {
   const DIFF = { file: 'deck.pptx', rule_id: '1.1.1', before: '(no alt text)', after: 'A clinician at a desk.' }
@@ -246,6 +246,32 @@ describe('evidenceSignals — grouped, checkable, never a fabricated score', () 
 
   it('is empty when the finding carried no evidence — never invents one', () => {
     expect(evidenceSignals({})).toEqual([])
+  })
+})
+
+describe('explainFinding — deterministic, keyless, honest', () => {
+  it('composes the requirement + who is blocked + what ACP did + the next step', () => {
+    const e = explainFinding(
+      { sc: '1.1.1', recommendation: 'The chart compares quarterly revenue.', certifiesOnApprove: false },
+      { trust: { grounding: { state: 'grounded' }, validation: { state: 'not_yet_written' } },
+        whyReview: 'The wording is a judgement call.' })
+    expect(e).toMatch(/WCAG 1\.1\.1/)
+    expect(e).toMatch(/assistive technology|screen reader/i)
+    expect(e).toMatch(/ACP drafted/)
+    expect(e).toMatch(/anchored in text read/i)
+    expect(e).toMatch(/judgement call/)
+    expect(e).toMatch(/writes it and re-scans/i)
+  })
+
+  it('says so plainly when ACP could not draft a value', () => {
+    expect(explainFinding({ sc: '1.1.1', recommendation: null, certifiesOnApprove: false }, {}))
+      .toMatch(/could not draft/i)
+  })
+
+  it('never emits a percentage or a confidence-level word', () => {
+    const e = explainFinding({ sc: '1.4.3', certifiesOnApprove: true },
+      { trust: { validation: { state: 'deterministic_passed' } } })
+    expect(e).not.toMatch(/%|confidence|\b(high|medium|low)\b/i)
   })
 })
 
