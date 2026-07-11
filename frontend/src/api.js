@@ -375,6 +375,15 @@ export const getHitlAnalytics = (scanId = null) => (SIM
 // which need no picture.
 // `style` ('shorter' | 'detailed' | 'regenerate') lets a reviewer re-draft an image description at a
 // different length (#131) — a bounded steer the backend allowlists; anything else is ignored.
+// Second-opinion cross-check of a drafted alt text (#123): the model independently re-describes the
+// image and we compare → {verdict: 'consistent'|'divergent', second_opinion, shared_terms}. {} when
+// no image / model down / SIM. Never a score.
+export const validateAlt = (scanId, file, ruleId, locator, alt) => (SIM || !alt
+  ? sim({})
+  : fetch(`${BASE}/ai/validate?scan_id=${encodeURIComponent(scanId)}&file=${encodeURIComponent(file)}&rule_id=${encodeURIComponent(ruleId)}&alt=${encodeURIComponent(alt)}`
+      + (locator ? `&locator=${encodeURIComponent(locator)}` : ''),
+      { headers: headers() }).then(j).catch(() => ({})))
+
 export const suggestFix = (scanId, file, ruleId, locator = null, style = null) => (SIM
   ? sim({ suggestion: 'AI draft unavailable in demo mode — edit manually', kind: 'fix', is_template: true })
   : fetch(`${BASE}/ai/suggest?scan_id=${encodeURIComponent(scanId)}&file=${encodeURIComponent(file)}&rule_id=${encodeURIComponent(ruleId)}`

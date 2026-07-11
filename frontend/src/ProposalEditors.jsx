@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import ProposalThumb from './ProposalThumb.jsx'
 import { thumbAlt, formatProposedValue } from './reviewCard.js'
 
@@ -16,10 +17,15 @@ import { thumbAlt, formatProposedValue } from './reviewCard.js'
 // onDraft(i), when given, adds a per-row "Draft with AI" button — for a DEFERRED row whose images
 // have no draft yet (the reviewer writes from scratch). Omitted for proposals, which arrive with a
 // draft already in the box, so the ReviewDrawer caller is unaffected.
-export default function ProposalEditors({ proposals, values, onChange, file, sc, onDraft, draftingIdx = null, onApplyToSimilar = null }) {
+export default function ProposalEditors({ proposals, values, onChange, file, sc, onDraft, draftingIdx = null, onApplyToSimilar = null, onCrossCheck = null }) {
+  const [checks, setChecks] = useState({})       // idx → {verdict, second_opinion, …} | 'loading'
   if (!proposals?.length) return null
   const many = proposals.length > 1
   const undrafted = !!onDraft   // an evidence row: no drafts, so the header must not claim any
+  const runCheck = (i) => {
+    setChecks((c) => ({ ...c, [i]: 'loading' }))
+    Promise.resolve(onCrossCheck && onCrossCheck(i)).then((v) => setChecks((c) => ({ ...c, [i]: v || 'none' })))
+  }
   // Identical images (same thumbnail bytes = the same embedded picture reused, e.g. a logo on every
   // slide) — count them so one description can be applied to all copies (#132 approve-similar). The
   // key is the exact thumb data URL; only byte-identical images group, never look-alikes.
@@ -93,6 +99,26 @@ export default function ProposalEditors({ proposals, values, onChange, file, sc,
                         onClick={() => onApplyToSimilar(i)}>
                   ⧉ Apply to {dupCount[p.thumb]} identical
                 </button>
+              )}
+              {/* Cross-check (#123): a second, independent AI look confirms the description matches the
+                  image (or flags a mismatch + shows what it saw) — a real verification, not a score. */}
+              {onCrossCheck && filled && (
+                <button type="button" className="evcard-similar-btn" disabled={checks[i] === 'loading'}
+                        title="Have the AI independently re-describe this image and compare"
+                        onClick={() => runCheck(i)}>
+                  {checks[i] === 'loading' ? 'Cross-checking…' : '⚖ Cross-check'}
+                </button>
+              )}
+              {checks[i] && checks[i] !== 'loading' && (
+                checks[i] === 'none' ? (
+                  <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>Cross-check unavailable for this image.</p>
+                ) : checks[i].verdict === 'consistent' ? (
+                  <p style={{ fontSize: 11.5, margin: '4px 0 0', color: '#0F6E56' }}>✓ Cross-checked — a second independent look agrees with this description.</p>
+                ) : (
+                  <p style={{ fontSize: 11.5, margin: '4px 0 0', color: '#BA7517' }}>
+                    ⚠ Second opinion differs — the AI independently saw: “{checks[i].second_opinion}”. Confirm the wording.
+                  </p>
+                )
               )}
               {/* The raw value can be opaque ("es"). Show the markup it becomes, so the
                   reviewer approves a change they understand. */}

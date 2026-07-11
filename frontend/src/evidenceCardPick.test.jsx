@@ -17,6 +17,7 @@ vi.mock('./api.js', () => ({
   getFilePage: () => Promise.resolve(null),
   getFileGeometry: () => Promise.resolve(null),
   getScanAiCalls: () => Promise.resolve([]),
+  validateAlt: () => Promise.resolve({}),
 }))
 
 const { default: EvidenceCard } = await import('./EvidenceCard.jsx')

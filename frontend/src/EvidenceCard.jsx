@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { aiProvenance, getFileRemediationDiffs, getScanAiCalls, suggestFix } from './api.js'
+import { aiProvenance, getFileRemediationDiffs, getScanAiCalls, suggestFix, validateAlt } from './api.js'
 import Thumbnail from './Thumbnail.jsx'
 import { buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, explainFinding, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
@@ -61,6 +61,14 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
     const t = instances[i]?.thumb
     if (!t) return
     setValues((prev) => prev.map((x, j) => (instances[j]?.thumb === t ? prev[i] : x)))
+  }
+  // Cross-check the CURRENT value of image i against a fresh independent description (#123). Returns
+  // the verdict so ProposalEditors can show it inline. Best-effort → null on any failure.
+  const crossCheck = (i) => {
+    if (!item?.scan_id || !item?.file || !item?.rule_id) return Promise.resolve(null)
+    return validateAlt(item.scan_id, item.file, item.rule_id, instances[i]?.locator, values[i])
+      .then((v) => (v && v.verdict ? v : null))
+      .catch(() => null)
   }
   const [draftingIdx, setDraftingIdx] = useState(null)
   // Which flagged image the HERO is showing (#122 multi-image pager). A 1.1.1 row can carry many
@@ -334,7 +342,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
                                onChange={setValueAt} file={card.file}
                                onDraft={usingEvidence ? draftInstance : undefined}
                                draftingIdx={usingEvidence ? draftingIdx : null}
-                               onApplyToSimilar={applyToSimilar} />
+                               onApplyToSimilar={applyToSimilar} onCrossCheck={crossCheck} />
               {usingEvidence && draftMsg && (
                 <span className={`evcard-draft-msg evcard-draft-${draftMsg.kind}`} role="status">
                   {draftMsg.text}

@@ -72,7 +72,7 @@ def ai_explain(scan_id: str = Query(...), file: str = Query(...), rule_id: str =
 @router.get("/ai/suggest")
 def ai_suggest(request: Request, scan_id: str = Query(...), file: str = Query(...),
                rule_id: str = Query(...), locator: str | None = Query(None),
-               style: str | None = Query(None)):
+               style: str | None = Query(None), validate: int = Query(0)):
     """Draft a concrete, human-approvable fix value (alt text / link text / title) for a
     semantic finding. Same AI gates as /ai/explain; 503 when Ollama is unavailable. The
     reviewer accepts or edits the draft in the HITL queue — it is never auto-applied.
@@ -94,18 +94,50 @@ def ai_suggest(request: Request, scan_id: str = Query(...), file: str = Query(..
     # Reviewer refinement (#131): only a bounded length steer reaches the model — never free text —
     # so a caption can be re-drafted shorter/longer/afresh without opening a prompt-injection path.
     safe_style = style if style in ("shorter", "detailed", "regenerate") else ""
+    img = _image_for_locator(request, scan_id, file, locator) if rule_id == "1.1.1" else None
     result = _ai.suggest_fix(
         rule_id=rule_id,
         rule_name=trace["rule_name"],
         level=trace["level"],
         filename=file,
         detail=trace.get("detail", "") or "",
-        image_bytes=_image_for_locator(request, scan_id, file, locator) if rule_id == "1.1.1" else None,
+        image_bytes=img,
         style="" if safe_style == "regenerate" else safe_style,
     )
     if result is None:
         raise HTTPException(503, "AI suggestion unavailable — is Ollama running?")
+    # Opt-in second-opinion cross-check (#123): the model independently re-describes the image and we
+    # compare — 'consistent' raises confidence toward auto-approve, 'divergent' hands the reviewer the
+    # second description as evidence. Additive; only for a real vision draft, and best-effort.
+    if validate and img and rule_id == "1.1.1" and result.get("suggestion") and not result.get("is_template"):
+        try:
+            v = _ai.validate_alt_text(img, result["suggestion"], filename=file, scan_id=scan_id, file=file)
+            if v:
+                result["validation"] = v
+        except Exception:
+            pass
     return result
+
+
+@router.get("/ai/validate")
+def ai_validate(request: Request, scan_id: str = Query(...), file: str = Query(...),
+                rule_id: str = Query(...), alt: str = Query(...), locator: str | None = Query(None)):
+    """Second-opinion cross-check of a proposed alt text (#123): the vision model INDEPENDENTLY
+    re-describes the located image, and we compare — 'consistent' (the draft agrees with a fresh
+    look) or 'divergent' (+ the second description as evidence). A verification pass, never a score.
+    Only meaningful for 1.1.1 image findings; returns {} when there's no image or the model is down."""
+    if not core.store.get_ai_enabled():
+        raise HTTPException(403, "AI is disabled (deterministic-only mode)")
+    import ai as _ai
+    if not _ai.is_available():
+        raise HTTPException(503, "AI validation unavailable — is Ollama running?")
+    img = _image_for_locator(request, scan_id, file, locator) if rule_id == "1.1.1" else None
+    if not img or not (alt or "").strip():
+        return {}
+    try:
+        return _ai.validate_alt_text(img, alt, filename=file, scan_id=scan_id, file=file) or {}
+    except Exception:
+        return {}
 
 
 @router.get("/ai/status")
