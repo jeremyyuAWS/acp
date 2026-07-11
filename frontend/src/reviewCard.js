@@ -117,6 +117,31 @@ export const firstThumb = (item) => proposalsOf(item)[0]?.thumb ?? evidenceOf(it
 // finding carries no shape locator (a judgement item, a page-level PDF finding) → no box drawn.
 export const firstLocator = (item) => proposalsOf(item)[0]?.locator ?? evidenceOf(item)[0]?.locator ?? null
 
+// The KIND of image, read from the vision model's OWN description words (#130) — not a separate,
+// fuzzy classifier. A chart wants a data-trend description; an icon wants two words; a photo wants
+// the scene: naming the kind tells the reviewer what a good alt text looks like here. Honest and
+// zero-cost: it's the model's own noun, surfaced as a routing hint, or null when nothing matches
+// (never guessed). Ordered specific→generic so "bar chart" wins over the bare "image".
+const _IMAGE_KINDS = [
+  [/\b(bar|line|pie|column|scatter|area)?\s*(chart|graph|plot|histogram)\b/, '📊', 'Chart', 'describe the trend and the key figure, not just "a chart"'],
+  [/\b(flow ?chart|diagram|workflow|schematic|org chart)\b/, '🔀', 'Diagram', 'describe what it shows and the flow between parts'],
+  [/\bscreenshot\b/, '🖥️', 'Screenshot', 'describe the screen and the key text on it'],
+  [/\b(table|spreadsheet|grid of)\b/, '🗂️', 'Table', 'summarise what the table conveys'],
+  [/\b(map|floor ?plan)\b/, '🗺️', 'Map', 'describe the location or layout shown'],
+  [/\blogo\b/, '🔖', 'Logo', 'usually just the organisation name'],
+  [/\b(icon|glyph|symbol|button)\b/, '🔣', 'Icon', 'name the action or meaning in a word or two'],
+  [/\b(photo|photograph|portrait|headshot)\b/, '📷', 'Photo', 'describe the scene and who or what is in it'],
+  [/\b(illustration|drawing|cartoon|graphic)\b/, '🖼️', 'Illustration', 'describe the subject and its meaning'],
+]
+export function describedImageType(item) {
+  const text = String(firstProposed(item) ?? firstRationale(item) ?? '').toLowerCase()
+  if (!text) return null
+  for (const [re, icon, label, hint] of _IMAGE_KINDS) {
+    if (re.test(text)) return { icon, label, hint }
+  }
+  return null
+}
+
 // The images this row asks a human to describe (hitl_queue.evidence): [{locator, thumb}, …],
 // one per deferred image, captured at remediation time whether or not the vision model ran.
 // NOT proposals — there is no value to approve — so they never reach proposalMeta or

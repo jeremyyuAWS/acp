@@ -1864,6 +1864,11 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
   border-bottom: 1px solid var(--line); }
 .evcard-audit-table td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line);
   vertical-align: top; }
+/* Image-kind routing hint (#130). */
+.evcard-imgkind { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin: 0 0 8px; font-size: 12px; }
+.evcard-imgkind-tag { font-weight: 700; white-space: nowrap; }
+
 .audit-zone { white-space: nowrap; font-weight: 600; }
 .audit-zone-local { color: #0F6E56; }
 .audit-zone-cloud { color: #854F0B; }

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { aiProvenance, getFileRemediationDiffs, getScanAiCalls, suggestFix } from './api.js'
 import Thumbnail from './Thumbnail.jsx'
-import { buildEvidenceCard, evidenceOf, evidenceSignals, explainFinding, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview } from './reviewCard.js'
+import { buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, explainFinding, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import HowToConfirm from './HowToConfirm.jsx'
@@ -136,6 +136,9 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   const card = buildEvidenceCard(item, diffs)
   // The locator the hero shows — the paged instance's, defaulting to the card's first (#122 pager).
   const heroLocator = (instances[heroIdx] && instances[heroIdx].locator) || card.locator
+  // The kind of image, read from the model's own description (#130) — a routing hint for what a
+  // good alt text looks like here (a chart needs a trend, an icon two words). null → no chip.
+  const imgKind = describedImageType(item)
   // Reviewer-trust primitives (all derived from real fields — never a fabricated score):
   //   ladder  — how far the pipeline got before handing off (detected → validated → your approval)
   //   signals — the concrete evidence behind the finding (detection basis, reasoning, subjective flag)
@@ -286,6 +289,15 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
         )}
         <div className="evcard-main" style={{ flex: 1, minWidth: 0 }}>
           <p className="evcard-problem">{card.problem}</p>
+          {/* Image-kind routing hint (#130) — the model's own noun for what this is, with a hint on
+              what a good description looks like for that kind. Honest: derived from the description,
+              shown only when a kind is recognised. */}
+          {imgKind && (
+            <div className="evcard-imgkind" title={`Read from the AI description — ${imgKind.hint}`}>
+              <span className="evcard-imgkind-tag">{imgKind.icon} {imgKind.label}</span>
+              <span className="muted">{imgKind.hint}</span>
+            </div>
+          )}
 
           {/* "✨ Explain this finding" — a deterministic, keyless plain-English primer (what the
               criterion requires, who is blocked, what ACP drafted + how anchored, why you're here).
