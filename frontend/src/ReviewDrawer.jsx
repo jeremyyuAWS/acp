@@ -3,6 +3,7 @@ import Drawer from './Drawer.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import { proposalsOf } from './reviewCard.js'
 import { scOf } from './fixSummary.js'
+import HowToConfirm from './HowToConfirm.jsx'
 
 export default function ReviewDrawer({ item, onClose, onAct, onDraft }) {
   const [afterText, setAfterText] = useState(item?.after || '')
@@ -77,6 +78,8 @@ export default function ReviewDrawer({ item, onClose, onAct, onDraft }) {
       )}
 
       <p className="muted" style={{ marginTop: 12 }}>{item.note || 'The agent proposes this fix; a human confirms because confidence is below the auto-apply threshold. Approving re-validates the file against all engines.'}</p>
+
+      <HowToConfirm sc={scOf(item.ruleId || item.rule)} file={item.file} />
 
       <div className="emptyactions" style={{ justifyContent: 'flex-start', marginTop: 16, flexWrap: 'wrap' }}>
         {/* With per-image editors the array is what gets written; the headline value stays the
