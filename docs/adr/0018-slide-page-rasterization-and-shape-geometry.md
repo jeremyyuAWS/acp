@@ -1,6 +1,6 @@
 # ADR 0018 — Slide/page rasterization + per-shape geometry (the visual-evidence seam)
 
-Status: Proposed
+Status: Accepted — **Slice 1 shipped** (2026-07-11): Office (docx/pptx/xlsx) + PDF page rasterization via headless LibreOffice → pypdfium2 (`render.py`, Office-aware `can_render` + `/thumbnail` + `/page/{n}` endpoints, LibreOffice in the deploy image), and the large page-preview HERO on `EvidenceCard`. Verified locally (showcase-deck.pptx → PNG). REMAINING: per-shape geometry (normalized bbox) → bounding-box overlay + zoom + crop + visual-diff + mini-map.
 Date: 2026-07-11
 Related: [ADR 0015](0015-page-render-thumbnail-seam.md) (extends the render seam it built), [ADR 0012](0012-own-office-analysers.md) (the .NET OpenXML analysers that will emit geometry), [ADR 0016](0016-evidence-based-confidence.md) (the no-fabricated-number honesty rule this must respect), [ADR 0010](0010-remediated-output-object-store.md) (blob cache reused)
 
