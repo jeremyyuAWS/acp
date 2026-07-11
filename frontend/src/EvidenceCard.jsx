@@ -134,11 +134,15 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   }
 
   const card = buildEvidenceCard(item, diffs)
-  // The locator the hero shows — the paged instance's, defaulting to the card's first (#122 pager).
-  const heroLocator = (instances[heroIdx] && instances[heroIdx].locator) || card.locator
+  // Everything about the "current" image follows the pager (#122) so the hero box, the object thumb,
+  // and the kind chip all describe the SAME image — paging to image 3 must not leave image 1's thumb
+  // beside the text. All fall back to the card's first instance for a single-image finding.
+  const heroInst = instances[heroIdx] || null
+  const heroLocator = heroInst?.locator || card.locator
+  const heroThumb = heroInst?.thumb ?? card.thumb
   // The kind of image, read from the model's own description (#130) — a routing hint for what a
   // good alt text looks like here (a chart needs a trend, an icon two words). null → no chip.
-  const imgKind = describedImageType(item)
+  const imgKind = describedImageType(heroInst ? { proposals: [heroInst] } : item)
   // Reviewer-trust primitives (all derived from real fields — never a fabricated score):
   //   ladder  — how far the pipeline got before handing off (detected → validated → your approval)
   //   signals — the concrete evidence behind the finding (detection basis, reasoning, subjective flag)
@@ -281,10 +285,11 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
       )}
 
       <div className="evcard-body" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-        {/* The specific object under review — the offending image (proposals[0].thumb) beside the
-            text. The whole-page context is the hero preview above; this is the "what". */}
-        {card.thumb && (
-          <ProposalThumb thumb={card.thumb} alt={thumbAlt(card.thumbKind, card.file)}
+        {/* The specific object under review — the offending image beside the text. Follows the pager
+            (#122) so it's the SAME image the hero boxes above. The whole-page context is the hero
+            preview; this is the "what". */}
+        {heroThumb && (
+          <ProposalThumb thumb={heroThumb} alt={thumbAlt(card.thumbKind, card.file)}
                          size={thumbSize(card.thumbKind, 96)} className="evcard-thumb" />
         )}
         <div className="evcard-main" style={{ flex: 1, minWidth: 0 }}>
