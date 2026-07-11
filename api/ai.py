@@ -432,7 +432,10 @@ def _structured_vision_prompt(filename: str, ocr_text: str, context: str) -> str
         "reader user understands what it conveys. Using the text read from the image, write "
         "ONE concise sentence (under 25 words) that states the image's headline/subject, its "
         "type (e.g. bar chart, line graph, table, screenshot), and the single key takeaway. "
-        "Do not begin with 'image of', 'picture of', or 'this image shows'."
+        "State the takeaway as a COMPARISON or TREND in words. Do NOT state specific numeric values "
+        "or pair numbers with categories (e.g. 'North at 150') — reading a chart's exact values is "
+        "unreliable, a wrong figure is worse than none, and a human confirms the specifics. Do not "
+        "begin with 'image of', 'picture of', or 'this image shows'."
         f"{where}{read}{near}\nAlt text:"
     )
 
