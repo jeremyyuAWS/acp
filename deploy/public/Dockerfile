@@ -29,6 +29,7 @@ WORKDIR /app
 # binary (unlike easyocr, which OOMs small containers).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates libicu-dev tesseract-ocr \
+       libreoffice-impress libreoffice-writer libreoffice-calc fonts-liberation \
     && curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
     && bash /tmp/dotnet-install.sh --runtime dotnet --channel 10.0 --install-dir /usr/share/dotnet \
     && ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet \

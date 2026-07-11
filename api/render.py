@@ -16,6 +16,7 @@ remediate, or report.
 """
 from __future__ import annotations
 import io
+import os
 
 # Longest-edge cap for the output PNG. A page-1 preview, not a viewer — this keeps the
 # cached object to tens of KB and is ample for the HITL surfaces and the certification PDF.
@@ -23,14 +24,26 @@ _MAX_EDGE = 1000
 # pdfium renders at 72*scale DPI; 2.0 → 144 DPI, enough to downscale from cleanly.
 _RENDER_SCALE = 2.0
 
-# Extensions this module can rasterize today. Office (docx/pptx/xlsx) is a phase-2 follow-on
-# (ADR 0015) — callers get None and degrade to a placeholder.
+# Extensions this module can always rasterize (pypdfium2, no external binary).
 RENDERABLE_EXTS = (".pdf",)
+# Office formats (ADR 0018): rasterized by converting to PDF with headless LibreOffice, then
+# rendering the PDF with pdfium. Only available when `soffice` is on PATH (the deploy image adds
+# it); everywhere it isn't — local dev without LibreOffice, a build that omits it — these degrade
+# to None (no preview), exactly like an unsupported type. LibreOffice is MPL/LGPL and invoked as a
+# subprocess (the tesseract precedent), never linked, so the license posture is unchanged.
+_OFFICE_EXTS = (".docx", ".pptx", ".xlsx")
+
+
+def _soffice() -> str | None:
+    """Path to the headless LibreOffice binary, or None when it isn't installed."""
+    import shutil
+    return shutil.which("soffice") or shutil.which("libreoffice")
 
 
 def can_render(ext: str) -> bool:
-    """Whether render_page1_png can (attempt to) rasterize this extension."""
-    return (ext or "").lower() in RENDERABLE_EXTS
+    """Whether render_page_png can (attempt to) rasterize this extension in this environment."""
+    e = (ext or "").lower()
+    return e in RENDERABLE_EXTS or (e in _OFFICE_EXTS and _soffice() is not None)
 
 
 def render_page_png(data: bytes, ext: str, page: int = 1) -> bytes | None:
@@ -43,16 +56,50 @@ def render_page_png(data: bytes, ext: str, page: int = 1) -> bytes | None:
     if not data or not can_render(ext):
         return None
     try:
-        return _render_pdf_page(data, page)
+        e = (ext or "").lower()
+        # Office → PDF first (LibreOffice), then the same pdfium path renders the page.
+        pdf_bytes = data if e in RENDERABLE_EXTS else _office_to_pdf(data, e)
+        if not pdf_bytes:
+            return None
+        return _render_pdf_page(pdf_bytes, page)
     except Exception:
-        # Corrupt bytes, password-protected PDF, pdfium load failure, Pillow encode error —
-        # all collapse to "no preview". Intentionally broad: this must never propagate.
+        # Corrupt bytes, password-protected PDF, a LibreOffice/pdfium/Pillow error — all collapse
+        # to "no preview". Intentionally broad: this must never propagate (ADR 0015/0018).
         return None
 
 
 def render_page1_png(data: bytes, ext: str) -> bytes | None:
     """Page-1 preview (ADR 0015). Back-compat wrapper over render_page_png."""
     return render_page_png(data, ext, 1)
+
+
+_OFFICE_CONVERT_TIMEOUT = float(os.environ.get("ACP_OFFICE_RENDER_TIMEOUT", "60"))
+
+
+def _office_to_pdf(data: bytes, ext: str) -> bytes | None:
+    """Convert Office bytes → PDF with headless LibreOffice, bounded by a timeout. Returns the PDF
+    bytes or None. A FRESH UserInstallation profile per call avoids the single-profile lock that
+    makes concurrent headless `soffice` runs fail. Never lets a subprocess error escape — the outer
+    render_page_png guard also catches, but a failed convert must simply mean 'no preview'."""
+    soffice = _soffice()
+    if not soffice:
+        return None
+    import subprocess
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory(prefix="acp-office-render-") as d:
+        src = Path(d) / f"in{ext}"
+        try:
+            src.write_bytes(data)
+            subprocess.run(
+                [soffice, "--headless", "--norestore", "--nolockcheck",
+                 f"-env:UserInstallation=file://{Path(d) / 'lo-profile'}",
+                 "--convert-to", "pdf", "--outdir", d, str(src)],
+                capture_output=True, timeout=_OFFICE_CONVERT_TIMEOUT, check=False)
+        except Exception:
+            return None
+        out = Path(d) / "in.pdf"
+        return out.read_bytes() if out.exists() else None
 
 
 def _render_pdf_page(data: bytes, page: int) -> bytes | None:

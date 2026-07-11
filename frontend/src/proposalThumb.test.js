@@ -95,10 +95,13 @@ describe('the review screens render the proposal, not a template', () => {
     expect(read('EvidenceCard.jsx')).toMatch(/getFileRemediationDiffs/)
   })
 
-  it('EvidenceCard prefers the offending image over the PDF-only page render', () => {
+  it('EvidenceCard shows the large page hero AND the object thumb (ADR 0018 visual-first)', () => {
     const src = read('EvidenceCard.jsx')
-    expect(src).toMatch(/card\.thumb\s*\n?\s*\?\s*<ProposalThumb/)
-    expect(src).toMatch(/: \(card\.scanId && card\.file && <Thumbnail/)
+    // The finding's page rendered large is the HERO (Principle 2) — no longer a mere fallback:
+    // rendered whenever scanId+file are present (self-hides if the backend can't rasterize).
+    expect(src).toMatch(/evcard-hero[\s\S]{0,200}<Thumbnail scanId=\{card\.scanId\} file=\{card\.file\} page=\{card\.page \|\| 1\} maxHeight=\{360\}/)
+    // The offending image (proposals[0].thumb) still renders as the object beside the text.
+    expect(src).toMatch(/\{card\.thumb && \([\s\S]{0,80}<ProposalThumb/)
   })
 
   it('both screens draw the thumb from the same helper', () => {

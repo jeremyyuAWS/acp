@@ -229,14 +229,23 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
         ))}
       </div>
 
+      {/* Large page preview (ADR 0018) — the visual "where": the finding's page rendered big, the
+          hero of the card (Principle 2). Self-hides when the backend can't rasterize (Thumbnail
+          returns null): PDF always; Office (pptx/docx/xlsx) once LibreOffice is in the image. The
+          bounding-box overlay pinpointing the object is the next slice (needs per-shape geometry). */}
+      {card.scanId && card.file && (
+        <div className="evcard-hero" style={{ margin: '0 0 12px' }}>
+          <Thumbnail scanId={card.scanId} file={card.file} page={card.page || 1} maxHeight={360} />
+        </div>
+      )}
+
       <div className="evcard-body" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-        {/* What the reviewer must judge — the offending image, or the rendered page for a
-            reading-order proposal. Falls back to the document's page-1 render (PDF only; a
-            deck cannot be rasterized). */}
-        {card.thumb
-          ? <ProposalThumb thumb={card.thumb} alt={thumbAlt(card.thumbKind, card.file)}
-                           size={thumbSize(card.thumbKind, 96)} className="evcard-thumb" />
-          : (card.scanId && card.file && <Thumbnail scanId={card.scanId} file={card.file} page={card.page || 1} className="evcard-thumb" />)}
+        {/* The specific object under review — the offending image (proposals[0].thumb) beside the
+            text. The whole-page context is the hero preview above; this is the "what". */}
+        {card.thumb && (
+          <ProposalThumb thumb={card.thumb} alt={thumbAlt(card.thumbKind, card.file)}
+                         size={thumbSize(card.thumbKind, 96)} className="evcard-thumb" />
+        )}
         <div className="evcard-main" style={{ flex: 1, minWidth: 0 }}>
           <p className="evcard-problem">{card.problem}</p>
 
