@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { allRules } from './rules'
-import { assessScan } from './api.js'
+import { assessScan, getCapability } from './api.js'
+import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
 import { TraceChip } from './Transparency.jsx'
 import { assessLine } from './phaseNarration.js'
 
@@ -15,14 +16,22 @@ const LEVELS = [
   { k: 'AAA', desc: 'enhanced' },
 ]
 
-// Real scan findings carry {rule_id, wcag, severity} but no conformance level or auto flag,
-// so derive both from the SC catalog (rules/*.js meta) keyed by the WCAG SC number.
+// Real scan findings carry {rule_id, wcag, severity} but no conformance level, so derive
+// it from the SC catalog (rules/*.js meta) keyed by the WCAG SC number.
 const SC_LEVEL = Object.fromEntries(allRules.map((r) => [r.meta.id, r.meta.level]))
-const SC_AUTO = Object.fromEntries(allRules.map((r) => [r.meta.id, r.meta.fixMode === 'auto']))
-const scOf = (w) => (String(w || '').match(/\d+\.\d+\.\d+/) || [])[0]
+// Findings carry wcag as EITHER the engine form 'SC_1_1_1' (real scans + SIM) or the
+// axe-style '1.1.1 name' — normalize both to the bare dotted SC. (A dotted-only match
+// silently returned undefined for the 'SC_' form, which read every finding as human /
+// not-auto once the auto flag became capability-derived.)
+const scOf = (w) => ((String(w || '')).replace(/^SC_/, '').replace(/_/g, '.').match(/\d+\.\d+\.\d+/) || [])[0]
 // Level of a finding: explicit field (SIM) → SC catalog → default A (unknown SCs still count).
 const levelOf = (x) => x.level || SC_LEVEL[scOf(x.wcag)] || 'A'
-const autoOf = (x) => (x.auto != null ? x.auto : !!SC_AUTO[scOf(x.wcag)])
+// Whether a finding CAN be auto-fixed is format-aware: the same criterion may be a
+// deterministic fix on one file type and human-only on another (a docx contrast fix
+// exists; a pdf one does not). Answered by the remediation-capability table for the
+// file's format — never by a format-blind flag (which is why a docx used to read
+// "0 auto-fixable"). This is a PRE-remediation capability, not a claim anything is fixed.
+const autoOf = (cap, x, fmt) => isAuto(cap, fmt, scOf(x.wcag))
 
 // Engine label shown per file type during scanning — mirrors what the real pipeline uses
 
@@ -45,6 +54,15 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   // Track whether the current result came from a previous session (cached) or was
   // computed in this session — so we can label cached results clearly.
   const [resultFromCache, setResultFromCache] = useState(saved?.phase === 'done' && !!saved?.result)
+  // Remediation capability ({fmt: {sc: mode}}) — fetched once, seeded with the bundled
+  // table so the auto-fixable counts are correct synchronously (and never regress to the
+  // format-blind view if the fetch is slow or fails).
+  const [cap, setCap] = useState(CAPABILITY_FALLBACK)
+  useEffect(() => {
+    let on = true
+    getCapability().then((r) => { if (on && r?.capability) setCap(r.capability) }).catch(() => {})
+    return () => { on = false }
+  }, [])
   const timer = useRef(null)
   const phaseTimer = useRef(null)
   useEffect(() => () => { clearInterval(timer.current); clearTimeout(phaseTimer.current) }, [])
@@ -65,9 +83,10 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     const target = RANK[lvl]
     let conformant = 0, applicable = 0, autoFix = 0
     docs.forEach((f) => {
+      const fmt = fmtOf(f)
       const blocking = (f.issues || []).filter((x) => RANK[levelOf(x)] <= target)
       applicable += blocking.length
-      autoFix += blocking.filter(autoOf).length
+      autoFix += blocking.filter((x) => autoOf(cap, x, fmt)).length
       if (!blocking.length) conformant++
     })
     const total = Math.max(1, docs.length)

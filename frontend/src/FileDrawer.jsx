@@ -4,7 +4,8 @@ import Tag from './Tag.jsx'
 import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
-import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, getFileRemediationDiffs, downloadRemediated, getRules, getRubric, getConfig } from './api.js'
+import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, getFileRemediationDiffs, downloadRemediated, getRules, getRubric, getConfig, getCapability } from './api.js'
+import { CAPABILITY_FALLBACK, fmtOf, autoSCs, modeFor, reviewRecommended } from './capability.js'
 import PagePreview from './PagePreview.jsx'
 import { WCAG } from './wcagCatalog.js'
 import { confidenceForFinding, confidenceForCoverage, confClass } from './confidence.js'
@@ -39,14 +40,28 @@ const REM_STAGE_LINES = [
   'Verifying the fix and updating records…',
 ]
 const remStageLine = (pct) => REM_STAGE_LINES[Math.min(REM_STAGE_LINES.length - 1, Math.floor(pct / (100 / REM_STAGE_LINES.length)))]
-// The WCAG rules the server-side remediator for each format actually fixes
-// deterministically (mirrors remediate_pdf = language+title, remediate_office
-// = +alt-text). Used to name the real rule under the progress bar as it's
-// applied. HTML runs the broad rule-module set, so it keeps the generic stages.
-// Every rule named here is one the engine genuinely fixes for this file — a
-// HITL-deferred finding (contrast, link purpose) is never claimed as 'fixing'.
-const REM_AUTOFIX_SC_BY_TYPE = { pdf: ['3.1.1', '2.4.2'], docx: ['1.1.1', '3.1.1', '2.4.2'], pptx: ['1.1.1', '3.1.1', '2.4.2', '1.4.3', '1.4.6', '1.3.2', '2.4.6'], xlsx: ['1.1.1', '3.1.1', '2.4.2', '1.4.3', '1.4.6'], html: ['3.1.1', '2.4.2', '1.3.1', '1.4.3', '1.4.6', '1.4.10', '1.4.4', '1.4.12', '1.4.2', '1.3.4'] }
+// Which WCAG criteria the server-side remediator DETERMINISTICALLY fixes for a given
+// file format is answered by the remediation-capability table (capability.js, backed by
+// api/remediation_capability.py) — the single source of truth, format-aware and grounded
+// in what the remediators actually do. `autoSetFor` returns that per-file auto set; a
+// HITL-deferred finding (docx language, pptx/pdf contrast, link purpose, alt text) is
+// never in it, so it is never claimed as 'fixing'.
+const autoSetFor = (cap, file) => autoSCs(cap, fmtOf(file))
 const scOfWcag = (v) => ((v || '').replace(/^SC_/, '').replace(/_/g, '.').match(/^\d+\.\d+\.\d+/) || [''])[0]
+
+// The coverage table's "Fix" column label for a criterion — driven ENTIRELY by the
+// remediation-capability lane for the file's format (`mode`), so the label can never disagree
+// with the capability-derived outcome/badges elsewhere in the drawer:
+//   auto     → deterministic. Contrast (REVIEW_RECOMMENDED_SC) additionally carries the policy
+//              note "review recommended" because recolouring is a judgement call.
+//   assisted → an AI/OCR proposal a human approves; degrades to human review when AI is off.
+//   human    → routed to a person (also the default for a criterion out of scope for the format).
+// Shared by computeCoverageRows (cert export) and the on-screen table so the two can't drift.
+const fixLabel = (sc, mode, aiEnabled) => {
+  if (mode === 'auto') return reviewRecommended(sc) ? '⚡ auto-fixable · review recommended' : '⚡ auto'
+  if (mode === 'assisted') return aiEnabled ? '✎ AI' : '✋ human'
+  return '✋ human'
+}
 
 // Only PDFs can be rasterized server-side (api/render.py RENDERABLE_EXTS = ('.pdf',)).
 // Office formats would need a LibreOffice round-trip, so for a deck we show the slide
@@ -92,20 +107,17 @@ function LocationChip({ pages, type }) {
 // UNCHECKED logic the on-screen WCAG coverage table below uses, extracted so the
 // certification-PDF export shares it exactly rather than risk drifting from what's
 // shown on screen.
-function computeCoverageRows(file, { catalogRules, targetLevel, remediatedRuleIds, effectiveRemediated, aiEnabled }) {
+function computeCoverageRows(file, { catalogRules, targetLevel, remediatedRuleIds, effectiveRemediated, aiEnabled, cap }) {
   const ext = (file.file || '').split('.').pop().toLowerCase()
   const fmt = /^html?$/.test(ext) ? 'html' : ['pdf', 'docx', 'pptx', 'xlsx'].includes(ext) ? ext : null
+  const remAutoSet = autoSCs(cap, fmt)
   const scFromRule = (r) => r.wcag_sc || ((r.wcag || '').startsWith('SC_') ? r.wcag.slice(3).replaceAll('_', '.') : scOf(r.wcag || ''))
   const checkedSCs = fmt === 'html'
     ? new Set(allRules.map((m) => m.meta.id))
     : new Set((((catalogRules || {})[fmt]) || []).map(scFromRule).filter(Boolean))
   const isHuman = (c) => /Human/i.test(c.approach || '') || c.source === 'MDK HITL'
   const DOC_HUMAN_WHEN_UNCHECKED = new Set(['1.4.1', '1.3.5', '2.5.3', '4.1.2'])
-  const fixOf = (c) => {
-    if ((c.tier || '').startsWith('Tier 1')) return '⚡ auto'
-    if ((c.tier || '').startsWith('Tier 2')) return aiEnabled ? '✎ AI' : '✋ human'
-    return '✋ human'
-  }
+  const fixOf = (c) => fixLabel(c.sc, modeFor(cap, fmt, c.sc), aiEnabled)
   const issuesBySc = {}
   ;(file.issues || []).forEach((i) => {
     const sc = scOfWcag(i.wcag)
@@ -118,7 +130,7 @@ function computeCoverageRows(file, { catalogRules, targetLevel, remediatedRuleId
   return inScope.map((c) => {
     const count = issuesBySc[c.sc] || 0
     const wasFixed = count > 0 && (remediatedRuleIds.has(c.sc)
-      || (effectiveRemediated && (REM_AUTOFIX_SC_BY_TYPE[file.type] || []).includes(c.sc)))
+      || (effectiveRemediated && remAutoSet.has(c.sc)))
     const outcome = wasFixed ? 'FIXED'
       : count > 0 ? 'FAIL'
       : checkedSCs.has(c.sc) ? 'PASS'
@@ -233,6 +245,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   // Conformance target (e.g. 'WCAG 2.1 AA') scopes the coverage table to the
   // level the platform is actually certifying against — AAA rows hide at AA.
   const [targetLevel, setTargetLevel] = useState('AA')
+  // Remediation capability ({fmt: {sc: mode}}) — the single source of truth for which
+  // criteria the remediator auto-fixes per format. Seeded with the bundled table so the
+  // coverage/finding badges are correct synchronously; refreshed from the backend.
+  const [cap, setCap] = useState(CAPABILITY_FALLBACK)
   useEffect(() => {
     let on = true
     getRules().then((r) => { if (on) setCatalogRules(r) }).catch(() => {})
@@ -240,6 +256,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
       const m = (r?.target || '').match(/\b(AAA|AA|A)\s*$/)
       if (on && m) setTargetLevel(m[1])
     }).catch(() => {})
+    getCapability().then((r) => { if (on && r?.capability) setCap(r.capability) }).catch(() => {})
     return () => { on = false }
   }, [])
   const fetchExplanation = (ruleId) => {
@@ -310,9 +327,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
     if (!scanId || remNow === 'queued') return
     setRemNow('queued'); setRemProgress(4); setRemStage('Queued — waiting for a worker…')
     // The file's failing findings the server-side remediator actually fixes for this
-    // format (REM_AUTOFIX_SC_BY_TYPE); everything else routes to human review.
+    // format (from the remediation-capability table); everything else routes to review.
     const failingSCs = new Set((file.issues || []).map((i) => scOfWcag(i.wcag)).filter(Boolean))
-    const remRules = (REM_AUTOFIX_SC_BY_TYPE[file.type] || [])
+    const remAutoSet = autoSetFor(cap, file)
+    const remRules = [...remAutoSet]
       .filter((sc) => failingSCs.has(sc)).map((sc) => ({ sc, name: PLAIN_NAMES[sc] || sc }))
     const isAutoSC = (sc) => remRules.some((r) => r.sc === sc)
     setFindStatus(Object.fromEntries([...failingSCs].map((sc) => [sc, isAutoSC(sc) ? 'queued' : 'review'])))
@@ -389,6 +407,16 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   const st = statusOf(file)
   const [sbg, sfg] = STATUS_BADGE[st]
   const issues = file.issues || []
+  // This file's format and the set of criteria the remediator auto-fixes for it — the
+  // single format-aware source for every "was this fixed / can this be fixed" decision
+  // below (coverage table, finding badges, certification export).
+  const fileFmt = fmtOf(file)
+  const remAutoSet = autoSetFor(cap, file)
+  // Is a given finding auto-fixable for THIS file's format? Capability-driven for the
+  // formats we map (so an "auto-fixable" label can never disagree with the capability-
+  // derived "→ human review" status a row also shows); falls back to the finding's own
+  // flag only for a format the table doesn't cover.
+  const findingAuto = (i) => (fileFmt ? remAutoSet.has(scOfWcag(i.wcag)) : (i.auto !== false))
   const isRemediated = !!(file.acp_stamped || file.remediated_at || file.drive_write_url || remNow?.done)
   // remediation_state can know the file is fixed before the files prop refreshes
   // (the fix ran in an earlier session / another tab): when every failing criterion
@@ -505,7 +533,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           // Both the PDF and the HTML certification exports are built from the SAME
           // payload (→ reportModel.js), so the two downloads can never disagree.
           const buildCertData = async () => {
-            const rows = computeCoverageRows(file, { catalogRules, targetLevel, remediatedRuleIds, effectiveRemediated, aiEnabled })
+            const rows = computeCoverageRows(file, { catalogRules, targetLevel, remediatedRuleIds, effectiveRemediated, aiEnabled, cap })
             const now = new Date()
             const cfg = await getConfig().catch(() => null)
             // Real before→after evidence for the "Before → After" section — only present for a
@@ -651,26 +679,25 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                       if (s === 'fixed') return <span className="dectag ok">✓ fixed</span>
                       if (s === 'review') return <span className="dectag" style={{ background: '#ECECF6', color: '#4A4A8A' }}>→ human review</span>
                       // No live status → persisted state. A finding is only ever shown
-                      // remediated if it's auto-fixable for this format (per-format map,
-                      // else the finding's own auto flag); HITL-deferred findings that a
-                      // remediated file left for review show 'human review', not 'remediated'.
-                      const fmtAuto = REM_AUTOFIX_SC_BY_TYPE[file.type]
-                      const autoFixable = fmtAuto ? fmtAuto.includes(sc) : (i.auto !== false)
+                      // remediated if it's auto-fixable for this format (capability table,
+                      // else the finding's own auto flag for a format we don't map);
+                      // HITL-deferred findings that a remediated file left for review show
+                      // 'human review', not 'remediated'.
+                      const autoFixable = findingAuto(i)
                       if (autoFixable && (remediatedRuleIds.has(sc) || isRemediated)) return <span className="dectag ok">✓ remediated</span>
                       if (!autoFixable && isRemediated) return <span className="dectag" style={{ background: '#ECECF6', color: '#4A4A8A' }}>→ human review</span>
                       return null
                     })()}</div>
                     {i.detail && <div className="findingdetail">{i.detail}</div>}
                     {i.impact && <div className="muted findingimpact">{i.impact}</div>}
-                    {i.fix && <div className="findingfix"><span className={i.auto ? 'fixauto' : 'fixreview'}>{i.auto ? '⚡ auto-fixable' : '✎ needs review'}</span> · {i.fix}<span className="muted"> · {i.rule_id ?? i.ruleId}</span></div>}
+                    {i.fix && <div className="findingfix"><span className={findingAuto(i) ? 'fixauto' : 'fixreview'}>{findingAuto(i) ? '⚡ auto-fixable' : '✎ needs review'}</span> · {i.fix}<span className="muted"> · {i.rule_id ?? i.ruleId}</span></div>}
                     {i.pages?.length > 0 && PAGE_RENDERABLE.has(file.type) &&
                       <FindingPagePreview scanId={scanId} file={file.file} pages={i.pages} />}
                     {(() => {
                       // Evidence-based confidence (confidence.js) — never a fabricated %.
                       // The basis is always shown next to the level so the signal is auditable.
                       const sc = scOfWcag(i.wcag)
-                      const fmtAuto = REM_AUTOFIX_SC_BY_TYPE[file.type]
-                      const autoFixable = fmtAuto ? fmtAuto.includes(sc) : (i.auto !== false)
+                      const autoFixable = findingAuto(i)
                       const verifiedCleared = remediatedRuleIds.has(sc)
                       const reportedFixedUnverified = !verifiedCleared && isRemediated && autoFixable
                       const { level, basis } = confidenceForFinding({ sc, verifiedCleared, reportedFixedUnverified })
@@ -765,11 +792,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         // as 'not auto-checked'. NOT a blanket flip: web-only criteria (Resize
         // Text, Reflow, Focus Order/Visible…) stay N-A for a static document.
         const DOC_HUMAN_WHEN_UNCHECKED = new Set(['1.4.1', '1.3.5', '2.5.3', '4.1.2'])
-        const fixOf = (c) => {
-          if ((c.tier || '').startsWith('Tier 1')) return '⚡ auto'
-          if ((c.tier || '').startsWith('Tier 2')) return aiEnabled ? '✎ AI' : '✋ human'
-          return '✋ human'
-        }
+        const fixOf = (c) => fixLabel(c.sc, modeFor(cap, fileFmt, c.sc), aiEnabled)
         // An unreadable file ran ZERO checks — claiming any PASS would be false.
         if (st === 'unanalysable') {
           return (
@@ -809,7 +832,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           const fileIssues = issuesBySc[c.sc] || []
           const count = fileIssues.length
           const wasFixed = count > 0 && (remediatedRuleIds.has(c.sc)
-            || (effectiveRemediated && (REM_AUTOFIX_SC_BY_TYPE[file.type] || []).includes(c.sc)))
+            || (effectiveRemediated && remAutoSet.has(c.sc)))
           const outcome = wasFixed ? 'FIXED'
             : count > 0 ? 'FAIL'
             : checkedSCs.has(c.sc) ? 'PASS'
@@ -851,7 +874,16 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                         <td className="covsc">{r.id}</td>
                         <td>{r.plain}<div className="muted" style={{ fontSize: 11 }}>{r.plain === r.name ? (r.req || '').slice(0, 90) : r.name}</div></td>
                         <td className="muted">{r.level}</td>
-                        <td className="muted">{r.fix}</td>
+                        {/* Split a "primary · note" fix label (e.g. contrast's "auto-fixable ·
+                            review recommended") onto two deliberate lines so it reads cleanly in
+                            this narrow column instead of wrapping raggedly. r.fix stays one string
+                            (the cert export renders it verbatim); this is on-screen presentation only. */}
+                        <td className="muted">{(() => {
+                          const [main, ...note] = String(r.fix).split(' · ')
+                          return note.length
+                            ? <><span>{main}</span><span style={{ display: 'block', fontSize: 10, opacity: 0.7 }}>{note.join(' · ')}</span></>
+                            : r.fix
+                        })()}</td>
                         <td className={`covoutcome ${r.outcome === 'FAIL' ? 'fail' : (r.outcome === 'PASS' || r.outcome === 'FIXED') ? 'pass' : 'skip'}`} title={OUT_TIP[r.outcome]}>
                           {(r.outcome === 'PASS' || r.outcome === 'FIXED') ? '✓' : r.outcome === 'FAIL' ? `✕ ${r.count}` : r.outcome === 'HUMAN' ? '👤' : '—'}
                           <span className="covouttxt">{r.outcome === 'PASS' && remediatedRuleIds.has(r.id) ? 'pass — remediated' : OUT_TXT[r.outcome]}</span>
@@ -879,7 +911,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                                     {issue.page && <b style={{ marginRight: 5 }}>{file.type === 'pptx' ? 'Slide' : 'Page'} {issue.page}</b>}
                                     {issue.fix && <span>{issue.fix}</span>}
                                     {issue.detail && !issue.fix && <span>{issue.detail}</span>}
-                                    {issue.auto != null && <span className={issue.auto ? 'fixauto' : 'fixreview'} style={{ marginLeft: 6, fontSize: 11 }}>{issue.auto ? '⚡ auto' : '✎ review'}</span>}
+                                    <span className={findingAuto(issue) ? 'fixauto' : 'fixreview'} style={{ marginLeft: 6, fontSize: 11 }}>{findingAuto(issue) ? '⚡ auto' : '✎ review'}</span>
                                   </div>
                                 </div>
                               )

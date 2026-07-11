@@ -1,4 +1,5 @@
 import { SIM, simIdentity, simGetSources, simStartScan, simGetJob, simGetScan, simListScans, simRules, simRemediationDiffs } from './sim.js'
+import { CAPABILITY_FALLBACK } from './capability.js'
 
 const BASE = import.meta.env.VITE_API ?? 'http://localhost:8077'
 
@@ -158,6 +159,14 @@ export const getRubric = () => (SIM
   ? sim({ name: 'WCAG 2.1 AA', version: '1', hash: 'e85fcf7e14f9040c', target: 'WCAG 2.1 AA', threshold: 90, criteria: {} })
   : fetch(`${BASE}/rubric`, { headers: headers() }).then(j))
 export const getRules = () => (SIM ? sim(simRules()) : fetch(`${BASE}/rules`, { headers: headers() }).then(j))
+// Per-(criterion × format) remediation capability — the single source of truth for which
+// WCAG criteria are auto-fixable per file format (see capability.js). SIM and any fetch
+// failure fall back to the bundled table, so the format-aware UI never regresses to the
+// format-blind view even offline.
+export const getCapability = () => (SIM
+  ? sim({ formats: Object.keys(CAPABILITY_FALLBACK), capability: CAPABILITY_FALLBACK })
+  : fetch(`${BASE}/capability`, { headers: headers() }).then(j)
+      .catch(() => ({ formats: Object.keys(CAPABILITY_FALLBACK), capability: CAPABILITY_FALLBACK })))
 export const updateRubric = (body) => (SIM
   ? sim({ hash: 'e85fcf7e14f9040c', disabled_rules: body.disabled_rules || [], threshold: body.compliant_threshold || 90 })
   : fetch(`${BASE}/rubric`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) }).then(j))
