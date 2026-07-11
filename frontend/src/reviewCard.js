@@ -92,7 +92,13 @@ export const firstProposed = (item) => proposalsOf(item)[0]?.proposed_value ?? n
 // heuristic wants marked decorative. For a reading-order proposal it is the rendered PDF page.
 // It is never a generic page-1 render: a PPTX cannot be rasterized at all (api/render.py is
 // PDF-only), so for a deck this is the only picture a reviewer can be shown.
-export const firstThumb = (item) => proposalsOf(item)[0]?.thumb ?? null
+//
+// Fall back to the first evidence thumb when there's no proposal: a 1.1.1 row where the vision
+// model returned nothing lands its image bytes in `evidence[]` (thumb captured, no drafted value)
+// rather than `proposals[]`. Without this fallback such a card showed NO picture at all — the
+// server thumbnail route is PDF-only, so a deck image was invisible. The reviewer must always see
+// the image they're being asked to describe, whether or not the AI managed a draft.
+export const firstThumb = (item) => proposalsOf(item)[0]?.thumb ?? evidenceOf(item)[0]?.thumb ?? null
 
 // The images this row asks a human to describe (hitl_queue.evidence): [{locator, thumb}, …],
 // one per deferred image, captured at remediation time whether or not the vision model ran.

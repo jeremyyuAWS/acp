@@ -209,3 +209,28 @@ describe('buildEvidenceCard — AI proposals (hitl_queue.proposals)', () => {
     }
   })
 })
+
+describe('card.thumb — the reviewer always sees the image, draft or not', () => {
+  const T1 = 'data:image/png;base64,PROPOSAL'
+  const T2 = 'data:image/png;base64,EVIDENCE'
+
+  it('prefers the proposal thumb when the AI produced a draft', () => {
+    const c = buildEvidenceCard({ id: 'a', rule_id: '1.1.1',
+      proposals: [{ proposed_value: 'A nurse at a workstation.', thumb: T1 }],
+      evidence: [{ locator: 'ppt/slides/slide2.xml#rId3', thumb: T2 }] })
+    expect(c.thumb).toBe(T1)
+  })
+
+  it('falls back to the evidence thumb when vision returned no draft', () => {
+    // The empty-card case: image bytes captured to evidence[], no proposal. Before the fallback
+    // this rendered no picture at all (the server thumbnail route is PDF-only, so a deck image
+    // was invisible).
+    const c = buildEvidenceCard({ id: 'b', rule_id: '1.1.1',
+      evidence: [{ locator: 'ppt/slides/slide2.xml#rId3', thumb: T2 }] })
+    expect(c.thumb).toBe(T2)
+  })
+
+  it('is null when there is neither a proposal nor evidence image', () => {
+    expect(buildEvidenceCard({ id: 'c', rule_id: '1.1.1' }).thumb).toBeNull()
+  })
+})
