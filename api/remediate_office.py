@@ -531,7 +531,7 @@ def _fix_image_alt(entries: dict, *, vision_enabled: bool = False,
     return applied, deferred
 
 
-# ── pptx slide-level structural remediation (2.4.2 / 1.4.3 / 1.4.6 / 1.3.2) ────
+# ── pptx slide-level structural remediation (2.4.2 / 1.4.3 / 1.4.6 / 1.3.2 / 1.3.1) ────
 # These need the slide XML, not just OPC core-properties, and are pptx-only.
 # Each was verified against the DigitalA11y engine (re-scan clears the finding):
 #   * title   — an off-slide title placeholder (y above the canvas) is read by AT
@@ -548,6 +548,12 @@ _PPTX_TITLE_PH = re.compile(r'<p:ph\b(?=[^>]*\btype="(?:ctrTitle|title)")')
 _A_T = re.compile(r"<a:t\b[^>]*>([^<]*)</a:t>")
 _A_R = re.compile(r"<a:r>.*?</a:r>", re.S)
 _P_SP = re.compile(r"<p:sp>.*?</p:sp>", re.S)
+# A DrawingML table and its parts. \b after "tbl" keeps this from matching <a:tblPr>
+# or <a:tblGrid>; tables don't nest, so a non-greedy body captures exactly one table.
+_A_TBL = re.compile(r"<a:tbl\b[^>]*>.*?</a:tbl>", re.S)
+_A_TR = re.compile(r"<a:tr\b")
+_A_TBLPR_OPEN = re.compile(r"<a:tblPr\b([^>]*?)(/?)>")
+_FIRSTROW = re.compile(r'\bfirstRow="([^"]*)"')
 
 
 def _pptx_has_title(xml: str) -> bool:
@@ -574,6 +580,42 @@ def _pptx_add_title(xml: str, text: str) -> str:
     return re.sub(r"</p:grpSpPr>|<p:grpSpPr\s*/>", lambda m: m.group(0) + sp, xml, count=1)
 
 
+def _pptx_mark_table_headers(xml: str, diffs=None) -> tuple[str, int]:
+    """WCAG 1.3.1: mark the first row of every multi-row DrawingML table as a header
+    row by setting firstRow="1" on its <a:tblPr> — the direct analogue of the docx
+    <w:tblHeader> and xlsx headerRowCount fixes, and exactly what the analyser's
+    PPTX-TABLE-001 rule checks for. String-surgical: only the tblPr tag is rewritten,
+    so every other byte of the slide is preserved. Fail closed — a single-row or
+    otherwise degenerate table (<= 1 <a:tr>) is never given a header row.
+    Returns (new_xml, tables_marked)."""
+    n = [0]
+
+    def fix(m):
+        block = m.group(0)
+        if len(_A_TR.findall(block)) <= 1:
+            return block                       # degenerate / single-row: leave it alone
+        pr = _A_TBLPR_OPEN.search(block)
+        if pr is None:                         # no <a:tblPr> — insert one as tbl's first child
+            cut = block.index(">") + 1
+            n[0] += 1
+            _rec(diffs, "1.3.1", "table had no header row marked (<a:tblPr firstRow> absent)",
+                 'first row marked as a header row (<a:tblPr firstRow="1"/>)',
+                 "so a screen reader announces the column heading for every data cell")
+            return block[:cut] + '<a:tblPr firstRow="1"/>' + block[cut:]
+        attrs, close = pr.group(1), pr.group(2)
+        fr = _FIRSTROW.search(attrs)
+        if fr and fr.group(1) in ("1", "true"):
+            return block                       # already a header row — nothing to do
+        new_attrs = _FIRSTROW.sub('firstRow="1"', attrs, count=1) if fr else ' firstRow="1"' + attrs
+        n[0] += 1
+        _rec(diffs, "1.3.1", "table had no header row marked (<a:tblPr firstRow> absent)",
+             'first row marked as a header row (firstRow="1")',
+             "so a screen reader announces the column heading for every data cell")
+        return block[:pr.start()] + "<a:tblPr" + new_attrs + close + ">" + block[pr.end():]
+
+    return _A_TBL.sub(fix, xml), n[0]
+
+
 def _remediate_pptx_slides(entries: dict, diffs=None) -> list[str]:
     """Mutate ppt/slides/*.xml in place; return the list of applied-fix messages."""
     import office_structure as _osx           # contrast helpers + narrow-scope regexes
@@ -583,7 +625,7 @@ def _remediate_pptx_slides(entries: dict, diffs=None) -> list[str]:
     shape_tags = {P + t for t in ("sp", "pic", "graphicFrame", "grpSp", "cxnSp")}
     slides = sorted((n for n in entries if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)),
                     key=lambda s: int(re.search(r"(\d+)", s).group()))
-    n_title = n_recolor = n_reorder = 0
+    n_title = n_recolor = n_reorder = n_tblhdr = 0
 
     def recolor_run_in_sp(sp_match) -> str:
         nonlocal n_recolor
@@ -652,6 +694,8 @@ def _remediate_pptx_slides(entries: dict, diffs=None) -> list[str]:
             n_title += 1
             _rec(diffs, "2.4.2", "(no title — assistive tech announced the slide as “Untitled”)",
                  title_text, f"programmatic title added to {sn.rsplit('/', 1)[-1]}")
+        xml, n_th = _pptx_mark_table_headers(xml, diffs)
+        n_tblhdr += n_th
         xml = _P_SP.sub(recolor_run_in_sp, xml)
         entries[sn] = reorder(xml.encode("utf-8"))
 
@@ -662,6 +706,8 @@ def _remediate_pptx_slides(entries: dict, diffs=None) -> list[str]:
         applied.append(f"Raised colour contrast to ≥4.5:1 on {n_recolor} text run(s)")
     if n_reorder:
         applied.append(f"Set reading order (visual top-to-bottom) on {n_reorder} slide(s)")
+    if n_tblhdr:
+        applied.append(f"Marked the first row as a header on {n_tblhdr} table(s) · 1.3.1")
     return applied
 
 
