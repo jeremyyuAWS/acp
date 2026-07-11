@@ -246,9 +246,8 @@ function WhyReview({ sc, suggested, before, beforeLiteral, comparison, thumb, th
                                           className="whyreview-thumb" maxHeight={150} />)}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="whyreview-row">
-            <span className="muted">AI confidence</span>
-            <span className={confClass(conf.level)}>{conf.level.label}</span>
-            <span className="muted">— {conf.basis}</span>
+            <span className="muted">Trust signal</span>
+            <span className={confClass(conf.level)} title={`tier: ${conf.level.label}`}>{conf.basis}</span>
           </div>
           <div className="whyreview-row"><span className="muted">Reason</span><span>{reason}</span></div>
           {/* Where to look. Only stated when the analysers attributed a page — a reviewer sent to

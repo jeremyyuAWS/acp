@@ -37,10 +37,13 @@ describe('EvidenceCard — the images awaiting a description', () => {
     expect((html.match(/Draft with AI/g) || [])).toHaveLength(5)
   })
 
-  it('no picker survives — nothing is aria-pressed', () => {
+  it('no picker survives — the deferred images are edit boxes, not a pick-one strip', () => {
     const html = markup({ ...base, evidence: ev(5) })
-    expect(html).not.toContain('aria-pressed')
+    // The old radio-style thumbnail picker (its class + aria-pressed selection) is gone. Note the
+    // HowToConfirm platform toggle legitimately uses aria-pressed, so we assert on the picker's own
+    // class + the per-image edit rows rather than a blanket aria-pressed check.
     expect(html).not.toContain('evcard-evidence-strip')
+    expect((html.match(/evcard-multi-row/g) || [])).toHaveLength(5)
   })
 
   it('names each image by its locator, so the reviewer knows which one they are describing', () => {

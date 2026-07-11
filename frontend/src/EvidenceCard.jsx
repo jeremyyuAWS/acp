@@ -242,7 +242,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
               Composed from real catalog + finding fields; no model call, no fabricated number. */}
           {explanation && (
             <div className="evcard-explain" style={{ margin: '2px 0 8px' }}>
-              <button type="button" className="evcard-draft-btn"
+              <button type="button" className="evcard-explain-btn"
                       aria-expanded={showExplain}
                       onClick={() => setShowExplain((v) => !v)}>
                 {showExplain ? '× Hide explanation' : '✨ Explain this finding'}

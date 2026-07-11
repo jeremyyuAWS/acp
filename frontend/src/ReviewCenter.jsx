@@ -139,7 +139,7 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
                       <span className="rc-item-file">{it.file || 'document'}</span>
                       {it.finding_count > 1 && <span className="muted rc-item-count">{it.finding_count} findings</span>}
                       <span className="rc-item-reason">⚑ {reasonOf(it)}</span>
-                      <span className={confClass(conf.level)} title={`Detection confidence: ${conf.level.label} — ${conf.basis}`}>{conf.level.label} confidence</span>
+                      <span className={confClass(conf.level)} title={`Trust signal — how this was detected (tier: ${conf.level.label})`}>{conf.basis}</span>
                       <span className="rc-item-caret" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
                     </button>
                     {isOpen && (

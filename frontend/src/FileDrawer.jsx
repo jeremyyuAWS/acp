@@ -703,8 +703,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                       const { level, basis } = confidenceForFinding({ sc, verifiedCleared, reportedFixedUnverified })
                       return (
                         <div className="findingconf">
-                          <span className={confClass(level)} title={`Confidence: ${level.label} — ${basis}`}>{level.label} confidence</span>
-                          <span className="muted"> · {basis}</span>
+                          <span className={confClass(level)} title={`Trust signal (tier: ${level.label})`}>{basis}</span>
                         </div>
                       )
                     })()}
@@ -735,8 +734,8 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
             ))}
           </details>
           <details className="sevhelp">
-            <summary>How is confidence derived?</summary>
-            <p className="muted" style={{ margin: '8px 0' }}>Confidence is a <b>genuine, evidence-based</b> signal — never a made-up percentage. Every level traces to a concrete signal the pipeline already produces, shown as the <i>basis</i> next to it.</p>
+            <summary>How is the trust signal derived?</summary>
+            <p className="muted" style={{ margin: '8px 0' }}>ACP shows the <b>concrete evidence</b> behind each verdict — the real basis the pipeline produced, never a made-up percentage. Its colour reflects how strong that evidence is (the three tiers below).</p>
             <div className="sevrow"><span className="conf conf-high" style={{ flex: '0 0 auto' }}>High</span><span className="muted">A deterministic rule check (structural/attribute test), a checksum-validated PII match, or a fix that <b>cleared the residual re-scan</b>.</span></div>
             <div className="sevrow"><span className="conf conf-medium" style={{ flex: '0 0 auto' }}>Medium</span><span className="muted">An AI / heuristic detection lane (alt text, link purpose, structure), a pattern-only PII match, or a fix applied but not yet re-scan-confirmed.</span></div>
             <div className="sevrow"><span className="conf conf-low" style={{ flex: '0 0 auto' }}>Low</span><span className="muted">A criterion that requires human judgement — routed to review with no automated signal to stand on.</span></div>
@@ -893,7 +892,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                         </td>
                         <td className="covconf">
                           {r.confidence
-                            ? <span className={confClass(r.confidence.level)} title={`Confidence: ${r.confidence.level.label} — ${r.confidence.basis}`}>{r.confidence.level.label}</span>
+                            ? <span className={confClass(r.confidence.level)} title={`Trust signal (tier: ${r.confidence.level.label})`}>{r.confidence.basis}</span>
                             : <span className="muted">—</span>}
                         </td>
                       </tr>

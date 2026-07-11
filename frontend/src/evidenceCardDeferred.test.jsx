@@ -12,6 +12,7 @@ const suggestFix = vi.fn()
 vi.mock('./api.js', () => ({
   suggestFix: (...a) => suggestFix(...a),
   getFileRemediationDiffs: () => Promise.resolve([]),
+  aiProvenance: () => null,
   getFileThumbnail: () => Promise.resolve(null),
 }))
 
