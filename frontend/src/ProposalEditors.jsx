@@ -16,10 +16,15 @@ import { thumbAlt, formatProposedValue } from './reviewCard.js'
 // onDraft(i), when given, adds a per-row "Draft with AI" button — for a DEFERRED row whose images
 // have no draft yet (the reviewer writes from scratch). Omitted for proposals, which arrive with a
 // draft already in the box, so the ReviewDrawer caller is unaffected.
-export default function ProposalEditors({ proposals, values, onChange, file, sc, onDraft, draftingIdx = null }) {
+export default function ProposalEditors({ proposals, values, onChange, file, sc, onDraft, draftingIdx = null, onApplyToSimilar = null }) {
   if (!proposals?.length) return null
   const many = proposals.length > 1
   const undrafted = !!onDraft   // an evidence row: no drafts, so the header must not claim any
+  // Identical images (same thumbnail bytes = the same embedded picture reused, e.g. a logo on every
+  // slide) — count them so one description can be applied to all copies (#132 approve-similar). The
+  // key is the exact thumb data URL; only byte-identical images group, never look-alikes.
+  const dupCount = {}
+  proposals.forEach((p) => { if (p?.thumb) dupCount[p.thumb] = (dupCount[p.thumb] || 0) + 1 })
   return (
     <div className="evcard-multi">
       <span className="muted" style={{ fontSize: 12 }}>
@@ -65,6 +70,16 @@ export default function ProposalEditors({ proposals, values, onChange, file, sc,
                         title="Ask the local model to describe this image — you still approve it"
                         onClick={() => onDraft(i)}>
                   {draftingIdx === i ? 'Drafting…' : '✨ Draft with AI'}
+                </button>
+              )}
+              {/* Approve-similar (#132): this exact image appears more than once in the document, so
+                  one description can fill every identical copy. Shown only once there's a value to
+                  copy and a real duplicate to copy it to — honest, byte-identical grouping. */}
+              {onApplyToSimilar && p?.thumb && dupCount[p.thumb] > 1 && filled && (
+                <button type="button" className="evcard-similar-btn"
+                        title="Copy this description to every identical copy of this image"
+                        onClick={() => onApplyToSimilar(i)}>
+                  ⧉ Apply to {dupCount[p.thumb]} identical
                 </button>
               )}
               {/* The raw value can be opaque ("es"). Show the markup it becomes, so the

@@ -1839,6 +1839,12 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .evcard-draft-btn:disabled { opacity: 0.6; cursor: default; }
 .evcard-draft-msg { display: block; font-size: 11.5px; margin-top: 4px; line-height: 1.4; }
 
+/* Approve-similar (#132) — apply one description to every identical copy of an image. */
+.evcard-similar-btn { margin-left: 8px; background: none; border: 1px solid var(--line);
+  border-radius: 6px; padding: 2px 9px; font-size: 11.5px; font-weight: 500; color: var(--plum);
+  cursor: pointer; white-space: nowrap; }
+.evcard-similar-btn:hover { background: var(--bg); border-color: var(--plum); }
+
 /* AI audit trail (#129) — the provenance ledger toggle + table. */
 .evcard-audit-btn { background: none; border: 1px solid var(--line); border-radius: 6px;
   padding: 2px 9px; font-size: 11.5px; font-weight: 500; color: var(--plum); cursor: pointer;

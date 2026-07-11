@@ -55,6 +55,13 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
                              approved_value: e.approved_value }))
   const [values, setValues] = useState(() => seedValues(instances))
   const setValueAt = (i, v) => setValues((prev) => prev.map((x, j) => (j === i ? v : x)))
+  // Approve-similar (#132): copy row i's description to every instance that is the SAME image
+  // (byte-identical thumbnail) — a logo reused across slides gets described once.
+  const applyToSimilar = (i) => {
+    const t = instances[i]?.thumb
+    if (!t) return
+    setValues((prev) => prev.map((x, j) => (instances[j]?.thumb === t ? prev[i] : x)))
+  }
   const [draftingIdx, setDraftingIdx] = useState(null)
   // Which flagged image the HERO is showing (#122 multi-image pager). A 1.1.1 row can carry many
   // undescribed images across several slides; the pager steps the large preview + its bounding box
@@ -308,7 +315,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
               <ProposalEditors proposals={instances} values={values} sc={card.sc}
                                onChange={setValueAt} file={card.file}
                                onDraft={usingEvidence ? draftInstance : undefined}
-                               draftingIdx={usingEvidence ? draftingIdx : null} />
+                               draftingIdx={usingEvidence ? draftingIdx : null}
+                               onApplyToSimilar={applyToSimilar} />
               {usingEvidence && draftMsg && (
                 <span className={`evcard-draft-msg evcard-draft-${draftMsg.kind}`} role="status">
                   {draftMsg.text}
