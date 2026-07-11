@@ -536,10 +536,16 @@ export default function App() {
               monitor: (publishedFiles?.length || 0) > 0,
             }
             const done = !!stageDone[k] && view !== k
+            // While a scan/assessment is running, lock the OTHER numbered workflow steps: jumping
+            // to Assess mid-scan would show the previous scan's data, not the one in flight. The
+            // current view + the utility tabs (step 0) stay reachable.
+            const locked = busy && step > 0 && view !== k
             return (
               <button key={k} role="tab" aria-selected={view === k}
                       aria-current={view === k ? 'step' : undefined}
-                      className={`tab${view === k ? ' on' : ''}${done ? ' done' : ''}${step ? ' stepTab' : ''}`}
+                      disabled={locked}
+                      title={locked ? 'A scan or assessment is running — this step opens when it finishes' : rg}
+                      className={`tab${view === k ? ' on' : ''}${done ? ' done' : ''}${step ? ' stepTab' : ''}${locked ? ' locked' : ''}`}
                       onClick={() => setView(k)}>
                 {step > 0 && <span className="stepnum" aria-hidden="true">{done ? '✓' : step}</span>}
                 <span className="tablbl">{done && <span className="vh">completed: </span>}{label}</span>

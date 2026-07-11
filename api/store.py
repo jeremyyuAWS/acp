@@ -1026,11 +1026,15 @@ class Store:
         return rows
 
     # Tables holding scan results / activity (what the dashboards chart). Cleared by
-    # reset_analytics. Deliberately EXCLUDES app_settings + schedule_config so a
-    # reset wipes data but keeps configuration (worker count, AI mode, schedule).
+    # reset_analytics for a TRUE clean slate. Deliberately EXCLUDES configuration
+    # (app_settings, schedule_config, disposition_policy) and user-authored programs
+    # (campaign, campaign_batch) so a reset wipes DATA but keeps settings + programs —
+    # matching the panel's "Your settings are preserved" promise. Everything here is
+    # scan-derived and re-populates on the next scan.
     _ANALYTICS_TABLES = ["scan_runs", "file_records", "issue_records", "scan_rule_traces",
-                         "scan_file_manifests", "pii_findings", "hitl_queue",
-                         "decision_log", "inventory", "jobs"]
+                         "scan_file_manifests", "pii_findings", "hitl_queue", "hitl_events",
+                         "decision_log", "inventory", "jobs", "documents",
+                         "remediation_state", "remediation_diff", "applied_fixes", "ai_calls"]
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start

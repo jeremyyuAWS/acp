@@ -99,6 +99,7 @@ td { padding: 10px 0; border-top: 1px solid var(--line); }
 .tabs { display: flex; gap: 6px; margin: 22px 0 4px; }
 .tab { background: #fff; color: var(--muted); border: 1px solid var(--line); border-radius: 9px; padding: 7px 14px; font-size: 14px; }
 .tab.on { background: var(--plum); color: #fff; border-color: var(--plum); }
+.tab.locked, .tab:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .kgcontrols { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .kgcontrols select { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 13px; background: #fff; color: var(--ink); cursor: pointer; }

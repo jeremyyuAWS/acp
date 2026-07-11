@@ -1024,6 +1024,12 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
     return an error result rather than raising."""
     rb = Rubric.load_active(ACP / "config")
     ext = Path(name).suffix.lower()
+    # Per-file progress logging (the fan-out path was silent — no way to tell a slow file from a
+    # stuck one in the container logs). The heavy steps are already bounded: the .NET office CLI
+    # has ACP_OFFICE_CLI_TIMEOUT (180s) and OCR caps at ACP_OCR_MAX_IMAGES (30) + downscales, so a
+    # single image-heavy deck can't hang its worker indefinitely.
+    _t0 = time.monotonic()
+    print(f"[scan] analysing {name} ({ext or '?'}) …", flush=True)
     if ext == ".pdf":
         raw = {"engine": "python/pdf", **_analyse_pdf(tmp / name)}
     elif ext in OFFICE:
@@ -1069,6 +1075,7 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
     if detect_pii:
         import pii as _pii_mod
         pinfo = _pii_mod.detect_file(tmp / name)
+    print(f"[scan] {name}: {len(raw.get('issues', []))} finding(s) in {time.monotonic() - _t0:.1f}s", flush=True)
     return fdict, pinfo
 
 
