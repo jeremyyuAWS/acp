@@ -21,7 +21,7 @@ import ai as _ai  # noqa: E402
 def test_image_bytes_reach_the_vision_model(monkeypatch):
     seen = {}
 
-    def fake_describe(img, *, filename="", context=""):
+    def fake_describe(img, *, filename="", context="", style="", **_):
         seen["img"] = img
         return {"alt": "A nurse reviews a chart with a patient.", "model": "llava:7b"}
 
