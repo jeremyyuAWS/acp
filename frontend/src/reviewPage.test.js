@@ -61,15 +61,16 @@ describe('Thumbnail fetches the page it claims to show', () => {
   const src = read('Thumbnail.jsx')
 
   it('routes a later page to /page/{n} and page 1 to the cheaper /thumbnail', () => {
-    expect(src).toMatch(/n === 1 \? getFileThumbnail\(scanId, file\) : getFilePage\(scanId, file, n\)/)
+    // renderPage = the geometry box's page when a locator resolves one, else the `page` prop.
+    expect(src).toMatch(/renderPage === 1 \? getFileThumbnail\(scanId, file\) : getFilePage\(scanId, file, renderPage\)/)
   })
 
   it('re-fetches when the page changes — a stale render is the wrong page', () => {
-    expect(src).toMatch(/\[scanId, file, n\]/)
+    expect(src).toMatch(/\[scanId, file, renderPage\]/)
   })
 
   it('names the page it actually rendered — hardcoded "page 1" alt is inaccurate alt text', () => {
-    expect(src).toMatch(/alt=\{`Page \$\{n\} of/)
+    expect(src).toMatch(/alt=\{`Page \$\{renderPage\} of/)
     expect(src).not.toMatch(/alt=\{`Page 1 of/)
   })
 })

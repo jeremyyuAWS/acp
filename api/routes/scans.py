@@ -787,3 +787,31 @@ def get_file_page(scan_id: str, filename: str, page: int, request: Request,
     _blob.upload_render(owner, scan_id, cache_key, png)   # best-effort cache; never raises
     return Response(png, media_type="image/png",
                     headers={"Cache-Control": "private, max-age=86400"})
+
+
+@router.get("/scans/{scan_id}/files/{filename:path}/geometry")
+def get_file_geometry(scan_id: str, filename: str, request: Request,
+                      locator: str = Query(...)):
+    """Normalized bounding box `{page, x, y, w, h}` (fractions of the page) for the shape a
+    finding's `part#rId` locator names — the rectangle the frontend overlays on the page render
+    (ADR 0018 Slice 2). Owner-scoped and non-blocking: a shape whose geometry can't be attributed
+    (grouped/inherited transform, a non-pptx format, a bad locator) returns `{"bbox": null}` — a
+    200 with no box, so the card degrades to the plain large preview, never an error. Honesty rule
+    (ADR 0016): a real measured rectangle or nothing — the box is never guessed."""
+    import render as _render
+
+    owner = _owner(request)
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+
+    ext = os.path.splitext(filename)[1].lower()
+    # Only formats we can both render AND read geometry from are worth resolving bytes for.
+    if not _render.can_render(ext):
+        return {"bbox": None}
+
+    data = _source_bytes_for_render(request, scan_id, filename, owner)
+    if not data:
+        return {"bbox": None}
+
+    import geometry as _geom
+    return {"bbox": _geom.shape_bbox(data, ext, locator)}

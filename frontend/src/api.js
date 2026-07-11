@@ -446,6 +446,17 @@ export const getFilePage = (scanId, file, page = 1) => (SIM || !scanId
       .then(r => (r.ok ? r.blob() : null))
       .catch(() => null))
 
+// Normalized bounding box {page,x,y,w,h} for the shape a finding's `part#rId` locator names —
+// the rectangle the review card overlays on the page render (ADR 0018 Slice 2). null (→ no box,
+// plain preview) for SIM, a non-pptx format, an unattributable shape, or any failure: a box is
+// only ever a real measured rectangle (ADR 0016), never guessed.
+export const getFileGeometry = (scanId, file, locator) => (SIM || !scanId || !file || !locator
+  ? sim(null)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/geometry?locator=${encodeURIComponent(locator)}`, { headers: headers() })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => (d && d.bbox) || null)
+      .catch(() => null))
+
 export const uploadToDrive = (scanId, file, blob, contentType) => {
   if (SIM) return sim({ url: 'https://drive.google.com/file/d/sim/view', file_id: 'sim' })
   const fd = new FormData()

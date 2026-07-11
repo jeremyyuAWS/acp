@@ -235,7 +235,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
           bounding-box overlay pinpointing the object is the next slice (needs per-shape geometry). */}
       {card.scanId && card.file && (
         <div className="evcard-hero" style={{ margin: '0 0 12px' }}>
-          <Thumbnail scanId={card.scanId} file={card.file} page={card.page || 1} maxHeight={360} />
+          <Thumbnail scanId={card.scanId} file={card.file} page={card.page || 1} locator={card.locator} maxHeight={360} />
         </div>
       )}
 

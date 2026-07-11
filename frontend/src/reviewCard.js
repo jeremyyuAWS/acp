@@ -111,6 +111,12 @@ export const firstProposed = (item) => proposalsOf(item)[0]?.proposed_value ?? n
 // the image they're being asked to describe, whether or not the AI managed a draft.
 export const firstThumb = (item) => proposalsOf(item)[0]?.thumb ?? evidenceOf(item)[0]?.thumb ?? null
 
+// The `part#rId` locator of the first offending shape — what the geometry endpoint resolves to a
+// bounding box for the page-preview overlay (ADR 0018). Same source-of-truth precedence as the
+// thumb: a drafted proposal's locator, else the first deferred evidence image's. null when the
+// finding carries no shape locator (a judgement item, a page-level PDF finding) → no box drawn.
+export const firstLocator = (item) => proposalsOf(item)[0]?.locator ?? evidenceOf(item)[0]?.locator ?? null
+
 // The images this row asks a human to describe (hitl_queue.evidence): [{locator, thumb}, …],
 // one per deferred image, captured at remediation time whether or not the vision model ran.
 // NOT proposals — there is no value to approve — so they never reach proposalMeta or
@@ -269,6 +275,8 @@ export function buildEvidenceCard(item, diffs = []) {
     location: locationLabel(item),
     // The actual image the reviewer must judge, and the evidence behind the draft.
     thumb: firstThumb(item),
+    // The offending shape's locator — feeds the page-preview bounding-box overlay (ADR 0018).
+    locator: firstLocator(item),
     rationale: firstRationale(item),
     proposalSource: firstSource(item),
   }

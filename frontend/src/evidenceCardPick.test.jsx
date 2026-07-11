@@ -14,6 +14,8 @@ vi.mock('./api.js', () => ({
   getFileRemediationDiffs: () => Promise.resolve([]),
   aiProvenance: () => null,
   getFileThumbnail: () => Promise.resolve(null),   // Thumbnail.jsx self-hides without a blob
+  getFilePage: () => Promise.resolve(null),
+  getFileGeometry: () => Promise.resolve(null),
 }))
 
 const { default: EvidenceCard } = await import('./EvidenceCard.jsx')
