@@ -322,7 +322,9 @@ def _vision_prompt(filename: str, context: str, style: str = "") -> str:
     length = {
         "shorter": "Reply with ONE very short phrase (under 10 words) — just the essential subject. ",
         "detailed": "Reply with ONE fuller sentence (up to 40 words) that also describes the key visual "
-                    "elements and any data values or labels. ",
+                    "elements. State a number, label, or value ONLY if you can clearly read it in the "
+                    "image — never estimate or invent figures; if the values are not legible, describe "
+                    "what the image shows without them. ",
     }.get(style,
           "Reply with ONE concise sentence (under 30 words) that includes the key text verbatim where "
           "it carries meaning. ")
