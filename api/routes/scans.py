@@ -26,7 +26,11 @@ def _owner(request: Request) -> str:
 def start_scan(request: Request, source: str = Query("local", pattern="^(local|drive|sharepoint)$"),
                sync: bool = False, folder: str | None = Query(None),
                ai: bool = Query(True), queue: bool = Query(False),
-               pii: bool = Query(True), fanout: bool = Query(False),
+               # PII (deep) scan is opt-in: it doubles scan time by extracting + regex-scanning
+               # every file's text, so a scan is fast unless the caller explicitly asks for it.
+               # The UI mirrors this (deepScan defaults off). Scheduled sweeps / API callers that
+               # want sensitive-data detection must pass pii=true.
+               pii: bool = Query(False), fanout: bool = Query(False),
                batch: bool = Query(False), exclude_remediated: bool = Query(False),
                incremental: bool = Query(True)):
     token = request.headers.get("x-drive-token")      # per-user Drive token (GIS)

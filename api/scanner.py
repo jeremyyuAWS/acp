@@ -1017,7 +1017,7 @@ def _collapse_reading_order(issues: list[dict]) -> list[dict]:
     return kept + [adv]
 
 
-def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = True):
+def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
     """Analyse + rubric-assess ONE already-downloaded file (fan-out path, ADR 0007).
     `tmp` is a directory containing `name`. Returns (assessed_file_dict, pii_info),
     or (None, None) for an unsupported extension. Engines catch their own errors and
@@ -1075,7 +1075,7 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = True):
 def run_scan(source: str = "local", progress=_noop, drive_token: str | None = None,
              folder: str | None = None, sp_token: str | None = None,
              ai_enabled: bool = True, scan_id: str | None = None,
-             user: str | None = None, detect_pii: bool = True,
+             user: str | None = None, detect_pii: bool = False,
              exclude_remediated: bool = False) -> dict:
     from store import RULE_CATALOG, _extract_sc  # import here to avoid circular at module load
     rb = Rubric.load_active(ACP / "config")

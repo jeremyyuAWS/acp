@@ -84,7 +84,7 @@ def _scan(payload: dict, job: dict) -> None:
         ai_enabled=effective_ai,
         scan_id=scan_id,
         user=payload.get("user"),
-        detect_pii=payload.get("pii", True),
+        detect_pii=payload.get("pii", False),
         exclude_remediated=bool(payload.get("exclude_remediated", False)),
     )
     core.store.save_scan(report)
@@ -514,7 +514,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
     scan_id = payload.get("scan_id") or job.get("scan_id")
     source = payload.get("source", "drive")
     ai = bool(payload.get("ai", True)) and core.store.get_ai_enabled()
-    pii = bool(payload.get("pii", True))
+    pii = bool(payload.get("pii", False))
     user = payload.get("user")
     folder = payload.get("folder")
     toks = core.get_scan_tokens(scan_id)
@@ -730,7 +730,7 @@ def _scan_batch(payload: dict, job: dict) -> None:
     import lf as _lf
     scan_id = payload["scan_id"]
     source = payload.get("source", "drive")
-    pii = bool(payload.get("pii", True))
+    pii = bool(payload.get("pii", False))
     user = payload.get("user")
     items = payload.get("items", [])
     toks = core.get_scan_tokens(scan_id)
@@ -758,7 +758,7 @@ def _scan_file(payload: dict, job: dict) -> None:
     import lf as _lf
     scan_id = payload["scan_id"]
     source = payload.get("source", "drive")
-    pii = bool(payload.get("pii", True))
+    pii = bool(payload.get("pii", False))
     user = payload.get("user")
     toks = core.get_scan_tokens(scan_id)
     now = _dt.datetime.now(_dt.timezone.utc).isoformat()
@@ -861,7 +861,7 @@ def _rescore_file(payload: dict, job: dict) -> None:
     scan_id = payload["scan_id"]
     file = payload["file"]
     source = payload.get("source", "drive")
-    pii = bool(payload.get("pii", True))
+    pii = bool(payload.get("pii", False))
     user = payload.get("user")
     drive_token = payload.get("drive_token")
     from scanner import _drive_service
