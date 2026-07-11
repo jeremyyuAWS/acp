@@ -846,6 +846,22 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               <span className="muted">{totalHitl - queue.length} of {totalHitl} reviewed</span>
             </div>
           )}
+          {/* Reviewer analytics (vision #39) — real counts from hitl_events, not a fabricated score:
+              approval rate, how often the reviewer edited the AI draft (the calibration signal), and
+              the average review time already computed by measuredReviewTime. */}
+          {reviewStats && reviewStats.reviewed > 0 && (
+            <div className="rev-analytics" style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, marginTop: 6, color: 'var(--muted)' }}>
+              {reviewStats.approval_rate != null && (
+                <span>Approval rate <b style={{ color: 'var(--ink)' }}>{Math.round(reviewStats.approval_rate * 100)}%</b></span>
+              )}
+              {reviewStats.edit_rate != null && (
+                <span title="how often a reviewer edited the AI draft before approving — a calibration signal, not a confidence score">
+                  AI draft edited <b style={{ color: 'var(--ink)' }}>{Math.round(reviewStats.edit_rate * 100)}%</b>
+                </span>
+              )}
+              {measured && <span>Avg review <b style={{ color: 'var(--ink)' }}>{measured.avg}</b></span>}
+            </div>
+          )}
         </div>
         {/* A decision the server refused. It rolled back, so the card is in the queue again —
             say so loudly, because a reviewer who thinks they signed something off and did not
