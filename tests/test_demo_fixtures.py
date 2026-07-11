@@ -48,8 +48,11 @@ def scanned(tmp_path_factory):
     d = tmp_path_factory.mktemp("demo-fixtures")
     gen.build_docx(d / "word-accessibility-demo.docx")
     gen.build_xlsx(d / "excel-accessibility-demo.xlsx")
+    gen.build_pdf(d / "pdf-accessibility-demo.pdf")
+    gen.build_pptx(d / "powerpoint-accessibility-demo.pptx")
     out = {}
-    for name in ("word-accessibility-demo.docx", "excel-accessibility-demo.xlsx"):
+    for name in ("word-accessibility-demo.docx", "excel-accessibility-demo.xlsx",
+                 "pdf-accessibility-demo.pdf", "powerpoint-accessibility-demo.pptx"):
         fdict, _ = scanner.analyse_and_assess(d, name, detect_pii=False)
         issues = fdict.get("issues", [])
         out[name] = {
@@ -64,6 +67,11 @@ def _expected_python(fmt: str) -> set[str]:
     base = {
         "docx": {"2.4.6", "1.3.1", "2.4.9", "3.3.2", "1.4.8", "1.3.3", "3.1.5"},
         "xlsx": {"1.4.3", "1.4.6", "1.3.3", "3.1.5"},
+        # pdf: office_structure contrast + bypass-blocks + textchecks sensory (3.1.5 needs more
+        # prose than fits an untagged PDF page; 1.1.1 is human on an untagged PDF).
+        "pdf": {"1.3.3", "1.4.3", "1.4.6", "2.4.1"},
+        # pptx: office_structure title + link-purpose + textchecks sensory + reading level.
+        "pptx": {"1.3.3", "2.4.6", "2.4.9", "3.1.5"},
     }[fmt]
     if ocr.is_available():
         base |= {"1.4.5", "1.4.9"}
@@ -85,6 +93,8 @@ _INSCOPE = {
 @pytest.mark.parametrize("fmt,name", [
     ("docx", "word-accessibility-demo.docx"),
     ("xlsx", "excel-accessibility-demo.xlsx"),
+    ("pdf", "pdf-accessibility-demo.pdf"),
+    ("pptx", "powerpoint-accessibility-demo.pptx"),
 ])
 def test_python_detected_criteria_all_fire(scanned, fmt, name):
     got = scanned[name]["scs"]

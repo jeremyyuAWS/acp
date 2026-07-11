@@ -273,15 +273,98 @@ def build_xlsx(path: Path) -> None:
     wb.save(str(path))
 
 
+def build_pdf(path: Path) -> None:
+    """A long, untagged PDF seeded with the actionable in-scope PDF failures. Untagged (no
+    StructTreeRoot), so image alt (1.1.1) routes to human — honest for the format. Covers:
+    2.4.2 (no title), 3.1.1 (no /Lang), 2.4.1 (>=5 pages, real headings but no outline —
+    remediable), 1.4.3/1.4.6 (light-grey text), 1.4.5 (image-of-text), 3.1.2 (French),
+    1.3.3 (sensory), 3.1.5 (dense block)."""
+    import textwrap
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.utils import ImageReader
+
+    c = canvas.Canvas(str(path), pagesize=letter)   # no setTitle() → 2.4.2; reportlab writes no /Lang → 3.1.1
+    sections = ["Executive Summary", "Scope and Methodology", "Findings",
+                "Risk Assessment", "Recommendations", "Appendix A"]
+    for i, title in enumerate(sections):
+        # 2.4.1 — real (bold, large) headings, but we never addOutlineEntry, so no bookmark
+        # outline; the remediator promotes these to one.
+        c.setFillColorRGB(0, 0, 0)
+        c.setFont("Helvetica-Bold", 18)
+        c.drawString(72, 720, title)
+        c.setFont("Helvetica", 11)
+        y = 690
+        for _ in range(4):
+            c.drawString(72, y, "Ordinary body paragraph text that fills the page below the heading.")
+            y -= 16
+        if i == 0:
+            c.setFillColorRGB(0.8, 0.8, 0.8)          # 1.4.3/1.4.6 — light grey on white fails contrast
+            c.drawString(72, y - 12, "Confidential internal distribution only, not for release.")
+            c.setFillColorRGB(0, 0, 0)
+            c.drawString(72, y - 32, FRENCH[:95])     # 3.1.2
+            c.drawString(72, y - 48, SENSORY[:95])    # 1.3.3
+        if i == 1:
+            yy = y - 12                                # 3.1.5 — dense high-grade block
+            for line in textwrap.wrap(DENSE_BLOCK, 95):
+                c.drawString(72, yy, line); yy -= 14
+                if yy < 80:
+                    break
+        if i == 2:
+            c.drawImage(ImageReader(io.BytesIO(_png())), 72, 240, width=180, height=90)           # 1.1.1
+            c.drawImage(ImageReader(io.BytesIO(_png_of_text())), 300, 220, width=240, height=64)  # 1.4.5
+        c.showPage()
+    c.save()
+
+
+def build_pptx(path: Path) -> None:
+    """A deck seeded with the actionable in-scope PPTX failures. Covers: 2.4.6 (empty title
+    placeholder), 1.1.1 (images with no alt), 1.4.5 (image-of-text), 2.4.9 (two 'click here'
+    links to different URLs), 3.1.2 (French), 1.3.3 (sensory), 3.1.5 (dense block). Audio
+    autoplay (1.4.2) is deliberately omitted — code-flagged BLOCKED without a real PowerPoint
+    fixture."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation()
+    # Slide 1 — Title Slide layout with an EMPTY title placeholder → 2.4.6 (PPTX_TITLE_EMPTY);
+    # subtitle carries the French (3.1.2) + sensory (1.3.3) text.
+    s1 = prs.slides.add_slide(prs.slide_layouts[0])
+    s1.shapes.title.text = ""
+    if len(s1.placeholders) > 1:
+        s1.placeholders[1].text = FRENCH + "  " + SENSORY
+
+    # Slide 2 — blank: a dense block (3.1.5) + two ambiguous same-text links (2.4.9).
+    s2 = prs.slides.add_slide(prs.slide_layouts[6])
+    tf = s2.shapes.add_textbox(Inches(0.5), Inches(0.4), Inches(9), Inches(4.5)).text_frame
+    tf.word_wrap = True
+    tf.text = DENSE_BLOCK
+    for url in ("https://example.com/methodology", "https://example.com/scores"):
+        run = tf.add_paragraph().add_run()
+        run.text = "click here"
+        run.hyperlink.address = url
+
+    # Slide 3 — blank: an image with no alt (1.1.1) + an image-of-text (1.4.5).
+    s3 = prs.slides.add_slide(prs.slide_layouts[6])
+    s3.shapes.add_picture(io.BytesIO(_png()), Inches(0.5), Inches(0.5), Inches(3), Inches(1.5))
+    s3.shapes.add_picture(io.BytesIO(_png_of_text()), Inches(4), Inches(0.5), Inches(4.5), Inches(1.2))
+
+    prs.save(str(path))
+
+
 def main() -> None:
     out_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("demo-fixtures")
     out_dir.mkdir(parents=True, exist_ok=True)
-    docx_path = out_dir / "word-accessibility-demo.docx"
-    xlsx_path = out_dir / "excel-accessibility-demo.xlsx"
-    build_docx(docx_path)
-    build_xlsx(xlsx_path)
-    print(f"wrote {docx_path}")
-    print(f"wrote {xlsx_path}")
+    targets = {
+        "word-accessibility-demo.docx": build_docx,
+        "excel-accessibility-demo.xlsx": build_xlsx,
+        "pdf-accessibility-demo.pdf": build_pdf,
+        "powerpoint-accessibility-demo.pptx": build_pptx,
+    }
+    for name, builder in targets.items():
+        p = out_dir / name
+        builder(p)
+        print(f"wrote {p}")
 
 
 if __name__ == "__main__":
