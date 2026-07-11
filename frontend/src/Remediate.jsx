@@ -6,7 +6,7 @@ import FileDrawer, { REC_STYLE, fmtEffort, EFFORT_BASIS, SOURCE_URL } from './Fi
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
-import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics } from './api.js'
+import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, openTraceUrl } from './api.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
 import QueuePanel from './QueuePanel.jsx'
@@ -869,7 +869,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 fed the raw hitl_queue row. `q._raw` is the untransformed row (live); SIM falls back
                 to the UI item. */}
             {queue.map((q) => (
-              <EvidenceCard key={q.id} item={q._raw || q} onAct={evAct} />
+              <EvidenceCard key={q.id} item={q._raw || q} onAct={evAct}
+                traceUrl={q._raw?.scan_id ? openTraceUrl(q._raw.scan_id, 'file', q._raw.file) : null} />
             ))}
           </div>
         )}
