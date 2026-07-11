@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildEvidenceCard, comparisonFor, evidenceSignals, formatProposedValue, noDraftHint, verificationLadder, whyHumanReview } from './reviewCard.js'
+import { buildEvidenceCard, comparisonFor, evidenceSignals, formatProposedValue, noDraftHint, trustStates, verificationLadder, whyHumanReview } from './reviewCard.js'
 
 describe('comparisonFor — current → remediated, or nothing', () => {
   const DIFF = { file: 'deck.pptx', rule_id: '1.1.1', before: '(no alt text)', after: 'A clinician at a desk.' }
@@ -246,6 +246,45 @@ describe('evidenceSignals — grouped, checkable, never a fabricated score', () 
 
   it('is empty when the finding carried no evidence — never invents one', () => {
     expect(evidenceSignals({})).toEqual([])
+  })
+})
+
+describe('trustStates — verifiable states, never a confidence score', () => {
+  it('OCR-anchored vision alt → grounded, not yet written', () => {
+    const t = trustStates({ sc: '1.1.1', rationale: 'anchored in text read from the image (OCR: "Revenue")',
+      proposal: { list: [{}], validated: false }, certifiesOnApprove: false })
+    expect(t.grounding.state).toBe('grounded')
+    expect(t.validation.state).toBe('not_yet_written')
+  })
+
+  it('ungrounded vision guess → visual interpretation (warn)', () => {
+    const t = trustStates({ sc: '1.1.1', rationale: 'vision description only — no text in the image to anchor it',
+      proposal: { list: [{}], validated: false }, certifiesOnApprove: false })
+    expect(t.grounding.state).toBe('visual_only')
+    expect(t.grounding.tone).toBe('warn')
+  })
+
+  it('an explicit grounded boolean on the proposal wins over the text heuristic', () => {
+    const t = trustStates({ sc: '1.1.1', rationale: 'ambiguous prose',
+      proposal: { list: [{ grounded: true }], validated: true }, certifiesOnApprove: false })
+    expect(t.grounding.state).toBe('grounded')
+    expect(t.validation.state).toBe('re_scan_passed')
+  })
+
+  it('a text finding with a value → grounded in document text', () => {
+    const t = trustStates({ sc: '2.4.4', recommendation: 'Download the 2025 annual report', certifiesOnApprove: false })
+    expect(t.grounding.state).toBe('document_text')
+  })
+
+  it('a judgement finding → deterministic validation, makes no grounding claim', () => {
+    const t = trustStates({ sc: '1.4.3', certifiesOnApprove: true })
+    expect(t.validation.state).toBe('deterministic_passed')
+    expect(t.grounding).toBeNull()
+  })
+
+  it('never emits a percentage or a confidence level', () => {
+    const t = trustStates({ sc: '1.1.1', rationale: 'OCR text', proposal: { list: [{}] }, certifiesOnApprove: false })
+    expect(JSON.stringify(t)).not.toMatch(/%|confidence|\b(high|medium|low)\b/i)
   })
 })
 

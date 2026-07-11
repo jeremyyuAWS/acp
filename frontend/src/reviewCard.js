@@ -328,6 +328,36 @@ export function evidenceSignals(card) {
   return out
 }
 
+// Verifiable trust states (ADR 0019 §3a) — the evidence-based REPLACEMENT for a confidence label.
+// Every state is derived from a real field; none is a number or an opaque level.
+//   grounding  — what the value is anchored in (OCR / document text / a pure visual guess)
+//   validation — whether an objective check has actually passed
+// The third axis, "review requirement", is the `whyHumanReview` callout — kept separate because it
+// carries a full explanation, not just a label. Returns { grounding: {state,label,tone}|null,
+// validation: {state,label,tone} }.
+export function trustStates(card) {
+  const c = card || {}
+  const p0 = c.proposal && c.proposal.list && c.proposal.list[0]
+  const rat = String(c.rationale || (p0 && p0.rationale) || '').toLowerCase()
+  // Prefer an explicit `grounded` boolean threaded from describe_image_structured; fall back to the
+  // evidence/rationale text, which already states whether the description was OCR-anchored or a guess.
+  const explicit = p0 && typeof p0.grounded === 'boolean' ? p0.grounded : null
+  let grounding = null
+  if (explicit === true || /\b(ocr|anchored|read from the image|chart label|text read)\b/.test(rat)) {
+    grounding = { state: 'grounded', label: 'Grounded in text read from the source', tone: 'ok' }
+  } else if (explicit === false || /vision description only|no text in the image|visual (guess|interpretation)/.test(rat)) {
+    grounding = { state: 'visual_only', label: 'Visual interpretation — no text anchor', tone: 'warn' }
+  } else if (c.sc && c.sc !== '1.1.1' && (p0 || c.recommendation)) {
+    // a text-model value on a text finding (link text, title, sensory rewrite) is read from the doc
+    grounding = { state: 'document_text', label: 'Grounded in document text', tone: 'ok' }
+  }
+  let validation
+  if (c.proposal && c.proposal.validated) validation = { state: 're_scan_passed', label: 'Re-scan passed', tone: 'ok' }
+  else if (c.certifiesOnApprove) validation = { state: 'deterministic_passed', label: 'Deterministic check — your sign-off certifies', tone: 'ok' }
+  else validation = { state: 'not_yet_written', label: 'Not yet written to document', tone: 'todo' }
+  return { grounding, validation }
+}
+
 // "Why am I reviewing this?" — the honest reason a human is in the loop for this finding, derived
 // from real signals so the reviewer understands the ask before approving. Null for a straightforward
 // deterministic confirmation with nothing to explain.

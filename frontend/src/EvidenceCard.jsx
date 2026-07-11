@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { aiProvenance, getFileRemediationDiffs, suggestFix } from './api.js'
-import { confClass } from './confidence.js'
 import Thumbnail from './Thumbnail.jsx'
-import { buildEvidenceCard, evidenceOf, evidenceSignals, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, verificationLadder, whyHumanReview } from './reviewCard.js'
+import { buildEvidenceCard, evidenceOf, evidenceSignals, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, trustStates, verificationLadder, whyHumanReview } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import HowToConfirm from './HowToConfirm.jsx'
@@ -14,6 +13,13 @@ import HowToConfirm from './HowToConfirm.jsx'
 //
 // onAct(id, status, note, approvedValue, telemetry) — the parent owns the write, so its
 // optimistic update and the queue-drain event stay wired. traceUrl is optional.
+// Trust-state pill styling (ADR 0019) — a verifiable state, never a confidence colour-by-score.
+const _TRUST_BG = { ok: '#E1F5EE', warn: '#FAEEDA', todo: 'rgba(0,0,0,.05)' }
+const _TRUST_FG = { ok: '#0F6E56', warn: '#854F0B', todo: '#6b6b6b' }
+const trustPill = (tone) => ({ padding: '2px 9px', borderRadius: 6, fontSize: 12, whiteSpace: 'nowrap',
+  background: _TRUST_BG[tone] || _TRUST_BG.todo, color: _TRUST_FG[tone] || _TRUST_FG.todo })
+const trustIcon = (tone) => (tone === 'ok' ? '✓' : tone === 'warn' ? '◐' : '○')
+
 export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null }) {
   const [diffs, setDiffs] = useState([])
   // One editor per proposal: the row carries one proposal per image, and a single text box
@@ -121,6 +127,9 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   const whyReview = whyHumanReview(card)
   // AI provenance (ADR 0019 Phase 0): which model produced this + where the bytes were processed.
   const aiProv = aiProvenance()
+  // Verifiable trust states (ADR 0019 §3a) — grounding + validation, the evidence-based replacement
+  // for a confidence label. No number, no opaque level; the review-requirement axis is whyReview.
+  const trust = trustStates(card)
   // Cluster the evidence by group (Detection / Reasoning / Document state) in a stable order — the
   // way a reviewer scans it — rather than one flat list.
   const signalGroups = signals.reduce((m, s) => { (m[s.group] = m[s.group] || []).push(s); return m }, {})
@@ -182,7 +191,6 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
     }
   }
 
-  const b = card.confidence
   return (
     <section className="evcard" aria-label={`Review ${card.wcag}`}
              style={{ border: '1px solid var(--line)', borderRadius: 10, padding: 14, marginBottom: 12, background: 'var(--card, #fff)' }}>
@@ -272,18 +280,16 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
             <p className="evcard-rec-static"><b>AI recommendation:</b> {card.recommendation}</p>
           ) : null}
 
-          {/* Two distinct trust axes, side by side: how confident the MODEL is (a bounded enum,
-              never a %), and whether the fix has been VALIDATED by an objective re-scan. Different
-              questions — the reviewer needs both. A value-fix reads "on approval" because the write
-              + re-scan run when you approve; only a proposal already cleared reads re-scan PASS. */}
-          {b && (
-            <div className="evcard-conf-split" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '4px 0 8px' }}>
-              <span className={confClass(b.level)}>AI confidence · {b.level.label.toLowerCase()}</span>
-              {card.certifiesOnApprove
-                ? <span className="conf conf-medium">Your sign-off resolves it</span>
-                : card.proposal && card.proposal.validated
-                  ? <span className="conf conf-high">✓ Validation · re-scan PASS</span>
-                  : <span className="conf" style={{ opacity: 0.75 }}>Validation · on approval</span>}
+          {/* Trust basis (ADR 0019 §3a) — verifiable states, NOT a confidence score. Grounding = what
+              the value is anchored in (OCR / document text / a visual guess); Validation = whether an
+              objective check has actually passed. The review-requirement axis is the "Why human
+              review?" callout below. No number, no opaque level. */}
+          {(trust.grounding || trust.validation) && (
+            <div className="evcard-trust" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '4px 0 8px' }}>
+              {trust.grounding && (
+                <span style={trustPill(trust.grounding.tone)}>{trustIcon(trust.grounding.tone)} {trust.grounding.label}</span>
+              )}
+              <span style={trustPill(trust.validation.tone)}>{trustIcon(trust.validation.tone)} {trust.validation.label}</span>
               {card.proposal && card.proposal.list.length > 1 && (
                 <span className="muted" style={{ fontSize: 12 }}>· {card.proposal.list.length} instances on this criterion</span>
               )}
