@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { aiProvenance, getFileRemediationDiffs, suggestFix } from './api.js'
 import Thumbnail from './Thumbnail.jsx'
-import { buildEvidenceCard, evidenceOf, evidenceSignals, explainFinding, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, trustStates, verificationLadder, whyHumanReview } from './reviewCard.js'
+import { buildEvidenceCard, evidenceOf, evidenceSignals, explainFinding, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import HowToConfirm from './HowToConfirm.jsx'
@@ -133,6 +133,9 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   const trust = trustStates(card)
   // Deterministic, keyless plain-English explanation (the "✨ Explain this finding" answer).
   const explanation = explainFinding(card, { trust, whyReview })
+  // Deterministic-validation receipt (vision #12) — the machine-verified proof for an APPLIED fix,
+  // shown separately from the AI generation. Null until something is applied + re-scan-cleared.
+  const valChecklist = validationChecklist(card)
   // Cluster the evidence by group (Detection / Reasoning / Document state) in a stable order — the
   // way a reviewer scans it — rather than one flat list.
   const signalGroups = signals.reduce((m, s) => { (m[s.group] = m[s.group] || []).push(s); return m }, {})
@@ -372,6 +375,22 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
                 <div key={i}>
                   <div className="diffbox before"><span className="difftag">before</span>{d.before}</div>
                   <div className="diffbox after"><span className="difftag">after</span>{d.after}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Deterministic validation (vision #12/#33) — the machine-verified receipt for an applied
+              fix, kept DISTINCT from the AI-written value above. Every ✓ is a real fact (a
+              remediation_diff / validated proposal proves write + re-open + re-scan + clear), never
+              a bare "Done". Absent until something is actually applied + verified. */}
+          {valChecklist && (
+            <div className="evcard-valcheck" style={{ margin: '2px 0 8px', padding: '9px 11px',
+                 background: '#E1F5EE', border: '1px solid var(--line)', borderRadius: 8 }}>
+              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.04em', color: '#0F6E56', margin: '0 0 4px' }}>Deterministic validation</div>
+              {valChecklist.map((v, i) => (
+                <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 12.5, margin: '2px 0', color: '#0F6E56' }}>
+                  <span aria-hidden="true">✓</span><span>{v.label}</span>
                 </div>
               ))}
             </div>

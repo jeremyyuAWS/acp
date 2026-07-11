@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildEvidenceCard, comparisonFor, evidenceSignals, explainFinding, formatProposedValue, noDraftHint, trustStates, verificationLadder, whyHumanReview } from './reviewCard.js'
+import { buildEvidenceCard, comparisonFor, evidenceSignals, explainFinding, formatProposedValue, noDraftHint, trustStates, validationChecklist, verificationLadder, whyHumanReview } from './reviewCard.js'
 
 describe('comparisonFor — current → remediated, or nothing', () => {
   const DIFF = { file: 'deck.pptx', rule_id: '1.1.1', before: '(no alt text)', after: 'A clinician at a desk.' }
@@ -311,6 +311,21 @@ describe('trustStates — verifiable states, never a confidence score', () => {
   it('never emits a percentage or a confidence level', () => {
     const t = trustStates({ sc: '1.1.1', rationale: 'OCR text', proposal: { list: [{}] }, certifiesOnApprove: false })
     expect(JSON.stringify(t)).not.toMatch(/%|confidence|\b(high|medium|low)\b/i)
+  })
+})
+
+describe('validationChecklist — machine-verified receipt for an applied fix', () => {
+  it('is null for a pending value-fix (nothing applied yet)', () => {
+    expect(validationChecklist({ sc: '1.1.1', diffs: [], proposal: { list: [{}], validated: false } })).toBeNull()
+  })
+  it('shows the write + re-scan + clear receipt when a remediation_diff exists', () => {
+    const c = validationChecklist({ sc: '1.4.3', diffs: [{ before: 'x', after: 'y' }] })
+    expect(c.every((s) => s.done)).toBe(true)
+    expect(c.map((s) => s.label).join(' ')).toMatch(/written.*re-opened.*cleared/is)
+    expect(c.some((s) => /1\.4\.3/.test(s.label))).toBe(true)
+  })
+  it('also fires for a validated proposal (applied + re-scan-cleared)', () => {
+    expect(validationChecklist({ sc: '2.4.4', diffs: [], proposal: { list: [{}], validated: true } })).toHaveLength(3)
   })
 })
 

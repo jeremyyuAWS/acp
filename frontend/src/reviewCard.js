@@ -402,6 +402,23 @@ export function explainFinding(card, { trust = null, whyReview = null } = {}) {
   return parts.join(' ')
 }
 
+// Deterministic-validation receipt (vision #12/#33) — the concrete proof that a fix was actually
+// APPLIED and machine-verified, kept SEPARATE from the AI generation ("never simply Done"). Every
+// tick is a real fact: a remediation_diff row is written ONLY for a criterion whose fix cleared the
+// residual re-scan, so its presence proves write + re-open + re-scan + clear; a validated proposal
+// proves the same. Returns an ordered [{ label, done:true }] when there IS applied+verified evidence,
+// else null — a pending value-fix has nothing to certify yet (the ladder shows its pending path).
+export function validationChecklist(card) {
+  const c = card || {}
+  const applied = (c.diffs && c.diffs.length > 0) || !!(c.proposal && c.proposal.validated)
+  if (!applied) return null
+  return [
+    { label: 'Value written into the document', done: true },
+    { label: 'Document re-opened and re-scanned', done: true },
+    { label: `${c.sc || 'Criterion'} cleared on the re-scan`, done: true },
+  ]
+}
+
 // "Why am I reviewing this?" — the honest reason a human is in the loop for this finding, derived
 // from real signals so the reviewer understands the ask before approving. Null for a straightforward
 // deterministic confirmation with nothing to explain.
