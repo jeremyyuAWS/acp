@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { getFileRemediationDiffs, suggestFix } from './api.js'
+import { aiProvenance, getFileRemediationDiffs, suggestFix } from './api.js'
 import { confClass } from './confidence.js'
 import Thumbnail from './Thumbnail.jsx'
 import { buildEvidenceCard, evidenceOf, evidenceSignals, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, verificationLadder, whyHumanReview } from './reviewCard.js'
@@ -119,6 +119,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   const ladder = verificationLadder(card)
   const signals = evidenceSignals(card)
   const whyReview = whyHumanReview(card)
+  // AI provenance (ADR 0019 Phase 0): which model produced this + where the bytes were processed.
+  const aiProv = aiProvenance()
   // Cluster the evidence by group (Detection / Reasoning / Document state) in a stable order — the
   // way a reviewer scans it — rather than one flat list.
   const signalGroups = signals.reduce((m, s) => { (m[s.group] = m[s.group] || []).push(s); return m }, {})
@@ -285,6 +287,24 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
               {card.proposal && card.proposal.list.length > 1 && (
                 <span className="muted" style={{ fontSize: 12 }}>· {card.proposal.list.length} instances on this criterion</span>
               )}
+            </div>
+          )}
+
+          {/* AI provenance (ADR 0019 Phase 0) — don't hide the model. Names the model that produced
+              this value (from the proposal's own source, or the active model) and, from the real
+              backend config, WHERE the bytes were processed: 🟢 local = on your own infrastructure,
+              nothing left your network. Shown only where AI actually generated a value. */}
+          {(card.proposal || card.recommendation) && aiProv && (
+            <div className="evcard-provenance" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 12, margin: '2px 0 8px' }}>
+              <span className="muted">🤖 {card.proposalSource || `${aiProv.provider} · ${card.sc === '1.1.1' ? aiProv.vision_model : aiProv.model}`}</span>
+              <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 11.5, whiteSpace: 'nowrap',
+                   background: aiProv.zone === 'local' ? '#E1F5EE' : '#FAEEDA',
+                   color: aiProv.zone === 'local' ? '#0F6E56' : '#854F0B' }}>
+                {aiProv.zone === 'local' ? '🟢 Local only' : '🟡 Cloud'}
+              </span>
+              <span className="muted">{aiProv.zone === 'local'
+                ? 'processed on your infrastructure — no document left your network'
+                : `sent to ${aiProv.host}`}</span>
             </div>
           )}
 

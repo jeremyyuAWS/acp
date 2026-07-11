@@ -53,6 +53,36 @@ def reset_probe_cache() -> None:
     """Drop the memoised probe (tests, and after an operator changes the Ollama config)."""
     _TAGS_CACHE.update(at=0.0, tags=None)
 
+
+def provenance() -> dict:
+    """AI provenance for governance/transparency (ADR 0019 Phase 0): which model runs, and WHERE
+    the document bytes are processed — the enterprise "what model? / did my document leave my
+    network?" answer, surfaced instead of a bare "AI generated".
+
+    `zone` is derived from OLLAMA_BASE_URL so it stays truthful if an operator repoints it:
+      - 'local'  → the endpoint is on your own infrastructure (localhost, an internal cluster
+                   address, or a private IP range). No document leaves your network.
+      - 'cloud'  → a third-party host (e.g. a hosted GPU proxy). Bytes leave your network.
+    This build has no API key and no third-party AI SDK; the only backend is the configured
+    Ollama endpoint. `zone='local'` is the honest default for the self-hosted Ollama deployment.
+    """
+    from urllib.parse import urlparse
+    host = (urlparse(OLLAMA_BASE_URL).hostname or "").lower()
+    local = (
+        host in ("localhost", "127.0.0.1", "::1", "")
+        or host.endswith(".internal") or ".internal." in host
+        or host.endswith(".local")
+        or host.startswith("10.") or host.startswith("192.168.")
+        or any(host.startswith(f"172.{n}.") for n in range(16, 32))
+    )
+    return {
+        "provider": "ollama",
+        "model": OLLAMA_MODEL,
+        "vision_model": OLLAMA_VISION_MODEL,
+        "zone": "local" if local else "cloud",
+        "host": host,
+    }
+
 # Per-rule plain-English context injected into the prompt so the model
 # produces grounded, file-type-aware explanations rather than generic advice.
 _RULE_CONTEXT: dict[str, str] = {

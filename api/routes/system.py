@@ -148,10 +148,12 @@ def config():
     lf_host = os.environ.get("LANGFUSE_HOST", "").rstrip("/")
     import lf as _lf
     lf_project = _lf._project_id()
+    import ai as _ai   # AI provenance (ADR 0019 Phase 0): active model + local/cloud zone
     return {"google_client_id": core.GOOGLE_CLIENT_ID,
             "drive_scope": core.DRIVE_SCOPES[0],
             "auth": "gis" if core.GOOGLE_CLIENT_ID else "demo",
             **_build_info(),
+            "ai": _ai.provenance(),
             "langfuse_trace_base": (f"{lf_host}/project/{lf_project}/traces" if lf_host else None)}
 
 
