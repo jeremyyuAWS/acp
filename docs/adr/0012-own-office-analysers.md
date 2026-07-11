@@ -58,6 +58,10 @@ rubric/coverage).
   fire. Verified end-to-end in `tests/test_office_language_rules.py` (self-skips without the
   .NET toolchain).
 - We now maintain ~28 analyser rules. A follow-up audit of the remaining rules for
-  WCAG-correctness bugs is planned (Phase 2).
+  WCAG-correctness bugs is planned (Phase 2). First audit result: pptx table-header
+  parity for WCAG 1.3.1 is **already covered** by the vendored `Pptx/Rules/TableHeaderRule.cs`
+  (rule `PPTX-TABLE-001`, the analogue of the docx/xlsx `TableHeaderRule`) — no duplicate
+  first-party detector was added; the behaviour is pinned by
+  `tests/test_pptx_engine_detection.py`. See https://github.com/mova-io/acp/pull/7.
 - The Python remediator's `dc:language` stuffing is now largely redundant for well-authored
   files; it remains a valid fallback and is unchanged here.
