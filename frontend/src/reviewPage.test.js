@@ -66,7 +66,11 @@ describe('Thumbnail fetches the page it claims to show', () => {
   })
 
   it('re-fetches when the page changes — a stale render is the wrong page', () => {
-    expect(src).toMatch(/\[scanId, file, renderPage\]/)
+    expect(src).toMatch(/\[scanId, file, renderPage, geomResolved\]/)
+  })
+
+  it('waits for geometry before rendering (no flash of the fallback page)', () => {
+    expect(src).toMatch(/if \(!geomResolved\) return/)
   })
 
   it('names the page it actually rendered — hardcoded "page 1" alt is inaccurate alt text', () => {

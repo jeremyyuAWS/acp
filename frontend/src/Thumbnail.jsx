@@ -36,15 +36,19 @@ function cropStyle(url, box) {
 export default function Thumbnail({ scanId, file, page = 1, locator = null, className = '', maxHeight = 240 }) {
   const [url, setUrl] = useState(null)
   const [box, setBox] = useState(null)      // {page,x,y,w,h} normalized, or null
+  const [geomResolved, setGeomResolved] = useState(false)   // has the geometry fetch settled?
   const [zoom, setZoom] = useState(false)   // Slice 3 — reveal the cropped close-up of the box
   const fallbackPage = Number.isInteger(page) && page > 0 ? page : 1
 
   // Resolve the box first (if a locator is given) — it may override which page we render.
   useEffect(() => {
     setBox(null)
+    setGeomResolved(!locator)               // no locator → nothing to wait for; render immediately
     if (!scanId || !file || !locator) return
     let live = true
-    getFileGeometry(scanId, file, locator).then((b) => { if (live) setBox(b || null) })
+    getFileGeometry(scanId, file, locator).then((b) => {
+      if (live) { setBox(b || null); setGeomResolved(true) }
+    })
     return () => { live = false }
   }, [scanId, file, locator])
 
@@ -53,6 +57,9 @@ export default function Thumbnail({ scanId, file, page = 1, locator = null, clas
   useEffect(() => {
     setUrl(null)
     if (!scanId || !file) return
+    // When a locator is present, wait for the box to resolve before rendering — otherwise we'd
+    // render the fallback page, then swap to the box's page (a visible flash of the wrong page).
+    if (!geomResolved) return
     let objectUrl = null
     let live = true
     const png = renderPage === 1 ? getFileThumbnail(scanId, file) : getFilePage(scanId, file, renderPage)
@@ -62,7 +69,7 @@ export default function Thumbnail({ scanId, file, page = 1, locator = null, clas
       setUrl(objectUrl)
     })
     return () => { live = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
-  }, [scanId, file, renderPage])
+  }, [scanId, file, renderPage, geomResolved])
 
   if (!url) return null
   const quadrant = box ? quad(box) : null
