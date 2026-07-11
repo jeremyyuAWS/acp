@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
+import EvidenceCard from './EvidenceCard.jsx'
 import FileDrawer, { REC_STYLE, fmtEffort, EFFORT_BASIS, SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
@@ -432,7 +433,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     if (SIM) { setQueue(buildHumanQueue(files, {})); return }
     autoPopulateHitlQueue(runId)
       .then(() => listHitlQueue(runId, 'pending'))
-      .then((items) => setQueue((items || []).map((it) => dbItemToUi(it, files))))
+      .then((items) => setQueue((items || []).map((it) => ({ ...dbItemToUi(it, files), _raw: it }))))
       .catch(() => setQueue(buildHumanQueue(files, {})))
   }, [runId]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -443,7 +444,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     if (!runId || SIM) return
     const reload = () => {
       listHitlQueue(runId, 'pending')
-        .then((items) => setQueue((items || []).map((it) => dbItemToUi(it, files)))).catch(() => {})
+        .then((items) => setQueue((items || []).map((it) => ({ ...dbItemToUi(it, files), _raw: it })))).catch(() => {})
       fetchFixes()
     }
     window.addEventListener('acp:hitl-changed', reload)
@@ -625,6 +626,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       )
     }
   }
+  // Adapter for the unified EvidenceCard: it calls onAct(id, status, note, finalValue, telemetry);
+  // map to this tab's act(id, kind, editedValue, approvedValues). EvidenceCard's "I'll fix it" sends
+  // status='skipped' → this tab's self-fix lane. The per-image approved values ride in telemetry.
+  const evAct = (id, status, _note, finalValue, tel) => {
+    if (readOnly) return   // time-travel replay is look-only — never mutate a historical scan
+    act(id, status === 'skipped' ? 'self' : status, finalValue, tel && tel.approvedValues)
+  }
+
   const draftAi = (item) => suggestFix(item.scanId || runId, item.file, item.ruleId).then((r) => r?.suggestion)
   const rescan = (id) => {
     const item = self.find((x) => x.id === id)
@@ -854,12 +863,13 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             : `All reviewed — ${acted.approved} approved, ${acted.rejected} rejected${acted.deferred ? `, ${acted.deferred} deferred` : ''}. Verification runs on the approved fixes.`}</p>
         ) : (
           <div className="reviewlist">
+            {/* Unified review card (canonical vision #1): the SAME rich EvidenceCard the AI Work
+                Inbox uses — pipeline ladder, ✨ Explain, Grounding/Validation trust states, provenance
+                badge, grouped evidence, cert preview, native verify steps — now renders here too,
+                fed the raw hitl_queue row. `q._raw` is the untransformed row (live); SIM falls back
+                to the UI item. */}
             {queue.map((q) => (
-              <ReviewItemCard key={q.id} item={q} scanDiffs={scanDiffs} disabled={readOnly}
-                onOpen={() => setSelItem(q)}
-                onApprove={() => act(q.id, 'approved')}
-                onSelf={() => act(q.id, 'self')}
-                onReject={() => act(q.id, 'rejected')} />
+              <EvidenceCard key={q.id} item={q._raw || q} onAct={evAct} />
             ))}
           </div>
         )}

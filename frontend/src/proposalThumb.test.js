@@ -84,13 +84,15 @@ describe('the review screens render the proposal, not a template', () => {
     expect(src).not.toMatch(/after: \(\) =>/)
   })
 
-  it('Remediate derives the comparison at render, so late-arriving diffs still show', () => {
-    // scanDiffs is fetched in parallel with the queue; baking the comparison into the mapped
-    // item would leave every card empty on first paint and never refresh.
+  it('Remediate renders the unified EvidenceCard, which sources its own comparison so late diffs still show', () => {
+    // Canonical vision #1: the Human-review list now renders the SAME EvidenceCard as the AI Work
+    // Inbox — fed the raw hitl row (q._raw). EvidenceCard fetches its own remediation diffs
+    // (getFileRemediationDiffs) in an effect and derives the before/after at render, so a
+    // late-arriving diff still shows without baking a stale value into the mapped item.
     const src = read('Remediate.jsx')
-    expect(src).toMatch(/const comparison = comparisonFor\(item, scanDiffs\)/)
-    expect(src).toMatch(/scanDiffs=\{scanDiffs\}/)
-    expect(src).toMatch(/proposals: it\.proposals/)   // carried through for comparisonFor
+    expect(src).toMatch(/<EvidenceCard[^>]*item=\{q\._raw \|\| q\}/)
+    expect(src).toMatch(/proposals: it\.proposals/)   // dbItemToUi still carries proposals through
+    expect(read('EvidenceCard.jsx')).toMatch(/getFileRemediationDiffs/)
   })
 
   it('EvidenceCard prefers the offending image over the PDF-only page render', () => {
