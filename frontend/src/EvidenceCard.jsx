@@ -5,6 +5,7 @@ import Thumbnail from './Thumbnail.jsx'
 import { buildEvidenceCard, evidenceOf, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
+import HowToConfirm from './HowToConfirm.jsx'
 
 // Evidence Card (PRD v2) — a PR-style review of ONE accessibility issue. The human APPROVES
 // ACP's recommendation; ACP applies it. Assembles only shipped primitives (confidence basis,
@@ -309,6 +310,12 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
               </p>
             </div>
           )}
+
+          {/* How the reviewer confirms the fix in the native app — the "verify it yourself in
+              under 10s" half of the trust model. Renders per-criterion Word/Excel/PowerPoint/
+              Acrobat steps (Mac/Win), or only the universal Accessibility-Checker line when no
+              crisp native step exists; nothing at all when neither applies (never a wrong path). */}
+          <HowToConfirm sc={card.sc} file={card.file} />
 
           <input className="rc-note" placeholder="Reviewer note (optional)" value={note}
                  onChange={(e) => setNote(e.target.value)} />
