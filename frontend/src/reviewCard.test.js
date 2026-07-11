@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildEvidenceCard, comparisonFor, evidenceSignals, formatProposedValue, noDraftHint, verificationLadder } from './reviewCard.js'
+import { buildEvidenceCard, comparisonFor, evidenceSignals, formatProposedValue, noDraftHint, verificationLadder, whyHumanReview } from './reviewCard.js'
 
 describe('comparisonFor — current → remediated, or nothing', () => {
   const DIFF = { file: 'deck.pptx', rule_id: '1.1.1', before: '(no alt text)', after: 'A clinician at a desk.' }
@@ -210,43 +210,54 @@ describe('buildEvidenceCard — AI proposals (hitl_queue.proposals)', () => {
   })
 })
 
-describe('verificationLadder — honest lifecycle, never a fix the doc lacks', () => {
-  it('value-fix with an unvalidated proposal: validation is still pending on approval', () => {
+describe('verificationLadder — the honest connected pipeline', () => {
+  it('value-fix, unvalidated: write + re-scan are still ahead (todo), never a green pass', () => {
     const l = verificationLadder({ certifiesOnApprove: false, proposal: { list: [{}], validated: false } })
-    expect(l.map((s) => s.label)).toEqual(['AI draft generated', 'Validates on approval', 'Your approval', 'Ready for certification'])
-    expect(l[0].state).toBe('done')
-    expect(l[1].state).toBe('todo')     // NOT a green pass — the doc still fails until approve + re-scan
-    expect(l[2].state).toBe('current')
+    expect(l.map((s) => s.label)).toEqual(['AI draft generated', 'Human review', 'Written to document', 'Re-scan verified', 'Certified'])
+    expect(l.map((s) => s.state)).toEqual(['done', 'current', 'todo', 'todo', 'todo'])
   })
 
-  it('value-fix with a validated proposal: step 2 is a done re-scan pass', () => {
+  it('value-fix, validated: write + re-scan already done, the human is the last gate', () => {
     const l = verificationLadder({ certifiesOnApprove: false, proposal: { list: [{}], validated: true } })
-    expect(l[1]).toEqual({ label: 'Validated by re-scan', state: 'done' })
+    expect(l.map((s) => s.label)).toEqual(['AI draft generated', 'Written to document', 'Re-scan verified', 'Human review', 'Certified'])
+    expect(l.map((s) => s.state)).toEqual(['done', 'done', 'done', 'current', 'todo'])
   })
 
-  it('judgement finding: shorter ladder — the sign-off IS the resolution', () => {
+  it('judgement finding: short pipeline — the sign-off IS the resolution', () => {
     const l = verificationLadder({ certifiesOnApprove: true })
-    expect(l.map((s) => s.label)).toEqual(['Issue detected', 'Your sign-off', 'Ready for certification'])
+    expect(l.map((s) => s.label)).toEqual(['Detected', 'Human review', 'Certified'])
   })
 })
 
-describe('evidenceSignals — real checkable signals, never a fabricated score', () => {
-  it('surfaces the detection basis + the reasoning, and flags subjective wording', () => {
+describe('evidenceSignals — grouped, checkable, never a fabricated score', () => {
+  it('groups the detection basis, the reasoning, and the empty prior state', () => {
     const sig = evidenceSignals({
       confidence: { basis: 'AI / heuristic detection — semantic judgement' },
       rationale: 'OCR read the title text inside the image',
       proposal: { list: [{ before: '(no alt text)' }], subjective: true },
       diffs: [],
     })
-    const texts = sig.map((s) => s.text)
-    expect(texts).toContain('AI / heuristic detection — semantic judgement')
-    expect(texts).toContain('OCR read the title text inside the image')
-    expect(texts).toContain('No existing value on the element')
-    expect(sig.find((s) => s.tone === 'warn').text).toMatch(/human wording/i)
+    expect(sig.find((s) => s.text.includes('heuristic')).group).toBe('Detection')
+    expect(sig.find((s) => s.text.includes('OCR')).group).toBe('Reasoning')
+    expect(sig.find((s) => s.text.includes('No existing value')).group).toBe('Document state')
+    // the subjective-wording caveat is NOT here — it's the dedicated whyHumanReview panel
+    expect(sig.some((s) => /human wording/i.test(s.text))).toBe(false)
   })
 
   it('is empty when the finding carried no evidence — never invents one', () => {
     expect(evidenceSignals({})).toEqual([])
+  })
+})
+
+describe('whyHumanReview — the honest reason a human is in the loop', () => {
+  it('subjective wording → several valid descriptions', () => {
+    expect(whyHumanReview({ proposal: { subjective: true } })).toMatch(/judgement call|valid descriptions/i)
+  })
+  it('medium (heuristic) confidence → a human confirms the call', () => {
+    expect(whyHumanReview({ confidence: { level: { key: 'medium' } } })).toMatch(/heuristic/i)
+  })
+  it('deterministic high-confidence → nothing to explain', () => {
+    expect(whyHumanReview({ confidence: { level: { key: 'high' } } })).toBeNull()
   })
 })
 

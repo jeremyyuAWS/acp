@@ -263,58 +263,80 @@ export function buildEvidenceCard(item, diffs = []) {
   }
 }
 
-// The verification ladder — the honest lifecycle of ONE finding, each step derived from a real
-// signal so the reviewer sees exactly how far the pipeline got before handing off. It never claims
-// a step that hasn't happened: for a value-fix the re-scan validation runs ON approval (the write
-// is scheduled then), so it reads 'validates on approval' until `proposal.validated` is true — it
-// must not show a green "validator passed" while the document still fails.
-// Returns [{ label, state: 'done' | 'current' | 'todo' }] in lifecycle order.
+// The verification ladder — the honest, connected pipeline for ONE finding, each stage derived from
+// a real signal so the reviewer sees exactly where in the flow they are. It never claims a stage
+// that hasn't happened: for a value-fix the write + re-scan run ON approval, so those stages read
+// 'todo' until the proposal was already applied and re-scan-validated (`proposal.validated`) — the
+// card must never show a green "written / re-scanned" while the document still fails.
+// Returns [{ label, state: 'done' | 'current' | 'todo' }] in pipeline order.
 export function verificationLadder(card) {
   const c = card || {}
   const hasProposal = !!(c.proposal && c.proposal.list && c.proposal.list.length)
   const validated = !!(c.proposal && c.proposal.validated)
-  // A judgement finding (contrast accepted, link text deemed adequate) is resolved by the sign-off
-  // itself — there is no value to write and nothing to re-scan, so its ladder is shorter and honest.
+  // Judgement finding (contrast accepted, link text deemed adequate): nothing is written and nothing
+  // is re-scanned — the human sign-off IS the resolution, so the pipeline is short and honest.
   if (c.certifiesOnApprove) {
     return [
-      { label: 'Issue detected', state: 'done' },
-      { label: 'Your sign-off', state: 'current' },
-      { label: 'Ready for certification', state: 'todo' },
+      { label: 'Detected', state: 'done' },
+      { label: 'Human review', state: 'current' },
+      { label: 'Certified', state: 'todo' },
+    ]
+  }
+  // Value-fix pipeline: generate → human review → write → re-scan → certify. When the proposal was
+  // already applied + re-scan-validated in a prior batch, the write and re-scan are behind us and the
+  // human is the last gate before certification; otherwise both happen when the reviewer approves.
+  if (validated) {
+    return [
+      { label: 'AI draft generated', state: 'done' },
+      { label: 'Written to document', state: 'done' },
+      { label: 'Re-scan verified', state: 'done' },
+      { label: 'Human review', state: 'current' },
+      { label: 'Certified', state: 'todo' },
     ]
   }
   return [
-    { label: hasProposal ? 'AI draft generated' : 'Issue detected', state: 'done' },
-    validated
-      ? { label: 'Validated by re-scan', state: 'done' }
-      : { label: 'Validates on approval', state: 'todo' },
-    { label: 'Your approval', state: 'current' },
-    { label: 'Ready for certification', state: 'todo' },
+    { label: hasProposal ? 'AI draft generated' : 'Detected', state: 'done' },
+    { label: 'Human review', state: 'current' },
+    { label: 'Written to document', state: 'todo' },
+    { label: 'Re-scan verified', state: 'todo' },
+    { label: 'Certified', state: 'todo' },
   ]
 }
 
 // The concrete, independently-checkable signals behind a finding — the EVIDENCE, never a fabricated
-// score (ADR 0016 forbids a %). Every item is a real field the pipeline produced: the detection
-// method/basis, the model's reasoning for this draft (e.g. OCR-anchored evidence), the prior empty
-// state we're replacing, and the subjective caveat. Nothing here is templated or invented — an
-// empty list is correct when the finding carried no evidence, and we show nothing rather than fake it.
-// Returns [{ tone: 'ok' | 'warn', text }].
+// score (ADR 0016 forbids a %). Every item is a real field the pipeline produced, tagged with a
+// GROUP so the card can cluster them (Detection / Reasoning / Document state) the way a reviewer
+// scans them. The subjective-wording caveat is intentionally NOT here — it's the dedicated
+// `whyHumanReview` panel. Empty list is correct when the finding carried no evidence — show nothing
+// rather than fake it. Returns [{ tone: 'ok' | 'warn', text, group }].
 export function evidenceSignals(card) {
   const c = card || {}
   const out = []
   const seen = new Set()
-  const add = (tone, text) => {
+  const add = (group, tone, text) => {
     const t = (text || '').trim()
-    if (t && !seen.has(t)) { seen.add(t); out.push({ tone, text: t }) }
+    if (t && !seen.has(t)) { seen.add(t); out.push({ tone, text: t, group }) }
   }
   // how it was detected — deterministic rule vs AI/heuristic — straight from the confidence basis
-  if (c.confidence && c.confidence.basis) add('ok', c.confidence.basis)
+  if (c.confidence && c.confidence.basis) add('Detection', 'ok', c.confidence.basis)
   // the model's reasoning for THIS draft (OCR-anchored evidence etc.), when present
-  add('ok', c.rationale || (c.proposal && c.proposal.list && c.proposal.list[0] && c.proposal.list[0].rationale))
+  add('Reasoning', 'ok', c.rationale || (c.proposal && c.proposal.list && c.proposal.list[0] && c.proposal.list[0].rationale))
   // the prior state we're replacing — a genuinely empty "before" is real evidence the value was missing
   const before = (c.diffs && c.diffs[0] && c.diffs[0].before)
     || (c.proposal && c.proposal.list && c.proposal.list[0] && c.proposal.list[0].before)
-  if (before && /\b(no|empty|none|missing)\b/i.test(String(before))) add('ok', 'No existing value on the element')
-  // subjective → a human must own the wording; a re-scan can never validate it
-  if (c.proposal && c.proposal.subjective) add('warn', 'Human wording review recommended')
+  if (before && /\b(no|empty|none|missing)\b/i.test(String(before))) add('Document state', 'ok', 'No existing value on the element')
   return out
+}
+
+// "Why am I reviewing this?" — the honest reason a human is in the loop for this finding, derived
+// from real signals so the reviewer understands the ask before approving. Null for a straightforward
+// deterministic confirmation with nothing to explain.
+export function whyHumanReview(card) {
+  const c = card || {}
+  if (c.proposal && c.proposal.subjective)
+    return 'The wording is a judgement call — several valid descriptions exist, so a person confirms it before it is certified.'
+  const level = c.confidence && c.confidence.level && c.confidence.level.key
+  if (level === 'low') return 'No automated signal fully covers this criterion — it needs your judgement.'
+  if (level === 'medium') return 'Detected by AI / heuristic rather than a deterministic rule, so a human confirms the call before certification.'
+  return null
 }

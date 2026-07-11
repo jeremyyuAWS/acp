@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { getFileRemediationDiffs, suggestFix } from './api.js'
 import { confClass } from './confidence.js'
 import Thumbnail from './Thumbnail.jsx'
-import { buildEvidenceCard, evidenceOf, evidenceSignals, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, verificationLadder } from './reviewCard.js'
+import { buildEvidenceCard, evidenceOf, evidenceSignals, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, verificationLadder, whyHumanReview } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import HowToConfirm from './HowToConfirm.jsx'
@@ -118,6 +118,11 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   //   signals — the concrete evidence behind the finding (detection basis, reasoning, subjective flag)
   const ladder = verificationLadder(card)
   const signals = evidenceSignals(card)
+  const whyReview = whyHumanReview(card)
+  // Cluster the evidence by group (Detection / Reasoning / Document state) in a stable order — the
+  // way a reviewer scans it — rather than one flat list.
+  const signalGroups = signals.reduce((m, s) => { (m[s.group] = m[s.group] || []).push(s); return m }, {})
+  const GROUP_ORDER = ['Detection', 'Document state', 'Reasoning']
   // An editor appears for every value-fix criterion, draft or not — a reviewer must be able to
   // author alt text the AI could not draft. Keying off `aiDraft != null` (as this once did)
   // silently hid the box exactly when the human was most needed.
@@ -283,19 +288,33 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
             </div>
           )}
 
-          {/* The evidence behind the finding — concrete, independently-checkable signals the
-              pipeline actually produced (detection basis, the model's reasoning, the empty prior
-              state, a subjective caveat), never an invented score. Empty → nothing shown rather
-              than a fabricated checklist. */}
+          {/* The evidence behind the finding — concrete, checkable signals the pipeline produced,
+              CLUSTERED (Detection / Document state / Reasoning) the way a reviewer scans them, never
+              an invented score. An empty group is skipped. */}
           {signals.length > 0 && (
-            <ul className="evcard-evidence" style={{ listStyle: 'none', padding: 0, margin: '0 0 8px' }}>
-              {signals.map((s, i) => (
-                <li key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 12, margin: '3px 0' }}>
-                  <span aria-hidden="true" style={{ color: s.tone === 'warn' ? '#BA7517' : '#0F6E56', flexShrink: 0 }}>{s.tone === 'warn' ? '⚠' : '✓'}</span>
-                  <span className="muted">{s.text}</span>
-                </li>
+            <div className="evcard-evidence" style={{ margin: '2px 0 8px' }}>
+              {GROUP_ORDER.filter((g) => signalGroups[g]).map((g) => (
+                <div key={g} style={{ margin: '0 0 6px' }}>
+                  <div className="muted" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.04em', margin: '0 0 2px' }}>{g}</div>
+                  {signalGroups[g].map((s, i) => (
+                    <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 12, margin: '2px 0' }}>
+                      <span aria-hidden="true" style={{ color: s.tone === 'warn' ? '#BA7517' : '#0F6E56', flexShrink: 0 }}>{s.tone === 'warn' ? '⚠' : '✓'}</span>
+                      <span className="muted">{s.text}</span>
+                    </div>
+                  ))}
+                </div>
               ))}
-            </ul>
+            </div>
+          )}
+
+          {/* "Why am I reviewing this?" — the honest reason a human is in the loop for this finding,
+              so the reviewer understands the ask before approving. Null → nothing shown. */}
+          {whyReview && (
+            <div className="evcard-whyreview" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12.5,
+                 background: '#FAEEDA', border: '1px solid var(--line)', borderRadius: 8, padding: '8px 11px', margin: '0 0 8px' }}>
+              <span aria-hidden="true" style={{ color: '#854F0B' }}>❓</span>
+              <span><b>Why human review?</b> {whyReview}</span>
+            </div>
           )}
 
           {card.diffs.length > 0 && (
@@ -344,6 +363,28 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
               Acrobat steps (Mac/Win), or only the universal Accessibility-Checker line when no
               crisp native step exists; nothing at all when neither applies (never a wrong path). */}
           <HowToConfirm sc={card.sc} file={card.file} />
+
+          {/* Certification preview — the auditor-facing entry this review will produce, assembled
+              from what's already on the card (no new endpoint). The reviewer + timestamp are
+              stamped on approval, so it says "on approval" rather than pre-filling a fake signer. */}
+          {(card.thumb || card.recommendation || value) && (
+            <details className="evcard-cert" style={{ margin: '0 0 8px' }}>
+              <summary style={{ fontSize: 13, cursor: 'pointer', color: 'var(--muted, #666)' }}>
+                📄 What the certification report will record
+              </summary>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginTop: 8, padding: '9px 11px',
+                   border: '1px solid var(--line)', borderRadius: 8, background: 'var(--surface-1, #f6f5f2)' }}>
+                {card.thumb && <ProposalThumb thumb={card.thumb} alt="" size={40} />}
+                <div style={{ fontSize: 12, minWidth: 0 }}>
+                  <div><b>{card.wcag}</b> · {card.file}{card.location ? ` · ${card.location}` : ''}</div>
+                  {(value || (multi && values[0]) || card.recommendation) && (
+                    <div className="muted" style={{ margin: '3px 0', wordBreak: 'break-word' }}>Value: “{value || (multi && values[0]) || card.recommendation}”</div>
+                  )}
+                  <div><span className="conf conf-high">Verified</span> <span className="muted">on approval · signed off by you</span></div>
+                </div>
+              </div>
+            </details>
+          )}
 
           <input className="rc-note" placeholder="Reviewer note (optional)" value={note}
                  onChange={(e) => setNote(e.target.value)} />
