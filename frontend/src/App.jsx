@@ -96,12 +96,28 @@ const PHASE_PCT = { queued: 2, connecting: 5, discovering: 9, reading: 12, taggi
 
 function progressPct(p) {
   if (!p) return 0
-  if (typeof p.pct === 'number') return p.pct   // explicit (e.g. queued elapsed-creep)
+  if (typeof p.pct === 'number') return p.pct   // explicit (e.g. queued per-file count)
   if (p.phase === 'reading' && p.files_found) {
     const frac = Math.min(1, (p.files_done || 0) / p.files_found)
     return Math.round(12 + frac * (84 - 12))
   }
   return PHASE_PCT[p.phase] ?? 6
+}
+
+// Honest progress for a queued/fan-out scan, derived from the scan row's REAL per-file counter
+// (scan_runs.files_done / files, bumped as each file's per-file job lands) — never a timer or a
+// synthetic decay curve. While files remain, the estate is being analysed; once every file is in,
+// the finalize pass (per-document score + estate aggregate) runs. `current` is deliberately left
+// unset: the fan-out analyses files in parallel across workers, so no single "file N is in flight
+// right now" is knowable — the truthful signal is the count, not a made-up filename.
+function queuedProgress(g, elapsed) {
+  const run = g && g.run
+  const total = (run && run.files) || 0
+  const done = (run && run.files_done) || 0
+  if (!total) return { phase: 'discovering', elapsed }        // estate not listed yet
+  const phase = done < total ? 'analysing' : 'scoring'
+  const pct = Math.round(12 + Math.min(1, done / total) * (95 - 12))
+  return { phase, files_found: total, files_done: done, current: null, elapsed, pct }
 }
 
 // Shown on results views (Overview / Dashboard / Monitor) until the user runs Assess —
@@ -392,13 +408,14 @@ export default function App() {
         const t0 = Date.now()
         for (let i = 0; i < 600 && !fresh; i++) {        // up to ~10 min for large estates
           await new Promise((r) => setTimeout(r, 1000))
-          // No per-file stream on the durable path; show elapsed time + a bar that
-          // eases toward ~95% so the user can see it's still working.
+          // Fan-out scans create the row early with status 'running' and bump files_done as each
+          // per-file job lands, so we can show the REAL count ("Analysing documents · 3/5") off
+          // the scan row itself — no fabricated phase, no timer-driven bar.
           const elapsed = Math.round((Date.now() - t0) / 1000)
-          setProgress({ phase: 'scoring', queued: true, elapsed,
-                        pct: Math.min(95, 10 + Math.round(85 * (1 - Math.exp(-elapsed / 90)))) })
-          // Fan-out scans create the row early with status 'running'; wait for 'done'.
-          try { const g = await getScan(scan_id); if (g && g.run && g.run.status !== 'running') fresh = g } catch { fresh = null }
+          let g = null
+          try { g = await getScan(scan_id) } catch { g = null }
+          setProgress(g ? queuedProgress(g, elapsed) : { phase: 'connecting', elapsed })
+          if (g && g.run && g.run.status !== 'running') fresh = g
         }
         if (!fresh) throw new Error('scan still processing — watch it finish in the Monitor queue')
       } else {
@@ -424,16 +441,17 @@ export default function App() {
   // Reconnect to an in-flight scan after a page reload — the durable fan-out keeps
   // running server-side, so we just resume polling until it finishes.
   const reconnectScan = async (scan_id) => {
-    setBusy(true); setProgress({ phase: 'scoring', queued: true, elapsed: 0 })
+    setBusy(true); setProgress({ phase: 'connecting', elapsed: 0 })
     const t0 = Date.now()
     let fresh
     try {
       for (let i = 0; i < 600 && !fresh; i++) {
         await new Promise((r) => setTimeout(r, 1500))
         const elapsed = Math.round((Date.now() - t0) / 1000)
-        setProgress({ phase: 'scoring', queued: true, elapsed,
-                      pct: Math.min(95, 10 + Math.round(85 * (1 - Math.exp(-elapsed / 90)))) })
-        try { const g = await getScan(scan_id); if (g && g.run && g.run.status !== 'running') fresh = g } catch { fresh = null }
+        let g = null
+        try { g = await getScan(scan_id) } catch { g = null }
+        setProgress(g ? queuedProgress(g, elapsed) : { phase: 'connecting', elapsed })
+        if (g && g.run && g.run.status !== 'running') fresh = g
       }
       if (fresh) { setScan(fresh); setScanList(await listScans()); setView('overview') }
     } catch { /* best-effort reconnect */ }

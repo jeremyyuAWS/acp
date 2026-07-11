@@ -35,7 +35,7 @@ export const SCAN_PHASE_LINES = {
   discovering: 'Listing the documents in this source…',
   reading: 'Downloading each document…',
   analysing: 'Extracting text, images and document structure…',
-  scoring: 'Scoring each document against the rubric…',
+  scoring: 'Scoring each document from what was found…',
   done: 'Finished.',
 }
 
