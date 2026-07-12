@@ -1,13 +1,19 @@
 """System & meta endpoints: liveness, SPA auth config, schedule, hub landing page."""
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 import core
 
 router = APIRouter()
+
+# A secret REFERENCE is an environment-variable name (e.g. AZURE_OPENAI_API_KEY), never a key
+# value. This shape is what keeps a pasted key out of the DB: a real key won't match it.
+_SECRET_REF_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,64}$")
 
 
 def _require_admin(request: Request) -> None:
@@ -263,6 +269,71 @@ def update_settings(body: SettingsUpdate, request: Request):
             "admin", "settings.ai_enabled",
             detail=f"ai_enabled set to {body.ai_enabled}")
     return get_settings()
+
+
+# ── AI provider gateway config (ADR 0019 §6, secret-ref design) ────────────────
+class AIProviderUpdate(BaseModel):
+    # extra='forbid' is a load-bearing security guard: the model has NO key/api_key field, so a
+    # client that tries to submit a key value (rather than a secret reference NAME) is rejected
+    # with 422 instead of the value being silently accepted. The key never transits this endpoint.
+    model_config = ConfigDict(extra="forbid")
+    provider: str
+    enabled: bool | None = None
+    endpoint: str | None = None
+    deployment: str | None = None
+    model: str | None = None
+    key_secret_ref: str | None = None       # the NAME of an ops-provisioned env/Key-Vault secret
+
+
+@router.get("/ai/providers")
+def get_ai_providers(request: Request):
+    """Admin: the configurable cloud AI providers as SAFE views — endpoint, model, whether the
+    referenced secret is present, and who owns it — never a key value (ADR 0019 §6). Admin-gated:
+    provider governance config isn't exposed to non-owners."""
+    _require_admin(request)
+    import providers as _providers
+    return {"providers": _providers.list_provider_views()}
+
+
+@router.put("/ai/providers")
+def put_ai_provider(body: AIProviderUpdate, request: Request):
+    """Admin: set ONE provider's non-secret config. The key itself is never submitted here — the
+    admin's ops team provisions it as a container/Key-Vault secret and this stores only the secret's
+    NAME (key_secret_ref). A value that looks like a key (not an env-var name) is rejected."""
+    _require_admin(request)
+    import providers as _providers
+    provider = (body.provider or "").strip().lower()
+    if provider not in _providers.CLOUD_PROVIDERS:
+        raise HTTPException(422, f"unknown provider '{provider}' — one of {list(_providers.CLOUD_PROVIDERS)}")
+    existing = core.store.get_ai_provider_config(provider) or {}
+    endpoint = existing.get("endpoint")
+    if body.endpoint is not None:
+        endpoint = body.endpoint.strip() or None
+        if endpoint and not endpoint.startswith(("http://", "https://")):
+            raise HTTPException(422, "endpoint must be an http(s) URL")
+    ref = existing.get("key_secret_ref")
+    if body.key_secret_ref is not None:
+        ref = body.key_secret_ref.strip() or None
+        # Reject a pasted key: a secret reference is an env-var NAME, not the credential. This is
+        # the guard that keeps a key out of the database even if an admin misunderstands the field.
+        if ref and not _SECRET_REF_RE.match(ref):
+            raise HTTPException(422, "key_secret_ref must be an environment-variable NAME "
+                                     "(e.g. AZURE_OPENAI_API_KEY), not a key value")
+    who = getattr(request.state, "user_email", None) or "admin"
+    core.store.upsert_ai_provider_config(
+        provider,
+        enabled=body.enabled if body.enabled is not None else bool(existing.get("enabled")),
+        endpoint=endpoint,
+        deployment=(body.deployment.strip() if body.deployment is not None else existing.get("deployment")) or None,
+        model=(body.model.strip() if body.model is not None else existing.get("model")) or None,
+        key_secret_ref=ref,
+        updated_by=who,
+    )
+    # Audit records the config change WITHOUT the key value (only the reference name).
+    core.store.log_decision("admin", f"settings.ai_provider.{provider}",
+                            detail=f"provider={provider} enabled={body.enabled} endpoint={endpoint or '—'} "
+                                   f"key_secret_ref={ref or '—'} (key value never handled here)")
+    return {"providers": _providers.list_provider_views()}
 
 
 @router.get("/decisions")

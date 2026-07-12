@@ -18,9 +18,15 @@ handles a key; an admin enters it in the product Settings UI and it is stored as
 """
 from __future__ import annotations
 
+import os
 import time
 from typing import Protocol, runtime_checkable
 from urllib.parse import urlparse
+
+# The cloud providers the gateway knows how to configure. Slice 2 stores config for all of them;
+# slice 3 wires the Azure OpenAI *adapter* first (the enterprise-safe default). Ollama is the
+# built-in local default and needs no key, so it is not in this table.
+CLOUD_PROVIDERS = ("azure_openai", "openai", "anthropic", "gemini", "bedrock")
 
 
 def zone_for_url(base_url: str) -> str:
@@ -91,6 +97,56 @@ class OllamaVisionProvider:
         except Exception:
             return _result(text=None, model=mdl, provider=self.name, zone=self.zone,
                            latency_ms=int((time.monotonic() - t0) * 1000), ok=False)
+
+
+# ── Provider configuration (ADR 0019 §6, secret-ref design) ────────────────────
+# The DB stores non-secret config + the NAME of an environment/Key-Vault secret (key_secret_ref).
+# The key VALUE is provisioned by ops as a container secret and read here at call time — it never
+# enters the DB, a request body, a log, a trace, or the browser. credential_source is therefore
+# 'environment_managed' when a ref is set (the enterprise "this is your key in your vault" answer).
+
+def _resolve_key(cfg: dict) -> str | None:
+    """The actual API key for a provider, read from the ops-provisioned environment secret named by
+    `key_secret_ref`. Internal — only an adapter calls this, never a route or the UI. Returns None
+    when unconfigured or the secret isn't present (→ provider stays inert, routes to local + human)."""
+    ref = (cfg or {}).get("key_secret_ref")
+    return os.environ.get(ref) if ref else None
+
+
+def provider_view(cfg: dict) -> dict:
+    """A browser/route-SAFE view of one provider's config: never the key, only whether the
+    referenced secret is present. `credential_source` tells an enterprise admin who owns the
+    secret. This is the ONLY shape that leaves the backend for a provider config."""
+    ref = (cfg or {}).get("key_secret_ref") or ""
+    return {
+        "provider": cfg.get("provider"),
+        "enabled": bool(cfg.get("enabled")),
+        "endpoint": cfg.get("endpoint") or "",
+        "deployment": cfg.get("deployment") or "",
+        "model": cfg.get("model") or "",
+        "key_secret_ref": ref,                       # the NAME only, never the value
+        "key_present": bool(os.environ.get(ref)) if ref else False,
+        "credential_source": "environment_managed" if ref else "not_configured",
+        "zone": zone_for_url(cfg.get("endpoint") or "") if cfg.get("endpoint") else "cloud",
+        "updated_at": cfg.get("updated_at"),
+        "updated_by": cfg.get("updated_by"),
+    }
+
+
+def list_provider_views() -> list[dict]:
+    """Every configurable cloud provider as a SAFE view — configured ones from the DB, the rest as
+    empty/not_configured placeholders so the Settings page can render the full catalogue. Ollama
+    (the built-in local default) is reported separately by ai.provenance()/ai.vision_is_available."""
+    configured = {}
+    try:
+        import core
+        configured = {c["provider"]: c for c in core.store.list_ai_provider_configs()}
+    except Exception:
+        configured = {}
+    out = []
+    for name in CLOUD_PROVIDERS:
+        out.append(provider_view(configured.get(name, {"provider": name})))
+    return out
 
 
 def active_vision_provider() -> VisionProvider:

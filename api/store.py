@@ -298,6 +298,14 @@ _SCHEMA = [
       batch_id TEXT PRIMARY KEY, campaign_id TEXT, seq INT, status TEXT,
       filter TEXT, deadline TEXT
     )""",
+    # ADR 0019 §1/§6 — per-provider AI gateway config. NON-SECRET only: the endpoint, model, and
+    # the NAME of the container/Key-Vault secret that holds the key (key_secret_ref) — never the
+    # key value itself. The adapter resolves the key from the ops-provisioned environment secret at
+    # call time; nothing here, in the request path, or in the browser ever sees it.
+    """CREATE TABLE IF NOT EXISTS ai_provider_config (
+      provider TEXT PRIMARY KEY, enabled INT DEFAULT 0, endpoint TEXT, deployment TEXT,
+      model TEXT, key_secret_ref TEXT, updated_at TEXT, updated_by TEXT
+    )""",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -2470,6 +2478,48 @@ class Store:
         clean = sorted({e.strip().lower() for e in (emails or []) if e and "@" in e})
         self.set_setting("allowed_emails", ",".join(clean))
         return clean
+
+    def list_ai_provider_configs(self) -> list[dict]:
+        """All configured AI gateway providers (ADR 0019 §6) — NON-SECRET config only. There is
+        no key column: `key_secret_ref` names the environment/Key-Vault secret the adapter reads
+        at call time, so this method can never leak a credential."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT provider,enabled,endpoint,deployment,model,key_secret_ref,updated_at,updated_by "
+                "FROM ai_provider_config ORDER BY provider")
+            rows = self._db.fetchall(cur)
+        for r in rows:
+            r["enabled"] = bool(r.get("enabled"))
+        return rows
+
+    def get_ai_provider_config(self, provider: str) -> dict | None:
+        """One provider's non-secret config, or None if never configured."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT provider,enabled,endpoint,deployment,model,key_secret_ref,updated_at,updated_by "
+                "FROM ai_provider_config WHERE provider=%s", (provider,))
+            r = self._db.fetchone(cur)
+        if r:
+            r["enabled"] = bool(r.get("enabled"))
+        return r
+
+    def upsert_ai_provider_config(self, provider: str, *, enabled: bool, endpoint: str | None,
+                                  deployment: str | None, model: str | None,
+                                  key_secret_ref: str | None, updated_by: str | None = None) -> None:
+        """Write a provider's NON-SECRET config (ADR 0019 §6). The caller must have rejected any
+        key value before reaching here — only a secret *reference name* is ever persisted."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO ai_provider_config(provider,enabled,endpoint,deployment,model,"
+                "key_secret_ref,updated_at,updated_by) VALUES(%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(provider) DO UPDATE SET enabled=EXCLUDED.enabled,"
+                "endpoint=EXCLUDED.endpoint,deployment=EXCLUDED.deployment,model=EXCLUDED.model,"
+                "key_secret_ref=EXCLUDED.key_secret_ref,updated_at=EXCLUDED.updated_at,"
+                "updated_by=EXCLUDED.updated_by",
+                (provider, 1 if enabled else 0, endpoint, deployment, model,
+                 key_secret_ref, now, updated_by))
 
     def get_ai_enabled(self) -> bool:
         """Platform AI mode. Defaults to enabled; admin can hard-disable it
