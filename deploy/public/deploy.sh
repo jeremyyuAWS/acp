@@ -332,6 +332,10 @@ BLOB_ENV="ACP_BLOB_ACCOUNT=$BLOB_ACCOUNT"
 # if someone later sets ACP_ENABLE_TEST_BYPASS on the app. ACP_DEPLOY_ENV is the only name for
 # this; the ACA environment name is now ACP_ACA_ENV, and ACP_ENV is refused outright (preflight).
 DEPLOY_ENV_ENV="ACP_DEPLOY_ENV=production"
+# ADR 0020 stage 4 — Discover lists only; the download + WCAG analysis run at Assess. Default ON.
+# Instant revert without a code change:  ACP_DEFER_ANALYSIS_TO_ASSESS=0 bash deploy/public/deploy.sh
+DEFER_ENV="ACP_DEFER_ANALYSIS_TO_ASSESS=${ACP_DEFER_ANALYSIS_TO_ASSESS:-1}"
+echo "   defer analysis to Assess = ${ACP_DEFER_ANALYSIS_TO_ASSESS:-1} (ADR 0020)"
 echo "   deploy env = production (test/demo auth bypasses refused)"
 echo "   workers = ${ACP_WORKERS:-${WORKERS_ENV:+inherited}}${WORKERS_ENV:+}"
 echo "   allowed emails = ${ACP_ALLOWED_EMAILS:-${EMAILS_ENV:+inherited}}"
@@ -395,14 +399,14 @@ if az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" -o none 2>/dev/null; then
   _retry az containerapp registry set "${AZ[@]}" -g "$RG" -n "$APP" \
     --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
   _retry az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$ACRSERVER/$IMAGE" \
-    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV -o none
+    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV -o none
 else
   az containerapp create "${AZ[@]}" -g "$RG" -n "$APP" --environment "$ENVNAME" \
     --image "$ACRSERVER/$IMAGE" \
     --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
     --target-port 8077 --ingress external \
     --secrets "${SECRETS[@]}" \
-    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV \
+    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV \
     --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 1 -o none
 fi
 
