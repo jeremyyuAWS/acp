@@ -368,7 +368,7 @@ RULE_FORMATS: dict[str, frozenset[str]] = {
     "1.1.1": _ALL_FORMATS, "1.2.1": frozenset({"html"}), "1.2.2": frozenset({"html"}),
     "1.2.3": frozenset({"html"}), "1.3.1": _ALL_FORMATS, "1.3.2": frozenset({"pdf", "pptx", "xlsx"}), "1.3.3": _ALL_FORMATS,
     "1.3.4": frozenset({"html"}), "1.3.5": frozenset({"html"}), "1.4.1": frozenset({"html"}),
-    "1.4.2": frozenset({"html"}), "1.4.3": _ALL_FORMATS,
+    "1.4.2": frozenset({"html", "pptx"}), "1.4.3": _ALL_FORMATS,
     "1.4.4": frozenset({"html"}), "1.4.5": _OFFICE_PDF, "1.4.6": frozenset({"html", "pdf", "pptx", "xlsx"}),
     "1.4.8": frozenset({"docx"}),
     "1.4.9": _OFFICE_PDF, "1.4.10": frozenset({"html"}), "1.4.11": frozenset({"html"}),
@@ -1140,6 +1140,28 @@ class Store:
                       f"jobs for {int(age)}s (worker lost it, e.g. a deploy mid-scan)", flush=True)
                 return None
         return row
+
+    def rescue_unfinalized_scans(self) -> int:
+        """Deploy-safety net (found live 2026-07-11): a revision swap can kill the worker
+        AFTER the last scan_file persisted its row but BEFORE the count trigger enqueued
+        scan_finalize — the scan stays 'running' forever with nothing left to do. For any
+        such scan (running, zero outstanding jobs, every enqueued file persisted), enqueue
+        the finalize job. Safe by construction: scan_finalize is idempotent and
+        mark_finalized claims exactly-once, so a duplicate enqueue no-ops. Called from the
+        stuck-job sweeper each tick. Returns how many scans were rescued."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT sr.id, sr.source FROM scan_runs sr WHERE sr.status='running' "
+                "AND sr.files > 0 "
+                "AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.scan_id=sr.id "
+                "                AND j.status IN ('queued','running')) "
+                "AND (SELECT COUNT(*) FROM file_records fr WHERE fr.scan_id=sr.id) >= sr.files")
+            rows = self._db.fetchall(cur)
+        for r in rows:
+            self.enqueue_job("scan_finalize",
+                             {"scan_id": r["id"], "source": r.get("source") or "drive"},
+                             scan_id=r["id"])
+        return len(rows)
 
     def cancel_scan(self, sid: str, owner: str | None = None) -> bool:
         """Stop an in-flight fan-out scan: kill its outstanding jobs and close the run as

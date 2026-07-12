@@ -41,6 +41,7 @@ _OFFICE_STRUCT_FORMATS = {
     "3.3.2": {"docx"},
     "2.4.10": {"docx"},
     "1.4.8": {"docx"},    # docx_checks() justified-body-text check
+    "1.4.2": {"pptx"},    # pptx_audio_autoplay_checks() — auto-starting embedded audio
 }
 
 

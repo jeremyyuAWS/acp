@@ -85,3 +85,34 @@ def test_scan_with_orphaned_but_reclaimable_jobs_is_left_alone(isolated_store):
     active = s.active_scan(owner="a@x.io")
     assert active and active["id"] == "resumable"
     assert s.get_scan("resumable")["run"]["status"] == "running"
+
+
+# ── sweeper rescue: completed-but-unfinalized scans get FINISHED, not abandoned ──
+
+def _persist_files(store, sid, n):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    for i in range(n):
+        store.save_file_result(sid, {"file": f"f{i}.docx", "engine": "t", "status": "ok",
+                                     "score": 90, "compliant": 1, "skipped_rules": 0,
+                                     "issues": []}, now)
+
+
+def test_rescue_enqueues_finalize_for_a_completed_running_scan(isolated_store):
+    s = isolated_store
+    _running_scan(s, "lostfin", started_ago_s=1200, jobs=0)   # jobs done+purged, finalize lost
+    _persist_files(s, "lostfin", 5)                           # every enqueued file persisted
+    assert s.rescue_unfinalized_scans() == 1
+    stats = s.job_stats()
+    assert stats.get("queued", 0) == 1                        # the (idempotent) finalize job
+    # and it is NOT double-enqueued while that job is outstanding
+    assert s.rescue_unfinalized_scans() == 0
+
+
+def test_rescue_leaves_incomplete_and_active_scans_alone(isolated_store):
+    s = isolated_store
+    _running_scan(s, "partial", started_ago_s=1200, jobs=0)
+    _persist_files(s, "partial", 2)                           # 2 of 5 — NOT complete
+    _running_scan(s, "active", started_ago_s=1200, jobs=3)    # jobs outstanding — sweeper's turf
+    _persist_files(s, "active", 5)
+    assert s.rescue_unfinalized_scans() == 0

@@ -410,6 +410,7 @@ export default function App() {
         if (!SIM && !workers) throw new Error('no workers running — start some in Monitor (or set ACP_WORKERS)')
         setLiveScanId(scan_id)
         const t0 = Date.now()
+        let misses = 0
         for (let i = 0; i < 600 && !fresh; i++) {        // up to ~10 min for large estates
           await new Promise((r) => setTimeout(r, 1000))
           // Fan-out scans create the row early with status 'running' and bump files_done as each
@@ -417,7 +418,15 @@ export default function App() {
           // the scan row itself — no fabricated phase, no timer-driven bar.
           const elapsed = Math.round((Date.now() - t0) / 1000)
           let g = null
-          try { g = await getScan(scan_id) } catch { g = null }
+          try { g = await getScan(scan_id); misses = 0 } catch { g = null; misses++ }
+          // A deploy mid-scan drops this tab's identity; the owner-scoped lookup then 404s
+          // FOREVER (found live 2026-07-11: silent console spam, banner wedged on
+          // "Connecting…"). Persistent misses → say what happened instead of spinning.
+          if (misses >= 8) {
+            window.dispatchEvent(new CustomEvent('acp:session-expired', { detail: { reason:
+              'The app was updated and this tab’s session ended. Sign in again — your scan kept running server-side and will be here when you return.' } }))
+            return
+          }
           setProgress(g ? queuedProgress(g, elapsed) : { phase: 'connecting', elapsed })
           if (g && g.run && g.run.status !== 'running') fresh = g
         }
@@ -449,11 +458,19 @@ export default function App() {
     const t0 = Date.now()
     let fresh
     try {
+      let misses = 0
       for (let i = 0; i < 600 && !fresh; i++) {
         await new Promise((r) => setTimeout(r, 1500))
         const elapsed = Math.round((Date.now() - t0) / 1000)
         let g = null
-        try { g = await getScan(scan_id) } catch { g = null }
+        try { g = await getScan(scan_id); misses = 0 } catch { g = null; misses++ }
+        // Same deploy-dropped-identity guard as doScan: persistent owner-scoped 404s mean
+        // this tab can no longer see its scan — say so instead of spinning forever.
+        if (misses >= 8) {
+          window.dispatchEvent(new CustomEvent('acp:session-expired', { detail: { reason:
+            'The app was updated and this tab’s session ended. Sign in again — your scan kept running server-side and will be here when you return.' } }))
+          return
+        }
         setProgress(g ? queuedProgress(g, elapsed) : { phase: 'connecting', elapsed })
         if (g && g.run && g.run.status !== 'running') fresh = g
       }

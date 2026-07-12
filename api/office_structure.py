@@ -574,9 +574,49 @@ def checks_for(path: Path, ext: str) -> list[dict]:
     if ext == ".docx":
         return docx_checks(path)
     if ext == ".pptx":
-        return pptx_checks(path) + pptx_contrast_checks(path)
+        return pptx_checks(path) + pptx_contrast_checks(path) + pptx_audio_autoplay_checks(path)
     if ext == ".pdf":
         return pdf_contrast_checks(path) + pdf_bypass_blocks_check(path)
     if ext == ".xlsx":
         return xlsx_contrast_checks(path)
     return []
+
+
+# ── 1.4.2 Audio Control — pptx embedded audio set to start automatically ────────
+# WCAG 1.4.2 (A): audio that plays automatically for more than 3 seconds needs a
+# pause/stop control. A deck can't offer one, so auto-starting embedded audio is the
+# finding itself. Deterministic markers in the slide XML: an <a:audioFile> (or wav
+# embed) whose timing tree starts it with a zero-delay condition rather than an
+# onClick event. Click-started audio is fine and never flagged; duration isn't
+# stored in OOXML, so the finding routes to a human (detect-and-route, ADR 0002) —
+# never auto-passed, never auto-fixed.
+_PPTX_AUDIO = re.compile(r"<a:audioFile\b|<a:wavAudioFile\b")
+_AUTOPLAY_COND = re.compile(r'<p:cond[^>]*\bdelay="0"')
+_ONCLICK_COND = re.compile(r'<p:cond[^>]*\bevt="onClick"')
+
+
+def pptx_audio_autoplay_checks(path: Path) -> list[dict]:
+    """One 1.4.2 finding per slide whose embedded audio auto-starts. Never raises —
+    structural checks must not fail a scan."""
+    findings: list[dict] = []
+    try:
+        with zipfile.ZipFile(path) as zf:
+            for slide_name in sorted(
+                    n for n in zf.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)):
+                xml = _read(zf, slide_name)
+                if not xml or not _PPTX_AUDIO.search(xml):
+                    continue
+                timing = xml.split("<p:timing>", 1)[1] if "<p:timing>" in xml else ""
+                # Auto-start = a zero-delay trigger in the timing tree with no onClick
+                # gate. No timing tree at all → the media has no start trigger; PowerPoint
+                # treats that as click-to-play, so it is not flagged.
+                if timing and _AUTOPLAY_COND.search(timing) and not _ONCLICK_COND.search(timing):
+                    n = re.search(r"slide(\d+)\.xml", slide_name)
+                    findings.append({**_finding(
+                        "PPTX_AUDIO_AUTOPLAY", "1.4.2 Audio Control", "SERIOUS"),
+                        "detail": f"slide {n.group(1) if n else '?'} embeds audio set to start "
+                                  "automatically — audio longer than 3 seconds needs a "
+                                  "pause/stop control, which a slide deck cannot provide"})
+    except Exception:
+        return findings
+    return findings

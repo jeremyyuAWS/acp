@@ -566,6 +566,12 @@ def start_workers() -> int:
                 n = get_store().reclaim_stuck_jobs(lease_seconds=1800)
                 if n:
                     print(f"[sweeper] reclaimed {n} stuck job(s)", flush=True)
+                # Deploy-safety net (found live 2026-07-11): a scan whose files ALL
+                # persisted but whose finalize was lost to a restart gets its idempotent
+                # finalize re-enqueued — finished, not abandoned.
+                f = get_store().rescue_unfinalized_scans()
+                if f:
+                    print(f"[sweeper] re-enqueued finalize for {f} completed-but-unfinalized scan(s)", flush=True)
                 ticks += 1
                 if ticks % 60 == 0:      # ~hourly: trim old completed jobs so the jobs
                     d = get_store().purge_done_jobs(older_than_hours=24)   # table + claim index don't bloat (audit P2)

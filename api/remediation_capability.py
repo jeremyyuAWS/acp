@@ -109,6 +109,7 @@ CAPABILITY: dict[str, dict[str, str]] = {
     "pptx": {
         "1.1.1": ASSISTED,
         "1.3.1": HUMAN,      # slide table structure — no pptx structural remediator
+        "1.4.2": HUMAN,      # auto-starting embedded audio — removing/re-timing it is authoring
         "1.3.2": AUTO,       # shapes reordered to visual top-to-bottom reading order
         "1.3.3": ASSISTED,
         "1.4.3": AUTO,       # low-contrast run recolour
