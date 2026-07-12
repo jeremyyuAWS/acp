@@ -85,6 +85,30 @@ def _doc_class(ext: str, m: dict) -> str:
     return "document"
 
 
+def classify_from_metadata(name: str, mime: str | None = None) -> dict:
+    """Metadata-only inventory classification (ADR 0020 — Discover without opening the file).
+
+    Derives doc_class from the file extension / Drive mime type ALONE — no bytes read, so a
+    Discover phase can classify a whole estate in milliseconds. The detailed counts (pages,
+    images, sheets, is_scanned) that need the container stay null here; they are filled at
+    Assess by classify() when the file is actually opened. Never raises."""
+    ext = Path(name or "").suffix.lower()
+    m = (mime or "").lower()
+    base = {"pages": None, "images": None, "sheets": None, "has_text": False,
+            "has_images": False, "is_scanned": False, "doc_class": "unknown"}
+    if ext == ".pptx" or "presentation" in m:
+        base["doc_class"] = "slide-deck"
+    elif ext == ".xlsx" or "spreadsheet" in m:
+        base["doc_class"] = "spreadsheet"
+    elif ext == ".pdf" or m == "application/pdf":
+        base["doc_class"] = "pdf-document"
+    elif ext == ".docx" or ("word" in m and "document" in m):
+        base["doc_class"] = "text-document"
+    elif ext in (".html", ".htm") or "html" in m:
+        base["doc_class"] = "web-page"
+    return base
+
+
 def classify(path: Path, ext: str) -> dict:
     """Inventory metadata for one file: {pages, images, sheets, has_text, has_images,
     is_scanned, doc_class}. Cheap, deterministic, never raises. Returns a doc_class of

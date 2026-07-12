@@ -14,10 +14,60 @@ Per-file fan-out (PDF/HTML) is a possible future optimization (ADR 0004 step 3).
 """
 from __future__ import annotations
 
+import json as _json
+import os as _os
+
 import core
 import provenance
 from worker import handler, FatalJobError
 from scanner import run_scan
+
+
+def _defer_analysis_to_assess() -> bool:
+    """ADR 0020 stage 4 kill-switch. When on, Discover only LISTS the estate (metadata, no file
+    opened) and the download + WCAG analysis run at Assess time instead. Read per-call so the
+    flag can be flipped by env without a code change; default off keeps today's behaviour until
+    the switch is deliberately set."""
+    return _os.environ.get("ACP_DEFER_ANALYSIS_TO_ASSESS", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _enqueue_analysis(scan_id: str, source: str, items: list[dict], *, ai: bool, pii: bool,
+                      user: str | None, incremental: bool, exclude_remediated: bool,
+                      force_batch: bool = False) -> None:
+    """Fan out the download+analyse work over `items` — one scan_file per file, or scan_batch
+    chunks for large estates (ADR 0008). Shared by the immediate scan path and the deferred
+    Assess path so both enqueue identical work; the last completing job finalizes (ADR 0013)."""
+    from store import logical_name as _logical_name
+    from scanner import SCAN_BATCH_SIZE, SCAN_BATCH_THRESHOLD
+    if not items:
+        core.store.enqueue_job("scan_finalize",
+                               {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)
+        return
+    name_counts: dict[str, int] = {}
+    for it in items:
+        name_counts[_logical_name(it["file"])] = name_counts.get(_logical_name(it["file"]), 0) + 1
+    use_batch = force_batch or len(items) >= SCAN_BATCH_THRESHOLD
+    if use_batch:
+        for i in range(0, len(items), SCAN_BATCH_SIZE):
+            chunk = items[i:i + SCAN_BATCH_SIZE]
+            core.store.enqueue_job("scan_batch", {
+                "scan_id": scan_id, "source": source, "ai": ai, "pii": pii, "user": user,
+                "incremental": incremental,
+                "items": [{"file": it["file"], "drive_file_id": it.get("drive_file_id"),
+                           "mime": it.get("mime"), "path": it.get("path"),
+                           "checksum": it.get("checksum"),
+                           "shadow_candidate": name_counts[_logical_name(it["file"])] > 1,
+                           "exclude_remediated": exclude_remediated} for it in chunk],
+            }, scan_id=scan_id)
+    else:
+        for it in items:
+            core.store.enqueue_job("scan_file", {
+                "scan_id": scan_id, "source": source, "file": it["file"],
+                "drive_file_id": it.get("drive_file_id"), "mime": it.get("mime"), "path": it.get("path"),
+                "checksum": it.get("checksum"),
+                "shadow_candidate": name_counts[_logical_name(it["file"])] > 1,
+                "exclude_remediated": exclude_remediated,
+                "ai": ai, "pii": pii, "user": user, "incremental": incremental}, scan_id=scan_id)
 from remediate import remediate_html
 
 
@@ -514,8 +564,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
     scan_file job per file. Each file's Langfuse trace is opened later, per file, by
     _analyse_and_persist_one — not here."""
     from rubric import Rubric
-    from scanner import (_list, _drive_service, ACP, FANOUT_MAX_FILES, SCAN_BATCH_SIZE,
-                         SCAN_BATCH_THRESHOLD)
+    from scanner import _list, _drive_service, ACP, FANOUT_MAX_FILES
     scan_id = payload.get("scan_id") or job.get("scan_id")
     source = payload.get("source", "drive")
     ai = bool(payload.get("ai", True)) and core.store.get_ai_enabled()
@@ -529,53 +578,70 @@ def _scan_discover(payload: dict, job: dict) -> None:
     items = _list(source, svc, folder=effective_folder, sp_token=toks.get("sp"),
                   max_files=FANOUT_MAX_FILES,
                   exclude_remediated=bool(payload.get("exclude_remediated", False)))
-    # Which discovered files share a logical name with another? Only those can be ACP's own
-    # output SHADOWING a source document. A stamped file standing alone under its own name is
-    # a certified document published back into the estate — it must still be scanned.
-    # The content stamp needs the bytes, so the final call happens per-file in scan_file; this
-    # just tells that job whether the question is even worth asking.
-    from store import logical_name as _logical_name
-    _name_counts: dict[str, int] = {}
-    for _it in items:
-        _name_counts[_logical_name(_it["name"])] = _name_counts.get(_logical_name(_it["name"]), 0) + 1
+    # shadow_candidate (a file sharing a logical name with another — possibly ACP's own output
+    # shadowing its source) is computed inside _enqueue_analysis from the item list, so the same
+    # rule applies whether the fan-out runs now or later at Assess.
     _exclude_rem = bool(payload.get("exclude_remediated", False))
 
     started = _dt.datetime.now(_dt.timezone.utc).isoformat()
-    core.store.init_scan_run(scan_id, source, len(items), started, rb.name, rb.hash, owner=user)
+    defer = _defer_analysis_to_assess()
+    incremental = bool(payload.get("incremental", True))
+    core.store.init_scan_run(scan_id, source, len(items), started, rb.name, rb.hash, owner=user,
+                             status="discovered" if defer else "running")
     if not items:
         core.store.enqueue_job("scan_finalize",
                                {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)
         return
-    # ADR 0008: very large estates fan out as batches (N files / job) instead of one job
-    # per file — far less queue churn + claim contention. Per-file stays the proven default
-    # below the threshold; an explicit batch=true forces the batch path. The persisted
-    # results and Langfuse traces are identical either way — only job granularity changes.
-    # No more per-document span cap here: file-centric tracing (lf.file_trace) gives every
-    # file its OWN trace, so there's no single big trace whose span count could break the
-    # Langfuse OSS detail view — the old SCAN_TRACE_SPAN_CAP problem this guarded against.
-    use_batch = bool(payload.get("batch")) or len(items) >= SCAN_BATCH_THRESHOLD
-    if use_batch:
-        for i in range(0, len(items), SCAN_BATCH_SIZE):
-            chunk = items[i:i + SCAN_BATCH_SIZE]
-            core.store.enqueue_job("scan_batch", {
-                "scan_id": scan_id, "source": source, "ai": ai, "pii": pii, "user": user,
-                "incremental": bool(payload.get("incremental", True)),
-                "items": [{"file": it["name"], "drive_file_id": it.get("id"),
-                           "mime": it.get("mime"), "path": it.get("path"),
-                           "checksum": it.get("checksum"),
-                           "shadow_candidate": _name_counts[_logical_name(it["name"])] > 1,
-                           "exclude_remediated": _exclude_rem} for it in chunk],
-            }, scan_id=scan_id)
-    else:
-        for it in items:
-            core.store.enqueue_job("scan_file", {
-                "scan_id": scan_id, "source": source, "file": it["name"],
-                "drive_file_id": it.get("id"), "mime": it.get("mime"), "path": it.get("path"),
-                "checksum": it.get("checksum"),
-                "shadow_candidate": _name_counts[_logical_name(it["name"])] > 1,
-                "exclude_remediated": _exclude_rem,
-                "ai": ai, "pii": pii, "user": user,
-                "incremental": bool(payload.get("incremental", True))}, scan_id=scan_id)
+    # Normalise the source listing to the common analysis-item shape.
+    norm = [{"file": it["name"], "drive_file_id": it.get("id"), "mime": it.get("mime"),
+             "path": it.get("path"), "checksum": it.get("checksum")} for it in items]
+    if defer:
+        # ADR 0020 stage 3/4 — Discover LISTS only: classify from metadata (no file opened),
+        # persist the inventory + the scan-level params, and STOP. The estate is browsable in
+        # seconds; the download + WCAG analysis happen at Assess (scan_assess), which rebuilds
+        # identical fan-out work from this inventory. file_records stay empty until then, so the
+        # finalize counter (count_files_done) is untouched by deferral.
+        import classify as _cls
+        inv = [{**it, "size_kb": None,
+                "doc_class": _cls.classify_from_metadata(it["file"], it.get("mime"))["doc_class"]}
+               for it in norm]
+        core.store.add_inventory(scan_id, inv)
+        core.store.set_setting(f"assess_params:{scan_id}", _json.dumps(
+            {"source": source, "ai": ai, "pii": pii, "incremental": incremental,
+             "exclude_remediated": _exclude_rem, "batch": bool(payload.get("batch"))}))
+        core.store.log_decision("system", "scan.discovered", scan_id=scan_id,
+                                detail=f"{len(inv)} file(s) inventoried from metadata (no file opened) — awaiting Assess")
+        return
+    # Immediate path (default today): fan out the analysis now. ADR 0008 batches large estates.
+    _enqueue_analysis(scan_id, source, norm, ai=ai, pii=pii, user=user,
+                      incremental=incremental, exclude_remediated=_exclude_rem,
+                      force_batch=bool(payload.get("batch")))
+
+
+@handler("scan_assess")
+def _scan_assess(payload: dict, job: dict) -> None:
+    """ADR 0020 — begin the ASSESS phase for a discovered scan: rebuild the download+analyse
+    fan-out from the persisted inventory + scan params, flip the run back to 'running', and let
+    the existing per-file jobs + finalize trigger take over. Idempotent: if file_records already
+    exist (a prior assess ran), re-enqueuing is harmless (save_file_result upserts)."""
+    scan_id = payload.get("scan_id") or job.get("scan_id")
+    user = payload.get("user")
+    inv = core.store.list_inventory(scan_id)
+    try:
+        params = _json.loads(core.store.get_setting(f"assess_params:{scan_id}") or "{}")
+    except Exception:
+        params = {}
+    source = params.get("source", payload.get("source", "drive"))
+    ai = bool(params.get("ai", True)) and core.store.get_ai_enabled()
+    pii = bool(params.get("pii", False))
+    incremental = bool(params.get("incremental", True))
+    exclude_rem = bool(params.get("exclude_remediated", False))
+    core.store.set_scan_status(scan_id, "running")
+    items = [{"file": r["file"], "drive_file_id": r.get("drive_file_id"), "mime": r.get("mime"),
+              "path": r.get("path"), "checksum": r.get("checksum")} for r in inv]
+    _enqueue_analysis(scan_id, source, items, ai=ai, pii=pii, user=user,
+                      incremental=incremental, exclude_remediated=exclude_rem,
+                      force_batch=bool(params.get("batch")))
 
 
 def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, user=None,
@@ -799,6 +865,13 @@ def _scan_finalize(payload: dict, job: dict) -> None:
     core.store.finalize_scan_run(scan_id, now)
     _lf.flush()
     core.finalize_scan(scan_id, ai, source)
+    # ADR 0020 — for a DEFERRED scan the Assess-phase analysis just completed, so this IS the
+    # assessment: stamp assessed_at + build the assess trace now (in the immediate-scan model the
+    # user runs Assess manually later, so we don't auto-mark there). assess_params exists only for
+    # deferred scans, so this gate never fires on a normal scan.
+    if core.store.get_setting(f"assess_params:{scan_id}"):
+        core.store.mark_assessed(scan_id, now)
+        core.store.enqueue_job("assess_trace", {"scan_id": scan_id, "level": "AA"}, scan_id=scan_id)
     core.clear_scan_tokens(scan_id)
 
 

@@ -47,10 +47,13 @@ def test_skip_requires_both_a_name_collision_and_the_stamp():
 
 
 def test_both_fanout_paths_carry_the_flag():
+    # The fan-out enqueue now lives in _enqueue_analysis (shared by the immediate scan and the
+    # deferred Assess path, ADR 0020); both the per-file and batch branches must still stamp the
+    # shadow_candidate + exclude_remediated flags so the shadow-skip works whenever analysis runs.
     src = HANDLERS.read_text()
-    assert src.count('"shadow_candidate": _name_counts[_logical_name(') == 2, \
+    assert src.count('"shadow_candidate": name_counts[_logical_name(') == 2, \
         "scan_file AND scan_batch must both carry shadow_candidate"
-    assert src.count('"exclude_remediated": _exclude_rem') == 2
+    assert src.count('"exclude_remediated": exclude_remediated') == 2
 
 
 # ── the collision flag itself ──

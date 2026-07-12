@@ -200,13 +200,27 @@ def scan(sid: str, request: Request):
 
 @router.post("/scans/{sid}/assess")
 def assess(sid: str, request: Request, level: str = Query("AA")):
-    """Write the WCAG rule assessment to Langfuse on demand — separate from the scan
-    trace (which is discovery + deep-scan only). Enqueued to the durable worker."""
-    if core.store.get_scan(sid, owner=_owner(request)) is None:
+    """Run the assessment. In the deferred-analysis model (ADR 0020) a Discover-only scan has an
+    inventory but no assessed file_records yet, so this KICKS OFF the download+WCAG fan-out (the
+    heavy work now lives here, not in Discover) — assessed_at is stamped when that analysis
+    finalizes. In the immediate model it just marks assessed + builds the assess trace, as before.
+    Both enqueue to the durable worker."""
+    scan = core.store.get_scan(sid, owner=_owner(request))
+    if scan is None:
         raise HTTPException(404, "scan not found")
-    # Mark the scan assessed — the results views (Overview/Dashboard/Monitor) gate on this,
-    # so scores only appear once the user has explicitly run Assess.
     import datetime as _dt
+    # Deferred: analysis hasn't run yet (inventory present, no assessed rows, scan 'discovered').
+    # Start it; do NOT mark assessed here — that happens at finalize when results actually exist.
+    deferred_pending = (
+        (scan.get("run", {}).get("status") == "discovered")
+        and core.store.count_inventory(sid) > 0
+        and core.store.get_setting(f"assess_params:{sid}") is not None
+    )
+    if deferred_pending:
+        jid = core.store.enqueue_job("scan_assess", {"scan_id": sid, "user": _owner(request)}, scan_id=sid)
+        return {"scan_id": sid, "level": level, "job_id": jid, "workers": core.WORKERS,
+                "phase": "assessing", "deferred": True}
+    # Immediate model — the results views gate on assessed_at; stamp it + build the assess trace.
     core.store.mark_assessed(sid, _dt.datetime.now(_dt.timezone.utc).isoformat())
     jid = core.store.enqueue_job("assess_trace", {"scan_id": sid, "level": level}, scan_id=sid)
     return {"scan_id": sid, "level": level, "job_id": jid, "workers": core.WORKERS}

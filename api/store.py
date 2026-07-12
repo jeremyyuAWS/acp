@@ -306,6 +306,15 @@ _SCHEMA = [
       provider TEXT PRIMARY KEY, enabled INT DEFAULT 0, endpoint TEXT, deployment TEXT,
       model TEXT, key_secret_ref TEXT, updated_at TEXT, updated_by TEXT
     )""",
+    # ADR 0020 stage 3 — the Discover-phase inventory: what was FOUND, from source metadata only
+    # (no file opened). Distinct from file_records, which holds ASSESSED results written later at
+    # Assess time. Keeping them separate means the finalize machinery (count_files_done over
+    # file_records) is untouched by deferral — file_records still fill 0→N only during Assess.
+    """CREATE TABLE IF NOT EXISTS scan_inventory (
+      scan_id TEXT, file TEXT, drive_file_id TEXT, mime TEXT, size_kb INT,
+      doc_class TEXT, checksum TEXT, path TEXT,
+      PRIMARY KEY (scan_id, file)
+    )""",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -802,13 +811,49 @@ class Store:
 
     # ── Fan-out scan pipeline (ADR 0007) ──────────────────────────────────────
     def init_scan_run(self, scan_id: str, source: str, total: int, started_at: str,
-                      rubric_name: str, rubric_hash: str, owner: str | None = None) -> None:
-        """Create the scan_runs row at discover time (status=running, counter=0)."""
+                      rubric_name: str, rubric_hash: str, owner: str | None = None,
+                      status: str = "running") -> None:
+        """Create the scan_runs row at discover time (counter=0). `status` defaults to 'running'
+        (analysis in flight); the deferred-analysis Discover phase (ADR 0020) passes 'discovered'
+        — inventory listed, awaiting an explicit Assess before any file is opened."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO scan_runs(id,started_at,source,rubric_name,rubric_hash,files,files_done,status,owner_email) "
-                "VALUES(%s,%s,%s,%s,%s,%s,0,'running',%s) ON CONFLICT(id) DO NOTHING",
-                (scan_id, started_at, source, rubric_name, rubric_hash, total, owner))
+                "VALUES(%s,%s,%s,%s,%s,%s,0,%s,%s) ON CONFLICT(id) DO NOTHING",
+                (scan_id, started_at, source, rubric_name, rubric_hash, total, status, owner))
+
+    def set_scan_status(self, scan_id: str, status: str) -> None:
+        """Move a scan between phases — e.g. 'discovered' → 'running' when Assess begins."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "UPDATE scan_runs SET status=%s WHERE id=%s", (status, scan_id))
+
+    def add_inventory(self, scan_id: str, items: list[dict]) -> None:
+        """Persist the Discover-phase inventory (ADR 0020) — metadata only, no file opened.
+        Idempotent per (scan_id, file) so a re-listed discover doesn't duplicate."""
+        if not items:
+            return
+        with self._db.cursor() as cur:
+            for it in items:
+                self._db.execute(cur,
+                    "INSERT INTO scan_inventory(scan_id,file,drive_file_id,mime,size_kb,doc_class,checksum,path) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
+                    "drive_file_id=EXCLUDED.drive_file_id, mime=EXCLUDED.mime, size_kb=EXCLUDED.size_kb, "
+                    "doc_class=EXCLUDED.doc_class, checksum=EXCLUDED.checksum, path=EXCLUDED.path",
+                    (scan_id, it.get("file"), it.get("drive_file_id"), it.get("mime"),
+                     it.get("size_kb"), it.get("doc_class"), it.get("checksum"), it.get("path")))
+
+    def list_inventory(self, scan_id: str) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT scan_id,file,drive_file_id,mime,size_kb,doc_class,checksum,path "
+                "FROM scan_inventory WHERE scan_id=%s ORDER BY file", (scan_id,))
+            return self._db.fetchall(cur)
+
+    def count_inventory(self, scan_id: str) -> int:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT COUNT(*) AS n FROM scan_inventory WHERE scan_id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+        return (row or {}).get("n", 0) or 0
 
     def save_file_result(self, scan_id: str, f: dict, completed_at: str) -> None:
         """Persist one assessed file (same shape save_scan writes). Idempotent so a
@@ -1214,6 +1259,20 @@ class Store:
                 "SELECT file,engine,status,score,compliant,skipped_rules,remediated_at,drive_write_url,acp_stamped,published_at,size_kb,pages,sheets,drive_file_id "
                 "FROM file_records WHERE scan_id=%s ORDER BY file", (sid,))
             files = self._db.fetchall(cur)
+            # ADR 0020 — a Discover-only scan (analysis deferred to Assess) has an inventory but no
+            # assessed file_records yet. Surface the inventory as 'discovered' rows so Discover shows
+            # the estate; every score/finding field is null/empty (nothing was opened). Once Assess
+            # writes real file_records, those win and this fallback goes quiet.
+            if not files:
+                self._db.execute(cur,
+                    "SELECT file,doc_class,size_kb,drive_file_id FROM scan_inventory WHERE scan_id=%s ORDER BY file", (sid,))
+                inv = self._db.fetchall(cur)
+                files = [{"file": r["file"], "engine": r.get("doc_class") or "inventory",
+                          "status": "discovered", "score": None, "compliant": 0,
+                          "skipped_rules": 0, "remediated_at": None, "drive_write_url": None,
+                          "acp_stamped": None, "published_at": None, "size_kb": r.get("size_kb"),
+                          "pages": None, "sheets": None, "drive_file_id": r.get("drive_file_id")}
+                         for r in inv]
             # Drop ACP's own remediated copies when they shadow the source document they were
             # made from. They are artifacts, not documents in the estate: counting them
             # inflated "total scanned", invented a "duplicate", and made a scan that
