@@ -1545,6 +1545,16 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .rc-metric b { font-size: 22px; font-weight: 600; }
 .rc-body { overflow-y: auto; padding: 4px 22px 22px; }
 .rc-empty { padding: 40px 0; text-align: center; color: var(--muted); }
+/* Three review types — each section header is the contract for the work beneath it. */
+.rc-type { margin-top: 20px; }
+.rc-type:first-of-type { margin-top: 8px; }
+.rc-type-head { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px;
+  border-radius: 10px; border: 1px solid var(--line); border-left-width: 4px; }
+.rc-type-title { font-size: 14px; font-weight: 700; }
+.rc-type-promise { font-size: 12px; }
+.rc-type-proposal { border-left-color: #7C5CBF; background: #F7F4FB; }
+.rc-type-confirm  { border-left-color: #3B6D11; background: #F4F8F0; }
+.rc-type-author   { border-left-color: #8A5A00; background: #FBF7EF; }
 .rc-group { margin-top: 16px; }
 .rc-group-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
 .rc-group-title { font-size: 13px; font-weight: 700; }

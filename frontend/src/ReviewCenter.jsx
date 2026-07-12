@@ -5,7 +5,7 @@ import { openTraceUrl } from './api.js'
 import EvidenceCard from './EvidenceCard.jsx'
 // proposalMeta / firstProposed live in reviewCard.js — the single source of truth for how a
 // hitl_queue.proposals row is read. EvidenceCard uses them too; don't fork the logic.
-import { VALUE_FIX, firstProposed, proposalMeta } from './reviewCard.js'
+import { VALUE_FIX, firstProposed, proposalMeta, reviewType, REVIEW_TYPES } from './reviewCard.js'
 
 // Rules whose fix IS a value a human writes/edits (alt text, link text, title, label) —
 // these get an editable "approved value" box (the AI draft, if any, prefilled). Judgement
@@ -29,21 +29,34 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
   const reviewedN = items.filter((i) => i.status !== 'pending').length
   const totalN = items.length
 
-  // Group pending by issue type; order groups by their most-urgent item.
-  const groups = useMemo(() => {
-    const m = new Map()
-    for (const it of pending) {
-      const k = groupLabel(it)
-      if (!m.has(k)) m.set(k, [])
-      m.get(k).push(it)
-    }
-    return [...m.entries()]
-      .map(([label, its]) => ({ label, items: its.sort((a, b) => priorityScore(b) - priorityScore(a)) }))
-      .sort((a, b) => priorityScore(b.items[0]) - priorityScore(a.items[0]))
+  // Three review types (canonical HITL vision): AI-proposal validation, deterministic
+  // confirmation, and manual authoring are DIFFERENT JOBS with different promises — mixing
+  // them in one list forces the reviewer to decode what kind of work each row is. Partition
+  // by reviewType (per-item, from real data), then keep the issue-type grouping within each.
+  // Order = effort: drafted one-click approvals first, applied-fix confirmations next, the
+  // real authoring work last.
+  const sections = useMemo(() => {
+    const byType = { proposal: [], confirm: [], author: [] }
+    for (const it of pending) byType[reviewType(it)].push(it)
+    return ['proposal', 'confirm', 'author']
+      .filter((t) => byType[t].length)
+      .map((t) => {
+        const m = new Map()
+        for (const it of byType[t]) {
+          const k = groupLabel(it)
+          if (!m.has(k)) m.set(k, [])
+          m.get(k).push(it)
+        }
+        const groups = [...m.entries()]
+          .map(([label, its]) => ({ label, items: its.sort((a, b) => priorityScore(b) - priorityScore(a)) }))
+          .sort((a, b) => priorityScore(b.items[0]) - priorityScore(a.items[0]))
+        return { type: REVIEW_TYPES[t], count: byType[t].length, groups }
+      })
   }, [pending])
 
   // Flat render-order list + a cursor, for keyboard-driven review (j/k, a/r/s, Enter).
-  const ordered = useMemo(() => groups.flatMap((g) => g.items), [groups])
+  const ordered = useMemo(
+    () => sections.flatMap((s) => s.groups.flatMap((g) => g.items)), [sections])
   const [cursor, setCursor] = useState(0)
 
   // Bulk path only. A single item is decided inside its EvidenceCard, which carries the
@@ -115,7 +128,16 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
           {error && <div className="rc-empty">The review queue is unavailable right now. <button className="ghost small" onClick={onRefresh}>Retry</button></div>}
           {!error && pending.length === 0 && <div className="rc-empty">All caught up — nothing awaiting review. ✓</div>}
 
-          {groups.map((grp) => (
+          {sections.map((sec) => (
+            <section className="rc-type" key={sec.type.key} aria-label={sec.type.label}>
+              {/* The review-type header is the contract for everything under it: what kind of
+                  work this is, and what clicking approve actually does. Three different jobs
+                  must not read as one undifferentiated queue. */}
+              <div className={`rc-type-head rc-type-${sec.type.key}`}>
+                <span className="rc-type-title">{sec.type.icon} {sec.type.label} <b>· {sec.count}</b></span>
+                <span className="muted rc-type-promise">{sec.type.promise}</span>
+              </div>
+          {sec.groups.map((grp) => (
             <section className="rc-group" key={grp.label}>
               <div className="rc-group-head">
                 <span className="rc-group-title">{grp.label} <span className="muted">· {grp.items.length}</span></span>
@@ -163,6 +185,8 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
                   </div>
                 )
               })}
+            </section>
+          ))}
             </section>
           ))}
           {pending.length > 0 && (

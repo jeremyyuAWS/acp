@@ -510,3 +510,36 @@ export function groupPages(pageMap) {
     .map(([page, idxs]) => [page, idxs.sort((a, b) => a - b)])
     .sort((a, b) => a[0] - b[0])
 }
+
+// ── Three review types (canonical HITL vision: don't force three different jobs into one
+// generic card). Classified per ITEM from data that already exists — never per SC, because a
+// 1.1.1 row can arrive with AI drafts (validate them) or with only evidence thumbnails
+// (author a description). The type tells the reviewer WHAT KIND OF WORK this is before they
+// open it, and gives each kind its own promise + primary verb.
+//
+//   proposal — AI/heuristic drafted a concrete value; the human validates and approves it.
+//   confirm  — ACP already applied a deterministic fix ('auto/verify' pseudo-rule); the human
+//              eyeballs and confirms — no authoring, no wording judgement.
+//   author   — ACP detected the issue but has no safe draft; the human writes the fix and
+//              ACP applies + re-validates it.
+export function reviewType(item) {
+  if (String(item?.rule_id || '').startsWith('auto/')) return 'confirm'
+  const props = proposalsOf(item)
+  if (props.some((p) => String(p?.proposed_value ?? '').trim() !== '')) return 'proposal'
+  return 'author'
+}
+
+export const REVIEW_TYPES = {
+  proposal: {
+    key: 'proposal', icon: '✨', label: 'AI proposals — validate & approve',
+    promise: 'ACP drafted each fix. Check it against the evidence and approve — or edit it first.',
+  },
+  confirm: {
+    key: 'confirm', icon: '🛡', label: 'Deterministic fixes — confirm',
+    promise: 'ACP already applied these rule-based fixes and re-validated them. Eyeball and confirm.',
+  },
+  author: {
+    key: 'author', icon: '✍️', label: 'Needs your judgement — author the fix',
+    promise: 'No safe automatic fix exists for these. You write the value; ACP applies and re-scans it.',
+  },
+}
