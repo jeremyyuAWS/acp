@@ -80,6 +80,16 @@ function DriveMirror() {
       .catch((e) => setMsg(e.message || 'update failed'))
       .finally(() => setBusy(false))
   }
+  const [aiUrl, setAiUrl] = useState('')
+  const [aiVision, setAiVision] = useState('')
+  useEffect(() => { if (settings) { setAiUrl(settings.ai_base_url || ''); setAiVision(settings.ai_vision_model || '') } }, [settings])
+  const saveEndpoint = () => {
+    setBusy(true); setMsg('')
+    updateSettings({ ai_base_url: aiUrl.trim(), ai_vision_model: aiVision.trim() })
+      .then((s) => { setSettings(s); setMsg('✓ endpoint switched — takes effect on every replica within ~30s, no restart') })
+      .catch((e) => setMsg(e.message || 'update failed'))
+      .finally(() => setBusy(false))
+  }
   const toggleAutoApply = () => {
     setBusy(true); setMsg('')
     updateSettings({ auto_apply_validated: !settings.auto_apply_validated })
@@ -146,6 +156,26 @@ function DriveMirror() {
               : 'Off — every ungrounded draft waits for one-click human approval (the default).'}
           </span>
         </span>
+      </label>
+      <h3>AI endpoint <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>· GPU burst without a restart</span></h3>
+      <p className="muted" style={{ fontSize: 13 }}>
+        Point the platform at a different Ollama endpoint (e.g. a burst GPU pod) at runtime —
+        it takes effect on every replica within ~30 seconds, with <b>no container restart</b>,
+        so running scans are never disturbed. Empty = the deploy's default. Every switch is
+        audited, and the 🟢 local / 🟡 cloud provenance badge follows the endpoint truthfully.
+      </p>
+      <label style={{ fontSize: 13, display: 'block' }}>Ollama base URL
+        <input value={aiUrl} onChange={(e) => setAiUrl(e.target.value)} disabled={busy}
+               placeholder="empty = deploy default"
+               style={{ display: 'block', width: '100%', padding: '4px 8px', margin: '6px 0 10px', border: '1px solid var(--line)', borderRadius: 6 }} />
+      </label>
+      <label style={{ fontSize: 13, display: 'block' }}>Vision model
+        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+          <input value={aiVision} onChange={(e) => setAiVision(e.target.value)} disabled={busy}
+                 placeholder="empty = deploy default (e.g. llava:13b on a GPU)"
+                 style={{ padding: '4px 8px', border: '1px solid var(--line)', borderRadius: 6, flex: 1 }} />
+          <button className="ghost small" onClick={saveEndpoint} disabled={busy}>Apply</button>
+        </div>
       </label>
       {msg && <p style={{ marginTop: 12, fontSize: 13, color: msg.startsWith('✓') ? '#3B6D11' : '#A32D2D' }}>{msg}</p>}
     </div>

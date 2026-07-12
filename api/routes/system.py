@@ -196,6 +196,9 @@ class SettingsUpdate(BaseModel):
     drive_mirror_enabled: bool | None = None
     drive_mirror_folder: str | None = None
     auto_apply_validated: bool | None = None
+    ai_base_url: str | None = None          # runtime AI endpoint override; "" clears → env default
+    ai_vision_model: str | None = None
+    ai_text_model: str | None = None
 
 
 @router.get("/settings")
@@ -206,7 +209,11 @@ def get_settings():
     return {"ai_enabled": core.store.get_ai_enabled(),
             "drive_mirror_enabled": core.store.get_drive_mirror_enabled(),
             "drive_mirror_folder": core.store.get_drive_mirror_folder(),
-            "auto_apply_validated": core.store.get_auto_apply_validated()}
+            "auto_apply_validated": core.store.get_auto_apply_validated(),
+            # Runtime AI endpoint override (GPU burst) — empty string = env default in use.
+            "ai_base_url": core.store.get_setting("ai_base_url", "") or "",
+            "ai_vision_model": core.store.get_setting("ai_vision_model", "") or "",
+            "ai_text_model": core.store.get_setting("ai_text_model", "") or ""}
 
 
 @router.put("/settings")
@@ -224,6 +231,25 @@ def update_settings(body: SettingsUpdate, request: Request):
         core.store.log_decision(
             "admin", "settings.drive_mirror_folder",
             detail=f"drive_mirror_folder set to {folder}")
+    for key, val in (("ai_base_url", body.ai_base_url),
+                     ("ai_vision_model", body.ai_vision_model),
+                     ("ai_text_model", body.ai_text_model)):
+        if val is None:
+            continue
+        val = val.strip()
+        if key == "ai_base_url" and val and not val.startswith(("http://", "https://")):
+            raise HTTPException(422, "ai_base_url must be an http(s) URL (or empty to use the deploy default)")
+        core.store.set_setting(key, val)
+        core.store.log_decision("admin", f"settings.{key}",
+                                detail=f"{key} set to {val or '(deploy default)'} — takes effect "
+                                       "on every replica within ~30s, no restart")
+        # This replica switches immediately; the others follow via the TTL refresh.
+        try:
+            import ai as _ai
+            _ai._override_checked["at"] = 0.0
+            _ai._maybe_refresh_endpoint()
+        except Exception:
+            pass
     if body.auto_apply_validated is not None:
         core.store.set_auto_apply_validated(body.auto_apply_validated)
         core.store.log_decision(

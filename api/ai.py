@@ -299,8 +299,44 @@ def _tags_cached() -> list[dict] | None:
     return tags
 
 
+# ── Runtime endpoint override (GPU burst pattern, no revision swap) ─────────────
+# The endpoint used to live only in env vars, so pointing the app at a burst GPU (or back
+# to CPU) required a container revision swap — which restarts the workers and was the root
+# cause of the 2026-07-11 wedged-scan incident. The admin Settings override lives in the
+# store instead: refreshed here on a short TTL, it reassigns the module globals every call
+# site already reads, so a switch takes effect within seconds on EVERY replica, no restart.
+# Empty/absent settings mean the env-var defaults — existing deployments are unchanged.
+_ENV_DEFAULTS = {"base": OLLAMA_BASE_URL, "vision": OLLAMA_VISION_MODEL, "text": OLLAMA_MODEL}
+_OVERRIDE_TTL_S = 30.0
+_override_checked = {"at": 0.0}
+
+
+def _maybe_refresh_endpoint() -> None:
+    """Re-read the runtime endpoint override (TTL-bounded) and reassign the module globals.
+    Best-effort: any store hiccup leaves the current endpoint in place."""
+    import time as _t
+    global OLLAMA_BASE_URL, OLLAMA_VISION_MODEL, OLLAMA_MODEL
+    now = _t.monotonic()
+    if now - _override_checked["at"] < _OVERRIDE_TTL_S:
+        return
+    _override_checked["at"] = now
+    try:
+        import core as _core
+        new_base = (_core.store.get_setting("ai_base_url") or "").strip().rstrip("/") or _ENV_DEFAULTS["base"]
+        new_vision = (_core.store.get_setting("ai_vision_model") or "").strip() or _ENV_DEFAULTS["vision"]
+        new_text = (_core.store.get_setting("ai_text_model") or "").strip() or _ENV_DEFAULTS["text"]
+        if (new_base, new_vision, new_text) != (OLLAMA_BASE_URL, OLLAMA_VISION_MODEL, OLLAMA_MODEL):
+            OLLAMA_BASE_URL, OLLAMA_VISION_MODEL, OLLAMA_MODEL = new_base, new_vision, new_text
+            reset_probe_cache()   # the availability probe must re-check the NEW endpoint
+            print(f"[ai] endpoint switched to {OLLAMA_BASE_URL} "
+                  f"(vision={OLLAMA_VISION_MODEL}, text={OLLAMA_MODEL})", flush=True)
+    except Exception:
+        pass
+
+
 def is_available() -> bool:
     """Quick ping to check if Ollama is reachable (tolerates a scale-from-zero cold start)."""
+    _maybe_refresh_endpoint()
     return _tags_cached() is not None
 
 
@@ -308,6 +344,7 @@ def vision_is_available() -> bool:
     """True only when Ollama is reachable AND the configured vision model is pulled.
     Distinct from is_available(): a text-only Ollama is 'available' but cannot describe
     images, so the alt-text remediator must gate genuine captioning on this, not is_available."""
+    _maybe_refresh_endpoint()
     tags = _tags_cached()
     if not tags:
         return False
