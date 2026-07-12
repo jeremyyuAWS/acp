@@ -61,15 +61,35 @@ def test_a_deferral_occupies_the_criterion_row_not_a_second_one(store):
     assert ids == {"1.1.1"}
 
 
-def test_no_commercial_llm_surface():
-    # The AI layer is 100% local: no Anthropic/OpenAI SDK, no key, no external
-    # call path. Even with a (would-bill) key set, there is nothing to invoke it —
-    # the module carries no commercial-LLM symbols at all.
+def test_ai_module_stays_vendor_agnostic():
+    # ai.py orchestrates; it must never name or import a cloud vendor (rule 6 / ADR 0019 §1).
+    # The provider adapters live behind the seam in providers.py — ai.py learns a provider's
+    # name only from the adapter's result at runtime, never as a literal or an SDK import.
     import ai
     src = open(ai.__file__).read().lower()
     assert "anthropic" not in src, "ai.py must not reference Anthropic"
     assert "openai" not in src, "ai.py must not reference OpenAI"
     assert not hasattr(ai, "_claude_complete") and not hasattr(ai, "_claude_narrative")
+
+
+def test_cloud_is_opt_in_and_keyless_by_default():
+    # ADR 0019 Phase 1: a cloud adapter EXISTS in providers.py (opt-in escalation), but the default
+    # build ships no key and no enabled cloud provider — so there is no external call path out of the
+    # box, and providers.py holds no hardcoded credential (only an env-secret REFERENCE is ever read).
+    import providers
+    src = open(providers.__file__).read()
+    assert "os.environ.get" in src, "the key must come from an env secret, never a literal"
+    # no obvious hardcoded key literal (sk-…/api-key=…) baked into the seam
+    assert "sk-" not in src.lower() and "api_key=" not in src.replace(" ", "").lower()
+    # default state: nothing configured → no cloud provider selected
+    import core
+    import types
+    _orig = core.store
+    try:
+        core.store = types.SimpleNamespace(get_ai_provider_config=lambda p: None)
+        assert providers.cloud_vision_provider() is None
+    finally:
+        core.store = _orig
 
 
 def test_digest_is_keyless_and_deterministic_when_offline(monkeypatch):

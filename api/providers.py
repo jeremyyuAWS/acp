@@ -149,6 +149,96 @@ def list_provider_views() -> list[dict]:
     return out
 
 
+# Per-1M-token list prices (USD) for cost accounting. These are REAL billing inputs multiplied by
+# the token counts the API returns — a measured cost, never a fabricated score (ADR 0016). Unknown
+# model → cost stays 0 (we don't invent one); tokens are still recorded.
+_PRICE_PER_1M = {
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4.1": (2.00, 8.00),
+    "gpt-4.1-mini": (0.40, 1.60),
+}
+
+
+def _price_for(model: str) -> tuple[float, float] | None:
+    m = (model or "").lower()
+    for name, price in _PRICE_PER_1M.items():
+        if name in m:
+            return price
+    return None
+
+
+class AzureOpenAIVisionProvider:
+    """Azure OpenAI vision via the chat-completions API — the enterprise-safe first cloud adapter
+    (ADR 0019 §1). `privacy_zone='tenant'`: the model runs in the customer's OWN Azure resource, not
+    a third-party host. The key is read from the ops-provisioned env secret (never stored/logged);
+    cost is computed from the real token usage the API returns. Never raises."""
+
+    def __init__(self, endpoint: str, deployment: str, api_key: str, *,
+                 model: str | None = None, api_version: str = "2024-06-01"):
+        self.endpoint = (endpoint or "").rstrip("/")
+        self.deployment = deployment
+        self._key = api_key
+        self.model = model or deployment
+        self.api_version = api_version
+        self.name = "azure_openai"
+        self.zone = "tenant"
+
+    def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
+                 timeout: float = 120.0) -> dict:
+        import base64
+        t0 = time.monotonic()
+        try:
+            import httpx
+            b64 = base64.b64encode(image_bytes).decode("ascii")
+            url = (f"{self.endpoint}/openai/deployments/{self.deployment}"
+                   f"/chat/completions?api-version={self.api_version}")
+            body = {
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ]}],
+                "max_tokens": 128, "temperature": 0.2,
+            }
+            # The key rides only in the request header to the customer's own Azure endpoint — it is
+            # never persisted, logged, or returned; _resolve_key handed it in from the env secret.
+            r = httpx.post(url, json=body, headers={"api-key": self._key}, timeout=timeout)
+            r.raise_for_status()
+            data = r.json()
+            text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "") or ""
+            usage = data.get("usage") or {}
+            price = _price_for(self.model)
+            cost = 0.0
+            if price:
+                cost = round(usage.get("prompt_tokens", 0) / 1e6 * price[0]
+                             + usage.get("completion_tokens", 0) / 1e6 * price[1], 6)
+            return _result(text=text.strip() or None, model=self.model, provider=self.name,
+                           zone=self.zone, latency_ms=int((time.monotonic() - t0) * 1000),
+                           ok=bool(text.strip()), cost_usd=cost)
+        except Exception:
+            return _result(text=None, model=self.model, provider=self.name, zone=self.zone,
+                           latency_ms=int((time.monotonic() - t0) * 1000), ok=False)
+
+
+def cloud_vision_provider() -> VisionProvider | None:
+    """The configured, ENABLED, key-present cloud vision provider for escalation, or None (ADR 0019
+    §2/§3c). None is the out-of-box state: with no cloud configured, escalation never fires and the
+    product stays exactly the keyless local build. Azure OpenAI is the only wired cloud adapter in
+    Phase 1; a mis/under-configured provider returns None rather than erroring."""
+    try:
+        import core
+        cfg = core.store.get_ai_provider_config("azure_openai")
+    except Exception:
+        return None
+    if not cfg or not cfg.get("enabled"):
+        return None
+    key = _resolve_key(cfg)
+    endpoint, deployment = cfg.get("endpoint"), cfg.get("deployment")
+    if not (key and endpoint and deployment):
+        return None
+    return AzureOpenAIVisionProvider(endpoint, deployment, key, model=cfg.get("model"))
+
+
 def active_vision_provider() -> VisionProvider:
     """Select the vision provider for this call (ADR 0019 §2 policy router — slice 1 stub).
 

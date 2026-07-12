@@ -577,14 +577,70 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     else:
         prompt = _vision_prompt(filename, context)
     alt = _vision_generate(prompt, image_bytes, scan_id=scan_id, file=file)
+    model_used = OLLAMA_VISION_MODEL
+    # Acceptance-gated cloud escalation (ADR 0019 §2/§3c): a local result that did not ground
+    # (ungrounded, or the local model returned nothing usable) MAY escalate to the configured cloud
+    # provider — only when an admin has enabled one and its secret is present, so the default keyless
+    # build never leaves the box. The escalation is transparent: the numbered path is attached, not
+    # hidden or dressed up as a score.
+    escalation = None
+    if not grounded:
+        esc = _escalate_vision(prompt, image_bytes, scan_id=scan_id, file=file)
+        if esc:
+            alt = esc["alt"]
+            model_used = esc["model"]
+            escalation = esc
     if not alt:
         return None
     if grounded:
         snippet = re.sub(r"\s+", " ", ocr_txt).strip()[:80]
         evidence = f"anchored in text read from the image (OCR: “{snippet}”)"
+    elif escalation:
+        evidence = ("a stronger cloud vision model produced this after the local model could not "
+                    "ground it — confirm it matches the intent")
     else:
         evidence = "vision description only — no text in the image to anchor it; confirm it matches the intent"
-    return {"alt": alt, "grounded": grounded, "evidence": evidence, "model": OLLAMA_VISION_MODEL}
+    out = {"alt": alt, "grounded": grounded, "evidence": evidence, "model": model_used}
+    if escalation:
+        out.update(provider=escalation["provider"], processing_zone=escalation["zone"],
+                   cost_usd=escalation["cost_usd"], escalation=escalation["steps"])
+    return out
+
+
+def _escalate_vision(prompt: str, image_bytes: bytes, *, scan_id: str | None = None,
+                     file: str | None = None) -> dict | None:
+    """Escalate one ungrounded vision description to the configured cloud provider (ADR 0019 §3c). Returns
+    a better draft + the transparent numbered path, or None when no cloud provider is configured /
+    enabled / key-present, or the cloud call fails or returns nothing usable. The cloud call is
+    traced + cost-recorded through the same ai_calls provenance path as every other AI call."""
+    import providers as _providers
+    cloud = _providers.cloud_vision_provider()
+    if cloud is None:
+        return None
+    import time as _t
+    _t0 = _t.monotonic()
+    res = cloud.generate(prompt, image_bytes, timeout=OLLAMA_VISION_TIMEOUT)
+    mdl = res.get("model")
+    # Stay vendor-agnostic (rule 6): the provider names itself in its result; ai.py never hardcodes
+    # a cloud vendor. 'cloud' is only a defensive fallback if an adapter omitted its own name.
+    _trace_ai("vision", prompt, res.get("text"), _t0, ok=bool(res.get("ok")), model=mdl,
+              provider=res.get("provider") or "cloud", zone=res.get("zone"),
+              cost_usd=res.get("cost_usd", 0.0), scan_id=scan_id, file=file)
+    if not res.get("ok"):
+        return None
+    alt = _clean_alt(res.get("text") or "")
+    if not (alt and len(alt) >= 8 and " " in alt):
+        return None
+    return {
+        "alt": alt, "model": mdl, "provider": res.get("provider"), "zone": res.get("zone"),
+        "cost_usd": res.get("cost_usd", 0.0),
+        "steps": [
+            {"provider": "ollama", "zone": provenance()["zone"],
+             "outcome": "no grounded description"},
+            {"provider": res.get("provider"), "zone": res.get("zone"),
+             "outcome": "produced a description", "cost_usd": res.get("cost_usd", 0.0)},
+        ],
+    }
 
 
 _ORDER_FIRST_ITEM = re.compile(r"(?:^|\s)(1\s*[.)]\s+\S)")
