@@ -1388,6 +1388,47 @@ class Store:
                 self._db.execute(cur, "SELECT * FROM ai_calls ORDER BY ts DESC LIMIT %s", (limit,))
             return self._db.fetchall(cur)
 
+    def ai_cost_rollup(self, since_days: int | None = None) -> dict:
+        """AI usage + cost governance rollup (ADR 0019 Phase 1). Every number is a real
+        aggregate of recorded ai_calls rows — calls, success, latency, and the summed
+        cost_usd (a genuine $0 for the keyless local-Ollama build: no per-token billing, no
+        bytes leaving the network). NOT a fabricated estimate (ADR 0016) — when a cloud
+        adapter runs it records its real per-call cost and this reflects it. `since_days`
+        bounds the window (1 = today-ish, 30 = month); None = all time."""
+        from datetime import datetime, timedelta, timezone
+        where, params = "", ()
+        if since_days is not None:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
+            where, params = " WHERE ts >= %s", (cutoff,)
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS calls, COALESCE(SUM(ok),0) AS ok, "
+                "COALESCE(SUM(cost_usd),0) AS cost, COALESCE(ROUND(AVG(latency_ms)),0) AS avg_ms, "
+                "COUNT(DISTINCT scan_id) AS scans "
+                f"FROM ai_calls{where}", params)
+            tot = self._db.fetchone(cur) or {}
+
+            def _group(col):
+                self._db.execute(cur,
+                    f"SELECT {col} AS k, COUNT(*) AS calls, COALESCE(SUM(cost_usd),0) AS cost "
+                    f"FROM ai_calls{where} GROUP BY {col} ORDER BY calls DESC", params)
+                return [{"key": r["k"], "calls": r["calls"], "cost_usd": round(r["cost"] or 0, 4)}
+                        for r in self._db.fetchall(cur)]
+
+            calls = tot.get("calls", 0) or 0
+            return {
+                "window_days": since_days,
+                "calls": calls,
+                "ok": tot.get("ok", 0) or 0,
+                "failed": calls - (tot.get("ok", 0) or 0),
+                "cost_usd": round(tot.get("cost", 0) or 0, 4),
+                "avg_latency_ms": int(tot.get("avg_ms", 0) or 0),
+                "scans": tot.get("scans", 0) or 0,
+                "by_provider": _group("provider"),
+                "by_zone": _group("zone"),
+                "by_surface": _group("surface"),
+            }
+
     def list_applied_fixes(self, scan_id: str, limit: int = 200) -> list[dict]:
         """The AI fixes that wrote a concrete value in this scan, newest first — real
         applied text + thumbnail for the 'Recent AI fixes' surface."""

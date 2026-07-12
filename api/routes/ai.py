@@ -152,3 +152,15 @@ def ai_status():
             "model": _ai.OLLAMA_MODEL, "ai_enabled": core.store.get_ai_enabled(),
             "backend": os.environ.get("ACP_AI_BACKEND", "auto").lower(),
             "vision_available": vision, "vision_model": _ai.OLLAMA_VISION_MODEL}
+
+
+@router.get("/ai/costs")
+def ai_costs():
+    """AI usage + cost governance rollup (ADR 0019 Phase 1): today / 30-day / all-time, each
+    a real aggregate of recorded ai_calls (provider, zone, surface, latency, summed cost).
+    For the keyless local-Ollama build every cost is a genuine $0 — no per-token billing, no
+    bytes off-network — which is itself the governance headline; a cloud adapter records real
+    cost and this reflects it. Public read, like /ai/status and /config."""
+    return {"today": core.store.ai_cost_rollup(since_days=1),
+            "month": core.store.ai_cost_rollup(since_days=30),
+            "all_time": core.store.ai_cost_rollup(since_days=None)}

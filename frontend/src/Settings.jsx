@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { resetDemoData, getAllowlist, setAllowlist, getSettings, updateSettings } from './api.js'
+import { resetDemoData, getAllowlist, setAllowlist, getSettings, updateSettings, getAiCosts } from './api.js'
 
 // Danger zone — wipe scan results (Grafana + in-app charts) and/or Langfuse
 // traces so the dashboards start fresh. Settings are preserved. Typed-confirm.
@@ -90,6 +90,8 @@ function DriveMirror() {
       .catch((e) => setMsg(e.message || 'update failed'))
       .finally(() => setBusy(false))
   }
+  const [costs, setCosts] = useState(null)
+  useEffect(() => { getAiCosts().then(setCosts).catch(() => {}) }, [])
   const toggleAutoApply = () => {
     setBusy(true); setMsg('')
     updateSettings({ auto_apply_validated: !settings.auto_apply_validated })
@@ -105,8 +107,38 @@ function DriveMirror() {
       .finally(() => setBusy(false))
   }
   if (!settings) return <p className="muted">Loading…</p>
+  const Roll = ({ label, r }) => (
+    <div style={{ flex: 1, minWidth: 150, border: '1px solid var(--line)', borderRadius: 8, padding: '10px 12px' }}>
+      <div className="muted" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: .3 }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 700 }}>${(r?.cost_usd ?? 0).toFixed(2)}</div>
+      <div className="muted" style={{ fontSize: 12 }}>{(r?.calls ?? 0).toLocaleString()} AI call{(r?.calls === 1) ? '' : 's'}{r?.avg_latency_ms ? ` · ${r.avg_latency_ms}ms avg` : ''}</div>
+    </div>
+  )
   return (
     <div style={{ maxWidth: 560 }}>
+      <h3 style={{ marginTop: 0 }}>AI usage &amp; cost <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>· governance</span></h3>
+      <p className="muted" style={{ fontSize: 13 }}>
+        Real per-call provenance, summed — never an estimate (ADR 0016). For this keyless
+        local-AI build every external AI cost is a genuine <b>$0.00</b>: no per-token billing,
+        and no document bytes leave your network. A governed cloud provider records its real
+        cost and it appears here.
+      </p>
+      {costs && (
+        <>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', margin: '10px 0' }}>
+            <Roll label="Today" r={costs.today} />
+            <Roll label="Last 30 days" r={costs.month} />
+            <Roll label="All time" r={costs.all_time} />
+          </div>
+          {costs.all_time?.by_zone?.length > 0 && (
+            <div className="muted" style={{ fontSize: 12 }}>
+              Processing zone: {costs.all_time.by_zone.map((z) => `${z.key} (${z.calls})`).join(' · ')}
+              {costs.all_time.by_zone.every((z) => z.key === 'local') && ' — nothing left your network 🟢'}
+            </div>
+          )}
+        </>
+      )}
+      <hr style={{ border: 0, borderTop: '1px solid var(--line)', margin: '20px 0' }} />
       <h3 style={{ marginTop: 0 }}>Remediated-file storage</h3>
       <p className="muted" style={{ fontSize: 13 }}>
         A remediated file's fixed copy is always written to Azure Blob first — the durable,
