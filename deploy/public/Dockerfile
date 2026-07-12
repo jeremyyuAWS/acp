@@ -69,6 +69,10 @@ ARG BUILD_TIME=
 ENV ACP_BUILD_VERSION=$BUILD_VERSION \
     ACP_BUILD_TIME=$BUILD_TIME
 WORKDIR /app/api
+# Worker-tier launcher (#113): a SINGLE dash-free command token for `az containerapp --command
+# acp-worker` — az's --command can't carry "-c" or a JSON array (see worker-entry.sh header).
+COPY deploy/public/worker-entry.sh /usr/local/bin/acp-worker
+RUN chmod +x /usr/local/bin/acp-worker
 # Materialize the Drive ADC secret (if provided) to a file google-auth can read,
 # then start the server.
 CMD ["sh", "-c", "if [ -n \"$ACP_GOOGLE_ADC\" ]; then printf '%s' \"$ACP_GOOGLE_ADC\" > /tmp/adc.json && export GOOGLE_APPLICATION_CREDENTIALS=/tmp/adc.json; fi; exec python -m uvicorn app:app --host 0.0.0.0 --port ${PORT}"]
