@@ -195,6 +195,7 @@ class SettingsUpdate(BaseModel):
     ai_enabled: bool | None = None
     drive_mirror_enabled: bool | None = None
     drive_mirror_folder: str | None = None
+    auto_apply_validated: bool | None = None
 
 
 @router.get("/settings")
@@ -204,7 +205,8 @@ def get_settings():
     (ADR 0010) → remediated fixes stay Blob-only, no automatic Drive copy."""
     return {"ai_enabled": core.store.get_ai_enabled(),
             "drive_mirror_enabled": core.store.get_drive_mirror_enabled(),
-            "drive_mirror_folder": core.store.get_drive_mirror_folder()}
+            "drive_mirror_folder": core.store.get_drive_mirror_folder(),
+            "auto_apply_validated": core.store.get_auto_apply_validated()}
 
 
 @router.put("/settings")
@@ -222,6 +224,13 @@ def update_settings(body: SettingsUpdate, request: Request):
         core.store.log_decision(
             "admin", "settings.drive_mirror_folder",
             detail=f"drive_mirror_folder set to {folder}")
+    if body.auto_apply_validated is not None:
+        core.store.set_auto_apply_validated(body.auto_apply_validated)
+        core.store.log_decision(
+            "admin", "settings.auto_apply_validated",
+            detail=f"auto_apply_validated set to {body.auto_apply_validated} — "
+                   "cross-checked ungrounded vision drafts "
+                   f"{'auto-apply' if body.auto_apply_validated else 'queue for one-click approval'}")
     if body.ai_enabled is not None:
         core.store.set_ai_enabled(body.ai_enabled)
         core.store.log_decision(

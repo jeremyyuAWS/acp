@@ -80,6 +80,13 @@ function DriveMirror() {
       .catch((e) => setMsg(e.message || 'update failed'))
       .finally(() => setBusy(false))
   }
+  const toggleAutoApply = () => {
+    setBusy(true); setMsg('')
+    updateSettings({ auto_apply_validated: !settings.auto_apply_validated })
+      .then(setSettings)
+      .catch((e) => setMsg(e.message || 'update failed'))
+      .finally(() => setBusy(false))
+  }
   const saveFolder = () => {
     setBusy(true); setMsg('')
     updateSettings({ drive_mirror_folder: folder })
@@ -119,6 +126,25 @@ function DriveMirror() {
         </div>
         <span className="muted" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
           Files already mirrored under a previous folder name aren't moved — only new remediations use the updated folder.
+        </span>
+      </label>
+      <h3>AI draft auto-apply</h3>
+      <p className="muted" style={{ fontSize: 13 }}>
+        A vision draft grounded in the image's own text always auto-applies. This controls the
+        NEXT tier: an ungrounded draft that an <b>independent second AI reading</b> confirms
+        (consistency cross-check — a measurement, never the model grading itself). Drafts the
+        cross-check does not confirm always queue for one-click human approval, and every
+        applied fix is still verified by re-scan before anything is certified.
+      </p>
+      <label style={{ display: 'flex', gap: 10, alignItems: 'center', cursor: busy ? 'default' : 'pointer', margin: '16px 0' }}>
+        <input type="checkbox" checked={!!settings.auto_apply_validated} onChange={toggleAutoApply} disabled={busy} />
+        <span>
+          <b>Auto-apply cross-checked drafts</b><br />
+          <span className="muted" style={{ fontSize: 12 }}>
+            {settings.auto_apply_validated
+              ? 'On — a draft confirmed by an independent second reading is applied without waiting for review (provenance says so on the fix).'
+              : 'Off — every ungrounded draft waits for one-click human approval (the default).'}
+          </span>
         </span>
       </label>
       {msg && <p style={{ marginTop: 12, fontSize: 13, color: msg.startsWith('✓') ? '#3B6D11' : '#A32D2D' }}>{msg}</p>}

@@ -481,6 +481,30 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
                 "thumb": _thumb_b64(img),
             })
         return res["alt"], "an AI vision description anchored in the image's own text"
+    # Auto-apply-validated policy (opt-in, default OFF): an ungrounded draft that an
+    # INDEPENDENT second reading confirms ('consistent' consistency cross-check — a
+    # measurement, never the model grading itself, ADR 0016) is applied inline like a
+    # grounded one. Any other verdict — divergent, validator down, policy off — falls
+    # through to the one-click proposal exactly as before, and the re-scan verify gate
+    # still decides whether the criterion actually cleared.
+    try:
+        import core as _core
+        if _core.store.get_auto_apply_validated():
+            v = _ai.validate_alt_text(img, res["alt"], filename=context_file,
+                                      scan_id=scan_id, file=context_file)
+            if v and v.get("verdict") == "consistent":
+                if applied_fixes is not None:
+                    applied_fixes.append({
+                        "rule_id": "SC_1_1_1",
+                        "value": res["alt"],
+                        "source": (f"AI vision model ({res['model']}), confirmed by an "
+                                   "independent second reading (consistency cross-check)"),
+                        "thumb": _thumb_b64(img),
+                    })
+                return res["alt"], ("an AI vision description confirmed by an independent "
+                                    "second reading (auto-apply-validated policy)")
+    except Exception:
+        pass
     # Ungrounded guess → surface for one-click approval instead of auto-writing it.
     if proposals is not None:
         import proposals as _prop

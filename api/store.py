@@ -2422,6 +2422,18 @@ class Store:
     def set_ai_enabled(self, enabled: bool) -> None:
         self.set_setting("ai_enabled", "true" if enabled else "false")
 
+    def get_auto_apply_validated(self) -> bool:
+        """Auto-apply policy for CROSS-CHECKED vision drafts (opt-in, default OFF). When on,
+        an ungrounded alt draft that an independent second reading confirms ('consistent'
+        consistency cross-check — a measurement, never a model's self-assessment, ADR 0016)
+        is applied inline like a grounded one instead of queueing for one-click approval.
+        The provenance string on the fix says exactly that, and the re-scan verify gate
+        still decides whether the criterion actually cleared."""
+        return self.get_setting("auto_apply_validated", "false") == "true"
+
+    def set_auto_apply_validated(self, enabled: bool) -> None:
+        self.set_setting("auto_apply_validated", "true" if enabled else "false")
+
     def get_drive_mirror_enabled(self) -> bool:
         """ADR 0010: whether a successful Blob remediation is also auto-mirrored to
         Drive. Defaults to enabled (the original ADR 0010 behavior). Off = Blob-only;
