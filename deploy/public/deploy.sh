@@ -373,8 +373,21 @@ if [ "${ACP_DEPLOY_WORKER:-}" = "1" ]; then
   fi
   WK_N="${ACP_WORKER_COUNT:-2}"
   echo "== worker tier: (re)deploy $WORKER_APP — python -m worker_main, $WK_N workers, no ingress =="
+  # A NEW worker app starts with ZERO secrets, but its env inherits secretREFS from the API app
+  # (database-url, langfuse-sk, demo-drive-key…) — a ref without its secret fails the create with
+  # ContainerAppSecretRefNotFound (hit on the first real spin-up). Copy the API app's secrets so
+  # every inherited ref resolves; fresh SECRETS entries from this run win on a name clash. Values
+  # are fetched via az and never echoed.
+  WORKER_SECRETS=()
+  while IFS=$'\t' read -r _sn _sv; do
+    [ -n "$_sn" ] || continue
+    case " ${SECRETS[*]:-} " in *" $_sn="*) continue;; esac   # ours (fresh) wins
+    WORKER_SECRETS+=("$_sn=$_sv")
+  done < <(az containerapp secret list "${AZ[@]}" -g "$RG" -n "$APP" --show-values \
+             --query "[].[name,value]" -o tsv 2>/dev/null)
+  WORKER_SECRETS+=("${SECRETS[@]}")
   if az containerapp show "${AZ[@]}" -g "$RG" -n "$WORKER_APP" -o none 2>/dev/null; then
-    _retry az containerapp secret set "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --secrets "${SECRETS[@]}" -o none
+    _retry az containerapp secret set "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --secrets "${WORKER_SECRETS[@]}" -o none
     _retry az containerapp registry set "${AZ[@]}" -g "$RG" -n "$WORKER_APP" \
       --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
     _retry az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --image "$ACRSERVER/$IMAGE" \
@@ -385,7 +398,7 @@ if [ "${ACP_DEPLOY_WORKER:-}" = "1" ]; then
       --image "$ACRSERVER/$IMAGE" \
       --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
       --command "$WORKER_CMD_JSON" \
-      --secrets "${SECRETS[@]}" \
+      --secrets "${WORKER_SECRETS[@]}" \
       --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV ACP_WORKERS=$WK_N \
       --system-assigned --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 3 -o none
     echo "   one-time: grant the worker's managed identity 'Storage Blob Data Contributor' on"
