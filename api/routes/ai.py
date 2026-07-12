@@ -160,7 +160,8 @@ def ai_costs():
     a real aggregate of recorded ai_calls (provider, zone, surface, latency, summed cost).
     For the keyless local-Ollama build every cost is a genuine $0 — no per-token billing, no
     bytes off-network — which is itself the governance headline; a cloud adapter records real
-    cost and this reflects it. Public read, like /ai/status and /config."""
+    cost and this reflects it. Requires sign-in (governance data isn't exposed anonymously);
+    the admin Settings panel reads it with the signed-in user's session."""
     return {"today": core.store.ai_cost_rollup(since_days=1),
             "month": core.store.ai_cost_rollup(since_days=30),
             "all_time": core.store.ai_cost_rollup(since_days=None)}
