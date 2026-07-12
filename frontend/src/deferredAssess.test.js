@@ -18,6 +18,13 @@ describe('AssessRunner drives the real analysis when it is deferred (ADR 0020)',
     expect(s).toMatch(/computeResultFrom\(scored, level\)/)
   })
 
+  it('refreshes the scan Drive token before the deferred fan-out downloads (stale-token gap)', () => {
+    const s = read('AssessRunner.jsx')
+    expect(s).toMatch(/refreshScanDriveToken/)
+    // the refresh runs BEFORE assessScan so the fan-out has a live token; best-effort for local
+    expect(s).toMatch(/refreshScanDriveToken\(runId\)\)\.catch\(\(\) => \{\}\)\.then\(\(\) => assessScan\(runId, level\)\)/)
+  })
+
   it('the immediate model is unchanged (optimistic reveal + cosmetic ticker)', () => {
     const s = read('AssessRunner.jsx')
     expect(s).toMatch(/onAssessed\?\.\(\)/)

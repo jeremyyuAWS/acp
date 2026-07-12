@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { allRules } from './rules'
-import { assessScan, getCapability, getScan } from './api.js'
+import { assessScan, getCapability, getScan, refreshScanDriveToken } from './api.js'
 import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
 import { TraceChip } from './Transparency.jsx'
 import { assessLine } from './phaseNarration.js'
@@ -161,7 +161,12 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
     const startedAt = Date.now()
     setPhase('running'); setResult(null); setResultFromCache(false); setProgress(0)
-    assessScan(runId, level).then((resp) => {
+    // ADR 0020: in the deferred model the DOWNLOAD happens now, at Assess — but GIS Drive tokens
+    // live ~1h and are held in-memory per scan, so a scan discovered a while ago (or after a
+    // container restart) has a stale/absent token and every file would 401. Push a fresh Drive
+    // token from the live session first (best-effort; the endpoint 422s harmlessly for a local /
+    // SharePoint scan with no token). Then kick off the assessment.
+    Promise.resolve(refreshScanDriveToken(runId)).catch(() => {}).then(() => assessScan(runId, level)).then((resp) => {
       if (resp && resp.deferred) {
         // The analysis is running now — track it for real.
         save({ phase: 'running', startedAt, level, deferred: true })
