@@ -144,17 +144,54 @@ def _embedded_images(path: Path, ext: str) -> list[bytes]:
     return out
 
 
+# Chart/graph recognition for 1.4.5's Essential exception, from the OCR text itself. A chart's
+# OCR is dominated by data values and axis ticks (numbers, $, %); a screenshot of prose is
+# dominated by words. Deterministic and evidence-based (ADR 0016) — no model call, no guess.
+_NUMERIC_TOKEN = re.compile(r"^[\$€£(]?\d[\d,.–%()kKmMbB]*%?\)?$")
+
+
+def _looks_like_chart(text: str) -> bool:
+    """True when this OCR text reads like a data visualization (chart/graph/plot) rather than a
+    picture of prose. Three independent signals, each measured on the real OCR tokens:
+      - numeric density ≥30% (data values dominate),
+      - several currency/percent values ($3.8M, 81%…),
+      - an AXIS-TICK RUN: ≥4 consecutive numeric tokens ("100 80 60 40 20" down a y-axis) — long
+        category labels dilute the density on labelled charts, but prose never produces a run of
+        four bare numbers in a row.
+    Used ONLY for the 1.4.5 Essential exception below."""
+    toks = text.split()
+    if len(toks) < 4:
+        return False
+    is_num = [bool(_NUMERIC_TOKEN.match(t)) for t in toks]
+    num = sum(is_num)
+    money_pct = sum(1 for t in toks if ("$" in t or "%" in t) and any(c.isdigit() for c in t))
+    run = best = 0
+    for b in is_num:
+        run = run + 1 if b else 0
+        best = max(best, run)
+    return (num / len(toks)) >= 0.3 or money_pct >= 3 or best >= 4
+
+
 def images_of_text(path: Path, ext: str) -> list[dict]:
     """Return one 1.4.5 issue per embedded image that carries substantial text. Each finding
     carries the OCR'd text itself as `detail` — the reviewer sees WHICH words are baked into
     WHICH image, not a bare rule id. Empty when OCR is unavailable/disabled — callers append
-    these to the file's engine findings so they flow through the rubric and per-rule traces."""
+    these to the file's engine findings so they flow through the rubric and per-rule traces.
+
+    Essential exception (WCAG 1.4.5): graphs and diagrams are the W3C's own example of a
+    presentation of text that IS essential — a chart cannot be re-authored as selectable text;
+    its information reaches AT users through the text alternative (1.1.1, checked separately).
+    So an image whose OCR reads like chart data (axis ticks, values — see _looks_like_chart) is
+    NOT a 1.4.5 failure and is skipped here. 1.4.9 (AAA, "No Exception") still flags it, which
+    is exactly the AA-vs-AAA distinction the two criteria encode."""
     if not is_available():
         return []
     findings: list[dict] = []
     for i, img in enumerate(_embedded_images(path, ext)):
         text = " ".join(ocr_text(img, min_pixels=_MIN_PIXELS).split())
         if len(_WORD_RE.findall(text)) >= _MIN_WORDS:
+            if _looks_like_chart(text):
+                continue        # Essential exception — a chart/graph, not a picture of prose
             findings.append({
                 "ruleId": "OCR_IMAGE_OF_TEXT",
                 "wcag": "1.4.5 Images of Text",
