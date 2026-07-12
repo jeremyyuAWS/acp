@@ -3,7 +3,7 @@ import { aiProvenance, getFileGeometry, getFileRemediationDiffs, getScanAiCalls,
 import Thumbnail from './Thumbnail.jsx'
 import BeforeAfterEvidence from './BeforeAfterEvidence.jsx'
 import RiskChip from './RiskChip.jsx'
-import { buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, explainFinding, firstProposed, groupPages, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview } from './reviewCard.js'
+import { buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, firstProposed, groupPages, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview, whyRecommendation } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import HowToConfirm from './HowToConfirm.jsx'
@@ -197,7 +197,15 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // for a confidence label. No number, no opaque level; the review-requirement axis is whyReview.
   const trust = trustStates(card)
   // Deterministic, keyless plain-English explanation (the "✨ Explain this finding" answer).
-  const explanation = explainFinding(card, { trust, whyReview })
+  // "Why this recommendation?" (#9) — the structured reasoning chain. The real OCR snippet, when
+  // the pipeline read one, is embedded in the rationale/evidence as OCR: "…"; pull it out so the
+  // panel can show what the model actually read, exactly like a reviewer would want.
+  const ocrText = (() => {
+    const src = `${card.rationale || ''} ${(evidence[0] && evidence[0].evidence) || ''}`
+    const m = /OCR:\s*[“"']?([^”"'’)]+)/i.exec(src)
+    return m ? m[1].trim() : null
+  })()
+  const why = whyRecommendation(card, { trust, kind: imgKind, ocrText })
   // Deterministic-validation receipt (vision #12) — the machine-verified proof for an APPLIED fix,
   // shown separately from the AI generation. Null until something is applied + re-scan-cleared.
   const valChecklist = validationChecklist(card)
@@ -360,22 +368,40 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
             </div>
           )}
 
-          {/* "✨ Explain this finding" — a deterministic, keyless plain-English primer (what the
-              criterion requires, who is blocked, what ACP drafted + how anchored, why you're here).
-              Composed from real catalog + finding fields; no model call, no fabricated number. */}
-          {explanation && (
+          {/* "Why this recommendation?" (#9) — the structured reasoning chain, one click, not buried:
+              problem → what ACP detected (OCR text / grounding / image kind) → suggested value →
+              the WCAG requirement that makes it necessary. Every line is a real finding/catalog
+              field; no model call, no fabricated number. Every reviewer eventually asks "why did the
+              AI think this?" — this answers it in place. */}
+          {why && (
             <div className="evcard-explain" style={{ margin: '2px 0 8px' }}>
               <button type="button" className="evcard-explain-btn"
                       aria-expanded={showExplain}
                       onClick={() => setShowExplain((v) => !v)}>
-                {showExplain ? '× Hide explanation' : '✨ Explain this finding'}
+                {showExplain ? '× Hide reasoning' : '✨ Why this recommendation?'}
               </button>
               {showExplain && (
-                <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.55, margin: '7px 0 0',
-                     padding: '9px 11px', background: 'var(--surface-1, #f6f5f2)',
-                     border: '1px solid var(--line)', borderRadius: 8 }}>
-                  {explanation}
-                </p>
+                <div style={{ fontSize: 12.5, lineHeight: 1.5, margin: '7px 0 0', padding: '10px 12px',
+                     background: 'var(--surface-1, #f6f5f2)', border: '1px solid var(--line)', borderRadius: 8 }}>
+                  {why.problem && <div style={{ fontWeight: 600, marginBottom: 6 }}>{why.problem}</div>}
+                  {why.detected.map((d, i) => (
+                    <div key={i} style={{ display: 'flex', gap: 6, margin: '2px 0' }}>
+                      <span className="muted" style={{ minWidth: 130, flex: '0 0 auto' }}>{d.label}:</span>
+                      <span>{d.value}</span>
+                    </div>
+                  ))}
+                  {why.suggested && (
+                    <div style={{ display: 'flex', gap: 6, margin: '2px 0' }}>
+                      <span className="muted" style={{ minWidth: 130, flex: '0 0 auto' }}>Suggested:</span>
+                      <span style={{ fontStyle: 'italic' }}>“{why.suggested}”</span>
+                    </div>
+                  )}
+                  {why.because && (
+                    <div style={{ marginTop: 7, paddingTop: 7, borderTop: '1px dashed var(--line)', color: 'var(--fg, #1c1620)' }}>
+                      {why.because}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )}

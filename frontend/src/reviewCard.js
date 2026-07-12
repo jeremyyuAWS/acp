@@ -467,6 +467,36 @@ export function explainFinding(card, { trust = null, whyReview = null } = {}) {
   return parts.join(' ')
 }
 
+// "Why this recommendation?" — the STRUCTURED reasoning chain a reviewer can read in one glance
+// (HITL vision #9): the problem, what ACP actually detected (grounding evidence + image kind), the
+// suggested value, and the WCAG requirement that makes it necessary. Every line is a real finding/
+// catalog field — no model call, no fabricated number. `ocrText` is the actual text read from the
+// image when present; `kind` is the model's own noun for the object. Any absent line is omitted,
+// never invented. Returns { problem, detected: [{label, value}], suggested, because } or null.
+export function whyRecommendation(card, { trust = null, kind = null, ocrText = null } = {}) {
+  const c = card || {}
+  const cat = _WCAG_BY_SC[c.sc] || {}
+  if (!c.problem && !cat.req && !c.recommendation) return null
+  const detected = []
+  // What was read from the source (grounding). Prefer the real OCR string; else name the anchor.
+  const g = trust && trust.grounding
+  const ocr = (ocrText || '').trim()
+  if (ocr) detected.push({ label: 'Text read from the image (OCR)', value: `“${ocr.slice(0, 90)}”` })
+  else if (g && g.state === 'grounded') detected.push({ label: 'Grounding', value: 'anchored in text read from the source' })
+  else if (g && g.state === 'document_text') detected.push({ label: 'Grounding', value: 'anchored in the surrounding document text' })
+  else if (g && g.state === 'visual_only') detected.push({ label: 'Grounding', value: 'a visual interpretation (no text to anchor it — confirm the wording)' })
+  // What the model saw it as (image kind), when recognised.
+  if (kind && kind.label) detected.push({ label: 'Detected', value: kind.label })
+  const impact = _PRINCIPLE_IMPACT[cat.principle] || 'some users cannot access this content'
+  const req = String(cat.req || '').replace(/\s*\.\s*$/, '')
+  return {
+    problem: c.problem || null,
+    detected,
+    suggested: c.recommendation ? String(c.recommendation).slice(0, 200) : null,
+    because: req ? `WCAG ${c.sc}${cat.name ? ` (${cat.name})` : ''} requires ${req.charAt(0).toLowerCase() + req.slice(1)} — otherwise ${impact}.` : null,
+  }
+}
+
 // Deterministic-validation receipt (vision #12/#33) — the concrete proof that a fix was actually
 // APPLIED and machine-verified, kept SEPARATE from the AI generation ("never simply Done"). Every
 // tick is a real fact: a remediation_diff row is written ONLY for a criterion whose fix cleared the
