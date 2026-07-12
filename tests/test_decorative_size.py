@@ -38,6 +38,19 @@ def _img(w, h, fmt="PNG") -> bytes:
     return buf.getvalue()
 
 
+def _photo(w, h) -> bytes:
+    """A high-variance image — a real photo/chart, not a solid fill. `Image.new` yields a
+    flat black rectangle, which the content signal (correctly) reads as decorative; a genuine
+    'real photo' fixture must actually carry pixel variance."""
+    from PIL import Image
+    im = Image.new("RGB", (w, h))
+    px = im.load()
+    for y in range(h):                     # a full-range gradient — variance survives downscaling,
+        for x in range(w):                 # unlike high-frequency noise which the box filter averages
+            px[x, y] = (int(255 * x / w), int(255 * y / h), int(255 * (x + y) / (w + h)))
+    buf = io.BytesIO(); im.save(buf, format="PNG"); return buf.getvalue()
+
+
 def _drawing(name: str) -> str:
     n = f' name="{name}"' if name else ""
     return (f'<w:p><w:r><w:drawing><wp:docPr id="1"{n}/>'
@@ -109,9 +122,32 @@ def test_a_size_proposal_is_never_auto_applied(tmp_path):
 # ── what must NOT fire ──
 
 def test_a_real_photo_with_a_generic_name_is_not_decorative(tmp_path):
-    # Falls through to the vision/human path exactly as before.
-    deco, _ = _run(tmp_path, "Picture 3", _img(800, 600))
+    # Falls through to the vision/human path exactly as before. A genuine photo carries
+    # variance; the content signal must not fire on it.
+    deco, _ = _run(tmp_path, "Picture 3", _photo(800, 600))
     assert deco == []
+
+
+# ── content signal: a near-solid fill (a background block) is decorative on pixels alone ──
+
+def test_a_normal_sized_solid_fill_is_proposed_decorative_on_content(tmp_path):
+    # A full-slide black/colour background block, ordinarily named — the case the name and size
+    # signals both miss and a vision model can only call "black, nothing to describe".
+    deco, _ = _run(tmp_path, "Picture 7", _img(900, 700))     # Image.new → solid fill, variance 0
+    assert len(deco) == 1 and "near-solid fill" in deco[0]["rationale"]
+
+
+def test_content_signal_never_auto_applies(tmp_path):
+    deco, xml = _run(tmp_path, "Picture 7", _img(900, 700))
+    assert len(deco) == 1
+    assert "descr=" not in xml                                # still a human-confirmed proposal
+
+
+def test_a_faithful_name_outranks_the_content_signal(tmp_path):
+    # A solid fill deliberately named by an author is described, not erased.
+    deco, xml = _run(tmp_path, "Brand colour band", _img(900, 700))
+    assert deco == []
+    assert 'descr="Brand colour band"' in xml
 
 
 def test_a_faithful_shape_name_outranks_a_dividers_aspect_ratio(tmp_path):

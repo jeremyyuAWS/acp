@@ -199,18 +199,48 @@ _DECOR_NAME = re.compile(
 _DECOR_MIN = 4        # px — below this in either axis is a spacer/hairline
 _DECOR_TINY = 24      # px — both axes at/under this is an icon-sized glyph/bullet
 _DECOR_THIN_RATIO = 10.0  # aspect ratio at/above which it reads as a divider/rule
+_DECOR_STD = 8.0      # per-channel stddev (0–255) below which the image is a near-solid fill
+
+
+def _near_uniform(image: bytes | None) -> dict | None:
+    """Content signal that an image is decorative: a near-solid fill — a black/white/colour
+    background block or a flat gradient with no meaningful detail. Computed from the pixels
+    (not the name or size), so it catches the ordinary-named background blocks the other
+    signals miss — exactly the images a vision model can only describe as "black background,
+    nothing to describe". Conservative on purpose: only genuinely flat images pass, because a
+    real photo or chart has high per-channel variance and marking real content decorative is
+    the expensive error. Never raises — an undecodable image is simply not classified here."""
+    if not image:
+        return None
+    try:
+        from io import BytesIO
+
+        from PIL import Image, ImageStat
+        im = Image.open(BytesIO(image))
+        im.draft("RGB", (64, 64))              # fast partial decode where the codec supports it
+        im = im.convert("RGB")
+        im.thumbnail((64, 64))
+        std = ImageStat.Stat(im).stddev
+    except Exception:
+        return None
+    if std and max(std) < _DECOR_STD:
+        return {"rationale": f"the image is a near-solid fill (colour variance ≈{max(std):.0f}/255) "
+                             "— no meaningful visual content"}
+    return None
 
 
 def infer_decorative(*, filename: str = "", width: int | None = None,
-                     height: int | None = None) -> dict | None:
+                     height: int | None = None, image: bytes | None = None) -> dict | None:
     """Heuristic guess that an image is decorative (logo / divider / spacer / background
     flourish), or None. Returns {"rationale"} only — the caller surfaces it as a Low proposal
     ("Mark decorative?"), never an auto-fix. Signals, weakest-first: a decorative-sounding
-    filename; an extreme aspect ratio (a hairline divider); or a hairline/tiny dimension."""
+    filename; a near-solid pixel fill (a background block); an extreme aspect ratio (a hairline
+    divider); or a hairline/tiny dimension."""
     name = (filename or "").rsplit("/", 1)[-1]
     nm = _DECOR_NAME.search(name)
     if nm:
         return {"rationale": f"filename '{name}' looks decorative ('{nm.group(1).lower()}')"}
+    # Size signals first — a hairline / icon / divider gets a precise dimensional rationale.
     if width and height:
         if min(width, height) <= _DECOR_MIN:
             return {"rationale": f"{width}×{height}px — a hairline, typical of a spacer/rule"}
@@ -219,7 +249,8 @@ def infer_decorative(*, filename: str = "", width: int | None = None,
             return {"rationale": f"{width}×{height}px — extreme aspect ratio, typical of a divider"}
         if width <= _DECOR_TINY and height <= _DECOR_TINY:
             return {"rationale": f"{width}×{height}px — icon-sized, typical of a bullet/glyph"}
-    return None
+    # …then the content signal, for a normal-sized image that is nonetheless a solid fill.
+    return _near_uniform(image)
 
 
 # ── 3.1.2 Language of Parts — per-span language proposals (deterministic) ──────

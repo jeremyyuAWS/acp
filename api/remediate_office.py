@@ -383,10 +383,17 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
                 # in hand the name is the evidence, and a size that disagrees must not overrule
                 # it — otherwise "Team Photo" (1200x100, ratio 12) is proposed for erasure.
                 _size = _img_size(_found[1]) if (_found and _faithful is None) else None
+                # The pixel bytes are a stronger, name-independent signal than size: a near-solid
+                # background block (which a vision model can only describe as "black, nothing to
+                # describe") is decorative regardless of its dimensions. Consulted only when there
+                # is no faithful alt source, same as size — a human-authored name/caption outranks
+                # any content heuristic, so real content is never erased on pixels alone.
+                _bytes = _found[1] if (_found and _faithful is None) else None
                 _deco = _prop.infer_decorative(
                     filename=(src[0] if src else _ATTR(attrs, "name").strip()),
                     width=_size[0] if _size else None,
-                    height=_size[1] if _size else None)
+                    height=_size[1] if _size else None,
+                    image=_bytes)
                 if _deco:
                     # Show the image. The reviewer's whole job is to look at the picture and say
                     # whether the guess is right — marking real content as decorative hides it
