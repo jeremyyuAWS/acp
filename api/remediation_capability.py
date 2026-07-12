@@ -86,7 +86,7 @@ CAPABILITY: dict[str, dict[str, str]] = {
         "2.4.10": HUMAN,     # section headings — an authoring decision
         "3.1.1": AUTO,       # document language (docProps/core.xml)
         "3.1.2": ASSISTED,   # language-of-parts (langdetect proposal)
-        "3.1.5": HUMAN,      # reading level — re-writing prose
+        "3.1.5": ASSISTED,      # reading level — re-writing prose
         "3.3.2": AUTO,       # form-field labels from adjacent text
     },
     # Excel — fully actioned bar reading level; no human lane for any structural/visual finding.
@@ -102,7 +102,7 @@ CAPABILITY: dict[str, dict[str, str]] = {
         "2.4.2": AUTO,
         "3.1.1": AUTO,
         "3.1.2": ASSISTED,
-        "3.1.5": HUMAN,
+        "3.1.5": ASSISTED,
     },
     # PowerPoint — slide-level deterministic fixes (title, contrast, reading order, language);
     # tables/keyboard/link/heading criteria have no pptx remediator, so they are human.
@@ -122,7 +122,7 @@ CAPABILITY: dict[str, dict[str, str]] = {
         "2.4.9": HUMAN,
         "3.1.1": AUTO,       # presentation language (docProps/core.xml)
         "3.1.2": ASSISTED,
-        "3.1.5": HUMAN,
+        "3.1.5": ASSISTED,
     },
     # PDF — only language/title/outline are safe to set deterministically. Contrast and structure
     # (re-tagging) need re-authoring; figure alt and reading order are AI proposals.
@@ -139,7 +139,7 @@ CAPABILITY: dict[str, dict[str, str]] = {
         "2.4.2": AUTO,       # /Title + ViewerPreferences DisplayDocTitle
         "3.1.1": AUTO,       # catalog /Lang
         "3.1.2": ASSISTED,
-        "3.1.5": HUMAN,
+        "3.1.5": ASSISTED,
     },
     # HTML — the server-side remediator auto-fixes the broad structural/visual set (several
     # criteria clear incidentally, see module docstring). Media, target size, and non-text
@@ -174,7 +174,7 @@ CAPABILITY: dict[str, dict[str, str]] = {
         "3.1.1": AUTO,       # <html lang>
         "3.1.2": ASSISTED,   # language-of-parts
         "3.1.4": AUTO,       # abbreviation expansion
-        "3.1.5": HUMAN,      # reading level
+        "3.1.5": ASSISTED,      # reading level
         "3.3.2": AUTO,       # cleared incidentally by the 1.3.1 labelling
         "4.1.2": AUTO,       # cleared incidentally by the 1.3.1 labelling
     },

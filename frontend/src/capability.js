@@ -33,7 +33,7 @@ export const CAPABILITY_FALLBACK = {
     "2.4.10": "human",
     "3.1.1": "auto",
     "3.1.2": "assisted",
-    "3.1.5": "human",
+    "3.1.5": "assisted",
     "3.3.2": "auto"
   },
   "xlsx": {
@@ -48,7 +48,7 @@ export const CAPABILITY_FALLBACK = {
     "2.4.2": "auto",
     "3.1.1": "auto",
     "3.1.2": "assisted",
-    "3.1.5": "human"
+    "3.1.5": "assisted"
   },
   "pptx": {
     "1.1.1": "assisted",
@@ -66,7 +66,7 @@ export const CAPABILITY_FALLBACK = {
     "2.4.9": "human",
     "3.1.1": "auto",
     "3.1.2": "assisted",
-    "3.1.5": "human"
+    "3.1.5": "assisted"
   },
   "pdf": {
     "1.1.1": "assisted",
@@ -81,7 +81,7 @@ export const CAPABILITY_FALLBACK = {
     "2.4.2": "auto",
     "3.1.1": "auto",
     "3.1.2": "assisted",
-    "3.1.5": "human"
+    "3.1.5": "assisted"
   },
   "html": {
     "1.1.1": "human",
@@ -112,7 +112,7 @@ export const CAPABILITY_FALLBACK = {
     "3.1.1": "auto",
     "3.1.2": "assisted",
     "3.1.4": "auto",
-    "3.1.5": "human",
+    "3.1.5": "assisted",
     "3.3.2": "auto",
     "4.1.2": "auto"
   }

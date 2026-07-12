@@ -344,6 +344,63 @@ def propose_sensory_rewrite(text: str, *, filename: str = "", ai_enabled: bool =
     return out
 
 
+# ── 3.1.5 Reading Level — plain-language rewrite of the densest sentences (GPU-assisted) ─
+_READING_CAP = 5
+
+
+def propose_reading_level(text: str, *, filename: str = "", ai_enabled: bool = True) -> list[dict]:
+    """Propose a plain-language rewrite of the hardest sentences (WCAG 3.1.5). Self-gates on the same
+    detector the scan uses (textchecks.detect_reading_level) so it only fires when the document really
+    reads above the SC bar, then targets the densest sentences and asks the local text model to
+    simplify each while PRESERVING every fact. Always Low confidence — surfaced for human approval,
+    never auto-applied (rewriting prose is a judgement, and a bad simplification could drop meaning)."""
+    if not text or not ai_enabled:
+        return []
+    try:
+        import textchecks as _tc
+        import ai as _ai
+    except Exception:
+        return []
+    if not _tc.detect_reading_level(text) or not _ai.is_available():
+        return []
+
+    def _density(s: str) -> float:
+        words = _tc._WORD_RE.findall(s)
+        if not words:
+            return 0.0
+        return len(words) * (sum(_tc._syllables(w) for w in words) / len(words))
+
+    def _is_prose(s: str) -> bool:
+        # Skip flattened lists / heading blobs — multiple labels, or mostly Title-Case words: those
+        # aren't sentences to simplify (the model refuses them anyway, wasting a call).
+        if s.count(":") >= 2:
+            return False
+        words = s.split()
+        lower = sum(1 for w in words if w[:1].islower())
+        return len(words) >= 15 and lower >= 0.5 * len(words)
+
+    # Real prose only: 15–60 words. Below is a fragment; ABOVE is almost always an extraction blob
+    # (a flattened table/list with no sentence punctuation) — simplifying those is meaningless.
+    sents = {re.sub(r"\s+", " ", s).strip()
+             for s in re.split(r"(?<=[.!?])\s+", text)
+             if 15 <= len(s.split()) <= 60 and _is_prose(re.sub(r"\s+", " ", s).strip())}
+    ranked = sorted(sents, key=_density, reverse=True)[:_READING_CAP]
+    out: list[dict] = []
+    for s in ranked:
+        s = s[:600]
+        simpler = _ai.simplify_text(s, file=filename)
+        if not simpler or simpler.strip().lower() == s.strip().lower():
+            continue
+        out.append(proposal(
+            locator=s[:60],
+            before=s,
+            proposed_value=simpler,
+            rationale="this sentence reads well above the target level; confirm the simpler version "
+                      "keeps every fact and number",
+            source="AI text model (plain-language rewrite) — human judgement required"))
+    return out
+
+
 # ── 1.4.5 Images of Text (OCR the text back out — reviewer pastes it as real text) ─
 def propose_images_of_text(path, ext: str) -> list[dict]:
     """One WCAG 1.4.5 proposal per embedded image that bakes in substantial text: the text is

@@ -352,6 +352,7 @@ def _proposer_key(sc: str) -> str:
         "1.4.5": "images_of_text",
         "1.4.9": "images_of_text",
         "3.1.2": "language_parts",
+        "3.1.5": "reading_level",          # GPU plain-language rewrite proposer (#123 follow-on)
         "2.4.4": "link_text",              # html only
     }.get(sc, "")
 

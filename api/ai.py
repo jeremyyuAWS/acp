@@ -703,6 +703,43 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
         return None
 
 
+def simplify_text(text: str, *, scan_id: str | None = None, file: str | None = None) -> str | None:
+    """Plain-language rewrite of a dense passage for WCAG 3.1.5 (reading level), via the local text
+    model. The prompt PRESERVES every fact, name, and number — it simplifies wording and breaks up
+    long sentences, it does NOT summarise or drop content (that would change meaning, not readability,
+    and could invent/omit facts — ADR 0016). Returns the simpler text or None. HITL by design: the
+    reviewer approves the rewrite; nothing is auto-applied to the document."""
+    src = (text or "").strip()
+    if not src or not is_available():
+        return None
+    prompt = (
+        "Rewrite the text below in plain, clear language a general reader can follow (about an "
+        "8th-grade reading level). Keep EVERY fact, name, and number exactly as given — do not add, "
+        "remove, or change any information; only simplify the wording and split long sentences. "
+        "Reply with the rewritten text only, no preamble.\n\n"
+        f"Text: {src[:700]}\n\nPlain-language version:"
+    )
+    import time as _t
+    _t0 = _t.monotonic()
+    try:
+        import httpx
+        r = httpx.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
+                  "options": {"temperature": 0.3, "num_predict": 220}},
+            timeout=OLLAMA_VISION_TIMEOUT,
+        )
+        r.raise_for_status()
+        out = (r.json().get("response", "") or "").strip().strip('"').strip()
+        out = re.sub(r"^(plain[- ]language version|rewritten text|here is[^:]*)\s*:\s*", "", out, flags=re.I).strip()
+        _trace_ai("simplify", prompt, out, _t0, ok=bool(out), scan_id=scan_id, file=file)
+        # Guard: a rewrite must actually be shorter/simpler and non-trivial, else treat as a miss.
+        return out if (out and len(out) >= 20 and out.lower() != src.lower()) else None
+    except Exception:
+        _trace_ai("simplify", prompt, None, _t0, ok=False, scan_id=scan_id, file=file)
+        return None
+
+
 # ── Compliance digest (ADR 0009 follow-on) ────────────────────────────────────
 # Deterministic facts (always reliable, grounded in real numbers) + an AI-written
 # executive narrative on top, with a deterministic-prose fallback. The model only

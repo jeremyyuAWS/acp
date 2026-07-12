@@ -145,6 +145,11 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
                                _prop.propose_sensory_rewrite(text, filename=filename, ai_enabled=ai_enabled))
         except Exception:
             pass
+        try:
+            _enqueue_proposals(scan_id, filename, "3.1.5", "Reading Level",
+                               _prop.propose_reading_level(text, filename=filename, ai_enabled=ai_enabled))
+        except Exception:
+            pass
     try:
         _enqueue_proposals(scan_id, filename, "1.4.5", "Images of Text", image_text)
     except Exception:
