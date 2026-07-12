@@ -1088,6 +1088,14 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
     fdict = {"file": name, "engine": raw["engine"], **assessed, "issues": raw["issues"],
              "acp_stamped": detect_acp_stamp(tmp / name, ext),
              **_file_extent(tmp / name, ext)}
+    # ADR 0020 stage 2 — Discover-side inventory classification (cheap container peek, no
+    # rule engine). Carried on the file result so the document upsert can persist it;
+    # additive, never affects findings, never raises.
+    try:
+        import classify as _cls
+        fdict["classify"] = _cls.classify(tmp / name, ext)
+    except Exception:
+        pass
     pinfo = None
     if detect_pii:
         import pii as _pii_mod
@@ -1164,6 +1172,11 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             except Exception:
                 pass
             r["issues"] = _collapse_reading_order(r["issues"])
+            try:                                          # ADR 0020 stage 2 — inventory peek
+                import classify as _cls
+                r["classify"] = _cls.classify(tmp / name, ext)
+            except Exception:
+                pass
             pinfo = _pii_mod.detect_file(tmp / name) if detect_pii else None
             return (name, r, pinfo)
 
@@ -1228,6 +1241,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             "files": [{"file": k, "engine": raw[k]["engine"], **assessed[k], "issues": raw[k]["issues"],
                        "drive_file_id": drive_id_map.get(k), "pii": pii_by_file.get(k),
                        "acp_stamped": detect_acp_stamp(tmp / k, Path(k).suffix.lower()),
+                       "classify": raw[k].get("classify"),   # ADR 0020 stage 2 — inventory peek
                        **_file_extent(tmp / k, Path(k).suffix.lower())}
                       for k in sorted(raw)],
         }

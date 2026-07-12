@@ -702,7 +702,8 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                 skipped_rules=fdict.get("skipped_rules", 0))
             core.store.upsert_document(doc_id, source=source, path=name, content_hash=checksum,
                                        owner=user, created_at=created_at, last_seen=now,
-                                       triage_score=tscore, triage_rationale=rationale)
+                                       triage_score=tscore, triage_rationale=rationale,
+                                       classify=fdict.get("classify"))   # ADR 0020 stage 2
         except Exception:
             pass
         # File-centric tracing (see lf.file_trace): each file gets its own trace, so unlike
