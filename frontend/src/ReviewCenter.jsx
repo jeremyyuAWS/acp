@@ -6,6 +6,8 @@ import EvidenceCard from './EvidenceCard.jsx'
 // proposalMeta / firstProposed live in reviewCard.js — the single source of truth for how a
 // hitl_queue.proposals row is read. EvidenceCard uses them too; don't fork the logic.
 import { VALUE_FIX, firstProposed, proposalMeta, reviewType, REVIEW_TYPES } from './reviewCard.js'
+import RiskChip from './RiskChip.jsx'
+import { riskComparator } from './reviewRisk.js'
 
 // Rules whose fix IS a value a human writes/edits (alt text, link text, title, label) —
 // these get an editable "approved value" box (the AI draft, if any, prefilled). Judgement
@@ -19,6 +21,7 @@ const isToday = (iso) => { if (!iso) return false; const d = new Date(iso), n = 
 export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }) {
   const [expanded, setExpanded] = useState(null)
   const [busy, setBusy] = useState(null)        // itemId currently acting
+  const [sortMode, setSortMode] = useState('critical')   // 'critical' = triage | 'quick' = clear easy work first
 
   const pending = useMemo(() => items.filter((i) => i.status === 'pending'), [items])
   const resolvedToday = items.filter((i) => i.status !== 'pending' && isToday(i.reviewed_at))
@@ -47,12 +50,13 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
           if (!m.has(k)) m.set(k, [])
           m.get(k).push(it)
         }
+        const cmp = riskComparator(sortMode)
         const groups = [...m.entries()]
-          .map(([label, its]) => ({ label, items: its.sort((a, b) => priorityScore(b) - priorityScore(a)) }))
-          .sort((a, b) => priorityScore(b.items[0]) - priorityScore(a.items[0]))
+          .map(([label, its]) => ({ label, items: its.sort(cmp) }))
+          .sort((a, b) => cmp(a.items[0], b.items[0]))
         return { type: REVIEW_TYPES[t], count: byType[t].length, groups }
       })
-  }, [pending])
+  }, [pending, sortMode])
 
   // Flat render-order list + a cursor, for keyboard-driven review (j/k, a/r/s, Enter).
   const ordered = useMemo(
@@ -122,6 +126,14 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
         {/* Labels must match the handler exactly: a→approved, r→rejected, s→skipped ("I'll fix
             it"). They were swapped — a reviewer pressing r expecting "I'll fix it" REJECTED. */}
         <div className="rc-kbd-hint" aria-hidden="true">↑↓ / j k navigate · <b>a</b> approve · <b>r</b> reject · <b>s</b> I’ll fix it · Enter expand · Esc close</div>
+        {/* Risk-tier sort (#6): triage the criticals, or clear the quick wins first. */}
+        <div className="rc-sort" style={{ display: 'flex', gap: 6, alignItems: 'center', margin: '2px 0 8px', fontSize: 12 }}>
+          <span className="muted">Sort:</span>
+          <button className={`ghost small${sortMode === 'critical' ? ' on' : ''}`} aria-pressed={sortMode === 'critical'}
+                  onClick={() => setSortMode('critical')} title="Highest-risk findings first">Most critical</button>
+          <button className={`ghost small${sortMode === 'quick' ? ' on' : ''}`} aria-pressed={sortMode === 'quick'}
+                  onClick={() => setSortMode('quick')} title="Lowest estimated effort first — clear quick wins">Quickest first</button>
+        </div>
         {totalN > 0 && (
           <div className="rc-progress">
             <span className="track"><i style={{ width: `${Math.round((reviewedN / totalN) * 100)}%` }} /></span>
@@ -172,6 +184,7 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
                           reads as a contradiction — say which is which. */}
                       <span className="rc-sevchip" style={{ background: s.bg, color: s.color }}
                             title={`WCAG severity of this criterion: ${s.label}`}>{s.label} severity</span>
+                      <RiskChip item={it} compact />
                       <span className="rc-item-file">{it.file || 'document'}</span>
                       {it.finding_count > 1 && <span className="muted rc-item-count">{it.finding_count} findings</span>}
                       <span className="rc-item-reason">⚑ {reasonOf(it)}</span>

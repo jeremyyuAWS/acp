@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { aiProvenance, getFileGeometry, getFileRemediationDiffs, getScanAiCalls, suggestFix, validateAlt } from './api.js'
 import Thumbnail from './Thumbnail.jsx'
 import BeforeAfterEvidence from './BeforeAfterEvidence.jsx'
+import RiskChip from './RiskChip.jsx'
 import { buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, explainFinding, firstProposed, groupPages, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
@@ -275,7 +276,12 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
             📍 {card.location}
           </span>
         )}
-        <span className={`conf conf-${card.track.badge.tone}`} style={{ marginLeft: 'auto' }}>{card.track.badge.label}</span>
+        {/* Risk tier + estimated effort (#6) — triage signal: how much scrutiny this needs and
+            roughly how long, from the review type + severity + grounding. */}
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+          <RiskChip item={item} />
+          <span className={`conf conf-${card.track.badge.tone}`}>{card.track.badge.label}</span>
+        </span>
       </header>
 
       {/* Verification ladder — the honest lifecycle of this finding. Each step reflects a real
