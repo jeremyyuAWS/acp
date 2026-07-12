@@ -1194,7 +1194,7 @@ class Store:
             if owner is not None and run.get("owner_email") != owner:
                 return None
             self._db.execute(cur,
-                "SELECT file,engine,status,score,compliant,skipped_rules,remediated_at,drive_write_url,acp_stamped,published_at,size_kb,pages,sheets "
+                "SELECT file,engine,status,score,compliant,skipped_rules,remediated_at,drive_write_url,acp_stamped,published_at,size_kb,pages,sheets,drive_file_id "
                 "FROM file_records WHERE scan_id=%s ORDER BY file", (sid,))
             files = self._db.fetchall(cur)
             # Drop ACP's own remediated copies when they shadow the source document they were

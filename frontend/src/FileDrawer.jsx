@@ -160,12 +160,17 @@ export const SOURCE_URL = {
   'Box': 'https://app.box.com/folder/0', 'Confluence': 'https://www.atlassian.com/wiki', 'Website / CMS': null,
 }
 export function FileLocation({ file }) {
-  const url = SOURCE_URL[file.sourceName]
+  // THE document beats the source's home page (canonical HITL vision §16): a Drive-scanned
+  // file carries its id, so link straight to it — the generic source link is the fallback.
+  const url = file.drive_file_id
+    ? `https://drive.google.com/file/d/${encodeURIComponent(file.drive_file_id)}/view`
+    : SOURCE_URL[file.sourceName]
+  const label = file.drive_file_id ? 'Open this document in Drive' : `Open in ${file.sourceName}`
   return (
     <div className="floc">
       <div className="flocpath"><span className="muted">location · </span>{file.sourceName || 'Source'} <span className="muted">›</span> {file.dept || 'Unfiled'} <span className="muted">›</span> <b>{file.file}</b></div>
       {url
-        ? <a className="ghost small flocbtn" href={url} target="_blank" rel="noopener noreferrer">↗ Open in {file.sourceName}</a>
+        ? <a className="ghost small flocbtn" href={url} target="_blank" rel="noopener noreferrer">↗ {label}</a>
         : <span className="flocbtn muted" style={{ fontSize: 12 }}>public web page · open in your CMS</span>}
       {file.superseded && <div className="flocsuper">⚠ A <b>newer version</b> of this document exists — open the source to compare or replace the superseded copy.</div>}
     </div>
