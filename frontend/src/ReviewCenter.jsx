@@ -78,7 +78,10 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
     // the proposed value is what a bulk approve accepts (there is no per-item edit here).
     const takesValue = VALUE_FIX.has(scOf(it.rule_id)) || !!(it.proposals && it.proposals.length)
     const val = takesValue ? (firstProposed(it) ?? it.approved_value ?? null) : null
-    Promise.resolve(onAct(it.id, status, null, status === 'approved' ? val : null))
+    // Bulk/keyboard rejections carry reason 'unspecified' — recorded honestly as "no reason
+    // asked", never dropped, so the feedback rollup separates them from chip-picked reasons.
+    const opts = status === 'rejected' ? { rejectReason: 'unspecified' } : {}
+    Promise.resolve(onAct(it.id, status, null, status === 'approved' ? val : null, opts))
       .catch(() => {})   // act() already reverts optimistic state on failure; avoid an unhandled rejection
       .finally(() => { setBusy(null); setExpanded(null) })
   }

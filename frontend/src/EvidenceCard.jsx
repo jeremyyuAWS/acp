@@ -38,6 +38,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // reviewer believing they signed something off that was never recorded.
   const [actError, setActError] = useState(null)
   const [showExplain, setShowExplain] = useState(false)   // "✨ Explain this finding" toggle
+  const [askReject, setAskReject] = useState(false)        // reject → "why?" reason chips (feedback intelligence)
   const [showAudit, setShowAudit] = useState(false)       // "🔎 AI audit trail" toggle (#129)
   const [aiCalls, setAiCalls] = useState(null)            // null = unloaded, [] = loaded-empty
   const [drafting, setDrafting] = useState(false)
@@ -239,10 +240,11 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // one box — keep warning rather than implying it can. (Now rare: deferred rows carry evidence.)
   const manyInstances = !multi && card.findingCount > 1 && isValueFix(card.sc)
 
-  const decide = async (status) => {
+  const decide = async (status, rejectReason = null) => {
     if (busy) return
     setBusy(true)
     setActError(null)
+    setAskReject(false)
     // The headline value (audit log, telemetry) is the first image's text when the row carries
     // proposals — the same one the collapsed card shows.
     const headline = multi ? (values[0] || '') : value
@@ -258,7 +260,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
       : null
     try {
       await onAct(card.id, status, note || null, t.finalValue,
-                  { edited: t.edited, reviewMs: t.reviewMs, aiValue: t.aiValue, approvedValues })
+                  { edited: t.edited, reviewMs: t.reviewMs, aiValue: t.aiValue, approvedValues,
+                    rejectReason })
       onResolved && onResolved(card.id, status)
     } catch (e) {
       // HitlBell rolls the optimistic list back and rethrows. Without this catch the rejection
@@ -662,9 +665,25 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
             <button className="qbtn self" disabled={busy}
                     title="Take ownership — fix it yourself, then re-scan to confirm"
                     onClick={() => decide('skipped')}>✋ I’ll fix it</button>
-            <button className="qbtn reject" disabled={busy} onClick={() => decide('rejected')}>✕ Reject</button>
+            <button className="qbtn reject" disabled={busy} aria-expanded={askReject}
+                    onClick={() => setAskReject((v) => !v)}>✕ Reject{askReject ? ' —' : '…'}</button>
             {traceUrl && <a className="rc-trace" href={traceUrl} target="_blank" rel="noopener noreferrer">📊 View trace</a>}
           </div>
+          {/* Feedback intelligence: one more click captures WHY. Each rejection becomes training
+              signal for "which rules/doc types are weakest" — real reviewer behaviour, not
+              intuition. Chips submit immediately; no extra confirm. */}
+          {askReject && (
+            <div className="evcard-rejectwhy" role="group" aria-label="Why are you rejecting this?"
+                 style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
+              <span className="muted" style={{ fontSize: 12 }}>Why?</span>
+              {[['incorrect_object', 'Incorrect object'], ['too_vague', 'Too vague'],
+                ['hallucinated', 'Hallucinated'], ['missed_text', 'Missed important text'],
+                ['org_preference', 'Organization preference'], ['other', 'Other']].map(([k, label]) => (
+                <button key={k} type="button" className="ghost small" disabled={busy}
+                        onClick={() => decide('rejected', k)}>{label}</button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </section>

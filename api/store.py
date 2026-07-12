@@ -273,6 +273,10 @@ _SCHEMA = [
       action TEXT, edited INT, review_ms INT, ai_value TEXT, final_value TEXT,
       reviewer TEXT, created_at TEXT
     )""",
+    # Reviewer Feedback Intelligence: WHY a rejection happened (enum: incorrect_object, too_vague,
+    # hallucinated, missed_text, org_preference, other, unspecified). Additive; placed AFTER the
+    # CREATE above — init_schema runs this list in order.
+    "ALTER TABLE hitl_events ADD COLUMN IF NOT EXISTS reject_reason TEXT",
     # Configurable file disposition (ADR 0003, Phase 3). PREVIEW ONLY as of this
     # migration -- api/disposition.py's matches() tells you which documents a policy
     # would select; nothing executes a real move/rename/archive/delete yet. That
@@ -1535,30 +1539,37 @@ class Store:
     def record_hitl_event(self, scan_id: str, file: str, rule_id: str, item_id: str,
                           action: str, *, edited: bool = False, review_ms: int | None = None,
                           ai_value: str | None = None, final_value: str | None = None,
-                          reviewer: str | None = None) -> None:
-        """One immutable row per human review decision — the telemetry the Intelligent
-        Review Workspace reports on (reviewer time saved) and calibrates from (edit rate on
-        High-confidence proposals). Best-effort: callers wrap so it never blocks a review."""
+                          reviewer: str | None = None, reject_reason: str | None = None) -> None:
+        """One immutable row per human review decision — the telemetry the review workspace
+        reports on (reviewer time saved) and calibrates from (edit rate on High-confidence
+        proposals). `reject_reason` (Reviewer Feedback Intelligence) records WHY a rejection
+        happened, so 'which rules/doc types are weakest' is answered by real reviewer behaviour
+        rather than intuition. Best-effort: callers wrap so it never blocks a review."""
         from datetime import datetime, timezone
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO hitl_events(id,scan_id,file,rule_id,item_id,action,edited,"
-                "review_ms,ai_value,final_value,reviewer,created_at) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "review_ms,ai_value,final_value,reviewer,created_at,reject_reason) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (uuid.uuid4().hex, scan_id, file, rule_id, item_id, action,
                  1 if edited else 0, review_ms, ai_value or None, final_value or None,
-                 reviewer, datetime.now(timezone.utc).isoformat()))
+                 reviewer, datetime.now(timezone.utc).isoformat(), reject_reason or None))
 
     def hitl_analytics(self, scan_id: str | None = None) -> dict:
         """Aggregate HITL review telemetry — headline metric is reviewer time eliminated,
         not % automated. Scoped to one scan when scan_id is given (owner-checked at the
-        route), else across all recorded decisions."""
+        route), else across all recorded decisions.
+
+        Reviewer Feedback Intelligence: also rolls up per-RULE and per-FORMAT quality (which
+        criteria/doc types the AI is weakest on) and the reject-reason histogram — every figure
+        a count of real reviewer decisions, never a fabricated score (ADR 0016)."""
         with self._db.cursor() as cur:
+            cols = "action,edited,review_ms,rule_id,file,reject_reason"
             if scan_id:
                 self._db.execute(cur,
-                    "SELECT action,edited,review_ms FROM hitl_events WHERE scan_id=%s", (scan_id,))
+                    f"SELECT {cols} FROM hitl_events WHERE scan_id=%s", (scan_id,))
             else:
-                self._db.execute(cur, "SELECT action,edited,review_ms FROM hitl_events")
+                self._db.execute(cur, f"SELECT {cols} FROM hitl_events")
             rows = self._db.fetchall(cur)
         by: dict = {}
         for r in rows:
@@ -1567,6 +1578,46 @@ class Store:
         decided = len(rows) - by.get("skip", 0)
         edited_n = sum(1 for r in rows if r.get("edited"))
         ms = [r["review_ms"] for r in rows if r.get("review_ms") is not None]
+
+        def _bucket(rows_iter, keyfn):
+            out: dict[str, dict] = {}
+            for r in rows_iter:
+                k = keyfn(r)
+                if not k:
+                    continue
+                b = out.setdefault(k, {"reviewed": 0, "approved": 0, "rejected": 0, "edited": 0,
+                                       "reject_reasons": {}, "_ms": []})
+                a = r.get("action")
+                if a in ("approve", "edit", "reject"):
+                    b["reviewed"] += 1
+                if a in ("approve", "edit"):
+                    b["approved"] += 1
+                if a == "reject":
+                    b["rejected"] += 1
+                    rr = r.get("reject_reason")
+                    if rr:
+                        b["reject_reasons"][rr] = b["reject_reasons"].get(rr, 0) + 1
+                if r.get("edited"):
+                    b["edited"] += 1
+                if r.get("review_ms") is not None:
+                    b["_ms"].append(r["review_ms"])
+            result = []
+            for k, b in out.items():
+                result.append({"key": k, "reviewed": b["reviewed"], "approved": b["approved"],
+                               "rejected": b["rejected"], "edited": b["edited"],
+                               "approval_rate": round(b["approved"] / b["reviewed"], 3) if b["reviewed"] else None,
+                               "avg_review_ms": round(sum(b["_ms"]) / len(b["_ms"])) if b["_ms"] else None,
+                               "reject_reasons": b["reject_reasons"]})
+            # weakest first: most rejections, then lowest approval rate — the "where should
+            # engineering invest next" ordering.
+            result.sort(key=lambda x: (-x["rejected"], x["approval_rate"] if x["approval_rate"] is not None else 1.0))
+            return result
+
+        reasons: dict[str, int] = {}
+        for r in rows:
+            rr = r.get("reject_reason")
+            if r.get("action") == "reject" and rr:
+                reasons[rr] = reasons.get(rr, 0) + 1
         return {
             "total": len(rows),
             "by_action": by,
@@ -1574,6 +1625,9 @@ class Store:
             "approval_rate": round(approvals / decided, 3) if decided else None,
             "edit_rate": round(edited_n / approvals, 3) if approvals else None,   # calibration signal
             "avg_review_ms": round(sum(ms) / len(ms)) if ms else None,
+            "reject_reasons": reasons,
+            "by_rule": _bucket(rows, lambda r: (r.get("rule_id") or "").replace("SC_", "").replace("_", ".") or None),
+            "by_format": _bucket(rows, lambda r: (r.get("file") or "").rsplit(".", 1)[-1].lower() if "." in (r.get("file") or "") else None),
         }
 
     def get_remediation_diffs(self, scan_id: str, file: str) -> list[dict]:

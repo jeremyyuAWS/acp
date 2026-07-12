@@ -21,6 +21,12 @@ class HitlUpdate(BaseModel):
     # null/"" accepts that proposal's own draft, so approving an unedited card means exactly
     # "the drafts I was shown are correct". Omit entirely for a judgement finding.
     approved_values: list[str | None] | None = None
+    # Reviewer Feedback Intelligence: WHY a rejection happened. A fixed vocabulary so the
+    # rollup can answer "which rules are weakest" — free text goes in reviewer_note.
+    reject_reason: str | None = None    # incorrect_object | too_vague | hallucinated | missed_text | org_preference | other
+
+
+REJECT_REASONS = {"incorrect_object", "too_vague", "hallucinated", "missed_text", "org_preference", "other", "unspecified"}
 
 
 @router.post("/hitl/queue/{scan_id}/auto")
@@ -82,6 +88,8 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     valid = {"pending", "approved", "rejected", "skipped"}
     if body.status not in valid:
         raise HTTPException(422, f"status must be one of {sorted(valid)}")
+    if body.reject_reason is not None and body.reject_reason not in REJECT_REASONS:
+        raise HTTPException(422, f"reject_reason must be one of {sorted(REJECT_REASONS)}")
     updated = core.store.update_hitl_item(item_id, body.status, body.reviewer_note, body.approved_value)
     # Record the reviewer's final text per proposal, so the applier knows which image gets which
     # description. Only on approval: rejecting or skipping approves no content.
@@ -116,7 +124,8 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
             item.get("scan_id"), item.get("file"), item.get("rule_id"), item_id, _action,
             edited=body.edited, review_ms=body.review_ms, ai_value=body.ai_value,
             final_value=body.approved_value,
-            reviewer=(getattr(request.state, "user_email", None) if request is not None else None))
+            reviewer=(getattr(request.state, "user_email", None) if request is not None else None),
+            reject_reason=(body.reject_reason if body.status == "rejected" else None))
     except Exception:
         pass
     # Observability: the human decision joins the file's Langfuse trace (audit P1 — HITL

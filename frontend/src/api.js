@@ -382,7 +382,9 @@ export const updateHitlItem = (itemId, status, reviewerNote = null, approvedValu
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ status, reviewer_note: reviewerNote, approved_value: approvedValue,
         approved_values: opts.approvedValues ?? null,
-        edited: !!opts.edited, review_ms: opts.reviewMs ?? null, ai_value: opts.aiValue ?? null }),
+        edited: !!opts.edited, review_ms: opts.reviewMs ?? null, ai_value: opts.aiValue ?? null,
+        // Feedback intelligence: WHY a rejection happened (enum; bulk/keyboard paths send 'unspecified')
+        reject_reason: opts.rejectReason ?? null }),
     }).then(j))
 // HITL review telemetry for the workspace dashboard — decisions by action, approval rate,
 // edit rate (confidence-calibration signal), avg review time (reviewer-time-saved). Scan-scoped.

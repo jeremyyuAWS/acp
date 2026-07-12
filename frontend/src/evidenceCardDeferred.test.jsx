@@ -69,12 +69,17 @@ describe('EvidenceCard — approving a deferred row', () => {
     expect(opts.approvedValues).toEqual(['a nurse', '', 'the logo'])
   })
 
-  it('sends no values on reject — rejecting approves no content', async () => {
+  it('sends no values on reject — and a reject captures WHY (feedback intelligence)', async () => {
     await mount()
     await type(inputs()[0], 'a nurse')
+    // Two-step: Reject opens the reason chips (nothing recorded yet)…
     await clickText('Reject')
+    expect(onAct).not.toHaveBeenCalled()
+    // …and picking a reason submits the rejection carrying it.
+    await clickText('Too vague')
     const [, status, , , opts] = onAct.mock.calls[0]
     expect(status).toBe('rejected')
     expect(opts.approvedValues).toBeNull()
+    expect(opts.rejectReason).toBe('too_vague')
   })
 })
