@@ -1545,6 +1545,14 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .rc-metric b { font-size: 22px; font-weight: 600; }
 .rc-body { overflow-y: auto; padding: 4px 22px 22px; }
 .rc-empty { padding: 40px 0; text-align: center; color: var(--muted); }
+/* Document Health header — THE question first: can this be certified, what stands in the way. */
+.dochealth { margin: 0 0 12px; padding: 11px 14px; border: 1px solid var(--line);
+  border-left: 4px solid #8A5A00; border-radius: 10px; background: var(--surface-1, #FBF9F4); }
+.dochealth-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.dochealth-status { font-size: 13.5px; }
+.dochealth-counts { font-size: 12.5px; margin-top: 4px; }
+.dochealth-cta { flex: 0 0 auto; }
+
 /* Three review types — each section header is the contract for the work beneath it. */
 .rc-type { margin-top: 20px; }
 .rc-type:first-of-type { margin-top: 8px; }

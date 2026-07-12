@@ -537,6 +537,42 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           when absent, same as before this existed. */}
       {scanId && <div style={{ margin: '0 0 12px' }}><TraceChip scanId={scanId} kind="file" file={file.file} label="View this document's trace" refreshKey={remNow?.done ? 1 : 0} /></div>}
       <Thumbnail scanId={scanId} file={file.file} className="drawer-thumb" />
+      {issues.length > 0 && st !== 'unanalysable' && (() => {
+        // Document Health (canonical HITL vision): answer THE question first — can this
+        // document be certified, and what exactly stands in the way? Every number is a real
+        // count from this file's findings and its pending review items; nothing is estimated
+        // and no time/effort guess is shown (ADR 0016).
+        const autoN = issues.filter((i) => findingAuto(i)).length
+        const reviewN = issues.length - autoN
+        const pendingReviews = hitlItems.reduce((n, h) => n + (h.finding_count || 1), 0)
+        const [icon, label] = allFailingFixed
+          ? ['🟢', 'Fixes applied — re-validate to certify']
+          : pendingReviews > 0
+            ? ['🟡', 'Needs human review before it can be certified']
+            : autoN === issues.length
+              ? ['🟢', 'Every blocking finding is auto-fixable — run remediation']
+              : ['🔴', `Blocked — needs remediation${reviewN ? ' and human judgement' : ''}`]
+        return (
+          <div className="dochealth" role="status">
+            <div className="dochealth-row">
+              <span className="dochealth-status">{icon} <b>{label}</b></span>
+              {hitlItems.length > 0 && (
+                <button className="qbtn approve dochealth-cta" onClick={() => {
+                  // One CTA: open the first pending review right here in the drawer.
+                  setReviewSc(scOfWcag(hitlItems[0].rule_id) || hitlItems[0].rule_id)
+                  setTimeout(() => document.querySelector('.evcard')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150)
+                }}>⚖ Review now</button>
+              )}
+            </div>
+            <div className="muted dochealth-counts">
+              <b>{issues.length}</b> blocking finding{issues.length !== 1 ? 's' : ''}
+              <span> · <b>{autoN}</b> auto-fixable</span>
+              <span> · <b>{reviewN}</b> need judgement</span>
+              {pendingReviews > 0 && <span> · <b>{pendingReviews}</b> awaiting your review below</span>}
+            </div>
+          </div>
+        )
+      })()}
       <div className="drawerstats">
         <span className="badge" style={{ background: sbg, color: sfg }}>{st}</span>
         <span className="drawerscore">{file.score === null ? 'n/a' : `${st === 'uncertain' ? '≤' : ''}${file.score}`}<span className="muted"> / 100</span></span>
