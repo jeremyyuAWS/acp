@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { aiProvenance, getFileGeometry, getFileRemediationDiffs, getScanAiCalls, suggestFix, validateAlt } from './api.js'
 import Thumbnail from './Thumbnail.jsx'
+import ContrastSwatch from './ContrastSwatch.jsx'
+import { parseContrast } from './contrastEvidence.js'
 import { buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, explainFinding, firstProposed, groupPages, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
@@ -170,6 +172,10 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // The kind of image, read from the model's own description (#130) — a routing hint for what a
   // good alt text looks like here (a chart needs a trend, an icon two words). null → no chip.
   const imgKind = describedImageType(heroInst ? { proposals: [heroInst] } : item)
+  // Contrast findings carry the real fg/bg colours + measured ratio in their detail — render the
+  // actual low-contrast text as VISUAL evidence (the "where/why" for a colour finding, which has no
+  // image to rasterize). null for findings whose detail has no colours (keeps prose, no swatch).
+  const contrast = parseContrast(card.detail)
   // Reviewer-trust primitives (all derived from real fields — never a fabricated score):
   //   ladder  — how far the pipeline got before handing off (detected → validated → your approval)
   //   signals — the concrete evidence behind the finding (detection basis, reasoning, subjective flag)
@@ -291,6 +297,9 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
           </span>
         ))}
       </div>
+
+      {/* Contrast finding: the actual faint text on its real background — see it, don't read a number. */}
+      {contrast && <ContrastSwatch {...contrast} />}
 
       {/* Large page preview (ADR 0018) — the visual "where": the finding's page rendered big, the
           hero of the card (Principle 2). Self-hides when the backend can't rasterize (Thumbnail

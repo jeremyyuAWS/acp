@@ -267,6 +267,9 @@ export function buildEvidenceCard(item, diffs = []) {
     severity: meta.sev,
     // Plain-English problem (show, don't tell) — never "Missing Alt Text".
     problem: meta.reason,
+    // The raw finding detail (e.g. a contrast finding's "#hex on #hex is X.X:1 (needs Y:1)") — the
+    // card parses it for structured visual evidence like the contrast swatch. Prose-only otherwise.
+    detail: item?.detail || '',
     // The AI-drafted value proposed for approval; null → a judgement item with no draft value.
     // A server-side proposal (hitl_queue.proposals) wins over a previously-approved value:
     // it is the current recommendation, pre-computed at remediation time so the reviewer

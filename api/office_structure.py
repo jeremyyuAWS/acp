@@ -541,6 +541,7 @@ def xlsx_contrast_checks(path: Path) -> list[dict]:
                     style_colors[i] = (font_hex, fill_hex)
 
             seen_aa = seen_aaa = False
+            worst = None      # (true_ratio, font6, fill6) of the lowest-contrast flagged cell
             for sheet_name in sorted(n for n in zf.namelist()
                                       if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", n)):
                 sheet_xml = _read(zf, sheet_name)
@@ -557,14 +558,35 @@ def xlsx_contrast_checks(path: Path) -> list[dict]:
                         seen_aaa = True
                     if diff < 0.3:
                         seen_aa = True
+                    # Track the worst pairing by the TRUE WCAG ratio (for the review card's colour
+                    # swatch) — detection above is unchanged; this only records the colours+ratio.
+                    if diff < 0.5:
+                        f6, b6 = colors[0][-6:], colors[1][-6:]
+                        r = _contrast_ratio(f6, b6)
+                        if worst is None or r < worst[0]:
+                            worst = (r, f6, b6)
                 if seen_aa and seen_aaa:
                     break
     except Exception:
         return []
+    # Attach the fg/bg + measured ratio in the same shape pptx uses, so the card renders the swatch.
+    # Only when the true ratio agrees the cell fails the finding's bar — never a contradictory detail.
+    def _detail(needs: float) -> str | None:
+        if worst and worst[0] < needs:
+            return f"Text #{worst[1].upper()} on #{worst[2].upper()} is {worst[0]:.1f}:1 (needs {needs:g}:1)"
+        return None
     if seen_aa:
-        findings.append(_finding("XLSX_LOW_CONTRAST_AA", "1.4.3 Contrast (Minimum)", "SERIOUS"))
+        f = _finding("XLSX_LOW_CONTRAST_AA", "1.4.3 Contrast (Minimum)", "SERIOUS")
+        d = _detail(4.5)
+        if d:
+            f["detail"] = d
+        findings.append(f)
     if seen_aaa:
-        findings.append(_finding("XLSX_LOW_CONTRAST_AAA", "1.4.6 Contrast (Enhanced)", "MODERATE"))
+        f = _finding("XLSX_LOW_CONTRAST_AAA", "1.4.6 Contrast (Enhanced)", "MODERATE")
+        d = _detail(7.0)
+        if d:
+            f["detail"] = d
+        findings.append(f)
     return findings
 
 
