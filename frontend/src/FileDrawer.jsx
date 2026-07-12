@@ -4,7 +4,8 @@ import Tag from './Tag.jsx'
 import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
-import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, getFileRemediationDiffs, downloadRemediated, getRules, getRubric, getConfig, getCapability } from './api.js'
+import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, getFileRemediationDiffs, downloadRemediated, getRules, getRubric, getConfig, getCapability, listHitlQueue, updateHitlItem, openTraceUrl } from './api.js'
+import EvidenceCard from './EvidenceCard.jsx'
 import { CAPABILITY_FALLBACK, fmtOf, autoSCs, modeFor, reviewRecommended } from './capability.js'
 import PagePreview from './PagePreview.jsx'
 import { WCAG } from './wcagCatalog.js'
@@ -307,6 +308,32 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   // outset — shown routed to a human, never claimed as being fixed.
   const [findStatus, setFindStatus] = useState({})
   const [hitlQueued, setHitlQueued] = useState(false)
+  // Review IN PLACE (canonical HITL vision): when a finding here has a pending review item,
+  // the drawer expands the SAME EvidenceCard the Work Inbox uses — hero preview, bounding
+  // box, zoom, page strip, drafted values — so the reviewer decides where the finding is,
+  // instead of being sent to hunt for it in another surface. One card open at a time.
+  const [hitlItems, setHitlItems] = useState([])
+  const [reviewSc, setReviewSc] = useState(null)
+  useEffect(() => {
+    setHitlItems([]); setReviewSc(null)
+    if (!scanId || !file?.file) return
+    let live = true
+    const load = () => listHitlQueue(scanId, 'pending')
+      .then((rows) => { if (live) setHitlItems((rows || []).filter((r) => r.file === file.file)) })
+      .catch(() => {})
+    load()
+    window.addEventListener('acp:hitl-changed', load)
+    return () => { live = false; window.removeEventListener('acp:hitl-changed', load) }
+  }, [scanId, file?.file])
+  const hitlItemFor = (sc) => hitlItems.find((h) => (scOfWcag(h.rule_id) || h.rule_id) === sc)
+  // Same contract as the inbox's act(): the card carries the note/value/telemetry; a
+  // success removes the item locally and tells the bell to reconcile.
+  const drawerAct = (itemId, status, note = null, approvedValue = null, telemetry = {}) =>
+    updateHitlItem(itemId, status, note, approvedValue, telemetry)
+      .then(() => {
+        setHitlItems((cur) => cur.filter((h) => h.id !== itemId))
+        window.dispatchEvent(new Event('acp:hitl-changed'))
+      })
   // Download the stored fixed copy. downloadRemediated() rejects on a non-2xx (e.g. the
   // 404 an ADR 0011 incremental re-scan produced for a file whose fixed copy lives under
   // an earlier scan_id) — but the bare onClick used to drop that rejection, so the button
@@ -704,6 +731,31 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                       return (
                         <div className="findingconf">
                           <span className={confClass(level)} title={`Trust signal (tier: ${level.label})`}>{basis}</span>
+                        </div>
+                      )
+                    })()}
+                    {(() => {
+                      // Review IN PLACE: a finding with a pending review item expands the same
+                      // EvidenceCard the Work Inbox uses (hero + bounding box + zoom + page
+                      // strip + drafts) right here — the reviewer never leaves the document
+                      // they are looking at to decide about it.
+                      const sc = scOfWcag(i.wcag)
+                      const hi = hitlItemFor(sc)
+                      if (!hi) return null
+                      const openHere = reviewSc === sc
+                      return (
+                        <div style={{ marginTop: 8 }}>
+                          <button className="ghost small" aria-expanded={openHere}
+                                  onClick={() => setReviewSc(openHere ? null : sc)}>
+                            {openHere ? '× Close review' : `⚖ Review here — ${hi.finding_count > 1 ? `${hi.finding_count} findings, ` : ''}evidence & approve`}
+                          </button>
+                          {openHere && (
+                            <div style={{ marginTop: 8 }}>
+                              <EvidenceCard item={hi} onAct={drawerAct}
+                                            onResolved={() => setReviewSc(null)}
+                                            traceUrl={hi.scan_id ? openTraceUrl(hi.scan_id, 'file', hi.file) : null} />
+                            </div>
+                          )}
                         </div>
                       )
                     })()}
