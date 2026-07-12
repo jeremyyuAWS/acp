@@ -73,6 +73,31 @@ def test_slide_chart_descr_injects_accurate_alt_onto_the_chart_shape():
     assert alts and "East at 150" in alts[0]
 
 
+def _native_chart_xlsx(cats, vals, title="Q4 Revenue by Region") -> bytes:
+    opx = pytest.importorskip("openpyxl")
+    from openpyxl.chart import BarChart, Reference
+    wb = opx.Workbook(); ws = wb.active
+    ws.append(["Region", "Revenue"])
+    for c, v in zip(cats, vals):
+        ws.append([c, v])
+    ch = BarChart(); ch.title = title
+    data = Reference(ws, min_col=2, min_row=1, max_row=1 + len(cats))
+    catref = Reference(ws, min_col=1, min_row=2, max_row=1 + len(cats))
+    ch.add_data(data, titles_from_data=True); ch.set_categories(catref)
+    ws.add_chart(ch, "E2")
+    buf = io.BytesIO(); wb.save(buf); return buf.getvalue()
+
+
+def test_xlsx_chart_reads_the_real_cell_values():
+    # A native xlsx chart references cells (empty numCache) — the resolver reads the actual VALUES
+    # from the worksheet. (Category labels also resolve on real Excel files; openpyxl serialises the
+    # category ref differently, so we assert on the values the resolver reliably recovers.)
+    data = _native_chart_xlsx(["North", "South", "East", "West"], [120, 70, 150, 50])
+    alts = chart_data.chart_alts(data, ".xlsx")
+    assert alts and alts[0].lower().startswith("bar chart")
+    assert "150" in alts[0] and "50" in alts[0]                 # real high/low, read from cells
+
+
 def test_slide_chart_descr_is_idempotent_never_overwrites():
     import io
     import zipfile

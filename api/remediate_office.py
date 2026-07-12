@@ -1048,33 +1048,40 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
     """
     try:
         with zipfile.ZipFile(path) as zin:
-            names = zin.namelist()
-            if _CORE not in names:
-                return None, [], ["no OPC core-properties part — cannot set language/title"]
-            entries = {n: zin.read(n) for n in names}
+            entries = {n: zin.read(n) for n in zin.namelist()}
     except Exception as e:
         return None, [], [f"could not open Office file: {type(e).__name__}"]
 
-    for pfx, uri in _NS.items():
-        ET.register_namespace(pfx, uri)
-    root = ET.fromstring(entries[_CORE].decode("utf-8"))
     applied: list[str] = []
+    _core_skip: list[str] = []
+    # Language + title live in docProps/core.xml. Some files (notably certain xlsx exports) omit that
+    # part — set lang/title only when it exists, but STILL run every other fix below (chart alt, image
+    # alt, structure). A missing core part must not abort the whole remediation — it used to return
+    # with nothing done, so such a file got NO fixes at all.
+    has_core = _CORE in entries
+    root = None
+    if has_core:
+        for pfx, uri in _NS.items():
+            ET.register_namespace(pfx, uri)
+        root = ET.fromstring(entries[_CORE].decode("utf-8"))
 
-    def _ensure(tag_uri: str, tag: str, value: str, label: str, sc: str, before: str):
-        el = root.find(f"{{{tag_uri}}}{tag}")
-        if el is None or not (el.text or "").strip():
-            if el is None:
-                el = ET.SubElement(root, f"{{{tag_uri}}}{tag}")
-            el.text = value
-            applied.append(label.format(value=value))
-            _rec(diffs, sc, before, value, f"read by assistive tech from docProps/core.xml (dc:{tag})")
+        def _ensure(tag_uri: str, tag: str, value: str, label: str, sc: str, before: str):
+            el = root.find(f"{{{tag_uri}}}{tag}")
+            if el is None or not (el.text or "").strip():
+                if el is None:
+                    el = ET.SubElement(root, f"{{{tag_uri}}}{tag}")
+                el.text = value
+                applied.append(label.format(value=value))
+                _rec(diffs, sc, before, value, f"read by assistive tech from docProps/core.xml (dc:{tag})")
 
-    _ensure(_DC, "language", lang, "Set document language to '{value}'",
-            "3.1.1", "(no language declared — screen readers guessed pronunciation)")
-    # A meaningful title beats an empty one; derive a readable default from the name.
-    title = path.stem.replace("-", " ").replace("_", " ").strip() or "Document"
-    _ensure(_DC, "title", title, "Set document title to '{value}'",
-            "2.4.2", "(no document title — could not be identified in assistive tech)")
+        _ensure(_DC, "language", lang, "Set document language to '{value}'",
+                "3.1.1", "(no language declared — screen readers guessed pronunciation)")
+        # A meaningful title beats an empty one; derive a readable default from the name.
+        title = path.stem.replace("-", " ").replace("_", " ").strip() or "Document"
+        _ensure(_DC, "title", title, "Set document title to '{value}'",
+                "2.4.2", "(no document title — could not be identified in assistive tech)")
+    else:
+        _core_skip.append("no OPC core-properties part — language/title not set")
 
     # Image alt text (WCAG 1.1.1) — faithful source first, then a genuine vision
     # description when AI is on and a vision model is reachable; the rest defer to review.
@@ -1085,11 +1092,28 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
             vision_enabled = _ai.vision_is_available()
         except Exception:
             vision_enabled = False
+    skipped: list[str] = list(_core_skip)
+    # Native charts (1.1.1) FIRST — before _fix_image_alt (which would otherwise put a weak
+    # name-based descr on the chart shape, which we then wouldn't overwrite) and before any structural
+    # pass re-encodes the XML. A native chart has NO image bytes, so vision can't help it; its data is
+    # in the chart part (and, for xlsx, the cells it references), so we write an EXACT, deterministic
+    # description from the real series/values — no model, no confabulation. Fills only a chart with no
+    # real alt; runs for pptx/xlsx/docx.
+    try:
+        import chart_data as _chart
+        for name, (new_xml, alts) in _chart.chart_descr_edits(entries, path.suffix.lower()).items():
+            entries[name] = new_xml
+            for a in alts:
+                applied.append(f"Alt text \"{a[:60]}\" set from the chart's own data · 1.1.1")
+                _rec(diffs, "1.1.1", "(native chart had no alt text)", a,
+                     "read from the chart's embedded data — exact values, no model")
+    except Exception:
+        skipped.append("native-chart alt text could not be applied")
+
     alt_applied, alt_deferred = _fix_image_alt(
         entries, vision_enabled=vision_enabled, context_file=path.name, scan_id=scan_id,
         applied_fixes=applied_fixes, proposals=proposals, evidence=evidence, diffs=diffs)
     applied.extend(alt_applied)
-    skipped: list[str] = []
     if alt_deferred:
         skipped.append(f"{alt_deferred} image(s) lack a faithful alt source — "
                        "needs human alt text (routed to review)")
@@ -1103,21 +1127,6 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
 
     # pptx-only structural fixes that need the slide XML (title / contrast / reading order).
     if path.suffix.lower() == ".pptx":
-        # Native charts (1.1.1) FIRST, on the untouched slide XML: a native chart has NO image bytes
-        # so vision can't help it, but its data is in the chart part — so we write an EXACT,
-        # deterministic description from the real series/values (no model, no confabulation). Runs
-        # before the reading-order pass re-encodes the slide, so the injected descr survives that
-        # round-trip. Additive: only fills a chart shape that has no real alt.
-        try:
-            import chart_data as _chart
-            for name, (new_xml, alts) in _chart.slide_chart_descr(entries).items():
-                entries[name] = new_xml
-                for a in alts:
-                    applied.append(f"Alt text \"{a[:60]}\" set from the chart's own data · 1.1.1")
-                    _rec(diffs, "1.1.1", "(native chart had no alt text)", a,
-                         "read from the chart's embedded data — exact values, no model")
-        except Exception:
-            skipped.append("native-chart alt text could not be applied")
         try:
             applied.extend(_remediate_pptx_slides(entries, diffs))
         except Exception:
@@ -1138,23 +1147,23 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
     if not applied:
         return None, [], skipped or ["language and title already set"]
 
-    # Also stamp the STANDARD (visible) core properties: the remediation date as the
-    # Modified date + "Last saved by" — so it shows on the General tab, not only Custom.
-    _DCTERMS, _XSI = _NS["dcterms"], _NS["xsi"]
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    lmb = root.find(f"{{{_CP}}}lastModifiedBy")
-    if lmb is None:
-        lmb = ET.SubElement(root, f"{{{_CP}}}lastModifiedBy")
-    lmb.text = TOOL
-    mod = root.find(f"{{{_DCTERMS}}}modified")
-    if mod is None:
-        mod = ET.SubElement(root, f"{{{_DCTERMS}}}modified")
-    mod.set(f"{{{_XSI}}}type", "dcterms:W3CDTF")
-    mod.text = ts
-
-    new_core = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
-                + ET.tostring(root, encoding="unicode"))
-    entries[_CORE] = new_core.encode("utf-8")
+    # Also stamp the STANDARD (visible) core properties: the remediation date as the Modified date +
+    # "Last saved by" — so it shows on the General tab, not only Custom. Only when a core part exists.
+    if root is not None:
+        _DCTERMS, _XSI = _NS["dcterms"], _NS["xsi"]
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        lmb = root.find(f"{{{_CP}}}lastModifiedBy")
+        if lmb is None:
+            lmb = ET.SubElement(root, f"{{{_CP}}}lastModifiedBy")
+        lmb.text = TOOL
+        mod = root.find(f"{{{_DCTERMS}}}modified")
+        if mod is None:
+            mod = ET.SubElement(root, f"{{{_DCTERMS}}}modified")
+        mod.set(f"{{{_XSI}}}type", "dcterms:W3CDTF")
+        mod.text = ts
+        new_core = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+                    + ET.tostring(root, encoding="unicode"))
+        entries[_CORE] = new_core.encode("utf-8")
 
     # Tamper-evident provenance in the Custom-properties tab (who/what/when/standard).
     _stamp_provenance(entries, applied)

@@ -42,14 +42,15 @@ def charts_in(data: bytes, ext: str) -> list[dict]:
     out: list[dict] = []
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as z:
-            for name in z.namelist():
-                if _CHART_PART.match(name):
-                    try:
-                        c = _parse_chart(z.read(name))
-                        if c and c.get("series"):
-                            out.append(c)
-                    except Exception:
-                        continue
+            entries = {n: z.read(n) for n in z.namelist()}   # all parts, so cell refs can resolve
+        for name in entries:
+            if _CHART_PART.match(name):
+                try:
+                    c = _parse_chart(entries[name], entries)
+                    if c and c.get("series"):
+                        out.append(c)
+                except Exception:
+                    continue
     except Exception:
         return []
     return out
@@ -74,7 +75,7 @@ def _cache_points(ref) -> list[str]:
     return [pts.get(i, "") for i in range(max(pts) + 1)] if pts else []
 
 
-def _parse_chart(xml: bytes) -> dict | None:
+def _parse_chart(xml: bytes, entries: dict | None = None) -> dict | None:
     root = ET.fromstring(xml)
     chart = root.find(f"{{{_C}}}chart")
     if chart is None:
@@ -92,13 +93,132 @@ def _parse_chart(xml: bytes) -> dict | None:
                 name = _txt(ser.find(f"{{{_C}}}tx"))
                 cats = _cache_points(ser.find(f"{{{_C}}}cat"))
                 vals = _cache_points(ser.find(f"{{{_C}}}val"))
-                pts = [(cats[i] if i < len(cats) else f"item {i + 1}", vals[i])
+                # Real xlsx charts leave <c:numCache/> empty — the values are in cells. Resolve the
+                # <c:f> range against the workbook so the alt states the ACTUAL numbers, not nothing.
+                if entries is not None and not any(v != "" for v in vals):
+                    vals = _resolve_ref(_ref_formula(ser.find(f"{{{_C}}}val")), entries) or vals
+                if entries is not None and not any(c for c in cats):
+                    cats = _resolve_ref(_ref_formula(ser.find(f"{{{_C}}}cat")), entries) or cats
+                pts = [(cats[i] if i < len(cats) and cats[i] else f"item {i + 1}", vals[i])
                        for i in range(len(vals)) if vals[i] != ""]
                 if pts:
                     series.append({"name": name, "points": pts})
     if not ctype or not series:
         return None
     return {"type": ctype, "title": title, "series": series}
+
+
+def _ref_formula(el) -> str:
+    """The <c:f> cell-range formula inside a <c:cat>/<c:val>, e.g. "'Sheet'!$B$6:$B$9", or ''."""
+    if el is None:
+        return ""
+    f = el.find(f".//{{{_C}}}f")
+    return (f.text or "").strip() if f is not None else ""
+
+
+def _col_to_num(col: str) -> int:
+    n = 0
+    for ch in col:
+        n = n * 26 + (ord(ch.upper()) - 64)
+    return n
+
+
+def _expand_range(rng: str) -> list[str]:
+    """'B6:B9' → ['B6','B7','B8','B9']; a single cell → [cell]. Only straight-line ranges."""
+    rng = rng.replace("$", "")
+    if ":" not in rng:
+        return [rng] if re.match(r"^[A-Za-z]+\d+$", rng) else []
+    a, b = rng.split(":", 1)
+    ma, mb = re.match(r"([A-Za-z]+)(\d+)", a), re.match(r"([A-Za-z]+)(\d+)", b)
+    if not ma or not mb:
+        return []
+    c1, r1 = _col_to_num(ma.group(1)), int(ma.group(2))
+    c2, r2 = _col_to_num(mb.group(1)), int(mb.group(2))
+    out = []
+    for c in range(min(c1, c2), max(c1, c2) + 1):
+        col = ""
+        cc = c
+        while cc:
+            cc, rem = divmod(cc - 1, 26)
+            col = chr(65 + rem) + col
+        for r in range(min(r1, r2), max(r1, r2) + 1):
+            out.append(f"{col}{r}")
+    return out[:64]                                         # bound — an alt needs a handful, not a sheet
+
+
+def _resolve_ref(formula: str, entries: dict) -> list[str]:
+    """Resolve "'Sheet Name'!$B$6:$B$9" to the cell values (numbers or shared-string text), in order."""
+    m = re.match(r"^'?([^'!]+)'?!(.+)$", formula or "")
+    if not m:
+        return []
+    sheet_name, rng = m.group(1), m.group(2)
+    part = _xlsx_sheet_part(entries, sheet_name)
+    if not part or part not in entries:
+        return []
+    cells = _expand_range(rng)
+    if not cells:
+        return []
+    try:
+        return _read_cells(entries[part], cells, _shared_strings(entries))
+    except Exception:
+        return []
+
+
+def _xlsx_sheet_part(entries: dict, sheet_name: str) -> str | None:
+    wb, rels = entries.get("xl/workbook.xml"), entries.get("xl/_rels/workbook.xml.rels")
+    if not wb or not rels:
+        return None
+    _R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    _RE = "http://schemas.openxmlformats.org/package/2006/relationships"
+    try:
+        wbr = ET.fromstring(wb)
+        ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+        rid = None
+        for s in wbr.iter(f"{ns}sheet"):
+            if s.get("name") == sheet_name:
+                rid = s.get(f"{{{_R}}}id")
+                break
+        if not rid:
+            return None
+        rr = ET.fromstring(rels)
+        for rel in rr.findall(f"{{{_RE}}}Relationship"):
+            if rel.get("Id") == rid:
+                tgt = rel.get("Target", "").split("/")[-1]
+                return f"xl/worksheets/{tgt}"
+    except Exception:
+        return None
+    return None
+
+
+def _shared_strings(entries: dict) -> list[str]:
+    raw = entries.get("xl/sharedStrings.xml")
+    if not raw:
+        return []
+    try:
+        root = ET.fromstring(raw)
+        return [_txt(si) for si in root]
+    except Exception:
+        return []
+
+
+def _read_cells(sheet_xml: bytes, cells: list[str], shared: list[str]) -> list[str]:
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    want = set(cells)
+    found = {}
+    root = ET.fromstring(sheet_xml)
+    for c in root.iter(f"{ns}c"):
+        ref = c.get("r")
+        if ref not in want:
+            continue
+        v = c.find(f"{ns}v")
+        val = (v.text or "") if v is not None else ""
+        if c.get("t") == "s":                              # shared-string index
+            try:
+                val = shared[int(val)]
+            except (ValueError, IndexError):
+                val = ""
+        found[ref] = val
+    return [found.get(ref, "") for ref in cells]
 
 
 def _fmt_num(v: str) -> str:
@@ -143,75 +263,96 @@ def _to_float(v):
 # A native chart has NO image bytes, so the vision path can't help it — but its data is in the chart
 # part, so we can write a correct, exact description with zero model risk. This adds descr= to a
 # chart graphicFrame's <p:cNvPr> only when it lacks a real one (never overwrites a human's alt).
-_GRAPHICFRAME = re.compile(r"<p:graphicFrame\b.*?</p:graphicFrame>", re.S)
+import posixpath
+
 _CHART_RID = re.compile(r'<c:chart\b[^>]*r:id="(rId\d+)"')
-_CNVPR = re.compile(r"<p:cNvPr\b([^>]*?)(/?)>")
 _HAS_DESCR = re.compile(r'\bdescr="[^"]*\S[^"]*"')
-_SLIDE = re.compile(r"^ppt/slides/slide\d+\.xml$")
 
-
-def _slide_rel_targets(entries: dict, slide_name: str) -> dict:
-    """{rId: chart part name} from a slide's .rels — resolving '../charts/chartN.xml' to a full path."""
-    rels_name = slide_name.replace("ppt/slides/", "ppt/slides/_rels/") + ".rels"
-    raw = entries.get(rels_name)
-    if not raw:
-        return {}
-    out = {}
-    try:
-        root = ET.fromstring(raw)
-    except Exception:
-        return {}
-    _RELS = "http://schemas.openxmlformats.org/package/2006/relationships"
-    for rel in root.findall(f"{{{_RELS}}}Relationship"):
-        rid, tgt = rel.get("Id"), rel.get("Target") or ""
-        if rid and "chart" in tgt:
-            out[rid] = "ppt/charts/" + tgt.split("/")[-1]
-    return out
+# Per-format: which parts carry a drawing, which element wraps a chart, and which element carries the
+# alt (descr). pptx → <p:graphicFrame>/<p:cNvPr>; xlsx → <xdr:graphicFrame>/<xdr:cNvPr>; docx → the
+# inline/anchor drawing wrapper with alt on <wp:docPr>.
+_CHART_CFG = {
+    ".pptx": (re.compile(r"^ppt/slides/slide\d+\.xml$"), ["p:graphicFrame"], "p:cNvPr"),
+    ".xlsx": (re.compile(r"^xl/drawings/drawing\d+\.xml$"), ["xdr:graphicFrame"], "xdr:cNvPr"),
+    ".docx": (re.compile(r"^word/document\.xml$"), ["wp:inline", "wp:anchor"], "wp:docPr"),
+}
 
 
 def _xml_escape(s: str) -> str:
     return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
 
 
-def slide_chart_descr(entries: dict) -> dict:
-    """{slide_part_name: (new_xml_bytes, [alts])} for slides where a native chart graphicFrame lacked
-    alt and got an accurate descr from its own data. Pure string surgery on the slide XML — only
-    inserts a descr attribute on a chart's <p:cNvPr>, never touches anything else, never overwrites an
-    existing real descr. Best-effort: a slide it can't handle is simply left unchanged."""
+def _rel_targets(entries: dict, part_name: str) -> dict:
+    """{rId: resolved chart part path} from a part's .rels, resolving a relative Target (e.g.
+    '../charts/chart1.xml') against the part's own directory — so it works for slides, drawings, and
+    the docx body alike, not just 'ppt/charts/'."""
+    d, base = part_name.rsplit("/", 1) if "/" in part_name else ("", part_name)
+    rels_name = f"{d}/_rels/{base}.rels" if d else f"_rels/{base}.rels"
+    raw = entries.get(rels_name)
+    if not raw:
+        return {}
+    _RELS = "http://schemas.openxmlformats.org/package/2006/relationships"
+    out = {}
+    try:
+        root = ET.fromstring(raw)
+    except Exception:
+        return {}
+    for rel in root.findall(f"{{{_RELS}}}Relationship"):
+        rid, tgt = rel.get("Id"), rel.get("Target") or ""
+        if rid and "chart" in tgt:
+            out[rid] = posixpath.normpath(posixpath.join(d, tgt)) if not tgt.startswith("/") else tgt.lstrip("/")
+    return out
+
+
+def chart_descr_edits(entries: dict, ext: str) -> dict:
+    """{part_name: (new_xml_bytes, [alts])} for every native chart (pptx/xlsx/docx) that lacked alt and
+    got an accurate descr from its own data. Pure, format-aware string surgery: it only inserts a
+    descr attribute on the chart's alt-carrying element, never touches anything else, never overwrites
+    a real descr, and leaves a part it can't handle unchanged."""
+    cfg = _CHART_CFG.get((ext or "").lower())
+    if not cfg:
+        return {}
+    part_re, block_tags, descr_tag = cfg
+    descr_re = re.compile(rf"<{descr_tag}\b([^>]*?)(/?)>")
     changed: dict = {}
     for name in list(entries):
-        if not _SLIDE.match(name):
+        if not part_re.match(name):
             continue
         try:
             xml = entries[name].decode("utf-8")
         except Exception:
             continue
-        rels = _slide_rel_targets(entries, name)
+        rels = _rel_targets(entries, name)
         if not rels:
             continue
         alts, new_xml, moved = [], xml, False
-        for gf in _GRAPHICFRAME.finditer(xml):
-            block = gf.group(0)
-            rid_m = _CHART_RID.search(block)
-            if not rid_m:
-                continue
-            chart_part = rels.get(rid_m.group(1))
-            if not chart_part or chart_part not in entries:
-                continue
-            try:
-                chart = _parse_chart(entries[chart_part])
-            except Exception:
-                chart = None
-            if not chart:
-                continue
-            alt = describe_chart(chart)
-            cnv = _CNVPR.search(block)
-            if not cnv or _HAS_DESCR.search(cnv.group(1)):
-                continue                                   # no cNvPr, or already has a real descr
-            new_cnv = f"<p:cNvPr{cnv.group(1)} descr=\"{_xml_escape(alt)}\"{cnv.group(2)}>"
-            new_block = block[:cnv.start()] + new_cnv + block[cnv.end():]
-            new_xml = new_xml.replace(block, new_block, 1)
-            alts.append(alt); moved = True
+        for btag in block_tags:
+            for bm in re.finditer(rf"<{btag}\b.*?</{btag}>", new_xml, re.S):
+                block = bm.group(0)
+                rid_m = _CHART_RID.search(block)
+                if not rid_m:
+                    continue
+                chart_part = rels.get(rid_m.group(1))
+                if not chart_part or chart_part not in entries:
+                    continue
+                try:
+                    chart = _parse_chart(entries[chart_part], entries)
+                except Exception:
+                    chart = None
+                if not chart:
+                    continue
+                alt = describe_chart(chart)
+                dm = descr_re.search(block)
+                if not dm or _HAS_DESCR.search(dm.group(1)):
+                    continue                               # no target element, or already has a real descr
+                new_block = block[:dm.start()] + f"<{descr_tag}{dm.group(1)} descr=\"{_xml_escape(alt)}\"{dm.group(2)}>" + block[dm.end():]
+                new_xml = new_xml.replace(block, new_block, 1)
+                alts.append(alt); moved = True
         if moved:
             changed[name] = (new_xml.encode("utf-8"), alts)
     return changed
+
+
+def slide_chart_descr(entries: dict) -> dict:
+    """Back-compat alias for the pptx path (kept for existing callers)."""
+    return chart_descr_edits(entries, ".pptx")
