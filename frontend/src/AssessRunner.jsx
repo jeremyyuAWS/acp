@@ -54,6 +54,9 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   // Track whether the current result came from a previous session (cached) or was
   // computed in this session — so we can label cached results clearly.
   const [resultFromCache, setResultFromCache] = useState(saved?.phase === 'done' && !!saved?.result)
+  // A deferred assess that opened NOTHING (0 scored of N) usually means the Drive sign-in expired
+  // between Discover and Assess — surface a clear "sign in again" path instead of a silent 0%.
+  const [accessFailed, setAccessFailed] = useState(false)
   // Remediation capability ({fmt: {sc: mode}}) — fetched once, seeded with the bundled
   // table so the auto-fixable counts are correct synchronously (and never regress to the
   // format-blind view if the fetch is slow or fails).
@@ -144,6 +147,8 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
           clearInterval(timer.current)
           const computed = computeResultFrom(scored, level)
           setProgress(scored.length); setCurrentFile(null); setCurrentPhase('')
+          // Opened nothing → almost always an expired Drive sign-in in the deferred model.
+          setAccessFailed(scored.length === 0 && total > 0)
           setResult(computed); setPhase('done')
           onAssessed?.()
           save({ phase: 'done', level, result: computed })
@@ -160,7 +165,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     if (!runId) return
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
     const startedAt = Date.now()
-    setPhase('running'); setResult(null); setResultFromCache(false); setProgress(0)
+    setPhase('running'); setResult(null); setResultFromCache(false); setProgress(0); setAccessFailed(false)
     // ADR 0020: in the deferred model the DOWNLOAD happens now, at Assess — but GIS Drive tokens
     // live ~1h and are held in-memory per scan, so a scan discovered a while ago (or after a
     // container restart) has a stale/absent token and every file would 401. Push a fresh Drive
@@ -263,7 +268,19 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
             </div>
           </div>
         )}
-        {phase === 'done' && result && (
+        {phase === 'done' && accessFailed && (
+          <div style={{ margin: '4px 0 12px', padding: '11px 14px', borderRadius: 8, fontSize: 13.5,
+               background: '#FBE9E7', border: '1px solid #E7B4AC', color: '#8A2A20' }}>
+            ⚠ <b>Assess couldn’t open any of these documents.</b> If they’re on Google Drive, your
+            sign-in has most likely expired since Discover ran — <b>sign in again</b> and re-run
+            Assess. (If they aren’t on Drive, the files may be password-protected or an unsupported
+            format.)
+            <div style={{ marginTop: 8 }}>
+              <button className="ghost small" onClick={assess} disabled={phase === 'running' || scanBusy}>↻ Re-run Assess</button>
+            </div>
+          </div>
+        )}
+        {phase === 'done' && result && !accessFailed && (
           <div className="assessres">
             {resultFromCache && (
               <p className="muted" style={{ fontSize: 12, margin: '0 0 8px', fontStyle: 'italic' }}>
