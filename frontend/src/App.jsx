@@ -128,8 +128,9 @@ function AssessGate({ onGo }) {
       <div style={{ fontSize: 30, marginBottom: 10 }}>📋</div>
       <h2 style={{ margin: '0 0 6px' }}>Run the assessment to see results</h2>
       <p className="muted" style={{ maxWidth: 480, margin: '0 auto 20px', lineHeight: 1.55 }}>
-        This estate has been discovered and deep-scanned, but not yet assessed against WCAG 2.1.
-        Compliance scores, trends and dashboards appear here once you run <b>Assess</b>.
+        This estate has been discovered but not yet assessed against WCAG 2.1. Running <b>Assess</b>
+        opens each file and scores it; compliance scores, trends and dashboards appear here once it
+        completes.
       </p>
       <button onClick={onGo}>Go to Assess →</button>
     </section>

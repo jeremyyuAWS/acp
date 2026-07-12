@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { allRules } from './rules'
-import { assessScan, getCapability } from './api.js'
+import { assessScan, getCapability, getScan } from './api.js'
 import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
 import { TraceChip } from './Transparency.jsx'
 import { assessLine } from './phaseNarration.js'
@@ -78,21 +78,23 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     try { sessionStorage.removeItem(SKEY(runId)) } catch { /* ignore */ }
   }
 
-  // Deterministic conformance result over the already-scanned docs at a WCAG level.
-  const computeResult = (lvl) => {
+  // Deterministic conformance result over a set of scored docs at a WCAG level. Defaults to the
+  // docs already in props (immediate model); the deferred path passes the freshly-analysed files.
+  const computeResultFrom = (scored, lvl) => {
     const target = RANK[lvl]
     let conformant = 0, applicable = 0, autoFix = 0
-    docs.forEach((f) => {
+    scored.forEach((f) => {
       const fmt = fmtOf(f)
       const blocking = (f.issues || []).filter((x) => RANK[levelOf(x)] <= target)
       applicable += blocking.length
       autoFix += blocking.filter((x) => autoOf(cap, x, fmt)).length
       if (!blocking.length) conformant++
     })
-    const total = Math.max(1, docs.length)
+    const total = Math.max(1, scored.length)
     return { level: lvl, total, conformant, failing: total - conformant, applicable, autoFix,
              pct: Math.round((conformant / total) * 100) }
   }
+  const computeResult = (lvl) => computeResultFrom(docs, lvl)
 
   // Time-based cosmetic pass. Floor at 1.5s so even a handful of files still reads as real
   // work happening (80ms/doc alone was as little as 80-800ms for small estates — gone before
@@ -119,29 +121,73 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     timer.current = setInterval(step, 200)
   }
 
+  // Deferred model (ADR 0020): Assess just KICKED OFF the real download+WCAG analysis. Poll the
+  // scan until it's assessed, driving progress off the true per-file count, then compute the
+  // result from the freshly-scored files. This is real work, not a cosmetic ticker.
+  const pollDeferred = (startedAt) => {
+    clearInterval(timer.current)
+    const tick = () => {
+      getScan(runId).then((data) => {
+        const run = data?.run || {}
+        const fs = data?.files || []
+        const scored = fs.filter((f) => f.score != null)
+        const total = run.files || fs.length || 1
+        setProgress(Math.min(scored.length, total))
+        setCurrentPhase(`Opening & assessing ${scored.length} of ${total}…`)
+        if (run.assessed_at || run.finalized_at) {
+          clearInterval(timer.current)
+          const computed = computeResultFrom(scored, level)
+          setProgress(scored.length); setCurrentFile(null); setCurrentPhase('')
+          setResult(computed); setPhase('done')
+          onAssessed?.()
+          save({ phase: 'done', level, result: computed })
+        }
+      }).catch(() => { /* transient poll error — keep polling */ })
+    }
+    tick()
+    timer.current = setInterval(tick, 2000)
+  }
+
   const assess = () => {
     if (phase === 'running') return               // never launch a second pass while one runs
     if (scanBusy) return                          // a scan must finish before assessing its results
+    if (!runId) return
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
-    const computed = computeResult(level)        // result is instant + deterministic
-    // Write the WCAG assessment to Langfuse on demand + mark the scan assessed (unlocks
-    // the results views). The endpoint stamps assessed_at; onAssessed flips it optimistically.
-    if (runId) { assessScan(runId, level).catch(() => {}); onAssessed?.() }
     const startedAt = Date.now()
-    save({ phase: 'running', startedAt, level, result: computed })
     setPhase('running'); setResult(null); setResultFromCache(false); setProgress(0)
-    runTicker(startedAt, level, computed)
+    assessScan(runId, level).then((resp) => {
+      if (resp && resp.deferred) {
+        // The analysis is running now — track it for real.
+        save({ phase: 'running', startedAt, level, deferred: true })
+        pollDeferred(startedAt)
+      } else {
+        // Immediate model: results already exist. Optimistic reveal + cosmetic pass over them.
+        onAssessed?.()
+        const computed = computeResult(level)
+        save({ phase: 'running', startedAt, level, result: computed })
+        runTicker(startedAt, level, computed)
+      }
+    }).catch(() => {
+      // On any error fall back to the immediate behaviour over whatever is already scored.
+      onAssessed?.()
+      const computed = computeResult(level)
+      save({ phase: 'running', startedAt, level, result: computed })
+      runTicker(startedAt, level, computed)
+    })
   }
 
   // Resume an in-flight pass after a tab switch or reload: continue from the elapsed
   // point, or finish if the expected duration already passed while away.
   useEffect(() => {
-    if (saved?.phase === 'running' && saved.startedAt) {
-      if (Date.now() - saved.startedAt >= DURATION) {
-        setProgress(docs.length); setResult(saved.result); setPhase('done')
-        save({ phase: 'done', level: saved.level, result: saved.result })
-      } else {
-        runTicker(saved.startedAt, saved.level, saved.result)
+    if (saved?.phase === 'running') {
+      if (saved.deferred) { pollDeferred(saved.startedAt || Date.now()); return }
+      if (saved.startedAt) {
+        if (Date.now() - saved.startedAt >= DURATION) {
+          setProgress(docs.length); setResult(saved.result); setPhase('done')
+          save({ phase: 'done', level: saved.level, result: saved.result })
+        } else {
+          runTicker(saved.startedAt, saved.level, saved.result)
+        }
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
