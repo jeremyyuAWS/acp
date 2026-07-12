@@ -99,7 +99,8 @@ describe('the review screens render the proposal, not a template', () => {
     const src = read('EvidenceCard.jsx')
     // The finding's page rendered large is the HERO (Principle 2) — no longer a mere fallback:
     // rendered whenever scanId+file are present (self-hides if the backend can't rasterize).
-    expect(src).toMatch(/evcard-hero[\s\S]{0,600}<Thumbnail scanId=\{card\.scanId\} file=\{card\.file\} page=\{card\.page \|\| 1\}/)
+    // (window sized to admit the pager + the vision-§17 page strip that now sit between them)
+    expect(src).toMatch(/evcard-hero[\s\S]{0,1800}<Thumbnail scanId=\{card\.scanId\} file=\{card\.file\} page=\{card\.page \|\| 1\}/)
     // Slice 2: the hero passes the finding's locator so the page render carries the bounding box.
     // (heroLocator = the paged instance's locator, defaulting to card.locator — #122 pager.)
     expect(src).toMatch(/<Thumbnail[^>]*locator=\{heroLocator\}[^>]*maxHeight=\{360\}/)

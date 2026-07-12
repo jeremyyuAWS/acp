@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from 'react'
-import { aiProvenance, getFileRemediationDiffs, getScanAiCalls, suggestFix, validateAlt } from './api.js'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { aiProvenance, getFileGeometry, getFileRemediationDiffs, getScanAiCalls, suggestFix, validateAlt } from './api.js'
 import Thumbnail from './Thumbnail.jsx'
-import { buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, explainFinding, firstProposed, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview } from './reviewCard.js'
+import { buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, explainFinding, firstProposed, groupPages, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import HowToConfirm from './HowToConfirm.jsx'
@@ -75,6 +75,25 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // undescribed images across several slides; the pager steps the large preview + its bounding box
   // through each one, so a reviewer verifies every finding in place, not just the first.
   const [heroIdx, setHeroIdx] = useState(0)
+  // Page heatmap (#121 / vision §17): which pages/slides the flagged objects live on, from
+  // MEASURED geometry only (the same bbox lookup the hero overlay uses — never guessed). A
+  // multi-image finding renders a clickable page strip; a page the geometry can't attribute
+  // simply doesn't appear. instances is rebuilt every render, so the fetch keys on the stable
+  // locator signature instead.
+  const [pageMap, setPageMap] = useState({})       // instance idx -> page number
+  const locatorSig = instances.map((x) => x?.locator || '').join('|')
+  useEffect(() => {
+    setPageMap({})
+    if (!item?.scan_id || !item?.file || instances.length < 2) return
+    let live = true
+    instances.forEach((inst, i) => {
+      if (!inst?.locator) return
+      getFileGeometry(item.scan_id, item.file, inst.locator)
+        .then((b) => { if (live && b && b.page) setPageMap((m) => ({ ...m, [i]: b.page })) })
+    })
+    return () => { live = false }
+  }, [item?.scan_id, item?.file, locatorSig]) // eslint-disable-line react-hooks/exhaustive-deps
+  const pageStrip = useMemo(() => groupPages(pageMap), [pageMap])
   const shownAt = useRef(Date.now())               // reviewer-time metric starts when the card mounts
   // The value the AI actually proposed — reviewTelemetry diffs the human's final value against
   // this to derive the `edited` calibration signal, so it must be the proposal, not the draft.
@@ -286,6 +305,22 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
               <span>Image {heroIdx + 1} of {instances.length}</span>
               <button type="button" aria-label="Next flagged image"
                       onClick={() => setHeroIdx((i) => (i + 1) % instances.length)}>›</button>
+            </div>
+          )}
+          {/* Document heatmap (vision §17): the pages that carry findings, with counts — click to
+              jump the hero straight to that page's first finding. Only rendered when geometry
+              attributed 2+ pages (a single-page finding needs no map). */}
+          {pageStrip.length > 1 && (
+            <div className="evcard-pagestrip" aria-label="Pages with findings">
+              <span className="muted">On pages:</span>
+              {pageStrip.map(([p, idxs]) => (
+                <button key={p} type="button"
+                        className={`evcard-pagechip${pageMap[heroIdx] === p ? ' evcard-pagechip-on' : ''}`}
+                        title={`${idxs.length} finding${idxs.length > 1 ? 's' : ''} on page/slide ${p} — click to jump`}
+                        onClick={() => setHeroIdx(idxs[0])}>
+                  {p}<span className="evcard-pagechip-n">{idxs.length}</span>
+                </button>
+              ))}
             </div>
           )}
           <Thumbnail scanId={card.scanId} file={card.file} page={card.page || 1} locator={heroLocator} maxHeight={360} />

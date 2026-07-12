@@ -85,7 +85,11 @@ def _clip(v: float) -> float:
 
 
 def _pic_rect_by_embed(slide_xml: bytes, rid: str) -> tuple[int, int, int, int] | None:
-    """(off.x, off.y, ext.cx, ext.cy) in EMU for the TOP-LEVEL `<p:pic>` whose blip embeds `rid`.
+    """(off.x, off.y, ext.cx, ext.cy) in EMU for the TOP-LEVEL `<p:pic>` the locator fragment
+    names — matched by its blip's r:embed (`#rId3`, the vision/evidence path) OR by its
+    `<p:cNvPr>` shape name (`#Picture 61`, the decorative / faithful-name proposal path).
+    remediate_office emits both fragment styles; matching only the rId left every name-style
+    card with no bounding box and no page attribution.
 
     Only pictures that are direct children of the slide's shape tree are considered — a picture
     inside a `<p:grpSp>` has a group-relative transform we would have to compose, so it returns
@@ -97,10 +101,10 @@ def _pic_rect_by_embed(slide_xml: bytes, rid: str) -> tuple[int, int, int, int] 
         return None
     for pic in sp_tree.findall(f"{{{_P}}}pic"):        # direct children only — no descendants
         blip = pic.find(f"{{{_P}}}blipFill/{{{_A}}}blip")
-        if blip is None:
-            continue
-        embed = blip.get(f"{{{_R}}}embed")
-        if embed != rid:
+        embed = blip.get(f"{{{_R}}}embed") if blip is not None else None
+        cnv = pic.find(f"{{{_P}}}nvPicPr/{{{_P}}}cNvPr")
+        name = (cnv.get("name") or "").strip() if cnv is not None else None
+        if rid != embed and (not name or rid != name):
             continue
         xfrm = pic.find(f"{{{_P}}}spPr/{{{_A}}}xfrm")
         if xfrm is None:

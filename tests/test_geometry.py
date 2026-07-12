@@ -127,3 +127,31 @@ def test_xfrm_less_and_grouped_pics_refuse_a_box():
     # A pic inside a group has a group-relative transform we won't compose → no box.
     d2 = _pptx(_grouped_slide("rId2", 0, 0, _W // 2, _H // 2), _slide([]))
     assert geometry.shape_bbox(d2, ".pptx", "ppt/slides/slide1.xml#rId2") is None
+
+
+def _named_slide(name, rid, ox, oy, cx, cy):
+    """A pic carrying a <p:cNvPr name> — the decorative / faithful-name proposal locator style."""
+    return (f'<?xml version="1.0"?>'
+            f'<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"'
+            f' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+            f' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            f'<p:cSld><p:spTree>'
+            f'<p:pic><p:nvPicPr><p:cNvPr id="4" name="{name}"/></p:nvPicPr>'
+            f'<p:blipFill><a:blip r:embed="{rid}"/></p:blipFill>'
+            f'<p:spPr><a:xfrm><a:off x="{ox}" y="{oy}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm></p:spPr>'
+            f'</p:pic></p:spTree></p:cSld></p:sld>')
+
+
+def test_shape_name_fragment_resolves_like_an_rid():
+    # remediate_office's decorative / faithful-name proposals locate by SHAPE NAME
+    # ("slideN.xml#Picture 61"), not by rId. Both fragment styles must resolve — matching only
+    # the rId left every name-style card with no box and no page (found live on a real deck).
+    data = _pptx(_named_slide("Picture 61", "rId9", _W // 4, _H // 4, _W // 2, _H // 2),
+                 _slide([]))
+    by_name = geometry.shape_bbox(data, ".pptx", "ppt/slides/slide1.xml#Picture 61")
+    by_rid = geometry.shape_bbox(data, ".pptx", "ppt/slides/slide1.xml#rId9")
+    assert by_name == by_rid
+    assert by_name and by_name["page"] == 1
+    assert abs(by_name["x"] - 0.25) < 0.01 and abs(by_name["w"] - 0.5) < 0.01
+    # An unknown name is still an honest None, never a guessed box.
+    assert geometry.shape_bbox(data, ".pptx", "ppt/slides/slide1.xml#No Such Shape") is None

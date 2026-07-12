@@ -493,3 +493,20 @@ export function whyHumanReview(card) {
   if (level === 'medium') return 'Detected by AI / heuristic rather than a deterministic rule, so a human confirms the call before certification.'
   return null
 }
+
+// ── Document page heatmap (vision §17) ─────────────────────────────────────────
+// Group instance indexes by their MEASURED page ({idx: page} → [[page, [idxs…]], …],
+// sorted by page). Pure: EvidenceCard feeds it the geometry results and renders one
+// clickable chip per page; clicking jumps the hero to that page's first finding.
+export function groupPages(pageMap) {
+  const byPage = new Map()
+  for (const [i, p] of Object.entries(pageMap || {})) {
+    if (!Number.isFinite(Number(p))) continue
+    const page = Number(p)
+    if (!byPage.has(page)) byPage.set(page, [])
+    byPage.get(page).push(Number(i))
+  }
+  return [...byPage.entries()]
+    .map(([page, idxs]) => [page, idxs.sort((a, b) => a - b)])
+    .sort((a, b) => a[0] - b[0])
+}

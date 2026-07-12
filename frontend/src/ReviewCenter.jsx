@@ -101,7 +101,9 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
           <div className="rc-metric"><span>Resolved today</span><b>{resolvedToday.length}</b></div>
           <div className="rc-metric"><span>AI draft acceptance</span><b>{acceptance == null ? '—' : `${acceptance}%`}</b></div>
         </div>
-        <div className="rc-kbd-hint" aria-hidden="true">↑↓ / j k navigate · <b>a</b> approve · <b>r</b> I’ll fix it · <b>s</b> reject · Enter expand · Esc close</div>
+        {/* Labels must match the handler exactly: a→approved, r→rejected, s→skipped ("I'll fix
+            it"). They were swapped — a reviewer pressing r expecting "I'll fix it" REJECTED. */}
+        <div className="rc-kbd-hint" aria-hidden="true">↑↓ / j k navigate · <b>a</b> approve · <b>r</b> reject · <b>s</b> I’ll fix it · Enter expand · Esc close</div>
         {totalN > 0 && (
           <div className="rc-progress">
             <span className="track"><i style={{ width: `${Math.round((reviewedN / totalN) * 100)}%` }} /></span>
