@@ -620,6 +620,11 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                 if item.get("path"):                       # local source — read from disk
                     it["path"] = item["path"]
                 _download(it, tmp, svc, sp_token=toks.get("sp"))
+                # ADR 0020 §1 — cache the source bytes for a later Assess phase (best-effort,
+                # never blocks the scan). Dedup'd files skip this branch entirely: their bytes
+                # live under the PRIOR scan's key, which the stage-3 reader will fall back to.
+                from scanner import cache_source_bytes
+                cache_source_bytes(tmp, name, scan_id, user)
                 # Stop BEFORE the expensive analysis. This file shares its logical name with
                 # another discovered file and carries ACP's in-document stamp, so it is our own
                 # remediated copy shadowing its source. Scanning it ran the Office/PDF engine,

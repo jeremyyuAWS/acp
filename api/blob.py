@@ -120,3 +120,52 @@ def download_render(owner: str | None, scan_id: str, filename: str) -> bytes | N
         return blob.download_blob().readall()
     except Exception:
         return None
+
+
+# --- ADR 0020 stage 1: source-bytes cache -------------------------------------
+# Discover downloads each file once; a later Assess phase (ADR 0020 stage 3) reads the
+# SAME bytes back from this cache instead of paying a second Drive/SharePoint download —
+# the 'open each file once' property, kept across the phase boundary. A distinct
+# container so a source original can never be mistaken for a remediated artifact or a
+# thumbnail. Same discipline as the render cache: lazy container creation, best-effort,
+# a no-op returning None when blob storage isn't configured (local dev re-reads the
+# source instead — the ADR's stated degradation, not an error).
+_SOURCES_CONTAINER = os.environ.get("ACP_BLOB_SOURCES_CONTAINER", "sources")
+
+
+def upload_source(owner: str | None, scan_id: str, filename: str, data: bytes) -> str | None:
+    """Cache a discovered file's original bytes. Returns the blob URL, or None when blob
+    storage isn't configured or the write fails — caching is best-effort and must NEVER
+    raise into the scan path. Self-heals a missing container on first use."""
+    svc = _service_client()
+    if svc is None:
+        return None
+    from azure.storage.blob import ContentSettings
+    blob = svc.get_blob_client(container=_SOURCES_CONTAINER, blob=_blob_path(owner, scan_id, filename))
+    settings = ContentSettings(content_type="application/octet-stream")
+    try:
+        blob.upload_blob(data, overwrite=True, content_settings=settings)
+        return blob.url
+    except Exception:
+        try:
+            svc.create_container(_SOURCES_CONTAINER)
+        except Exception:
+            pass  # already exists (race) or can't create — fall through to the retry
+        try:
+            blob.upload_blob(data, overwrite=True, content_settings=settings)
+            return blob.url
+        except Exception:
+            return None
+
+
+def download_source(owner: str | None, scan_id: str, filename: str) -> bytes | None:
+    """Read a discovered file's cached original bytes back out. None if not configured or
+    not cached (the caller falls back to a fresh source download — today's behavior)."""
+    svc = _service_client()
+    if svc is None:
+        return None
+    blob = svc.get_blob_client(container=_SOURCES_CONTAINER, blob=_blob_path(owner, scan_id, filename))
+    try:
+        return blob.download_blob().readall()
+    except Exception:
+        return None

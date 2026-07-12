@@ -1,6 +1,6 @@
 # ADR 0020 — Separating Discover (inventory) from Assess (conformance)
 
-Status: **Proposed** (2026-07-12)
+Status: **Proposed** (2026-07-12) — **Rollout stage 1 shipped** (2026-07-11): `blob.upload_source`/`download_source` (`sources` container, `{owner}/{scan_id}/{filename}`, lazy-create, no-op unconfigured) + `scanner.cache_source_bytes` wired after BOTH download paths (monolithic `run_scan` read loop and the ADR 0007 fan-out per-file body). Best-effort, nothing reads from it yet — behavior unchanged, exactly as §Rollout 1 specifies. Dedup'd fan-out files intentionally skip the write (their bytes live under the prior scan's key; the stage-3 reader falls back).
 Date: 2026-07-12
 Related: [ADR 0001](0001-read-only-assessment-spine-on-mdk.md) (the read-only scan spine this re-phases), [ADR 0003](0003-document-lifecycle-model.md) (documents table + triage scorer — the inventory home this builds on), [ADR 0007](0007-fan-out-scan-pipeline.md) (the durable fan-out this extends to a second phase), [ADR 0011](0011-incremental-scan-fingerprinting.md) (the per-file fingerprint that decides what to re-assess), [ADR 0016](0016-evidence-based-confidence.md) (honesty — a document with no assessment has *no* findings, not zero findings)
 

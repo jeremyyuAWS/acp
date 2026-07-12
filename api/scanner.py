@@ -475,6 +475,23 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
     return _dedupe_names(result)
 
 
+def cache_source_bytes(tmp: Path, name: str, scan_id: str, user: str | None) -> None:
+    """ADR 0020 stage 1: stash a just-downloaded file's original bytes in the blob source
+    cache ({owner}/{scan_id}/{filename} in the 'sources' container) so a later Assess phase
+    can re-read them without a second Drive/SharePoint download — the 'open each file once'
+    property, kept across the phase boundary. Strictly best-effort and non-blocking: a cache
+    failure (or no blob configured) must never fail or slow a scan, and NOTHING reads from
+    the cache yet — this stage only proves the bytes round-trip before anything depends on
+    them (ADR 0020 rollout §1)."""
+    try:
+        import blob
+        if not blob.enabled():
+            return
+        blob.upload_source(user, scan_id, name, (tmp / name).read_bytes())
+    except Exception:
+        pass
+
+
 def _download(item: dict, dest: Path, svc=None, sp_token: str | None = None) -> None:
     out = dest / item["name"]
     if "path" in item:
@@ -1102,6 +1119,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         for i, it in enumerate(items):
             progress({"phase": "reading", "files_found": n, "files_done": i, "current": it["name"]})
             _download(it, tmp, svc, sp_token=sp_token)
+            cache_source_bytes(tmp, it["name"], scan_id, user)   # ADR 0020 §1 — best-effort
 
         office = _analyse_office(tmp)
 
