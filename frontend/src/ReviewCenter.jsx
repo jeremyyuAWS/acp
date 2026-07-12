@@ -7,7 +7,7 @@ import EvidenceCard from './EvidenceCard.jsx'
 // hitl_queue.proposals row is read. EvidenceCard uses them too; don't fork the logic.
 import { VALUE_FIX, firstProposed, proposalMeta, reviewType, REVIEW_TYPES } from './reviewCard.js'
 import RiskChip from './RiskChip.jsx'
-import { riskComparator } from './reviewRisk.js'
+import { riskComparator, reviewRisk, fmtEst } from './reviewRisk.js'
 
 // Rules whose fix IS a value a human writes/edits (alt text, link text, title, label) —
 // these get an editable "approved value" box (the AI draft, if any, prefilled). Judgement
@@ -31,6 +31,13 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
   const highN = pending.filter((i) => sevOf(i) === 'high').length
   const reviewedN = items.filter((i) => i.status !== 'pending').length
   const totalN = items.length
+  // Certification impact (#10): clearing this queue unblocks documents for certification, and the
+  // estimated review effort tells the reviewer how far off "done" is — gamifies completion. Both
+  // are real: the est is the sum of per-item risk-tier estimates; the doc count is the distinct
+  // files these approvals clear. (The estate % projection needs the scan totals, which the inbox
+  // doesn't hold — surfaced here as the document count instead, which is honest either way.)
+  const estToClearS = pending.reduce((s, it) => s + reviewRisk(it).estSeconds, 0)
+  const docsUnblocked = new Set(pending.map((i) => i.file || i.id)).size
 
   // Three review types (canonical HITL vision): AI-proposal validation, deterministic
   // confirmation, and manual authoring are DIFFERENT JOBS with different promises — mixing
@@ -138,6 +145,16 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
           <div className="rc-progress">
             <span className="track"><i style={{ width: `${Math.round((reviewedN / totalN) * 100)}%` }} /></span>
             <span className="muted">{reviewedN} of {totalN} reviewed</span>
+          </div>
+        )}
+        {/* Certification impact (#10): what clearing this queue achieves + how far off "done" is —
+            real counts, honest estimate, gamifies completion. */}
+        {pending.length > 0 && (
+          <div className="rc-impact" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
+               margin: '2px 0 10px', padding: '8px 12px', borderRadius: 8, background: '#F4F8F0', border: '1px solid #CFE3BB' }}>
+            <span style={{ fontWeight: 700, color: '#2C5209' }}>🎯 Approving these clears {docsUnblocked} document{docsUnblocked === 1 ? '' : 's'} for certification</span>
+            <span className="muted">·</span>
+            <span className="muted">about <b>{fmtEst(estToClearS)}</b> of review left ({pending.length} item{pending.length === 1 ? '' : 's'})</span>
           </div>
         )}
 

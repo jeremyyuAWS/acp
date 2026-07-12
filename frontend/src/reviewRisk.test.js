@@ -58,4 +58,12 @@ describe('the inbox surfaces + sorts by risk', () => {
   it('the EvidenceCard header carries the risk tier + estimate', () => {
     expect(read('EvidenceCard.jsx')).toMatch(/<RiskChip item=\{item\} \/>/)
   })
+
+  it('the inbox shows a certification-impact strip (#10): docs unblocked + est time to clear', () => {
+    const s = read('ReviewCenter.jsx')
+    expect(s).toMatch(/const estToClearS = pending\.reduce/)          // real sum of per-item estimates
+    expect(s).toMatch(/const docsUnblocked = new Set\(pending\.map/)  // distinct files these clear
+    expect(s).toMatch(/clears \{docsUnblocked\} document/)
+    expect(s).toMatch(/\{fmtEst\(estToClearS\)\}/)
+  })
 })
