@@ -376,25 +376,41 @@ if [ "${ACP_DEPLOY_WORKER:-}" = "1" ]; then
   # A NEW worker app starts with ZERO secrets, but its env inherits secretREFS from the API app
   # (database-url, langfuse-sk, demo-drive-key…) — a ref without its secret fails the create with
   # ContainerAppSecretRefNotFound (hit on the first real spin-up). Copy the API app's secrets so
-  # every inherited ref resolves; fresh SECRETS entries from this run win on a name clash. Values
-  # are fetched via az and never echoed.
+  # every inherited ref resolves; fresh SECRETS entries from this run win on a name clash.
+  # Parse as JSON via python, NOT tsv: a multi-line secret value (the google-adc JSON) breaks
+  # line-based parsing into garbage "names" — and az then ECHOES the mangled value in its error.
+  # NUL-separated output keeps arbitrary values (newlines, quotes) intact and un-echoed.
   WORKER_SECRETS=()
-  while IFS=$'\t' read -r _sn _sv; do
-    [ -n "$_sn" ] || continue
-    case " ${SECRETS[*]:-} " in *" $_sn="*) continue;; esac   # ours (fresh) wins
-    WORKER_SECRETS+=("$_sn=$_sv")
-  done < <(az containerapp secret list "${AZ[@]}" -g "$RG" -n "$APP" --show-values \
-             --query "[].[name,value]" -o tsv 2>/dev/null)
+  _APP_SECRETS_JSON="$(az containerapp secret list "${AZ[@]}" -g "$RG" -n "$APP" --show-values -o json 2>/dev/null || echo '[]')"
+  while IFS= read -r -d '' _kv; do
+    WORKER_SECRETS+=("$_kv")
+  done < <(APP_SECRETS_JSON="$_APP_SECRETS_JSON" python3 -c '
+import json, os, sys
+ours = {a.split("=", 1)[0] for a in sys.argv[1:]}
+for s in json.loads(os.environ.get("APP_SECRETS_JSON") or "[]"):
+    if s.get("name") in ours or s.get("value") is None:
+        continue                                  # fresh value from this run wins / KV-ref skipped
+    sys.stdout.write(f"{s[\"name\"]}={s[\"value\"]}\0")
+' "${SECRETS[@]}")
   WORKER_SECRETS+=("${SECRETS[@]}")
+  unset _APP_SECRETS_JSON
+
+  # az error output for these commands may embed secret VALUES (seen live: a malformed --secrets
+  # arg was echoed back verbatim, refresh token included). Never cat it — print the error CODE only.
+  _az_scrubbed() {
+    if "$@" >/dev/null 2>/tmp/acp_az_worker_err; then return 0; fi
+    echo "   worker-tier az call failed: $(grep -oE '\([A-Za-z]+\)' /tmp/acp_az_worker_err | head -1 || echo '(unknown)') — full output suppressed (may contain secret material); see /tmp/acp_az_worker_err locally" >&2
+    return 1
+  }
   if az containerapp show "${AZ[@]}" -g "$RG" -n "$WORKER_APP" -o none 2>/dev/null; then
-    _retry az containerapp secret set "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --secrets "${WORKER_SECRETS[@]}" -o none
+    _az_scrubbed az containerapp secret set "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --secrets "${WORKER_SECRETS[@]}" -o none
     _retry az containerapp registry set "${AZ[@]}" -g "$RG" -n "$WORKER_APP" \
       --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
-    _retry az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --image "$ACRSERVER/$IMAGE" \
+    _az_scrubbed az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --image "$ACRSERVER/$IMAGE" \
       --command "$WORKER_CMD_JSON" \
       --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV ACP_WORKERS=$WK_N -o none
   else
-    az containerapp create "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --environment "$ENVNAME" \
+    _az_scrubbed az containerapp create "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --environment "$ENVNAME" \
       --image "$ACRSERVER/$IMAGE" \
       --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
       --command "$WORKER_CMD_JSON" \
