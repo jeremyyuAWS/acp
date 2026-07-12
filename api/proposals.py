@@ -415,6 +415,14 @@ def propose_reading_level(text: str, *, filename: str = "", ai_enabled: bool = T
     sents = {re.sub(r"\s+", " ", s).strip()
              for s in re.split(r"(?<=[.!?])\s+", text)
              if 15 <= len(s.split()) <= 60 and _is_prose(re.sub(r"\s+", " ", s).strip())}
+    def _fk_grade(s: str) -> float | None:
+        # Single-sentence Flesch-Kincaid (n_sent=1) — a real measurement the reviewer can see,
+        # not a confidence guess. Noisier than a document-level score, so it is labelled ≈.
+        words = _tc._WORD_RE.findall(s)
+        if not words:
+            return None
+        return 0.39 * len(words) + 11.8 * (sum(_tc._syllables(w) for w in words) / len(words)) - 15.59
+
     ranked = sorted(sents, key=_density, reverse=True)[:_READING_CAP]
     out: list[dict] = []
     for s in ranked:
@@ -422,12 +430,15 @@ def propose_reading_level(text: str, *, filename: str = "", ai_enabled: bool = T
         simpler = _ai.simplify_text(s, file=filename)
         if not simpler or simpler.strip().lower() == s.strip().lower():
             continue
+        grade = _fk_grade(s)
+        measured = (f"this sentence alone scores Flesch-Kincaid grade ≈{grade:.0f} "
+                    f"(the SC targets ~grade 9)" if grade is not None
+                    else "this sentence reads well above the target level")
         out.append(proposal(
             locator=s[:60],
             before=s,
             proposed_value=simpler,
-            rationale="this sentence reads well above the target level; confirm the simpler version "
-                      "keeps every fact and number",
+            rationale=f"{measured}; confirm the simpler version keeps every fact and number",
             source="AI text model (plain-language rewrite) — human judgement required"))
     return out
 
@@ -440,9 +451,11 @@ def propose_images_of_text(path, ext: str) -> list[dict]:
     an authoring decision, and OCR misreads — so this is a Medium-confidence card, not a silent
     fix. Deterministic (tesseract, api/ocr.py), no model. Returns [] when OCR is
     unavailable/disabled or nothing text-bearing is found, so it is safe to run on every
-    remediated file. The detection floor is exactly ocr.images_of_text's (`_MIN_WORDS` real
-    words above the `_MIN_PIXELS` size floor), so a proposal appears for precisely the images
-    that fail 1.4.5 — the scan finding and the fix card never disagree."""
+    remediated file. Covers BOTH scan tiers so neither finding is left without a review path:
+    the AA band (ocr.images_of_text's floor — `_MIN_WORDS` words above `_MIN_PIXELS`) gets the
+    paste-back-as-text card, and the strict-only band (1.4.9's lower floor) gets a card that
+    also offers the logotype/essential-exception disposition, since a short baked-in text block
+    is very often a brand mark WCAG exempts under both SCs."""
     import ocr as _ocr
     if not _ocr.is_available():
         return []
@@ -453,18 +466,34 @@ def propose_images_of_text(path, ext: str) -> list[dict]:
     out: list[dict] = []
     for i, img in enumerate(images):
         try:
-            if _ocr._ocr_words(img, _ocr._MIN_PIXELS) < _ocr._MIN_WORDS:
-                continue                       # icon / logo / short caption — not an image of text
+            # Band determination uses the scan's own functions at the scan's own floors, so
+            # the card and the finding can never disagree about which tier an image is in.
+            aa_band = _ocr._ocr_words(img, _ocr._MIN_PIXELS) >= _ocr._MIN_WORDS
+            words = _ocr._ocr_words(img, _ocr._MIN_PIXELS_STRICT)
+            if not aa_band and words < _ocr._MIN_WORDS_STRICT:
+                continue                       # icon / single-glyph — no images-of-text finding at all
             text = " ".join(_ocr.ocr_text(img).split())
             if not text:
                 continue                       # OCR gave nothing usable — no fabricated value
+            if aa_band:
+                # AA band — a substantial text block baked into pixels. The scan's 1.4.5 finding.
+                rationale = ("WCAG 1.4.5: text presented as an image should be real, selectable "
+                             "text. Paste this back into the document (or mark the image "
+                             "decorative if the text is duplicated nearby).")
+            else:
+                # Strict-only band (fails 1.4.9/AAA but not 1.4.5/AA): a short text block —
+                # often a logotype or badge, which WCAG treats as ESSENTIAL (exempt) under both
+                # SCs. The card offers that disposition explicitly instead of leaving the
+                # finding with no review path at all.
+                rationale = (f"WCAG 1.4.9 (AAA): a short text block ({words} words) is baked into "
+                             "this image. If it is a logotype/brand mark, WCAG treats it as "
+                             "essential — record the logotype exception. Otherwise paste the "
+                             "text back as real, selectable text.")
             out.append(proposal(
                 locator=f"image {i + 1}",
                 before="text baked into an image — assistive technology cannot read it",
                 proposed_value=text,
-                rationale="WCAG 1.4.5: text presented as an image should be real, selectable "
-                          "text. Paste this back into the document (or mark the image "
-                          "decorative if the text is duplicated nearby).",
+                rationale=rationale,
                 source="OCR (tesseract) — human confirmation required",
                 thumb=thumb_b64(img),
             ))

@@ -64,12 +64,21 @@ def test_a_logo_with_few_words_yields_no_proposal(_ocr_stub):
     assert proposals.propose_images_of_text("doc.docx", ".docx") == []
 
 
-def test_word_count_gate_is_at_min_words_exactly(_ocr_stub):
-    # Mutation guard: the gate is `< _MIN_WORDS → skip`, so exactly _MIN_WORDS must PASS and
-    # _MIN_WORDS-1 must SKIP. A `<=` or off-by-one flips one of these.
+def test_word_count_gate_band_boundaries(_ocr_stub):
+    # Mutation guards on BOTH band floors.
+    # Exactly _MIN_WORDS → the AA band (the 1.4.5 paste-back card).
     _ocr_stub(words=[ocr._MIN_WORDS], texts=["w " * ocr._MIN_WORDS])
-    assert len(proposals.propose_images_of_text("d.docx", ".docx")) == 1
+    out = proposals.propose_images_of_text("d.docx", ".docx")
+    assert len(out) == 1 and "1.4.5" in out[0]["rationale"]
+    # One below → drops to the STRICT band (a 1.4.9 card offering the logotype exception),
+    # not to nothing — the 1.4.9 scan finding needs a review path too.
     _ocr_stub(words=[ocr._MIN_WORDS - 1], texts=["w " * ocr._MIN_WORDS])
+    out = proposals.propose_images_of_text("d.docx", ".docx")
+    assert len(out) == 1 and "1.4.9" in out[0]["rationale"] and "logotype" in out[0]["rationale"]
+    # Exactly the strict floor → still a card; one below → nothing at all.
+    _ocr_stub(words=[ocr._MIN_WORDS_STRICT], texts=["some words here"])
+    assert len(proposals.propose_images_of_text("d.docx", ".docx")) == 1
+    _ocr_stub(words=[ocr._MIN_WORDS_STRICT - 1], texts=["two words"])
     assert proposals.propose_images_of_text("d.docx", ".docx") == []
 
 
@@ -132,7 +141,9 @@ def test_end_to_end_with_a_real_text_image():
     # OCR may not be pixel-perfect, but a text-bearing image must yield a non-empty proposal.
     if out:  # tesseract present but may under-read a synthetic font; don't hard-fail on OCR quality
         assert out[0]["proposed_value"].strip()
-        assert "1.4.5" in out[0]["rationale"]
+        # Which band depends on how many words tesseract recovers from the synthetic font —
+        # either way the card cites the right SC.
+        assert "1.4.5" in out[0]["rationale"] or "1.4.9" in out[0]["rationale"]
 
 
 def test_handler_enqueues_1_4_5_even_for_an_image_only_doc(monkeypatch):

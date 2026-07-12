@@ -145,18 +145,21 @@ def _embedded_images(path: Path, ext: str) -> list[bytes]:
 
 
 def images_of_text(path: Path, ext: str) -> list[dict]:
-    """Return one 1.4.5 issue per embedded image that carries substantial text.
-    Empty when OCR is unavailable/disabled — callers append these to the file's
-    engine findings so they flow through the rubric and per-rule traces."""
+    """Return one 1.4.5 issue per embedded image that carries substantial text. Each finding
+    carries the OCR'd text itself as `detail` — the reviewer sees WHICH words are baked into
+    WHICH image, not a bare rule id. Empty when OCR is unavailable/disabled — callers append
+    these to the file's engine findings so they flow through the rubric and per-rule traces."""
     if not is_available():
         return []
     findings: list[dict] = []
-    for img in _embedded_images(path, ext):
-        if _ocr_words(img, _MIN_PIXELS) >= _MIN_WORDS:
+    for i, img in enumerate(_embedded_images(path, ext)):
+        text = " ".join(ocr_text(img, min_pixels=_MIN_PIXELS).split())
+        if len(_WORD_RE.findall(text)) >= _MIN_WORDS:
             findings.append({
                 "ruleId": "OCR_IMAGE_OF_TEXT",
                 "wcag": "1.4.5 Images of Text",
                 "severity": "SERIOUS",
+                "detail": f"embedded image {i + 1} contains readable text (OCR): “{text[:160]}”",
             })
     return findings
 
@@ -164,16 +167,18 @@ def images_of_text(path: Path, ext: str) -> list[dict]:
 def images_of_text_no_exception(path: Path, ext: str) -> list[dict]:
     """Return one 1.4.9 issue per embedded image whose OCR'd text clears the
     stricter AAA floor — genuinely more images than 1.4.5 catches, since AAA
-    tolerates none of the incidental-text slack AA does. Same self-gating and
-    bounds as images_of_text()."""
+    tolerates none of the incidental-text slack AA does. Same self-gating,
+    bounds, and OCR-text evidence as images_of_text()."""
     if not is_available():
         return []
     findings: list[dict] = []
-    for img in _embedded_images(path, ext):
-        if _ocr_words(img, _MIN_PIXELS_STRICT) >= _MIN_WORDS_STRICT:
+    for i, img in enumerate(_embedded_images(path, ext)):
+        text = " ".join(ocr_text(img, min_pixels=_MIN_PIXELS_STRICT).split())
+        if len(_WORD_RE.findall(text)) >= _MIN_WORDS_STRICT:
             findings.append({
                 "ruleId": "OCR_IMAGE_OF_TEXT_STRICT",
                 "wcag": "1.4.9 Images of Text (No Exception)",
                 "severity": "MODERATE",
+                "detail": f"embedded image {i + 1} contains readable text (OCR): “{text[:160]}”",
             })
     return findings

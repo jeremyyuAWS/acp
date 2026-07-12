@@ -34,14 +34,38 @@ _SENSORY_RE = re.compile(
     rf"\b({_VERB})\b[^.!?\n]{{0,45}}\b(({_SHAPE})|{_LOCATION})", re.I)
 
 
+_SENSORY_MAX = 10   # per-document cap — bounds work and review noise on pathological docs
+
+
+def _sentence_around(text: str, start: int, end: int) -> str:
+    """The (whitespace-normalised, capped) sentence containing text[start:end] — the
+    evidence a reviewer needs to find the instruction without re-reading the document."""
+    left = max(text.rfind(".", 0, start), text.rfind("\n", 0, start),
+               text.rfind("!", 0, start), text.rfind("?", 0, start)) + 1
+    rights = [i for i in (text.find(c, end) for c in ".!?\n") if i != -1]
+    right = min(rights) + 1 if rights else len(text)
+    return re.sub(r"\s+", " ", text[left:right]).strip()[:200]
+
+
 def detect_sensory(text: str) -> list[dict]:
+    """One finding PER sensory-only instruction, each carrying the offending sentence as
+    `detail` — the reviewer sees exactly which phrasing fired instead of a bare rule id
+    they must hunt for in the document. Deduped by sentence, capped at _SENSORY_MAX."""
     if not text:
         return []
-    if _SENSORY_RE.search(text):
-        # One finding per document — the reviewer inspects the specific phrasing.
-        return [{"ruleId": "SENSORY_INSTRUCTION", "wcag": "1.3.3 Sensory Characteristics",
-                 "severity": "SERIOUS"}]
-    return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for m in _SENSORY_RE.finditer(text):
+        sentence = _sentence_around(text, m.start(), m.end())
+        if not sentence or sentence in seen:
+            continue
+        seen.add(sentence)
+        out.append({"ruleId": "SENSORY_INSTRUCTION", "wcag": "1.3.3 Sensory Characteristics",
+                    "severity": "SERIOUS",
+                    "detail": f"instruction relies on shape/position alone: “{sentence}”"})
+        if len(out) >= _SENSORY_MAX:
+            break
+    return out
 
 
 # ── 3.1.2 Language of Parts ─────────────────────────────────────────────────────
@@ -81,8 +105,11 @@ def detect_language_parts(text: str) -> list[dict]:
     # Two+ languages, each backed by at least one confident passage -> the
     # document mixes languages and each part's language should be marked.
     if len([lang for lang, n in counts.items() if n >= 1]) >= 2:
+        mix = ", ".join(f"{lang} ({n} passage{'s' if n != 1 else ''})"
+                        for lang, n in sorted(counts.items(), key=lambda kv: -kv[1]))
         return [{"ruleId": "LANG_PARTS_UNMARKED", "wcag": "3.1.2 Language of Parts",
-                 "severity": "MODERATE"}]
+                 "severity": "MODERATE",
+                 "detail": f"document mixes languages — confidently detected: {mix}"}]
     return []
 
 
@@ -140,7 +167,9 @@ def detect_reading_level(text: str) -> list[dict]:
     grade = flesch_kincaid_grade(text)
     if grade is not None and grade >= _MIN_GRADE:
         return [{"ruleId": "READING_LEVEL_ADVANCED", "wcag": "3.1.5 Reading Level",
-                 "severity": "MODERATE"}]
+                 "severity": "MODERATE",
+                 "detail": f"document reads at Flesch-Kincaid grade {grade:.1f} "
+                           f"(flagged at ≥ {_MIN_GRADE:.0f}; the SC targets ~grade 9)"}]
     return []
 
 

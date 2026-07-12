@@ -26,6 +26,8 @@ import textchecks as tc  # noqa: E402
 def test_sensory_flags_shape_and_location_instructions(text):
     f = tc.detect_sensory(text)
     assert len(f) == 1 and f[0]["wcag"].startswith("1.3.3")
+    # Evidence, not a bare rule id: the finding carries the offending sentence.
+    assert text.rstrip(".") in f[0]["detail"] or text in f[0]["detail"]
 
 
 @pytest.mark.parametrize("text", [
@@ -38,9 +40,23 @@ def test_sensory_ignores_non_sensory_instructions(text):
     assert tc.detect_sensory(text) == []
 
 
-def test_sensory_one_finding_per_document():
+def test_sensory_one_finding_per_instruction_each_with_its_sentence():
+    # Per-phrase findings (was: one bare finding per document) — the reviewer sees every
+    # offending instruction with its own sentence as evidence, no document re-reading.
     text = "Click the round button. Also press the icon on the left. And see the box above."
-    assert len(tc.detect_sensory(text)) == 1
+    f = tc.detect_sensory(text)
+    assert len(f) == 3
+    assert "Click the round button" in f[0]["detail"]
+    assert "press the icon on the left" in f[1]["detail"]
+    assert "see the box above" in f[2]["detail"]
+
+
+def test_sensory_dedupes_repeats_and_is_capped():
+    one = "Click the round button to continue. "
+    f = tc.detect_sensory(one * 40)                       # same sentence 40× → one finding
+    assert len(f) == 1
+    many = " ".join(f"Click the round button number {i}." for i in range(40))
+    assert len(tc.detect_sensory(many)) == tc._SENSORY_MAX   # distinct sentences → capped
 
 
 # ── 3.1.2 ──
@@ -90,10 +106,14 @@ _DENSE = ('Notwithstanding any provision herein to the contrary, the indemnifyin
           'subsections. ') * 8
 
 
-def test_reading_level_flags_dense_prose():
-    assert tc.detect_reading_level(_DENSE) == [
-        {"ruleId": "READING_LEVEL_ADVANCED", "wcag": "3.1.5 Reading Level", "severity": "MODERATE"}
-    ]
+def test_reading_level_flags_dense_prose_with_the_measured_grade():
+    f = tc.detect_reading_level(_DENSE)
+    assert len(f) == 1
+    assert f[0]["ruleId"] == "READING_LEVEL_ADVANCED" and f[0]["severity"] == "MODERATE"
+    # The evidence is the real measurement, not a fabricated confidence.
+    assert "Flesch-Kincaid grade" in f[0]["detail"]
+    grade = float(f[0]["detail"].split("grade ")[1].split(" ")[0])
+    assert grade >= tc._MIN_GRADE
 
 
 def test_reading_level_ignores_simple_prose():
