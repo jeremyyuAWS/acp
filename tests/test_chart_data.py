@@ -57,3 +57,31 @@ def test_non_office_and_garbage_return_empty_never_raise():
     assert chart_data.charts_in(b"not a zip", ".pptx") == []
     assert chart_data.charts_in(b"%PDF-1.7", ".pdf") == []
     assert chart_data.chart_alts(b"junk", ".docx") == []
+
+
+def test_slide_chart_descr_injects_accurate_alt_onto_the_chart_shape():
+    import io
+    import zipfile
+    data = _native_chart_pptx(["North", "South", "East", "West"], [120, 70, 150, 50])
+    entries = {n: zipfile.ZipFile(io.BytesIO(data)).read(n) for n in zipfile.ZipFile(io.BytesIO(data)).namelist()}
+    changed = chart_data.slide_chart_descr(entries)
+    assert changed, "a native chart with no alt should get one"
+    (new_xml, alts) = next(iter(changed.values()))
+    xml = new_xml.decode("utf-8")
+    # The descr landed on a <p:cNvPr> and states the REAL high/low — not a guess.
+    assert 'descr="Bar chart' in xml and "East at 150" in xml and "West at 50" in xml
+    assert alts and "East at 150" in alts[0]
+
+
+def test_slide_chart_descr_is_idempotent_never_overwrites():
+    import io
+    import zipfile
+    data = _native_chart_pptx(["A", "B"], [1, 2])
+    z = zipfile.ZipFile(io.BytesIO(data))
+    entries = {n: z.read(n) for n in z.namelist()}
+    first = chart_data.slide_chart_descr(entries)
+    assert first                                             # first pass adds the alt
+    for name, (new_xml, _) in first.items():
+        entries[name] = new_xml
+    # Second pass on the now-described chart must be a no-op — a real descr is never overwritten.
+    assert chart_data.slide_chart_descr(entries) == {}

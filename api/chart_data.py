@@ -137,3 +137,81 @@ def _to_float(v):
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+# ── Remediation: write accurate alt (descr) onto native chart shapes (1.1.1) ──────────────────────
+# A native chart has NO image bytes, so the vision path can't help it — but its data is in the chart
+# part, so we can write a correct, exact description with zero model risk. This adds descr= to a
+# chart graphicFrame's <p:cNvPr> only when it lacks a real one (never overwrites a human's alt).
+_GRAPHICFRAME = re.compile(r"<p:graphicFrame\b.*?</p:graphicFrame>", re.S)
+_CHART_RID = re.compile(r'<c:chart\b[^>]*r:id="(rId\d+)"')
+_CNVPR = re.compile(r"<p:cNvPr\b([^>]*?)(/?)>")
+_HAS_DESCR = re.compile(r'\bdescr="[^"]*\S[^"]*"')
+_SLIDE = re.compile(r"^ppt/slides/slide\d+\.xml$")
+
+
+def _slide_rel_targets(entries: dict, slide_name: str) -> dict:
+    """{rId: chart part name} from a slide's .rels — resolving '../charts/chartN.xml' to a full path."""
+    rels_name = slide_name.replace("ppt/slides/", "ppt/slides/_rels/") + ".rels"
+    raw = entries.get(rels_name)
+    if not raw:
+        return {}
+    out = {}
+    try:
+        root = ET.fromstring(raw)
+    except Exception:
+        return {}
+    _RELS = "http://schemas.openxmlformats.org/package/2006/relationships"
+    for rel in root.findall(f"{{{_RELS}}}Relationship"):
+        rid, tgt = rel.get("Id"), rel.get("Target") or ""
+        if rid and "chart" in tgt:
+            out[rid] = "ppt/charts/" + tgt.split("/")[-1]
+    return out
+
+
+def _xml_escape(s: str) -> str:
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def slide_chart_descr(entries: dict) -> dict:
+    """{slide_part_name: (new_xml_bytes, [alts])} for slides where a native chart graphicFrame lacked
+    alt and got an accurate descr from its own data. Pure string surgery on the slide XML — only
+    inserts a descr attribute on a chart's <p:cNvPr>, never touches anything else, never overwrites an
+    existing real descr. Best-effort: a slide it can't handle is simply left unchanged."""
+    changed: dict = {}
+    for name in list(entries):
+        if not _SLIDE.match(name):
+            continue
+        try:
+            xml = entries[name].decode("utf-8")
+        except Exception:
+            continue
+        rels = _slide_rel_targets(entries, name)
+        if not rels:
+            continue
+        alts, new_xml, moved = [], xml, False
+        for gf in _GRAPHICFRAME.finditer(xml):
+            block = gf.group(0)
+            rid_m = _CHART_RID.search(block)
+            if not rid_m:
+                continue
+            chart_part = rels.get(rid_m.group(1))
+            if not chart_part or chart_part not in entries:
+                continue
+            try:
+                chart = _parse_chart(entries[chart_part])
+            except Exception:
+                chart = None
+            if not chart:
+                continue
+            alt = describe_chart(chart)
+            cnv = _CNVPR.search(block)
+            if not cnv or _HAS_DESCR.search(cnv.group(1)):
+                continue                                   # no cNvPr, or already has a real descr
+            new_cnv = f"<p:cNvPr{cnv.group(1)} descr=\"{_xml_escape(alt)}\"{cnv.group(2)}>"
+            new_block = block[:cnv.start()] + new_cnv + block[cnv.end():]
+            new_xml = new_xml.replace(block, new_block, 1)
+            alts.append(alt); moved = True
+        if moved:
+            changed[name] = (new_xml.encode("utf-8"), alts)
+    return changed

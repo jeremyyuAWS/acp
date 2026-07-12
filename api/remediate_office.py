@@ -1103,6 +1103,21 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
 
     # pptx-only structural fixes that need the slide XML (title / contrast / reading order).
     if path.suffix.lower() == ".pptx":
+        # Native charts (1.1.1) FIRST, on the untouched slide XML: a native chart has NO image bytes
+        # so vision can't help it, but its data is in the chart part — so we write an EXACT,
+        # deterministic description from the real series/values (no model, no confabulation). Runs
+        # before the reading-order pass re-encodes the slide, so the injected descr survives that
+        # round-trip. Additive: only fills a chart shape that has no real alt.
+        try:
+            import chart_data as _chart
+            for name, (new_xml, alts) in _chart.slide_chart_descr(entries).items():
+                entries[name] = new_xml
+                for a in alts:
+                    applied.append(f"Alt text \"{a[:60]}\" set from the chart's own data · 1.1.1")
+                    _rec(diffs, "1.1.1", "(native chart had no alt text)", a,
+                         "read from the chart's embedded data — exact values, no model")
+        except Exception:
+            skipped.append("native-chart alt text could not be applied")
         try:
             applied.extend(_remediate_pptx_slides(entries, diffs))
         except Exception:
