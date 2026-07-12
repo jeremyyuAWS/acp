@@ -9,7 +9,7 @@ const read = (f) => readFileSync(join(here, f), 'utf8')
 describe('AssessRunner drives the real analysis when it is deferred (ADR 0020)', () => {
   it('branches on the deferred response and polls the real scan', () => {
     const s = read('AssessRunner.jsx')
-    expect(s).toMatch(/assessScan\(runId, level\)\.then/)      // reads the response, not fire-and-forget
+    expect(s).toMatch(/\.then\(\(\) => assessScan\(runId, level\)\)\.then\(\(resp\)/)   // reads the response, not fire-and-forget
     expect(s).toMatch(/if \(resp && resp\.deferred\)/)          // deferred branch
     expect(s).toMatch(/const pollDeferred/)
     expect(s).toMatch(/getScan\(runId\)/)                        // polls the true per-file progress
