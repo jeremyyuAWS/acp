@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } fro
 import HitlBell from './HitlBell.jsx'
 import { refreshDriveToken } from './driveAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, listScans, getScan, getActiveScan, startScan, startScanQueued, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, SESSION_EXPIRED } from './api'
+import { getSources, getRubric, getConfig, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, SESSION_EXPIRED } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -201,6 +201,9 @@ export default function App() {
   const [deepScan, setDeepScan] = useState(false)      // off by default → Fast scan; opt in to PII scan via the switch
   const [excludeRemediated, setExcludeRemediated] = useState(true)  // on by default — skip re-discovering ACP's own Remediated/ output
   const [incremental, setIncremental] = useState(true)  // ADR 0011 — skip re-analysing byte-identical files already scored under the same rubric
+  // The in-flight durable scan's id — what the banner's Stop button cancels. null when
+  // no queued scan is being polled (sync scans finish in-request and can't be stopped).
+  const [liveScanId, setLiveScanId] = useState(null)
   const [tick, setTick] = useState(0)                  // bumped every minute to keep timeAgo labels fresh
   const [platformVersion, setPlatformVersion] = useState(null)  // full git-derived CalVer from /config (with the daily .N)
 
@@ -405,6 +408,7 @@ export default function App() {
         // Durable path: enqueue a scan job, then poll until the scan is persisted.
         const { scan_id, workers } = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental)
         if (!SIM && !workers) throw new Error('no workers running — start some in Monitor (or set ACP_WORKERS)')
+        setLiveScanId(scan_id)
         const t0 = Date.now()
         for (let i = 0; i < 600 && !fresh; i++) {        // up to ~10 min for large estates
           await new Promise((r) => setTimeout(r, 1000))
@@ -435,13 +439,13 @@ export default function App() {
       if (prevAvg != null && newAvg != null && newAvg !== prevAvg) { setDelta(newAvg - prevAvg); setDeltaKey((k) => k + 1) }
       // Guide the user into the workflow: land on Discover (step 1) after a scan.
       setView(me?.allow && !me.allow.includes('discover') ? 'overview' : 'discover')
-    } catch (e) { setErr(`scan failed: ${e}`) } finally { setBusy(false); setProgress(null) }
+    } catch (e) { setErr(`scan failed: ${e}`) } finally { setBusy(false); setProgress(null); setLiveScanId(null) }
   }
 
   // Reconnect to an in-flight scan after a page reload — the durable fan-out keeps
   // running server-side, so we just resume polling until it finishes.
   const reconnectScan = async (scan_id) => {
-    setBusy(true); setProgress({ phase: 'connecting', elapsed: 0 })
+    setBusy(true); setProgress({ phase: 'connecting', elapsed: 0 }); setLiveScanId(scan_id)
     const t0 = Date.now()
     let fresh
     try {
@@ -455,7 +459,7 @@ export default function App() {
       }
       if (fresh) { setScan(fresh); setScanList(await listScans()); setView('overview') }
     } catch { /* best-effort reconnect */ }
-    finally { setBusy(false); setProgress(null) }
+    finally { setBusy(false); setProgress(null); setLiveScanId(null) }
   }
 
   const run = scan?.run
@@ -611,6 +615,14 @@ export default function App() {
             <span style={{ fontWeight: 700, color: '#BF8C00', marginRight: 6 }}>Scan</span>{progressText(progress)}
             {progress.files_found ? <span className="scancount"> · {progress.files_found.toLocaleString()} files</span> : null}
             {progress.blocked ? <span className="lockwarn"> · 🔒 {progress.blocked} password-protected / couldn’t open</span> : null}
+            {/* Stop (found live 2026-07-11: there was no way out of a wedged scan). Cancelling
+                kills the outstanding jobs server-side; the poll loop then sees the run leave
+                'running' and exits normally. Files already analysed are kept. */}
+            {liveScanId && (
+              <button className="ghost small" style={{ marginLeft: 'auto' }}
+                      title="Stop this scan — files already analysed are kept"
+                      onClick={() => cancelScan(liveScanId).catch(() => {})}>■ Stop scan</button>
+            )}
           </div>
           <div className="track"><i style={{ width: `${progressPct(progress)}%`, background: '#BF8C00', transition: 'width .3s' }} /></div>
           {/* Narrate the phase the scanner reports, or say nothing. The old line came from a

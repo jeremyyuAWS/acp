@@ -213,6 +213,11 @@ export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/sca
 export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = true, excludeRemediated = false, incremental = true) => (SIM
   ? sim({ scan_id: 'sim-scan', job_id: 'sim-job', queued: true, workers: 4 })
   : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}&queue=true&fanout=true`, { method: 'POST', headers: headers() }).then(j))
+// Stop an in-flight durable scan: kills its outstanding jobs server-side and closes the run
+// as 'cancelled' (files already analysed keep their records). Owner-scoped — 409 otherwise.
+export const cancelScan = (scanId) => (SIM
+  ? sim({ scan_id: scanId, status: 'cancelled' })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/cancel`, { method: 'POST', headers: headers() }).then(j))
 // Async server-side remediation: one remediate_file job per HTML file in the scan.
 // SIM keeps a tiny drain state so getRemediationStatus ticks down over a few polls —
 // the demo then shows the live KPI / progress-bar updates instead of finishing instantly.

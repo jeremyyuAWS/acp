@@ -1092,9 +1092,22 @@ class Store:
             self._db.execute(cur, "DELETE FROM scan_decisions WHERE scan_id=%s AND file=%s AND kind=%s",
                              (scan_id, file, kind))
 
+    # Self-heal grace: a running scan younger than this is never auto-interrupted — its
+    # discover job may not have enqueued the per-file jobs yet.
+    _ACTIVE_SCAN_GRACE_S = 600
+
     def active_scan(self, owner: str | None = None) -> dict | None:
         """The most recent in-flight scan (for reconnecting after a page reload), or None.
-        Scoped to the signed-in user so reconnect never picks up someone else's scan."""
+        Scoped to the signed-in user so reconnect never picks up someone else's scan.
+
+        SELF-HEALS a dead scan (found live 2026-07-11): a deploy/restart can kill the
+        workers after a fan-out scan's jobs finished or died but before finalize ran —
+        the row stays 'running' forever, and the UI reconnects to it eternally
+        ("scanning…", no way to start another). A running fan-out scan with ZERO
+        outstanding jobs is dead by definition (init_scan_run rows always have job rows),
+        so past a grace period it is marked 'interrupted' and no longer reported active.
+        Jobs merely orphaned (still queued/running rows) are NOT touched — the stuck-job
+        sweeper reclaims those and the scan genuinely resumes."""
         where, params = "status='running'", ()
         if owner:
             where += " AND owner_email=%s"; params = (owner,)
@@ -1102,7 +1115,51 @@ class Store:
             self._db.execute(cur,
                 "SELECT id,started_at,source,files,files_done FROM scan_runs "
                 f"WHERE {where} ORDER BY started_at DESC LIMIT 1", params)
-            return self._db.fetchone(cur)
+            row = self._db.fetchone(cur)
+            if not row:
+                return None
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE scan_id=%s AND status IN ('queued','running')",
+                (row["id"],))
+            outstanding = (self._db.fetchone(cur) or {}).get("n", 0)
+        if outstanding == 0:
+            from datetime import datetime, timezone
+            try:
+                started = datetime.fromisoformat(str(row["started_at"]))
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=timezone.utc)
+                age = (datetime.now(timezone.utc) - started).total_seconds()
+            except Exception:
+                age = 0
+            if age > self._ACTIVE_SCAN_GRACE_S:
+                with self._db.cursor() as cur:
+                    self._db.execute(cur,
+                        "UPDATE scan_runs SET status='interrupted', completed_at=%s "
+                        "WHERE id=%s AND status='running'", (self._now(), row["id"]))
+                print(f"[scan] {row['id']}: marked interrupted — 'running' with no outstanding "
+                      f"jobs for {int(age)}s (worker lost it, e.g. a deploy mid-scan)", flush=True)
+                return None
+        return row
+
+    def cancel_scan(self, sid: str, owner: str | None = None) -> bool:
+        """Stop an in-flight fan-out scan: kill its outstanding jobs and close the run as
+        'cancelled'. Owner-scoped like get_scan. Files already analysed keep their records —
+        history stays honest about what ran before the stop. False when the scan doesn't
+        exist, belongs to someone else, or isn't running (nothing to cancel)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT owner_email, status FROM scan_runs WHERE id=%s", (sid,))
+            row = self._db.fetchone(cur)
+            if not row or (owner is not None and row.get("owner_email") != owner):
+                return False
+            if row.get("status") != "running":
+                return False
+            self._db.execute(cur,
+                "UPDATE jobs SET status='dead', updated_at=%s "
+                "WHERE scan_id=%s AND status IN ('queued','running')", (self._now(), sid))
+            self._db.execute(cur,
+                "UPDATE scan_runs SET status='cancelled', completed_at=%s "
+                "WHERE id=%s AND status='running'", (self._now(), sid))
+        return True
 
     def get_scan(self, sid: str, owner: str | None = None) -> dict | None:
         with self._db.cursor() as cur:
