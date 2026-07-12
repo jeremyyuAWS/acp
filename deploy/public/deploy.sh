@@ -362,6 +362,10 @@ echo "   blob account = $BLOB_ACCOUNT"
 WORKER_APP="acp-worker"
 # Same ADC bootstrap as the API's Dockerfile CMD, but exec the worker entrypoint instead of uvicorn.
 WORKER_CMD='if [ -n "$ACP_GOOGLE_ADC" ]; then printf "%s" "$ACP_GOOGLE_ADC" > /tmp/adc.json && export GOOGLE_APPLICATION_CREDENTIALS=/tmp/adc.json; fi; exec python -m worker_main'
+# az's --command is argparse nargs: a bare "-c" is misparsed as an unknown FLAG ("unrecognized
+# arguments: -c …"). Pass the whole command vector as a JSON array string, which az accepts and
+# which keeps the "-c" out of argparse's option scanner. python does the quote-safe escaping.
+WORKER_CMD_JSON=$(python3 -c 'import json,sys; print(json.dumps(["/bin/sh","-c",sys.argv[1]]))' "$WORKER_CMD")
 if [ "${ACP_DEPLOY_WORKER:-}" = "1" ]; then
   if [ -z "$REDIS_ENV" ]; then
     echo "refusing: ACP_DEPLOY_WORKER=1 requires REDIS_URL (cross-replica scan tokens, ADR 0013 §2)" >&2
@@ -374,15 +378,15 @@ if [ "${ACP_DEPLOY_WORKER:-}" = "1" ]; then
     _retry az containerapp registry set "${AZ[@]}" -g "$RG" -n "$WORKER_APP" \
       --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
     _retry az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --image "$ACRSERVER/$IMAGE" \
-      --command "/bin/sh" "-c" "$WORKER_CMD" \
-      --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DB_ENV $LF_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV ACP_WORKERS=$WK_N -o none
+      --command "$WORKER_CMD_JSON" \
+      --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV ACP_WORKERS=$WK_N -o none
   else
     az containerapp create "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --environment "$ENVNAME" \
       --image "$ACRSERVER/$IMAGE" \
       --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
-      --command "/bin/sh" "-c" "$WORKER_CMD" \
+      --command "$WORKER_CMD_JSON" \
       --secrets "${SECRETS[@]}" \
-      --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DB_ENV $LF_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV ACP_WORKERS=$WK_N \
+      --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV ACP_WORKERS=$WK_N \
       --system-assigned --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 3 -o none
     echo "   one-time: grant the worker's managed identity 'Storage Blob Data Contributor' on"
     echo "   the '$BLOB_ACCOUNT' account so its remediation Blob writes don't 403 — exact"
