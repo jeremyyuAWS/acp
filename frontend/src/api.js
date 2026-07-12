@@ -278,6 +278,19 @@ const _emptyRoll = { calls: 0, ok: 0, failed: 0, cost_usd: 0, avg_latency_ms: 0,
 export const getAiCosts = () => (SIM
   ? sim({ today: _emptyRoll, month: _emptyRoll, all_time: _emptyRoll })
   : fetch(`${BASE}/ai/costs`, { headers: headers() }).then(j).catch(() => ({ today: _emptyRoll, month: _emptyRoll, all_time: _emptyRoll })))
+// AI provider gateway config (ADR 0019 §6). The API returns only SAFE views — never a key value,
+// just whether the referenced secret is present. putAiProvider sends the secret's reference NAME,
+// never a key (the backend rejects a pasted key).
+export const getAiProviders = () => (SIM
+  ? sim({ providers: [] })
+  : fetch(`${BASE}/ai/providers`, { headers: headers() }).then(j).catch(() => ({ providers: [] })))
+export const putAiProvider = (patch) => (SIM
+  ? sim({ providers: [] })
+  : fetch(`${BASE}/ai/providers`, {
+      method: 'PUT',
+      headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(patch),
+    }).then(j))
 export const updateSettings = (patch) => (SIM
   ? sim({ ai_enabled: true, drive_mirror_enabled: true, drive_mirror_folder: 'Remediated', ...patch })
   : fetch(`${BASE}/settings`, {

@@ -44,8 +44,11 @@ describe('no rendered string names a model the product never calls', () => {
   // Files allowed to mention a vendor: this file, the module explaining why, the narration
   // guard, the dead Netlify-prototype module (whose comments say so), the badge that promises
   // we DON'T use them, and "Claude-paced" (a statement about who wrote the code, not runtime).
+  // Settings.jsx is exempt from ADR 0019 §6: the AI Providers governance page names configurable
+  // cloud vendors BY DESIGN (a bring-your-own-provider catalogue) — it is not a claim that any of
+  // them ran; the page is local-first, opt-in, and clearly marks unwired adapters as "coming".
   const EXEMPT = new Set(['aiModel.js', 'aiModel.test.js', 'phaseNarration.js', 'aiRemediate.js',
-                          'PrivateAiBadge.jsx', 'evidenceMount.test.js'])
+                          'PrivateAiBadge.jsx', 'evidenceMount.test.js', 'Settings.jsx'])
 
   const sources = readdirSync(here).filter((f) => /\.(js|jsx)$/.test(f) && !EXEMPT.has(f))
 

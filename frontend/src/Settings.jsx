@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { resetDemoData, getAllowlist, setAllowlist, getSettings, updateSettings, getAiCosts } from './api.js'
+import { resetDemoData, getAllowlist, setAllowlist, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider } from './api.js'
 
 // Danger zone — wipe scan results (Grafana + in-app charts) and/or Langfuse
 // traces so the dashboards start fresh. Settings are preserved. Typed-confirm.
@@ -209,6 +209,8 @@ function DriveMirror() {
           <button className="ghost small" onClick={saveEndpoint} disabled={busy}>Apply</button>
         </div>
       </label>
+      <hr style={{ border: 0, borderTop: '1px solid var(--line)', margin: '20px 0' }} />
+      <AIProvidersPanel />
       {msg && <p style={{ marginTop: 12, fontSize: 13, color: msg.startsWith('✓') ? '#3B6D11' : '#A32D2D' }}>{msg}</p>}
     </div>
   )
@@ -329,6 +331,101 @@ function AllowList() {
     </section>
   )
 }
+
+// Friendly labels for the provider catalogue. Azure OpenAI is the only wired adapter in Phase 1;
+// the others store config for a later adapter (the backend keeps their config, no cloud call yet).
+const PROVIDER_LABELS = {
+  azure_openai: 'Azure OpenAI', openai: 'OpenAI', anthropic: 'Anthropic',
+  gemini: 'Google Gemini', bedrock: 'AWS Bedrock',
+}
+const ADAPTER_READY = new Set(['azure_openai'])
+
+// ADR 0019 §6 — the admin's AI provider governance page. The KEY is never entered here: an admin's
+// ops team provisions it as a container/Key-Vault secret, and this stores only the secret's NAME
+// (key_secret_ref). The page shows whether the referenced secret is present, never its value.
+function AIProvidersPanel() {
+  const [providers, setProviders] = useState(null)
+  const [draft, setDraft] = useState({})     // provider -> edited fields
+  const [busy, setBusy] = useState('')
+  const [note, setNote] = useState('')
+  useEffect(() => { getAiProviders().then((d) => setProviders(d.providers || [])).catch(() => setProviders([])) }, [])
+  if (!providers) return null
+  const edit = (p, field, val) => setDraft((d) => ({ ...d, [p]: { ...(d[p] || {}), [field]: val } }))
+  const field = (row, f) => (draft[row.provider]?.[f] ?? row[f] ?? '')
+  const save = (row) => {
+    const d = draft[row.provider] || {}
+    setBusy(row.provider); setNote('')
+    putAiProvider({
+      provider: row.provider,
+      enabled: d.enabled ?? row.enabled,
+      endpoint: field(row, 'endpoint'),
+      deployment: field(row, 'deployment'),
+      model: field(row, 'model'),
+      key_secret_ref: field(row, 'key_secret_ref'),
+    })
+      .then((res) => { setProviders(res.providers); setDraft((x) => ({ ...x, [row.provider]: {} }))
+                       setNote(`✓ ${PROVIDER_LABELS[row.provider] || row.provider} saved`) })
+      .catch((e) => setNote(e.message || 'save failed'))
+      .finally(() => setBusy(''))
+  }
+  return (
+    <div>
+      <h3 style={{ marginTop: 0 }}>AI providers <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>· governance &amp; bring-your-own-key</span></h3>
+      <p className="muted" style={{ fontSize: 13 }}>
+        The platform runs <b>local-first</b>: your on-box Ollama handles everything by default, at
+        $0, with no document leaving your network. You may enable a governed cloud provider as a
+        fallback for cases the local model can’t ground (e.g. dense charts) — escalation is
+        transparent and only fires when local falls short.
+      </p>
+      <p className="muted" style={{ fontSize: 13, background: 'var(--card, #f7f4fb)', border: '1px solid var(--line)', borderRadius: 8, padding: '8px 12px' }}>
+        🔐 <b>The key is never entered here.</b> Your ops team provisions it as a container / Key
+        Vault secret; you enter only the secret’s <b>reference name</b> (e.g.
+        <code> AZURE_OPENAI_API_KEY</code>). The key value never touches the database, this page, or
+        a log — only whether it’s present is shown.
+      </p>
+      {providers.map((row) => {
+        const ready = ADAPTER_READY.has(row.provider)
+        const dirty = !!draft[row.provider] && Object.keys(draft[row.provider]).length > 0
+        return (
+          <div key={row.provider} style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '12px 14px', margin: '10px 0', opacity: ready ? 1 : 0.7 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <b style={{ fontSize: 14 }}>{PROVIDER_LABELS[row.provider] || row.provider}</b>
+              {!ready && <span className="muted" style={{ fontSize: 11 }}>· adapter coming (config saved)</span>}
+              <span style={{ marginLeft: 'auto', fontSize: 12 }}
+                    title="Whether the ops-provisioned secret named below is present in this environment">
+                {row.key_present
+                  ? <span style={{ color: '#2C5209' }}>🔵 key present · {row.credential_source}</span>
+                  : <span className="muted">key not set</span>}
+              </span>
+            </div>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '10px 0', fontSize: 13 }}>
+              <input type="checkbox" checked={draft[row.provider]?.enabled ?? row.enabled}
+                     onChange={(e) => edit(row.provider, 'enabled', e.target.checked)} disabled={!ready} />
+              <span>Enable as an escalation fallback {row.enabled ? '' : '(off — local-only)'}</span>
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <L label="Endpoint"><input value={field(row, 'endpoint')} placeholder="https://your.openai.azure.com"
+                     onChange={(e) => edit(row.provider, 'endpoint', e.target.value)} style={INP} /></L>
+              <L label="Deployment / model"><input value={field(row, 'deployment')} placeholder="gpt-4o"
+                     onChange={(e) => edit(row.provider, 'deployment', e.target.value)} style={INP} /></L>
+              <L label="Model (for cost)"><input value={field(row, 'model')} placeholder="gpt-4o"
+                     onChange={(e) => edit(row.provider, 'model', e.target.value)} style={INP} /></L>
+              <L label="Secret reference NAME (not the key)"><input value={field(row, 'key_secret_ref')} placeholder="AZURE_OPENAI_API_KEY"
+                     onChange={(e) => edit(row.provider, 'key_secret_ref', e.target.value)} style={INP} /></L>
+            </div>
+            <button className="ghost small" style={{ marginTop: 10 }} onClick={() => save(row)}
+                    disabled={busy === row.provider || !dirty}>
+              {busy === row.provider ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        )
+      })}
+      {note && <p style={{ fontSize: 13, color: note.startsWith('✓') ? '#3B6D11' : '#A32D2D' }}>{note}</p>}
+    </div>
+  )
+}
+const INP = { display: 'block', width: '100%', padding: '4px 8px', marginTop: 4, border: '1px solid var(--line)', borderRadius: 6, boxSizing: 'border-box' }
+const L = ({ label, children }) => (<label style={{ fontSize: 12 }} className="muted">{label}{children}</label>)
 
 export default function Settings({ onClose, onRubricSaved, files = [], onOntologyChange, onDelegationChange, onFileTypeChange, onPrivilegeChange }) {
   const [tab, setTab] = useState('rules')
