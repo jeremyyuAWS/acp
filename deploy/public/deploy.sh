@@ -382,18 +382,30 @@ if [ "${ACP_DEPLOY_WORKER:-}" = "1" ]; then
   # NUL-separated output keeps arbitrary values (newlines, quotes) intact and un-echoed.
   WORKER_SECRETS=()
   _APP_SECRETS_JSON="$(az containerapp secret list "${AZ[@]}" -g "$RG" -n "$APP" --show-values -o json 2>/dev/null || echo '[]')"
+  # NB: no backslash-escapes inside f-strings — that is a SyntaxError before Python 3.12 (macOS
+  # ships 3.9), and a snippet that dies inside a process substitution fails SILENTLY, which is
+  # exactly how attempt 3 shipped an empty copy. Plain concatenation + a fail-fast guard below.
   while IFS= read -r -d '' _kv; do
     WORKER_SECRETS+=("$_kv")
   done < <(APP_SECRETS_JSON="$_APP_SECRETS_JSON" python3 -c '
 import json, os, sys
-ours = {a.split("=", 1)[0] for a in sys.argv[1:]}
+ours = set(a.split("=", 1)[0] for a in sys.argv[1:])
 for s in json.loads(os.environ.get("APP_SECRETS_JSON") or "[]"):
-    if s.get("name") in ours or s.get("value") is None:
+    n, v = s.get("name"), s.get("value")
+    if not n or n in ours or v is None:
         continue                                  # fresh value from this run wins / KV-ref skipped
-    sys.stdout.write(f"{s[\"name\"]}={s[\"value\"]}\0")
+    sys.stdout.write(n + "=" + v + "\0")
 ' "${SECRETS[@]}")
   WORKER_SECRETS+=("${SECRETS[@]}")
   unset _APP_SECRETS_JSON
+  # Fail fast, with NAMES only, if the copy came up short — a worker created with dangling
+  # secretrefs is a guaranteed ContainerAppSecretRefNotFound later.
+  _wn=""; for _kv in "${WORKER_SECRETS[@]}"; do _wn="$_wn ${_kv%%=*}"; done
+  echo "   worker secrets:$_wn"
+  case "$_wn" in *" database-url"*) : ;; *)
+    echo "refusing: worker secret copy is missing 'database-url' (copy failed?) — aborting before a doomed create" >&2
+    exit 1;;
+  esac
 
   # az error output for these commands may embed secret VALUES (seen live: a malformed --secrets
   # arg was echoed back verbatim, refresh token included). Never cat it — print the error CODE only.
