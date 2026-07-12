@@ -825,3 +825,31 @@ def compliance_digest(d: dict, ai_enabled: bool = True) -> dict:
         if res:
             narrative, model, ai = res[0], res[1], True
     return {**facts, "narrative": narrative, "ai": ai, "model": model}
+
+
+# ── HITL precision helpers (GPU-assisted hints — never decisions) ───────────────
+
+def looks_like_logotype(image_bytes: bytes, *, scan_id: str | None = None,
+                        file: str | None = None) -> bool | None:
+    """Vision judgement for the images-of-text card: does this text-bearing image read as a
+    LOGOTYPE / wordmark / brand badge — which WCAG 1.4.5 and 1.4.9 both treat as essential
+    (exempt) — rather than content text baked into pixels? True / False, or None when vision
+    is unavailable or the answer is unparseable. Strictly a HINT surfaced on the card:
+    recording the logotype exception stays a human decision (ADR 0016 — the model informs,
+    it never decides)."""
+    if not image_bytes or not vision_is_available():
+        return None
+    prompt = ("Is this image a company logo, logotype, wordmark or brand badge — rather than a "
+              "chart, a slide, a screenshot, a photo, or a block of document text? "
+              "Answer with exactly one word: yes or no.")
+    # clean=False: the default path's honesty guard rejects one-word replies as junk ALT
+    # TEXT — correct there, fatal here, where one word is exactly the answer.
+    out = _vision_generate(prompt, image_bytes, clean=False, scan_id=scan_id, file=file)
+    if not out:
+        return None
+    w = out.strip().lower()
+    if w.startswith("yes"):
+        return True
+    if w.startswith("no"):
+        return False
+    return None

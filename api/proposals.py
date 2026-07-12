@@ -357,6 +357,12 @@ def propose_sensory_rewrite(text: str, *, filename: str = "", ai_enabled: bool =
         if not sentence or sentence in seen:
             continue
         seen.add(sentence)
+        # NOTE (2026-07-11): a GPU precision filter was tried here (skip the rewrite when the
+        # model says the instruction also names its control) and REJECTED after live corpus
+        # validation: llama3.2 returned descriptive phrases ("green button") as "names" and
+        # suppressed a genuine finding's rewrite. A filter that can silently kill a real
+        # rewrite loses more than it saves — every regex hit keeps its draft, and the human
+        # dismisses false positives with one click.
         try:
             res = _ai.suggest_fix("1.3.3", "Sensory Characteristics", "A", filename, detail=sentence)
         except Exception:
@@ -489,6 +495,17 @@ def propose_images_of_text(path, ext: str) -> list[dict]:
                              "this image. If it is a logotype/brand mark, WCAG treats it as "
                              "essential — record the logotype exception. Otherwise paste the "
                              "text back as real, selectable text.")
+                # GPU hint (best-effort, never a decision): a vision look at the image itself.
+                # Only the strict band — AA-band blocks are substantial text, not brand marks —
+                # and only a POSITIVE read is surfaced: "the model didn't think it's a logo" is
+                # not evidence of anything, so silence beats noise (ADR 0016).
+                try:
+                    import ai as _ai
+                    if _ai.looks_like_logotype(img):
+                        rationale = ("The vision model reads this image as a logotype/brand "
+                                     "mark. " + rationale)
+                except Exception:
+                    pass
             out.append(proposal(
                 locator=f"image {i + 1}",
                 before="text baked into an image — assistive technology cannot read it",
