@@ -72,3 +72,14 @@ def test_frontend_captures_reason_on_reject():
     assert "reject_reason: opts.rejectReason" in api
     rc = (fe / "ReviewCenter.jsx").read_text()
     assert "rejectReason: 'unspecified'" in rc                # bulk/keyboard path never drops the signal
+
+
+def test_frontend_surfaces_the_quality_rollup():
+    # The loop is only closed when someone SEES the answer: the Remediate review section renders
+    # the weakest-rules list + top reject reasons from the extended analytics payload.
+    fe = Path(__file__).resolve().parent.parent / "frontend" / "src"
+    rem = (fe / "Remediate.jsx").read_text()
+    assert "AI quality · weakest rules first" in rem
+    assert "reviewStats.by_rule" in rem
+    assert "reviewStats.reject_reasons" in rem
+    assert "top reject reasons" in rem

@@ -862,6 +862,26 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               {measured && <span>Avg review <b style={{ color: 'var(--ink)' }}>{measured.avg}</b></span>}
             </div>
           )}
+          {/* AI Quality (feedback intelligence): which rules are weakest + WHY rejections happen —
+              real reviewer-decision counts, weakest-first, never a fabricated score. Renders only
+              once there is signal (a rejection, or 3+ reviewed on some rule). */}
+          {reviewStats && ((reviewStats.by_rule || []).some((r) => r.rejected > 0 || r.reviewed >= 3)) && (
+            <div className="rev-quality" style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
+              <span style={{ fontWeight: 700, color: 'var(--ink)' }}>AI quality · weakest rules first:</span>{' '}
+              {(reviewStats.by_rule || []).filter((r) => r.reviewed > 0).slice(0, 4).map((r, i) => (
+                <span key={r.key} title={Object.entries(r.reject_reasons || {}).map(([k, n]) => `${k.replace(/_/g, ' ')}: ${n}`).join(' · ') || 'no rejections'}>
+                  {i > 0 && ' · '}
+                  <b style={{ color: r.rejected > 0 ? '#A32D2D' : 'var(--ink)' }}>{r.key}</b>
+                  {' '}{r.approved}✓{r.rejected > 0 && <span style={{ color: '#A32D2D' }}> {r.rejected}✕</span>}
+                </span>
+              ))}
+              {Object.keys(reviewStats.reject_reasons || {}).length > 0 && (
+                <span> — top reject reasons: {Object.entries(reviewStats.reject_reasons)
+                  .sort((a, b) => b[1] - a[1]).slice(0, 3)
+                  .map(([k, n]) => `${k.replace(/_/g, ' ')} (${n})`).join(', ')}</span>
+              )}
+            </div>
+          )}
         </div>
         {/* A decision the server refused. It rolled back, so the card is in the queue again —
             say so loudly, because a reviewer who thinks they signed something off and did not
