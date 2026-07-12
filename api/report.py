@@ -541,6 +541,60 @@ def _stat_band(cells, styles) -> Table:
     return band
 
 
+def _ai_governance_section(run, h2, body, cell, muted) -> list:
+    """AI governance & provenance for this scan (ADR 0019 §4/§7): a real, per-scan aggregate
+    of the recorded ai_calls — how many AI-assisted operations ran, where they were processed
+    (network boundary), and what they cost. Every figure is measured, never a fabricated score
+    (ADR 0016); the keyless local build's $0 IS the governance headline. Best-effort — the
+    report must never fail because the rollup is unavailable, so any error drops the section."""
+    try:
+        import core
+        r = core.store.ai_cost_rollup(scan_id=run["id"])
+    except Exception:
+        return []
+    if not r or not r.get("calls"):
+        # Nothing to attest AND nothing to hide: an all-deterministic scan needed no model.
+        return [Paragraph("AI governance &amp; provenance", h2),
+                Paragraph("No AI-assisted operations were needed for this scan — every finding was "
+                          "resolved by the deterministic engine. Nothing was sent to any model.", body)]
+    zones = {g["key"]: g for g in r.get("by_zone", [])}
+    local = zones.get("local", {}).get("calls", 0)
+    off_network = r["calls"] - local
+    cost = r.get("cost_usd", 0) or 0
+    el = [Paragraph("AI governance &amp; provenance", h2)]
+    # The plain-language attestation an enterprise buyer's governance checklist asks for:
+    # what ran, whether documents left the network, and the real cost.
+    if off_network == 0:
+        el.append(Paragraph(
+            f"<b>{r['calls']}</b> AI-assisted operation(s) supported this scan. "
+            '<font color="#3B6D11"><b>All were processed locally</b></font> — no document or image '
+            "left your network, and the total external AI cost was "
+            f'<font color="#3B6D11"><b>${cost:.2f}</b></font>.', body))
+    else:
+        el.append(Paragraph(
+            f"<b>{r['calls']}</b> AI-assisted operation(s) supported this scan: <b>{local}</b> processed "
+            f"locally and <b>{off_network}</b> escalated to a cloud provider under the configured "
+            f"governance policy, at a recorded cost of <b>${cost:.2f}</b>.", body))
+    el.append(_stat_band([
+        Paragraph(f'<font size="18"><b>{r["calls"]}</b></font><br/>'
+                  f'<font size="8" color="#6c6470">AI operations</font>', body),
+        Paragraph(f'<font size="18" color="#3B6D11"><b>{local}</b></font><br/>'
+                  f'<font size="8" color="#6c6470">local · 🟢 on-network</font>', body),
+        Paragraph(f'<font size="18"><b>${cost:.2f}</b></font><br/>'
+                  f'<font size="8" color="#6c6470">external AI cost</font>', body),
+        Paragraph(f'<font size="18"><b>{r.get("avg_latency_ms", 0)}</b></font><br/>'
+                  f'<font size="8" color="#6c6470">avg latency (ms)</font>', body),
+    ], []))
+    prov = r.get("by_provider") or []
+    if prov:
+        prov_str = " · ".join(f'{g["calls"]} {g["key"]}' + (f' ${g["cost_usd"]:.2f}' if g["cost_usd"] else "")
+                              for g in prov)
+        el.append(Paragraph(
+            f'<font color="#6c6470">By provider: {prov_str}. Every AI operation is recorded with its '
+            "model, processing zone, latency and cost, and is auditable per finding.</font>", muted))
+    return el
+
+
 def build_report(run: dict, files: list, meta: dict, decisions: dict | None = None,
                  evidence: list | None = None, facts: dict | None = None) -> bytes:
     buf = io.BytesIO()
@@ -858,6 +912,12 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     # The per-finding detail (with WCAG ids, before/after and sign-off) follows for the auditor.
     el.extend(_work_by_category_section(evidence or [], h2, body, cell, _muted))
     el.extend(_evidence_section(evidence or [], h2, body, cell, foot_style))
+
+    # ── AI governance & provenance (ADR 0019 §4/§7) ──────────────────────────
+    # The network-boundary + cost attestation enterprise procurement asks for, from the real
+    # per-scan ai_calls record — placed before the closing statement so the governance story
+    # is part of the certification evidence, not an afterthought.
+    el.extend(_ai_governance_section(run, h2, body, cell, _muted))
 
     # ── Conformance statement & how to read this report ──────────────────────
     el.append(Spacer(1, 14))

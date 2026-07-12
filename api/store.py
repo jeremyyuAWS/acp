@@ -1388,18 +1388,25 @@ class Store:
                 self._db.execute(cur, "SELECT * FROM ai_calls ORDER BY ts DESC LIMIT %s", (limit,))
             return self._db.fetchall(cur)
 
-    def ai_cost_rollup(self, since_days: int | None = None) -> dict:
+    def ai_cost_rollup(self, since_days: int | None = None, scan_id: str | None = None) -> dict:
         """AI usage + cost governance rollup (ADR 0019 Phase 1). Every number is a real
         aggregate of recorded ai_calls rows — calls, success, latency, and the summed
         cost_usd (a genuine $0 for the keyless local-Ollama build: no per-token billing, no
         bytes leaving the network). NOT a fabricated estimate (ADR 0016) — when a cloud
         adapter runs it records its real per-call cost and this reflects it. `since_days`
-        bounds the window (1 = today-ish, 30 = month); None = all time."""
+        bounds the window (1 = today-ish, 30 = month); None = all time. `scan_id` scopes the
+        rollup to one scan — the per-scan provenance the certification report embeds (§4)."""
         from datetime import datetime, timedelta, timezone
-        where, params = "", ()
+        clauses, params_l = [], []
         if since_days is not None:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
-            where, params = " WHERE ts >= %s", (cutoff,)
+            clauses.append("ts >= %s")
+            params_l.append(cutoff)
+        if scan_id is not None:
+            clauses.append("scan_id = %s")
+            params_l.append(scan_id)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params = tuple(params_l)
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT COUNT(*) AS calls, COALESCE(SUM(ok),0) AS ok, "
