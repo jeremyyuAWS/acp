@@ -178,7 +178,11 @@ def docx_checks(path: Path) -> list[dict]:
             for m in _HEADING_STYLE.finditer(doc):
                 level = int(m.group(1))
                 if prev_level > 0 and level > prev_level + 1:
-                    findings.append(_finding("DOCX_HEADING_SKIP", "2.4.6 Headings and Labels", "MODERATE"))
+                    f = _finding("DOCX_HEADING_SKIP", "2.4.6 Headings and Labels", "MODERATE")
+                    # Carry the actual levels so the review card can show the before/after outline
+                    # (H{prev} → H{level}, should be H{prev} → H{prev+1}) — real, not illustrative.
+                    f["detail"] = f"Heading level jumps from H{prev_level} to H{level} (should step to H{prev_level + 1})"
+                    findings.append(f)
                     break
                 prev_level = level
 

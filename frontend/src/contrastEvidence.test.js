@@ -32,9 +32,9 @@ describe('the swatch is wired as visual evidence in the card', () => {
   it('buildEvidenceCard carries the raw detail', () => {
     expect(read('reviewCard.js')).toMatch(/detail: item\?\.detail \|\| ''/)
   })
-  it('EvidenceCard renders ContrastSwatch from the parsed detail', () => {
+  it('EvidenceCard renders the unified BeforeAfterEvidence (contrast routes through it)', () => {
     const s = read('EvidenceCard.jsx')
-    expect(s).toMatch(/const contrast = parseContrast\(card\.detail\)/)
-    expect(s).toMatch(/\{contrast && <ContrastSwatch \{\.\.\.contrast\} \/>\}/)
+    expect(s).toMatch(/<BeforeAfterEvidence card=\{card\} \/>/)
+    expect(read('BeforeAfterEvidence.jsx')).toMatch(/ContrastSwatch/)
   })
 })
