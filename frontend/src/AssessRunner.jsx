@@ -72,6 +72,12 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
 
   const docs = files.filter((f) => f.score != null)
   const excludedCount = files.length - docs.length
+  // Deferred model (ADR 0020): before Assess runs, files are 'discovered' (no score yet) — they
+  // are ASSESSABLE, not excluded. The excluded/parsable framing only makes sense AFTER analysis, so
+  // pre-assess we count every discovered file as assessable and suppress the "excluded" warning.
+  const discoveredN = files.filter((f) => f.status === 'discovered').length
+  const deferredPending = discoveredN > 0 && docs.length === 0
+  const assessN = deferredPending ? files.length : docs.length
   const reset = () => {
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
     setPhase('idle'); setResult(null); setResultFromCache(false); setProgress(0); setCurrentFile(null); setCurrentPhase('')
@@ -199,29 +205,33 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
       ? 'Level AA is the legal target for ADA Title II, the EAA and Section 508 — Level A + AA findings both count.'
       : 'Level AAA is the enhanced bar — every A, AA and AAA finding counts, so conformance is strictest here.')
 
-  const pct = phase === 'running' ? Math.round((progress / Math.max(1, docs.length)) * 100) : 0
+  const pct = phase === 'running' ? Math.round((progress / Math.max(1, assessN, docs.length)) * 100) : 0
 
   return (
     <section className="panel assesspanel">
       <div className="assesshd">
         <div>
           <h2 style={{ margin: 0 }}>Assess the estate against WCAG 2.1</h2>
-          <p className="muted" style={{ margin: '3px 0 0' }}>Run all {docs.length.toLocaleString()} readable documents against the success criteria at your target conformance level.</p>
-          {excludedCount > 0 && (
+          <p className="muted" style={{ margin: '3px 0 0' }}>
+            {deferredPending
+              ? <>Run all {assessN.toLocaleString()} discovered documents — Assess opens each file and scores it against the success criteria at your target conformance level.</>
+              : <>Run all {assessN.toLocaleString()} readable documents against the success criteria at your target conformance level.</>}
+          </p>
+          {!deferredPending && excludedCount > 0 && (
             <p style={{ margin: '5px 0 0', fontSize: 12.5, color: '#854F0B', background: '#FAEEDA', border: '1px solid #E8C98A', borderRadius: 6, padding: '5px 10px', display: 'inline-block' }}>
               ⚠ {excludedCount} of {files.length} files excluded — could not be parsed during scan (password-protected, unsupported format, or corrupt). Only {docs.length} parsable files are assessed.
             </p>
           )}
           {scanBusy && <p style={{ margin: '6px 0 0', fontSize: 13, color: '#854F0B' }}>⏳ A scan is still running — assessment will be available once it finishes.</p>}
         </div>
-        <button className="assessbtn" onClick={assess} disabled={phase === 'running' || !docs.length || scanBusy}
+        <button className="assessbtn" onClick={assess} disabled={phase === 'running' || !assessN || scanBusy}
                 style={phase === 'done' ? { background: 'transparent', color: '#1F5FA8', border: '1.5px solid #9DBCE4', fontWeight: 600 } : undefined}
                 title={scanBusy ? 'A scan is still running — assessment will be available when it completes'
                        : phase === 'done' ? 'Already assessed — re-run only if you changed the target level or re-scanned' : undefined}>
           {phase === 'running' ? 'Assessing…'
             : scanBusy ? 'Scan in progress…'
-            : phase === 'done' ? `↻ Re-assess ${docs.length.toLocaleString()} files`
-            : `▶ Assess ${docs.length.toLocaleString()} files`}
+            : phase === 'done' ? `↻ Re-assess ${assessN.toLocaleString()} files`
+            : `▶ Assess ${assessN.toLocaleString()} files`}
         </button>
       </div>
 
@@ -233,7 +243,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
         ))}
       </div>
       <p className="muted" style={{ fontSize: 12, margin: '4px 0 0', lineHeight: 1.5 }}>
-        The level controls <b>which WCAG success criteria count as blocking</b> — not which files are scanned. All {docs.length} parsable files are always assessed; at <b>A</b> only Level A findings block conformance, at <b>AA</b> both A + AA findings count (the legal target for ADA / EAA), and at <b>AAA</b> all findings count. Changing the level resets the result so you can re-run at the new target.
+        The level controls <b>which WCAG success criteria count as blocking</b> — not which files are scanned. All {assessN} {deferredPending ? 'discovered' : 'parsable'} files are always assessed; at <b>A</b> only Level A findings block conformance, at <b>AA</b> both A + AA findings count (the legal target for ADA / EAA), and at <b>AAA</b> all findings count. Changing the level resets the result so you can re-run at the new target.
       </p>
 
       <div role="status" aria-live="polite">

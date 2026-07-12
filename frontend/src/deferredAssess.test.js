@@ -24,6 +24,18 @@ describe('AssessRunner drives the real analysis when it is deferred (ADR 0020)',
     expect(s).toMatch(/runTicker\(startedAt, level, computed\)/)
   })
 
+  it('counts DISCOVERED files as assessable, not excluded (the "Assess 0 files" regression)', () => {
+    const s = read('AssessRunner.jsx')
+    // discovered files (score null, status 'discovered') are assessable in the deferred model
+    expect(s).toMatch(/status === 'discovered'/)
+    expect(s).toMatch(/const assessN = deferredPending \? files\.length : docs\.length/)
+    // the CTA + enablement use assessN, so the button isn't dead when nothing is scored yet
+    expect(s).toMatch(/disabled=\{phase === 'running' \|\| !assessN \|\| scanBusy\}/)
+    expect(s).toMatch(/▶ Assess \$\{assessN/)
+    // the "excluded / could not be parsed" warning is suppressed pre-analysis
+    expect(s).toMatch(/!deferredPending && excludedCount > 0/)
+  })
+
   it('the AssessGate copy no longer claims the estate was already deep-scanned', () => {
     const app = read('App.jsx')
     // deferred means Discover did NOT open files — the gate must not imply a completed deep scan
