@@ -29,6 +29,16 @@ describe('three review types — different jobs, not one generic queue', () => {
     expect(reviewType({ rule_id: '1.1.1', proposals: [{ proposed_value: '  ' }] })).toBe('author')
   })
 
+  it('bulk "Confirm all" is offered ONLY on the deterministic-confirmation tier', () => {
+    const src = read('ReviewCenter.jsx')
+    // the bulk action exists and is gated to the confirm tier with a >1 threshold
+    expect(src).toMatch(/const confirmSection = \(sec\)/)
+    expect(src).toMatch(/sec\.type\.key === 'confirm' && sec\.count > 1/)
+    // it must NOT be rendered for the proposal or authoring tiers (those need per-item review)
+    expect(src).not.toMatch(/sec\.type\.key === 'proposal'.*rc-type-bulk/s)
+    expect(src).not.toMatch(/sec\.type\.key === 'author'.*rc-type-bulk/s)
+  })
+
   it('every type carries its own promise and no fabricated numbers', () => {
     for (const t of Object.values(REVIEW_TYPES)) {
       expect(t.label.length).toBeGreaterThan(0)

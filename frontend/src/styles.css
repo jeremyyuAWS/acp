@@ -1556,10 +1556,14 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 /* Three review types — each section header is the contract for the work beneath it. */
 .rc-type { margin-top: 20px; }
 .rc-type:first-of-type { margin-top: 8px; }
-.rc-type-head { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px;
+.rc-type-head { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 10px 14px;
   border-radius: 10px; border: 1px solid var(--line); border-left-width: 4px; }
 .rc-type-title { font-size: 14px; font-weight: 700; }
 .rc-type-promise { font-size: 12px; }
+.rc-type-bulk { position: absolute; top: 10px; right: 12px; font-size: 12px; font-weight: 700;
+  padding: 5px 12px; border-radius: 20px; cursor: pointer; color: #2C5209;
+  background: #E7F1DA; border: 1px solid #B9D49A; }
+.rc-type-bulk:hover { background: #DBEBC9; }
 .rc-type-proposal { border-left-color: #7C5CBF; background: #F7F4FB; }
 .rc-type-confirm  { border-left-color: #3B6D11; background: #F4F8F0; }
 .rc-type-author   { border-left-color: #8A5A00; background: #FBF7EF; }

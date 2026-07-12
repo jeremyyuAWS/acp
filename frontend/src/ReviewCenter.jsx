@@ -96,6 +96,11 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
   // those are safe to bulk-approve; a proposal must be reviewed individually.
   const isJudgement = (it) => !VALUE_FIX.has(scOf(it.rule_id)) && !(it.proposals && it.proposals.length)
   const approveGroup = (grp) => grp.items.forEach((it) => { if (isJudgement(it)) onAct(it.id, 'approved') })
+  // Bulk "Confirm all" for the deterministic-confirmation tier (PRD HITL 2.0 bulk approval):
+  // those items are ACP-applied rule-based fixes already re-validated, so a rubber-stamp of
+  // the whole tier is the intended one-click — never offered for the proposal or authoring
+  // tiers, which need per-item review.
+  const confirmSection = (sec) => sec.groups.flatMap((g) => g.items).forEach((it) => doAct(it, 'approved'))
 
   return (
     <div className="rc-overlay" role="dialog" aria-modal="true" aria-label="Human review center">
@@ -136,6 +141,13 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
               <div className={`rc-type-head rc-type-${sec.type.key}`}>
                 <span className="rc-type-title">{sec.type.icon} {sec.type.label} <b>· {sec.count}</b></span>
                 <span className="muted rc-type-promise">{sec.type.promise}</span>
+                {/* Bulk one-click only for the deterministic-confirmation tier: those fixes are
+                    already applied + re-validated, so confirming the whole tier is a rubber-stamp.
+                    The proposal + authoring tiers deliberately have no bulk action. */}
+                {sec.type.key === 'confirm' && sec.count > 1 && (
+                  <button className="rc-type-bulk" onClick={() => confirmSection(sec)}
+                          title="Confirm every already-applied fix in this section">✓ Confirm all {sec.count}</button>
+                )}
               </div>
           {sec.groups.map((grp) => (
             <section className="rc-group" key={grp.label}>
