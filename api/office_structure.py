@@ -610,6 +610,61 @@ def pdf_nontext_contrast_checks(path: Path) -> list[dict]:
         "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative")]
 
 
+_MAX_PAGES_OVER_IMAGE = 20     # cap the pages we scan for text-over-image
+_MIN_OVERLAP_FRAC = 0.6        # a char counts as "over" an image when ≥60% of its box is inside one
+
+
+def _bbox_overlap_frac(cx0: float, ctop: float, cx1: float, cbot: float,
+                       ix0: float, itop: float, ix1: float, ibot: float) -> float:
+    """Fraction of the char box (first bbox) that falls inside the image box (second). 0 when the
+    char has no area or the boxes don't intersect."""
+    ca = max(0.0, cx1 - cx0) * max(0.0, cbot - ctop)
+    if ca <= 0:
+        return 0.0
+    ox = max(0.0, min(cx1, ix1) - max(cx0, ix0))
+    oy = max(0.0, min(cbot, ibot) - max(ctop, itop))
+    return (ox * oy) / ca
+
+
+def pdf_text_over_image_checks(path: Path) -> list[dict]:
+    """1.4.3 Contrast (Minimum), text-over-image case (Review) for PDF (ADR 0025). `pdf_contrast_checks`
+    reads each char's DECLARED fill colour against an assumed page background — which is blind to text
+    laid over a raster image (photo/gradient/screenshot), where the real background is the pixels, not
+    the page colour. Rather than fabricate a contrast ratio from the declared colour there (dishonest),
+    this flags the case for review: any char whose box sits ≥60% inside an image XObject. Purely
+    structural (pdfplumber char + image bboxes, no render); the render-verified pixel measurement under
+    the char is the documented follow-on. Rides the existing 1.4.3 lane as a per-file finding — 1.4.3
+    stays 🟢 at the format level. Advisory, never a pass. Never raises."""
+    hits = 0
+    try:
+        import pdfplumber
+        with pdfplumber.open(str(path)) as pdf:
+            for page in pdf.pages[:_MAX_PAGES_OVER_IMAGE]:
+                images = page.images
+                if not images:
+                    continue
+                boxes = [(im["x0"], im["top"], im["x1"], im["bottom"]) for im in images]
+                for ch in page.chars[:_MAX_CHARS_PER_PAGE]:
+                    try:
+                        cx0, ctop, cx1, cbot = (float(ch["x0"]), float(ch["top"]),
+                                                float(ch["x1"]), float(ch["bottom"]))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    for ix0, itop, ix1, ibot in boxes:
+                        if _bbox_overlap_frac(cx0, ctop, cx1, cbot, ix0, itop, ix1, ibot) >= _MIN_OVERLAP_FRAC:
+                            hits += 1
+                            break
+    except Exception:
+        return []
+    if hits == 0:
+        return []
+    return [_review_finding(
+        "PDF_TEXT_OVER_IMAGE", "1.4.3 Contrast (Minimum)",
+        f"{hits} character{'s' if hits != 1 else ''} sit over an image, where the real background is "
+        "the picture's pixels — the declared text colour can't prove contrast here; verify the text "
+        "stays legible against the image behind it")]
+
+
 def pdf_contrast_checks(path: Path) -> list[dict]:
     findings: list[dict] = []
     seen_aa = seen_aaa = False
@@ -1096,7 +1151,7 @@ def checks_for(path: Path, ext: str) -> list[dict]:
         return (pdf_contrast_checks(path) + pdf_bypass_blocks_check(path) + pdf_form_field_checks(path)
                 + pdf_headings_labels_check(path) + pdf_link_purpose_check(path)
                 + pdf_text_spacing_checks(path) + pdf_use_of_color_checks(path)
-                + pdf_nontext_contrast_checks(path))
+                + pdf_nontext_contrast_checks(path) + pdf_text_over_image_checks(path))
     if ext == ".xlsx":
         return (xlsx_contrast_checks(path) + xlsx_structure_checks(path)
                 + office_control_review_checks(path, ext) + office_color_only_checks(path, ext))
