@@ -146,6 +146,49 @@ def test_end_to_end_with_a_real_text_image():
         assert "1.4.5" in out[0]["rationale"] or "1.4.9" in out[0]["rationale"]
 
 
+@pytest.mark.skipif(not ocr.is_available(), reason="tesseract not installed")
+def test_end_to_end_xlsx_image_of_text_matches_docx():
+    """xlsx parity — WCAG 1.4.5 covers spreadsheets too. Every stubbed test above monkeypatches
+    ocr._embedded_images (which ignores `ext`), so NONE of them exercise the per-format media
+    walk; the only real-zip test is docx. This pins that an image of text embedded under
+    xl/media/ is reached and proposed exactly like the same image under word/media/, so a
+    regression in _ooxml_images' xl/ branch (e.g. a narrowed media glob) cannot pass silently.
+
+    Asserted as docx↔xlsx PARITY rather than an absolute count, so it stays honest to whatever
+    the local tesseract actually reads — but a guard (`out_docx` non-empty) keeps it from passing
+    vacuously if OCR under-reads the fixture to nothing."""
+    from PIL import Image, ImageDraw
+    import io
+    import tempfile
+    import zipfile
+
+    # A clear, multi-line block well above the word/pixel floor, so OCR reads it the same via
+    # either package and the parity assertion below is meaningful, not vacuous.
+    lines = ("The quick brown fox jumps over\nthe lazy dog while twelve\n"
+             "wizards make jolted vows today")
+    im = Image.new("RGB", (800, 240), "white")
+    ImageDraw.Draw(im).multiline_text((15, 15), lines, fill="black", spacing=8)
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    png = buf.getvalue()
+
+    def _propose(name: str, media_part: str) -> list[dict]:
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / name
+            with zipfile.ZipFile(path, "w") as z:
+                z.writestr(media_part, png)             # the ONLY part _ooxml_images should walk
+            return proposals.propose_images_of_text(path, path.suffix)
+
+    out_docx = _propose("doc.docx", "word/media/image1.png")
+    out_xlsx = _propose("book.xlsx", "xl/media/image1.png")
+
+    assert out_docx, "fixture must OCR above the word floor, else the parity check is vacuous"
+    # The identical image under xl/media/ must be reached and proposed just like word/media/.
+    assert len(out_xlsx) == len(out_docx) == 1
+    assert out_xlsx[0]["proposed_value"] == out_docx[0]["proposed_value"]
+    assert "1.4.5" in out_xlsx[0]["rationale"]
+
+
 def test_handler_enqueues_1_4_5_even_for_an_image_only_doc(monkeypatch):
     """The wiring that matters: _propose_text_findings must enqueue the 1.4.5 proposals
     INDEPENDENTLY of the text proposers. An image-only document has no extractable text, so
