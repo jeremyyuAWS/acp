@@ -552,6 +552,64 @@ def _pdf_luma(color) -> float | None:
         return None
 
 
+def _pdf_color_hex(color) -> str | None:
+    """pdfplumber colour (DeviceGray float, RGB 3-tuple, or CMYK 4-tuple, each 0..1) → 6-hex, so it
+    can feed the WCAG `_contrast_ratio` the Office non-text-contrast checks already use. None when
+    the colour can't be read."""
+    def _byte(x: float) -> int:
+        return int(round(max(0.0, min(1.0, x)) * 255))
+    try:
+        if isinstance(color, (int, float)):
+            v = _byte(float(color))
+            return f"{v:02X}{v:02X}{v:02X}"
+        if not isinstance(color, (tuple, list)) or not color:
+            return None
+        vals = [float(v) for v in color]
+        if len(vals) == 1:
+            v = _byte(vals[0])
+            return f"{v:02X}{v:02X}{v:02X}"
+        if len(vals) == 3:
+            r, g, b = vals
+        elif len(vals) == 4:
+            c, m, y, k = vals
+            r, g, b = (1 - c) * (1 - k), (1 - m) * (1 - k), (1 - y) * (1 - k)
+        else:
+            return None
+        return "".join(f"{_byte(x):02X}" for x in (r, g, b))
+    except (TypeError, ValueError):
+        return None
+
+
+def pdf_nontext_contrast_checks(path: Path) -> list[dict]:
+    """1.4.11 Non-text Contrast (Review) for PDF (ADR 0025) — the lowest-contrast bordered rectangle
+    (its stroke colour against its own fill, < 3:1). The PDF analogue of the docx/pptx solid
+    outline-on-fill check, reading pdfplumber rect stroke/fill colours (no render). Only rects that
+    declare BOTH a stroke and a fill are measured — real measurement or nothing (ADR 0016).
+    Advisory, never a pass. Never raises."""
+    worst = None      # (ratio, border_hex, fill_hex)
+    try:
+        import pdfplumber
+        with pdfplumber.open(str(path)) as pdf:
+            for page in pdf.pages[:_MAX_PAGES_SPACING]:
+                for r in page.rects:
+                    border = _pdf_color_hex(r.get("stroking_color"))
+                    fill = _pdf_color_hex(r.get("non_stroking_color"))
+                    if not border or not fill:
+                        continue
+                    ratio = _contrast_ratio(border, fill)
+                    if ratio < 3.0 and (worst is None or ratio < worst[0]):
+                        worst = (ratio, border, fill)
+    except Exception:
+        return []
+    if worst is None:
+        return []
+    ratio, border_hex, fill_hex = worst
+    return [_review_finding(
+        "PDF_NONTEXT_LOW_CONTRAST", "1.4.11 Non-text Contrast",
+        f"a shape outline #{border_hex} on its #{fill_hex} fill is {ratio:.1f}:1 (needs 3:1) — if the "
+        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative")]
+
+
 def pdf_contrast_checks(path: Path) -> list[dict]:
     findings: list[dict] = []
     seen_aa = seen_aaa = False
@@ -1037,7 +1095,8 @@ def checks_for(path: Path, ext: str) -> list[dict]:
     if ext == ".pdf":
         return (pdf_contrast_checks(path) + pdf_bypass_blocks_check(path) + pdf_form_field_checks(path)
                 + pdf_headings_labels_check(path) + pdf_link_purpose_check(path)
-                + pdf_text_spacing_checks(path) + pdf_use_of_color_checks(path))
+                + pdf_text_spacing_checks(path) + pdf_use_of_color_checks(path)
+                + pdf_nontext_contrast_checks(path))
     if ext == ".xlsx":
         return (xlsx_contrast_checks(path) + xlsx_structure_checks(path)
                 + office_control_review_checks(path, ext) + office_color_only_checks(path, ext))

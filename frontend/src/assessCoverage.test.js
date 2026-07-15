@@ -71,7 +71,7 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     docx: { auto: 5, review: 12, human: 0, gap: 0, at: 0, na: 3, certifiable: 5 },
     xlsx: { auto: 5, review: 9, human: 0, gap: 0, at: 0, na: 6, certifiable: 5 },
     pptx: { auto: 5, review: 13, human: 1, gap: 0, at: 0, na: 1, certifiable: 5 },
-    pdf: { auto: 3, review: 10, human: 0, gap: 0, at: 0, na: 7, certifiable: 3 },  // +1.4.12, +1.4.1 (ADR 0025 Tier A)
+    pdf: { auto: 3, review: 11, human: 0, gap: 0, at: 0, na: 6, certifiable: 3 },  // +1.4.12, +1.4.1, +1.4.11 (ADR 0025)
     html: { auto: 11, review: 7, human: 0, gap: 0, at: 2, na: 0, certifiable: 11 },
   }
   for (const [fmt, want] of Object.entries(EST)) {
