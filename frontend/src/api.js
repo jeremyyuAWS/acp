@@ -532,6 +532,17 @@ export const getFileResize = (scanId, file) => (SIM || !scanId || !file
       .then(r => (r.ok ? r.json() : { measured: false, reason: 'error' }))
       .catch(() => ({ measured: false, reason: 'error' })))
 
+// ADR 0025 Tier B — render-verified 1.4.3 text-over-image contrast for PDF, ON DEMAND. The scan
+// flags text sitting over a raster image (declared colour can't prove contrast there); this renders
+// the page (pdfium, no LibreOffice) and MEASURES the text-vs-image contrast per run. Returns
+// {measured:true, worst_ratio, any_fail_aa, runs:[…], checked, total} or {measured:false, reason:…}.
+// Upgrades a 🟡 flag to a measured value; never a certified pass.
+export const getFilePdfContrast = (scanId, file) => (SIM || !scanId || !file
+  ? sim({ measured: false, reason: 'unavailable' })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/verify-pdf-contrast`, { headers: headers() })
+      .then(r => (r.ok ? r.json() : { measured: false, reason: 'error' }))
+      .catch(() => ({ measured: false, reason: 'error' })))
+
 export const uploadToDrive = (scanId, file, blob, contentType) => {
   if (SIM) return sim({ url: 'https://drive.google.com/file/d/sim/view', file_id: 'sim' })
   const fd = new FormData()

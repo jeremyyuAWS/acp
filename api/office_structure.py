@@ -665,6 +665,48 @@ def pdf_text_over_image_checks(path: Path) -> list[dict]:
         "stays legible against the image behind it")]
 
 
+def pdf_over_image_locators(data) -> list[dict]:
+    """The text RUNS that sit over an image — the render targets for the ADR 0025 Tier B
+    pixel-sample measurement (the DRY source the on-demand endpoint re-derives from, the PDF analogue
+    of `hybrid_contrast_locators`). Accepts PDF bytes OR a Path. Each run groups the over-image chars
+    on one text line into a union bbox in NORMALIZED page fractions `{x,y,w,h,page}` — the shape
+    `render_verify.region_contrast` samples. A single glyph is mostly ink; a run carries ink AND the
+    image background around it, which is what a contrast measurement needs. Never raises."""
+    import io
+    runs: list[dict] = []
+    try:
+        import pdfplumber
+        src = io.BytesIO(data) if isinstance(data, (bytes, bytearray)) else str(data)
+        with pdfplumber.open(src) as pdf:
+            for pno, page in enumerate(pdf.pages[:_MAX_PAGES_OVER_IMAGE], start=1):
+                images = page.images
+                if not images:
+                    continue
+                pw, ph = float(page.width or 0), float(page.height or 0)
+                if pw <= 0 or ph <= 0:
+                    continue
+                boxes = [(im["x0"], im["top"], im["x1"], im["bottom"]) for im in images]
+                lines: dict[int, list[tuple]] = {}
+                for ch in page.chars[:_MAX_CHARS_PER_PAGE]:
+                    try:
+                        cx0, ctop, cx1, cbot = (float(ch["x0"]), float(ch["top"]),
+                                                float(ch["x1"]), float(ch["bottom"]))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if any(_bbox_overlap_frac(cx0, ctop, cx1, cbot, *b) >= _MIN_OVERLAP_FRAC
+                           for b in boxes):
+                        lines.setdefault(round(ctop), []).append((cx0, ctop, cx1, cbot))
+                for chs in lines.values():
+                    x0 = min(c[0] for c in chs); top = min(c[1] for c in chs)
+                    x1 = max(c[2] for c in chs); bot = max(c[3] for c in chs)
+                    runs.append({"page": pno, "chars": len(chs), "bbox": {
+                        "x": x0 / pw, "y": top / ph, "w": (x1 - x0) / pw, "h": (bot - top) / ph,
+                        "page": pno}})
+    except Exception:
+        return []
+    return runs
+
+
 def pdf_contrast_checks(path: Path) -> list[dict]:
     findings: list[dict] = []
     seen_aa = seen_aaa = False

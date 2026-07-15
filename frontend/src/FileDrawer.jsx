@@ -14,6 +14,7 @@ import { TraceChip } from './Transparency.jsx'
 import Thumbnail from './Thumbnail.jsx'
 import HybridContrastCheck from './HybridContrastCheck.jsx'
 import ResizeHeadroomCheck from './ResizeHeadroomCheck.jsx'
+import PdfImageContrastCheck from './PdfImageContrastCheck.jsx'
 import { DOCUMENTS_20 } from './documents20.js'
 import { statusIn, remediationIn } from './assessCoverage.js'
 import { fmtEffort, EFFORT_BASIS } from './effort.js'
@@ -815,6 +816,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                         MEASURED fill (does the text fit when enlarged to 200%). */}
                     {(i.rule_id ?? i.ruleId) === 'PPTX_FIXED_TEXT_BOX_RESIZE' &&
                       <ResizeHeadroomCheck scanId={scanId} file={file.file} />}
+                    {/* ADR 0025 Tier B — the PDF text-over-image flag can be render-verified into a
+                        MEASURED contrast on demand (declared colour can't prove it over a picture). */}
+                    {(i.rule_id ?? i.ruleId) === 'PDF_TEXT_OVER_IMAGE' &&
+                      <PdfImageContrastCheck scanId={scanId} file={file.file} />}
                     {i.impact && <div className="muted findingimpact">{i.impact}</div>}
                     {i.fix && <div className="findingfix"><span className={findingAuto(i) ? 'fixauto' : 'fixreview'}>{findingAuto(i) ? '⚡ auto-fixable' : '✎ needs review'}</span> · {i.fix}<span className="muted"> · {i.rule_id ?? i.ruleId}</span></div>}
                     {i.pages?.length > 0 && PAGE_RENDERABLE.has(file.type) &&

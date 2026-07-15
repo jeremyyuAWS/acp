@@ -982,3 +982,35 @@ def get_file_verify_resize(scan_id: str, filename: str, request: Request,
             "worst_fill": worst["height_frac"], "worst_shape": worst["shape"],
             "any_overflow_at_200": any(b["overflows_at_200"] for b in ok),
             "checked": len(boxes), "total": len(targets)}
+
+
+@router.get("/scans/{scan_id}/files/{filename:path}/verify-pdf-contrast")
+def get_file_verify_pdf_contrast(scan_id: str, filename: str, request: Request):
+    """ADR 0025 Tier B — render-verified 1.4.3 text-over-image contrast for PDF, ON DEMAND. The
+    scan-time detector flags "text sits over an image — declared colour can't prove contrast"; this
+    renders the offending page (pdfium, no LibreOffice needed) and MEASURES the text-vs-image
+    contrast from the pixels, upgrading the 🟡 flag from "possible" to "measured".
+
+    Re-derives the text runs from the source bytes (no schema change, ADR 0024/0025 posture), so the
+    card needs only the file. View-time only — never in the bulk scan. Owner-scoped and always 200:
+    every degrade (not a PDF, pdfium missing, busy background) returns `measured: false`, so the card
+    falls back to the scan-time 🟡, never an error and never a certified pass (ADR 0016). Unlike the
+    Office Tier B endpoints this needs no `ACP_OFFICE_RENDER` — pdfium rasterizes PDF unconditionally."""
+    import pdf_render_verify as _prv
+    import render as _render
+
+    owner = _owner(request)
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+
+    ext = os.path.splitext(filename)[1].lower()
+    if ext != ".pdf":
+        return {"measured": False, "reason": "unsupported_format"}
+    if not _render.can_render(ext):
+        return {"measured": False, "reason": "render_unavailable"}
+
+    data = _source_bytes_for_render(request, scan_id, filename, owner)
+    if not data:
+        return {"measured": False, "reason": "source_unavailable"}
+
+    return _prv.measure_pdf_over_image_contrast(data)

@@ -61,6 +61,7 @@ render, no endpoint, no schema change. Each is an advisory 🟡 REVIEW finding, 
 | **1.4.1** Use of Color | Tier A structural — chromatic link text with no underline | `pdf_use_of_color_checks` | scan-time |
 | **1.4.11** Non-text Contrast | Tier B **structural** — worst bordered `page.rect` stroke-vs-fill < 3:1 (the ADR's "vector colours from the content stream" option, not pixel edges) | `pdf_nontext_contrast_checks` | scan-time |
 | **1.4.3** over images | Tier B **structural** — chars whose box sits ≥60% inside an image XObject; declared colour can't prove contrast there → flag for review. Rides the existing 1.4.3 lane (stays 🟢 at format level), like the Office 1.4.3-hybrid | `pdf_text_over_image_checks` | scan-time |
+| **1.4.3** over images | Tier B **render-verified** — the follow-on: on demand, render the page (pdfium, no LibreOffice) and MEASURE the text-vs-image contrast per run via `region_contrast`, upgrading the flag to `worst_ratio X.X:1`. Endpoint `GET .../verify-pdf-contrast` re-derives runs from source (no schema change); frontend `PdfImageContrastCheck` on the finding. Degrades to the scan-time 🟡; never a certified pass | `pdf_render_verify.measure_pdf_over_image_contrast` + `office_structure.pdf_over_image_locators` | view-time |
 
 **Deliberately not built:**
 
@@ -73,13 +74,20 @@ render, no endpoint, no schema change. Each is an advisory 🟡 REVIEW finding, 
   ADR 0024 treats Office 1.4.10 as *structural where a narrowest-column signal genuinely exists*, and
   ⚪ where it doesn't.)
 
-**Documented follow-on (not yet built):**
+**Render-verified pixel sampling — shipped for 1.4.3-over-images:**
 
-- **Render-verified pixel sampling** for 1.4.3-over-images and 1.4.11. The structural detectors above
-  flag the *risk*; the richer version rasterizes the page (pdfium, already in the image) and samples
-  `region_contrast` under the char/edge for a real measured ratio — the exact A→B pattern ADR 0024
-  followed (structural flag first, on-demand measured endpoint second). Deferred as proportionate:
-  the structural flags already close the blind spots honestly.
+- The structural detector flags the *risk*; the on-demand endpoint now rasterizes the page and samples
+  `region_contrast` per text run over the image for a real measured ratio (worst-run `worst_ratio`,
+  `any_fail_aa`, honest abstain on a busy/varied background). This is the exact A→B pattern ADR 0024
+  followed (structural flag first, measured endpoint second). Unlike the Office Tier B endpoints it
+  needs no `ACP_OFFICE_RENDER` — pdfium rasterizes PDF unconditionally.
+
+**Remaining follow-on (not built):**
+
+- **Render-verified pixel-edge sampling for 1.4.11.** Today 1.4.11 uses the structural
+  vector-colour option (declared stroke-vs-fill), which is a real measurement for declared colours;
+  pixel-edge sampling would additionally catch anti-aliased / gradient borders. Lower value than the
+  1.4.3-over-image case (where declared colour is meaningless), so deferred.
 
 ## Honesty guardrails (ADR 0016, non-negotiable)
 1. **Real measurement or abstain.** A ratio/overflow actually read from the chars/pixels, or ⚪.
