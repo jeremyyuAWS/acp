@@ -398,6 +398,7 @@ def pptx_checks(path: Path) -> list[dict]:
 # contrast ratio); one AA + one AAA finding per file at most.
 _PPTX_SP = re.compile(r"<p:sp>.*?</p:sp>", re.S)
 _PPTX_SPPR = re.compile(r"<p:spPr\b.*?</p:spPr>", re.S)
+_WPS_SPPR = re.compile(r"<wps:spPr\b.*?</wps:spPr>", re.S)   # docx DrawingML shape props
 _A_LN_BLOCK = re.compile(r"<a:ln\b.*?</a:ln>", re.S)
 _SOLID_SRGB = re.compile(r'<a:solidFill>\s*<a:srgbClr val="([0-9A-Fa-f]{6})"')
 
@@ -893,7 +894,8 @@ def checks_for(path: Path, ext: str) -> list[dict]:
     if ext == ".docx":
         return (docx_checks(path) + office_control_review_checks(path, ext)
                 + office_color_only_checks(path, ext)
-                + office_reflow_checks(path, ext) + office_text_spacing_checks(path, ext))
+                + office_reflow_checks(path, ext) + office_text_spacing_checks(path, ext)
+                + docx_nontext_contrast_checks(path))
     if ext == ".pptx":
         return (pptx_checks(path) + pptx_contrast_checks(path) + pptx_audio_autoplay_checks(path)
                 + office_control_review_checks(path, ext)
@@ -1158,6 +1160,37 @@ def pptx_nontext_contrast_checks(path: Path) -> list[dict]:
     ratio, border_hex, fill_hex = worst
     return [_review_finding(
         "PPTX_NONTEXT_LOW_CONTRAST", "1.4.11 Non-text Contrast",
+        f"a shape outline #{border_hex} on its #{fill_hex} fill is {ratio:.1f}:1 (needs 3:1) — if the "
+        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative")]
+
+
+def docx_nontext_contrast_checks(path: Path) -> list[dict]:
+    """1.4.11 Non-text Contrast (Review) for docx — the lowest-contrast solid outline-on-fill
+    DrawingML shape (<3:1). Word's shapes carry the SAME `<a:ln>` outline + `<a:solidFill>` under
+    `<wps:spPr>` as pptx, so this mirrors `pptx_nontext_contrast_checks` on word/document.xml.
+    Never raises."""
+    worst = None      # (ratio, border_hex, fill_hex)
+    try:
+        with zipfile.ZipFile(path) as zf:
+            xml = _read(zf, "word/document.xml") or ""
+            for sppr in _WPS_SPPR.findall(xml):
+                ln_m = _A_LN_BLOCK.search(sppr)
+                if not ln_m:
+                    continue
+                border_m = _SOLID_SRGB.search(ln_m.group(0))              # the outline colour
+                fill_m = _SOLID_SRGB.search(_A_LN_BLOCK.sub("", sppr))    # the fill (border stripped)
+                if not border_m or not fill_m:
+                    continue
+                ratio = _contrast_ratio(border_m.group(1), fill_m.group(1))
+                if ratio < 3.0 and (worst is None or ratio < worst[0]):
+                    worst = (ratio, border_m.group(1), fill_m.group(1))
+    except Exception:
+        return []
+    if worst is None:
+        return []
+    ratio, border_hex, fill_hex = worst
+    return [_review_finding(
+        "DOCX_NONTEXT_LOW_CONTRAST", "1.4.11 Non-text Contrast",
         f"a shape outline #{border_hex} on its #{fill_hex} fill is {ratio:.1f}:1 (needs 3:1) — if the "
         "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative")]
 

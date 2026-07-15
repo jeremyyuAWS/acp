@@ -48,7 +48,7 @@ const REVIEW_ONLY = new Set([
   '4.1.2|docx', '4.1.2|pptx', '4.1.2|xlsx',
   '1.4.1|docx', '1.4.1|xlsx',                 // Use of Color — colour-only status / links
   '2.4.3|pptx',                               // Focus Order — title not first
-  '1.4.11|pptx',                              // Non-text Contrast — faint shape outline
+  '1.4.11|pptx', '1.4.11|docx',               // Non-text Contrast — faint shape outline
   // ADR 0024 Tier A — render-gated structural proxies. (1.4.3 hybrid is NOT here: 1.4.3 stays
   // 🟢 auto at the format level; its text-over-non-solid REVIEW is a per-file finding.)
   '1.4.4|pptx',                               // Resize Text — fixed-size text box

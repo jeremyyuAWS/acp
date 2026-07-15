@@ -467,7 +467,7 @@ REVIEW_FORMATS: dict[str, frozenset[str]] = {
     "4.1.2": frozenset({"docx", "pptx", "xlsx"}),   # Name/Role/Value — controls present
     "1.4.1": frozenset({"docx", "xlsx"}),           # Use of Color — colour-only status / links
     "2.4.3": frozenset({"pptx"}),                   # Focus Order — title not first in reading order
-    "1.4.11": frozenset({"pptx"}),                  # Non-text Contrast — faint shape outline
+    "1.4.11": frozenset({"pptx", "docx"}),          # Non-text Contrast — faint shape outline (docx DrawingML shapes too)
     # ADR 0024 Tier A — render-gated structural proxies (no rendering). 1.4.3 is NOT here: its
     # hybrid text-over-non-solid REVIEW rides the existing 1.4.3 pass/fail lane (a solid-fill FAIL
     # still wins), so it must not be diverted to the review-only lane.

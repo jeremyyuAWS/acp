@@ -140,6 +140,32 @@ def test_pptx_no_outline_not_flagged(tmp_path):
     assert os_.pptx_nontext_contrast_checks(p) == []
 
 
+def _docx_shape(spPr):
+    """A word/document.xml carrying one DrawingML (<wps:wsp>) shape with the given <wps:spPr>."""
+    return (f"<w:document><w:body><w:p><w:r><w:drawing><wp:inline><a:graphic><a:graphicData>"
+            f"<wps:wsp><wps:spPr>{spPr}</wps:spPr></wps:wsp>"
+            f"</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:body></w:document>")
+
+
+def test_docx_faint_shape_outline_flags_nontext_contrast(tmp_path):
+    spPr = '<a:ln><a:solidFill><a:srgbClr val="EEEEEE"/></a:solidFill></a:ln>' + _FILL
+    p = _zip(tmp_path, "faint.docx", {"word/document.xml": _docx_shape(spPr)})
+    f = os_.docx_nontext_contrast_checks(p)
+    assert _wcags(f) == {"1.4.11 Non-text Contrast"} and _all_review(f)
+    assert "EEEEEE" in f[0]["detail"] and "FFFFFF" in f[0]["detail"]
+    # routed through the docx dispatcher too
+    assert any(x["wcag"].startswith("1.4.11") for x in os_.checks_for(p, ".docx"))
+
+
+def test_docx_high_contrast_and_no_outline_not_flagged(tmp_path):
+    ok = '<a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln>' + _FILL
+    assert os_.docx_nontext_contrast_checks(_zip(tmp_path, "ok.docx", {"word/document.xml": _docx_shape(ok)})) == []
+    assert os_.docx_nontext_contrast_checks(_zip(tmp_path, "noln.docx", {"word/document.xml": _docx_shape(_FILL)})) == []
+    bad = tmp_path / "bad.docx"
+    bad.write_bytes(b"not a zip")
+    assert os_.docx_nontext_contrast_checks(bad) == []
+
+
 # ── dispatcher wiring + robustness ───────────────────────────────────────────
 def test_checks_for_routes_all_three(tmp_path):
     xlsx = _zip(tmp_path, "cf.xlsx", {"xl/worksheets/sheet1.xml": _sheet(

@@ -50,9 +50,9 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     expect(assessmentIn('1.4.1', 'xlsx')).toBe('review')
     expect(assessmentIn('2.4.3', 'pptx')).toBe('review')   // focus order
     expect(assessmentIn('1.4.11', 'pptx')).toBe('review')  // non-text contrast
+    expect(assessmentIn('1.4.11', 'docx')).toBe('review')  // docx DrawingML shapes now covered too
     // not built for these formats yet → grey ⚪ N/A, honestly
     expect(assessmentIn('2.4.3', 'docx')).toBe('na')
-    expect(assessmentIn('1.4.11', 'docx')).toBe('na')
     expect(assessmentIn('1.4.1', 'pptx')).toBe('na')
   })
 
@@ -68,7 +68,7 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
   // Assessment-axis rollups — the three buckets partition the 20 exactly in every estate.
   const EST = {
     // docx/pptx gain the ADR 0024 Tier-A review lanes: docx +1.4.10/1.4.12, pptx +1.4.4/1.4.10/1.4.12.
-    docx: { auto: 5, review: 11, human: 0, gap: 0, at: 0, na: 4, certifiable: 5 },
+    docx: { auto: 5, review: 12, human: 0, gap: 0, at: 0, na: 3, certifiable: 5 },
     xlsx: { auto: 5, review: 9, human: 0, gap: 0, at: 0, na: 6, certifiable: 5 },
     pptx: { auto: 5, review: 13, human: 1, gap: 0, at: 0, na: 1, certifiable: 5 },
     pdf: { auto: 3, review: 8, human: 0, gap: 0, at: 0, na: 9, certifiable: 3 },
