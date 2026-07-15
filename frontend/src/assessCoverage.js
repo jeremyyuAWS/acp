@@ -53,7 +53,7 @@ const REVIEW_ONLY = new Set([
   // 🟢 auto at the format level; its text-over-non-solid REVIEW is a per-file finding.)
   '1.4.4|pptx',                               // Resize Text — fixed-size text box
   '1.4.10|docx', '1.4.10|pptx',               // Reflow — table too wide
-  '1.4.12|docx', '1.4.12|pptx',               // Text Spacing — exact line spacing
+  '1.4.12|docx', '1.4.12|pptx', '1.4.12|pdf', // Text Spacing — exact line spacing (docx/pptx); tight line pitch (pdf)
 ])
 
 export const GAP_REASON = {

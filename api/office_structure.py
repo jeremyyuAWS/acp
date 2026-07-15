@@ -580,6 +580,59 @@ def pdf_contrast_checks(path: Path) -> list[dict]:
     return findings
 
 
+# ── ADR 0025 Tier A — PDF structural measurements from pdfplumber char metrics (no render) ──
+_MAX_PAGES_SPACING = 20        # cap the pages we measure line spacing on
+_MIN_LINES_FOR_SPACING = 4     # need a few lines before judging line pitch
+_TIGHT_LINE_PITCH = 1.15       # pitch below this × font size = cramped (single-spacing is ~1.2×)
+
+
+def pdf_text_spacing_checks(path: Path) -> list[dict]:
+    """1.4.12 Text Spacing (Review) for PDF (ADR 0025 Tier A). A flattened PDF can't honour a
+    reader's line-spacing override, so genuinely TIGHT line pitch is a fixed legibility risk.
+    Measures the line pitch (baseline-to-baseline) as a multiple of the font size from pdfplumber
+    char positions and flags the tightest page below _TIGHT_LINE_PITCH — a real measured value, or
+    nothing (ADR 0016): abstains when there aren't enough lines to judge. Advisory, never a pass.
+    Never raises."""
+    import statistics
+    worst = None      # (ratio, pitch_pt, font_pt)
+    try:
+        import pdfplumber
+        with pdfplumber.open(str(path)) as pdf:
+            for page in pdf.pages[:_MAX_PAGES_SPACING]:
+                tops: dict[int, list[float]] = {}
+                for ch in page.chars[:_MAX_CHARS_PER_PAGE]:
+                    try:
+                        top = round(float(ch["top"]))
+                        size = float(ch.get("size") or 0)
+                    except (TypeError, ValueError, KeyError):
+                        continue
+                    if size > 0:
+                        tops.setdefault(top, []).append(size)
+                lines = sorted(tops)
+                if len(lines) < _MIN_LINES_FOR_SPACING:
+                    continue
+                font = statistics.median(s for sizes in tops.values() for s in sizes)
+                if font <= 0:
+                    continue
+                # consecutive baseline gaps that look like line pitch — exclude paragraph breaks and
+                # column jumps (anything beyond 3× the font is a gap between blocks, not a line).
+                gaps = [b - a for a, b in zip(lines, lines[1:]) if 0 < (b - a) <= 3 * font]
+                if len(gaps) < _MIN_LINES_FOR_SPACING - 1:
+                    continue
+                ratio = statistics.median(gaps) / font
+                if ratio < _TIGHT_LINE_PITCH and (worst is None or ratio < worst[0]):
+                    worst = (ratio, statistics.median(gaps), font)
+    except Exception:
+        return []
+    if worst is None:
+        return []
+    ratio = worst[0]
+    return [_review_finding(
+        "PDF_TIGHT_LINE_SPACING", "1.4.12 Text Spacing",
+        f"text lines are set at {ratio:.2f}× the font size — tight, and a flattened PDF can't honour "
+        "a reader's request for looser (1.5×) line spacing; verify the text stays legible")]
+
+
 # A short memo/letter has no real "bypass repeated blocks" problem — bookmarks
 # only start pulling their weight once a reader would otherwise have to scroll
 # past several pages of unrelated content to find a section. Matches common
@@ -904,7 +957,8 @@ def checks_for(path: Path, ext: str) -> list[dict]:
                 + pptx_resize_text_checks(path) + pptx_complex_bg_contrast_checks(path))
     if ext == ".pdf":
         return (pdf_contrast_checks(path) + pdf_bypass_blocks_check(path) + pdf_form_field_checks(path)
-                + pdf_headings_labels_check(path) + pdf_link_purpose_check(path))
+                + pdf_headings_labels_check(path) + pdf_link_purpose_check(path)
+                + pdf_text_spacing_checks(path))
     if ext == ".xlsx":
         return (xlsx_contrast_checks(path) + xlsx_structure_checks(path)
                 + office_control_review_checks(path, ext) + office_color_only_checks(path, ext))

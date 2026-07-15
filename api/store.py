@@ -473,7 +473,7 @@ REVIEW_FORMATS: dict[str, frozenset[str]] = {
     # still wins), so it must not be diverted to the review-only lane.
     "1.4.4": frozenset({"pptx"}),                   # Resize Text — fixed-size text box, no auto-fit
     "1.4.10": frozenset({"docx", "pptx"}),          # Reflow — table too wide to reflow
-    "1.4.12": frozenset({"docx", "pptx"}),          # Text Spacing — exact (fixed) line spacing
+    "1.4.12": frozenset({"docx", "pptx", "pdf"}),   # Text Spacing — exact line spacing (docx/pptx); tight line pitch (pdf, ADR 0025)
 }
 
 # Criteria whose ASSESSMENT lane is 🟡 review (ADR 0023) even though they have a pass/fail
