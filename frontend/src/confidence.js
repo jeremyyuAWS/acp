@@ -108,6 +108,10 @@ export function confidenceForPii(type) {
 //   verifiedCleared — the criterion's fix cleared the residual re-scan
 export function confidenceForCoverage({ sc, outcome, verifiedCleared = false } = {}) {
   if (outcome === 'UNCHECKED' || outcome === 'WEB') return null
+  // A 🟡 Review verdict (ADR 0023): ACP surfaced concrete evidence of a likely issue but did
+  // NOT verify conformance — a human adjudicates. Medium: the evidence is real (deterministic
+  // detection) but the conformance call is a human judgement, so it is never High.
+  if (outcome === 'REVIEW') return { level: CONFIDENCE.MEDIUM, short: 'Review', basis: 'ACP can’t certify this criterion — a reviewer confirms conformance' }
   // A HUMAN verdict means we deferred to a person precisely because no automated
   // signal covers it — that is low automated confidence regardless of the SC's tier.
   if (outcome === 'HUMAN') return { level: CONFIDENCE.LOW, short: 'Human', basis: 'routed to human review — no automated signal' }

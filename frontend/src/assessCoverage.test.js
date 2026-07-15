@@ -1,71 +1,120 @@
 import { describe, it, expect } from 'vitest'
-import { coverageSummary, statusIn, statusAcross, estateFormats, DOCUMENTS_20 } from './assessCoverage.js'
+import {
+  coverageSummary, assessmentIn, remediationIn, statusIn, statusAcross,
+  isAssessable, isCertifiable, estateFormats, DOCUMENTS_20,
+} from './assessCoverage.js'
 
 const filesOf = (...exts) => exts.map((e, i) => ({ file: `doc${i}.${e}`, type: e }))
 
-describe('assessCoverage — capability, format-scoped', () => {
-  it('every 20-core criterion resolves to exactly one status per format', () => {
+describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
+  it('every 20-core criterion resolves to exactly one assessment lane per format', () => {
     for (const sc of DOCUMENTS_20) {
       for (const f of ['docx', 'xlsx', 'pptx', 'pdf', 'html']) {
-        expect(['auto', 'ai', 'human', 'gap', 'at', 'na']).toContain(statusIn(sc, f))
+        expect(['auto', 'review', 'human', 'gap', 'at', 'na']).toContain(assessmentIn(sc, f))
+        expect(['auto', 'ai', 'human', 'na']).toContain(remediationIn(sc, f))
       }
     }
   })
 
-  it('an all-.xlsx estate is now fully covered: 11 assessable · 0 gaps · 9 N/A (2.4.4 + 2.4.6 closed)', () => {
-    const s = coverageSummary(filesOf('xlsx'), { documents: true })
-    expect(s.fmts).toEqual(['xlsx'])
-    expect(s.assessable).toBe(11)   // + 2.4.4 + 2.4.6 (both now assessed)
-    expect(s.human).toBe(0)         // 2.4.4 link-purpose + 2.4.6 labels are both AI-assisted now
-    expect(s.gap).toBe(0)           // no buildable gaps left for xlsx
-    expect(s.at).toBe(0)
-    expect(s.na).toBe(9)
-    expect(s.assessable + s.gap + s.at + s.na).toBe(20)
-    expect(s.auto + s.ai + s.human).toBe(s.assessable)
+  it('statusIn is the assessment axis (back-compat alias)', () => {
+    expect(statusIn('1.1.1', 'docx')).toBe(assessmentIn('1.1.1', 'docx'))
+    expect(statusIn('2.4.2', 'docx')).toBe('auto')
   })
 
-  it('an all-.docx estate is now fully covered: 11 assessable · 0 gaps (1.3.2 closed)', () => {
-    const s = coverageSummary(filesOf('docx'), { documents: true })
-    expect(s.assessable).toBe(11)   // + 1.3.2 reading-order
-    expect(s.gap).toBe(0)
-    expect(s.assessable + s.gap + s.at + s.na).toBe(20)
-  })
-
-  it('mixed doc estate (docx/xlsx/pptx/pdf): gaps collapse into assessable — 12 assessable, 0 gap, 8 N/A', () => {
-    const s = coverageSummary(filesOf('docx', 'xlsx', 'pptx', 'pdf'), { documents: true })
-    expect(s.assessable).toBe(12)   // union across all four
-    expect(s.gap).toBe(0)           // every gap criterion is assessable in SOME present format
-    expect(s.na).toBe(8)
-    expect(s.assessable + s.gap + s.at + s.na).toBe(20)
-  })
-
-  it('an all-.pptx estate is fully covered for what applies (0 gaps)', () => {
-    const s = coverageSummary(filesOf('pptx'), { documents: true })
-    expect(s.assessable).toBe(12)
-    expect(s.gap).toBe(0)
-    expect(s.na).toBe(8)
-  })
-
-  it('an .html estate: 1.3.2 + 1.4.5 now assessed, only the 2 keyboard criteria remain (needs-AT)', () => {
-    const s = coverageSummary(filesOf('html'), { documents: true })
-    expect(s.assessable).toBe(18)   // + 1.3.2 + 1.4.5 (both now detected)
-    expect(s.gap).toBe(0)           // no buildable gaps left anywhere
-    expect(s.at).toBe(2)            // 2.1.1 + 2.1.2 — only static-analysis can't prove these
-    expect(s.na).toBe(0)
-    expect(s.assessable + s.gap + s.at + s.na).toBe(20)
-  })
-
-  it('every doc format now has zero buildable gaps', () => {
+  it('the honest 🟢 rule: 1.1.1 is review (can detect a fail, cannot certify a pass)', () => {
     for (const f of ['docx', 'xlsx', 'pptx', 'pdf']) {
-      expect(coverageSummary(filesOf(f), { documents: true }).gap, f).toBe(0)
+      expect(assessmentIn('1.1.1', f)).toBe('review')   // alt adequacy is a judgement
+      expect(remediationIn('1.1.1', f)).toBe('ai')      // …but AI drafts the fix — independent axis
     }
   })
 
-  it('union status prefers assessable over na (gaps are all closed)', () => {
-    expect(statusAcross('2.4.6', ['docx', 'pdf'])).toBe('auto')  // auto in docx wins
-    expect(statusAcross('2.4.6', ['pdf'])).toBe('ai')            // pdf 2.4.6 now AI-assisted (heading-map proposer)
-    expect(statusAcross('2.4.6', ['xlsx'])).toBe('ai')           // xlsx 2.4.6 now AI-assisted (label proposer)
-    expect(statusAcross('1.4.4', ['docx'])).toBe('na')           // still not applicable to docx
+  it('deterministic structural criteria are 🟢 auto-assess + ⚡ auto-remediate', () => {
+    for (const f of ['docx', 'xlsx', 'pptx', 'pdf']) {
+      expect(assessmentIn('1.4.3', f)).toBe('auto')     // contrast math
+      expect(remediationIn('1.4.3', f)).toBe('auto')
+      expect(assessmentIn('2.4.2', f)).toBe('auto')     // title present
+    }
+  })
+
+  it('office 2.1.2 / 4.1.2 are 🟡 review (controls-gated) — mirrors store.REVIEW_FORMATS', () => {
+    for (const f of ['docx', 'xlsx', 'pptx']) {
+      expect(assessmentIn('2.1.2', f)).toBe('review')
+      expect(assessmentIn('4.1.2', f)).toBe('review')
+    }
+    // pdf keyboard-trap is 🔴/⚪ for now (no pdf control detector wired) — not review.
+    expect(assessmentIn('2.1.2', 'pdf')).toBe('na')
+  })
+
+  it('Phase 1b review detectors put their criteria in the 🟡 lane at the format level', () => {
+    expect(assessmentIn('1.4.1', 'docx')).toBe('review')   // colour-only status / links
+    expect(assessmentIn('1.4.1', 'xlsx')).toBe('review')
+    expect(assessmentIn('2.4.3', 'pptx')).toBe('review')   // focus order
+    expect(assessmentIn('1.4.11', 'pptx')).toBe('review')  // non-text contrast
+    // not built for these formats yet → grey ⚪ N/A, honestly
+    expect(assessmentIn('2.4.3', 'docx')).toBe('na')
+    expect(assessmentIn('1.4.11', 'docx')).toBe('na')
+    expect(assessmentIn('1.4.1', 'pptx')).toBe('na')
+  })
+
+  it('static-deck keyboard (pptx 2.1.1) is 🔴 human-only', () => {
+    expect(assessmentIn('2.1.1', 'pptx')).toBe('human')
+  })
+
+  it('html keyboard criteria stay needs-AT — no static tool can prove them', () => {
+    expect(assessmentIn('2.1.1', 'html')).toBe('at')
+    expect(assessmentIn('2.1.2', 'html')).toBe('at')
+  })
+
+  // Assessment-axis rollups — the three buckets partition the 20 exactly in every estate.
+  const EST = {
+    // docx/pptx gain the ADR 0024 Tier-A review lanes: docx +1.4.10/1.4.12, pptx +1.4.4/1.4.10/1.4.12.
+    docx: { auto: 5, review: 11, human: 0, gap: 0, at: 0, na: 4, certifiable: 5 },
+    xlsx: { auto: 5, review: 9, human: 0, gap: 0, at: 0, na: 6, certifiable: 5 },
+    pptx: { auto: 5, review: 13, human: 1, gap: 0, at: 0, na: 1, certifiable: 5 },
+    pdf: { auto: 3, review: 8, human: 0, gap: 0, at: 0, na: 9, certifiable: 3 },
+    html: { auto: 11, review: 7, human: 0, gap: 0, at: 2, na: 0, certifiable: 11 },
+  }
+  for (const [fmt, want] of Object.entries(EST)) {
+    it(`an all-.${fmt} estate: ${want.auto}🟢 ${want.review}🟡 ${want.human}🔴 ${want.na}⚪ (sums to 20)`, () => {
+      const s = coverageSummary(filesOf(fmt), { documents: true })
+      expect({ auto: s.auto, review: s.review, human: s.human, gap: s.gap, at: s.at, na: s.na, certifiable: s.certifiable })
+        .toEqual(want)
+      expect(s.auto + s.review + s.human + s.gap + s.at + s.na).toBe(20)
+      expect(s.assessable).toBe(s.auto + s.review)   // 🟢 + 🟡
+      expect(s.certifiable).toBe(s.auto)             // honest headline = 🟢 only
+    })
+  }
+
+  it('mixed doc estate unions to the best lane per criterion (19 assessable, sum 20)', () => {
+    const s = coverageSummary(filesOf('docx', 'xlsx', 'pptx', 'pdf'), { documents: true })
+    expect(s.auto).toBe(6)
+    // Tier A closes the last three union ⚪ (1.4.4 / 1.4.10 / 1.4.12) into the 🟡 review lane.
+    expect(s.review).toBe(13)
+    expect(s.human).toBe(1)
+    expect(s.na).toBe(0)
+    expect(s.assessable).toBe(19)
+    expect(s.auto + s.review + s.human + s.gap + s.at + s.na).toBe(20)
+  })
+
+  it('remediation axis is counted independently (docx: 5⚡ 6🤖 0👤)', () => {
+    const s = coverageSummary(filesOf('docx'), { documents: true })
+    expect({ remAuto: s.remAuto, remAi: s.remAi, remHuman: s.remHuman }).toEqual({ remAuto: 5, remAi: 6, remHuman: 0 })
+  })
+
+  it('union prefers the best assessment lane; a distinct remediation resolver is honored', () => {
+    expect(statusAcross('2.4.6', ['docx', 'pdf'], assessmentIn)).toBe('auto')   // 🟢 in docx wins
+    expect(statusAcross('2.4.6', ['pdf'], assessmentIn)).toBe('review')          // pdf 2.4.6 is 🟡
+    expect(statusAcross('2.4.6', ['docx'], remediationIn)).toBe('auto')          // ⚡ in docx
+    expect(statusAcross('2.4.6', ['pdf'], remediationIn)).toBe('ai')             // 🤖 in pdf
+  })
+
+  it('isAssessable = 🟢|🟡 (a verdict or a flag); isCertifiable = 🟢 only', () => {
+    expect(isAssessable('auto')).toBe(true)
+    expect(isAssessable('review')).toBe(true)
+    expect(isAssessable('human')).toBe(false)   // 🔴 can't-assess is NOT assessable
+    expect(isAssessable('na')).toBe(false)
+    expect(isCertifiable('auto')).toBe(true)
+    expect(isCertifiable('review')).toBe(false)
   })
 
   it('empty / unknown estate falls back to the four document formats', () => {
@@ -77,6 +126,6 @@ describe('assessCoverage — capability, format-scoped', () => {
     const documents = coverageSummary(filesOf('docx'), { documents: true })
     const all = coverageSummary(filesOf('docx'), { documents: false })
     expect(all.total).toBeGreaterThan(documents.total)
-    expect(all.assessable + all.gap + all.at + all.na).toBe(all.total)
+    expect(all.auto + all.review + all.human + all.gap + all.at + all.na).toBe(all.total)
   })
 })

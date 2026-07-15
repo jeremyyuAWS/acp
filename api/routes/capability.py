@@ -16,10 +16,15 @@ router = APIRouter()
 
 @router.get("/capability")
 def capability():
-    """The full {format: {WCAG SC: lane}} matrix, the lane vocabulary, and the format order.
+    """The two-axis capability matrix (ADR 0023) + vocabularies + format order.
 
-    `formats` + `capability` match the shape the frontend capability mirror consumes; `lanes`
-    is the vocabulary. Any (fmt, sc) absent from a format's map is "human" (out of scope /
-    no automation)."""
-    return {"formats": list(cap.FORMATS), "lanes": sorted(cap.LANES),
-            "capability": cap.as_dict()}
+    `capability` is the single-value REMEDIATION projection (⚡ auto / 🤖 assisted / 👤 human),
+    the shape the frontend mirror has always consumed. `assessment` is the ASSESSMENT axis
+    (🟢 auto / 🟡 review / 🔴 human) — can ACP determine compliance, independent of how a
+    failure is remediated. Any (fmt, sc) absent from a format's map is out of scope (grey ⚪
+    N/A in the UI; "human" for remediation defaulting)."""
+    return {"formats": list(cap.FORMATS),
+            "lanes": sorted(cap.LANES),
+            "capability": cap.remediation_table(),
+            "assessment": cap.assessment_table(),
+            "assessment_lanes": sorted(cap.ASSESSMENT_LANES)}

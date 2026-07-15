@@ -101,5 +101,5 @@ def test_dark_text_untouched(tmp_path):
 
 def test_capability_table_promoted():
     import remediation_capability as cap
-    assert cap.CAPABILITY["pdf"]["1.4.3"] == cap.AUTO
-    assert cap.CAPABILITY["pdf"]["1.4.6"] == cap.AUTO
+    assert cap.mode_for("pdf", "1.4.3") == cap.AUTO
+    assert cap.mode_for("pdf", "1.4.6") == cap.AUTO

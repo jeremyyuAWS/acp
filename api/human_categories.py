@@ -66,6 +66,7 @@ _MAP: dict[str, tuple[str, str]] = {
     "1.4.11": ("contrast",      "Buttons or icons with low contrast"),
     "1.4.12": ("layout",        "Text spacing can't be adjusted"),
     "2.1.1":  ("navigation",    "Can't be used with a keyboard"),
+    "2.1.2":  ("navigation",    "Embedded control may trap keyboard focus"),
     "2.4.1":  ("navigation",    "No way to skip repeated navigation"),
     "2.4.2":  ("doc_props",     "Missing document title"),
     "2.4.3":  ("navigation",    "Illogical tab order"),

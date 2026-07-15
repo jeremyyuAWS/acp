@@ -58,6 +58,7 @@ Never raises — a parse failure just means no findings for that document.
 """
 from __future__ import annotations
 
+import io
 import re
 import zipfile
 from pathlib import Path
@@ -146,6 +147,14 @@ def _relationships(zf: zipfile.ZipFile, rels_path: str) -> dict[str, str]:
 
 def _finding(rule_id: str, wcag: str, severity: str) -> dict:
     return {"ruleId": rule_id, "wcag": wcag, "severity": severity}
+
+
+def _review_finding(rule_id: str, wcag: str, detail: str) -> dict:
+    """A Review-Recommended finding (ADR 0023): advisory, evidence-carrying, and
+    NON-blocking. Severity "REVIEW" has a zero penalty weight in the rubric, so it
+    never lowers the score or blocks certification — it flags a concrete risk a human
+    must adjudicate, never claims a pass, and offers no ACP fix (ADR 0016)."""
+    return {"ruleId": rule_id, "wcag": wcag, "severity": "REVIEW", "advisory": True, "detail": detail}
 
 
 def _duplicate_href_findings(links: list[tuple[str, str]], rule_id: str, wcag: str) -> list[dict]:
@@ -882,14 +891,21 @@ def checks_for(path: Path, ext: str) -> list[dict]:
     """Dispatch by extension; returns [] for formats with no structural check yet."""
     ext = ext.lower()
     if ext == ".docx":
-        return docx_checks(path)
+        return (docx_checks(path) + office_control_review_checks(path, ext)
+                + office_color_only_checks(path, ext)
+                + office_reflow_checks(path, ext) + office_text_spacing_checks(path, ext))
     if ext == ".pptx":
-        return pptx_checks(path) + pptx_contrast_checks(path) + pptx_audio_autoplay_checks(path)
+        return (pptx_checks(path) + pptx_contrast_checks(path) + pptx_audio_autoplay_checks(path)
+                + office_control_review_checks(path, ext)
+                + pptx_focus_order_checks(path) + pptx_nontext_contrast_checks(path)
+                + office_reflow_checks(path, ext) + office_text_spacing_checks(path, ext)
+                + pptx_resize_text_checks(path) + pptx_complex_bg_contrast_checks(path))
     if ext == ".pdf":
         return (pdf_contrast_checks(path) + pdf_bypass_blocks_check(path) + pdf_form_field_checks(path)
                 + pdf_headings_labels_check(path) + pdf_link_purpose_check(path))
     if ext == ".xlsx":
-        return xlsx_contrast_checks(path) + xlsx_structure_checks(path)
+        return (xlsx_contrast_checks(path) + xlsx_structure_checks(path)
+                + office_control_review_checks(path, ext) + office_color_only_checks(path, ext))
     return []
 
 
@@ -931,3 +947,484 @@ def pptx_audio_autoplay_checks(path: Path) -> list[dict]:
     except Exception:
         return findings
     return findings
+
+
+# ── 2.1.2 No Keyboard Trap / 4.1.2 Name, Role, Value — interactive controls (Review) ──
+# ADR 0023, Phase 1a. A *static* Office document has no interactive controls, so both
+# criteria are genuinely N/A. But a document CAN embed interactive controls — ActiveX,
+# OLE objects, VBA-driven UserForms, content-control form fields, legacy Word form
+# fields, or worksheet form controls — any of which can trap keyboard focus (2.1.2) or
+# ship without an accessible name/role (4.1.2). We can't statically prove a trap, nor
+# verify every control exposes a name, so this is a REVIEW-RECOMMENDED signal: surface
+# the concrete controls we found and route a human to judge conformance. No controls
+# found → the criteria stay genuinely N/A for that file (never a fabricated pass).
+_AX_PART = re.compile(r"/activeX/activeX\d+\.xml$", re.I)          # ActiveX control part
+_OLE_PART = re.compile(r"/embeddings/oleObject\d+\.\w+$", re.I)     # embedded OLE object
+_XL_CTRL_PART = re.compile(r"/ctrlProps/ctrlProp\d+\.xml$", re.I)   # xlsx form control
+_VBA_PART = re.compile(r"vbaProject\.bin$", re.I)                   # VBA macro project
+_FFDATA = re.compile(r"<w:ffData\b")                               # docx legacy form field
+
+
+def office_interactive_controls(path: Path, ext: str) -> list[dict]:
+    """Evidence of interactive controls embedded in an OOXML document.
+
+    Returns a list of ``{"type": str, "count": int}`` entries (one per control kind
+    actually found), or ``[]`` when the document is static. Reads the zip's part list
+    plus — for docx — ``word/document.xml`` for content-control form fields and legacy
+    form fields. Never raises: a control scan must never fail a document scan."""
+    ext = (ext or "").lower()
+    if ext not in (".docx", ".pptx", ".xlsx"):
+        return []
+    counts: dict[str, int] = {}
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = zf.namelist()
+            ax = sum(1 for n in names if _AX_PART.search(n))
+            if ax:
+                counts["ActiveX control"] = ax
+            ole = sum(1 for n in names if _OLE_PART.search(n))
+            if ole:
+                counts["embedded OLE object"] = ole
+            vba = sum(1 for n in names if _VBA_PART.search(n))
+            if vba:
+                counts["VBA macro project"] = vba
+            if ext == ".xlsx":
+                ctrl = sum(1 for n in names if _XL_CTRL_PART.search(n))
+                if ctrl:
+                    counts["form control"] = ctrl
+            if ext == ".docx":
+                doc = _read(zf, "word/document.xml") or ""
+                # Only genuine INPUT content controls (checkbox/date/dropdown/combo/
+                # picture) — the same input-type gate the 3.3.2 detector uses, so
+                # non-interactive template placeholders (w:text/w:richText) don't count.
+                cc = 0
+                for sdt_inner in _SDT.findall(doc):
+                    pr_m = _SDT_PR.search(sdt_inner)
+                    if pr_m and _SDT_INPUT_TYPE.search(pr_m.group(1)):
+                        cc += 1
+                if cc:
+                    counts["interactive content control"] = cc
+                ff = len(_FFDATA.findall(doc))
+                if ff:
+                    counts["legacy form field"] = ff
+    except Exception:
+        return []
+    return [{"type": k, "count": v} for k, v in counts.items()]
+
+
+def _controls_phrase(controls: list[dict]) -> str:
+    """Human phrase for the evidence list, e.g. '2 ActiveX controls, 1 VBA macro project'."""
+    parts = []
+    for c in controls:
+        n, t = c["count"], c["type"]
+        parts.append(f"{n} {t}{'s' if n != 1 else ''}")
+    return ", ".join(parts)
+
+
+def office_control_review_checks(path: Path, ext: str) -> list[dict]:
+    """REVIEW findings for 2.1.2 + 4.1.2 when a document embeds interactive controls
+    (ADR 0023). Advisory only — carries the concrete control evidence, never a pass,
+    never a fix. Emits nothing (→ the criteria stay N/A) for a static document."""
+    controls = office_interactive_controls(path, ext)
+    if not controls:
+        return []
+    phrase = _controls_phrase(controls)
+    return [
+        _review_finding(
+            "OFFICE_INTERACTIVE_CONTROL_KEYBOARD", "2.1.2 No Keyboard Trap",
+            f"document embeds {phrase} — verify keyboard focus can move away from every "
+            "control (no keyboard trap); ACP can't confirm this statically"),
+        _review_finding(
+            "OFFICE_INTERACTIVE_CONTROL_NAME_ROLE", "4.1.2 Name, Role, Value",
+            f"document embeds {phrase} — verify each control exposes an accessible name "
+            "and role to assistive technology; ACP can't confirm this statically"),
+    ]
+
+
+# ── 1.4.1 Use of Color (Review, ADR 0023 Phase 1b) ─────────────────────────────
+# Colour used as the ONLY way to convey information fails 1.4.1. Two high-precision
+# structural signals ACP can surface for a human to confirm:
+#   • xlsx conditional formatting that shades cells by value (colorScale, or a rule with a
+#     differential-format fill) — status may be encoded by colour alone.
+#   • docx hyperlinks whose underline is explicitly removed — a link distinguished from body
+#     text by colour only. Both are advisory: whether a non-colour cue also exists is a human call.
+_CF_RULE = re.compile(r"<cfRule\b[^>]*>")
+_W_U_NONE = re.compile(r'<w:u\b[^>]*w:val="none"')
+
+
+def office_color_only_checks(path: Path, ext: str) -> list[dict]:
+    """REVIEW findings for 1.4.1 when colour appears to carry meaning on its own. Never raises."""
+    ext = (ext or "").lower()
+    findings: list[dict] = []
+    try:
+        with zipfile.ZipFile(path) as zf:
+            if ext == ".xlsx":
+                cf = 0
+                for n in zf.namelist():
+                    if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", n):
+                        for tag in _CF_RULE.findall(_read(zf, n) or ""):
+                            # colorScale = pure colour gradient; a dxfId rule applies a colour
+                            # fill. iconSet pairs colour WITH an icon, so it is NOT colour-only.
+                            if 'type="colorScale"' in tag or ('dxfId="' in tag and "iconSet" not in tag):
+                                cf += 1
+                if cf:
+                    findings.append(_review_finding(
+                        "XLSX_COLOR_ONLY_STATUS", "1.4.1 Use of Color",
+                        f"{cf} conditional-formatting rule(s) shade cells by value — verify the "
+                        "status they signal is ALSO conveyed without colour (a label or icon), so "
+                        "it isn't lost for colour-blind or screen-reader users"))
+            if ext == ".docx":
+                doc = _read(zf, "word/document.xml") or ""
+                colour_only = sum(1 for _rid, inner in _HYPERLINK.findall(doc) if _W_U_NONE.search(inner))
+                if colour_only:
+                    findings.append(_review_finding(
+                        "DOCX_COLOR_ONLY_LINK", "1.4.1 Use of Color",
+                        f"{colour_only} hyperlink(s) have their underline removed — a link set apart "
+                        "from body text by colour alone fails for colour-blind users; verify each "
+                        "link is identifiable without relying on colour"))
+    except Exception:
+        return findings
+    return findings
+
+
+# ── 2.4.3 Focus Order (Review, ADR 0023 Phase 1b) ──────────────────────────────
+# A slide's shapes are read and tabbed in document (spTree) order. When a body/content
+# placeholder precedes the TITLE placeholder in that order, assistive tech reaches the slide's
+# content before its heading — a focus/reading-order anomaly. Advisory: a human confirms the
+# intended order (some layouts are legitimately title-last).
+def pptx_focus_order_checks(path: Path) -> list[dict]:
+    """One REVIEW finding for 2.4.3 per slide whose title placeholder is not the first
+    placeholder in document order. Never raises."""
+    findings: list[dict] = []
+    try:
+        with zipfile.ZipFile(path) as zf:
+            for slide_name in sorted(n for n in zf.namelist()
+                                     if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)):
+                xml = _read(zf, slide_name)
+                if not xml:
+                    continue
+                ph_shapes = [sp for sp in _PPTX_SP.findall(xml) if "<p:ph" in sp]
+                if len(ph_shapes) < 2:
+                    continue
+                title_pos = next((k for k, sp in enumerate(ph_shapes) if _PPTX_TITLE_PH.search(sp)), None)
+                if title_pos is not None and title_pos > 0:
+                    n = re.search(r"slide(\d+)\.xml", slide_name)
+                    findings.append(_review_finding(
+                        "PPTX_FOCUS_ORDER", "2.4.3 Focus Order",
+                        f"on slide {n.group(1) if n else '?'} {title_pos} content placeholder(s) come "
+                        "before the title in reading/tab order — verify assistive tech reaches the "
+                        "slide's heading before its body content"))
+    except Exception:
+        return findings
+    return findings
+
+
+# ── 1.4.11 Non-text Contrast (Review, ADR 0023 Phase 1b) ───────────────────────
+# A meaningful shape needs ≥3:1 contrast between its boundary and adjacent colour. A shape that
+# has an explicit solid outline whose colour is near-identical to its own fill has an effectively
+# invisible boundary — a 1.4.11 risk IF the shape conveys meaning (a human confirms it isn't
+# purely decorative). Border-vs-fill is fully determined by explicit colours, so no fragile
+# slide-background assumption is needed; both are measured with the same WCAG math as 1.4.3.
+def pptx_nontext_contrast_checks(path: Path) -> list[dict]:
+    """One REVIEW finding for 1.4.11 for the lowest-contrast solid outline-on-fill shape (<3:1).
+    Never raises."""
+    worst = None      # (ratio, border_hex, fill_hex)
+    try:
+        with zipfile.ZipFile(path) as zf:
+            for slide_name in sorted(n for n in zf.namelist()
+                                     if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)):
+                xml = _read(zf, slide_name)
+                if not xml:
+                    continue
+                for sp in _PPTX_SP.findall(xml):
+                    sppr_m = _PPTX_SPPR.search(sp)
+                    if not sppr_m:
+                        continue
+                    sppr_xml = sppr_m.group(0)
+                    ln_m = _A_LN_BLOCK.search(sppr_xml)
+                    if not ln_m:
+                        continue
+                    border_m = _SOLID_SRGB.search(ln_m.group(0))          # the outline colour
+                    fill_m = _SOLID_SRGB.search(_A_LN_BLOCK.sub("", sppr_xml))  # the fill (border stripped)
+                    if not border_m or not fill_m:
+                        continue
+                    ratio = _contrast_ratio(border_m.group(1), fill_m.group(1))
+                    if ratio < 3.0 and (worst is None or ratio < worst[0]):
+                        worst = (ratio, border_m.group(1), fill_m.group(1))
+    except Exception:
+        return []
+    if worst is None:
+        return []
+    ratio, border_hex, fill_hex = worst
+    return [_review_finding(
+        "PPTX_NONTEXT_LOW_CONTRAST", "1.4.11 Non-text Contrast",
+        f"a shape outline #{border_hex} on its #{fill_hex} fill is {ratio:.1f}:1 (needs 3:1) — if the "
+        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative")]
+
+
+# ── ADR 0024 Tier A — render-gated criteria, structural proxies (no rendering) ──
+# Advisory 🟡 REVIEW signals for the four render-dependent criteria (1.4.4 Resize Text, 1.4.10
+# Reflow, 1.4.12 Text Spacing, 1.4.3 hybrid). Each is a cheap, deterministic OOXML fact that a
+# criterion is at RENDER-RISK — surfaced for a human to confirm against the rendered page, never
+# a certified pass (ADR 0016). Tier B (ADR 0018 render) will later upgrade these with measured
+# pixel evidence; these ship first, adding NO rendering to the scan path.
+_WIDE_TABLE_COLS = 8                 # a table this wide likely can't reflow to a narrow viewport
+_RESIZE_MIN_CHARS = 300              # a fixed-size (no-autofit) box holding this much text may clip at 200%
+_MIN_EXACT_SPACING_PARAS = 3         # a few exact-line-height paragraphs before flagging text-spacing risk
+_W_TBL = re.compile(r"<w:tbl>(.*?)</w:tbl>", re.S)
+_W_GRIDCOL = re.compile(r"<w:gridCol\b")
+_W_GRIDCOL_W = re.compile(r'<w:gridCol\b[^>]*\bw:w="(\d+)"')     # docx column width, twips
+_A_TBL = re.compile(r"<a:tbl>(.*?)</a:tbl>", re.S)
+_A_GRIDCOL = re.compile(r"<a:gridCol\b")
+_A_GRIDCOL_W = re.compile(r'<a:gridCol\b[^>]*\bw="(\d+)"')       # pptx column width, EMU
+_A_NOAUTOFIT = re.compile(r"<a:noAutofit\b")
+_W_LINERULE_EXACT = re.compile(r'<w:spacing\b[^>]*w:lineRule="exact"')
+_A_EXACT_LNSPC = re.compile(r"<a:lnSpc>\s*<a:spcPts\b")
+# Per-paragraph parsing for the measured 1.4.12 line-height ratio (fixed line height ÷ font size).
+_W_PARA = re.compile(r"<w:p\b[^>]*>.*?</w:p>", re.S)      # \b keeps w:p from matching w:pPr
+_W_SPACING_TAG = re.compile(r"<w:spacing\b[^>]*?/?>")
+_W_LINE_VAL = re.compile(r'\bw:line="(\d+)"')             # twentieths of a point
+_W_SZ = re.compile(r'<w:sz\b\s+w:val="(\d+)"')            # half-points (\b excludes w:szCs)
+_A_PARA = re.compile(r"<a:p\b[^>]*>.*?</a:p>", re.S)
+_A_LNSPC_PTS = re.compile(r'<a:lnSpc>\s*<a:spcPts\b[^>]*\bval="(\d+)"')   # hundredths of a point
+_A_RUN_SZ = re.compile(r'<a:(?:rPr|defRPr|endParaRPr)\b[^>]*\bsz="(\d+)"')  # hundredths of a point
+_A_BLIPFILL = re.compile(r"<a:blipFill\b")
+_A_GRADFILL = re.compile(r"<a:gradFill\b")
+_CNVPR_NAME = re.compile(r'<p:cNvPr\b[^>]*\bname="([^"]*)"')
+_CNVPR_ID = re.compile(r'<p:cNvPr\b[^>]*\bid="([^"]*)"')
+
+
+def _widest_table_cols(xml: str, tbl_re, gridcol_re, gridcol_w_re) -> tuple[int, list[int]]:
+    """(column count, [column widths]) of the widest (most-columns) table in this part; (0, [])
+    if none. The widths list is empty when that table's gridCols don't declare widths."""
+    best_cols, best_widths = 0, []
+    for inner in tbl_re.findall(xml):
+        cols = len(gridcol_re.findall(inner))
+        if cols > best_cols:
+            best_cols = cols
+            best_widths = [int(w) for w in gridcol_w_re.findall(inner)]
+    return best_cols, best_widths
+
+
+def _narrowest_column_fraction(cols: int, widths: list[int]) -> float | None:
+    """The narrowest column as a fraction of the total table width (ADR 0024 Tier B.3 / #185
+    measured 1.4.10 evidence) — how squeezed the tightest column is, scale-invariant so it holds on
+    any screen. Returns None when the widths are absent/incomplete (real measurement or nothing,
+    ADR 0016 — never a guessed fraction)."""
+    if not widths or len(widths) != cols:
+        return None
+    total = sum(widths)
+    if total <= 0:
+        return None
+    return min(widths) / total
+
+
+def office_reflow_checks(path: Path, ext: str) -> list[dict]:
+    """1.4.10 Reflow (Review) — a table too wide to reflow to a narrow viewport without 2-D
+    scrolling. Wide is a structural fact (grid-column count); whether it actually needs scrolling
+    is a rendered/AT judgement, so it is advisory. Never raises."""
+    ext = (ext or "").lower()
+    findings: list[dict] = []
+    try:
+        with zipfile.ZipFile(path) as zf:
+            cols, widths = 0, []
+            if ext == ".docx":
+                cols, widths = _widest_table_cols(
+                    _read(zf, "word/document.xml") or "", _W_TBL, _W_GRIDCOL, _W_GRIDCOL_W)
+            elif ext == ".pptx":
+                for n in zf.namelist():
+                    if re.fullmatch(r"ppt/slides/slide\d+\.xml", n):
+                        c, w = _widest_table_cols(_read(zf, n) or "", _A_TBL, _A_GRIDCOL, _A_GRIDCOL_W)
+                        if c > cols:
+                            cols, widths = c, w
+            if cols >= _WIDE_TABLE_COLS:
+                detail = (f"a table is {cols} columns wide — verify it can be read at a narrow (320px) "
+                          "width without two-dimensional scrolling; wide fixed tables often can't reflow")
+                # #185 measured refinement: the tightest column's share of the table width, projected
+                # to a 360px phone. A real number from the file's own gridCol widths (no render).
+                frac = _narrowest_column_fraction(cols, widths)
+                if frac is not None:
+                    detail = (
+                        f"a table is {cols} columns wide and its narrowest column is only "
+                        f"{round(frac * 100)}% of the table (≈{round(frac * 360)}px when the table "
+                        "is fit to a 360px-wide phone) — verify it stays readable without "
+                        "two-dimensional scrolling")
+                findings.append(_review_finding("OFFICE_WIDE_TABLE_REFLOW", "1.4.10 Reflow", detail))
+    except Exception:
+        return findings
+    return findings
+
+
+def _min_exact_line_height_ratio(xml: str, fmt: str) -> float | None:
+    """Smallest (fixed line height ÷ font size) across paragraphs that use EXACT line spacing, or
+    None when no such paragraph declares a font size to compare against (real measurement or
+    nothing, ADR 0016). WCAG 1.4.12 asks a reader be able to set line height to 1.5× the font size:
+    a fixed line box below that clips the override, and below 1.0× the box is already shorter than
+    its own text."""
+    ratios: list[float] = []
+    if fmt == ".docx":
+        for para in _W_PARA.findall(xml):
+            sp = _W_SPACING_TAG.search(para)
+            if not sp or 'w:lineRule="exact"' not in sp.group(0):
+                continue
+            m = _W_LINE_VAL.search(sp.group(0))
+            szs = [int(s) for s in _W_SZ.findall(para)]
+            if not m or not szs:
+                continue
+            line_pt = int(m.group(1)) / 20.0        # twentieths-pt → pt
+            font_pt = max(szs) / 2.0                # half-pt → pt (tallest run drives the need)
+            if font_pt > 0:
+                ratios.append(line_pt / font_pt)
+    else:  # .pptx
+        for para in _A_PARA.findall(xml):
+            m = _A_LNSPC_PTS.search(para)
+            szs = [int(s) for s in _A_RUN_SZ.findall(para)]
+            if not m or not szs:
+                continue
+            line_pt = int(m.group(1)) / 100.0       # hundredths-pt → pt
+            font_pt = max(szs) / 100.0
+            if font_pt > 0:
+                ratios.append(line_pt / font_pt)
+    return min(ratios) if ratios else None
+
+
+def office_text_spacing_checks(path: Path, ext: str) -> list[dict]:
+    """1.4.12 Text Spacing (Review) — exact (fixed) line spacing blocks the user's spacing
+    override, which can clip text. Exact spacing is a deterministic attribute; whether it clips is
+    a rendered outcome, so it is advisory. Never raises."""
+    ext = (ext or "").lower()
+    findings: list[dict] = []
+    try:
+        with zipfile.ZipFile(path) as zf:
+            n = 0
+            ratio = None
+            if ext == ".docx":
+                xml = _read(zf, "word/document.xml") or ""
+                n = len(_W_LINERULE_EXACT.findall(xml))
+                ratio = _min_exact_line_height_ratio(xml, ".docx")
+            elif ext == ".pptx":
+                for name in zf.namelist():
+                    if re.fullmatch(r"ppt/slides/slide\d+\.xml", name):
+                        xml = _read(zf, name) or ""
+                        n += len(_A_EXACT_LNSPC.findall(xml))
+                        r = _min_exact_line_height_ratio(xml, ".pptx")
+                        if r is not None and (ratio is None or r < ratio):
+                            ratio = r
+            if n >= _MIN_EXACT_SPACING_PARAS:
+                detail = (f"{n} paragraph(s) use exact (fixed) line spacing — a user who increases "
+                          "line spacing for readability may see text clip; verify it reflows without loss")
+                # #185 measured refinement: the tightest fixed line height as a multiple of the font
+                # size, from the file's own values (no render). WCAG Text Spacing needs ≥1.5×.
+                if ratio is not None:
+                    detail = (
+                        f"{n} paragraph(s) use exact (fixed) line spacing and the tightest is only "
+                        f"{round(ratio, 2)}× the font size (WCAG Text Spacing needs 1.5×) — "
+                        + ("the line box is already shorter than the text, so lines overlap; "
+                           if ratio < 1.0 else
+                           "a reader who increases line spacing will see text clip; ")
+                        + "verify it reflows without loss")
+                findings.append(_review_finding("OFFICE_EXACT_LINE_SPACING", "1.4.12 Text Spacing", detail))
+    except Exception:
+        return findings
+    return findings
+
+
+def resize_text_locators(src) -> list[dict]:
+    """Fixed-size (auto-fit OFF) pptx text boxes holding a lot of text (>= _RESIZE_MIN_CHARS) — the
+    1.4.4 Resize Text render targets: ``[{"part", "shape"}]`` (`shape` = cNvPr name|id, "" if none).
+    `src` is a Path (detector) or bytes (the on-demand verify-resize endpoint). Never raises."""
+    out: list[dict] = []
+    try:
+        opener = zipfile.ZipFile(io.BytesIO(src)) if isinstance(src, (bytes, bytearray)) else zipfile.ZipFile(src)
+        with opener as zf:
+            for name in sorted(n for n in zf.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)):
+                xml = _read(zf, name) or ""
+                for sp in _PPTX_SP.findall(xml):
+                    if _A_NOAUTOFIT.search(sp) and len("".join(_AT.findall(sp))) >= _RESIZE_MIN_CHARS:
+                        nm = _CNVPR_NAME.search(sp)
+                        sid = _CNVPR_ID.search(sp)
+                        frag = (nm.group(1) if nm else (sid.group(1) if sid else "")).strip()
+                        out.append({"part": name, "shape": frag})
+    except Exception:
+        return out
+    return out
+
+
+def pptx_resize_text_checks(path: Path) -> list[dict]:
+    """1.4.4 Resize Text (Review) — a fixed-size text box (auto-fit OFF) holding a lot of text may
+    clip when text is enlarged to 200%. no-autofit is deterministic; the clip is a rendered
+    outcome, so it is advisory (ADR 0024 Tier B measures it). Never raises."""
+    boxes = resize_text_locators(path)
+    if not boxes:
+        return []
+    finding = _review_finding(
+        "PPTX_FIXED_TEXT_BOX_RESIZE", "1.4.4 Resize Text",
+        f"{len(boxes)} fixed-size text box(es) (auto-fit off) hold a lot of text — verify the "
+        "text doesn't clip when enlarged to 200%")
+    targets = [b for b in boxes if b["shape"]]     # only render-attributable boxes for Tier B
+    if targets:
+        finding["locators"] = targets
+    return [finding]
+
+
+def hybrid_contrast_locators(src) -> list[dict]:
+    """Every pptx text shape set over a PICTURE or GRADIENT fill (the 1.4.3-hybrid candidates):
+    ``[{"part": "ppt/slides/slideN.xml", "shape": <cNvPr name|id, "" if none>, "kind": "picture"|"gradient"}]``.
+
+    `src` is a Path (scan-time detector) OR raw bytes (the on-demand verify-contrast endpoint,
+    which re-derives the targets from the source rather than persisting them — no schema change,
+    ADR 0024). `shape` is best-effort: a shape with no `<p:cNvPr>` still counts toward the Tier-A
+    flag but carries an empty `shape` (Tier B can't render-attribute it — the caller filters those
+    out). Never raises: any parse error yields ``[]``."""
+    out: list[dict] = []
+    try:
+        opener = zipfile.ZipFile(io.BytesIO(src)) if isinstance(src, (bytes, bytearray)) else zipfile.ZipFile(src)
+        with opener as zf:
+            for name in sorted(n for n in zf.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)):
+                xml = _read(zf, name) or ""
+                for sp in _PPTX_SP.findall(xml):
+                    sppr_m = _PPTX_SPPR.search(sp)
+                    if not sppr_m or not "".join(_AT.findall(sp)).strip():
+                        continue                       # only shapes that actually hold text
+                    sppr = sppr_m.group(0)
+                    if _A_BLIPFILL.search(sppr):
+                        kind = "picture"
+                    elif _A_GRADFILL.search(sppr):
+                        kind = "gradient"
+                    else:
+                        continue
+                    # Prefer the shape name (geometry matches name or id); "" when neither is
+                    # present — still a real Tier-A finding, just not a Tier-B render target.
+                    nm = _CNVPR_NAME.search(sp)
+                    sid = _CNVPR_ID.search(sp)
+                    frag = (nm.group(1) if nm else (sid.group(1) if sid else "")).strip()
+                    out.append({"part": name, "shape": frag, "kind": kind})
+    except Exception:
+        return out
+    return out
+
+
+def pptx_complex_bg_contrast_checks(path: Path) -> list[dict]:
+    """1.4.3 Contrast — HYBRID review tier (ADR 0024). The deterministic core certifies text over
+    an explicit SOLID fill; this flags text over a PICTURE or GRADIENT fill, whose effective
+    background is a rendered pixel field contrast can't be read from colours alone. Advisory —
+    Tier B samples the rendered pixels to measure it. Never raises. Rides the existing 1.4.3
+    pass/fail lane (a definite solid-contrast FAIL still outranks this REVIEW)."""
+    candidates = hybrid_contrast_locators(path)
+    if not candidates:
+        return []
+    over_image = sum(1 for c in candidates if c["kind"] == "picture")
+    over_gradient = sum(1 for c in candidates if c["kind"] == "gradient")
+    bits = []
+    if over_image:
+        bits.append(f"{over_image} over a picture")
+    if over_gradient:
+        bits.append(f"{over_gradient} over a gradient")
+    finding = _review_finding(
+        "PPTX_TEXT_OVER_COMPLEX_BG", "1.4.3 Contrast (Minimum)",
+        f"text sits {' and '.join(bits)} fill — contrast can't be read from declared "
+        "colours; verify the text stays legible against the actual background")
+    targets = [c for c in candidates if c["shape"]]   # only render-attributable shapes for Tier B
+    if targets:
+        finding["locators"] = targets
+    return [finding]

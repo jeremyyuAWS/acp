@@ -1444,6 +1444,7 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .covstat { font-size: 11px; font-weight: 500; padding: 1px 8px; border-radius: 999px; margin-left: 4px; }
 .covstat.pass { background: #E7F0DC; color: #3B6D11; }
 .covstat.fail { background: #FAEEDA; color: #854F0B; }
+.covstat.review { background: #fbf3d6; color: #8a6a0e; }   /* 🟡 Review Recommended (ADR 0023) */
 .covstat.skip { background: #f1eff4; color: #716b76; }
 /* Count chips that double as row filters — clickable, with a struck-through "off" state. */
 .covstat-btn { border: 1px solid transparent; font-family: inherit; line-height: 1.5; cursor: pointer; }
@@ -1457,10 +1458,12 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .covrow:last-child td { border-bottom: none; }
 .covrow.pass { background: transparent; }
 .covrow.fail { background: #fff8f3; }
+.covrow.review { background: #fdfaef; }   /* 🟡 amber-tinted, distinct from grey skip rows */
 .covrow.skip { opacity: 0.55; }
 .covoutcome { font-weight: 600; white-space: nowrap; }
 .covoutcome.pass { color: #3B6D11; }
 .covoutcome.fail { color: #854F0B; }
+.covoutcome.review { color: #8a6a0e; }
 .covoutcome.skip { color: #716b76; }
 .covouttxt { font-size: 10px; margin-left: 3px; font-weight: 400; text-transform: uppercase; letter-spacing: 0.04em; }
 .explain-btn { margin-left: 7px; font-size: 10px; padding: 1px 6px; border-radius: 4px; border: 1px solid #c8bfb0; background: #faf8f5; color: #5a4f44; cursor: pointer; font-weight: 500; line-height: 1.6; }

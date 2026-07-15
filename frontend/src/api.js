@@ -512,6 +512,26 @@ export const getFileGeometry = (scanId, file, locator) => (SIM || !scanId || !fi
       .then(d => (d && d.bbox) || null)
       .catch(() => null))
 
+// ADR 0024 Tier B.1 — render-verified 1.4.3-hybrid contrast, ON DEMAND. With no locator the
+// backend re-derives every text-over-picture/gradient shape and MEASURES each from real pixels,
+// returning {measured:true, worst_ratio, any_fail_aa, shapes:[…], checked, total} or an honest
+// {measured:false, reason:…}. Upgrades a 🟡 flag to a measured value; never a certified pass.
+export const getFileContrast = (scanId, file) => (SIM || !scanId || !file
+  ? sim({ measured: false, reason: 'unavailable' })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/verify-contrast`, { headers: headers() })
+      .then(r => (r.ok ? r.json() : { measured: false, reason: 'error' }))
+      .catch(() => ({ measured: false, reason: 'error' })))
+
+// ADR 0024 Tier B.2 — render-verified 1.4.4 Resize Text, ON DEMAND. Renders each fixed-size
+// (no-autofit) text box and MEASURES how much of it the text fills; enlarging to 200% needs ≥2×
+// that height. Returns {measured:true, worst_fill, any_overflow_at_200, boxes:[…]} or an honest
+// {measured:false, reason:…}. Upgrades a 🟡 flag to a measured overflow/headroom; never a pass.
+export const getFileResize = (scanId, file) => (SIM || !scanId || !file
+  ? sim({ measured: false, reason: 'unavailable' })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/verify-resize`, { headers: headers() })
+      .then(r => (r.ok ? r.json() : { measured: false, reason: 'error' }))
+      .catch(() => ({ measured: false, reason: 'error' })))
+
 export const uploadToDrive = (scanId, file, blob, contentType) => {
   if (SIM) return sim({ url: 'https://drive.google.com/file/d/sim/view', file_id: 'sim' })
   const fd = new FormData()

@@ -37,21 +37,31 @@ describe('Assess drawer coverage table — the document-core 20, assessed + reme
     expect(src).toMatch(/\{shown\.map\(\(r\) =>/)   // the table renders the filtered set
   })
 
-  it('classifies each criterion by the capability truth (statusIn), not just scan data', () => {
-    expect(src).toMatch(/import \{ statusIn \} from '\.\/assessCoverage\.js'/)
+  it('classifies each criterion by the capability truth (both axes), not just scan data', () => {
+    expect(src).toMatch(/import \{ statusIn, remediationIn \} from '\.\/assessCoverage\.js'/)
     expect(src).toMatch(/const capStatus = fmt \? statusIn\(c\.sc, fmt\) : 'na'/)
+    expect(src).toMatch(/const remLane = fmt \? remediationIn\(c\.sc, fmt\) : 'na'/)
     // honest labels: n/a and gap replace the misleading "not auto-checked" when nothing was found
     expect(src).toMatch(/capStatus === 'na' \? 'NA'/)
     expect(src).toMatch(/capStatus === 'gap' \? 'GAP'/)
     expect(src).toMatch(/capStatus === 'at' \? 'AT'/)
   })
 
-  it('a real finding always wins over the capability label', () => {
+  it('a real blocking finding wins; an advisory review finding surfaces as 🟡 REVIEW (ADR 0023)', () => {
     expect(src).toMatch(/count > 0 \? \(wasFixed \? 'FIXED' : 'FAIL'\)/)
+    expect(src).toMatch(/reviewIssues\.length > 0 \? 'REVIEW'/)
+    // a review-only lane with no signal is genuine N/A, never a fabricated pass
+    expect(src).toMatch(/capStatus === 'review' && remLane === 'na'\) \? 'NA'/)
   })
 
-  it('non-assessable rows carry no remediation lane (fix = —)', () => {
-    expect(src).toMatch(/const fix = assessable \? fixOf\(c\) : '—'/)
+  it('a 🟡 review-lane criterion with no finding is REVIEW ("verify"), never a certified pass (#174)', () => {
+    // e.g. 1.1.1 with no missing alt — ACP can't certify alt adequacy, so it is NOT a green PASS.
+    expect(src).toMatch(/: capStatus === 'review' \? 'REVIEW'/)
+    expect(src).toMatch(/verify — none found/)
+  })
+
+  it('rows carry the remediation lane in the Fix column; none-lane rows show —', () => {
+    expect(src).toMatch(/const fix = remLane !== 'na' \? fixOf\(c\) : '—'/)
   })
 
   it('surfaces the assess outcome AND the remediation lane, with gap/na/at explained', () => {

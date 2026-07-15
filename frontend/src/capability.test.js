@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { CAPABILITY_FALLBACK, fmtOf, modeFor, isAuto, autoSCs, reviewRecommended, REVIEW_RECOMMENDED_SC } from './capability.js'
+import { CAPABILITY_FALLBACK, ASSESSMENT_FALLBACK, fmtOf, modeFor, isAuto, autoSCs, assessmentFor, reviewRecommended, REVIEW_RECOMMENDED_SC } from './capability.js'
 
 const CAP = CAPABILITY_FALLBACK
+const ASMT = ASSESSMENT_FALLBACK
 
 describe('remediation capability — format-aware single source of truth', () => {
   describe('fmtOf', () => {
@@ -92,6 +93,39 @@ describe('remediation capability — format-aware single source of truth', () =>
     })
     it('marks html 1.1.1 human — an external <img> is never fetched, so no proposer backs it', () => {
       expect(modeFor(CAP, 'html', '1.1.1')).toBe('human')
+    })
+  })
+
+  describe('assessment axis (ADR 0023) — independent of remediation', () => {
+    it('is 🟢 auto only where ACP can certify a pass (deterministic fix proves it)', () => {
+      expect(assessmentFor(ASMT, 'docx', '1.4.3')).toBe('auto')   // contrast math
+      expect(assessmentFor(ASMT, 'docx', '3.1.1')).toBe('auto')   // language present
+      expect(assessmentFor(ASMT, 'docx', '2.4.2')).toBe('auto')   // title present
+    })
+    it('is 🟡 review where ACP detects a likely issue but cannot certify a pass', () => {
+      // alt ADEQUACY is a judgement even though missing-alt is deterministic → review, not auto.
+      for (const fmt of ['docx', 'xlsx', 'pptx', 'pdf']) {
+        expect(assessmentFor(ASMT, fmt, '1.1.1')).toBe('review')
+      }
+      expect(assessmentFor(ASMT, 'docx', '2.4.4')).toBe('review')  // link-purpose quality
+      expect(assessmentFor(ASMT, 'html', '1.4.11')).toBe('review') // non-text contrast meaning
+    })
+    it('is 🔴 human only where ACP cannot collect evidence (static-deck keyboard)', () => {
+      expect(assessmentFor(ASMT, 'pptx', '2.1.1')).toBe('human')
+    })
+    it('the two axes are independent: 🟡 assess can pair with 🤖 remediate', () => {
+      expect(assessmentFor(ASMT, 'docx', '1.1.1')).toBe('review')   // can't certify a pass
+      expect(modeFor(CAP, 'docx', '1.1.1')).toBe('assisted')        // but AI drafts the alt
+    })
+    it('…and the mirror (audit #174): 🟢 assess can pair with 🤖 remediate', () => {
+      // docx 1.4.8 justified text — deterministically assessable, but the left-align fix is opt-in.
+      expect(assessmentFor(ASMT, 'docx', '1.4.8')).toBe('auto')     // certifiable pass (structural)
+      expect(modeFor(CAP, 'docx', '1.4.8')).toBe('assisted')        // yet not an auto fix
+    })
+    it('returns null out of scope — the caller renders a grey ⚪ N/A, not a verdict', () => {
+      expect(assessmentFor(ASMT, 'docx', '9.9.9')).toBeNull()
+      expect(assessmentFor(ASMT, 'docx', '1.2.2')).toBeNull()      // video captions: N/A for a doc
+      expect(assessmentFor(ASMT, 'nope', '1.1.1')).toBeNull()
     })
   })
 })

@@ -88,5 +88,5 @@ def test_handler_routes_both_scs():
 def test_capability_promoted():
     import remediation_capability as cap
     for fmt in ("docx", "pptx"):
-        assert cap.CAPABILITY[fmt]["2.4.4"] == cap.ASSISTED
-        assert cap.CAPABILITY[fmt]["2.4.9"] == cap.ASSISTED
+        assert cap.mode_for(fmt, "2.4.4") == cap.ASSISTED
+        assert cap.mode_for(fmt, "2.4.9") == cap.ASSISTED

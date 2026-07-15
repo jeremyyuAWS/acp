@@ -23,3 +23,5 @@ header). Match the structure of the latest ADR when adding a new one.
 - [0020 — Separating Discover (inventory) from Assess (conformance)](0020-discover-assess-phase-separation.md) — **Accepted** (2026-07-12)
 - [0021 — Enterprise review memory (org style + derived preferences → curated draft guidance)](0021-enterprise-review-memory.md) — **Accepted** (2026-07-12)
 - [0022 — GPU vision as the default via a scale-to-zero RunPod Serverless endpoint](0022-gpu-vision-default-runpod-serverless.md) — **Proposed** (2026-07-13)
+- [0023 — Two-axis assessment model: assessment ⟂ remediation, in customer-outcome language](0023-two-axis-assessment-remediation-model.md) — **Proposed** (2026-07-14) · companion: [reclassification audit](0023-reclassification-audit.md)
+- [0024 — Render-gated assessment criteria (Resize / Reflow / Text Spacing + the 1.4.3 hybrid)](0024-render-gated-assessment-criteria.md) — **Proposed** (2026-07-15)

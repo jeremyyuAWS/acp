@@ -868,3 +868,117 @@ def get_file_geometry(scan_id: str, filename: str, request: Request,
 
     import geometry as _geom
     return {"bbox": _geom.shape_bbox(data, ext, locator)}
+
+
+# A reviewer opening one 1.4.3-hybrid card shouldn't trigger dozens of slide renders; bound the
+# work per request (the OCR-cap precedent). A deck with more hybrid shapes than this reports the
+# cap honestly (`checked` < `total`) rather than silently covering only some.
+_TIER_B_SHAPE_CAP = 8
+
+
+@router.get("/scans/{scan_id}/files/{filename:path}/verify-contrast")
+def get_file_verify_contrast(scan_id: str, filename: str, request: Request,
+                             locator: str = Query(None)):
+    """ADR 0024 Tier B.1 — render-verified 1.4.3-hybrid contrast, ON DEMAND. The Tier-A scan flags
+    "text over a picture/gradient fill — contrast unknowable from the file"; this endpoint renders
+    the offending shape's page (ADR 0018 seam) and MEASURES the contrast from the actual pixels,
+    upgrading the 🟡 flag from "possible" to "measured".
+
+    With no `locator` it RE-DERIVES the hybrid shapes from the source and measures each (up to a
+    per-request cap) — so the card needs only the file, and nothing is persisted at rest (ADR 0024,
+    no schema change). A `locator` measures one named shape.
+
+    View-time only — never in the bulk scan (same deferred posture as the thumbnail/geometry). Owner
+    -scoped and always 200: every degrade (render disabled, no LibreOffice, unattributable geometry,
+    ambiguous busy background) returns a `measured: false` shape, so the card falls back to the
+    Tier-A 🟡, never an error and never a certified pass (ADR 0016). pptx only in B.1."""
+    import office_structure as _off
+    import render as _render
+    import render_verify as _rv
+
+    owner = _owner(request)
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+
+    ext = os.path.splitext(filename)[1].lower()
+    if ext != ".pptx":
+        return {"measured": False, "reason": "unsupported_format"}
+    if not (_render.office_render_enabled() and _render.can_render(ext)):
+        return {"measured": False, "reason": "render_unavailable"}
+
+    data = _source_bytes_for_render(request, scan_id, filename, owner)
+    if not data:
+        return {"measured": False, "reason": "source_unavailable"}
+
+    # One named shape → the single measurement (used by a per-shape "verify" action).
+    if locator:
+        return _rv.measure_hybrid_contrast(data, ext, locator)
+
+    # No locator → re-derive every render-attributable hybrid shape and measure each, capped.
+    targets = [t for t in _off.hybrid_contrast_locators(data) if t.get("shape")]
+    if not targets:
+        return {"measured": False, "reason": "no_hybrid_shapes"}
+    shapes = []
+    for t in targets[:_TIER_B_SHAPE_CAP]:
+        m = _rv.measure_hybrid_contrast(data, ext, f"{t['part']}#{t['shape']}")
+        shapes.append({"shape": t["shape"], "kind": t["kind"], **m})
+    ok = [s for s in shapes if s.get("measured") and isinstance(s.get("ratio"), (int, float))]
+    if not ok:
+        # Nothing measurable (busy backgrounds / unattributable) — honest abstain, not a pass.
+        return {"measured": False, "reason": "ambiguous_background",
+                "checked": len(shapes), "total": len(targets)}
+    worst = min(ok, key=lambda s: s["ratio"])
+    return {"measured": True, "shapes": shapes,
+            "worst_ratio": worst["ratio"], "worst_shape": worst["shape"],
+            "any_fail_aa": any(not s["passes_aa"] for s in ok),
+            "checked": len(shapes), "total": len(targets)}
+
+
+@router.get("/scans/{scan_id}/files/{filename:path}/verify-resize")
+def get_file_verify_resize(scan_id: str, filename: str, request: Request,
+                           locator: str = Query(None)):
+    """ADR 0024 Tier B.2 — render-verified 1.4.4 Resize Text, ON DEMAND. The Tier-A scan flags a
+    fixed-size (auto-fit off) text box holding a lot of text — "may clip at 200%". This renders the
+    box and MEASURES how much of it the text already fills: enlarging to 200% needs ≥2× the current
+    text height, so a box already over half full overflows.
+
+    Same posture as verify-contrast: view-time only, pptx-only, owner-scoped, always 200, re-derives
+    targets from source (no schema change), degrades to the Tier-A 🟡. A measured overflow is
+    actionable; measured headroom still says "verify" (rewrapping may clip) — never a certified pass."""
+    import office_structure as _off
+    import render as _render
+    import render_verify as _rv
+
+    owner = _owner(request)
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+
+    ext = os.path.splitext(filename)[1].lower()
+    if ext != ".pptx":
+        return {"measured": False, "reason": "unsupported_format"}
+    if not (_render.office_render_enabled() and _render.can_render(ext)):
+        return {"measured": False, "reason": "render_unavailable"}
+
+    data = _source_bytes_for_render(request, scan_id, filename, owner)
+    if not data:
+        return {"measured": False, "reason": "source_unavailable"}
+
+    if locator:
+        return _rv.measure_resize_headroom(data, ext, locator)
+
+    targets = [t for t in _off.resize_text_locators(data) if t.get("shape")]
+    if not targets:
+        return {"measured": False, "reason": "no_fixed_boxes"}
+    boxes = []
+    for t in targets[:_TIER_B_SHAPE_CAP]:
+        m = _rv.measure_resize_headroom(data, ext, f"{t['part']}#{t['shape']}")
+        boxes.append({"shape": t["shape"], **m})
+    ok = [b for b in boxes if b.get("measured") and isinstance(b.get("height_frac"), (int, float))]
+    if not ok:
+        return {"measured": False, "reason": "no_text_measured",
+                "checked": len(boxes), "total": len(targets)}
+    worst = max(ok, key=lambda b: b["height_frac"])   # fullest box = closest to overflowing
+    return {"measured": True, "boxes": boxes,
+            "worst_fill": worst["height_frac"], "worst_shape": worst["shape"],
+            "any_overflow_at_200": any(b["overflows_at_200"] for b in ok),
+            "checked": len(boxes), "total": len(targets)}

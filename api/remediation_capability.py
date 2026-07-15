@@ -64,14 +64,39 @@ contrast) is orthogonal to these lanes and can stay.
 """
 from __future__ import annotations
 
+# ── Two axes (ADR 0023) ───────────────────────────────────────────────────────
+# Every (format × criterion) pair answers TWO independent questions in customer-outcome
+# language. This module authors the REMEDIATION axis directly (round-trip proven) and
+# DERIVES the ASSESSMENT axis from it, so the two can never silently disagree.
+#
+#   Assessment — "Can ACP determine compliance?"
+#       "auto"    🟢 ACP certifies PASS *and* FAIL from a deterministic/computable fact.
+#       "review"  🟡 ACP can't certify a pass but detects evidence of a likely issue;
+#                    it escalates with that evidence for a human to confirm.
+#       "human"   🔴 ACP can't collect evidence at all (author intent / runtime behaviour).
+#
+#   Remediation — "If it fails, how is the fix produced?" (only relevant on FAIL)
+#       "auto"     ⚡ deterministic fix, re-scan verified.
+#       "assisted" 🤖 AI/OCR proposes a fix a human approves.
+#       "human"    👤 genuine re-authoring; no tool can responsibly guess.
+
+# Remediation lanes (the authored axis — unchanged vocabulary; frontend + round-trip proofs
+# consume it verbatim).
 AUTO = "auto"
 ASSISTED = "assisted"
 HUMAN = "human"
 LANES = frozenset({AUTO, ASSISTED, HUMAN})
 
-# format → { "X.Y.Z" WCAG SC : lane }. Keyed identically to store.RULE_FORMATS' in-scope pairs;
-# the contract test asserts this correspondence is exact.
-CAPABILITY: dict[str, dict[str, str]] = {
+# Assessment lanes (the derived axis).
+A_AUTO = "auto"
+A_REVIEW = "review"
+A_HUMAN = "human"
+ASSESSMENT_LANES = frozenset({A_AUTO, A_REVIEW, A_HUMAN})
+
+# format → { "X.Y.Z" WCAG SC : remediation lane }. Keyed identically to store.RULE_FORMATS'
+# in-scope pairs; the contract test asserts this correspondence is exact. This is the AUTHORED,
+# round-trip-proven table — the assessment axis is derived from it below.
+REMEDIATION: dict[str, dict[str, str]] = {
     # Word — every in-scope criterion is actioned; only genuinely subjective/re-authoring
     # criteria stay human. auto set verified live on gen_demo_fixtures word-accessibility-demo.
     "docx": {
@@ -203,26 +228,90 @@ CAPABILITY: dict[str, dict[str, str]] = {
 FORMATS: tuple[str, ...] = ("html", "docx", "pptx", "xlsx", "pdf")
 
 
+# ── Assessment axis, derived from remediation + audited overrides (ADR 0023) ───
+# The honest rule: a criterion is 🟢 auto-assess when ACP can certify a PASS, not merely detect
+# a FAIL. A deterministic remediator that clears the finding on re-scan proves that — so
+# remediation "auto" ⟹ assessment "auto" (one direction). The DEFAULT for a non-auto criterion
+# is 🟡 review (ACP flags a likely issue for a human to confirm), because "not auto-fixable"
+# strongly correlates with "not deterministically certifiable" (the fix would be deterministic
+# if the check were). The reclassification audit (task #174, docs/adr/0023-reclassification-audit.md)
+# round-trip-verified every non-auto cell against its detector and CONFIRMED the default for all
+# but the exceptions below.
+#
+# ASSESSMENT_OVERRIDES carries those audited exceptions — in BOTH directions, because the two
+# axes are genuinely independent:
+#   • 🔴 human — ACP can't collect evidence (keyboard operability of a static deck: a runtime
+#     property, not a file property; ADR 0016 — route to a human, never fabricate an assessment).
+#   • 🟢 auto — deterministically ASSESSABLE even though the fix is not auto. docx 1.4.8 justified
+#     text is an explicit `<w:jc w:val="both">` attribute (present = fail, absent = certifiable
+#     pass), but the fix is an opt-in left-align a human elects (🤖), not a silent auto-fix. This
+#     is the proof the axes don't collapse: 🟢 assess does NOT require ⚡ remediate.
+# Control-gated 🟡 criteria (2.1.2/4.1.2 with no controls) are NOT listed here — they resolve
+# per-file to a grey ⚪ N/A when their detector finds nothing (a per-document outcome, not a lane).
+ASSESSMENT_OVERRIDES: dict[tuple[str, str], str] = {
+    ("pptx", "2.1.1"): A_HUMAN,   # keyboard operability of a static deck — nothing to assess
+    ("docx", "1.4.8"): A_AUTO,    # justified-text detection is deterministic; fix is opt-in (🤖)
+}
+
+
+def _assessment(fmt: str, sc: str, remediation: str) -> str:
+    """Assessment lane for a (format, sc) given its remediation lane. auto-remediation proves
+    deterministic assessability (🟢); the audited override list carries both-direction exceptions
+    (🔴 unassessable, 🟢 assessable-but-non-auto-fix); the honest default is 🟡 review."""
+    override = ASSESSMENT_OVERRIDES.get((fmt, sc))
+    if override is not None:
+        return override
+    return A_AUTO if remediation == AUTO else A_REVIEW
+
+
+# The authoritative two-axis table, derived once at import. CAPABILITY[fmt][sc] =
+# {"assessment": ..., "remediation": ...}. REMEDIATION stays the single source for the
+# remediation axis (frontend + round-trip proofs read it verbatim via the projections below).
+CAPABILITY: dict[str, dict[str, dict[str, str]]] = {
+    fmt: {sc: {"assessment": _assessment(fmt, sc, rem), "remediation": rem}
+          for sc, rem in table.items()}
+    for fmt, table in REMEDIATION.items()
+}
+
+
+def remediation_table() -> dict[str, dict[str, str]]:
+    """Single-value remediation projection {fmt: {sc: lane}} — the shape the frontend
+    CAPABILITY_FALLBACK mirrors and the round-trip contract test proves."""
+    return {fmt: dict(scs) for fmt, scs in REMEDIATION.items()}
+
+
+def assessment_table() -> dict[str, dict[str, str]]:
+    """Single-value assessment projection {fmt: {sc: 🟢/🟡/🔴 lane}}."""
+    return {fmt: {sc: cell["assessment"] for sc, cell in scs.items()}
+            for fmt, scs in CAPABILITY.items()}
+
+
 def lane(fmt: str, sc: str) -> str | None:
     """The remediation lane for a (format, WCAG SC) pair, or None if the criterion is not
     in scope for that format. `sc` is a bare 'X.Y.Z' number."""
-    return CAPABILITY.get(fmt, {}).get(sc)
+    return REMEDIATION.get(fmt, {}).get(sc)
+
+
+def assessment_lane(fmt: str, sc: str) -> str | None:
+    """The assessment lane (🟢 auto / 🟡 review / 🔴 human) for a pair, or None if out of scope."""
+    cell = CAPABILITY.get(fmt, {}).get(sc)
+    return cell["assessment"] if cell else None
 
 
 # ── compatibility surface with the earlier sparse version (see module docstring) ──
-# These let the /capability route and the frontend mirror consume this table unchanged.
-# Because the table is dense, an in-scope "human" criterion is returned explicitly; an
-# out-of-scope pair still defaults to "human" — identical behaviour to the sparse version.
+# These let the /capability route and the frontend mirror consume the REMEDIATION axis
+# unchanged. An out-of-scope pair still defaults to "human" — identical to the sparse version.
 def mode_for(fmt: str | None, sc: str | None) -> str:
-    """The automation mode for one (format, criterion). Unknown/out-of-scope -> "human"."""
-    return CAPABILITY.get(fmt or "", {}).get(sc or "", HUMAN)
+    """The remediation mode for one (format, criterion). Unknown/out-of-scope -> "human"."""
+    return REMEDIATION.get(fmt or "", {}).get(sc or "", HUMAN)
 
 
 def auto_scs(fmt: str | None) -> set[str]:
     """The set of SCs deterministically auto-fixable for this format."""
-    return {sc for sc, ln in CAPABILITY.get(fmt or "", {}).items() if ln == AUTO}
+    return {sc for sc, ln in REMEDIATION.get(fmt or "", {}).items() if ln == AUTO}
 
 
 def as_dict() -> dict[str, dict[str, str]]:
-    """A JSON-serialisable deep copy of the table (so a caller can't mutate the module state)."""
-    return {fmt: dict(scs) for fmt, scs in CAPABILITY.items()}
+    """A JSON-serialisable deep copy of the remediation table (back-compat: this always
+    returned the single-value remediation projection)."""
+    return remediation_table()

@@ -155,3 +155,38 @@ def test_shape_name_fragment_resolves_like_an_rid():
     assert abs(by_name["x"] - 0.25) < 0.01 and abs(by_name["w"] - 0.5) < 0.01
     # An unknown name is still an honest None, never a guessed box.
     assert geometry.shape_bbox(data, ".pptx", "ppt/slides/slide1.xml#No Such Shape") is None
+
+
+# ── ADR 0024 Tier B: text-shape (<p:sp>) geometry for the 1.4.3-hybrid run ─────────
+def _text_slide(sp_id, name, ox, oy, cx, cy, grouped=False, xfrm=True):
+    """A slide with a top-level text box (<p:sp> + txBody) — the shape a 1.4.3-hybrid finding
+    names. `grouped` nests it in a <p:grpSp>; `xfrm=False` drops its own transform."""
+    x = (f'<a:xfrm><a:off x="{ox}" y="{oy}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>' if xfrm else "")
+    sp = (f'<p:sp><p:nvSpPr><p:cNvPr id="{sp_id}" name="{name}"/></p:nvSpPr>'
+          f'<p:spPr>{x}<a:blipFill/></p:spPr>'
+          f'<p:txBody><a:p><a:r><a:t>Over the image</a:t></a:r></a:p></p:txBody></p:sp>')
+    inner = f'<p:grpSp>{sp}</p:grpSp>' if grouped else sp
+    return (f'<?xml version="1.0"?>'
+            f'<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"'
+            f' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+            f' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            f'<p:cSld><p:spTree>{inner}</p:spTree></p:cSld></p:sld>')
+
+
+def test_text_shape_resolves_by_name_and_id():
+    # The hybrid locator names a TEXT box by cNvPr name ("#Title 1") or id ("#7"); both resolve.
+    data = _pptx(_text_slide(7, "Title 1", _W // 4, _H // 8, _W // 2, _H // 4), _slide([]))
+    by_name = geometry.shape_bbox(data, ".pptx", "ppt/slides/slide1.xml#Title 1")
+    by_id = geometry.shape_bbox(data, ".pptx", "ppt/slides/slide1.xml#7")
+    assert by_name == by_id
+    assert by_name and by_name["page"] == 1
+    assert abs(by_name["x"] - 0.25) < 1e-4 and abs(by_name["y"] - 0.125) < 1e-4
+    assert abs(by_name["w"] - 0.5) < 1e-4 and abs(by_name["h"] - 0.25) < 1e-4
+
+
+def test_text_shape_grouped_or_xfrm_less_refuses_a_box():
+    # Same honesty rule as pictures: a grouped or transform-inheriting text box gets no box.
+    grouped = _pptx(_text_slide(7, "Title 1", 0, 0, _W // 2, _H // 2, grouped=True), _slide([]))
+    assert geometry.shape_bbox(grouped, ".pptx", "ppt/slides/slide1.xml#Title 1") is None
+    inherited = _pptx(_text_slide(7, "Title 1", 0, 0, 0, 0, xfrm=False), _slide([]))
+    assert geometry.shape_bbox(inherited, ".pptx", "ppt/slides/slide1.xml#Title 1") is None

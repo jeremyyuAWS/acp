@@ -12,8 +12,10 @@ import { WCAG } from './wcagCatalog.js'
 import { confidenceForFinding, confidenceForCoverage, confClass } from './confidence.js'
 import { TraceChip } from './Transparency.jsx'
 import Thumbnail from './Thumbnail.jsx'
+import HybridContrastCheck from './HybridContrastCheck.jsx'
+import ResizeHeadroomCheck from './ResizeHeadroomCheck.jsx'
 import { DOCUMENTS_20 } from './documents20.js'
-import { statusIn } from './assessCoverage.js'
+import { statusIn, remediationIn } from './assessCoverage.js'
 import { fmtEffort, EFFORT_BASIS } from './effort.js'
 export { fmtEffort, EFFORT_BASIS }
 
@@ -805,6 +807,14 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                       return null
                     })()}</div>
                     {i.detail && <div className="findingdetail">{i.detail}</div>}
+                    {/* ADR 0024 Tier B.1 — the 1.4.3-hybrid flag can be render-verified into a
+                        MEASURED contrast on demand (text over a picture/gradient fill). */}
+                    {(i.rule_id ?? i.ruleId) === 'PPTX_TEXT_OVER_COMPLEX_BG' &&
+                      <HybridContrastCheck scanId={scanId} file={file.file} />}
+                    {/* ADR 0024 Tier B.2 — the 1.4.4 fixed-box flag can be render-verified into a
+                        MEASURED fill (does the text fit when enlarged to 200%). */}
+                    {(i.rule_id ?? i.ruleId) === 'PPTX_FIXED_TEXT_BOX_RESIZE' &&
+                      <ResizeHeadroomCheck scanId={scanId} file={file.file} />}
                     {i.impact && <div className="muted findingimpact">{i.impact}</div>}
                     {i.fix && <div className="findingfix"><span className={findingAuto(i) ? 'fixauto' : 'fixreview'}>{findingAuto(i) ? '⚡ auto-fixable' : '✎ needs review'}</span> · {i.fix}<span className="muted"> · {i.rule_id ?? i.ruleId}</span></div>}
                     {i.pages?.length > 0 && PAGE_RENDERABLE.has(file.type) &&
@@ -940,10 +950,11 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
             </details>
           )
         }
-        const OUT_RANK = { FAIL: 0, FIXED: 0.5, PASS: 1, HUMAN: 2, GAP: 2.4, AT: 2.6, UNCHECKED: 3, WEB: 4, NA: 5 }
-        const OUT_TXT = { PASS: 'pass', FAIL: 'fail', FIXED: 'fixed · re-validate', HUMAN: 'human review', GAP: 'gap · not built', AT: 'needs AT test', UNCHECKED: 'not auto-checked', WEB: 'web-only', NA: 'n/a for this type' }
+        const OUT_RANK = { FAIL: 0, FIXED: 0.5, REVIEW: 0.8, PASS: 1, HUMAN: 2, GAP: 2.4, AT: 2.6, UNCHECKED: 3, WEB: 4, NA: 5 }
+        const OUT_TXT = { PASS: 'pass', FAIL: 'fail', FIXED: 'fixed · re-validate', REVIEW: 'review recommended', HUMAN: 'human review', GAP: 'gap · not built', AT: 'needs AT test', UNCHECKED: 'not auto-checked', WEB: 'web-only', NA: 'n/a for this type' }
         const OUT_TIP = {
           FIXED: 'Remediated in this session — the fixed copy is stored; re-validate (re-scan the fixed copy) to confirm the pass',
+          REVIEW: 'ACP found concrete evidence of a likely issue (e.g. embedded interactive controls) — a reviewer confirms conformance. Advisory: not a fail and not certified (ADR 0023).',
           HUMAN: 'ACP assesses this; the fix needs a person (routes through the HITL workflow)',
           GAP: 'Applies to this file type and is statically detectable, but a check is not built yet',
           AT: 'Keyboard operability — provable only by interaction / assistive-tech testing; no static check can assess it',
@@ -963,27 +974,42 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         // No "show all" toggle; the other in-scope criteria are noise in this per-file drawer.
         const inScope = WCAG.filter((c) => c.docApplies !== false && DOCUMENTS_20.has(c.sc))
         const rows = inScope.map((c) => {
-          const fileIssues = issuesBySc[c.sc] || []
-          const count = fileIssues.length
+          const allIssues = issuesBySc[c.sc] || []
+          // A finding is advisory (🟡 Review, ADR 0023) when its severity is REVIEW; everything
+          // else is a blocking finding. Split them so an advisory control-review finding renders
+          // as 🟡 Review, NOT as a ✕ fail.
+          const reviewIssues = allIssues.filter((i) => String(i.severity || '').toUpperCase() === 'REVIEW')
+          const blockingIssues = allIssues.filter((i) => String(i.severity || '').toUpperCase() !== 'REVIEW')
+          const count = blockingIssues.length
           const wasFixed = count > 0 && (remediatedRuleIds.has(c.sc)
             || (effectiveRemediated && remAutoSet.has(c.sc)))
           // Capability truth for THIS file's format (assessCoverage.js, same source the Assess
-          // scorecard uses): assessable (auto/ai/human), a buildable gap, needs-AT, or
-          // not-applicable. Drives the honest label when the scan found nothing — so a criterion
-          // that can't exist in this file type reads "n/a", not "not auto-checked", and a
-          // detector-not-built-yet reads "gap".
+          // scorecard uses): the ASSESSMENT lane (auto/review/human/gap/at/na) and, separately,
+          // the REMEDIATION lane. Drives the honest label when the scan found nothing.
           const capStatus = fmt ? statusIn(c.sc, fmt) : 'na'
-          const assessable = capStatus === 'auto' || capStatus === 'ai' || capStatus === 'human'
+          const remLane = fmt ? remediationIn(c.sc, fmt) : 'na'
+          const assessable = capStatus === 'auto' || capStatus === 'review' || capStatus === 'human'
           const outcome = count > 0 ? (wasFixed ? 'FIXED' : 'FAIL')
+            : reviewIssues.length > 0 ? 'REVIEW'                       // 🟡 evidence-backed review flag
+            // A review-only lane (e.g. office 2.1.2/4.1.2 — no remediation lane) that found no
+            // signal is genuinely N/A for this file (no interactive controls), never a fabricated
+            // pass: we didn't verify conformance (ADR 0016).
+            : (capStatus === 'review' && remLane === 'na') ? 'NA'
+            // A 🟡 review-lane criterion where the scan found nothing is NOT a certified pass —
+            // ACP can't certify it (alt adequacy, colour meaning, …), so it stays REVIEW ("verify,
+            // none found"), matching the estate scorecard (audit #174). A green PASS here would
+            // over-claim exactly what the two-axis model exists to stop.
+            : capStatus === 'review' ? 'REVIEW'
             : capStatus === 'na' ? 'NA'
             : capStatus === 'gap' ? 'GAP'
             : capStatus === 'at' ? 'AT'
             : capStatus === 'human' ? 'HUMAN'
             : checkedSCs.has(c.sc) ? 'PASS'
             : (DOC_HUMAN_WHEN_UNCHECKED.has(c.sc) && fmt && fmt !== 'html') ? 'HUMAN'
-            : 'PASS'   // auto/ai lane per capability → ACP assesses it deterministically/with AI; no finding
+            : 'PASS'   // a checked 🟢 auto lane found nothing → ACP certifies the pass
           const confidence = confidenceForCoverage({ sc: c.sc, outcome, verifiedCleared: remediatedRuleIds.has(c.sc) })
-          const fix = assessable ? fixOf(c) : '—'
+          const fix = remLane !== 'na' ? fixOf(c) : '—'
+          const fileIssues = count > 0 ? blockingIssues : reviewIssues
           return { id: c.sc, name: c.name, plain: PLAIN_NAMES[c.sc] || c.name, req: c.req, level: c.level, fix, outcome, count, fileIssues, confidence }
         }).sort((a, b) => (OUT_RANK[a.outcome] ?? 3) - (OUT_RANK[b.outcome] ?? 3))
         const n = (o) => rows.filter((r) => r.outcome === o).length
@@ -1012,6 +1038,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
               {chip('PASS', 'pass', 'pass')}
               {chip('FAIL', 'fail', 'fail')}
               {chip('FIXED', 'pass', 'fixed · re-validate')}
+              {chip('REVIEW', 'review', 'review')}
               {chip('HUMAN', 'skip', 'human')}
               {chip('GAP', 'fail', 'gap')}
               {chip('AT', 'skip', 'AT')}
@@ -1025,7 +1052,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
             </summary>
             <div className="covmanifest-note muted">
               The <b>20-check document core</b> — 87 WCAG 2.2 criteria → 50 US-regulated (A/AA) → the 20 that apply to documents. Each row shows how this {fmt || 'file'} assessed and how the fix is delivered.
-              {' '}<b>Outcome</b>: pass / fail (with count) / fixed, or <b>human</b> (ACP assesses it, a person fixes), <b>gap</b> (no check built yet), <b>n/a</b> (can’t exist in this file type). <b>Fix</b> is the remediation lane: <b>⚡ auto</b> deterministic · <b>✎ AI</b> 1-click · <b>✋ human</b>. A <b>pass</b> is only claimed where ACP actually assesses the criterion for this format.
+              {' '}<b>Outcome</b>: pass / fail (with count) / fixed, or <b>🟡 review</b> (ACP found evidence of a likely issue — a reviewer confirms; advisory, not certified), <b>human</b> (ACP assesses it, a person fixes), <b>gap</b> (no check built yet), <b>⚪ n/a</b> (can’t exist here). <b>Fix</b> is the remediation lane: <b>⚡ auto</b> deterministic · <b>✎ AI</b> 1-click · <b>✋ human</b>. A <b>pass</b> is only claimed where ACP actually assesses the criterion for this format.
               {' '}<span style={{ opacity: 0.8 }}>Tip: click a count tag above to hide those rows.</span>
             </div>
             {shown.length === 0 && (
@@ -1038,7 +1065,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                   const exp = explanations[r.id]
                   return (
                     <Fragment key={r.id}>
-                      <tr className={`covrow ${r.outcome === 'FAIL' ? 'fail' : (r.outcome === 'PASS' || r.outcome === 'FIXED') ? 'pass' : 'skip'}`}>
+                      <tr className={`covrow ${r.outcome === 'FAIL' ? 'fail' : (r.outcome === 'PASS' || r.outcome === 'FIXED') ? 'pass' : r.outcome === 'REVIEW' ? 'review' : 'skip'}`}>
                         <td className="covsc">{r.id}</td>
                         <td>{r.plain}<div className="muted" style={{ fontSize: 11 }}>{r.plain === r.name ? (r.req || '').slice(0, 90) : r.name}</div></td>
                         <td className="muted">{r.level}</td>
@@ -1052,9 +1079,11 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                             ? <><span>{main}</span><span style={{ display: 'block', fontSize: 10, opacity: 0.7 }}>{note.join(' · ')}</span></>
                             : r.fix
                         })()}</td>
-                        <td className={`covoutcome ${r.outcome === 'FAIL' ? 'fail' : (r.outcome === 'PASS' || r.outcome === 'FIXED') ? 'pass' : 'skip'}`} title={OUT_TIP[r.outcome]}>
-                          {(r.outcome === 'PASS' || r.outcome === 'FIXED') ? '✓' : r.outcome === 'FAIL' ? `✕ ${r.count}` : r.outcome === 'HUMAN' ? '👤' : r.outcome === 'AT' ? '⌨' : r.outcome === 'GAP' ? '◔' : '—'}
-                          <span className="covouttxt">{r.outcome === 'PASS' && remediatedRuleIds.has(r.id) ? 'pass — remediated' : OUT_TXT[r.outcome]}</span>
+                        <td className={`covoutcome ${r.outcome === 'FAIL' ? 'fail' : (r.outcome === 'PASS' || r.outcome === 'FIXED') ? 'pass' : r.outcome === 'REVIEW' ? 'review' : 'skip'}`} title={r.outcome === 'REVIEW' && r.fileIssues.length === 0 ? 'ACP found no issue, but cannot certify this criterion (it needs human judgement) — verify and sign off; not a certified pass (ADR 0023)' : OUT_TIP[r.outcome]}>
+                          {(r.outcome === 'PASS' || r.outcome === 'FIXED') ? '✓' : r.outcome === 'FAIL' ? `✕ ${r.count}` : r.outcome === 'REVIEW' ? '🟡' : r.outcome === 'HUMAN' ? '👤' : r.outcome === 'AT' ? '⌨' : r.outcome === 'GAP' ? '◔' : '⚪'}
+                          {/* 🟡 with evidence → "review recommended"; 🟡 with a clean scan → "verify —
+                              none found" (ACP can't certify it, so it is NOT a green pass). */}
+                          <span className="covouttxt">{r.outcome === 'PASS' && remediatedRuleIds.has(r.id) ? 'pass — remediated' : r.outcome === 'REVIEW' && r.fileIssues.length === 0 ? 'verify — none found' : OUT_TXT[r.outcome]}</span>
                           {r.outcome === 'FAIL' && scanId && !exp && (
                             <button className="explain-btn" onClick={() => fetchExplanation(r.id)} title="Get AI explanation">Why?</button>
                           )}
@@ -1068,7 +1097,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                             : <span className="muted">—</span>}
                         </td>
                       </tr>
-                      {r.outcome === 'FAIL' && r.fileIssues.length > 0 && (
+                      {(r.outcome === 'FAIL' || r.outcome === 'REVIEW') && r.fileIssues.length > 0 && (
                         <tr className="covrow-issues">
                           <td colSpan={6}>
                             {r.fileIssues.map((issue, idx) => {

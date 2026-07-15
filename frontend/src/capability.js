@@ -126,6 +126,45 @@ export const CAPABILITY_FALLBACK = {
   }
 }
 
+// The ASSESSMENT axis (ADR 0023) — "can ACP determine compliance?", independent of how a
+// failure is remediated. Mirrors remediation_capability.assessment_table(); kept in lock-step
+// by tests/test_capability_frontend_sync.py. Values: "auto" (🟢 ACP certifies pass & fail),
+// "review" (🟡 ACP detects a likely issue, human confirms), "human" (🔴 ACP can't assess).
+// A pair absent here is out of scope for that format → render a grey ⚪ N/A (not a verdict).
+export const ASSESSMENT_FALLBACK = {
+  "docx": {
+    "1.1.1": "review", "1.3.1": "auto", "1.3.2": "review", "1.3.3": "review", "1.4.3": "auto",
+    "1.4.5": "review", "1.4.8": "auto", "1.4.9": "review", "2.4.2": "auto", "2.4.4": "review",
+    "2.4.6": "auto", "2.4.9": "review", "2.4.10": "review", "3.1.1": "auto", "3.1.2": "review",
+    "3.1.5": "review", "3.3.2": "auto"
+  },
+  "xlsx": {
+    "1.1.1": "review", "1.3.1": "auto", "1.3.2": "auto", "1.3.3": "review", "1.4.3": "auto",
+    "1.4.5": "review", "1.4.6": "auto", "1.4.9": "review", "2.4.2": "auto", "2.4.4": "review",
+    "2.4.6": "review", "3.1.1": "auto", "3.1.2": "review", "3.1.5": "review"
+  },
+  "pptx": {
+    "1.1.1": "review", "1.3.1": "auto", "1.4.2": "review", "1.3.2": "auto", "1.3.3": "review",
+    "1.4.3": "auto", "1.4.5": "review", "1.4.6": "auto", "1.4.9": "review", "2.1.1": "human",
+    "2.4.2": "auto", "2.4.4": "review", "2.4.6": "review", "2.4.9": "review", "3.1.1": "auto",
+    "3.1.2": "review", "3.1.5": "review"
+  },
+  "pdf": {
+    "1.1.1": "review", "1.3.1": "review", "1.3.2": "review", "1.3.3": "review", "1.4.3": "auto",
+    "1.4.5": "review", "1.4.6": "auto", "1.4.9": "review", "2.4.1": "auto", "2.4.2": "auto",
+    "2.4.4": "review", "2.4.6": "review", "3.1.1": "auto", "3.1.2": "review", "3.1.5": "review"
+  },
+  "html": {
+    "1.1.1": "review", "1.2.1": "review", "1.2.2": "review", "1.2.3": "review", "1.3.1": "auto",
+    "1.3.2": "review", "1.3.3": "review", "1.3.4": "auto", "1.3.5": "auto", "1.4.1": "auto",
+    "1.4.2": "auto", "1.4.3": "auto", "1.4.4": "auto", "1.4.5": "review", "1.4.6": "auto",
+    "1.4.10": "auto", "1.4.11": "review", "1.4.12": "auto", "2.4.1": "auto", "2.4.2": "auto",
+    "2.4.3": "auto", "2.4.4": "review", "2.4.6": "auto", "2.4.7": "auto", "2.4.9": "review",
+    "2.5.3": "auto", "2.5.8": "review", "3.1.1": "auto", "3.1.2": "review", "3.1.4": "auto",
+    "3.1.5": "review", "3.3.2": "auto", "4.1.2": "auto"
+  }
+}
+
 // Normalize a file object to one of the five capability formats, or null. Prefers the
 // explicit type field (backend scans + SIM set file.type), falling back to the extension.
 export const fmtOf = (file) => {
@@ -152,6 +191,11 @@ export const reviewRecommended = (sc) => REVIEW_RECOMMENDED_SC.has(sc)
 // is "human" — the conservative default, never a silent "auto".
 export const modeFor = (cap, fmt, sc) => (cap && cap[fmt] && cap[fmt][sc]) || 'human'
 export const isAuto = (cap, fmt, sc) => modeFor(cap, fmt, sc) === 'auto'
+
+// Assessment axis (ADR 0023). `asmt` is the {fmt: {sc: lane}} assessment map (fetched
+// `assessment` or ASSESSMENT_FALLBACK). Returns 'auto' | 'review' | 'human', or null when the
+// pair is out of scope for that format — the caller renders null as a grey ⚪ N/A, NOT a verdict.
+export const assessmentFor = (asmt, fmt, sc) => (asmt && asmt[fmt] && asmt[fmt][sc]) || null
 export const autoSCs = (cap, fmt) => new Set(
   Object.entries((cap && cap[fmt]) || {}).filter(([, m]) => m === 'auto').map(([sc]) => sc)
 )

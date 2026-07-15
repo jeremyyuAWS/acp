@@ -170,5 +170,5 @@ def test_handler_routes_both_new_kinds_to_their_rules():
 
 def test_capability_promoted_to_assisted():
     import remediation_capability as cap
-    assert cap.CAPABILITY["pdf"]["2.4.4"] == cap.ASSISTED
-    assert cap.CAPABILITY["pdf"]["2.4.6"] == cap.ASSISTED
+    assert cap.mode_for("pdf", "2.4.4") == cap.ASSISTED
+    assert cap.mode_for("pdf", "2.4.6") == cap.ASSISTED

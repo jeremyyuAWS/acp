@@ -73,4 +73,4 @@ def test_wiring_and_capability():
     src = (root / "api" / "handlers.py").read_text()
     assert "propose_section_headings" in src and '"2.4.10", "Section Headings"' in src
     import remediation_capability as cap
-    assert cap.CAPABILITY["docx"]["2.4.10"] == cap.ASSISTED
+    assert cap.mode_for("docx", "2.4.10") == cap.ASSISTED

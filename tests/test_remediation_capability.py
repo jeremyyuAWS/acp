@@ -102,18 +102,26 @@ def _rescan(path: Path, name: str, tmp: Path):
 
 
 def _auto(fmt: str) -> set[str]:
-    return {sc for sc, ln in cap.CAPABILITY[fmt].items() if ln == cap.AUTO}
+    return {sc for sc, ln in cap.REMEDIATION[fmt].items() if ln == cap.AUTO}
 
 
 def _assisted(fmt: str) -> set[str]:
-    return {sc for sc, ln in cap.CAPABILITY[fmt].items() if ln == cap.ASSISTED}
+    return {sc for sc, ln in cap.REMEDIATION[fmt].items() if ln == cap.ASSISTED}
 
 
 # ══ structure — the drift guard ════════════════════════════════════════════════
 def test_lanes_are_valid():
+    # Two-axis (ADR 0023): every cell carries a valid remediation lane AND a valid assessment lane.
+    # The axes are INDEPENDENT — the reclassification audit (#174) confirmed a 🟢 auto-assess cell
+    # need NOT be auto-remediated (docx 1.4.8 is 🟢 assess / 🤖 remediate: justified text is a
+    # deterministic attribute, but the fix is an opt-in left-align). So there is deliberately no
+    # "🟢 ⟹ ⚡" assertion here; that reverse implication was an early over-strong invariant.
     for fmt, table in cap.CAPABILITY.items():
-        for sc, ln in table.items():
-            assert ln in cap.LANES, f"{fmt} {sc}: unknown lane {ln!r}"
+        for sc, cell in table.items():
+            assert cell["remediation"] in cap.LANES, f"{fmt} {sc}: bad remediation {cell['remediation']!r}"
+            assert cell["assessment"] in cap.ASSESSMENT_LANES, f"{fmt} {sc}: bad assessment {cell['assessment']!r}"
+    # The one 🟢/non-auto exception is explicit and audited (not accidental drift).
+    assert cap.CAPABILITY["docx"]["1.4.8"] == {"assessment": cap.A_AUTO, "remediation": cap.ASSISTED}
 
 
 def test_capability_formats_match_rule_formats():
@@ -455,10 +463,13 @@ def test_compat_auto_scs_matches_auto_lanes():
 
 
 def test_compat_as_dict_is_an_equal_deep_copy():
+    # as_dict() has always returned the single-value REMEDIATION projection (back-compat).
     d = cap.as_dict()
-    assert d == cap.CAPABILITY
+    assert d == cap.remediation_table()
     d["docx"]["3.1.1"] = "MUTATED"
-    assert cap.CAPABILITY["docx"]["3.1.1"] == cap.AUTO  # module state untouched
+    assert cap.REMEDIATION["docx"]["3.1.1"] == cap.AUTO  # module state untouched
+    # The two-axis CAPABILITY carries both lanes per cell.
+    assert cap.CAPABILITY["docx"]["3.1.1"] == {"assessment": cap.A_AUTO, "remediation": cap.AUTO}
 
 
 def test_compat_formats_are_the_rule_formats_formats():
@@ -496,8 +507,12 @@ def test_capability_route_serves_the_table():
     r = TestClient(app).get("/capability")
     assert r.status_code == 200
     body = r.json()
-    assert body["capability"] == cap.CAPABILITY
+    # Two axes (ADR 0023): `capability` is the remediation projection (back-compat shape),
+    # `assessment` is the new assessment axis.
+    assert body["capability"] == cap.remediation_table()
+    assert body["assessment"] == cap.assessment_table()
     assert sorted(body["lanes"]) == sorted(cap.LANES)
+    assert sorted(body["assessment_lanes"]) == sorted(cap.ASSESSMENT_LANES)
     assert body["formats"] == list(cap.FORMATS)
 
 

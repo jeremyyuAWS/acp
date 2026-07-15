@@ -63,5 +63,5 @@ def test_wiring_and_capability():
     src = (Path(__file__).resolve().parent.parent / "api" / "handlers.py").read_text()
     assert '"1.4.8", "Visual Presentation"' in src and '"1.4.2", "Audio Control"' in src
     import remediation_capability as cap
-    assert cap.CAPABILITY["docx"]["1.4.8"] == cap.ASSISTED
-    assert cap.CAPABILITY["pptx"]["1.4.2"] == cap.ASSISTED
+    assert cap.mode_for("docx", "1.4.8") == cap.ASSISTED
+    assert cap.mode_for("pptx", "1.4.2") == cap.ASSISTED

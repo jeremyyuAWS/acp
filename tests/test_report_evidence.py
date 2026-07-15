@@ -202,8 +202,9 @@ def test_certification_facts_counts_are_grounded_and_add_up(isolated_store):
     sid, _, _ = _seed_traces(s)
     facts = s.get_certification_facts(sid)
     d = facts["documents"][0]
-    # every catalog criterion is either evaluated for this format or explicitly not evaluated
-    assert d["evaluated"] + d["not_evaluated"] == facts["scope"]["catalog_size"]
+    # every catalog criterion is evaluated, explicitly not-evaluated, or 🟡 review-recommended
+    # (ADR 0023) — the three buckets partition the catalog exactly.
+    assert d["evaluated"] + d["not_evaluated"] + d["review"] == facts["scope"]["catalog_size"]
     assert d["failing"] == 2 and d["remediated"] == 1 and d["remaining"] == 1
     assert d["approvals"] == 1
     # not_evaluated means NEVER RUN — pptx has no validator for these. It is deliberately NOT
@@ -211,6 +212,35 @@ def test_certification_facts_counts_are_grounded_and_add_up(isolated_store):
     # never determined. The report says only what we know.
     assert "1.4.10" in d["not_evaluated_criteria"]          # Reflow: no validator on pptx
     assert sum(d["by_mode"].values()) == d["evaluated"]
+
+
+def test_review_recommended_is_its_own_bucket_and_not_certified(isolated_store):
+    """A 🟡 Review criterion (ADR 0023) lands in the `review` bucket — assessed-for-review,
+    NOT certified: neither counted as evaluated (we didn't verify pass/fail) nor as not_evaluated
+    (we looked). Both a control-review finding (4.1.2) AND a clean review-lane criterion (1.1.1
+    with no missing-alt: ACP can't certify alt adequacy — audit #174) belong here, never a pass."""
+    s = isolated_store
+    # A pptx with a real fail (1.3.1) plus an advisory control-review finding on 4.1.2. 1.1.1 has
+    # NO finding — a 🟡 review-lane criterion, so it must land in review, not a green pass.
+    issues = [
+        {"ruleId": "A", "wcag": "SC_1_3_1", "severity": "SERIOUS", "detail": "d"},
+        {"ruleId": "OFFICE_INTERACTIVE_CONTROL_NAME_ROLE",
+         "wcag": "4.1.2 Name, Role, Value", "severity": "REVIEW", "detail": "2 ActiveX controls"},
+    ]
+    s.save_file_result("rev", {"file": "deck.pptx", "engine": "office", "status": "pass",
+                               "score": 85, "compliant": 0, "skipped_rules": 0, "issues": issues},
+                       "2026-07-14T00:00:00Z")
+    facts = s.get_certification_facts("rev")
+    d = facts["documents"][0]
+    # Both the control-review (4.1.2) and the clean review-lane (1.1.1) criteria are in review.
+    assert {"4.1.2", "1.1.1"} <= set(d["review_criteria"])
+    assert "1.1.1" not in d["not_evaluated_criteria"] and "4.1.2" not in d["not_evaluated_criteria"]
+    assert d["review"] >= 2
+    # The three buckets still partition the catalog exactly.
+    assert d["evaluated"] + d["not_evaluated"] + d["review"] == facts["scope"]["catalog_size"]
+    # Scope lists them explicitly as review-recommended (not certified).
+    assert any(r["sc"] == "4.1.2" for r in facts["scope"]["review_criteria"])
+    assert any(r["sc"] == "1.1.1" for r in facts["scope"]["review_criteria"])
 
 
 def test_a_scan_stored_before_the_rename_still_adds_up(isolated_store):
@@ -229,7 +259,7 @@ def test_a_scan_stored_before_the_rename_still_adds_up(isolated_store):
     facts = s.get_certification_facts(sid)
     d = facts["documents"][0]
     assert d["not_evaluated"] > 0, "the fixture must contain criteria with no validator"
-    assert d["evaluated"] + d["not_evaluated"] == facts["scope"]["catalog_size"]
+    assert d["evaluated"] + d["not_evaluated"] + d["review"] == facts["scope"]["catalog_size"]
     assert "1.4.10" in d["not_evaluated_criteria"]
 
 
@@ -286,7 +316,7 @@ def test_decision_block_and_scope_of_assertion_are_honest(isolated_store):
     assert "reported as not applicable" not in t.lower()
     assert "deliberately not the same as not applicable" in t.lower()
     # never claims the platform validates the whole standard
-    assert "automated validator for 37 success criteria" in t
+    assert "automated validator for 38 success criteria" in t   # +2.1.2 No Keyboard Trap (#187)
 
 
 def test_a_fully_conformant_estate_reads_certifiable(isolated_store):

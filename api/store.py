@@ -375,6 +375,7 @@ RULE_CATALOG: list[dict] = [
     {"id": "1.4.11", "name": "Non-text Contrast",           "level": "AA",  "fix_mode": "ai-assisted", "plain": "Buttons or icons with low contrast"},
     {"id": "1.4.12", "name": "Text Spacing",                "level": "AA",  "fix_mode": "auto",         "plain": "Text spacing can't be adjusted"},
     {"id": "2.1.1",  "name": "Keyboard",                    "level": "A",   "fix_mode": "auto",         "plain": "Can't be used with a keyboard"},
+    {"id": "2.1.2",  "name": "No Keyboard Trap",            "level": "A",   "fix_mode": "human-only",   "plain": "Embedded controls may trap keyboard focus"},
     {"id": "2.4.1",  "name": "Bypass Blocks",              "level": "A",   "fix_mode": "auto",         "plain": "No way to skip repeated navigation"},
     {"id": "2.4.2",  "name": "Page Titled",                 "level": "A",   "fix_mode": "auto",         "plain": "Missing a page or document title"},
     {"id": "2.4.3",  "name": "Focus Order",                 "level": "A",   "fix_mode": "auto",         "plain": "Illogical keyboard navigation order"},
@@ -411,7 +412,13 @@ RULE_FORMATS: dict[str, frozenset[str]] = {
     "1.4.4": frozenset({"html"}), "1.4.5": _ALL_FORMATS, "1.4.6": frozenset({"html", "pdf", "pptx", "xlsx"}),
     "1.4.8": frozenset({"docx"}),
     "1.4.9": _OFFICE_PDF, "1.4.10": frozenset({"html"}), "1.4.11": frozenset({"html"}),
-    "1.4.12": frozenset({"html"}), "2.1.1": frozenset({"pptx"}), "2.4.1": frozenset({"html", "pdf"}),
+    "1.4.12": frozenset({"html"}), "2.1.1": frozenset({"pptx"}),
+    # 2.1.2 No Keyboard Trap has NO pass/fail validator on any format — it is review-lane for
+    # office (REVIEW_FORMATS, control-gated), needs-AT for html, and out of scope for pdf. An empty
+    # set makes _rule_outcome fall through to REVIEW (office w/ controls) or NOT_EVALUATED (else),
+    # never a fabricated PASS.
+    "2.1.2": frozenset(),
+    "2.4.1": frozenset({"html", "pdf"}),
     "2.4.2": _ALL_FORMATS, "2.4.3": frozenset({"html"}), "2.4.4": _ALL_FORMATS,
     "2.4.6": _ALL_FORMATS, "2.4.7": frozenset({"html"}), "2.4.9": frozenset({"docx", "html", "pptx"}),
     "2.4.10": frozenset({"docx"}),
@@ -446,15 +453,86 @@ def _file_format(filename: str) -> str | None:
 # explicitly — never inferred from the absence of an implementation.
 NOT_EVALUATED = "NOT_EVALUATED"
 _LEGACY_NOT_EVALUATED = "NOT_APPLICABLE"   # rows written before this rename; see _SCHEMA
+REVIEW = "REVIEW"   # 🟡 advisory Review-Recommended outcome (ADR 0023) — assessed-for-review, never certified
+
+# ── Review-lane detectors (ADR 0023, Option A) ─────────────────────────────────
+# The criteria + formats where ACP runs a REVIEW detector (surfaces evidence of a likely
+# issue for a human to adjudicate) rather than a pass/fail validator. This is a SEPARATE map
+# from RULE_FORMATS on purpose: a review-lane (criterion, format) resolves to REVIEW when its
+# detector fires and to NOT_EVALUATED (genuine N/A) when it does not — it NEVER resolves to
+# PASS, because ACP did not verify conformance (ADR 0016). Currently backed by the shipped
+# office interactive-control detector (office_structure.office_control_review_checks).
+REVIEW_FORMATS: dict[str, frozenset[str]] = {
+    "2.1.2": frozenset({"docx", "pptx", "xlsx"}),   # No Keyboard Trap — controls present
+    "4.1.2": frozenset({"docx", "pptx", "xlsx"}),   # Name/Role/Value — controls present
+    "1.4.1": frozenset({"docx", "xlsx"}),           # Use of Color — colour-only status / links
+    "2.4.3": frozenset({"pptx"}),                   # Focus Order — title not first in reading order
+    "1.4.11": frozenset({"pptx"}),                  # Non-text Contrast — faint shape outline
+    # ADR 0024 Tier A — render-gated structural proxies (no rendering). 1.4.3 is NOT here: its
+    # hybrid text-over-non-solid REVIEW rides the existing 1.4.3 pass/fail lane (a solid-fill FAIL
+    # still wins), so it must not be diverted to the review-only lane.
+    "1.4.4": frozenset({"pptx"}),                   # Resize Text — fixed-size text box, no auto-fit
+    "1.4.10": frozenset({"docx", "pptx"}),          # Reflow — table too wide to reflow
+    "1.4.12": frozenset({"docx", "pptx"}),          # Text Spacing — exact (fixed) line spacing
+}
+
+# Criteria whose ASSESSMENT lane is 🟡 review (ADR 0023) even though they have a pass/fail
+# detector — ACP detects a fail but can't certify a pass (alt adequacy, colour meaning, link-text
+# quality, reading order, …). Derived from remediation_capability.assessment_table(). Used by
+# _rule_outcome so a review-lane criterion with NO finding resolves to REVIEW ("assessed for
+# review, not certified"), never a green PASS — keeping the estate rollup honest and consistent
+# with the per-file drawer + the scorecard (audit #174).
+try:
+    import remediation_capability as _cap_mod
+    _rev_assess: dict[str, set[str]] = {}
+    for _fmt, _scs in _cap_mod.assessment_table().items():
+        for _sc, _lane in _scs.items():
+            if _lane == "review":
+                _rev_assess.setdefault(_sc, set()).add(_fmt)
+    REVIEW_ASSESS_FORMATS: dict[str, frozenset[str]] = {k: frozenset(v) for k, v in _rev_assess.items()}
+except Exception:
+    REVIEW_ASSESS_FORMATS = {}
 
 
-def _rule_outcome(rule_id: str, fmt: str | None, count: int) -> str:
-    """PASS/FAIL if the rule actually has a validator for this file's format, else
-    NOT_EVALUATED — the rule was never run, which is neither a pass nor a statement
-    that the criterion does not apply."""
+def _rule_outcome(rule_id: str, fmt: str | None, fail_count: int, review_count: int = 0) -> str:
+    """The per-(criterion, format) outcome from its finding counts.
+
+    `fail_count` = blocking findings, `review_count` = advisory (severity REVIEW) findings.
+    Review-lane pairs (REVIEW_FORMATS): a signal → REVIEW, none → NOT_EVALUATED — NEVER PASS,
+    because a review detector doesn't certify conformance (ADR 0016). Pass/fail-lane pairs: FAIL
+    if a blocking finding fired, else PASS if the validator ran, else NOT_EVALUATED. An advisory
+    review finding on a pass/fail-lane criterion (rare) surfaces as REVIEW only when nothing
+    blocking fired. A definite FAIL always outranks an advisory REVIEW."""
+    if fmt is not None and fmt in REVIEW_FORMATS.get(rule_id, frozenset()):
+        if fail_count > 0:
+            return "FAIL"
+        return REVIEW if review_count > 0 else NOT_EVALUATED
     if fmt is None or fmt not in RULE_FORMATS.get(rule_id, _ALL_FORMATS):
         return NOT_EVALUATED
-    return "FAIL" if count > 0 else "PASS"
+    if fail_count > 0:
+        return "FAIL"
+    if review_count > 0:
+        return REVIEW
+    # Validator ran, no finding. A 🟢 auto-assess criterion → a certified PASS. But a 🟡 review-lane
+    # criterion (ACP can't certify it — see REVIEW_ASSESS_FORMATS) is NOT a pass: it stays REVIEW,
+    # never a fabricated green (ADR 0016 / audit #174).
+    if fmt in REVIEW_ASSESS_FORMATS.get(rule_id, frozenset()):
+        return REVIEW
+    return "PASS"
+
+
+def _split_sc_counts(issues: list[dict]) -> tuple[dict[str, int], dict[str, int]]:
+    """Per-SC finding counts split into (blocking, advisory-review). A finding is advisory when
+    its severity is REVIEW (ADR 0023); everything else is blocking. Both keyed by 'X.Y.Z' SC."""
+    fail_counts: dict[str, int] = {}
+    review_counts: dict[str, int] = {}
+    for i in issues:
+        sc = _extract_sc(i.get("wcag", ""))
+        if not sc:
+            continue
+        bucket = review_counts if str(i.get("severity", "")).upper() == REVIEW else fail_counts
+        bucket[sc] = bucket.get(sc, 0) + 1
+    return fail_counts, review_counts
 
 
 def _pages_csv(pages: list[int]) -> str | None:
@@ -764,17 +842,14 @@ class Store:
                         "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
                         (sid, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
                          i.get("page"), i.get("location")))
-                # Per-rule trace: one row per catalog rule per file — PASS/FAIL/NOT_EVALUATED.
-                sc_counts: dict[str, int] = {}
-                for i in f["issues"]:
-                    sc = _extract_sc(i.get("wcag", ""))
-                    if sc:
-                        sc_counts[sc] = sc_counts.get(sc, 0) + 1
+                # Per-rule trace: one row per catalog rule per file — PASS/FAIL/REVIEW/NOT_EVALUATED.
+                fail_counts, review_counts = _split_sc_counts(f["issues"])
                 fmt = _file_format(f["file"])
                 for rule in RULE_CATALOG:
                     rid = rule["id"]
-                    count = sc_counts.get(rid, 0)
-                    outcome = _rule_outcome(rid, fmt, count)
+                    fc, rc = fail_counts.get(rid, 0), review_counts.get(rid, 0)
+                    outcome = _rule_outcome(rid, fmt, fc, rc)
+                    count = fc if fc else rc   # findings that drove the outcome
                     self._db.execute(cur,
                         "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "
                         "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) "
@@ -893,15 +968,13 @@ class Store:
                     "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
                     (scan_id, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
                      i.get("page"), i.get("location")))
-            sc_counts: dict[str, int] = {}
-            for i in f.get("issues", []):
-                sc = _extract_sc(i.get("wcag", ""))
-                if sc:
-                    sc_counts[sc] = sc_counts.get(sc, 0) + 1
+            fail_counts, review_counts = _split_sc_counts(f.get("issues", []))
             fmt = _file_format(f["file"])
             for rule in RULE_CATALOG:
-                rid = rule["id"]; count = sc_counts.get(rid, 0)
-                outcome = _rule_outcome(rid, fmt, count)
+                rid = rule["id"]
+                fc, rc = fail_counts.get(rid, 0), review_counts.get(rid, 0)
+                outcome = _rule_outcome(rid, fmt, fc, rc)
+                count = fc if fc else rc
                 self._db.execute(cur,
                     "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "
                     "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file,rule_id) DO UPDATE SET "
@@ -1794,16 +1867,25 @@ class Store:
         for t in traces:
             f = per_file.setdefault(t["file"], {
                 "file": t["file"], "evaluated": 0, "not_evaluated": 0, "failing": 0,
-                "findings": 0, "not_evaluated_criteria": [], "by_mode": {},
+                "review": 0, "findings": 0, "not_evaluated_criteria": [],
+                "review_criteria": [], "by_mode": {},
             })
             outcome = t.get("outcome")
             # Both tokens: a scan run before the rename, or by a rolled-back image, wrote the
             # old one. Reading only the new token would silently count those criteria as
-            # neither evaluated nor skipped, and `evaluated + not_evaluated == catalog_size`
-            # would quietly stop holding.
+            # neither evaluated nor skipped, and the coverage identity would quietly stop holding.
             if outcome in (NOT_EVALUATED, _LEGACY_NOT_EVALUATED):
                 f["not_evaluated"] += 1
                 f["not_evaluated_criteria"].append(t["rule_id"])
+                continue
+            # 🟡 Review Recommended (ADR 0023) — advisory, evidence-backed, NOT certified. It is
+            # its own bucket: assessed-for-review, neither "evaluated" (we didn't verify a
+            # pass/fail) nor "not_evaluated" (we did look and flagged a risk). It never blocks
+            # certification. Counting it here keeps the identity honest:
+            #   evaluated + not_evaluated + review == catalog_size.
+            if outcome == REVIEW:
+                f["review"] += 1
+                f["review_criteria"].append(t["rule_id"])
                 continue
             if outcome not in ("PASS", "FAIL"):
                 continue                       # ERROR: the rule could not evaluate — assert nothing
@@ -1821,14 +1903,17 @@ class Store:
             f["remaining"] = max(0, f["failing"] - len(remediated))
             f["approvals"] = approvals.get(f["file"], 0)
             f["not_evaluated_criteria"] = sorted(f["not_evaluated_criteria"])
+            f["review_criteria"] = sorted(f["review_criteria"])
             docs.append(f)
 
         scope_modes: dict[str, int] = {}
         not_evaluated_union: set[str] = set()
+        review_union: set[str] = set()
         for f in docs:
             for m, n in f["by_mode"].items():
                 scope_modes[m] = scope_modes.get(m, 0) + n
             not_evaluated_union.update(f["not_evaluated_criteria"])
+            review_union.update(f["review_criteria"])
 
         return {
             "documents": docs,
@@ -1837,6 +1922,10 @@ class Store:
                 "by_mode": scope_modes,
                 "not_evaluated_criteria": [
                     {"sc": sc, "name": rules.get(sc, {}).get("name", sc)} for sc in sorted(not_evaluated_union)],
+                # 🟡 Review Recommended criteria — listed explicitly as assessed-for-review,
+                # NOT certified (kept separate from the certifiable "evaluated" headline).
+                "review_criteria": [
+                    {"sc": sc, "name": rules.get(sc, {}).get("name", sc)} for sc in sorted(review_union)],
                 "human_only_criteria": [
                     {"sc": r["id"], "name": r["name"]} for r in RULE_CATALOG
                     if r["fix_mode"] == "human-only"],

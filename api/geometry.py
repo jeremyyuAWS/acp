@@ -68,7 +68,9 @@ def shape_bbox(data: bytes, ext: str, locator: str | None) -> dict | None:
 
 def _pptx_shape_bbox(z, names, part_name, rid):
     slide_xml = z.read(part_name)
-    rect = _pic_rect_by_embed(slide_xml, rid)
+    # A pptx locator names either a picture (blip r:embed / picture name) or a TEXT shape
+    # (cNvPr name / id — the ADR 0024 1.4.3-hybrid path, text over a picture/gradient fill).
+    rect = _pic_rect_by_embed(slide_xml, rid) or _sp_rect_by_name(slide_xml, rid)
     if rect is None:
         return None
     sw, sh = _slide_size(z, names)
@@ -118,6 +120,43 @@ def _pic_rect_by_embed(slide_xml: bytes, rid: str) -> tuple[int, int, int, int] 
         if rid != embed and (not name or rid != name):
             continue
         xfrm = pic.find(f"{{{_P}}}spPr/{{{_A}}}xfrm")
+        if xfrm is None:
+            return None
+        off = xfrm.find(f"{{{_A}}}off")
+        extt = xfrm.find(f"{{{_A}}}ext")
+        if off is None or extt is None:
+            return None
+        try:
+            return (int(off.get("x")), int(off.get("y")),
+                    int(extt.get("cx")), int(extt.get("cy")))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _sp_rect_by_name(slide_xml: bytes, rid: str) -> tuple[int, int, int, int] | None:
+    """(off.x, off.y, ext.cx, ext.cy) in EMU for the TOP-LEVEL `<p:sp>` the locator fragment
+    names — matched by its `<p:cNvPr>` name (`#Title 1`) or id (`#5`). This is the ADR 0024
+    1.4.3-hybrid path: the offending shape is a text box over a picture/gradient fill, so it has
+    a txBody rather than a blip.
+
+    Same honesty posture as `_pic_rect_by_embed` (ADR 0016): only shapes that are DIRECT children
+    of the slide's shape tree and carry their OWN `<a:xfrm>` yield a rectangle. A shape inside a
+    `<p:grpSp>` (group-relative transform) or one inheriting its placeholder's geometry (no own
+    `<a:xfrm>`) returns None rather than a composed/guessed box."""
+    root = ET.fromstring(slide_xml)
+    sp_tree = root.find(f"{{{_P}}}cSld/{{{_P}}}spTree")
+    if sp_tree is None:
+        return None
+    for sp in sp_tree.findall(f"{{{_P}}}sp"):           # direct children only — no descendants
+        cnv = sp.find(f"{{{_P}}}nvSpPr/{{{_P}}}cNvPr")
+        if cnv is None:
+            continue
+        name = (cnv.get("name") or "").strip()
+        sid = (cnv.get("id") or "").strip()
+        if rid != name and rid != sid:
+            continue
+        xfrm = sp.find(f"{{{_P}}}spPr/{{{_A}}}xfrm")
         if xfrm is None:
             return None
         off = xfrm.find(f"{{{_A}}}off")

@@ -46,6 +46,18 @@ def can_render(ext: str) -> bool:
     return e in RENDERABLE_EXTS or (e in _OFFICE_EXTS and _soffice() is not None)
 
 
+def office_render_enabled() -> bool:
+    """Whether the heavy Office→PDF render path (ADR 0018/0024) is switched on. Defaults ON
+    wherever LibreOffice is present — matching the existing thumbnail behaviour — but
+    `ACP_OFFICE_RENDER=0` force-disables it, so the render/worker image can shed the cost of
+    Tier-B on-demand rasterization without a code change. PDF rendering (no LibreOffice) is
+    unaffected."""
+    v = os.environ.get("ACP_OFFICE_RENDER")
+    if v is None:
+        return True
+    return v.strip().lower() not in ("0", "false", "no", "off")
+
+
 def render_page_png(data: bytes, ext: str, page: int = 1) -> bytes | None:
     """Render page N (1-indexed) of a document to a PNG, downscaled to _MAX_EDGE on the long
     side. `page` is CLAMPED to the document's real range, so an out-of-range request returns

@@ -3,7 +3,7 @@
   "version": "2026.06.1",
   "conformance_target": "WCAG 2.1 AA",
   "compliant_threshold": 90,
-  "severity_weights": { "CRITICAL": 25, "SERIOUS": 15, "MODERATE": 8, "MINOR": 3, "_default": 5 },
+  "severity_weights": { "CRITICAL": 25, "SERIOUS": 15, "MODERATE": 8, "MINOR": 3, "REVIEW": 0, "_default": 5 },
   "disabled_rules": [],
   "criteria": {
     "SC_1_1_1": { "name": "Non-text Content", "level": "A" },

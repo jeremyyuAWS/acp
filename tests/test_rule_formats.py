@@ -114,18 +114,20 @@ def test_an_unrun_check_never_claims_the_criterion_is_inapplicable():
     assert store.NOT_EVALUATED == "NOT_EVALUATED"
     for rid in ("2.4.3", "4.1.2"):
         assert store._rule_outcome(rid, "pdf", 0) == store.NOT_EVALUATED
-    # A rule with no format restriction at all still evaluates where it has a validator.
-    assert store._rule_outcome("1.1.1", "pdf", 0) == "PASS"
+    # A rule with no format restriction at all still evaluates where it has a validator. 1.1.1 is
+    # a 🟡 review-lane criterion, so a clean scan is REVIEW ("verify"), not a certified pass (#174).
+    assert store._rule_outcome("1.1.1", "pdf", 0) == store.REVIEW
     assert store._rule_outcome("1.1.1", "pdf", 3) == "FAIL"
     # An unknown format is unevaluated, never a pass.
     assert store._rule_outcome("1.1.1", None, 0) == store.NOT_EVALUATED
 
 
 def test_rule_outcome_still_computes_pass_fail_for_applicable_formats():
+    # 2.4.6 html + 3.1.1 pdf are 🟢 auto-assess → a clean scan is a real PASS.
     assert store._rule_outcome("2.4.6", "html", 0) == "PASS"
     assert store._rule_outcome("2.4.6", "html", 3) == "FAIL"
-    assert store._rule_outcome("1.3.3", "pdf", 0) == "PASS"   # cross-format rule
-    assert store._rule_outcome("1.3.3", "pdf", 1) == "FAIL"
+    assert store._rule_outcome("3.1.1", "pdf", 0) == "PASS"   # cross-format auto-assess rule
+    assert store._rule_outcome("3.1.1", "pdf", 1) == "FAIL"
 
 
 def test_file_format_recognizes_every_scanned_extension():
