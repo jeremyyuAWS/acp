@@ -220,6 +220,83 @@ class AzureOpenAIVisionProvider:
                            latency_ms=int((time.monotonic() - t0) * 1000), ok=False)
 
 
+class RunPodServerlessVisionProvider:
+    """GPU vision on a RunPod SERVERLESS endpoint via its OpenAI-compatible chat-completions API
+    (ADR 0022). The endpoint URL is STABLE (set once), its workers auto-scale 0→N on demand and
+    scale to zero when idle — so this can be the DEFAULT vision path with no standing pod and no
+    idle bill, and it survives a redeploy. The key is read from an ops-provisioned env secret (never
+    stored/logged/returned). `zone='cloud'`: RunPod is a third-party host, so bytes leave the network
+    — the 🟡 badge stays honest (ADR 0016). Cost is GPU-seconds × the endpoint's rate (measured from
+    the response, 0 when the rate is unknown — never invented). Never raises → ok=False on failure."""
+
+    def __init__(self, endpoint_id: str, api_key: str, *, model: str = "qwen2.5-vl",
+                 cost_per_sec: float = 0.0):
+        self.endpoint_id = endpoint_id
+        self._key = api_key
+        self.model = model
+        self.cost_per_sec = cost_per_sec
+        self.name = "runpod_serverless"
+        self.zone = "cloud"
+        self.url = f"https://api.runpod.ai/v2/{endpoint_id}/openai/v1/chat/completions"
+
+    def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
+                 timeout: float = 120.0) -> dict:
+        import base64
+        t0 = time.monotonic()
+        mdl = model or self.model
+        try:
+            import httpx
+            b64 = base64.b64encode(image_bytes).decode("ascii")
+            body = {
+                "model": mdl,
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ]}],
+                "max_tokens": 128, "temperature": 0.2,
+            }
+            # The RunPod key rides only in this request header — never persisted, logged, or returned.
+            r = httpx.post(self.url, json=body,
+                           headers={"Authorization": f"Bearer {self._key}", "content-type": "application/json"},
+                           timeout=timeout)
+            r.raise_for_status()
+            data = r.json()
+            text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "") or ""
+            # GPU-seconds → cost. RunPod surfaces execution time on the envelope; 0 if absent/no rate.
+            exec_ms = data.get("executionTime") or (data.get("usage") or {}).get("execution_time_ms") or 0
+            cost = round((exec_ms / 1000.0) * self.cost_per_sec, 6) if (exec_ms and self.cost_per_sec) else 0.0
+            return _result(text=text.strip() or None, model=mdl, provider=self.name, zone=self.zone,
+                           latency_ms=int((time.monotonic() - t0) * 1000), ok=bool(text.strip()),
+                           cost_usd=cost)
+        except Exception:
+            return _result(text=None, model=mdl, provider=self.name, zone=self.zone,
+                           latency_ms=int((time.monotonic() - t0) * 1000), ok=False)
+
+
+def serverless_vision_provider() -> VisionProvider | None:
+    """The RunPod Serverless GPU provider from deploy env, or None when unconfigured (→ the vision
+    default stays the local CPU floor, so a deploy without serverless config is exactly the keyless
+    local build). `RUNPOD_ENDPOINT_ID` is non-secret config; `RUNPOD_API_KEY` is the ops secret."""
+    eid = os.environ.get("RUNPOD_ENDPOINT_ID")
+    key = os.environ.get("RUNPOD_API_KEY")
+    if not (eid and key):
+        return None
+    model = os.environ.get("RUNPOD_VISION_MODEL", "qwen2.5-vl")
+    try:
+        rate = float(os.environ.get("RUNPOD_COST_PER_SEC", "0") or 0)
+    except ValueError:
+        rate = 0.0
+    return RunPodServerlessVisionProvider(eid, key, model=model, cost_per_sec=rate)
+
+
+def local_vision_provider() -> VisionProvider:
+    """The always-available local CPU Ollama floor — the fallback when the default GPU provider
+    misses (cold-start timeout / outage), built from `ai`'s current endpoint globals."""
+    import ai as _ai
+    _ai._maybe_refresh_endpoint()
+    return OllamaVisionProvider(_ai.OLLAMA_BASE_URL, _ai.OLLAMA_VISION_MODEL)
+
+
 def cloud_vision_provider() -> VisionProvider | None:
     """The configured, ENABLED, key-present cloud vision provider for escalation, or None (ADR 0019
     §2/§3c). None is the out-of-box state: with no cloud configured, escalation never fires and the
@@ -251,11 +328,21 @@ def active_vision_provider() -> VisionProvider:
     _ai._maybe_refresh_endpoint()              # honour a runtime endpoint switch before selecting
     base_url = _ai.OLLAMA_BASE_URL
     model = _ai.OLLAMA_VISION_MODEL
-    choice = "ollama"
+    choice = os.environ.get("ACP_VISION_PROVIDER", "").strip().lower()   # deploy default (ADR 0022)
     try:
         import core
-        choice = (core.store.get_setting("ai_vision_provider") or "ollama").strip().lower() or "ollama"
+        setting = (core.store.get_setting("ai_vision_provider") or "").strip().lower()
+        if setting:                                    # an explicit admin choice overrides the default
+            choice = setting
     except Exception:
         pass
+    choice = choice or "ollama"
+    # RunPod Serverless GPU is the durable default when configured (ADR 0022); it falls back to the
+    # local floor inside ai._vision_generate on a miss, and returns None here when unconfigured so
+    # the local path is never broken by a stale selection.
+    if choice == "runpod_serverless":
+        sp = serverless_vision_provider()
+        if sp is not None:
+            return sp
     # Future: elif choice == "azure_openai" and configured → AzureOpenAIVisionProvider(...)
     return OllamaVisionProvider(base_url, model)

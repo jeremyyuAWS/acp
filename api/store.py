@@ -319,6 +319,16 @@ _SCHEMA = [
       doc_class TEXT, checksum TEXT, path TEXT,
       PRIMARY KEY (scan_id, file)
     )""",
+    # ADR 0021 — enterprise review memory. Org-scoped guidance that shapes AI draft PROMPTS
+    # (never model weights). kind: 'style'/'glossary' (admin-authored, apply when status
+    # 'active') or 'derived' (behaviour-proposed, inert until an admin accepts it). guidance
+    # IS the prompt fragment; evidence holds the real hitl_events count for a derived rule
+    # (ADR 0016 — a real count or it does not exist). Org-isolated; no memory crosses tenants.
+    """CREATE TABLE IF NOT EXISTS org_memory (
+      id TEXT PRIMARY KEY, org TEXT NOT NULL, kind TEXT NOT NULL,
+      rule_id TEXT, format TEXT, guidance TEXT NOT NULL, status TEXT NOT NULL,
+      evidence TEXT, author TEXT, created_at TEXT, updated_at TEXT
+    )""",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -395,15 +405,15 @@ _ALL_FORMATS = frozenset({"html", "docx", "pptx", "xlsx", "pdf"})
 _OFFICE_PDF = frozenset({"docx", "pptx", "xlsx", "pdf"})
 RULE_FORMATS: dict[str, frozenset[str]] = {
     "1.1.1": _ALL_FORMATS, "1.2.1": frozenset({"html"}), "1.2.2": frozenset({"html"}),
-    "1.2.3": frozenset({"html"}), "1.3.1": _ALL_FORMATS, "1.3.2": frozenset({"pdf", "pptx", "xlsx"}), "1.3.3": _ALL_FORMATS,
+    "1.2.3": frozenset({"html"}), "1.3.1": _ALL_FORMATS, "1.3.2": _ALL_FORMATS, "1.3.3": _ALL_FORMATS,
     "1.3.4": frozenset({"html"}), "1.3.5": frozenset({"html"}), "1.4.1": frozenset({"html"}),
     "1.4.2": frozenset({"html", "pptx"}), "1.4.3": _ALL_FORMATS,
-    "1.4.4": frozenset({"html"}), "1.4.5": _OFFICE_PDF, "1.4.6": frozenset({"html", "pdf", "pptx", "xlsx"}),
+    "1.4.4": frozenset({"html"}), "1.4.5": _ALL_FORMATS, "1.4.6": frozenset({"html", "pdf", "pptx", "xlsx"}),
     "1.4.8": frozenset({"docx"}),
     "1.4.9": _OFFICE_PDF, "1.4.10": frozenset({"html"}), "1.4.11": frozenset({"html"}),
     "1.4.12": frozenset({"html"}), "2.1.1": frozenset({"pptx"}), "2.4.1": frozenset({"html", "pdf"}),
-    "2.4.2": _ALL_FORMATS, "2.4.3": frozenset({"html"}), "2.4.4": frozenset({"docx", "html", "pptx"}),
-    "2.4.6": frozenset({"docx", "html", "pptx"}), "2.4.7": frozenset({"html"}), "2.4.9": frozenset({"docx", "html", "pptx"}),
+    "2.4.2": _ALL_FORMATS, "2.4.3": frozenset({"html"}), "2.4.4": _ALL_FORMATS,
+    "2.4.6": _ALL_FORMATS, "2.4.7": frozenset({"html"}), "2.4.9": frozenset({"docx", "html", "pptx"}),
     "2.4.10": frozenset({"docx"}),
     "2.5.3": frozenset({"html"}), "2.5.8": frozenset({"html"}), "3.1.1": _ALL_FORMATS,
     "3.1.2": _ALL_FORMATS, "3.1.4": frozenset({"html"}), "3.1.5": _ALL_FORMATS, "3.3.2": frozenset({"docx", "html"}),
@@ -2582,6 +2592,25 @@ class Store:
                 "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value",
                 (key, value))
 
+    def worker_tier_alive(self, window_s: int = 120) -> bool:
+        """True if a standalone worker container (worker_main, #113) beat within `window_s`.
+
+        The API tier runs ACP_WORKERS=0 in the split topology, so the scan-start "are there
+        workers?" guard must look here, not at its local pool. Freshness-based on a real
+        heartbeat — a dead worker goes stale and the guard correctly refuses again.
+        """
+        from datetime import datetime, timedelta, timezone
+        raw = self.get_setting("worker_tier_heartbeat")
+        if not raw:
+            return False
+        try:
+            beat = datetime.fromisoformat(raw)
+        except ValueError:
+            return False
+        if beat.tzinfo is None:
+            beat = beat.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) - beat <= timedelta(seconds=window_s)
+
     def get_allowlist(self) -> list[str]:
         """Runtime-editable allowed emails (managed from Settings), lowercased."""
         raw = self.get_setting("allowed_emails", "") or ""
@@ -2633,6 +2662,106 @@ class Store:
                 "updated_by=EXCLUDED.updated_by",
                 (provider, 1 if enabled else 0, endpoint, deployment, model,
                  key_secret_ref, now, updated_by))
+
+    # ── Enterprise review memory (ADR 0021) ───────────────────────────────────
+    def add_org_memory(self, org: str, kind: str, guidance: str, *, rule_id: str | None = None,
+                       format: str | None = None, status: str = "active",
+                       evidence: str | None = None, author: str | None = None) -> str:
+        """Insert one org_memory rule and return its id. Admin-authored `style`/`glossary`
+        default to 'active'; the derivation job (ADR 0021 §D) inserts `derived` rows as
+        'proposed' — inert until an admin accepts (set_org_memory_status → 'active')."""
+        import uuid
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        mid = uuid.uuid4().hex[:12]
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO org_memory(id,org,kind,rule_id,format,guidance,status,evidence,"
+                "author,created_at,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (mid, org, kind, rule_id, format, guidance, status, evidence, author, now, now))
+        return mid
+
+    def list_org_memory(self, org: str, *, status: str | None = None) -> list[dict]:
+        """An org's memory rules (optionally filtered by status), newest first. Org-isolated:
+        never returns another tenant's rules."""
+        with self._db.cursor() as cur:
+            if status:
+                self._db.execute(cur,
+                    "SELECT * FROM org_memory WHERE org=%s AND status=%s ORDER BY created_at DESC",
+                    (org, status))
+            else:
+                self._db.execute(cur,
+                    "SELECT * FROM org_memory WHERE org=%s ORDER BY created_at DESC", (org,))
+            return self._db.fetchall(cur)
+
+    def set_org_memory_status(self, org: str, mid: str, status: str) -> bool:
+        """Accept ('active'), dismiss/retire ('archived'), or re-propose a rule. Org-scoped so
+        one tenant can't touch another's memory. Returns True if the row exists and was set."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE org_memory SET status=%s, updated_at=%s WHERE id=%s AND org=%s",
+                (status, now, mid, org))
+            self._db.execute(cur,
+                "SELECT status FROM org_memory WHERE id=%s AND org=%s", (mid, org))
+            row = self._db.fetchone(cur)
+        return bool(row and row.get("status") == status)
+
+    def list_org_owners(self) -> list[str]:
+        """Distinct scan owners — the orgs the nightly derivation job iterates (ADR 0021)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT DISTINCT owner_email FROM scan_runs WHERE owner_email IS NOT NULL")
+            return [r["owner_email"] for r in self._db.fetchall(cur) if r.get("owner_email")]
+
+    def list_hitl_events_for_org(self, org: str, *, since_iso: str | None = None,
+                                 limit: int = 5000) -> list[dict]:
+        """Every HITL decision across an ORG's scans (joined via scan_runs.owner_email) —
+        the raw learning signal ADR 0021's derivation job reads. Org-isolated: an org's memory
+        can only ever derive from that org's own reviewers. `since_iso` windows to recent
+        behaviour (recency, ADR 0021 §D)."""
+        with self._db.cursor() as cur:
+            if since_iso:
+                self._db.execute(cur,
+                    "SELECT e.* FROM hitl_events e JOIN scan_runs r ON e.scan_id=r.id "
+                    "WHERE r.owner_email=%s AND e.created_at>=%s ORDER BY e.created_at DESC LIMIT %s",
+                    (org, since_iso, limit))
+            else:
+                self._db.execute(cur,
+                    "SELECT e.* FROM hitl_events e JOIN scan_runs r ON e.scan_id=r.id "
+                    "WHERE r.owner_email=%s ORDER BY e.created_at DESC LIMIT %s", (org, limit))
+            return self._db.fetchall(cur)
+
+    def memory_guidance(self, org: str, rule_id: str | None, format: str | None) -> list[str]:
+        """The ACTIVE guidance fragments that apply to a (org, rule, format) draft, ordered
+        most-specific-first (rule+format > rule > format > org-wide). Only 'active' rules —
+        'proposed'/'derived' never influence a draft until accepted (ADR 0021 §D). Returns
+        the raw guidance strings; the caller composes them into the prompt."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT rule_id,format,guidance FROM org_memory "
+                "WHERE org=%s AND status='active'", (org,))
+            rows = self._db.fetchall(cur)
+
+        def applies(r) -> bool:
+            return ((r.get("rule_id") in (None, "", rule_id))
+                    and (r.get("format") in (None, "", format)))
+
+        def specificity(r) -> int:
+            return (2 if r.get("rule_id") else 0) + (1 if r.get("format") else 0)
+
+        keep = [r for r in rows if applies(r)]
+        keep.sort(key=specificity, reverse=True)
+        # De-dup identical guidance text (an org-wide + a rule-scoped copy) while keeping order.
+        seen: set[str] = set()
+        out: list[str] = []
+        for r in keep:
+            g = (r.get("guidance") or "").strip()
+            if g and g not in seen:
+                seen.add(g)
+                out.append(g)
+        return out
 
     def get_ai_enabled(self) -> bool:
         """Platform AI mode. Defaults to enabled; admin can hard-disable it
@@ -2695,6 +2824,70 @@ class Store:
                 self._db.execute(cur,
                     "SELECT * FROM decision_log ORDER BY ts DESC LIMIT %s", (limit,))
             return self._db.fetchall(cur)
+
+    # ── Audit trail (maturity Phase 4) ────────────────────────────────────────
+    def document_timeline(self, scan_id: str, file: str, limit: int = 300) -> list[dict]:
+        """Chronological provenance for ONE document in ONE scan — the auditor's answer to
+        "what happened to this file and who decided what". Assembled entirely from rows the
+        pipeline already persists (scan_runs, file_records, ai_calls, hitl_queue,
+        hitl_events, applied_fixes, decision_log); nothing is inferred or fabricated
+        (ADR 0016). Every event: {ts, kind, title, detail?, actor?, rule_id?}. Best-effort
+        per source — a missing table (older DB) skips that source, never errors."""
+        events: list[dict] = []
+
+        def _add(ts, kind, title, detail=None, actor=None, rule_id=None):
+            if ts:
+                events.append({"ts": ts, "kind": kind, "title": title,
+                               "detail": detail or None, "actor": actor or None,
+                               "rule_id": rule_id or None})
+
+        def _rows(sql, params):
+            try:
+                with self._db.cursor() as cur:
+                    self._db.execute(cur, sql, params)
+                    return self._db.fetchall(cur)
+            except Exception:
+                return []
+
+        for r in _rows("SELECT * FROM scan_runs WHERE id=%s", (scan_id,)):
+            _add(r.get("started_at"), "scan", f"Scan started ({r.get('source') or 'local'})")
+            _add(r.get("assessed_at"), "scan", "Assessed against WCAG rubric",
+                 detail=f"rubric {r.get('rubric_hash') or ''}".strip() or None)
+        for r in _rows("SELECT * FROM file_records WHERE scan_id=%s AND file=%s", (scan_id, file)):
+            _add(r.get("remediated_at"), "fix", "Auto-remediation applied",
+                 detail=("remediated copy in Blob store" if r.get("blob_url") else None))
+            _add(r.get("published_at"), "publish", "Published",
+                 detail=r.get("drive_write_url") or r.get("blob_url"))
+        for r in _rows("SELECT * FROM ai_calls WHERE scan_id=%s AND file=%s ORDER BY ts", (scan_id, file)):
+            zone = r.get("zone") or "local"
+            _add(r.get("ts"), "ai",
+                 f"AI {r.get('surface') or 'call'} · {r.get('provider') or ''} {r.get('model') or ''}".strip(),
+                 detail=f"zone={zone} · {'ok' if r.get('ok') else 'failed'}"
+                        + (f" · ${r['cost_usd']:.4f}" if r.get("cost_usd") else ""))
+        for r in _rows("SELECT * FROM hitl_queue WHERE scan_id=%s AND file=%s", (scan_id, file)):
+            _add(r.get("created_at"), "review", f"Queued for human review · {r.get('rule_id') or ''}".strip(" ·"),
+                 detail=r.get("rule_name"), rule_id=r.get("rule_id"))
+        for r in _rows("SELECT * FROM hitl_events WHERE scan_id=%s AND file=%s ORDER BY created_at",
+                       (scan_id, file)):
+            action = r.get("action") or "decision"
+            detail = None
+            if r.get("edited"):
+                detail = "reviewer edited the AI draft before approving"
+            if r.get("reject_reason") and r["reject_reason"] != "unspecified":
+                detail = f"reason: {r['reject_reason']}"
+            _add(r.get("created_at"), "human", f"Human {action} · {r.get('rule_id') or ''}".strip(" ·"),
+                 detail=detail, actor=r.get("reviewer"), rule_id=r.get("rule_id"))
+        for r in _rows("SELECT * FROM applied_fixes WHERE scan_id=%s AND file=%s ORDER BY created_at",
+                       (scan_id, file)):
+            _add(r.get("created_at"), "fix", f"Fix written into document · {r.get('rule_id') or ''}".strip(" ·"),
+                 detail=(r.get("value") or "")[:160] or None, rule_id=r.get("rule_id"))
+        for r in _rows("SELECT * FROM decision_log WHERE scan_id=%s AND file=%s ORDER BY ts",
+                       (scan_id, file)):
+            _add(r.get("ts"), "decision", r.get("action") or "decision",
+                 detail=(r.get("detail") or "")[:160] or None, actor=r.get("actor"),
+                 rule_id=r.get("rule_id"))
+        events.sort(key=lambda e: e["ts"])
+        return events[:limit]
 
     # ── Durable job queue (ADR 0004) ──────────────────────────────────────────
     # A worker claims the next eligible job, runs it, and marks it done — or, on

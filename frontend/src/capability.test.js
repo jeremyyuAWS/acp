@@ -46,14 +46,15 @@ describe('remediation capability — format-aware single source of truth', () =>
   })
 
   describe('format-awareness: the same criterion differs by format', () => {
-    it('contrast 1.4.3 is auto on docx/xlsx/pptx/html but human on pdf', () => {
+    it('contrast 1.4.3 is auto on every format (pdf gained a content-stream darkener)', () => {
       // pptx corrected from the sparse version's "human (not verified)": the recolour is now
-      // round-trip verified. pdf has no contrast remediator at all, so it stays human.
+      // round-trip verified. pdf joined when remediate_pdf grew the text-scoped darken
+      // (_fix_pdf_text_contrast) — round-trip proven in tests/test_remediate_pdf_contrast.py.
       expect(isAuto(CAP, 'docx', '1.4.3')).toBe(true)
       expect(isAuto(CAP, 'xlsx', '1.4.3')).toBe(true)
       expect(isAuto(CAP, 'pptx', '1.4.3')).toBe(true)
       expect(isAuto(CAP, 'html', '1.4.3')).toBe(true)
-      expect(isAuto(CAP, 'pdf', '1.4.3')).toBe(false)
+      expect(isAuto(CAP, 'pdf', '1.4.3')).toBe(true)
     })
     it('language 3.1.1 is auto on every format that carries it', () => {
       for (const fmt of ['docx', 'pptx', 'xlsx', 'pdf', 'html']) {

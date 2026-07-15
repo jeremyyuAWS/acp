@@ -22,7 +22,7 @@ VM_SIZE="${ACP_GPU_VM_SIZE:-Standard_NC4as_T4_v3}"  # 1x T4 (16GB VRAM), 4 vCPU.
 ADMIN="${ACP_GPU_ADMIN:-azureuser}"
 VISION_MODEL="${ACP_VISION_MODEL:-llava:13b}"
 TEXT_MODEL="${ACP_TEXT_MODEL:-llama3.1:8b}"
-CD_SUB="${ACP_APP_SUB:-Customer Demos}"           # subscription the app lives in
+CD_SUB="${ACP_APP_SUB:-AZLABSV2.0-Sandbox(POC)}"  # subscription the app lives in
 APP_RG="${ACP_APP_RG:-mdk-accessibility}"
 APP="${ACP_APP:-acp-app}"
 

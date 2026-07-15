@@ -162,6 +162,17 @@ export const firstKind = (item) => proposalsOf(item)[0]?.kind ?? null
 export const PAGE_KINDS = new Set(['reading-order'])
 export const isPageThumb = (kind) => PAGE_KINDS.has(kind)
 export const thumbSize = (kind, imageSize = 84) => (isPageThumb(kind) ? 240 : imageSize)
+
+// Should the card's HERO be the isolated embedded image (its own r:embed bytes), rather than a
+// whole-page render? For xlsx it must: an Office page render of a spreadsheet is the ENTIRE sheet —
+// a grid of cells with the flagged picture as a tiny region — so the reviewer can't tell which image
+// is under review or see it clearly (ADR 0018's bounding-box crop self-hides for Office). The
+// per-image thumb IS the offending picture, already resolved server-side (remediate_office
+// ._image_bytes_for), so it is the honest hero. Scoped to xlsx image findings — a real embedded
+// image, never a page-kind reading-order thumb. pptx/docx keep today's behaviour: their page render
+// is either useful or self-hides. Pure on the card; the caller still checks the thumb is present.
+export const leadWithIsolatedImage = (card) =>
+  (card || {}).fmt === 'XLSX' && !isPageThumb((card || {}).thumbKind)
 export const thumbAlt = (kind, file) => (isPageThumb(kind)
   ? `Rendered page of ${file || 'the document'}, for confirming its reading order`
   : `Image needing alt text in ${file || 'the document'}`)
@@ -514,17 +525,71 @@ export function validationChecklist(card) {
   ]
 }
 
+// The irreducibly-human criteria (the document-core 20 "HITL-six" and their kin): findings a model must
+// NOT settle alone, each with the TRUE, criterion-specific reason a person is required. Keyed by
+// WCAG SC so the "Why human review?" callout states why THIS check can't be a machine call —
+// an authorial, editorial, or brand/legal judgement — instead of a generic "no signal covers it".
+// Every line names a real limitation; none implies ACP could do it and chose not to.
+const HUMAN_REVIEW_BY_SC = {
+  '1.2.1': 'A transcript for audio must be written by a person — its accuracy is a compliance liability ACP will not synthesize.',
+  '1.2.2': 'Captions must be authored and time-synced by a person — ACP flags the gap but will not fabricate caption text.',
+  '1.2.3': 'An audio description or media alternative is human-authored content — ACP marks it required, it does not invent it.',
+  '1.3.2': 'The correct reading order of a complex layout depends on what the author meant to convey — auto-linearising it can silently reorder meaning, so a person confirms it.',
+  '1.3.3': 'Whether an instruction relies only on shape, colour, or position — and how to reword it without losing meaning — is an editorial judgement.',
+  '1.4.5': 'Whether text-in-image is essential (a logo or brand mark, and so exempt) or a fixable design choice is a brand/legal call — the “essential” option records it.',
+  '1.4.9': 'Whether text-in-image is essential (a logo or brand mark, and so exempt) is a brand/legal call — the “essential” option records it.',
+  '2.4.6': 'Whether a heading truly describes its section is a judgement about the author’s intent, not a pattern a model can settle.',
+  '2.4.10': 'Whether the document’s section structure is logically correct depends on what the author meant to convey.',
+}
+
 // "Why am I reviewing this?" — the honest reason a human is in the loop for this finding, derived
-// from real signals so the reviewer understands the ask before approving. Null for a straightforward
-// deterministic confirmation with nothing to explain.
+// from real signals so the reviewer understands the ask before approving. A criterion-specific
+// reason (the HITL-six) wins over the generic confidence-derived one, because it says something
+// TRUE about that check rather than a hedge. Null for a straightforward deterministic confirmation
+// with nothing to explain.
 export function whyHumanReview(card) {
   const c = card || {}
+  const bySc = HUMAN_REVIEW_BY_SC[c.sc]
+  if (bySc) return bySc
   if (c.proposal && c.proposal.subjective)
     return 'The wording is a judgement call — several valid descriptions exist, so a person confirms it before it is certified.'
   const level = c.confidence && c.confidence.level && c.confidence.level.key
   if (level === 'low') return 'No automated signal fully covers this criterion — it needs your judgement.'
   if (level === 'medium') return 'Detected by AI / heuristic rather than a deterministic rule, so a human confirms the call before certification.'
   return null
+}
+
+// "Why this is safe to approve" — the AFFIRMATIVE counterpart to whyHumanReview. A reviewer should
+// build confidence from what has ALREADY been checked, not from digging through the audit trail.
+// This composes ONLY the positive facts that are genuinely true for THIS card — each derived from a
+// real trust signal (grounding, validation, deterministic sign-off, no-prior-value), never a
+// fabricated reassurance. It is deliberately silent when the honest answer is "this still needs
+// judgement" (visual-only wording, manual authoring): there we return null and let whyHumanReview
+// carry the ask rather than paint a false green. Returns { points: [string] } or null.
+export function whySafeToApprove(card, { trust = null } = {}) {
+  const c = card || {}
+  const t = trust || trustStates(c)
+  const g = t.grounding
+  const v = t.validation
+  // Honest gate 1: the irreducibly-human criteria (the HITL-six + kin) are never "safe to approve"
+  // on autopilot — captions, reading order, a brand/essential call are judgements a person must
+  // make, even though their sign-off certifies. Leading with a green box would contradict the
+  // "Why human review?" reason those same criteria carry. (certifiesOnApprove alone can't tell a
+  // deterministic contrast check apart from a caption sign-off — this list can.)
+  if (HUMAN_REVIEW_BY_SC[c.sc]) return null
+  // Honest gate 2: a visual-only draft (no text anchor) is precisely the wording a human must vet —
+  // never paint it green. A pure manual-authoring finding needs no gate: it produces no positive
+  // point below, so it returns null on its own.
+  if (g && g.tone === 'warn') return null
+  const points = []
+  if (v && v.state === 're_scan_passed') points.push('A re-scan already confirmed the fix clears this check.')
+  else if (c.certifiesOnApprove || (v && v.state === 'deterministic_passed')) points.push('This is a deterministic check — your sign-off is the certification; nothing is guessed.')
+  if (g && g.state === 'grounded') points.push('The wording is anchored in text read directly from the source, not a guess.')
+  else if (g && g.state === 'document_text') points.push('The value is drawn from the document’s own text.')
+  // an empty "before" means approving only fills a gap — it cannot overwrite good content
+  if ((evidenceSignals(c) || []).some((s) => /no existing value/i.test(s.text)))
+    points.push('There was no existing value on the element — approving only adds what was missing, it overwrites nothing.')
+  return points.length ? { points } : null
 }
 
 // ── Document page heatmap (vision §17) ─────────────────────────────────────────
@@ -575,4 +640,83 @@ export const REVIEW_TYPES = {
     key: 'author', icon: '✍️', label: 'Needs your judgement — author the fix',
     promise: 'No safe automatic fix exists for these. You write the value; ACP applies and re-scans it.',
   },
+}
+
+// ── Review Intent (AI Work Inbox reframe) ───────────────────────────────────────
+// ONE plain-language sentence, rendered at the TOP of the card, that answers "why am I here and
+// what do I do?" before any audit detail. Task-first, no jargon ("AI/heuristic detection",
+// "semantic judgement", "review suggested" all move under Details). Keyed off reviewType and
+// flavoured by the finding's own noun.
+const _SC_NOUN = {
+  '1.1.1': 'image', '2.4.4': 'link', '2.4.9': 'link', '2.4.6': 'heading', '2.4.10': 'heading',
+  '3.1.2': 'passage', '1.3.3': 'instruction', '4.1.2': 'form field', '2.4.2': 'document',
+}
+export function reviewIntent(item, sc = null) {
+  const t = reviewType(item)
+  const noun = _SC_NOUN[String(sc || '')] || 'item'
+  if (t === 'confirm') return 'ACP applied and verified this fix — confirm it before certification.'
+  if (t === 'proposal')
+    return `ACP drafted a fix for this ${noun}. Check the wording against the evidence and approve — or edit it first.`
+  return `ACP flagged this ${noun} but couldn’t generate a trustworthy fix, so it needs you to write one.`
+}
+
+// The single primary button's label, by workflow — so the one action reads plainly ("Approve AI
+// fix" / "Confirm fix" / "Approve description") instead of exposing internal apply semantics.
+export function primaryActionLabel(item) {
+  return { proposal: 'Approve AI fix', confirm: 'Confirm fix', author: 'Approve description' }[reviewType(item)]
+    || 'Approve'
+}
+
+// Suggested-outline scaffold for authoring from scratch (no AI draft) — bullets that turn a blank
+// box into a guided task, so a reviewer is never staring at "good luck". SC-aware; null when the
+// field is self-explanatory (the placeholder alone suffices).
+const _SCAFFOLD = {
+  '1.1.1': ['What kind of image is it? (photo, chart, diagram, logo)',
+            'What information does it convey? Lead with that.',
+            'Skip decorative colour and styling.',
+            'Describe the meaning, not just the picture.'],
+  '2.4.4': ['Say where the link goes or what it does.',
+            'Make it meaningful out of context — not “click here”.'],
+  '2.4.9': ['Say where the link goes or what it does.',
+            'Make it meaningful out of context — not “click here”.'],
+  '1.3.3': ['Name the control by its label, not its position or colour.',
+            'e.g. “Select the Save button”, not “the green button on the right”.'],
+  '4.1.2': ['Give the field the label a screen reader should announce.',
+            'e.g. “Home address”, “Date of birth”.'],
+}
+export function authoringScaffold(sc) { return _SCAFFOLD[String(sc || '')] || null }
+
+// The WCAG exception a reviewer may APPLY on an images-of-text finding (1.4.5 / 1.4.9), routed by the
+// detected image KIND (#130 describedImageType — the model's own words, never guessed). The only
+// standard exemption here is a logotype / brand mark, so "Is this a logo?" is the right question for a
+// logo or an unidentified image — but it reads as nonsense on a DATA image. A chart's baked-in text is
+// NOT essential: it should be provided as real, selectable text (a chart, additionally, as an
+// accessible data table), so a recognised content kind (chart / diagram / screenshot / table / map /
+// photo / illustration) gets honest remediation guidance and NO exempt button — offering one would let
+// real data be waved through as "essential". Kind unknown → keep the exemption option (a short baked-in
+// text block is very often a brand mark; we can't rule it out). Returns null off these criteria, else
+// { kind, prompt, action:{label,title,resolution} } for the exemption path or { kind, note } for the
+// content-remediation path.
+const _CONTENT_IMAGE_KINDS = new Set(['Chart', 'Diagram', 'Screenshot', 'Table', 'Map', 'Photo', 'Illustration'])
+export function imagesOfTextException(sc, imgKind) {
+  if (sc !== '1.4.5' && sc !== '1.4.9') return null
+  const label = imgKind && imgKind.label
+  if (label && _CONTENT_IMAGE_KINDS.has(label)) {
+    const noun = label.toLowerCase()
+    return {
+      kind: label,
+      note: label === 'Chart'
+        ? 'This is a chart, not a logo — the logotype exemption doesn’t apply. Provide its text as real, selectable text or an accessible data table, not baked into an image.'
+        : `This ${noun} contains text and isn’t a logo — the logotype exemption doesn’t apply. Provide the text as real, selectable text rather than an image.`,
+    }
+  }
+  return {
+    kind: label || null,
+    prompt: 'Is this a logo or brand mark? Essential images of text are exempt.',
+    action: {
+      label: '🏷️ Essential logo/brand — exempt',
+      title: 'Resolve as essential — a logo/brand mark is exempt from the images-of-text rule (WCAG 1.4.5/1.4.9). Recorded as an exception, not a fix.',
+      resolution: 'essential_exception',
+    },
+  }
 }

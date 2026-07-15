@@ -193,11 +193,25 @@ def _raw_pptx(path: Path) -> None:
         ("lower", 4500000, "Lower middle authored second contrast label"),
         ("upper", 3000000, "Upper middle authored third contrast label"),
         ("top", 1000000, "Top shape authored last contrast label")]))
+    # Multi-row table with NO firstRow header mark — trips 1.3.1 (engine TableHeaderRule);
+    # _pptx_mark_table_headers must clear it on the round-trip.
+    def trow(*cells):
+        tcs = "".join(f'<a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:rPr lang=""/><a:t>{c}</a:t>'
+                      "</a:r></a:p></a:txBody><a:tcPr/></a:tc>" for c in cells)
+        return f"<a:tr h=\"370840\">{tcs}</a:tr>"
+    table = (
+        '<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="9" name="tbl"/><p:cNvGraphicFramePr/>'
+        '<p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="1000000" y="5200000"/>'
+        '<a:ext cx="4000000" cy="1000000"/></p:xfrm>'
+        f'<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">'
+        f'<a:tbl><a:tblPr/><a:tblGrid><a:gridCol w="2000000"/><a:gridCol w="2000000"/></a:tblGrid>'
+        f'{trow("Region", "Total")}{trow("North", "1240")}{trow("South", "980")}'
+        "</a:tbl></a:graphicData></a:graphic></p:graphicFrame>")
     slide = (
         f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         f'<p:sld xmlns:p="{P}" xmlns:a="{A}" xmlns:r="{R}"><p:cSld><p:spTree>'
         f'<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>'
-        f'{shapes}</p:spTree></p:cSld></p:sld>')
+        f'{shapes}{table}</p:spTree></p:cSld></p:sld>')
     ctypes = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
@@ -263,6 +277,8 @@ def test_pdf_auto_entries_clear(tmp_path):
     from reportlab.pdfgen import canvas
     import remediate_pdf
 
+    from reportlab.lib.colors import Color
+
     name = "report-accessibility-demo.pdf"
     src = tmp_path / name
     c = canvas.Canvas(str(src), pagesize=letter)
@@ -272,6 +288,10 @@ def test_pdf_auto_entries_clear(tmp_path):
         c.drawString(72, 720, h)
         c.setFont("Helvetica", 11)
         c.drawString(72, 690, f"Body paragraph {i} with enough real words to read as prose.")
+        # Light-grey caption: trips 1.4.3/1.4.6 so the round-trip proves the darken clears them.
+        c.setFillColor(Color(0.8, 0.8, 0.8))
+        c.drawString(72, 660, "Figure caption set in light grey that fails the contrast floors.")
+        c.setFillColor(Color(0, 0, 0))
         c.showPage()
     c.save()
 
@@ -347,13 +367,19 @@ def _write(d: Path, name: str, text: str) -> Path:
 def _proposer_key(sc: str) -> str:
     return {
         "1.1.1": "vision_alt",
+        "1.3.1": "structure_map",          # pdf only — deterministic heading-map proposal
         "1.3.2": "vision_reading_order",   # pdf only
         "1.3.3": "sensory",
         "1.4.5": "images_of_text",
         "1.4.9": "images_of_text",
         "3.1.2": "language_parts",
         "3.1.5": "reading_level",          # GPU plain-language rewrite proposer (#123 follow-on)
-        "2.4.4": "link_text",              # html only
+        "2.4.4": "link_text",              # html inline + Office propose_link_texts
+        "2.4.9": "link_text",              # Office propose_link_texts (per-destination)
+        "2.4.10": "section_headings",      # docx only — AI names the document's own sections
+        "2.4.6": "slide_titles",           # pptx only — AI names the slide from its own content
+        "1.4.8": "one_click_left_align",   # docx only — deterministic, human elects
+        "1.4.2": "one_click_play_on_click",  # pptx only — deterministic, human elects
     }.get(sc, "")
 
 
@@ -420,7 +446,7 @@ def test_compat_mode_for_defaults_to_human_out_of_scope():
     assert cap.mode_for("unknown-format", "1.1.1") == cap.HUMAN
     assert cap.mode_for(None, None) == cap.HUMAN
     # an in-scope human criterion is returned explicitly (dense table), same net answer
-    assert cap.mode_for("docx", "1.4.8") == cap.HUMAN
+    assert cap.mode_for("docx", "2.1.1") == cap.HUMAN     # keyboard — out of docx scope, absent → human
 
 
 def test_compat_auto_scs_matches_auto_lanes():

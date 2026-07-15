@@ -635,6 +635,30 @@ export async function exportScanReport(d) {
     p.text(`${h.pending || 0} item(s) await a reviewer; ${h.approved || 0} approved and ${h.rejected || 0} rejected${h.skipped ? `, ${h.skipped} skipped` : ''}. Items route here only when a fix needs human judgement or a human-authored value (alt text, captions, contrast, link purpose).`, { size: 9.5 })
   }
 
+  // Manual remediation checklist — where to find and fix each broken item by hand, on Mac and PC.
+  const cl = d.manualChecklist || []
+  if (cl.length) {
+    p.pageBreak()
+    p.heading('Manual remediation checklist — where to fix each item')
+    p.text('For every WCAG criterion the scan found failing, this is where to find it and how to fix it by hand in the file’s own app — on macOS and on Windows. Tick each item as you complete it. These are the manual steps for items that need human judgement; the platform auto-fixes the deterministic ones separately.', { size: 9, color: MUTED, lh: 13, gapAfter: 6 })
+    p.text('One row per criterion × file type. “In:” names the app to open (Word / Excel / PowerPoint / Acrobat Pro) and how many documents are affected.', { size: 8.5, color: MUTED, lh: 12, gapAfter: 11 })
+    const cbW = 26
+    const itemW = (p.CW - cbW) * 0.30
+    const stepW = (p.CW - cbW - itemW) / 2
+    const rows = cl.map((it) => {
+      const lvl = it.level ? ` (${it.level})` : ''
+      const item = `${it.sc}  ${it.name}${lvl}\nIn: ${it.app} · ${it.docs} file${it.docs === 1 ? '' : 's'}`
+                 + (it.where ? `\n${it.where}` : '')
+      return ['[  ]', item, it.mac || '', it.win || '']
+    })
+    p.table(['Done', 'Broken item — where to find it', 'Fix on Mac', 'Fix on Windows / PC'],
+      rows, [cbW, itemW, stepW, stepW])
+    if (d.checklistTruncated) {
+      p.text(`Showing the ${cl.length} most actionable of ${d.checklistTotal} criterion×format items. The full list is in the Assess view.`, { size: 8.5, color: MUTED })
+    }
+    p.text('App menu paths reflect current Microsoft 365 and Adobe Acrobat Pro. Wording can vary slightly by version; the built-in Accessibility Checker (Review → Check Accessibility) will always locate the flagged item.', { size: 8, color: MUTED, lh: 11 })
+  }
+
   p.pageBreak()
   p.heading('Appendix · documents & outcomes')
   const ap = d.appendix || []

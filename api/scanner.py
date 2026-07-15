@@ -734,6 +734,28 @@ def _analyse_html(path: Path) -> dict:
                 break
             prev_level = level
 
+    # 1.3.2 Meaningful Sequence — CSS that visually reorders content away from source order
+    # (flex 'order', reversed flex direction/flow), or an image-replacement technique (a large
+    # negative text-indent hiding real text behind a background image). A screen reader follows
+    # source order, so any of these can make the spoken order differ from the visual one.
+    _style_blob = " ".join(
+        [el.get("style", "") for el in root.iter() if el.get("style")]
+        + [s.text_content() for s in root.iter("style") if s.text_content()]
+    ).lower()
+    if re.search(r"order\s*:\s*-?[1-9]", _style_blob) or re.search(r"flex-(?:direction|flow)\s*:[^;]*reverse", _style_blob):
+        issues.append({"ruleId": "HTML_VISUAL_REORDER", "wcag": "1.3.2 Meaningful Sequence", "severity": "MODERATE"})
+
+    # 1.4.5 Images of Text — an <img> whose file name signals it carries text, or a CSS
+    # image-replacement technique (large negative text-indent). Conservative: only these
+    # unambiguous signals fire, so an ordinary photo/diagram is never mistaken for text.
+    _TEXT_IMG_NAME = re.compile(
+        r"\b(heading|headline|banner|title|quote|wordmark|slogan|tagline|typography|text)\b", re.I)
+    _imgtext = any(_TEXT_IMG_NAME.search((img.get("src") or "").rsplit("/", 1)[-1]) for img in root.iter("img"))
+    if not _imgtext and re.search(r"text-indent\s*:\s*-\s*(?:9{3,}|\d{4,})", _style_blob):
+        _imgtext = True
+    if _imgtext:
+        issues.append({"ruleId": "HTML_IMAGE_OF_TEXT", "wcag": "1.4.5 Images of Text", "severity": "MODERATE"})
+
     # 4.1.2 Name, Role, Value — <input> without an associated label
     labelled_ids: set[str] = set()
     for label in root.iter("label"):

@@ -78,6 +78,20 @@ _MAX_SEGS = 200        # bound the work on huge documents
 _SEG_SPLIT = re.compile(r"[.!?。！？\r\n]+")
 
 
+_CODE_CHARS = set("{};=<>#*_|\\")
+
+
+def _looks_like_code(seg: str) -> bool:
+    """CSS/markup/code that leaks into extracted text (e.g. an HTML file's inline <style>)
+    is confidently mislabelled by langdetect ('h1 { margin: 0 }' → Romanian, live false
+    positive on careers-landing.html). Human prose contains none of these characters and is
+    letter-dominant; code fails one of the two."""
+    if any(c in _CODE_CHARS for c in seg):
+        return True
+    letters = sum(c.isalpha() or c.isspace() for c in seg)
+    return letters / max(len(seg), 1) < 0.75
+
+
 def _langdetect_available() -> bool:
     try:
         from langdetect import DetectorFactory
@@ -90,8 +104,13 @@ def _langdetect_available() -> bool:
 def detect_language_parts(text: str) -> list[dict]:
     if not text or not _langdetect_available():
         return []
+    import html as _html
+    # Office extractors can leave HTML entities raw ('r&#233;gions' for 'régions') — decode
+    # so accents reach langdetect and entity punctuation doesn't read as code.
+    text = _html.unescape(text)
     from langdetect import detect_langs
-    segs = [s.strip() for s in _SEG_SPLIT.split(text) if len(s.split()) >= _MIN_SEG_WORDS]
+    segs = [s.strip() for s in _SEG_SPLIT.split(text)
+            if len(s.split()) >= _MIN_SEG_WORDS and not _looks_like_code(s)]
     if len(segs) < 2:
         return []
     counts: dict[str, int] = {}

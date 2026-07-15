@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import ProposalThumb from './ProposalThumb.jsx'
 import { thumbAlt, formatProposedValue } from './reviewCard.js'
+import { speakAsScreenReader, srSupported } from './srPreview.js'
 
 // One finding, one editor — and, above it, the evidence for what is actually changing.
 //
@@ -14,9 +15,9 @@ import { thumbAlt, formatProposedValue } from './reviewCard.js'
 // Shared by the Remediate drawer and the Review Center's evidence card: the array index IS the
 // contract with the server (approved_values[i] is proposal i), so the two screens must never
 // render a different order.
-// onDraft(i), when given, adds a per-row "Draft with AI" button — for a DEFERRED row whose images
-// have no draft yet (the reviewer writes from scratch). Omitted for proposals, which arrive with a
-// draft already in the box, so the ReviewDrawer caller is unaffected.
+// onDraft(i), when given, adds a per-row "↻ Draft this image" retry button — for a DEFERRED row
+// whose images the auto-draft couldn't fill. Omitted for proposals, which arrive with a draft
+// already in the box, so the ReviewDrawer caller is unaffected.
 export default function ProposalEditors({ proposals, values, onChange, file, sc, onDraft, draftingIdx = null, onApplyToSimilar = null, onCrossCheck = null }) {
   const [checks, setChecks] = useState({})       // idx → {verdict, second_opinion, …} | 'loading'
   if (!proposals?.length) return null
@@ -69,13 +70,15 @@ export default function ProposalEditors({ proposals, values, onChange, file, sc,
                           placeholder="Type the value that should be written…"
                           onChange={(e) => onChange(i, e.target.value)} />
               </label>
-              {/* Draft THIS image with the vision model. The model sees one image, so the button
-                  lives on the image's own row — there is no "picked" image to get wrong. */}
+              {/* Retry drafting THIS image. Descriptions generate automatically when the card comes
+                  into view; this per-image button is the recovery path for an image the auto-draft
+                  couldn't fill (vision was unavailable) — not a primary "Draft with AI" action. The
+                  model sees one image, so the button lives on the image's own row. */}
               {onDraft && (
                 <button type="button" className="evcard-draft-btn" disabled={draftingIdx != null}
-                        title="Ask the local model to describe this image — you still approve it"
+                        title="Draft a description for this image — you still approve it"
                         onClick={() => onDraft(i)}>
-                  {draftingIdx === i ? 'Drafting…' : '✨ Draft with AI'}
+                  {draftingIdx === i ? 'Drafting…' : '↻ Draft this image'}
                 </button>
               )}
               {/* Refine the draft (#131) — re-ask the vision model for a shorter or fuller
@@ -89,6 +92,14 @@ export default function ProposalEditors({ proposals, values, onChange, file, sc,
                             onClick={() => onDraft(i, k)}>{label}</button>
                   ))}
                 </span>
+              )}
+              {/* Hear it (trust): play this value through the browser's LOCAL speech synthesis
+                  with the screen-reader announcement ("Image, …"), so the reviewer judges by
+                  EAR whether the description actually conveys the image. Private, on-device. */}
+              {srSupported() && filled && (
+                <button type="button" className="evcard-similar-btn"
+                        title="Hear this read aloud the way a screen reader announces it"
+                        onClick={() => speakAsScreenReader(sc, values[i])}>🔊 Hear it</button>
               )}
               {/* Approve-similar (#132): this exact image appears more than once in the document, so
                   one description can fill every identical copy. Shown only once there's a value to
@@ -117,6 +128,17 @@ export default function ProposalEditors({ proposals, values, onChange, file, sc,
                 ) : (
                   <p style={{ fontSize: 11.5, margin: '4px 0 0', color: '#BA7517' }}>
                     ⚠ Second opinion differs — the AI independently saw: “{checks[i].second_opinion}”. Confirm the wording.
+                  </p>
+                )
+              )}
+              {/* Consensus computed at draft time (two models already ran) — shown automatically
+                  so the reviewer sees agreement without clicking Cross-check. On-demand check wins. */}
+              {!checks[i] && p?.agreement && (
+                p.agreement.verdict === 'consistent' ? (
+                  <p style={{ fontSize: 11.5, margin: '4px 0 0', color: '#0F6E56' }}>✓ Two models agree on this description{p.agreement.validator_model ? ` (${p.agreement.validator_model} confirmed)` : ''}.</p>
+                ) : (
+                  <p style={{ fontSize: 11.5, margin: '4px 0 0', color: '#BA7517' }}>
+                    ⚠ A second model saw it differently: “{p.agreement.second_opinion}”. Confirm the wording.
                   </p>
                 )
               )}

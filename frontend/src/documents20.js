@@ -1,4 +1,4 @@
-// Deva's "20-check document core" — the criteria the customer actually certifies against.
+// The "20-check document core" — the criteria the customer actually certifies against.
 //
 //   87 WCAG 2.2 criteria  →  50 US-regulated (A/AA)  →  20 that apply to documents
 //
@@ -7,7 +7,7 @@
 // two screens would quietly disagree about what was certified.
 //
 // Grouped as the customer's own standard slide groups them.
-export const DEVA_20 = new Set([
+export const DOCUMENTS_20 = new Set([
   // Structure & reading order
   '1.1.1', '1.3.1', '1.3.2', '1.3.3', '2.4.6',
   // Text & language

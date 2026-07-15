@@ -22,6 +22,7 @@ import Monitor from './Monitor.jsx'
 import Publish from './Publish.jsx'
 import Overview from './Overview.jsx'
 import AssessRunner from './AssessRunner.jsx'
+import CoverageScorecard from './CoverageScorecard.jsx'
 import RiskScore from './RiskScore.jsx'
 import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
@@ -407,8 +408,10 @@ export default function App() {
       let fresh
       if (queuedScan) {
         // Durable path: enqueue a scan job, then poll until the scan is persisted.
-        const { scan_id, workers } = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental)
-        if (!SIM && !workers) throw new Error('no workers running — start some in Monitor (or set ACP_WORKERS)')
+        const { scan_id, workers, worker_tier_alive } = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental)
+        // Split topology (#113): the API's local pool is 0 by design — the standalone worker
+        // container's heartbeat is what proves the queue is manned.
+        if (!SIM && !workers && !worker_tier_alive) throw new Error('no workers available — the worker service looks down; check Monitor')
         setLiveScanId(scan_id)
         const t0 = Date.now()
         let misses = 0
@@ -674,7 +677,7 @@ export default function App() {
                 above still pretended to be working. assessPhase tracks AssessRunner's actual
                 idle/running/done state (via onPhase), so results now appear exactly when the
                 animation finishes — same instant a real assessment would land. */}
-            {assessed && assessPhase === 'done' && <><RuleBreakdown scanId={run.id} files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
+            {assessed && assessPhase === 'done' && <><CoverageScorecard files={files} /><RuleBreakdown scanId={run.id} files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
             {assessed && assessPhase === 'done' && <RiskScore run={run} files={files} />}
           </>
         ) : placeholder)}

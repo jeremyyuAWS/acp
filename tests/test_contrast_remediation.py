@@ -85,3 +85,45 @@ def test_html_contrast_skips_dark_background():
     fixed, applied, _ = remediate_html(html)
     assert "color:#cccccc" in fixed.replace(" ", "")
     assert not any("1.4.3" in a for a in applied)
+
+
+# ── Hue-preserving contrast recolor (office_structure.min_contrast_recolor) ──────────
+# The fix must reach AA WITHOUT flattening every colour to pure black/white — the brand
+# survives, only its lightness moves.
+import colorsys  # noqa: E402
+
+
+def _hue(hex6):
+    r, g, b = (int(hex6[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    return colorsys.rgb_to_hls(r, g, b)[0]
+
+
+def test_recolor_reaches_AA_on_light_background():
+    # A light brand blue (#6FA8DC ~2.3:1 on white) must clear 4.5:1 after the fix.
+    out = osx.min_contrast_recolor("6FA8DC", "FFFFFF")
+    assert osx._contrast_ratio("FFFFFF", out) >= 4.5
+
+
+def test_recolor_preserves_hue_not_flatten_to_black():
+    # The fixed colour is still BLUE, just darker — not #000000.
+    out = osx.min_contrast_recolor("6FA8DC", "FFFFFF")
+    assert out != "000000"
+    assert abs(_hue(out) - _hue("6FA8DC")) < 0.03    # same hue, within rounding
+
+
+def test_recolor_lightens_on_dark_background():
+    # A mid colour on near-black must be LIGHTENED (not darkened) and clear AA.
+    out = osx.min_contrast_recolor("444444", "111111")
+    assert osx._contrast_ratio("111111", out) >= 4.5
+    assert osx._wcag_luminance(out) > osx._wcag_luminance("444444")
+
+
+def test_recolor_leaves_a_passing_colour_untouched():
+    assert osx.min_contrast_recolor("000000", "FFFFFF") == "000000"
+
+
+def test_recolor_is_minimal_change_keeps_more_colour_than_pure_black():
+    # The result is lighter than pure black — i.e. it stopped as soon as AA was met,
+    # preserving more of the original colour than the old flatten-to-black behaviour.
+    out = osx.min_contrast_recolor("6FA8DC", "FFFFFF")
+    assert osx._wcag_luminance(out) > osx._wcag_luminance("000000")

@@ -106,8 +106,9 @@ describe('the review screens render the proposal, not a template', () => {
     expect(src).toMatch(/<Thumbnail[^>]*locator=\{heroLocator\}[^>]*maxHeight=\{360\}/)
     // #122 pager: with many flagged images the hero steps through each one.
     expect(src).toMatch(/instances\.length > 1 &&[\s\S]{0,500}Image \{heroIdx \+ 1\} of \{instances\.length\}/)
-    // The offending image still renders as the object beside the text — following the pager.
-    expect(src).toMatch(/\{heroThumb && \([\s\S]{0,80}<ProposalThumb/)
+    // The offending image still renders as the object beside the text — following the pager, but
+    // suppressed when the hero already IS that image (xlsx isolated-image lead).
+    expect(src).toMatch(/\{heroThumb && !heroIsImage && \([\s\S]{0,80}<ProposalThumb/)
   })
 
   it('both screens draw the thumb from the same helper', () => {

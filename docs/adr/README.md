@@ -20,3 +20,6 @@ header). Match the structure of the latest ADR when adding a new one.
 - [0017 — Server-side Drive refresh via the OAuth authorization-code flow](0017-drive-offline-refresh-auth-code-flow.md) — **Proposed** (2026-07-09)
 - [0018 — Slide/page rasterization + per-shape geometry (the visual-evidence seam)](0018-slide-page-rasterization-and-shape-geometry.md) — **Proposed** (2026-07-11)
 - [0019 — AI provider gateway + governance (local-first, quality-verified, auditable)](0019-ai-provider-gateway-and-governance.md) — **Proposed** (2026-07-11)
+- [0020 — Separating Discover (inventory) from Assess (conformance)](0020-discover-assess-phase-separation.md) — **Accepted** (2026-07-12)
+- [0021 — Enterprise review memory (org style + derived preferences → curated draft guidance)](0021-enterprise-review-memory.md) — **Accepted** (2026-07-12)
+- [0022 — GPU vision as the default via a scale-to-zero RunPod Serverless endpoint](0022-gpu-vision-default-runpod-serverless.md) — **Proposed** (2026-07-13)

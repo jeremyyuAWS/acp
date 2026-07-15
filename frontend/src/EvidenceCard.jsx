@@ -3,9 +3,11 @@ import { aiProvenance, getFileGeometry, getFileRemediationDiffs, getScanAiCalls,
 import Thumbnail from './Thumbnail.jsx'
 import BeforeAfterEvidence from './BeforeAfterEvidence.jsx'
 import RiskChip from './RiskChip.jsx'
-import { buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, firstProposed, groupPages, isValueFix, proposalsOf, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview, whyRecommendation } from './reviewCard.js'
-import ProposalThumb from './ProposalThumb.jsx'
+import { authoringScaffold, buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, firstProposed, groupPages, imagesOfTextException, isValueFix, leadWithIsolatedImage, primaryActionLabel, proposalsOf, reviewIntent, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview, whyRecommendation, whySafeToApprove } from './reviewCard.js'
+import ProposalThumb, { isSafeThumb } from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
+import { speakAsScreenReader, srSupported } from './srPreview.js'
+import { runAutoDraft } from './autoDraft.js'
 import HowToConfirm from './HowToConfirm.jsx'
 
 // Evidence Card (PRD v2) — a PR-style review of ONE accessibility issue. The human APPROVES
@@ -43,6 +45,9 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   const [aiCalls, setAiCalls] = useState(null)            // null = unloaded, [] = loaded-empty
   const [drafting, setDrafting] = useState(false)
   const [draftMsg, setDraftMsg] = useState(null)   // { kind: 'ai' | 'template' | 'error', text }
+  // Deterministic verification aid: the text OCR actually read from the drafted image, so the
+  // reviewer checks the description against what the image SAYS instead of squinting at a thumb.
+  const [ocrAid, setOcrAid] = useState(null)
   // Which deferred image the reviewer is looking at. The vision model describes ONE image, so
   // a row carrying nineteen must say which — defaulting to the first silently captions the
   // wrong picture and the reviewer approves alt text for an image they never saw.
@@ -101,6 +106,11 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // The value the AI actually proposed — reviewTelemetry diffs the human's final value against
   // this to derive the `edited` calibration signal, so it must be the proposal, not the draft.
   const aiDraft = useRef(firstProposed(item) ?? item?.approved_value ?? null)
+  // Auto-draft plumbing: the card element (for the viewport observer), a once-guard so the auto
+  // draft fires at most once, and whether the card has been scrolled into view yet.
+  const rootRef = useRef(null)
+  const autoDraftedRef = useRef(false)
+  const [seen, setSeen] = useState(false)
 
   useEffect(() => {
     let live = true
@@ -124,6 +134,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
       const s = (r?.suggestion || '').trim()
       if (!s) { setDraftMsg({ kind: 'error', text: 'The model returned nothing — write the value yourself.' }); return }
       setValue(s)
+      setOcrAid(r.ocr_text || null)
       if (r.is_template) {
         // A fill-in-the-blank template, NOT a description of this image. It is deliberately
         // NOT recorded as aiDraft: approving it verbatim must count as human-authored, and
@@ -133,7 +144,11 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
         setDraftMsg({ kind: 'template', text: r.reason || 'Template only — no vision model was available to look at this image. Rewrite it before approving.' })
       } else {
         aiDraft.current = s   // a genuine AI value: `edited` now means the human changed it
-        setDraftMsg({ kind: 'ai', text: `AI draft${r.model ? ` · ${r.model}` : ''} — edit if it misses the meaning.` })
+        setDraftMsg(r.deterministic
+          // Machine-detected, not model-authored (e.g. 3.1.2 language ID via langdetect):
+          // say so — "AI draft · llama3.2" would misattribute a deterministic detection.
+          ? { kind: 'ai', text: `Detected deterministically${r.model ? ` · ${r.model}` : ''} — approve, or override if the detection is wrong.` }
+          : { kind: 'ai', text: `AI draft${r.model ? ` · ${r.model}` : ''} — edit if it misses the meaning.` })
       }
     } catch (e) {
       setDraftMsg({ kind: 'error', text: e?.message || 'AI draft unavailable — write the value yourself.' })
@@ -144,6 +159,30 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
 
   // Draft one deferred image, by its own row. Unlike draftWithAi (single box), this writes the
   // result into instance i's value — the model saw image i, so its description belongs to image i.
+  // "Draft all with AI" — fill every still-empty image editor with an AI description in one
+  // click, so a 14-image card becomes review-and-approve instead of author-14-by-hand. Runs
+  // sequentially (one vision call at a time) so the local model isn't overwhelmed; skips
+  // images the reviewer already filled. Most cards arrive PRE-drafted from the scan; this is
+  // the on-demand path for when vision was unavailable then and is reachable now.
+  const [draftingAll, setDraftingAll] = useState(false)
+  const draftAll = async () => {
+    if (draftingAll || draftingIdx != null) return
+    setDraftingAll(true); setDraftMsg(null)
+    let n = 0
+    for (let i = 0; i < instances.length; i++) {
+      if ((values[i] || '').trim()) continue        // don't overwrite a value already there
+      try {
+        const r = await suggestFix(item.scan_id, item.file, item.rule_id, instances[i]?.locator)
+        const s = (r?.suggestion || '').trim()
+        if (s && !r.is_template) { setValueAt(i, s); n += 1 }
+      } catch { /* one image failing must not stop the batch */ }
+    }
+    setDraftingAll(false)
+    setDraftMsg({ kind: n ? 'ai' : 'template', text: n
+      ? `Drafted ${n} image${n === 1 ? '' : 's'} with AI — review and edit before approving.`
+      : 'No AI drafts available (is the vision model running?) — describe the images yourself.' })
+  }
+
   const draftInstance = async (i, style = '') => {
     if (draftingIdx != null || !item?.scan_id || !item?.file || !item?.rule_id) return
     setDraftingIdx(i); setDraftMsg(null)
@@ -152,10 +191,13 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
       const s = (r?.suggestion || '').trim()
       if (!s) { setDraftMsg({ kind: 'error', text: `Image ${i + 1}: the model returned nothing — write it yourself.` }); return }
       setValueAt(i, s)
+      setOcrAid(r.ocr_text || null)
       const styleWord = style === 'shorter' ? ' (shorter)' : style === 'detailed' ? ' (more detail)' : style === 'regenerate' ? ' (regenerated)' : ''
       setDraftMsg(r.is_template
         ? { kind: 'template', text: r.reason || 'Template only — no vision model was available. Rewrite it before approving.' }
-        : { kind: 'ai', text: `Image ${i + 1} drafted${styleWord}${r.model ? ` · ${r.model}` : ''} — edit if it misses the meaning.` })
+        : r.deterministic
+          ? { kind: 'ai', text: `Detected deterministically${r.model ? ` · ${r.model}` : ''} — approve, or override if the detection is wrong.` }
+          : { kind: 'ai', text: `Image ${i + 1} drafted${styleWord}${r.model ? ` · ${r.model}` : ''} — edit if it misses the meaning.` })
     } catch (e) {
       setDraftMsg({ kind: 'error', text: e?.message || 'AI draft unavailable — write the value yourself.' })
     } finally {
@@ -173,12 +215,20 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // The kind of image, read from the model's own description (#130) — a routing hint for what a
   // good alt text looks like here (a chart needs a trend, an icon two words). null → no chip.
   const imgKind = describedImageType(heroInst ? { proposals: [heroInst] } : item)
+  // Lead with the ISOLATED embedded image as the hero, not a whole-page render, when the format's
+  // page render would obscure the object under review (xlsx = the entire sheet). Only when we
+  // actually hold the image bytes; otherwise fall through to the page-render hero as before.
+  const heroIsImage = leadWithIsolatedImage(card) && isSafeThumb(heroThumb)
   // Reviewer-trust primitives (all derived from real fields — never a fabricated score):
   //   ladder  — how far the pipeline got before handing off (detected → validated → your approval)
   //   signals — the concrete evidence behind the finding (detection basis, reasoning, subjective flag)
   const ladder = verificationLadder(card)
   const signals = evidenceSignals(card)
   const whyReview = whyHumanReview(card)
+  // Review Intent (AI Work Inbox) — the one plain-language sentence at the top: why you're here
+  // and what to do, before any audit detail. The primary button's label follows the same workflow.
+  const intent = reviewIntent(item, card.sc)
+  const primaryAction = primaryActionLabel(item)
   // AI provenance (ADR 0019 Phase 0): which model produced this + where the bytes were processed.
   const aiProv = aiProvenance()
 
@@ -197,6 +247,11 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // Verifiable trust states (ADR 0019 §3a) — grounding + validation, the evidence-based replacement
   // for a confidence label. No number, no opaque level; the review-requirement axis is whyReview.
   const trust = trustStates(card)
+  // "Why this is safe to approve" (AI Work Inbox P0) — the affirmative, plain-language summary of
+  // what has ALREADY been checked, so the reviewer builds confidence up front instead of digging
+  // through the audit trail. Null when the honest answer is "still needs judgement" — then only the
+  // "Why human review?" callout stands.
+  const whySafe = whySafeToApprove(card, { trust })
   // Deterministic, keyless plain-English explanation (the "✨ Explain this finding" answer).
   // "Why this recommendation?" (#9) — the structured reasoning chain. The real OCR snippet, when
   // the pipeline read one, is embedded in the rationale/evidence as OCR: "…"; pull it out so the
@@ -220,15 +275,9 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // An item carrying a proposal always takes a value, even if its SC isn't a classic VALUE_FIX
   // (e.g. a 1.3.3 sensory rewrite) — otherwise the reviewer sees a proposal they cannot accept.
   const editable = card.track.track !== 'auto' && (isValueFix(card.sc) || !!card.proposal)
-  // What approving actually does, in three honest cases:
-  //   judgement (contrast)      → the sign-off IS the resolution        → the track's own verb
-  //   content WITH an applier   → the value is written into the document → say so
-  //   content with no applier   → the value is recorded, nothing written → say that instead
-  // Alt text on an Office file is the only thing ACP can write back today (api/apply_alt.py).
-  const hasApplier = card.sc === '1.1.1' && /\.(docx|pptx|xlsx)$/i.test(card.file || '')
-  const primaryLabel = card.certifiesOnApprove
-    ? card.track.action
-    : hasApplier ? 'Approve & write into the document' : 'Approve — record sign-off'
+  // The primary button reads by workflow (primaryAction, above) — "Approve AI fix" / "Confirm
+  // fix" / "Approve description". The honest "writes into the document vs records sign-off"
+  // distinction stays in the "What you need to do" prose below, not on the button.
   // Any row carrying proposals gets the per-instance editor. It is the only surface that shows
   // WHAT is changing — the image, or the passage of text — beside the value being written, and
   // a reviewer cannot honestly approve a description of something they were never shown.
@@ -240,7 +289,41 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // one box — keep warning rather than implying it can. (Now rare: deferred rows carry evidence.)
   const manyInstances = !multi && card.findingCount > 1 && isValueFix(card.sc)
 
-  const decide = async (status, rejectReason = null) => {
+  // Auto-draft the preview when the card scrolls into view (Principle: the reviewer confirms a
+  // suggestion, they never click "Draft with AI" and wait). The inbox lists every finding at once,
+  // so we observe visibility and draft only what the reviewer actually reaches — off-screen cards
+  // stay dormant. jsdom/SSR has no IntersectionObserver: treat as immediately seen (tests + no-JS).
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el || seen) return
+    if (typeof IntersectionObserver !== 'function') { setSeen(true); return }
+    const obs = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) { setSeen(true); obs.disconnect() }
+    }, { rootMargin: '150px' })
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [seen])
+
+  // Auto-generate the preview (AI Work Inbox P0 — replaces the "Draft with AI" button): a value-fix
+  // that reached the inbox with no draft is the fallback case where vision was unavailable at scan
+  // time. Draft it automatically, at most once, only after it is in view, and through the shared
+  // gate so opening a 40-finding inbox never stampedes the model. A reviewer's own text is never
+  // overwritten (guarded on an empty value) and pre-drafted cards are skipped (aiDraft/values set).
+  useEffect(() => {
+    if (!seen || autoDraftedRef.current) return
+    if (!editable || !item?.scan_id || !item?.file || !item?.rule_id) return
+    if (multi) {
+      if (usingEvidence && instances.length && values.some((v) => !(v || '').trim())) {
+        autoDraftedRef.current = true
+        runAutoDraft(draftAll)
+      }
+    } else if (!aiDraft.current && !(value || '').trim()) {
+      autoDraftedRef.current = true
+      runAutoDraft(draftWithAi)
+    }
+  }, [seen]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const decide = async (status, rejectReason = null, resolution = null) => {
     if (busy) return
     setBusy(true)
     setActError(null)
@@ -254,14 +337,20 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
     })
     // What actually gets written into the document, one entry per image, positionally aligned
     // with `instances` (proposals or deferred evidence). Only on approval: rejecting approves no
-    // content. The server routes these to proposals[] or evidence[] as the row demands.
-    const approvedValues = (status === 'approved' && instances.length)
+    // content. A WCAG-exception resolution (decorative / essential logo) writes NO value — the
+    // finding is resolved by human judgment, not by authoring alt text — so suppress the values.
+    const approvedValues = (status === 'approved' && !resolution && instances.length)
       ? (multi ? values : [value || ''])
       : null
+    // A resolution stands in for the authored value: send no finalValue (nothing was written), and
+    // if the reviewer left the note blank, self-describe the exception so the audit line is legible.
+    const finalValue = resolution ? null : t.finalValue
+    const noteOut = note || (resolution === 'decorative' ? 'Marked decorative — no description needed'
+      : resolution === 'essential_exception' ? 'Marked essential logo/brand — exempt' : null)
     try {
-      await onAct(card.id, status, note || null, t.finalValue,
+      await onAct(card.id, status, noteOut, finalValue,
                   { edited: t.edited, reviewMs: t.reviewMs, aiValue: t.aiValue, approvedValues,
-                    rejectReason })
+                    rejectReason, resolution })
       onResolved && onResolved(card.id, status)
     } catch (e) {
       // HitlBell rolls the optimistic list back and rethrows. Without this catch the rejection
@@ -274,7 +363,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   }
 
   return (
-    <section className="evcard" aria-label={`Review ${card.wcag}`}
+    <section ref={rootRef} className="evcard" aria-label={`Review ${card.wcag}`}
              style={{ border: '1px solid var(--line)', borderRadius: 10, padding: 14, marginBottom: 12, background: 'var(--card, #fff)' }}>
       <header className="evcard-hd" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         <span className="fmtchip">{card.fmt}</span>
@@ -294,6 +383,23 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
           <span className={`conf conf-${card.track.badge.tone}`}>{card.track.badge.label}</span>
         </span>
       </header>
+
+      {/* Review Intent (AI Work Inbox) — the first thing the reviewer reads: one plain-language
+          sentence, task-first, no jargon. The audit lifecycle/trust states follow below. */}
+      {intent && <p className="evcard-intent">{intent}</p>}
+
+      {/* "Why this is safe to approve" (AI Work Inbox P0) — positive, up-front evidence framing so
+          the reviewer sees what has already been checked without opening the audit trail. Rendered
+          ONLY when whySafeToApprove found genuinely affirmative, real signals; a finding that still
+          needs human judgement shows nothing here (the "Why human review?" callout carries it). */}
+      {whySafe && (
+        <div className="evcard-safe">
+          <b>✓ Why this is safe to approve</b>
+          <ul>
+            {whySafe.points.map((p, i) => <li key={i}>{p}</li>)}
+          </ul>
+        </div>
+      )}
 
       {/* Verification ladder — the honest lifecycle of this finding. Each step reflects a real
           pipeline state; a value-fix reads "validates on approval" (not a green pass) because the
@@ -347,15 +453,26 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
               ))}
             </div>
           )}
-          <Thumbnail scanId={card.scanId} file={card.file} page={card.page || 1} locator={heroLocator} maxHeight={360} />
+          {heroIsImage ? (
+            // xlsx (ADR 0018): the page render is the whole sheet, so lead with the flagged image
+            // itself — the actual r:embed bytes — shown large. A caption says it's isolated from the
+            // sheet so the reviewer knows THIS is the image under review, not a crop of a screenshot.
+            <figure className="evcard-hero-img">
+              <ProposalThumb thumb={heroThumb} alt={thumbAlt(card.thumbKind, card.file)} size={360} />
+              <figcaption className="muted">The flagged image, shown on its own (isolated from the sheet)</figcaption>
+            </figure>
+          ) : (
+            <Thumbnail scanId={card.scanId} file={card.file} page={card.page || 1} locator={heroLocator} maxHeight={360} />
+          )}
         </div>
       )}
 
       <div className="evcard-body" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
         {/* The specific object under review — the offending image beside the text. Follows the pager
             (#122) so it's the SAME image the hero boxes above. The whole-page context is the hero
-            preview; this is the "what". */}
-        {heroThumb && (
+            preview; this is the "what". Suppressed when the hero IS this image already (xlsx isolated
+            image) — no point showing the same picture twice, big then small. */}
+        {heroThumb && !heroIsImage && (
           <ProposalThumb thumb={heroThumb} alt={thumbAlt(card.thumbKind, card.file)}
                          size={thumbSize(card.thumbKind, 96)} className="evcard-thumb" />
         )}
@@ -415,6 +532,23 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
 
           {editable && multi ? (
             <>
+              {/* Drafts generate automatically once the card is in view (auto-draft effect above),
+                  so a 14-image card becomes review-and-approve without a click. While the batch runs
+                  we show a passive status; if it left images blank (vision unavailable), a low-key
+                  "Draft remaining" retry stands in for the removed button — recovery, not a primary
+                  action. */}
+              {draftingAll ? (
+                <span className="evcard-drafting" role="status" style={{ marginBottom: 8 }}>
+                  ✨ Drafting all {instances.length} images…
+                </span>
+              ) : (autoDraftedRef.current && instances.length >= 2 && draftingIdx == null
+                    && values.some((v) => !(v || '').trim()) && (
+                <button type="button" className="evcard-draftall-btn"
+                        title="Some images have no description yet — ask the vision model to draft the rest"
+                        onClick={draftAll} style={{ marginBottom: 8 }}>
+                  ↻ Draft remaining {values.filter((v) => !(v || '').trim()).length} image{values.filter((v) => !(v || '').trim()).length === 1 ? '' : 's'}
+                </button>
+              ))}
               <ProposalEditors proposals={instances} values={values} sc={card.sc}
                                onChange={setValueAt} file={card.file}
                                onDraft={usingEvidence ? draftInstance : undefined}
@@ -425,36 +559,76 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
                   {draftMsg.text}
                 </span>
               )}
+              {usingEvidence && ocrAid && (
+                <details className="evcard-ocr-aid">
+                  <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>
+                    🔍 Verify — text OCR-read from this image
+                  </summary>
+                  <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>“{ocrAid}”</p>
+                </details>
+              )}
             </>
           ) : editable ? (
             <label className="evcard-rec">
               <span className="evcard-rec-head">
+                {/* The draft generates automatically (auto-draft effect above) — no button. The label
+                    reflects the live state: drafting → recommendation → or "author it yourself" when
+                    no model value could be produced. */}
                 <span className="muted" style={{ fontSize: 12 }}>
-                  {aiDraft.current ? 'AI recommendation (edit before approving if needed)' : 'No AI draft — type the value a screen reader should announce'}
+                  {aiDraft.current ? 'AI recommendation (edit before approving if needed)'
+                    : drafting ? '✨ Drafting a suggestion…'
+                    : 'No AI draft — type the value a screen reader should announce'}
                 </span>
-                {/* Ask the model for a draft on demand. Only offered when nothing was proposed —
-                    with a proposal present the box is already filled and re-drafting would
-                    silently overwrite the value the rationale below explains. */}
-                {!aiDraft.current && item?.scan_id && item?.file && item?.rule_id && (
-                  <button type="button" className="evcard-draft-btn" disabled={drafting}
-                          title="Ask the local model to draft this value — you still approve it"
-                          onClick={draftWithAi}>
-                    {drafting ? 'Drafting…' : '✨ Draft with AI'}
-                  </button>
-                )}
               </span>
               <textarea className="evcard-rec-input" rows={2} value={value}
                         placeholder={aiDraft.current ? '' : 'Type the value a screen reader should announce…'}
                         onChange={(e) => setValue(e.target.value)} />
+              {/* Suggested outline — turns the empty box into a guided task when authoring from
+                  scratch. Disappears the moment the reviewer starts typing. */}
+              {!aiDraft.current && !(value || '').trim() && authoringScaffold(card.sc) && (
+                <div className="evcard-scaffold">
+                  <b>Suggested outline</b>
+                  <ul>{authoringScaffold(card.sc).map((h, i) => <li key={i}>{h}</li>)}</ul>
+                </div>
+              )}
+              {srSupported() && (value || '').trim() && (
+                <button type="button" className="evcard-refine-btn" style={{ marginTop: 4 }}
+                        title="Hear this read aloud the way a screen reader announces it"
+                        onClick={() => speakAsScreenReader(card.sc, value)}>🔊 Hear it</button>
+              )}
               {draftMsg && (
                 <span className={`evcard-draft-msg evcard-draft-${draftMsg.kind}`} role="status">
                   {draftMsg.text}
+                  {/* Auto-draft failed or returned a template — a low-key retry replaces the removed
+                      "Draft with AI" button so a transient vision outage is recoverable. */}
+                  {(draftMsg.kind === 'error' || draftMsg.kind === 'template') && !drafting && (
+                    <button type="button" className="evcard-linkbtn" style={{ marginLeft: 6 }}
+                            onClick={draftWithAi}>↻ Try again</button>
+                  )}
                 </span>
+              )}
+              {ocrAid && (
+                <details className="evcard-ocr-aid">
+                  <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>
+                    🔍 Verify — text OCR-read from this image
+                  </summary>
+                  <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>“{ocrAid}”</p>
+                </details>
               )}
             </label>
           ) : card.recommendation ? (
             <p className="evcard-rec-static"><b>AI recommendation:</b> {card.recommendation}</p>
           ) : null}
+
+          {/* Details ▾ (AI Work Inbox progressive disclosure) — the audit jargon a reviewer only
+              needs when they want to dig: the trust-state enums, model/provenance/zone + audit
+              trail, the clustered detection evidence, and the honest "why a human is here". The
+              primary flow above answers what to do; this answers how the AI got there. Collapsed by
+              default so the card leads with the decision, not the machinery. */}
+          {(trust.grounding || trust.validation || ((card.proposal || card.recommendation) && aiProv) || signals.length > 0 || whyReview) && (
+            <details className="evcard-details">
+              <summary>🔎 Detection, provenance &amp; audit — how the AI reached this</summary>
+              <div className="evcard-details-body">
 
           {/* Trust basis (ADR 0019 §3a) — verifiable states, NOT a confidence score. Grounding = what
               the value is anchored in (OCR / document text / a visual guess); Validation = whether an
@@ -562,6 +736,10 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
             </div>
           )}
 
+              </div>
+            </details>
+          )}
+
           {card.diffs.length > 0 && (
             <div className="evcard-ba">
               {card.diffs.slice(0, 1).map((d, i) => (
@@ -660,8 +838,46 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
             </p>
           )}
 
+          {/* WCAG-exception resolution (HITL-six close-out) — the two findings a model must NOT
+              decide alone. Instead of authoring alt text, the reviewer applies the exception the
+              standard allows: a decorative image needs no description (1.1.1), and an essential
+              logo/brand mark is exempt from the images-of-text rule (1.4.5/1.4.9). One tap resolves
+              the finding by human judgment; the reason is recorded in the audit trail (no value is
+              written into the document, so nothing is misrepresented as a fix). */}
+          {card.sc === '1.1.1' && (
+            <div className="evcard-exception">
+              <span className="muted">Is this image purely decorative? Then it needs no description.</span>
+              <button type="button" className="ghost small" disabled={busy}
+                      title="Resolve as decorative — records that this image needs no text alternative (WCAG 1.1.1). No description is written."
+                      onClick={() => decide('approved', null, 'decorative')}>🚫 Decorative — no alt needed</button>
+            </div>
+          )}
+          {/* Images-of-text exception (1.4.5/1.4.9), routed by detected image kind (#130): a logo or
+              an unidentified image gets the "essential logotype — exempt" disposition; a DATA image
+              (a chart, diagram, screenshot…) instead gets honest remediation guidance and NO logo
+              question — a chart is not a logo, and its text should become real text, not be waved
+              through as essential. */}
+          {(() => {
+            const exc = imagesOfTextException(card.sc, imgKind)
+            if (!exc) return null
+            return (
+              <div className="evcard-exception">
+                {exc.action ? (
+                  <>
+                    <span className="muted">{exc.prompt}</span>
+                    <button type="button" className="ghost small" disabled={busy}
+                            title={exc.action.title}
+                            onClick={() => decide('approved', null, exc.action.resolution)}>{exc.action.label}</button>
+                  </>
+                ) : (
+                  <span className="muted evcard-exception-note">{exc.note}</span>
+                )}
+              </div>
+            )
+          })()}
+
           <div className="evcard-actions">
-            <button className="qbtn approve" disabled={busy} onClick={() => decide('approved')}>✓ {primaryLabel}</button>
+            <button className="qbtn approve" disabled={busy} onClick={() => decide('approved')}>✓ {primaryAction}</button>
             <button className="qbtn self" disabled={busy}
                     title="Take ownership — fix it yourself, then re-scan to confirm"
                     onClick={() => decide('skipped')}>✋ I’ll fix it</button>

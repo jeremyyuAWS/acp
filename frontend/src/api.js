@@ -164,6 +164,14 @@ export const getScanRemediationDiffs = (scanId) => {
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation-diffs`,
                { headers: headers() }).then(j).catch(() => [])
 }
+// Audit trail (maturity Phase 4): chronological provenance of one document in one scan —
+// scanned → AI drafted → human decided → fix written → published. Every event is a real
+// persisted row; [] on any error (the History panel simply doesn't render).
+export const getDocumentTimeline = (scanId, file) => {
+  if (SIM || !scanId || !file) return sim([])
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/timeline?file=${encodeURIComponent(file)}`,
+               { headers: headers() }).then(j).catch(() => [])
+}
 export const getMe = () => (SIM ? sim(simIdentity()) : fetch(`${BASE}/me`, { headers: headers() }).then(j))
 export const getSources = () => (SIM ? sim(simGetSources()) : fetch(`${BASE}/sources`, { headers: headers() }).then(j))
 export const getRubric = () => (SIM
@@ -384,7 +392,11 @@ export const updateHitlItem = (itemId, status, reviewerNote = null, approvedValu
         approved_values: opts.approvedValues ?? null,
         edited: !!opts.edited, review_ms: opts.reviewMs ?? null, ai_value: opts.aiValue ?? null,
         // Feedback intelligence: WHY a rejection happened (enum; bulk/keyboard paths send 'unspecified')
-        reject_reason: opts.rejectReason ?? null }),
+        reject_reason: opts.rejectReason ?? null,
+        // WCAG exception the reviewer applied instead of writing a fix: 'decorative' (1.1.1 — image
+        // conveys nothing, no text alternative required) or 'essential_exception' (1.4.5/1.4.9 —
+        // a logo/brand mark is exempt). Recorded in the audit trail as WHY the finding is resolved.
+        resolution: opts.resolution ?? null }),
     }).then(j))
 // HITL review telemetry for the workspace dashboard — decisions by action, approval rate,
 // edit rate (confidence-calibration signal), avg review time (reviewer-time-saved). Scan-scoped.

@@ -39,6 +39,108 @@ _PAGE_THUMB_EDGE = 320
 _FIX_THUMB_EDGE = 96
 
 
+# ── 1.4.3 / 1.4.6 — deterministic text-contrast darkening ──────────────────────
+# Darken to below the detector's AAA floor (office_structure.pdf_contrast_checks flags
+# luma > 0.45 for AAA, > 0.62 for AA), with margin — one darken clears both criteria and
+# the post-fix re-scan can verify it. Same luma model as the detector, so fixer and
+# finding can never disagree about what "too light" means.
+_CONTRAST_TARGET_LUMA = 0.40
+# Fill-colour operators this fixer understands. sc/scn (arbitrary colourspaces) are left
+# alone — darkening a colour we can't interpret risks corrupting it, and the re-scan
+# verify-guard means an unclear fix is simply never claimed.
+_FILL_GRAY, _FILL_RGB, _FILL_CMYK = "g", "rg", "k"
+# Path-painting operators: a fill colour consumed by one of these coloured a SHAPE, and a
+# shape/background fill must never be darkened (it would invert the contrast problem).
+_PAINT_OPS = {"f", "F", "f*", "B", "B*", "b", "b*", "S", "s"}
+_TEXT_SHOW_OPS = {"Tj", "TJ", "'", '"'}
+
+
+def _fill_luma(op: str, vals: list[float]) -> float | None:
+    if op == _FILL_GRAY and len(vals) == 1:
+        return vals[0]
+    if op == _FILL_RGB and len(vals) == 3:
+        r, g, b = vals
+        return 0.299 * r + 0.587 * g + 0.114 * b
+    if op == _FILL_CMYK and len(vals) == 4:
+        c, m, y, k = vals
+        return ((1 - c) * 0.299 + (1 - m) * 0.587 + (1 - y) * 0.114) * (1 - k)
+    return None
+
+
+def _darken(op: str, vals: list[float], luma: float) -> list[float]:
+    """Scale a too-light fill colour toward black until its luma hits the target —
+    hue-preserving for RGB (all channels scale together), K-boosting for CMYK."""
+    scale = _CONTRAST_TARGET_LUMA / luma
+    if op == _FILL_CMYK:
+        c, m, y, k = vals
+        return [c, m, y, 1 - (1 - k) * scale]
+    return [v * scale for v in vals]
+
+
+def _colours_text(ops, idx: int, in_text: bool) -> bool:
+    """Does the fill colour set at ops[idx] colour TEXT? Inside BT..ET it unambiguously
+    does. Outside, scan forward: it colours text if a text object begins and shows text
+    before any path-painting op, graphics-state restore (Q), or another fill op consumes
+    it — the common `set colour; BT … Tj … ET` pattern. Conservative by construction:
+    any ambiguity (Q, painting, re-set) leaves the colour untouched."""
+    if in_text:
+        return True
+    for operands, operator in ops[idx + 1:]:
+        name = str(operator)
+        if name in _TEXT_SHOW_OPS:
+            return True
+        if name in _PAINT_OPS or name == "Q" or name in (_FILL_GRAY, _FILL_RGB, _FILL_CMYK):
+            return False
+    return False
+
+
+def _fix_pdf_text_contrast(pdf) -> int:
+    """Darken light TEXT fill colours in every page's content stream so the document's
+    text meets the contrast floors (WCAG 1.4.3/1.4.6, white-background model — the same
+    assumption the detector makes). Deterministic content-stream rewrite via pikepdf;
+    only text-scoped colours are touched (see _colours_text), so shapes, backgrounds and
+    images are never altered. Returns the number of colour operations darkened."""
+    import pikepdf
+    changed_total = 0
+    for page in pdf.pages:
+        try:
+            ops = [[list(operands), operator] for operands, operator
+                   in pikepdf.parse_content_stream(page)]
+        except Exception:
+            continue
+        changed = 0
+        in_text = False
+        for i, (operands, operator) in enumerate(ops):
+            name = str(operator)
+            if name == "BT":
+                in_text = True
+                continue
+            if name == "ET":
+                in_text = False
+                continue
+            if name not in (_FILL_GRAY, _FILL_RGB, _FILL_CMYK):
+                continue
+            try:
+                vals = [float(v) for v in operands]
+            except (TypeError, ValueError):
+                continue
+            luma = _fill_luma(name, vals)
+            if luma is None or luma <= 0.45:      # detector's AAA floor — already fine
+                continue
+            if not _colours_text(ops, i, in_text):
+                continue
+            ops[i][0] = _darken(name, vals, luma)
+            changed += 1
+        if changed:
+            try:
+                page.Contents = pdf.make_stream(pikepdf.unparse_content_stream(
+                    [(operands, operator) for operands, operator in ops]))
+                changed_total += changed
+            except Exception:
+                continue                          # one unwritable page never sinks the rest
+    return changed_total
+
+
 def _propose_reading_order(pdf, source_path: str, *, ai_enabled: bool, scan_id, file,
                            proposals) -> None:
     """WCAG 1.3.2 — for an UNTAGGED (scanned/flat) PDF, vision proposes the page reading
@@ -76,6 +178,156 @@ def _propose_reading_order(pdf, source_path: str, *, ai_enabled: bool, scan_id, 
         # image's thumb: a whole page shrunk to 96px is an unreadable grey rectangle. `kind`
         # tells the card to show it at page size, and to describe it as a page, not an image.
         thumb=_prop.thumb_b64(png, max_edge=_PAGE_THUMB_EDGE)))
+
+
+def _propose_structure_map(pdf, source_path: str, *, proposals) -> None:
+    """WCAG 1.3.1 — for an UNTAGGED PDF, derive the document's heading structure
+    deterministically (font-size rank, no AI) and hand it to a human as a structure map to
+    confirm. Tags can't be auto-written safely (re-authoring), but "here is the structure"
+    turns the re-author-this-file dead end into a one-click confirmation whose approved map
+    is the tagging instruction + compliance evidence. Self-gating: a tagged PDF, or one
+    with no visually-distinct headings (uniform-font / scanned), yields nothing — we never
+    fabricate a structure that isn't in the document (ADR 0016)."""
+    if proposals is None:
+        return
+    try:
+        if "/StructTreeRoot" in pdf.Root:
+            return                                 # tagged — structure already exists
+    except Exception:
+        return
+    headings = _extract_pdf_headings(source_path)
+    if len(headings) < _MIN_OUTLINE_ENTRIES:
+        return
+    from proposals import infer_heading_levels, proposal
+    levels = infer_heading_levels(size for _t, _p, size in headings)
+    lines = [f"Heading {levels[float(size)]} · “{title}” (p.{page + 1})"
+             for title, page, size in headings]
+    proposals.append(proposal(
+        locator="document structure",
+        before="(untagged PDF — no structure tree for assistive technology)",
+        proposed_value="\n".join(lines),
+        rationale=("Derived deterministically from the document's font hierarchy — confirm "
+                   "it matches the intended structure. The approved map is the tagging "
+                   "instruction for re-authoring and the compliance evidence of what the "
+                   "structure should be."),
+        source="font-size rank (deterministic) — human confirmation required",
+        kind="structure-map"))
+
+
+_PDF_LINK_PROPOSAL_CAP = 12       # a review card with 30 links is homework, not assistance
+_PDF_TEXT_SCAN_PAGE_CAP = 20      # bound text extraction on a large PDF (mirrors the detector)
+
+
+def _propose_pdf_link_purpose(pdf, source_path: str, *, ai_enabled: bool, proposals) -> None:
+    """WCAG 2.4.4 Link Purpose (In Context) — a link annotation whose visible text IS the raw
+    URL (the URL string of a /Link's /URI appears verbatim in the page text). A bare URL is not
+    a meaningful label, but rewriting it re-flows the page's text runs, so this is a proposal,
+    never an auto-fix: derive a descriptive label from the link target (deterministic) and hand
+    it to a human to confirm. Mirrors office_structure.pdf_link_purpose_check exactly, so a
+    proposal only appears where the detector flagged. Self-gating — descriptive links yield
+    nothing (ADR 0016: we never fabricate a link we can't derive from its target)."""
+    if proposals is None:
+        return
+    try:
+        import pikepdf  # noqa: F401
+        uris: list[str] = []
+        for page in pdf.pages:
+            for annot in (page.get("/Annots") or []):
+                try:
+                    if str(annot.get("/Subtype")) != "/Link":
+                        continue
+                    action = annot.get("/A")
+                    uri = action.get("/URI") if action is not None else None
+                    if uri:
+                        uris.append(str(uri))
+                except Exception:
+                    continue
+        if not uris:
+            return
+        import pdfplumber
+        text = ""
+        with pdfplumber.open(source_path) as doc:
+            for page in doc.pages[:_PDF_TEXT_SCAN_PAGE_CAP]:
+                text += (page.extract_text() or "") + " "
+                if len(text) > 20000:
+                    break
+    except Exception:
+        return
+    import re as _re2
+    import proposals as _prop
+    seen: set[str] = set()
+    for uri in uris:
+        if uri in seen:
+            continue
+        # The detector's predicate: the URI (or its scheme-stripped form) shows as visible text.
+        bare = _re2.sub(r"^https?://", "", uri)
+        if not (uri and (uri in text or (bare and bare in text))):
+            continue
+        seen.add(uri)
+        der = _prop.derive_link_text(uri, "")
+        if der:
+            proposals.append(_prop.proposal(
+                locator=uri, before=uri,
+                proposed_value=der["text"],
+                rationale=("the visible link text is the raw URL, which conveys nothing about "
+                           f"the destination — {der['rationale']}"),
+                source="derived from the link target (deterministic) — human confirmation required",
+                kind="link-purpose"))
+        elif ai_enabled:
+            try:
+                import ai as _ai
+                res = (_ai.suggest_fix("2.4.4", "Link Purpose", "A", "",
+                                       detail=f'link text "{uri}" → {uri}')
+                       if _ai.is_available() else None)
+            except Exception:
+                res = None
+            if res and res.get("suggestion"):
+                proposals.append(_prop.proposal(
+                    locator=uri, before=uri,
+                    proposed_value=res["suggestion"],
+                    rationale=("the visible link text is the raw URL; the target is opaque, so AI "
+                               "drafted descriptive text — confirm it names the destination"),
+                    source=f"AI text model ({res.get('model', 'llama')}) — human confirmation required",
+                    kind="link-purpose"))
+        if len([p for p in proposals if p.get("kind") == "link-purpose"]) >= _PDF_LINK_PROPOSAL_CAP:
+            break
+
+
+def _propose_pdf_headings(pdf, source_path: str, *, proposals) -> None:
+    """WCAG 2.4.6 Headings and Labels — a TAGGED PDF (has a StructTreeRoot) that carries NO
+    heading struct elements: assistive tech then has no headings to navigate by. This is the
+    complement of the 1.3.1 structure-map proposer (which handles UNTAGGED PDFs) — here the
+    tagging exists but omits headings, so we derive candidate headings deterministically from
+    the font hierarchy and hand them over as a heading map to confirm. Re-tagging re-authors
+    the file, so this is never auto-applied. Self-gating via the detector: fires only where
+    office_structure.pdf_headings_labels_check flagged (tagged, past the page floor, no
+    headings), and yields nothing when no visually-distinct headings exist (ADR 0016)."""
+    if proposals is None:
+        return
+    try:
+        # Reuse the detector as the gate so proposal and finding stay in lock-step: it fires
+        # only for a tagged PDF, past the page floor, with no heading struct elements.
+        from office_structure import pdf_headings_labels_check
+        if not pdf_headings_labels_check(Path(source_path)):
+            return
+    except Exception:
+        return
+    headings = _extract_pdf_headings(source_path)
+    if len(headings) < _MIN_OUTLINE_ENTRIES:
+        return
+    from proposals import infer_heading_levels, proposal
+    levels = infer_heading_levels(size for _t, _p, size in headings)
+    lines = [f"Heading {levels[float(size)]} · “{title}” (p.{page + 1})"
+             for title, page, size in headings]
+    proposals.append(proposal(
+        locator="document headings",
+        before="(tagged PDF, but the structure tree contains no headings to navigate by)",
+        proposed_value="\n".join(lines),
+        rationale=("Derived deterministically from the document's font hierarchy — confirm it "
+                   "matches the intended headings. The approved map is the tagging instruction "
+                   "for re-authoring and the compliance evidence of what the headings should be."),
+        source="font-size rank (deterministic) — human confirmation required",
+        kind="headings-map"))
 
 
 def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
@@ -147,17 +399,61 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
         # vision model is reachable; unfixed figures defer to review via the re-scan.
         alt_applied, alt_deferred = _fix_pdf_figure_alt(
             pdf, str(path), ai_enabled=ai_enabled, scan_id=scan_id, file=path.name,
-            applied_fixes=applied_fixes)
+            applied_fixes=applied_fixes, proposals=proposals)
         applied.extend(alt_applied)
         if alt_deferred:
-            skipped.append(f"{alt_deferred} figure(s) need human alt text "
-                           "(no vision description) — routed to review · 1.1.1")
+            skipped.append(f"{alt_deferred} figure(s) need human alt text — each surfaced as a "
+                           "review card with the page render · 1.1.1")
         # 1.3.2 reading order — a vision proposal for an untagged (scanned) PDF (never auto).
         try:
             _propose_reading_order(pdf, str(path), ai_enabled=ai_enabled,
                                    scan_id=scan_id, file=path.name, proposals=proposals)
         except Exception:
             pass
+        # 1.3.1 structure map — deterministic heading-hierarchy proposal for an untagged PDF
+        # (kind='structure-map'; the handler routes it to the 1.3.1 review card).
+        try:
+            _propose_structure_map(pdf, str(path), proposals=proposals)
+        except Exception:
+            pass
+        # 2.4.6 heading map — for a TAGGED PDF that has no heading struct elements, propose the
+        # headings deterministically from the font hierarchy (kind='headings-map').
+        try:
+            _propose_pdf_headings(pdf, str(path), proposals=proposals)
+        except Exception:
+            pass
+        # 2.4.4 link purpose — a link whose visible text is the raw URL gets a derived
+        # descriptive label to confirm (kind='link-purpose'; deterministic, AI fallback).
+        try:
+            _propose_pdf_link_purpose(pdf, str(path), ai_enabled=ai_enabled, proposals=proposals)
+        except Exception:
+            pass
+        # 4.1.2 form-field accessible names — deterministic /TU from a meaningful field name;
+        # a generic auto-name defers to a per-field review card (write-back on approval).
+        try:
+            fld_applied, fld_deferred = _fix_pdf_form_fields(
+                pdf, proposals=proposals, applied_fixes=applied_fixes)
+            applied.extend(fld_applied)
+            if fld_deferred:
+                skipped.append(f"{fld_deferred} form field(s) need an accessible name — each "
+                               "surfaced as a review card · 4.1.2")
+        except Exception:
+            pass
+        # 1.4.3/1.4.6 — darken light text colours in the content streams (deterministic,
+        # text-scoped only; shapes/backgrounds untouched). Verified by the post-fix re-scan.
+        try:
+            n_darkened = _fix_pdf_text_contrast(pdf)
+            if n_darkened:
+                applied.append(f"Darkened {n_darkened} low-contrast text colour(s) to meet "
+                               "the contrast floors · 1.4.3")
+                _rec("1.4.3", "text colour too light against the page (fails 4.5:1)",
+                     "darkened toward black, hue preserved",
+                     f"{n_darkened} fill-colour run(s) rewritten in the content streams")
+                _rec("1.4.6", "text colour below the enhanced (7:1) contrast band",
+                     "cleared by the same darkening pass",
+                     "one darken clears both the AA and AAA contrast checks")
+        except Exception:
+            skipped.append("contrast: could not rewrite content streams · 1.4.3")
         # 2.4.1 bypass blocks — deterministically build a bookmark outline from the document's
         # headings when a long PDF has none (no AI; only when confident).
         try:
@@ -221,19 +517,277 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
     return out_path, applied, skipped
 
 
+def _figure_locators(figures, pdf) -> dict:
+    """Stable locator per /Figure: `pdf:fig:{page}:{seq}` where seq is the figure's 0-based
+    position among ALL figures on its page (collection order). Computed over EVERY figure (not
+    just the ones missing alt) so the same figure resolves to the same locator at apply time,
+    after some siblings have already been captioned. `id(fig)` keys the map for this pass only."""
+    loc, per_page = {}, {}
+    for fig in figures:
+        pg = _resolve_page_number(fig, pdf)
+        seq = per_page.get(pg, 0); per_page[pg] = seq + 1
+        loc[id(fig)] = f"pdf:fig:{pg if pg is not None else '?'}:{seq}"
+    return loc
+
+
+# ── 4.1.2 Name, Role, Value — AcroForm field accessible names (/TU) ─────────────
+import re as _re
+
+# Generic auto-generated field names carry no meaning — a screen reader announcing "Text1"
+# helps no one. When /T looks like this, we defer to a human rather than write a bad name.
+_GENERIC_FIELD = _re.compile(
+    r"^(text|textfield|txt|field|fld|input|form|checkbox|check|chk|radio|button|btn|"
+    r"combo|list|choice|sig|signature|untitled|blank)[\s_\-.]*\d*$", _re.I)
+
+
+def _humanize_field_name(t: str) -> str:
+    """`/T` → a readable label: split camelCase + separators, collapse, title-case if it was
+    a machine token. 'first_name'→'First Name', 'dateOfBirth'→'Date Of Birth', 'Home Address'
+    (already readable) → unchanged."""
+    s = (t or "").strip()
+    if not s:
+        return ""
+    had_space = " " in s
+    s = _re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", s)          # camelCase → words
+    s = _re.sub(r"[_\-.]+", " ", s)                          # separators → space
+    s = _re.sub(r"\s+", " ", s).strip()
+    if not had_space and s and s[0].islower():
+        s = s.title()                                        # a bare token: title-case it
+    return s
+
+
+def _field_name_meaningful(t: str) -> bool:
+    """A /T we can safely reuse as the accessible name: readable words, not an auto-name."""
+    h = _humanize_field_name(t)
+    if len(h) < 3 or not _re.search(r"[A-Za-z]", h):
+        return False
+    if _GENERIC_FIELD.match((t or "").strip()):
+        return False
+    return bool(_re.search(r"[aeiouAEIOU]", h))              # has a vowel → word-like, not a code
+
+
+def _field_page(field, pdf) -> int | None:
+    """1-based page for a field via its own /P or its first widget kid's /P."""
+    import pikepdf
+    for obj in (field, *(field.get("/Kids") or [])):
+        try:
+            pg = obj.get("/P") if isinstance(obj, pikepdf.Dictionary) else None
+            if pg is not None:
+                for i, page in enumerate(pdf.pages, start=1):
+                    if page.obj.objgen == pg.objgen:
+                        return i
+        except Exception:
+            continue
+    return None
+
+
+def _collect_form_fields(pdf) -> list:
+    """Terminal AcroForm fields (those with /FT), following /Kids — mirrors the detector."""
+    import pikepdf
+    out, seen = [], set()
+
+    def walk(node):
+        if not isinstance(node, pikepdf.Dictionary) or id(node) in seen:
+            return
+        seen.add(id(node))
+        kids = node.get("/Kids")
+        if "/FT" in node and not (isinstance(kids, pikepdf.Array) and any(
+                "/FT" in k for k in kids if isinstance(k, pikepdf.Dictionary))):
+            out.append(node)
+        if isinstance(kids, pikepdf.Array):
+            for k in kids:
+                walk(k)
+
+    try:
+        root = pdf.Root
+        if "/AcroForm" in root and "/Fields" in root["/AcroForm"]:
+            for f in root["/AcroForm"]["/Fields"]:
+                walk(f)
+    except Exception:
+        pass
+    return out
+
+
+def _form_field_locators(fields, pdf) -> dict:
+    """Stable `pdf:field:{page}:{seq}` per terminal field (over ALL fields, so it resolves the
+    same at apply time after siblings were auto-named)."""
+    loc, per_page = {}, {}
+    for fld in fields:
+        pg = _field_page(fld, pdf)
+        seq = per_page.get(pg, 0); per_page[pg] = seq + 1
+        loc[id(fld)] = f"pdf:field:{pg if pg is not None else '?'}:{seq}"
+    return loc
+
+
+def _field_unnamed(field) -> bool:
+    try:
+        tu = field.get("/TU")
+        return tu is None or not str(tu).strip()
+    except Exception:
+        return False
+
+
+def _fix_pdf_form_fields(pdf, *, proposals=None, applied_fixes=None) -> tuple[list[str], int]:
+    """WCAG 4.1.2 — give every unnamed AcroForm field an accessible name (/TU). Deterministic
+    when the field's own name (/T) reads like a label ('First Name', 'dateOfBirth'): set /TU to
+    the humanized name — no model, ADR-0016 safe. A field whose /T is a generic auto-name
+    ('Text1', 'fld_03') can't be named honestly by machine, so it defers to a per-field review
+    card ('pdf:field:{page}:{seq}' locator) for a human to author, then write back on approval.
+    Returns (applied messages, deferred_count). Mutates pdf in place. Never raises."""
+    import pikepdf
+    fields = _collect_form_fields(pdf)
+    unnamed = [f for f in fields if _field_unnamed(f)]
+    if not unnamed:
+        return [], 0
+    locators = _form_field_locators(fields, pdf)
+    applied: list[str] = []
+    deferred = 0
+    for fld in unnamed:
+        raw_t = ""
+        try:
+            raw_t = str(fld.get("/T", "")).strip()
+        except Exception:
+            raw_t = ""
+        if _field_name_meaningful(raw_t):
+            name = _humanize_field_name(raw_t)
+            try:
+                fld["/TU"] = pikepdf.String(name)
+            except Exception:
+                deferred += 1
+                continue
+            if applied_fixes is not None:
+                applied_fixes.append({"rule_id": "SC_4_1_2", "value": name,
+                                      "source": f"derived deterministically from the field name “{raw_t}”"})
+            applied.append(f"Accessible name “{name}” set on form field (from its field name) · 4.1.2")
+        else:
+            deferred += 1
+            if proposals is not None:
+                import proposals as _prop
+                proposals.append(_prop.proposal(
+                    locator=locators.get(id(fld), "pdf:field:?:0"),
+                    before=(f"(form field “{raw_t}” has no accessible name — a screen reader can't say what to enter · 4.1.2)"
+                            if raw_t else "(an interactive form field has no accessible name · 4.1.2)"),
+                    proposed_value="",
+                    rationale=("This field's internal name is not a usable label. Write the label a "
+                               "screen reader should announce (e.g. “Home address”), then approve — "
+                               "ACP writes it into the field."),
+                    source="field name is a generic auto-name — human authors",
+                    kind="pdf-field-name"))
+    return applied, deferred
+
+
+def apply_pdf_field_name(data: bytes, values: dict) -> tuple[bytes, list[dict], list[str]]:
+    """Write reviewer-approved accessible names into AcroForm fields (/TU) by the
+    `pdf:field:{page}:{seq}` locator. Same contract as apply_pdf_figure_alt; keys that aren't
+    field locators pass through unresolved. Never raises."""
+    import io
+    import pikepdf
+    fvals = {k: (v or "").strip() for k, v in (values or {}).items()
+             if str(k).startswith("pdf:field:") and (v or "").strip()}
+    other = [k for k in (values or {}) if not str(k).startswith("pdf:field:")]
+    if not fvals:
+        return data, [], other
+    try:
+        pdf = pikepdf.open(io.BytesIO(data))
+    except Exception:
+        return data, [], other + list(fvals)
+    fields = _collect_form_fields(pdf)
+    by_loc = {_form_field_locators(fields, pdf)[id(f)]: f for f in fields}
+    applied, unresolved = [], list(other)
+    for locator, value in fvals.items():
+        fld = by_loc.get(locator)
+        if fld is None:
+            unresolved.append(locator); continue
+        try:
+            fld["/TU"] = pikepdf.String(value)
+            applied.append({"locator": locator, "rule_id": "SC_4_1_2", "value": value})
+        except Exception:
+            unresolved.append(locator)
+    if not applied:
+        return data, [], unresolved
+    out = io.BytesIO(); pdf.save(out)
+    return out.getvalue(), applied, unresolved
+
+
+def apply_pdf_approved(data: bytes, values: dict) -> tuple[bytes, list[dict], list[str]]:
+    """Single PDF write-back entry for the apply job: routes figure-alt (`pdf:fig:…` → /Alt)
+    and form-field-name (`pdf:field:…` → /TU) approvals by locator prefix, in sequence. The
+    unresolved list only carries locators neither writer recognised."""
+    fig_vals = {k: v for k, v in (values or {}).items() if str(k).startswith("pdf:fig:")}
+    fld_vals = {k: v for k, v in (values or {}).items() if str(k).startswith("pdf:field:")}
+    unknown = [k for k in (values or {})
+               if not (str(k).startswith("pdf:fig:") or str(k).startswith("pdf:field:"))]
+    applied: list[dict] = []
+    cur = data
+    if fig_vals:
+        cur, a, _ = apply_pdf_figure_alt(cur, fig_vals); applied += a
+    if fld_vals:
+        cur, a, _ = apply_pdf_field_name(cur, fld_vals); applied += a
+    unresolved = [k for k in list(fig_vals) + list(fld_vals)
+                  if not any(x.get("locator") == k for x in applied)] + unknown
+    return cur, applied, unresolved
+
+
+def apply_pdf_figure_alt(data: bytes, values: dict) -> tuple[bytes, list[dict], list[str]]:
+    """Write reviewer-approved alt text into PDF /Figure elements by the `pdf:fig:{page}:{seq}`
+    locator minted at remediation time. Mirrors office `apply_alt.apply_alt_text` exactly —
+    `(bytes, {locator: value}) -> (fixed_bytes, applied, unresolved)` — so the apply job branches
+    only on file extension. Keys that aren't PDF-figure locators are left unresolved (a mixed or
+    mis-routed call never silently drops them). Re-collects figures and recomputes locators, so an
+    approval written now lands on the same figure the proposal pointed at, even after siblings were
+    auto-captioned at remediation. Never raises; on any failure the input bytes come back unchanged."""
+    import io
+    import pikepdf
+    pdf_values = {k: (v or "").strip() for k, v in (values or {}).items()
+                  if str(k).startswith("pdf:fig:") and (v or "").strip()}
+    other = [k for k in (values or {}) if not str(k).startswith("pdf:fig:")]
+    if not pdf_values:
+        return data, [], other
+    try:
+        pdf = pikepdf.open(io.BytesIO(data))
+    except Exception:
+        return data, [], other + list(pdf_values)
+    try:
+        root = pdf.Root
+        figures = _collect_figures(root["/StructTreeRoot"]) if "/StructTreeRoot" in root else []
+    except Exception:
+        figures = []
+    loc = _figure_locators(figures, pdf)
+    by_loc = {loc[id(f)]: f for f in figures}
+    applied, unresolved = [], list(other)
+    for locator, value in pdf_values.items():
+        fig = by_loc.get(locator)
+        if fig is None:
+            unresolved.append(locator)
+            continue
+        try:
+            fig["/Alt"] = pikepdf.String(value)
+            applied.append({"locator": locator, "rule_id": "SC_1_1_1", "value": value})
+        except Exception:
+            unresolved.append(locator)
+    if not applied:
+        return data, [], unresolved
+    out = io.BytesIO()
+    pdf.save(out)
+    return out.getvalue(), applied, unresolved
+
+
 def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
                         scan_id: str | None, file: str,
-                        applied_fixes=None) -> tuple[list[str], int]:
+                        applied_fixes=None, proposals=None) -> tuple[list[str], int]:
     """Set /Alt on tagged /Figure struct elements that lack it, from a vision description
     of the figure's page. Returns (applied messages, deferred_count). Mutates pdf in place;
     the caller saves. Never raises — a figure we can't caption is just deferred.
 
+    A GROUNDED vision description (the page render is text-anchored) is auto-applied inline. A
+    figure we cannot caption (AI off / no vision result / budget spent) is **deferred to a
+    per-figure review card**, not silently counted: it emits one proposal into `proposals`
+    carrying its stable locator (for write-back), the page render as its thumbnail, and any
+    best-effort AI draft — mirroring the office undescribed-image flow, so a PDF figure the
+    machine can't ground reaches a human with a picture instead of vanishing into a tally.
+
     `applied_fixes` receives one evidence row per figure captioned, in the SAME shape the
-    office remediator emits — {rule_id, value, source, thumb}. That list is what
-    store.record_applied_fix persists and what "Recent AI fixes" and the certification
-    evidence read. Until now this function only returned prose, so a PDF's AI-written alt
-    text left no row at all: no value, no provenance, no picture. The message strings are
-    still returned for the job log; they are not the record."""
+    office remediator emits — {rule_id, value, source, thumb}."""
     import pikepdf
     root = pdf.Root
     if "/StructTreeRoot" not in root:
@@ -245,6 +799,7 @@ def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
     missing = [f for f in figures if _fig_alt(f) is None]
     if not missing:
         return [], 0
+    locators = _figure_locators(figures, pdf)
 
     vision = False
     if ai_enabled:
@@ -253,54 +808,63 @@ def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
             vision = _ai.vision_is_available()
         except Exception:
             vision = False
-    if not vision:
-        return [], len(missing)  # AI off / no vision model → all defer to review
 
-    import ai as _ai
+    import proposals as _prop
     applied: list[str] = []
     deferred = 0
     budget = _VISION_MAX_FIGURES
+    thumb_budget = _VISION_MAX_FIGURES        # bound page renders for deferred cards too
     page_cache: dict[int, bytes | None] = {}
-    for idx, fig in enumerate(missing):
-        if budget <= 0:
-            deferred += 1
-            continue
-        page_num = _resolve_page_number(fig, pdf)
+
+    def _render(page_num):
         if page_num is None:
-            deferred += 1
-            continue
+            return None
         if page_num not in page_cache:
             page_cache[page_num] = _render_page_png(source_path, page_num)
-        img = page_cache[page_num]
-        if not img:
-            deferred += 1
+        return page_cache[page_num]
+
+    def _defer(fig, page_num, img, draft=""):
+        """Emit a per-figure review card for a figure we could not auto-caption."""
+        nonlocal deferred
+        deferred += 1
+        if proposals is None:
+            return
+        proposals.append(_prop.proposal(
+            locator=locators.get(id(fig), "pdf:fig:?:0"),
+            before="(figure has no alt text — invisible to screen readers · 1.1.1)",
+            proposed_value=draft,
+            rationale=("A screen reader cannot describe this figure. Write the alt text a "
+                       "reader should hear (or edit the AI draft), then approve — ACP writes "
+                       "it into the PDF."),
+            source=("AI vision could not ground a description — human authors"
+                    if not draft else "AI vision draft — confirm it matches the figure"),
+            kind="pdf-figure-alt",
+            thumb=(_prop.thumb_b64(img, max_edge=_PAGE_THUMB_EDGE) if img else None)))
+
+    for fig in missing:
+        page_num = _resolve_page_number(fig, pdf)
+        img = _render(page_num) if thumb_budget > 0 else None
+        if img is not None:
+            thumb_budget -= 1
+        if not vision or budget <= 0 or img is None:
+            _defer(fig, page_num, img)
             continue
-        # Structured (OCR-anchored) alt: a rendered figure page carries the figure's own
-        # labels, so the description leads with the headline/chart type. The page render is
-        # inherently text-anchored, so this stays an inline auto-fix (unlike the office
-        # textless-photo case, which surfaces an ungrounded guess for approval).
+        import ai as _ai
         res = _ai.describe_image_structured(img, filename=file, scan_id=scan_id, file=file)
         if not res:
-            deferred += 1
+            _defer(fig, page_num, img)
             continue
         try:
             fig["/Alt"] = pikepdf.String(res["alt"])
         except Exception:
-            deferred += 1
+            _defer(fig, page_num, img, draft=res.get("alt", ""))
             continue
         budget -= 1
         if applied_fixes is not None:
-            import proposals as _prop
             applied_fixes.append({
                 "rule_id": "SC_1_1_1",
                 "value": res["alt"],
-                # Say what the model actually looked at. Office alt text is anchored in the
-                # embedded image; this one is anchored in a render of the whole page, and the
-                # thumbnail below is that page. Claiming "the image" would misdescribe both.
                 "source": f"AI vision model ({res['model']}), from a render of page {page_num}",
-                # Small: this is a receipt shown at 36px in "Recent AI fixes", not a review
-                # surface. A budget of 25 figures at the reading-order card's 320px would put
-                # ~1 MB of base64 into applied_fixes for one document.
                 "thumb": _prop.thumb_b64(img, max_edge=_FIX_THUMB_EDGE),
             })
         applied.append(f"Alt text \"{res['alt'][:60]}\" set on figure (page {page_num}) "
@@ -402,10 +966,11 @@ _OUTLINE_SCAN_PAGE_CAP = 120    # bound worst-case parse cost on a huge PDF
 _OUTLINE_ENTRY_CAP = 200        # a sane ceiling on bookmark count
 
 
-def _extract_pdf_headings(source_path: str) -> list[tuple[str, int]]:
+def _extract_pdf_headings(source_path: str) -> list[tuple[str, int, int]]:
     """Heading candidates by font size. The modal rounded char size is body text; a line
     whose largest char is >= _HEADING_SIZE_RATIO x that, is short, and has letters reads as a
-    heading. Returns [(title, page_index)] in document order, deduped by text, capped. Empty
+    heading. Returns [(title, page_index, size)] in document order, deduped by text, capped —
+    size lets a caller rank headings into levels (proposals.infer_heading_levels). Empty
     on any failure or when nothing stands out (uniform-font / scanned PDF)."""
     try:
         import pdfplumber
@@ -422,7 +987,7 @@ def _extract_pdf_headings(source_path: str) -> list[tuple[str, int]]:
             body = Counter(sizes).most_common(1)[0][0]
             if body <= 0:
                 return []
-            out: list[tuple[str, int]] = []
+            out: list[tuple[str, int, int]] = []
             seen: set[str] = set()
             for i, pg in enumerate(pages):
                 lines: dict[int, dict] = {}
@@ -442,7 +1007,7 @@ def _extract_pdf_headings(source_path: str) -> list[tuple[str, int]]:
                         if norm in seen:
                             continue
                         seen.add(norm)
-                        out.append((text[:120], i))
+                        out.append((text[:120], i, line["size"]))
                         if len(out) >= _OUTLINE_ENTRY_CAP:
                             return out
             return out
@@ -472,7 +1037,7 @@ def _generate_pdf_outline(pdf, source_path: str) -> str | None:
             headings = _extract_pdf_headings(source_path)
             if len(headings) < _MIN_OUTLINE_ENTRIES:
                 return None                        # nothing confident to build; stays HITL
-            for title, page_idx in headings:
+            for title, page_idx, _size in headings:
                 outline.root.append(pikepdf.OutlineItem(title, page_idx))
     except Exception:
         return None

@@ -327,6 +327,29 @@ _inherit_env() {  # $1 = var name → echoes "NAME=value" if currently set, else
 WORKERS_ENV="${ACP_WORKERS:+ACP_WORKERS=$ACP_WORKERS}"; [ -z "$WORKERS_ENV" ] && WORKERS_ENV="$(_inherit_env ACP_WORKERS)"
 EMAILS_ENV="${ACP_ALLOWED_EMAILS:+ACP_ALLOWED_EMAILS=$ACP_ALLOWED_EMAILS}"; [ -z "$EMAILS_ENV" ] && EMAILS_ENV="$(_inherit_env ACP_ALLOWED_EMAILS)"
 BLOB_ENV="ACP_BLOB_ACCOUNT=$BLOB_ACCOUNT"
+# GPU vision default (ADR 0022) — OPT-IN. Pass ACP_RUNPOD_ENDPOINT_ID (+ export RUNPOD_API_KEY) to
+# point the DEFAULT vision path at a scale-to-zero RunPod Serverless GPU endpoint (survives redeploy,
+# no idle cost). Guarded: without it the vision default stays the local CPU Ollama floor (unchanged),
+# and the app auto-falls-back to that floor on any serverless miss (ai._vision_generate), so flipping
+# this on can only upgrade quality, never break AI. Inherited on a bare redeploy so it isn't dropped.
+# The key is a container secret (secretref) — never an env literal, never logged.
+if [ -n "${ACP_RUNPOD_ENDPOINT_ID:-}" ] && [ -n "${RUNPOD_API_KEY:-}" ]; then
+  SECRETS+=("runpod-api-key=$RUNPOD_API_KEY")
+  RUNPOD_ENV="ACP_VISION_PROVIDER=runpod_serverless RUNPOD_ENDPOINT_ID=$ACP_RUNPOD_ENDPOINT_ID RUNPOD_API_KEY=secretref:runpod-api-key RUNPOD_VISION_MODEL=${ACP_RUNPOD_VISION_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}"
+  echo "   vision default = RunPod Serverless GPU (endpoint $ACP_RUNPOD_ENDPOINT_ID; CPU fallback on miss)"
+else
+  EXISTING_RP_EID="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" \
+    --query "properties.template.containers[0].env[?name=='RUNPOD_ENDPOINT_ID'].value | [0]" -o tsv 2>/dev/null || echo "")"
+  EXISTING_RP_REF="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" \
+    --query "properties.template.containers[0].env[?name=='RUNPOD_API_KEY'].secretRef | [0]" -o tsv 2>/dev/null || echo "")"
+  if [ -n "$EXISTING_RP_EID" ] && [ -n "$EXISTING_RP_REF" ]; then
+    RUNPOD_ENV="ACP_VISION_PROVIDER=runpod_serverless RUNPOD_ENDPOINT_ID=$EXISTING_RP_EID RUNPOD_API_KEY=secretref:$EXISTING_RP_REF $(_inherit_env RUNPOD_VISION_MODEL)"
+    echo "   vision default = RunPod Serverless GPU (inherited)"
+  else
+    RUNPOD_ENV=""
+    echo "   vision default = local CPU Ollama floor"
+  fi
+fi
 # This script only ever deploys the public demo, so the app it produces IS production.
 # Stamp it so core.IS_PROD is true, which refuses the X-E2E-Key / X-Demo-Key bypasses even
 # if someone later sets ACP_ENABLE_TEST_BYPASS on the app. ACP_DEPLOY_ENV is the only name for
@@ -418,14 +441,14 @@ for s in json.loads(os.environ.get("APP_SECRETS_JSON") or "[]"):
       --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
     _az_scrubbed az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --image "$ACRSERVER/$IMAGE" \
       --command acp-worker \
-      --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV ACP_WORKERS=$WK_N -o none
+      --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV ACP_WORKERS=$WK_N -o none
   else
     _az_scrubbed az containerapp create "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --environment "$ENVNAME" \
       --image "$ACRSERVER/$IMAGE" \
       --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
       --command acp-worker \
       --secrets "${WORKER_SECRETS[@]}" \
-      --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV ACP_WORKERS=$WK_N \
+      --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV ACP_WORKERS=$WK_N \
       --system-assigned --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 3 -o none
     echo "   one-time: grant the worker's managed identity 'Storage Blob Data Contributor' on"
     echo "   the '$BLOB_ACCOUNT' account so its remediation Blob writes don't 403 — exact"
@@ -442,14 +465,14 @@ if az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" -o none 2>/dev/null; then
   _retry az containerapp registry set "${AZ[@]}" -g "$RG" -n "$APP" \
     --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
   _retry az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$ACRSERVER/$IMAGE" \
-    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV -o none
+    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV -o none
 else
   az containerapp create "${AZ[@]}" -g "$RG" -n "$APP" --environment "$ENVNAME" \
     --image "$ACRSERVER/$IMAGE" \
     --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
     --target-port 8077 --ingress external \
     --secrets "${SECRETS[@]}" \
-    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV \
+    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV \
     --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 1 -o none
 fi
 

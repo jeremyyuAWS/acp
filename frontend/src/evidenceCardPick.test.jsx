@@ -3,10 +3,12 @@ import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
 
-// The whole point of the strip: "Draft with AI" must describe the image the reviewer is
-// LOOKING AT. A vision model sees one image. Silently drafting the first of nineteen would
-// caption the wrong picture, and the reviewer would approve alt text for an image they
-// never saw — worse than no draft at all.
+// The whole point of the per-image rows: a draft must describe the image on ITS OWN row. A vision
+// model sees one image; drafting the first of nineteen for all of them would caption the wrong
+// picture and the reviewer would approve alt text for an image they never saw. Descriptions now
+// generate AUTOMATICALLY when the card is in view (auto-draft), fanning out one call per image's
+// own locator — so this invariant is exercised by the auto-draft itself, and again by the per-image
+// retry button.
 
 const suggestFix = vi.fn()
 vi.mock('./api.js', () => ({
@@ -40,51 +42,53 @@ const mount = async (props = {}) => {
   root = createRoot(container)
   await act(async () => { root.render(createElement(EvidenceCard, { item, onAct: () => {}, ...props })) })
 }
-// The picker is gone: each deferred image has its own editor row and its own draft button, so
-// the draft targets THAT image by construction — there is no "picked" image to get wrong.
+// jsdom has no IntersectionObserver, so the card counts as in-view immediately and auto-draft fires
+// on mount; the sequential draftAll needs a few macrotask turns to complete.
+const settle = async (n = 8) => { for (let k = 0; k < n; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
 const drafts = () => [...container.querySelectorAll('.evcard-draft-btn')]
 const inputs = () => [...container.querySelectorAll('.evcard-rec-input')]
 const click = async (el) => { await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }
 
 beforeEach(() => {
   suggestFix.mockReset()
-  suggestFix.mockResolvedValue({ suggestion: 'A nurse reviews a chart.', is_template: false, model: 'llava:7b' })
+  // Each locator gets a DISTINCT suggestion, so a description bleeding into the wrong image's box
+  // would be visible.
+  suggestFix.mockImplementation((scan, file, rule, locator) =>
+    Promise.resolve({ suggestion: `desc:${locator}`, is_template: false, model: 'llava:7b' }))
 })
 
-describe('EvidenceCard — the drafted image is its own row', () => {
-  it('a row draft describes that row’s image', async () => {
-    await mount()
-    await click(drafts()[0])
-    expect(suggestFix).toHaveBeenCalledWith('s1', 'deck.pptx', '1.1.1', 'ppt/slides/slide1.xml#rId2', null)
+describe('EvidenceCard — auto-draft targets each image’s own row', () => {
+  it('auto-drafts every deferred image from its OWN locator, isolated per row', async () => {
+    await mount(); await settle()
+    expect(suggestFix).toHaveBeenCalledWith('s1', 'deck.pptx', '1.1.1', 'ppt/slides/slide1.xml#rId2')
+    expect(suggestFix).toHaveBeenCalledWith('s1', 'deck.pptx', '1.1.1', 'ppt/slides/slide3.xml#rId4')
+    // each box holds ITS image's description, never another's
+    expect(inputs().map((t) => t.value)).toEqual([
+      'desc:ppt/slides/slide1.xml#rId2', 'desc:ppt/slides/slide2.xml#rId3', 'desc:ppt/slides/slide3.xml#rId4',
+    ])
   })
 
-  it('a later row draft describes that image, not the first', async () => {
-    await mount()
+  it('the per-image retry re-drafts that row’s image, not the first', async () => {
+    await mount(); await settle()
+    suggestFix.mockClear()
     await click(drafts()[2])
     expect(suggestFix).toHaveBeenCalledWith('s1', 'deck.pptx', '1.1.1', 'ppt/slides/slide3.xml#rId4', null)
   })
 
-  it('puts the draft into that row only, never another image’s box', async () => {
-    await mount()
-    await click(drafts()[2])
-    expect(inputs().map((t) => t.value)).toEqual(['', '', 'A nurse reviews a chart.'])
-  })
-
-  it('shows the server reason when the model could only produce a template', async () => {
+  it('a per-image retry shows the server reason when the model could only produce a template', async () => {
     suggestFix.mockResolvedValue({
       suggestion: 'Describe: [what it shows]', is_template: true,
       reason: 'Template only — no vision model is available to look at this image.',
     })
-    await mount()
-    await click(drafts()[0])
+    await mount(); await settle()          // auto-draftAll leaves the boxes empty (all templates)
+    await click(drafts()[0])               // reviewer retries one image → the per-image reason surfaces
     expect(container.textContent).toContain('no vision model is available')
     expect(container.textContent).not.toContain('no vision model described this image')
   })
 
-  it('sends no locator for a single-value item with no images', async () => {
-    // No evidence and no proposals → the single-value editor, whose draft has no per-image target.
-    await mount({ item: { ...item, evidence: [], finding_count: 1 } })
-    await click(container.querySelector('.evcard-draft-btn'))
+  it('auto-drafts a single-value item with no per-image target (no locator)', async () => {
+    // No evidence and no proposals → the single-value editor; its auto-draft has no per-image target.
+    await mount({ item: { ...item, evidence: [], finding_count: 1 } }); await settle()
     expect(suggestFix).toHaveBeenCalledWith('s1', 'deck.pptx', '1.1.1', undefined)
   })
 })

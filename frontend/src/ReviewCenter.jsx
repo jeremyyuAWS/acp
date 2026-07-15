@@ -117,7 +117,7 @@ export default function ReviewCenter({ items, onAct, onClose, onRefresh, error }
   const confirmSection = (sec) => sec.groups.flatMap((g) => g.items).forEach((it) => doAct(it, 'approved'))
 
   return (
-    <div className="rc-overlay" role="dialog" aria-modal="true" aria-label="Human review center">
+    <div className="rc-overlay" role="dialog" aria-modal="true" aria-label="AI Work Inbox">
       <div className="rc-panel">
         <div className="rc-head">
           <div>

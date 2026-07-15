@@ -72,19 +72,21 @@ export function methodForSc(sc) {
 // re-scan evidence). This keeps the "AI proposes → human approves" lane honest — the chip
 // tells the reviewer whether they are confirming validated machine work (fast) or making a
 // judgement (slower), never implying the platform already decided.
+// `short` is a 1–2 word label for narrow contexts (the coverage table's Confidence column);
+// `basis` is the full auditable phrase, always kept in the chip's tooltip.
 export function confidenceForFinding({ sc, verifiedCleared = false, reportedFixedUnverified = false, proposal = null } = {}) {
-  if (verifiedCleared) return { level: CONFIDENCE.HIGH, basis: 'fix cleared on re-scan verification' }
-  if (reportedFixedUnverified) return { level: CONFIDENCE.MEDIUM, basis: 'fix applied — re-scan confirmation pending' }
+  if (verifiedCleared) return { level: CONFIDENCE.HIGH, short: 'Verified', basis: 'fix cleared on re-scan verification' }
+  if (reportedFixedUnverified) return { level: CONFIDENCE.MEDIUM, short: 'Fix pending', basis: 'fix applied — re-scan confirmation pending' }
   if (proposal) {
-    if (proposal.subjective) return { level: CONFIDENCE.LOW, basis: 'AI proposal — needs human judgement' }
-    if (proposal.validated) return { level: CONFIDENCE.MEDIUM, basis: 'AI proposal validated by re-scan — awaiting approval' }
-    return { level: CONFIDENCE.MEDIUM, basis: 'AI proposal — approve to apply' }
+    if (proposal.subjective) return { level: CONFIDENCE.LOW, short: 'Needs review', basis: 'AI proposal — needs human judgement' }
+    if (proposal.validated) return { level: CONFIDENCE.MEDIUM, short: 'AI · validated', basis: 'AI proposal validated by re-scan — awaiting approval' }
+    return { level: CONFIDENCE.MEDIUM, short: 'AI proposal', basis: 'AI proposal — approve to apply' }
   }
   switch (methodForSc(sc)) {
-    case 'deterministic': return { level: CONFIDENCE.HIGH,   basis: 'deterministic rule check' }
-    case 'heuristic':     return { level: CONFIDENCE.MEDIUM, basis: 'AI / heuristic detection — semantic judgement' }
-    case 'human':         return { level: CONFIDENCE.LOW,    basis: 'requires human review' }
-    default:              return { level: CONFIDENCE.MEDIUM, basis: 'heuristic detection' }
+    case 'deterministic': return { level: CONFIDENCE.HIGH,   short: 'Deterministic', basis: 'deterministic rule check' }
+    case 'heuristic':     return { level: CONFIDENCE.MEDIUM, short: 'AI-detected',    basis: 'AI / heuristic detection — semantic judgement' }
+    case 'human':         return { level: CONFIDENCE.LOW,    short: 'Human',          basis: 'requires human review' }
+    default:              return { level: CONFIDENCE.MEDIUM, short: 'Heuristic',      basis: 'heuristic detection' }
   }
 }
 
@@ -108,7 +110,7 @@ export function confidenceForCoverage({ sc, outcome, verifiedCleared = false } =
   if (outcome === 'UNCHECKED' || outcome === 'WEB') return null
   // A HUMAN verdict means we deferred to a person precisely because no automated
   // signal covers it — that is low automated confidence regardless of the SC's tier.
-  if (outcome === 'HUMAN') return { level: CONFIDENCE.LOW, basis: 'routed to human review — no automated signal' }
+  if (outcome === 'HUMAN') return { level: CONFIDENCE.LOW, short: 'Human', basis: 'routed to human review — no automated signal' }
   const reportedFixedUnverified = outcome === 'FIXED' && !verifiedCleared
   return confidenceForFinding({ sc, verifiedCleared, reportedFixedUnverified })
 }

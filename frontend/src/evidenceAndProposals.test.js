@@ -39,7 +39,7 @@ describe('evidence strip vs per-proposal editors', () => {
     expect(html).toContain('evcard-multi-row')
     expect(html.split('evcard-multi-row').length - 1).toBe(2)   // one row per image
     expect(html).not.toContain('evcard-evidence-strip')
-    expect(html).toContain('Draft with AI')                     // each row can draft its own image
+    expect(html).toContain('Draft this image')                  // each row can retry drafting its own image
   })
 
   it('drafts → the editors, each image beside its own value', () => {

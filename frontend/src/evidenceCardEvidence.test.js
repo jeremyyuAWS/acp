@@ -32,9 +32,9 @@ describe('EvidenceCard — the images awaiting a description', () => {
     expect((html.match(/<textarea/g) || [])).toHaveLength(19)
   })
 
-  it('offers Draft with AI on every deferred image, so any can be described from scratch', () => {
+  it('offers a per-image draft retry on every deferred image (auto-draft fills them; this recovers)', () => {
     const html = markup({ ...base, evidence: ev(5) })
-    expect((html.match(/Draft with AI/g) || [])).toHaveLength(5)
+    expect((html.match(/Draft this image/g) || [])).toHaveLength(5)
   })
 
   it('no picker survives — the deferred images are edit boxes, not a pick-one strip', () => {

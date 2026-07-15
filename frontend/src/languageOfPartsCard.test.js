@@ -73,17 +73,18 @@ describe('Language of Parts — approving it does not certify the file', () => {
     expect(card.impact).toEqual({ before: 'Fail', after: 'Pass' })
   })
 
-  it('the button says what approving does — and 3.1.2 has no applier, so it records only', () => {
-    expect(markup(item)).toContain('Approve — record sign-off')
-    expect(markup(item)).not.toContain('Approve &amp; Apply')
+  it('the button reads by workflow (Approve AI fix); the records-only honesty is in the prose', () => {
+    const m = markup(item)                             // 3.1.2 with a proposal → proposal workflow
+    expect(m).toContain('Approve AI fix')              // button is workflow-labelled, not apply-semantics
+    expect(m).toMatch(/records your sign-off/i)        // the "writes vs records" honesty moved to the prose
+    expect(m).not.toContain('Approve &amp; Apply')
   })
 
-  it('alt text on an Office file DOES get written, so the button says so', () => {
+  it('an alt proposal reads “Approve AI fix” by workflow regardless of format', () => {
     const alt = { ...item, rule_id: '1.1.1', rule_name: 'Non-text Content', file: 'deck.pptx',
                   proposals: [{ locator: 'ppt/slides/slide1.xml#Picture 1', before: '(no alt text)',
                                 proposed_value: 'A clinician at a desk.' }] }
-    expect(markup(alt)).toContain('Approve &amp; write into the document')
-    // …but a PDF has no applier: do not promise a write we cannot perform
-    expect(markup({ ...alt, file: 'handbook.pdf' })).toContain('Approve — record sign-off')
+    expect(markup(alt)).toContain('Approve AI fix')
+    expect(markup({ ...alt, file: 'handbook.pdf' })).toContain('Approve AI fix')
   })
 })

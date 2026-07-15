@@ -199,7 +199,14 @@ _DECOR_NAME = re.compile(
 _DECOR_MIN = 4        # px — below this in either axis is a spacer/hairline
 _DECOR_TINY = 24      # px — both axes at/under this is an icon-sized glyph/bullet
 _DECOR_THIN_RATIO = 10.0  # aspect ratio at/above which it reads as a divider/rule
-_DECOR_STD = 8.0      # per-channel stddev (0–255) below which the image is a near-solid fill
+# Per-channel stddev (0–255) below which an image reads as a near-solid fill. Kept deliberately
+# TIGHT: the decorative call is computed on a 64×64 downscale, which averages sparse dark text into
+# its white background — a page of text (e.g. an image-of-text notice) can fall to a stddev of ~6.
+# Marking such an image decorative HIDES its text from screen readers (the expensive, harmful error
+# direction), so only a genuinely flat fill (stddev ≈0–2) qualifies; anything with structure is left
+# for the vision model / a human. Under-calling decorative just adds a review; over-calling erases
+# content.
+_DECOR_STD = 3.0
 
 
 def _near_uniform(image: bytes | None) -> dict | None:
@@ -319,6 +326,87 @@ def propose_language_parts(text: str) -> list[dict]:
     return out
 
 
+def _despace_ocr(seg: str) -> str:
+    """Collapse OCR letter-spacing artifacts ("t r i mest r i el") so language detection can
+    work on text rendered inside images. When most tokens are 1–2 chars the spaces carry no
+    word-boundary information — drop them and let langdetect's character n-grams (which don't
+    need word boundaries) identify the language. Returns the segment unchanged otherwise."""
+    toks = seg.split()
+    # Real OCR fragments are pure letters split apart — a slash-list or numbered line
+    # ("4 frontier / mini / nano") must never be joined into pseudo-words (that minted a
+    # confident-but-wrong "Italian" on a real corpus document).
+    if len(toks) < 4 or not all(t.isalpha() for t in toks):
+        return seg
+    frag = sum(1 for t in toks if len(t) <= 2)
+    return "".join(toks) if frag / len(toks) >= 0.35 else seg
+
+
+def language_parts_suggestion(text: str) -> dict | None:
+    """One-shot deterministic draft for a 3.1.2 review card: WHICH language the foreign
+    passage(s) are in, with the actual passages as evidence. Replaces the generic text-model
+    template that produced rule-mismatched nonsense for this criterion — the language of a
+    passage is machine-detectable (langdetect, seeded), so the card should arrive answered,
+    not ask the reviewer to author it. Real detections only, never a fabricated score
+    (ADR 0016); returns None when nothing detects confidently (the card degrades to manual)."""
+    try:
+        import textchecks as _tc
+    except Exception:
+        return None
+    if not text or not _tc._langdetect_available():
+        return None
+    import html as _html
+    text = _html.unescape(text)   # same entity decode as the detector ('r&#233;gions' → 'régions')
+    from langdetect import detect_langs
+    counts: dict[str, int] = {}
+    samples: dict[str, str] = {}          # first (original, human-readable) passage per lang
+    scanned = 0
+    for raw in _tc._SEG_SPLIT.split(text):
+        seg = raw.strip()
+        if not seg or _tc._looks_like_code(seg):
+            continue
+        # Normal prose gates on word count; OCR-despaced text has no words, so it gates on
+        # character length instead (langdetect needs ~25+ chars to be trustworthy).
+        if len(seg.split()) >= _tc._MIN_SEG_WORDS:
+            cand = seg
+        else:
+            d = _despace_ocr(seg)
+            cand = d if (d != seg and len(d) >= 25) else None
+        if cand is None:
+            continue
+        scanned += 1
+        try:
+            res = detect_langs(cand)
+        except Exception:
+            continue
+        if res and res[0].prob >= _tc._MIN_CONF:
+            lang = res[0].lang
+            counts[lang] = counts.get(lang, 0) + 1
+            samples.setdefault(lang, seg)
+        if scanned >= _tc._MAX_SEGS:
+            break
+    # A genuine MIX is required — one language across the whole text is the document's
+    # primary language (3.1.1's concern), and suggesting it as a "part" would be wrong.
+    if len(counts) < 2:
+        return None
+    # The parts needing lang markup are the minority languages.
+    primary = max(counts, key=counts.get)
+    foreign = [lang for lang in counts if lang != primary]
+    lines = []
+    for lang in sorted(foreign, key=lambda code: -counts[code])[:3]:
+        name = _LANG_NAMES.get(lang, lang)
+        snippet = samples[lang][:110]
+        lines.append(f'{name}: mark the passage lang="{lang}" — detected in “{snippet}”')
+    return {
+        "suggestion": "\n".join(lines),
+        "kind": "language tag",
+        "is_template": False,
+        "deterministic": True,
+        "model": "langdetect (deterministic)",
+        "languages": [{"code": lang, "name": _LANG_NAMES.get(lang, lang),
+                       "passages": counts[lang]} for lang in foreign],
+    }
+
+
 # ── 1.3.3 Sensory Characteristics — non-sensory rewrite proposal (model, human) ─
 # Genuinely subjective (which green button?), so this ALWAYS surfaces for human approval and
 # is never auto-applied. The local text model drafts a non-sensory rewrite the reviewer
@@ -328,7 +416,8 @@ _SENSORY_SENT = re.compile(r"[^.!?\n]*[.!?\n]|[^.!?\n]+")
 _SENSORY_CAP = 5
 
 
-def propose_sensory_rewrite(text: str, *, filename: str = "", ai_enabled: bool = True) -> list[dict]:
+def propose_sensory_rewrite(text: str, *, filename: str = "", ai_enabled: bool = True,
+                            guidance: str = "") -> list[dict]:
     """Propose a non-sensory rewrite for each sentence that relies on shape / colour / size /
     position (WCAG 1.3.3). Returns [] when AI is off/unavailable or nothing matches. The
     proposals are always Low confidence (a subjective judgement) — the caller surfaces them
@@ -364,7 +453,8 @@ def propose_sensory_rewrite(text: str, *, filename: str = "", ai_enabled: bool =
         # rewrite loses more than it saves — every regex hit keeps its draft, and the human
         # dismisses false positives with one click.
         try:
-            res = _ai.suggest_fix("1.3.3", "Sensory Characteristics", "A", filename, detail=sentence)
+            res = _ai.suggest_fix("1.3.3", "Sensory Characteristics", "A", filename,
+                                  detail=sentence, guidance=guidance)
         except Exception:
             res = None
         if not res or not res.get("suggestion"):
@@ -516,6 +606,605 @@ def propose_images_of_text(path, ext: str) -> list[dict]:
             ))
         except Exception:
             continue                           # one bad image never sinks the rest
+    return out
+
+
+# ── 2.4.4 / 2.4.9 Office link text — descriptive-text proposals (docx + pptx) ──
+# The html lane's exact pattern, ported to OOXML: a VAGUE link ("click here", a bare URL)
+# gets a deterministic derivation from its target when possible (High) or a local text-model
+# draft (Medium); a link whose display text is REUSED for a different destination (the 2.4.9
+# ambiguity the detector flags) gets the same treatment per destination. Proposal-only for
+# Office — rewriting run text is an authoring edit a human approves, never silent.
+_LINK_PROPOSAL_CAP = 20
+
+
+def extract_office_links(path, ext: str) -> list[tuple[str, str]]:
+    """(display_text, href) for every hyperlink in a docx/pptx — the same OOXML parsing as
+    the 2.4.9 detector (office_structure), so proposer and detector see identical links."""
+    import zipfile
+    import office_structure as _os
+    ext = (ext or "").lower().lstrip(".")
+    out: list[tuple[str, str]] = []
+    try:
+        with zipfile.ZipFile(path) as zf:
+            if ext == "docx":
+                doc = _os._read(zf, "word/document.xml") or ""
+                rels = _os._relationships(zf, "word/_rels/document.xml.rels")
+                for rid, inner in _os._HYPERLINK.findall(doc):
+                    href = rels.get(rid)
+                    if href:
+                        out.append(("".join(_os._WT.findall(inner)), href))
+            elif ext == "pptx":
+                import re as _re
+                for slide_name in sorted(n for n in zf.namelist()
+                                         if _re.fullmatch(r"ppt/slides/slide\d+\.xml", n)):
+                    xml = _os._read(zf, slide_name) or ""
+                    num = _re.search(r"slide(\d+)\.xml", slide_name).group(1)
+                    rels = _os._relationships(zf, f"ppt/slides/_rels/slide{num}.xml.rels")
+                    for run_inner in _os._A_RUN.findall(xml):
+                        m = _os._A_HLINK.search(run_inner)
+                        if not m:
+                            continue
+                        href = rels.get(m.group(1))
+                        if href:
+                            out.append(("".join(_os._AT.findall(run_inner)), href))
+            elif ext == "xlsx":
+                # Cell hyperlinks: <hyperlink ref="A1" r:id="rId1" display="click here"/>. The
+                # detector (office_structure.xlsx_structure_checks) judges the `display` text, so
+                # the proposer reads the SAME attribute — a link with no display is skipped there
+                # and here alike (its label is the cell value, which we don't rewrite blindly).
+                import re as _re
+                for ws_name in sorted(n for n in zf.namelist()
+                                      if _re.fullmatch(r"xl/worksheets/sheet\d+\.xml", n)):
+                    xml = _os._read(zf, ws_name) or ""
+                    num = _re.search(r"sheet(\d+)\.xml", ws_name).group(1)
+                    rels = _os._relationships(zf, f"xl/worksheets/_rels/sheet{num}.xml.rels")
+                    for tag in _os._XLSX_HL.findall(xml):
+                        disp = _os._HL_DISPLAY.search(tag)
+                        rid = _re.search(r'r:id="(rId\w+)"', tag)
+                        if not disp or not rid:
+                            continue
+                        href = rels.get(rid.group(1))
+                        if href:
+                            out.append((disp.group(1), href))
+    except Exception:
+        return []
+    return out
+
+
+def propose_link_texts(path, ext: str, *, ai_enabled: bool = True, guidance: str = "") -> list[dict]:
+    """Descriptive link-text proposals for a docx/pptx/xlsx. Each proposal carries `sc` ('2.4.4'
+    for vague text, '2.4.9' for text reused across destinations) so the caller enqueues it
+    onto the right card. Self-gating: a document whose links are all descriptive and unique
+    yields [] — safe to run on every remediated Office file."""
+    links = extract_office_links(path, ext)
+    if not links:
+        return []
+    # Text reused for a DIFFERENT destination — the 2.4.9 signal, same rule as the detector.
+    by_text: dict[str, set[str]] = {}
+    for text, href in links:
+        t = " ".join((text or "").split()).lower()
+        if t:
+            by_text.setdefault(t, set()).add(href)
+    ambiguous = {t for t, hrefs in by_text.items() if len(hrefs) > 1}
+
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for text, href in links:
+        norm = " ".join((text or "").split()).lower()
+        vague = is_vague_link_text(text)
+        dup = norm in ambiguous
+        if not (vague or dup) or (norm, href) in seen:
+            continue
+        seen.add((norm, href))
+        sc = "2.4.4" if vague else "2.4.9"
+        why = ("link text conveys nothing about the destination" if vague
+               else "the same link text points at a different destination elsewhere in the document")
+        der = derive_link_text(href, "")
+        if der:
+            out.append({**proposal(
+                locator=href, before=text or "(empty link text)",
+                proposed_value=der["text"],
+                rationale=f"{why} — {der['rationale']}",
+                source="derived from the link target"), "sc": sc})
+        elif ai_enabled:
+            try:
+                import ai as _ai
+                res = (_ai.suggest_fix(sc, "Link Purpose", "A", "",
+                                       detail=f'link text "{text}" → {href}', guidance=guidance)
+                       if _ai.is_available() else None)
+            except Exception:
+                res = None
+            if res and res.get("suggestion"):
+                out.append({**proposal(
+                    locator=href, before=text or "(empty link text)",
+                    proposed_value=res["suggestion"],
+                    rationale=f"{why}; the target is opaque, so AI drafted descriptive text — "
+                              "confirm it names the destination",
+                    source=f"AI text model ({res.get('model', 'llama')})"), "sc": sc})
+        if len(out) >= _LINK_PROPOSAL_CAP:
+            break
+    return out
+
+
+# ── 2.4.10 Section Headings — AI-drafted heading proposals (docx) ──────────────
+# The detector (office_structure DOCX_NO_SECTION_HEADINGS) fires when a long document uses
+# no heading styles at all. Sectioning is an authoring decision, so this NEVER auto-inserts;
+# it splits the document at its own blank-paragraph boundaries and drafts one short heading
+# per section for a human to approve, with each section's opening words as the evidence.
+_SECTION_HEADING_CAP = 8      # a review card with 30 headings is homework, not assistance
+_MIN_SECTION_WORDS = 25       # a heading for a two-line fragment is noise
+
+
+def propose_section_headings(path, ext: str, *, ai_enabled: bool = True, guidance: str = "") -> list[dict]:
+    """Heading proposals for a long, heading-less docx. Gates on the DETECTOR's own
+    conditions (no Heading styles, >= its paragraph floor) so a card can never appear for a
+    document the scan didn't flag; degrades to [] when AI is off/unavailable (the finding
+    stays plain human review). Sections come from the document's own blank-line structure —
+    the model only names them, it never invents where they are."""
+    if (ext or "").lower().lstrip(".") != "docx" or not ai_enabled:
+        return []
+    import zipfile
+
+    import office_structure as _os
+    try:
+        with zipfile.ZipFile(path) as zf:
+            doc = _os._read(zf, "word/document.xml") or ""
+    except Exception:
+        return []
+    if _os._HEADING_STYLE.search(doc):
+        return []                                  # has headings — not this finding
+    paras = ["".join(_os._WT.findall(p)).strip() for p in _os._PARA.findall(doc)]
+    if sum(1 for p in paras if p) < _os._MIN_PARAS_FOR_HEADINGS:
+        return []                                  # short memo — detector wouldn't fire
+    # Sections = runs of non-empty paragraphs split at the document's blank paragraphs.
+    sections: list[tuple[int, str]] = []           # (1-based paragraph number, section text)
+    cur: list[str] = []
+    start = 0
+    for i, p in enumerate(paras):
+        if p:
+            if not cur:
+                start = i + 1
+            cur.append(p)
+        elif cur:
+            sections.append((start, " ".join(cur)))
+            cur = []
+    if cur:
+        sections.append((start, " ".join(cur)))
+    sections = [(n, t) for n, t in sections if len(t.split()) >= _MIN_SECTION_WORDS]
+    if len(sections) < 2:
+        return []                                  # one blob — no section structure to name
+    try:
+        import ai as _ai
+        if not _ai.is_available():
+            return []
+    except Exception:
+        return []
+    out: list[dict] = []
+    for n, text in sections[:_SECTION_HEADING_CAP]:
+        try:
+            res = _ai.suggest_fix("2.4.10", "Section Headings", "AAA", "",
+                                  detail=text[:400], guidance=guidance)
+        except Exception:
+            res = None
+        title = (res or {}).get("suggestion", "").strip().strip('"')
+        if not title or len(title) > 90:
+            continue
+        out.append(proposal(
+            locator=f"before paragraph {n}",
+            before="(no section heading — a long document reads as one undifferentiated block)",
+            proposed_value=title,
+            rationale=f"AI named this section from its opening words — “{text[:110]}…” — "
+                      "confirm the heading describes it",
+            source=f"AI text model ({(res or {}).get('model', 'llama')})"))
+    return out
+
+
+# ── pptx 2.4.6 — AI slide-title drafts for empty title placeholders ─────────────
+_SLIDE_TITLE_CAP = 10
+
+
+def propose_slide_titles(path, ext: str, *, ai_enabled: bool = True, guidance: str = "") -> list[dict]:
+    """A slide whose layout has a title placeholder that was left EMPTY (the detector's
+    PPTX_TITLE_EMPTY condition, mirrored exactly) gets an AI-drafted title from the slide's
+    own body text — naming content is drafting, placement is already decided by the layout.
+    One proposal per offending slide, the slide's opening words as evidence; [] when AI is
+    off/unavailable or every title is filled."""
+    if (ext or "").lower().lstrip(".") != "pptx" or not ai_enabled:
+        return []
+    import re as _re
+    import zipfile
+
+    import office_structure as _os
+    empties: list[tuple[int, str]] = []        # (slide number, slide body text)
+    try:
+        with zipfile.ZipFile(path) as zf:
+            for slide_name in sorted(n for n in zf.namelist()
+                                     if _re.fullmatch(r"ppt/slides/slide\d+\.xml", n)):
+                xml = _os._read(zf, slide_name) or ""
+                ph = _os._PPTX_TITLE_PH.search(xml)
+                if not ph:
+                    continue                   # no title slot on this layout — by design
+                shape_text = xml[ph.end():].split("</p:sp>", 1)[0]
+                if "".join(_os._AT.findall(shape_text)).strip():
+                    continue                   # title filled — not this finding
+                body = " ".join(t for t in _os._AT.findall(xml) if t.strip())
+                if body.strip():
+                    empties.append((int(_re.search(r"slide(\d+)", slide_name).group(1)), body))
+    except Exception:
+        return []
+    if not empties:
+        return []
+    try:
+        import ai as _ai
+        if not _ai.is_available():
+            return []
+    except Exception:
+        return []
+    out: list[dict] = []
+    for num, body in empties[:_SLIDE_TITLE_CAP]:
+        try:
+            res = _ai.suggest_fix("2.4.6", "Headings and Labels", "AA", "",
+                                  detail=f"slide content: {body[:400]}", guidance=guidance)
+        except Exception:
+            res = None
+        title = (res or {}).get("suggestion", "").strip().strip('"')
+        if not title or len(title) > 90:
+            continue
+        out.append(proposal(
+            locator=f"slide {num}",
+            before="(title placeholder left empty — the slide has no announceable name)",
+            proposed_value=title,
+            rationale=f"AI named the slide from its own content — “{body[:110]}…” — "
+                      "confirm the title describes it",
+            source=f"AI text model ({(res or {}).get('model', 'llama')})"))
+    return out
+
+
+# ── xlsx 2.4.6 — AI-drafted names for default sheet tabs / table columns ────────
+_XLSX_LABEL_CAP = 12
+
+
+def propose_xlsx_labels(path, ext: str, *, ai_enabled: bool = True, guidance: str = "") -> list[dict]:
+    """xlsx 2.4.6 Headings & Labels — default 'SheetN' tabs and 'ColumnN' table headers get an
+    AI-drafted meaningful name from their OWN content (the sheet's cells / the column's values),
+    mirroring the detector's gate exactly (>= 2 default sheet tabs, or any default table column).
+    Naming is drafting — the model only labels content that already exists; a human approves.
+    [] when AI is off/unavailable or nothing is default-named."""
+    if (ext or "").lower().lstrip(".") != "xlsx" or not ai_enabled:
+        return []
+    import re as _re
+    import zipfile
+
+    import office_structure as _os
+    targets: list[tuple[str, str, str]] = []      # (locator, before, sample content)
+    try:
+        with zipfile.ZipFile(path) as zf:
+            ss_xml = _os._read(zf, "xl/sharedStrings.xml") or ""
+            shared = _re.findall(r"<t[^>]*>(.*?)</t>", ss_xml, _re.S)     # <si> text, rich runs concatenated
+
+            def sample(ws_xml: str, col: str | None = None, limit: int = 15) -> str:
+                out: list[str] = []
+                for m in _re.finditer(r'<c\b[^>]*\br="([A-Z]+)\d+"[^>]*?(?:\st="([^"]*)")?[^>]*>(.*?)</c>', ws_xml, _re.S):
+                    if col and m.group(1) != col:
+                        continue
+                    inner, typ = m.group(3), m.group(2)
+                    v = _re.search(r"<v>(.*?)</v>", inner)
+                    if v and typ == "s":
+                        idx = int(v.group(1))
+                        if 0 <= idx < len(shared) and shared[idx].strip():
+                            out.append(shared[idx].strip())
+                    elif v and v.group(1).strip():
+                        out.append(v.group(1).strip())
+                    else:
+                        t = _re.search(r"<t[^>]*>(.*?)</t>", inner, _re.S)
+                        if t and t.group(1).strip():
+                            out.append(t.group(1).strip())
+                    if len(out) >= limit:
+                        break
+                return " · ".join(out[:limit])
+
+            # 2.4.6a — default sheet tabs (only when >= 2, matching the detector).
+            wb = _os._read(zf, "xl/workbook.xml") or ""
+            wb_rels = _os._relationships(zf, "xl/_rels/workbook.xml.rels")
+            # attr order varies — pull name + r:id independently per <sheet> tag.
+            sheets = []
+            for tag in _re.findall(r"<sheet\b[^>]*/?>", wb):
+                nm, rid = _re.search(r'name="([^"]*)"', tag), _re.search(r'r:id="(rId\w+)"', tag)
+                if nm and rid:
+                    sheets.append((nm.group(1), rid.group(1)))
+            default_sheets = [(nm, rid) for nm, rid in sheets if _os._DEFAULT_SHEET.match(nm.strip())]
+            if len(default_sheets) >= 2:
+                for nm, rid in default_sheets:
+                    tgt = wb_rels.get(rid, "")
+                    ws_path = "xl/" + tgt if tgt and not tgt.startswith("/") else tgt.lstrip("/")
+                    content = sample(_os._read(zf, ws_path) or "")
+                    if content:
+                        targets.append((f"sheet:{nm}", f"default sheet tab “{nm}”", content))
+
+            # 2.4.6b — default table columns ('Column1'); sample that column's own data.
+            for name in zf.namelist():
+                if not _re.fullmatch(r"xl/tables/table\d+\.xml", name):
+                    continue
+                txml = _os._read(zf, name) or ""
+                disp = (_re.search(r'displayName="([^"]*)"', txml) or [None, "table"])[1] if _re.search(r'displayName="([^"]*)"', txml) else "table"
+                ref = _re.search(r'\bref="([A-Z]+)\d+:([A-Z]+)\d+"', txml)
+                start_col = ref.group(1) if ref else None
+                cols = _re.findall(r'<tableColumn\b[^>]*\bname="([^"]*)"', txml)
+                # the worksheet the table lives on: table rels → ../worksheets/sheetN.xml
+                ws_for_table = ""
+                for wsn in zf.namelist():
+                    if _re.fullmatch(r"xl/worksheets/sheet\d+\.xml", wsn):
+                        ws_for_table = ws_for_table or wsn        # best-effort: first sheet
+                ws_xml = _os._read(zf, ws_for_table) or "" if ws_for_table else ""
+                for i, cname in enumerate(cols):
+                    if not _os._DEFAULT_COL.match(cname.strip()):
+                        continue
+                    col_letter = _col_add(start_col, i) if start_col else None
+                    content = sample(ws_xml, col=col_letter) if col_letter else ""
+                    targets.append((f"table:{disp}#col:{cname}", f"default column header “{cname}”",
+                                    content or f"a column in table {disp}"))
+    except Exception:
+        return []
+    if not targets:
+        return []
+    try:
+        import ai as _ai
+        if not _ai.is_available():
+            return []
+    except Exception:
+        return []
+
+    out: list[dict] = []
+    for locator, before, content in targets[:_XLSX_LABEL_CAP]:
+        try:
+            res = _ai.suggest_fix("2.4.6", "Headings and Labels", "AA", "",
+                                  detail=f"give a short descriptive label for this content: {content[:400]}",
+                                  guidance=guidance)
+        except Exception:
+            res = None
+        label = (res or {}).get("suggestion", "").strip().strip('"')
+        if not label or len(label) > 60:
+            continue
+        out.append(proposal(
+            locator=locator, before=before, proposed_value=label,
+            rationale=f"AI named it from its own content — “{content[:110]}…” — confirm the label fits",
+            source=f"AI text model ({(res or {}).get('model', 'llama')})"))
+    return out
+
+
+def _col_add(col: str, n: int) -> str:
+    """Column letter n positions right of `col` (A + 2 → C)."""
+    idx = 0
+    for ch in col:
+        idx = idx * 26 + (ord(ch) - 64)
+    idx += n
+    out = ""
+    while idx > 0:
+        idx, r = divmod(idx - 1, 26)
+        out = chr(65 + r) + out
+    return out
+
+
+# ── docx 1.3.2 — floating-text reading-order recommendations ────────────────────
+# The detector (office_structure DOCX_READING_ORDER_RISK) fires on text-bearing floating objects
+# (DrawingML/VML text boxes, positioned frames): a screen reader reads them at their anchor point,
+# not where they appear. There is NO safe silent fix — moving anchored content re-flows the page —
+# so this is proposal-only: surface each floating box with its exact text and a concrete "place it
+# inline here" recommendation for a human to apply. Deterministic (no model): the text and the
+# recommendation come straight from the document, so it works with AI off.
+_READING_ORDER_CAP = 12
+
+
+def propose_reading_order(path, ext: str) -> list[dict]:
+    """docx 1.3.2 Meaningful Sequence — one recommendation per text-bearing floating object,
+    carrying the box's own text so a reviewer knows exactly what to move and can drop it into the
+    body flow at the intended point. Gates on the detector's own condition (text-bearing text
+    boxes / frames); [] for an ordinary linear document."""
+    if (ext or "").lower().lstrip(".") != "docx":
+        return []
+    import zipfile
+
+    import office_structure as _os
+    try:
+        with zipfile.ZipFile(path) as zf:
+            doc = _os._read(zf, "word/document.xml") or ""
+    except Exception:
+        return []
+    floats: list[str] = []
+    for inner in _os._TXBX_CONTENT.findall(doc):
+        txt = " ".join(t for t in _os._WT.findall(inner) if t.strip()).strip()
+        if txt:
+            floats.append(txt)
+    for para in _os._PARA.findall(doc):
+        if _os._FRAMEPR.search(para):
+            txt = " ".join(t for t in _os._WT.findall(para) if t.strip()).strip()
+            if txt:
+                floats.append(txt)
+    out: list[dict] = []
+    for i, txt in enumerate(floats[:_READING_ORDER_CAP], 1):
+        excerpt = txt if len(txt) <= 120 else txt[:117] + "…"
+        out.append({**proposal(
+            locator=f"floating-text:{i}",
+            before="floating text box / frame — read at its anchor, not its visual position",
+            proposed_value=f"Move this text into the body at its intended reading position: “{excerpt}”",
+            rationale="a screen reader follows the document's linear order, so anchored text is spoken "
+                      "out of sequence; placing it inline where it visually belongs fixes the order",
+            source="floating text detected in the document (deterministic)"), "sc": "1.3.2"})
+    return out
+
+
+# ── One-click deterministic cards — layout/authoring calls a human elects ───────
+# docx 1.4.8 (justified text → left-aligned) and pptx 1.4.2 (auto-starting audio → play on
+# click). Both FIXES are deterministic, but applying them silently would change layout /
+# authoring intent — so each becomes a one-click proposal: the exact change is pre-computed
+# and stated, the human only elects it. Gates mirror the detectors exactly.
+
+
+def propose_justified_fix(path, ext: str) -> list[dict]:
+    """docx 1.4.8 — one card offering to set the document's justified paragraphs to
+    left-aligned. Deterministic (no model); [] unless the detector's own condition holds
+    (>= its justified-paragraph floor)."""
+    if (ext or "").lower().lstrip(".") != "docx":
+        return []
+    import zipfile
+
+    import office_structure as _os
+    try:
+        with zipfile.ZipFile(path) as zf:
+            doc = _os._read(zf, "word/document.xml") or ""
+    except Exception:
+        return []
+    justified = sum(1 for p in _os._PARA.findall(doc)
+                    if _os._JC_BOTH.search(p) and "".join(_os._WT.findall(p)).strip())
+    if justified < _os._MIN_JUSTIFIED_PARAS:
+        return []
+    return [proposal(
+        locator=f"{justified} justified paragraph(s)",
+        before='body text set justified (<w:jc w:val="both"/>) — uneven word spacing makes '
+               "long text harder to read",
+        proposed_value='Set the justified paragraphs to left-aligned (<w:jc w:val="left"/>)',
+        rationale="The fix is exact and deterministic, but alignment is a layout decision — "
+                  "confirm the document may be left-aligned",
+        source="deterministic (detector-mirrored) — human election required")]
+
+
+def propose_autoplay_fix(path, ext: str) -> list[dict]:
+    """pptx 1.4.2 — one card per slide offering to make auto-starting embedded audio play
+    on click instead. Deterministic (no model); mirrors pptx_audio_autoplay_checks."""
+    if (ext or "").lower().lstrip(".") != "pptx":
+        return []
+    import office_structure as _os
+    out: list[dict] = []
+    for f in _os.pptx_audio_autoplay_checks(path):
+        out.append(proposal(
+            locator=(f.get("detail") or "slide")[:40],
+            before="embedded audio starts automatically — no pause/stop control exists on a slide",
+            proposed_value="Change the audio trigger from auto-start to play-on-click",
+            rationale="The change is exact and deterministic, but when media plays is an "
+                      "authoring decision — confirm click-to-play matches the deck's intent",
+            source="deterministic (detector-mirrored) — human election required"))
+    return out
+
+
+# ── 1.1.1 Non-text Content — native-chart datasheet (deterministic, grounded) ───
+# A native (DrawingML) chart in a docx/pptx/xlsx stores its OWN series data in chart XML.
+# That is the strongest possible alt text: exact values, not a vision guess at a rendered
+# picture. This proposer reads chart title + series names + categories + values straight
+# from the XML and builds a grounded description + datasheet — the ADR-0016 gold standard
+# (every number is the chart's own, nothing fabricated). Distinct from the images-of-text /
+# vision proposers, which handle images WITHOUT recoverable data.
+import re as _re
+
+_C_SER = _re.compile(r"<c:ser\b.*?</c:ser>", _re.S)
+_C_V = _re.compile(r"<c:v>([^<]*)</c:v>")
+_C_TITLE = _re.compile(r"<c:title\b.*?</c:title>", _re.S)
+_A_T_RE = _re.compile(r"<a:t>([^<]*)</a:t>")
+_C_CHART_TYPE = _re.compile(r"<c:(bar|line|pie|scatter|area|doughnut|radar|bubble|surface|stock|ofPie)Chart\b")
+_CHART_TYPE_NAME = {
+    "bar": "Bar/column chart", "line": "Line chart", "pie": "Pie chart",
+    "scatter": "Scatter chart", "area": "Area chart", "doughnut": "Doughnut chart",
+    "radar": "Radar chart", "bubble": "Bubble chart", "surface": "Surface chart",
+    "stock": "Stock chart", "ofPie": "Pie-of-pie chart",
+}
+_CHART_PART = _re.compile(r"(?:ppt|word|xl)/charts/chart\d+\.xml$")
+_CHART_SERIES_CAP = 8       # bound a huge multi-series chart's datasheet
+_CHART_CAT_CAP = 24
+
+
+def _chart_block_values(block: str, tag: str) -> list[str]:
+    """The <c:v> values inside the FIRST <c:tag>…</c:tag> sub-block of a series (cat/val/tx).
+    The cached values (<c:*Cache>) are what a reader needs; formula refs are ignored."""
+    m = _re.search(rf"<c:{tag}\b.*?</c:{tag}>", block, _re.S)
+    return _C_V.findall(m.group(0)) if m else []
+
+
+def _num(s: str) -> str:
+    """Trim a chart's numeric string for display: '1.0'→'1', '1.50'→'1.5', leave text as-is."""
+    try:
+        f = float(s)
+    except (TypeError, ValueError):
+        return s
+    return str(int(f)) if f == int(f) else f"{f:g}"
+
+
+def _describe_chart(xml: str) -> dict | None:
+    """Parse one chart XML into {title, type, series:[{name, values}], categories}. None when
+    it carries no plottable series (empty/placeholder chart)."""
+    sers = _C_SER.findall(xml)
+    if not sers:
+        return None
+    tm = _C_TITLE.search(xml)
+    title = " ".join(_A_T_RE.findall(tm.group(0))).strip() if tm else ""
+    ctm = _C_CHART_TYPE.search(xml)
+    ctype = _CHART_TYPE_NAME.get(ctm.group(1), "Chart") if ctm else "Chart"
+    categories: list[str] = []
+    series: list[dict] = []
+    for block in sers[:_CHART_SERIES_CAP]:
+        name = " ".join(_chart_block_values(block, "tx")).strip()
+        values = _chart_block_values(block, "val")
+        if not values:
+            continue
+        if not categories:
+            categories = _chart_block_values(block, "cat")
+        series.append({"name": name, "values": values})
+    if not series:
+        return None
+    return {"title": title, "type": ctype, "series": series, "categories": categories}
+
+
+def _chart_alt_and_sheet(desc: dict) -> tuple[str, str]:
+    """(concise alt text, full datasheet) from a parsed chart. Alt names what the chart shows
+    and its range; the datasheet is the exact value table — both grounded in the chart's data."""
+    title = desc["title"]
+    names = [s["name"] for s in desc["series"] if s["name"]]
+    named = f" comparing {', '.join(names)}" if names else ""
+    cats = desc["categories"][:_CHART_CAT_CAP]
+    span = f" across {cats[0]}–{cats[-1]}" if len(cats) >= 2 else ""
+    titled = f" titled “{title}”" if title else ""
+    alt = f"{desc['type']}{titled}{named}{span}.".strip()
+    # Datasheet: one line per series, category:value pairs (the reader's real data alternative).
+    lines: list[str] = []
+    for s in desc["series"]:
+        vals = s["values"][:_CHART_CAT_CAP]
+        if cats and len(cats) == len(vals):
+            pairs = ", ".join(f"{c} {_num(v)}" for c, v in zip(cats, vals))
+        else:
+            pairs = ", ".join(_num(v) for v in vals)
+        lead = f"{s['name']}: " if s["name"] else ""
+        lines.append(f"{lead}{pairs}")
+    return alt, "\n".join(lines)
+
+
+def propose_chart_datasheet(path, ext: str) -> list[dict]:
+    """One 1.1.1 proposal per NATIVE chart in a docx/pptx/xlsx, carrying a deterministic,
+    grounded description + the chart's exact data as a datasheet. Returns [] when the file
+    has no native charts (embedded chart IMAGES are handled by the vision/OCR proposers).
+    Never a fabricated value — every figure is read from the chart's own XML (ADR 0016)."""
+    if (ext or "").lower().lstrip(".") not in ("docx", "pptx", "xlsx"):
+        return []
+    import zipfile
+    out: list[dict] = []
+    try:
+        with zipfile.ZipFile(path) as zf:
+            parts = sorted(n for n in zf.namelist() if _CHART_PART.search(n))
+            for i, name in enumerate(parts):
+                try:
+                    desc = _describe_chart(zf.read(name).decode("utf-8", "ignore"))
+                except Exception:
+                    continue
+                if not desc:
+                    continue
+                alt, sheet = _chart_alt_and_sheet(desc)
+                out.append(proposal(
+                    locator=f"chart {i + 1}" + (f" ({desc['title']})" if desc["title"] else ""),
+                    before="a chart with no text alternative — assistive tech cannot convey its data",
+                    proposed_value=alt,
+                    rationale="Read directly from the chart's own data (no vision guess). "
+                              "Data table:\n" + sheet,
+                    source="chart data (deterministic — from the document's chart XML)"))
+    except Exception:
+        return []
     return out
 
 

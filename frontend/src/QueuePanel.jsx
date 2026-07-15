@@ -177,10 +177,21 @@ export default function QueuePanel() {
         )}
       </div>
 
-      {q && workers === 0 && (
+      {/* Split topology (#113): jobs normally run on the standalone worker service, whose
+          heartbeat is worker_tier_alive — its liveness, not this container's local pool,
+          is what says whether the queue is manned. */}
+      {q && workers === 0 && q.worker_tier_alive && (
         <p className="muted" style={{ marginTop: 8, fontSize: 13 }}>
-          No workers running — queued scans and remediation jobs won't process.
-          Use <strong>+</strong> below to start some.
+          <span style={{ color: '#1a7f37', fontWeight: 600 }}>✓ worker service online</span>{' '}
+          — jobs run on the dedicated worker container. The controls below scale extra
+          in-process workers in this container (normally unneeded).
+        </p>
+      )}
+      {q && workers === 0 && !q.worker_tier_alive && (
+        <p className="muted" style={{ marginTop: 8, fontSize: 13 }}>
+          No workers available — the worker service isn't reporting a heartbeat, and this
+          container has no in-process pool. Queued scans and remediation jobs won't process.
+          Use <strong>+</strong> below to start emergency in-process workers.
         </p>
       )}
       {!q && err && <p className="muted" style={{ marginTop: 8, fontSize: 13 }}>Queue status unavailable: {err}</p>}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildEvidenceCard, comparisonFor, evidenceSignals, explainFinding, formatProposedValue, noDraftHint, trustStates, validationChecklist, verificationLadder, whyHumanReview } from './reviewCard.js'
+import { authoringScaffold, buildEvidenceCard, comparisonFor, evidenceSignals, explainFinding, formatProposedValue, noDraftHint, primaryActionLabel, reviewIntent, trustStates, validationChecklist, verificationLadder, whyHumanReview } from './reviewCard.js'
 
 describe('comparisonFor — current → remediated, or nothing', () => {
   const DIFF = { file: 'deck.pptx', rule_id: '1.1.1', before: '(no alt text)', after: 'A clinician at a desk.' }
@@ -329,6 +329,37 @@ describe('validationChecklist — machine-verified receipt for an applied fix', 
   })
 })
 
+describe('reviewIntent — the one plain-language sentence at the top (AI Work Inbox)', () => {
+  const withDraft = { proposals: [{ proposed_value: 'a chart of revenue' }] }
+  const noDraft = { proposals: [] }
+  it('a drafted fix → “review and approve”, flavoured by the SC noun', () => {
+    expect(reviewIntent(withDraft, '1.1.1')).toMatch(/drafted a fix for this image/i)
+    expect(reviewIntent(withDraft, '2.4.4')).toMatch(/link/i)
+  })
+  it('no draft → “couldn’t generate a trustworthy fix, write one”', () => {
+    expect(reviewIntent(noDraft, '1.1.1')).toMatch(/couldn.t generate|needs you to write/i)
+  })
+  it('a deterministic (auto/verify) item → “applied and verified — confirm”', () => {
+    expect(reviewIntent({ rule_id: 'auto/verify' })).toMatch(/applied and verified/i)
+  })
+})
+
+describe('primaryActionLabel — the button reads by workflow, not internal state', () => {
+  it('proposal → Approve AI fix · confirm → Confirm fix · author → Approve description', () => {
+    expect(primaryActionLabel({ proposals: [{ proposed_value: 'x' }] })).toBe('Approve AI fix')
+    expect(primaryActionLabel({ rule_id: 'auto/verify' })).toBe('Confirm fix')
+    expect(primaryActionLabel({ proposals: [] })).toBe('Approve description')
+  })
+})
+
+describe('authoringScaffold — never a blank box', () => {
+  it('gives image-authoring an outline, links a link outline, and null for an unknown SC', () => {
+    expect(authoringScaffold('1.1.1')).toEqual(expect.arrayContaining([expect.stringMatching(/kind of image/i)]))
+    expect(authoringScaffold('2.4.4')).toEqual(expect.arrayContaining([expect.stringMatching(/where the link goes/i)]))
+    expect(authoringScaffold('9.9.9')).toBeNull()
+  })
+})
+
 describe('whyHumanReview — the honest reason a human is in the loop', () => {
   it('subjective wording → several valid descriptions', () => {
     expect(whyHumanReview({ proposal: { subjective: true } })).toMatch(/judgement call|valid descriptions/i)
@@ -338,6 +369,24 @@ describe('whyHumanReview — the honest reason a human is in the loop', () => {
   })
   it('deterministic high-confidence → nothing to explain', () => {
     expect(whyHumanReview({ confidence: { level: { key: 'high' } } })).toBeNull()
+  })
+  it('the HITL-six get a criterion-specific reason, not a generic hedge', () => {
+    expect(whyHumanReview({ sc: '1.2.1' })).toMatch(/transcript/i)
+    expect(whyHumanReview({ sc: '1.2.2' })).toMatch(/caption/i)
+    expect(whyHumanReview({ sc: '1.2.3' })).toMatch(/audio description|media alternative/i)
+    expect(whyHumanReview({ sc: '1.3.2' })).toMatch(/reading order/i)
+    expect(whyHumanReview({ sc: '1.3.3' })).toMatch(/shape, colour|editorial/i)
+    expect(whyHumanReview({ sc: '1.4.5' })).toMatch(/essential/i)
+    expect(whyHumanReview({ sc: '1.4.9' })).toMatch(/essential/i)
+    expect(whyHumanReview({ sc: '2.4.6' })).toMatch(/heading|intent/i)
+    expect(whyHumanReview({ sc: '2.4.10' })).toMatch(/section structure|logically/i)
+  })
+  it('the criterion-specific reason wins over the generic confidence reason', () => {
+    // A 1.3.3 finding detected at medium confidence must say WHY 1.3.3 is human, not "heuristic".
+    expect(whyHumanReview({ sc: '1.3.3', confidence: { level: { key: 'medium' } } })).toMatch(/editorial/i)
+  })
+  it('an SC with no special reason still falls back to the confidence-based one', () => {
+    expect(whyHumanReview({ sc: '4.1.2', confidence: { level: { key: 'medium' } } })).toMatch(/heuristic/i)
   })
 })
 

@@ -69,7 +69,11 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
                     "exclude_remediated": exclude_remediated, "incremental": incremental},
             scan_id=scan_id)
         return {"scan_id": scan_id, "job_id": job_id, "queued": True,
-                "fanout": fanout, "batch": batch, "workers": core.WORKERS}
+                "fanout": fanout, "batch": batch, "workers": core.WORKERS,
+                # Split topology (#113): the API runs ACP_WORKERS=0 and a standalone worker
+                # container carries the pool — report its heartbeat so the client's
+                # "no workers" guard doesn't refuse a perfectly manned queue.
+                "worker_tier_alive": core.store.worker_tier_alive()}
 
     if sync:  # synchronous path for scripts/tests
         report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token,
@@ -155,7 +159,8 @@ async def remediate_scan(sid: str, request: Request):
              "remediated_folder_id": remediated_folder_id, "drive_token": token},
             scan_id=sid)
         enqueued.append(jid)
-    return {"scan_id": sid, "enqueued": len(enqueued), "job_ids": enqueued, "workers": core.WORKERS}
+    return {"scan_id": sid, "enqueued": len(enqueued), "job_ids": enqueued,
+            "workers": core.WORKERS, "worker_tier_alive": core.store.worker_tier_alive()}
 
 
 @router.post("/scans/{sid}/cancel")
@@ -219,6 +224,7 @@ def assess(sid: str, request: Request, level: str = Query("AA")):
     if deferred_pending:
         jid = core.store.enqueue_job("scan_assess", {"scan_id": sid, "user": _owner(request)}, scan_id=sid)
         return {"scan_id": sid, "level": level, "job_id": jid, "workers": core.WORKERS,
+                "worker_tier_alive": core.store.worker_tier_alive(),
                 "phase": "assessing", "deferred": True}
     # Immediate model — the results views gate on assessed_at; stamp it + build the assess trace.
     core.store.mark_assessed(sid, _dt.datetime.now(_dt.timezone.utc).isoformat())
@@ -417,6 +423,16 @@ def scan_traces(sid: str, request: Request, file: str | None = None):
     return core.store.get_scan_traces(sid, file=file)
 
 
+@router.get("/scans/{sid}/timeline")
+def scan_timeline(sid: str, request: Request, file: str = Query(...)):
+    """Audit trail (maturity Phase 4): the chronological provenance of one document in this
+    scan — scanned → AI drafted → human decided → fix written → published — assembled from
+    rows the pipeline already persists. Owner-scoped like every per-scan surface."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    return core.store.document_timeline(sid, file)
+
+
 @router.get("/scans/{sid}/applied-fixes")
 def scan_applied_fixes(sid: str, request: Request):
     """The concrete values AI fixes wrote this scan (vision-generated alt text + a small
@@ -608,7 +624,8 @@ def rescore_file(sid: str, request: Request, file: str = Query(...)):
          "drive_token": drive_token, "user": _owner(request)},
         scan_id=sid,
     )
-    return {"scan_id": sid, "file": file, "job_id": jid, "workers": core.WORKERS}
+    return {"scan_id": sid, "file": file, "job_id": jid, "workers": core.WORKERS,
+            "worker_tier_alive": core.store.worker_tier_alive()}
 
 
 @router.post("/scans/{sid}/drive-token")

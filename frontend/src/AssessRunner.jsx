@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { allRules } from './rules'
+import { WCAG } from './wcagCatalog.js'
 import { assessScan, getCapability, getScan, refreshScanDriveToken } from './api.js'
 import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
 import { TraceChip } from './Transparency.jsx'
@@ -19,13 +20,20 @@ const LEVELS = [
 // Real scan findings carry {rule_id, wcag, severity} but no conformance level, so derive
 // it from the SC catalog (rules/*.js meta) keyed by the WCAG SC number.
 const SC_LEVEL = Object.fromEntries(allRules.map((r) => [r.meta.id, r.meta.level]))
+// The rule modules only cover the ~29 SCs with a remediator; ACP DETECTS more than it can
+// fix (e.g. 1.4.9 / 1.4.6 / 2.4.9 — all AAA — via api/ocr.py & friends, which emit no level).
+// Without a level those defaulted to 'A' and wrongly BLOCKED at an AA target. The hand-kept
+// wcagCatalog carries the correct conformance level for every 2.1/2.2 SC — use it as the
+// authoritative fallback so the AA filter counts an AAA finding as AAA, not A.
+const CATALOG_LEVEL = Object.fromEntries(WCAG.map((c) => [c.sc, c.level]))
 // Findings carry wcag as EITHER the engine form 'SC_1_1_1' (real scans + SIM) or the
 // axe-style '1.1.1 name' — normalize both to the bare dotted SC. (A dotted-only match
 // silently returned undefined for the 'SC_' form, which read every finding as human /
 // not-auto once the auto flag became capability-derived.)
 const scOf = (w) => ((String(w || '')).replace(/^SC_/, '').replace(/_/g, '.').match(/\d+\.\d+\.\d+/) || [])[0]
-// Level of a finding: explicit field (SIM) → SC catalog → default A (unknown SCs still count).
-const levelOf = (x) => x.level || SC_LEVEL[scOf(x.wcag)] || 'A'
+// Level of a finding: explicit field (SIM) → rule-module meta → full WCAG catalog → default A.
+// The catalog step is what stops detector-only AAA criteria (1.4.9 etc.) from blocking at AA.
+const levelOf = (x) => x.level || SC_LEVEL[scOf(x.wcag)] || CATALOG_LEVEL[scOf(x.wcag)] || 'A'
 // Whether a finding CAN be auto-fixed is format-aware: the same criterion may be a
 // deterministic fix on one file type and human-only on another (a docx contrast fix
 // exists; a pdf one does not). Answered by the remediation-capability table for the

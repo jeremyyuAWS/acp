@@ -9,6 +9,16 @@
 import { getScanTraces, listHitlQueue, getConfig } from './api.js'
 import { WCAG } from './wcagCatalog.js'
 import { recommendationSummary } from './sim.js'
+import { fixSteps, hasGuidance, appName } from './remediationGuide.js'
+
+// Normalize a filename to one of the native-app formats the remediation guide keys on.
+const CHECKLIST_CAP = 60
+const fmtOfName = (name) => {
+  const ext = String(name || '').split('.').pop().toLowerCase()
+  if (/^html?$/.test(ext)) return 'html'
+  if (['docx', 'xlsx', 'pptx', 'pdf'].includes(ext)) return ext
+  return null
+}
 
 const LEVEL_RANK = { A: 1, AA: 2, AAA: 3 }
 // Same per-scan target the Assess runner persisted (Transparency reads this too).
@@ -74,6 +84,28 @@ export async function generateScanReport({ scanId, files = [], org = 'your organ
     rows: topFailing.map((r) => ({ id: r.id, name: r.name, cells: heatDepts.map((dpt) => cell[`${r.id}::${dpt}`] || 0) })),
   }
 
+  // ── Manual remediation checklist: every FAILING criterion × the file format(s) it
+  //    fails in, paired with the native-app menu path to fix it by hand on Mac and Windows.
+  //    Driven entirely by real FAIL traces — no criterion appears that the scan did not flag.
+  //    One row per (SC × format) so the instructions are exact for the app the user opens.
+  const fileFmt = {}
+  files.forEach((f) => { fileFmt[f.file] = fmtOfName(f.file) || (String(f.type || '').toLowerCase() || null) })
+  const clMap = {}   // `${sc}::${fmt}` -> { sc, name, level, fmt, docs }
+  rows.forEach((r) => {
+    if (String(r.outcome || '').toUpperCase() !== 'FAIL') return
+    const fmt = fileFmt[r.file]
+    if (!fmt) return
+    const sc = r.rule_id
+    const key = `${sc}::${fmt}`
+    if (!clMap[key]) clMap[key] = { sc, name: byRule[sc]?.name || r.plain_name || sc, level: byRule[sc]?.level || r.level || null, fmt, docs: 0 }
+    clMap[key].docs++
+  })
+  const manualChecklist = Object.values(clMap)
+    .map((it) => { const s = fixSteps(it.sc, it.fmt); return { ...it, app: appName(it.fmt), where: s.where, mac: s.mac, win: s.win, specific: hasGuidance(it.sc) } })
+    // Most actionable first: criteria with a specific menu path, then most-affected, then by SC.
+    .sort((a, b) => (b.specific - a.specific) || (b.docs - a.docs) || a.sc.localeCompare(b.sc))
+  const checklistTruncated = manualChecklist.length > CHECKLIST_CAP
+
   // ── Document-level rollups ────────────────────────────────────────────────
   const totalFiles = files.length
   const conformantN = files.filter((f) => statusOf(f) === 'certifiable').length
@@ -129,5 +161,7 @@ export async function generateScanReport({ scanId, files = [], org = 'your organ
     totalFiles, conformantN, conformantPct, avgScore, statusCounts,
     criteriaAutomated, inScopeCount: inScope.length,
     topFailing, heatmap, byDept, bySource, routing, effort, hitl, appendix,
+    manualChecklist: manualChecklist.slice(0, CHECKLIST_CAP), checklistTruncated,
+    checklistTotal: manualChecklist.length,
   })
 }

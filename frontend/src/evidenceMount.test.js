@@ -73,7 +73,9 @@ describe('the evidence card is actually mounted, and owns the write', () => {
   it('the card decides through the parent, preserving the optimistic update', () => {
     // Calling updateHitlItem directly would bypass HitlBell's optimistic state + drain event.
     expect(read('EvidenceCard.jsx')).not.toMatch(/updateHitlItem/)
-    expect(read('EvidenceCard.jsx')).toMatch(/onAct\(card\.id, status, note \|\| null/)
+    // noteOut/finalValue collapse to note/value for a normal decision, and self-describe a
+    // WCAG-exception resolution (decorative / essential logo) — either way it flows through onAct.
+    expect(read('EvidenceCard.jsx')).toMatch(/onAct\(card\.id, status, noteOut, finalValue/)
   })
 
   it('telemetry reaches the API — hitl_events.review_ms was previously always null', () => {

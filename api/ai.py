@@ -388,7 +388,7 @@ def _clean_alt(text: str) -> str:
     return t.strip()
 
 
-def _vision_prompt(filename: str, context: str, style: str = "") -> str:
+def _vision_prompt(filename: str, context: str, style: str = "", guidance: str = "") -> str:
     where = f" It appears in the document '{filename}'." if filename else ""
     near = f" Nearby text for context: {context.strip()[:200]}" if context and context.strip() else ""
     # Reviewer-directed refinement (#131) — a length steer only; the description stays grounded in
@@ -410,6 +410,8 @@ def _vision_prompt(filename: str, context: str, style: str = "") -> str:
         "figure or takeaway. If it is a photo or illustration, describe the content and its meaning. "
         f"{length}"
         "Do not begin with 'image of', 'picture of', or 'this image shows'."
+        # ADR 0021 — org house style, injected only when review memory is active for this org.
+        f"{(chr(10) + guidance) if guidance else ''}"
         f"{where}{near}\nAlt text:"
     )
 
@@ -433,6 +435,14 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     import providers as _providers
     prov = _providers.active_vision_provider()
     res = prov.generate(prompt, image_bytes, model=model, timeout=OLLAMA_VISION_TIMEOUT)
+    # Fallback floor (ADR 0022): if the default GPU provider missed — a serverless cold-start over the
+    # timeout, or the endpoint down — retry on the always-available local CPU Ollama so the finding
+    # still gets *a* draft (degraded, not broken). Recorded honestly: the trace/ai_calls row reports
+    # whichever provider ACTUALLY served the call, so provenance never claims GPU when CPU ran.
+    if not res.get("ok") and getattr(prov, "name", "") != "ollama":
+        fb = _providers.local_vision_provider()
+        if getattr(fb, "name", "") == "ollama":
+            res = fb.generate(prompt, image_bytes, model=None, timeout=OLLAMA_VISION_TIMEOUT)
     mdl = res.get("model") or model or OLLAMA_VISION_MODEL
     _tr = dict(model=mdl, scan_id=scan_id, file=file, provider=res.get("provider", "ollama"),
                zone=res.get("zone"), cost_usd=res.get("cost_usd", 0.0))
@@ -450,7 +460,7 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
 
 
 def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "", style: str = "",
-                   scan_id: str | None = None, file: str | None = None) -> dict | None:
+                   guidance: str = "", scan_id: str | None = None, file: str | None = None) -> dict | None:
     """Generate genuine alt text for one image via the local vision model.
 
     Sends the raw image bytes (base64) to Ollama /api/generate with OLLAMA_VISION_MODEL
@@ -460,7 +470,7 @@ def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
     usable. Traced through Langfuse (surface 'vision') — model, latency, prompt size, ok."""
     if not image_bytes:
         return None
-    alt = _vision_generate(_vision_prompt(filename, context, style), image_bytes,
+    alt = _vision_generate(_vision_prompt(filename, context, style, guidance), image_bytes,
                            scan_id=scan_id, file=file)
     return {"alt": alt, "model": OLLAMA_VISION_MODEL} if alt else None
 
@@ -721,14 +731,19 @@ _SUGGEST_KIND: dict[str, tuple[str, str]] = {
     "2.4.4": ("link text", "descriptive link text stating the destination or purpose without surrounding context"),
     "2.4.9": ("link text", "descriptive link text understandable from the link alone"),
     "2.4.2": ("title", "a concise, descriptive document title"),
+    "2.4.10": ("heading", "a short, descriptive section heading (3-8 words) that names what the "
+                          "passage in the finding detail is about — reply with the heading only"),
+    "2.4.6": ("title", "a short, descriptive slide title (3-8 words) that names what the slide "
+                       "content in the finding detail is about — reply with the title only"),
     "1.3.3": ("rewrite", "a rewrite of the instruction that does not rely on shape, colour, size, or "
                          "on-screen position — refer to controls by their visible label or name instead"),
 }
 
 
-def _suggest_prompt(rule_id: str, rule_name: str, filename: str, detail: str) -> str:
+def _suggest_prompt(rule_id: str, rule_name: str, filename: str, detail: str, guidance: str = "") -> str:
     kind, want = _SUGGEST_KIND.get(rule_id, ("fix", "a concrete corrected value"))
     ctx = f"\nFinding detail: {detail}" if detail else ""
+    house = f"\n{guidance}" if guidance else ""    # ADR 0021 org house style (memory active)
     vision_note = ""
     if rule_id == "1.1.1":
         vision_note = ("\nYou cannot see the image. Produce a SHORT fill-in-the-blank template the author "
@@ -741,27 +756,31 @@ def _suggest_prompt(rule_id: str, rule_name: str, filename: str, detail: str) ->
     return (
         f"You are an accessibility remediation assistant. A WCAG {rule_id} ({rule_name}) issue was found "
         f"in the document '{filename}'.{ctx}\n"
-        f"Draft {want}.{vision_note}\n"
+        f"Draft {want}.{vision_note}{house}\n"
         f"Reply with ONLY the suggested {kind} — no preamble, no quotes, under 30 words."
     )
 
 
 def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
-                detail: str = "", image_bytes: bytes | None = None, style: str = "") -> dict | None:
+                detail: str = "", image_bytes: bytes | None = None, style: str = "",
+                guidance: str = "") -> dict | None:
     """Draft a concrete, human-approvable fix value (alt text / link text / title) for a
     semantic finding via the local model. Returns None when Ollama is unavailable.
 
     For 1.1.1 with the image's bytes in hand, uses the VISION model to produce real,
     image-derived alt text (is_template=False) instead of the text model's fill-in
     template — the reviewer then approves genuine alt text rather than a blank to fill.
-    `style` re-drafts an image description shorter/longer at the reviewer's request (#131)."""
+    `style` re-drafts an image description shorter/longer at the reviewer's request (#131).
+    `guidance` (ADR 0021) is the org house-style block, injected into the prompt when review
+    memory is active — "" (the default) leaves the prompt byte-identical to pre-memory."""
     if rule_id == "1.1.1" and image_bytes:
-        res = describe_image(image_bytes, filename=filename, context=detail, style=style)
+        res = describe_image(image_bytes, filename=filename, context=detail, style=style,
+                             guidance=guidance)
         if res:
             return {"suggestion": res["alt"], "kind": "alt text",
                     "is_template": False, "model": res["model"]}
         # vision unavailable / unusable → fall through to the text template below.
-    prompt = _suggest_prompt(rule_id, rule_name, filename, detail)
+    prompt = _suggest_prompt(rule_id, rule_name, filename, detail, guidance)
     import time as _t
     _t0 = _t.monotonic()
     try:

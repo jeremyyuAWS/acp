@@ -169,6 +169,19 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
     to run on every remediated file. The text proposers run on the extracted text (same source
     as the scan-time detectors); the 1.4.5 proposer OCRs the embedded images off the temp path.
     Enqueues prefilled one-click values onto the file's HITL rows, and never fails the job."""
+    # ADR 0021 stage 2 — org house-style guidance for the prose drafts. Computed once per file
+    # from the scan owner; per-rule. "" (flag off / no rules / any lookup error) leaves every
+    # proposer's prompt byte-identical to pre-memory.
+    try:
+        import memory as _mem
+        _org = (core.store.get_scan(scan_id) or {}).get("run", {}).get("owner_email")
+        _fmt = filename.rsplit(".", 1)[-1].lower() if "." in filename else None
+
+        def _g(rule):
+            return _mem.guidance_for(core.store, _org, rule, _fmt)
+    except Exception:
+        def _g(rule):
+            return ""
     try:
         import tempfile
         from pathlib import Path as _P
@@ -182,6 +195,37 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
             # the temp path is alive — and independently of `text`, since an image-only doc
             # carries no extractable text yet still fails 1.4.5.
             image_text = _prop.propose_images_of_text(p, p.suffix)
+            # 2.4.4/2.4.9 link-text proposals read the OOXML zip, so same constraint.
+            link_props = (_prop.propose_link_texts(p, p.suffix, ai_enabled=ai_enabled, guidance=_g("2.4.4"))
+                          if p.suffix.lower() in (".docx", ".pptx", ".xlsx") else [])
+            # 2.4.10 section-heading drafts (docx only) — likewise zip-bound.
+            section_heads = _prop.propose_section_headings(p, p.suffix, ai_enabled=ai_enabled,
+                                                           guidance=_g("2.4.10"))
+            # 2.4.6 slide-title drafts (pptx only) — likewise zip-bound.
+            slide_titles = _prop.propose_slide_titles(p, p.suffix, ai_enabled=ai_enabled,
+                                                      guidance=_g("2.4.6"))
+            # 2.4.6 xlsx label drafts — default sheet tabs / table columns get an AI-named label.
+            xlsx_labels = _prop.propose_xlsx_labels(p, p.suffix, ai_enabled=ai_enabled,
+                                                    guidance=_g("2.4.6"))
+            # 1.3.2 docx reading-order recommendations (floating text boxes / frames) — deterministic.
+            reading_order = _prop.propose_reading_order(p, p.suffix)
+            # One-click deterministic layout cards (no AI): docx 1.4.8 + pptx 1.4.2.
+            one_clicks = (_prop.propose_justified_fix(p, p.suffix)
+                          + _prop.propose_autoplay_fix(p, p.suffix))
+            # 1.1.1 native-chart datasheets (docx/pptx/xlsx) — grounded alt from the chart's data.
+            chart_sheets = _prop.propose_chart_datasheet(p, p.suffix)
+            # 1.1.1 image alt — enumerate every unlabelled image and PRE-DRAFT it (vision when
+            # reachable), so the review card arrives with a per-image thumbnail + AI description
+            # for each, not a single "author it yourself" template. Reuses the fix-time alt logic.
+            img_props, img_evidence = ([], [])
+            if p.suffix.lower() in (".docx", ".pptx", ".xlsx"):
+                try:
+                    from remediate_office import alt_proposals_for_office
+                    img_props, img_evidence = alt_proposals_for_office(
+                        file_bytes, p.suffix, ai_enabled=ai_enabled, scan_id=scan_id,
+                        context_file=filename)
+                except Exception:
+                    img_props, img_evidence = [], []
     except Exception:
         return
     if text:
@@ -192,7 +236,8 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
             pass
         try:
             _enqueue_proposals(scan_id, filename, "1.3.3", "Sensory Characteristics",
-                               _prop.propose_sensory_rewrite(text, filename=filename, ai_enabled=ai_enabled))
+                               _prop.propose_sensory_rewrite(text, filename=filename,
+                                                             ai_enabled=ai_enabled, guidance=_g("1.3.3")))
         except Exception:
             pass
         try:
@@ -200,8 +245,56 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
                                _prop.propose_reading_level(text, filename=filename, ai_enabled=ai_enabled))
         except Exception:
             pass
+    # 2.4.10 — AI-drafted section headings for a long, heading-less docx (reads the zip, so
+    # computed above while the temp path was alive; self-gates on the detector's conditions).
+    try:
+        _enqueue_proposals(scan_id, filename, "2.4.10", "Section Headings", section_heads)
+    except Exception:
+        pass
+    # 2.4.6 — AI slide-title drafts for pptx title placeholders left empty.
+    try:
+        _enqueue_proposals(scan_id, filename, "2.4.6", "Headings and Labels", slide_titles + xlsx_labels)
+    except Exception:
+        pass
+    # 1.3.2 — reading-order recommendations for docx floating text boxes / frames.
+    try:
+        _enqueue_proposals(scan_id, filename, "1.3.2", "Meaningful Sequence", reading_order)
+    except Exception:
+        pass
+    # One-click deterministic layout cards — the fix is exact, the human elects it.
+    try:
+        if filename.lower().endswith(".docx"):
+            _enqueue_proposals(scan_id, filename, "1.4.8", "Visual Presentation", one_clicks)
+        else:
+            _enqueue_proposals(scan_id, filename, "1.4.2", "Audio Control", one_clicks)
+    except Exception:
+        pass
+    # 1.1.1 — chart datasheets + per-image alt drafts (vision when reachable) go on the SAME
+    # 1.1.1 card in one enqueue: enqueue_proposals REPLACES per (scan,file,rule), so two calls
+    # would clobber. Together they turn a single fill-in template into an editable AI
+    # description per image/chart.
+    try:
+        _enqueue_proposals(scan_id, filename, "1.1.1", "Non-text Content",
+                           (chart_sheets or []) + (img_props or []))
+    except Exception:
+        pass
+    try:
+        if img_evidence:
+            core.store.attach_hitl_evidence(scan_id, filename, "1.1.1", img_evidence)
+    except Exception:
+        pass
     try:
         _enqueue_proposals(scan_id, filename, "1.4.5", "Images of Text", image_text)
+    except Exception:
+        pass
+    # 2.4.4 / 2.4.9 — descriptive link-text proposals for Office hyperlinks (vague text /
+    # text reused across destinations). Needs the file on disk like the OCR proposer, so it
+    # was computed above while the temp path was alive; split by the sc each proposal carries.
+    try:
+        for sc, rule_name in (("2.4.4", "Link Purpose (In Context)"),
+                              ("2.4.9", "Link Purpose (Link Only)")):
+            _enqueue_proposals(scan_id, filename, sc, rule_name,
+                               [p for p in link_props if p.get("sc") == sc])
     except Exception:
         pass
 
@@ -331,9 +424,19 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 # It used to be dropped: remediate_pdf returned only prose, so no row reached
                 # applied_fixes and the certification record showed the fix had never happened.
                 _record_applied_fixes(scan_id, filename, _applied_fixes)
-                # 1.3.2 reading-order vision proposal (untagged/scanned PDF) — surfaced for
-                # one-click confirm, never auto-applied. Before the no-fixes early return.
-                _enqueue_proposals(scan_id, filename, "1.3.2", "Meaningful Sequence", _pdf_proposals)
+                # Untagged-PDF proposals, split by kind — 1.3.2 reading order (vision) and
+                # 1.3.1 structure map (deterministic font rank). Surfaced for one-click
+                # confirm, never auto-applied. Before the no-fixes early return.
+                _enqueue_proposals(scan_id, filename, "1.3.2", "Meaningful Sequence",
+                                   [p for p in _pdf_proposals if p.get("kind") == "reading-order"])
+                _enqueue_proposals(scan_id, filename, "1.3.1", "Info and Relationships",
+                                   [p for p in _pdf_proposals if p.get("kind") == "structure-map"])
+                # 2.4.6 heading map (tagged PDF, no headings) + 2.4.4 link purpose (raw-URL
+                # links) — deterministic proposals for one-click confirm, never auto-applied.
+                _enqueue_proposals(scan_id, filename, "2.4.6", "Headings and Labels",
+                                   [p for p in _pdf_proposals if p.get("kind") == "headings-map"])
+                _enqueue_proposals(scan_id, filename, "2.4.4", "Link Purpose (In Context)",
+                                   [p for p in _pdf_proposals if p.get("kind") == "link-purpose"])
             else:  # docx / pptx / xlsx
                 from remediate_office import remediate_office
                 _applied_fixes: list = []
@@ -1025,9 +1128,15 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
                                 file=filename, detail="no stored remediated copy to write into")
         return
 
-    from apply_alt import apply_alt_text
     _phase(job, "writing the approved descriptions")
-    fixed, applied, unresolved = apply_alt_text(current, values)
+    # Alt write-back branches only on extension: PDF figures carry `pdf:fig:…` locators written
+    # into /Figure /Alt by pikepdf; office images carry part#rId locators written by apply_alt.
+    if str(filename).lower().endswith(".pdf"):
+        from remediate_pdf import apply_pdf_approved
+        fixed, applied, unresolved = apply_pdf_approved(current, values)
+    else:
+        from apply_alt import apply_alt_text
+        fixed, applied, unresolved = apply_alt_text(current, values)
     if unresolved:
         # A locator that no longer resolves means the reviewer approved text for an image this
         # document no longer has. Never guess at a different image — record and move on.

@@ -84,6 +84,6 @@ def test_extract_headings_finds_larger_text(tmp_path):
     src = tmp_path / "h.pdf"
     _pdf(src, [("Big Heading Here", "small body text"), ("Another Heading", "more body text")])
     heads = remediate_pdf._extract_pdf_headings(str(src))
-    titles = [t for t, _page in heads]
+    titles = [t for t, _page, _size in heads]
     assert "Big Heading Here" in titles and "Another Heading" in titles
     assert "small body text" not in titles     # body is not promoted

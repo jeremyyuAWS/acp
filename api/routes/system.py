@@ -351,6 +351,9 @@ def jobs(request: Request, status: str | None = None, limit: int = 100):
     count is global (shared infra, not sensitive)."""
     owner = getattr(request.state, "user_email", None) or "demo"
     return {"workers": core.WORKERS,
+            # Standalone worker container's heartbeat (#113) — in the split topology the
+            # API's own pool is 0, so Monitor must show the tier that actually runs jobs.
+            "worker_tier_alive": core.store.worker_tier_alive(),
             "stats": core.store.job_stats(owner=owner),
             "dead_letters": core.store.dead_letter_breakdown(owner=owner),
             "jobs": core.store.list_jobs(status=status, limit=limit, owner=owner)}

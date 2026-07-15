@@ -18,7 +18,7 @@ set -euo pipefail
 # at the demo subscription (the footgun tests/test_az_subscription_scope.py guards against).
 
 # ── config ──────────────────────────────────────────────────────────────────
-SUB="${ACP_SUBSCRIPTION:-Customer Demos}"
+SUB="${ACP_SUBSCRIPTION:-AZLABSV2.0-Sandbox(POC)}"
 AZ=(--subscription "$SUB")                       # scope EVERY az call; no global mutation
 RG="${ACP_RG:-mdk-accessibility}"                # RGs are region-agnostic; reuse the existing one
 ACR="${ACP_ACR:-mdkaccessibilityacr}"            # existing ACR (East US 2); cross-region pull is fine

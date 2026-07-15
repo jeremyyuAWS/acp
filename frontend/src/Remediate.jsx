@@ -180,7 +180,7 @@ function AutoBadge({ kind }) {
   return <span className={`autobadge ${b.cls}`}>{b.label}</span>
 }
 
-// GitHub-style progress rail (§2) — where am I in Scan → Assess → Remediate → Human Review
+// GitHub-style progress rail (§2) — where am I in Scan → Assess → Remediate → AI Work Inbox
 // → Verify → Publish. `state` is 'done' | 'active' | 'pending'; an active step may carry a
 // count (the human-review backlog).
 function ProgressRail({ steps }) {
@@ -556,7 +556,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   + `remediated elsewhere; re-scan to refresh.`)
         setRemBusy(false); return
       }
-      if (!r.workers) { setRemMsg(`Enqueued ${r.enqueued}, but no workers are running. Add some in the Monitor tab.`); setRemBusy(false); return }
+      // In-process pool OR the standalone worker container's heartbeat (#113) counts as manned.
+      if (!r.workers && !r.worker_tier_alive) { setRemMsg(`Enqueued ${r.enqueued}, but no workers are available — the worker service looks down; check Monitor.`); setRemBusy(false); return }
       const total = r.enqueued
       setRemProg({ total, done: 0, latest: null, failed: 0 })
       try { sessionStorage.setItem(REMKEY(runId), JSON.stringify({ total })) } catch { /* ignore */ }
@@ -786,7 +787,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     { key: 'scan', label: 'Scan', state: 'done' },
     { key: 'assess', label: 'Assess', state: 'done' },
     { key: 'remediate', label: 'Remediate', state: (remStarted || fixedCount > 0) ? 'done' : 'active' },
-    { key: 'review', label: 'Human Review', state: queue.length > 0 ? 'active' : 'done', count: queue.length },
+    { key: 'review', label: 'AI Work Inbox', state: queue.length > 0 ? 'active' : 'done', count: queue.length },
     { key: 'verify', label: 'Verify', state: verifyState === 'complete' ? 'done' : verifyState === 'running' ? 'active' : 'pending' },
     { key: 'publish', label: 'Publish', state: written > 0 ? 'done' : 'pending' },
   ]
@@ -839,7 +840,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           "Why am I reviewing this?" panel (real confidence + reason + suggested value). ── */}
       <section className="panel rem-review-panel" id="rem-review">
         <div className="rem-sec-hd">
-          <h2 style={{ margin: 0 }}>Human review {queue.length > 0 ? <span className="reviewpill">{queue.length}</span> : <span className="muted">· all clear</span>}</h2>
+          <h2 style={{ margin: 0 }}>AI Work Inbox {queue.length > 0 ? <span className="reviewpill">{queue.length}</span> : <span className="muted">· all clear</span>}</h2>
           {totalHitl > 0 && (
             <div className="rem-sec-prog">
               <div className="conftrack" style={{ width: 120 }}><i style={{ width: `${hitlProgress}%`, background: hitlProgress === 100 ? '#3B6D11' : '#1F5FA8' }} /></div>

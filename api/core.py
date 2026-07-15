@@ -329,6 +329,18 @@ def _do_scheduled_scan():
             print(f"scheduled sweep failed: {e2}", flush=True)
 
 
+def _derive_review_memory_tick() -> None:
+    """Nightly ADR 0021 derivation: for every org, read recent HITL behaviour and PROPOSE
+    (never activate) house-style rules. Best-effort; only armed when review memory is on."""
+    import memory as _mem
+    st = get_store()
+    for org in st.list_org_owners():
+        try:
+            _mem.derive_org_memory(st, org)
+        except Exception:
+            continue
+
+
 def reload_scheduler():
     cfg = get_store().get_schedule()
     scheduler.remove_all_jobs()
@@ -337,6 +349,11 @@ def reload_scheduler():
                           minutes=cfg["interval_minutes"],
                           id="scheduled_local_scan",
                           coalesce=True, max_instances=1)
+    # ADR 0021 stage 3 — nightly review-memory derivation, only when the feature is on. Dark
+    # by default (flag unset), so it adds no scheduled work to today's deploys.
+    if os.environ.get("ACP_REVIEW_MEMORY", "").strip().lower() in ("1", "true", "yes", "on"):
+        scheduler.add_job(_derive_review_memory_tick, "cron", hour=3, minute=17,
+                          id="review_memory_derive", coalesce=True, max_instances=1)
 
 
 # NOT called at import: reload_scheduler() reads the schedule out of the database, which would

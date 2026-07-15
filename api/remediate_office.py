@@ -200,7 +200,9 @@ def _image_bytes_for(xml: str, m, tag: str, pic_spans, entries, part_name):
     if pic_spans is not None:
         region_end = next((b for a, b in pic_spans if a <= m.start() < b), m.end())
     else:
-        nxt = xml.find(f"<{tag}", m.end())
+        # `tag` may be a regex alternation — find the next same-tag drawing with a regex.
+        _nm = re.compile(rf"<{tag}\b").search(xml, m.end())
+        nxt = _nm.start() if _nm else -1
         region_end = nxt if nxt != -1 else len(xml)
         region_end = min(region_end, m.end() + 8000)
     rid_m = _R_EMBED.search(xml, m.end(), region_end)
@@ -257,8 +259,15 @@ def _media_path(rels_bytes: bytes, d: str, rid: str) -> str | None:
     if not tm:
         return None
     target = tm.group(1)
-    if target.startswith(("http:", "https:", "file:", "/")):
+    if target.startswith(("http:", "https:", "file:")):
         return None
+    if target.startswith("/"):
+        # An ABSOLUTE package path ("/xl/media/image1.png"), valid OOXML meaning "from the package
+        # root" — NOT an external link. Some generators emit this form; treating the leading slash
+        # as "external" (as this did) discarded every image in such a workbook, so its pictures got
+        # no alt/decorative/vision handling and fell through as bare HITL findings. Resolve from the
+        # root (entries are keyed without the leading slash), not relative to the part directory.
+        return posixpath.normpath(target.lstrip("/"))
     return posixpath.normpath(posixpath.join(d, target) if d else target)
 
 
@@ -343,7 +352,13 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
         inside_pic = pic_spans is None or any(a <= m.start() < b for a, b in pic_spans)
         if inside_pic and _is_junk_descr(_ATTR(attrs, "descr")):
             # decorative? the marker lives in the element's extLst children
-            block_end = xml.find(f"</{tag}>", m.end()) if not selfclose else m.end()
+            # `tag` may be a regex alternation (e.g. `(?:xdr:)?cNvPr`), so match the closing tag
+            # with a regex, not a literal find. Only reached for a non-self-closing element.
+            if selfclose:
+                block_end = m.end()
+            else:
+                _cm = re.compile(rf"</{tag}>").search(xml, m.end())
+                block_end = _cm.start() if _cm else -1
             block = xml[m.start():block_end if block_end != -1 else m.end()]
             if 'decorative val="1"' in block or "decorative val='1'" in block:
                 out.append(keep); continue
@@ -413,6 +428,27 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
                 src = _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name,
                                   vision_enabled, context_file, caption, scan_id, vision_budget,
                                   applied_fixes, proposals)
+            # xlsx chart with no vision draft (no GPU / no key / model down): compose a keyless draft
+            # from the sheet's OWN adjacent data table — the numbers a chart plots live in cells right
+            # beside it. Offered as a PROPOSAL so the reviewer confirms it against the visible chart;
+            # grounded in the document's real values, never a guess. This is the "something to approve
+            # even with no AI at all" fallback, one rung above handing the human a blank box.
+            if src is None and proposals is not None and part_name and part_name.startswith("xl/drawings/"):
+                _ev = _image_bytes_for(xml, m, tag, pic_spans, entries, part_name)
+                if _ev:
+                    _rid, _img = _ev
+                    import xlsx_chart_context as _xcc
+                    _cd = _xcc.draft_from_entries(entries, part_name, _rid)
+                    if _cd:
+                        import proposals as _prop
+                        _draft, _source = _cd
+                        proposals.append(_prop.proposal(
+                            locator=f"{part_name}#{_rid}", before="(no alt text)",
+                            proposed_value=_draft, kind="chart-data", source=_source,
+                            rationale="composed from the chart's adjacent data table on the sheet",
+                            thumb=_prop.thumb_b64(_img)))
+                        deferred += 1
+                        out.append(keep); continue
             if src is None:
                 # This image is going to a human. Hand them the picture: without it the card
                 # asks someone to write alt text for an image they cannot see. Deterministic —
@@ -505,16 +541,34 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
                                     "second reading (auto-apply-validated policy)")
     except Exception:
         pass
-    # Ungrounded guess → surface for one-click approval instead of auto-writing it.
+    # Ungrounded guess → surface for one-click approval instead of auto-writing it. When a
+    # DISTINCT validator model is configured (ACP_ALT_VALIDATOR_MODEL), run the consensus
+    # cross-check now and attach the verdict, so the card arrives already showing whether a
+    # second model agrees — automatic transparency, no reviewer click. Real model agreement,
+    # never a fabricated score (ADR 0016). Best-effort: no validator / a failure → no badge.
+    agreement = None
+    if getattr(_ai, "_ALT_VALIDATOR_MODEL", ""):
+        try:
+            v = _ai.validate_alt_text(img, res["alt"], filename=context_file,
+                                      scan_id=scan_id, file=context_file)
+            if v:
+                agreement = {"verdict": v.get("verdict"),
+                             "second_opinion": v.get("second_opinion"),
+                             "validator_model": v.get("validator_model")}
+        except Exception:
+            agreement = None
     if proposals is not None:
         import proposals as _prop
-        proposals.append(_prop.proposal(
+        p = _prop.proposal(
             locator=f"{part_name}#{rid}",
             before="(no alt text — image skipped by screen readers)",
             proposed_value=res["alt"],
             rationale=res.get("evidence") or "AI vision description — confirm it matches the intent",
             source=f"AI vision model ({res['model']})",
-            thumb=_thumb_b64(img)))
+            thumb=_thumb_b64(img))
+        if agreement:
+            p["agreement"] = agreement          # {verdict, second_opinion, validator_model}
+        proposals.append(p)
     return None
 
 
@@ -522,7 +576,13 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
 _ALT_TARGETS = [
     (re.compile(r"^word/(document|header\d*|footer\d*)\.xml$"), "wp:docPr", None, True),
     (re.compile(r"^ppt/slides/slide\d+\.xml$"), "p:cNvPr", "p:pic", False),
-    (re.compile(r"^xl/drawings/drawing\d+\.xml$"), "xdr:cNvPr", "xdr:pic", False),
+    # xlsx drawings come in two namespace flavours: Excel authors the prefixed `<xdr:pic>/
+    # <xdr:cNvPr>`, but many generators (openpyxl-family, some export paths) emit the SAME parts
+    # in the default spreadsheetDrawing namespace as `<pic>/<cNvPr>`. Matching only the prefixed
+    # form silently skipped every image in a default-namespace workbook — the alt/decorative/
+    # vision machinery never ran, so those images fell through as bare, un-drafted HITL findings.
+    # An optional `(?:xdr:)?` prefix covers both. (docx/pptx above are single-flavour, left as-is.)
+    (re.compile(r"^xl/drawings/drawing\d+\.xml$"), r"(?:xdr:)?cNvPr", r"(?:xdr:)?pic", False),
 ]
 
 
@@ -678,7 +738,9 @@ def _remediate_pptx_slides(entries: dict, diffs=None) -> list[str]:
             text = "".join(_A_T.findall(run)).strip()
             if not text:
                 return run
-            new = "000000" if _osx._contrast_ratio(bg, "000000") >= _osx._contrast_ratio(bg, "FFFFFF") else "FFFFFF"
+            # Hue-preserving fix: darken/lighten the brand colour only as far as AA needs,
+            # rather than flattening every run to pure black/white.
+            new = _osx.min_contrast_recolor(col.group(1), bg)
             n_recolor += 1
             _rec(diffs, "1.4.3", f"#{col.group(1).upper()} on #{bg.upper()} "
                  f"({_osx._contrast_ratio(bg, col.group(1)):.1f}:1 — fails AA)",
@@ -693,7 +755,16 @@ def _remediate_pptx_slides(entries: dict, diffs=None) -> list[str]:
         for pfx, uri in (("p", P[1:-1]), ("a", A[1:-1]),
                          ("r", "http://schemas.openxmlformats.org/officeDocument/2006/relationships")):
             ET.register_namespace(pfx, uri)
-        root = ET.fromstring(data)
+        # Real-world slides sometimes carry XML the .NET analyser tolerates but ElementTree rejects
+        # — most commonly an unescaped '&' in a text run ("Workforce & Headcount"). This full parse
+        # is the ONLY step in the slide loop that isn't string-surgical, so a strict-parse failure
+        # here used to raise out of the whole function and abort the deck's remediation partway
+        # (later slides lost their titles + reading order). Skip only the reading-order pass for that
+        # one slide instead; the title/header/contrast edits already in `data` are returned intact.
+        try:
+            root = ET.fromstring(data)
+        except ET.ParseError:
+            return data
         tree = root.find(f".//{P}cSld/{P}spTree")
         if tree is None:
             return data
@@ -720,7 +791,11 @@ def _remediate_pptx_slides(entries: dict, diffs=None) -> list[str]:
         xml = entries[sn].decode("utf-8")
         if not _pptx_has_title(xml):
             texts = [t.strip() for t in _A_T.findall(xml) if t.strip()]
-            title_text = (max(texts, key=len) if texts else "Untitled slide")[:250]
+            # The slide's title is the FIRST text on it (the title placeholder is authored first and
+            # sits at the top), NOT the longest run. `max(…, key=len)` picked the longest text, which
+            # is almost always a body paragraph — so the auto-title announced body copy instead of the
+            # heading. First-in-authoring-order is the real title far more often.
+            title_text = (texts[0] if texts else "Untitled slide")[:250]
             xml = _pptx_add_title(xml, title_text)
             n_title += 1
             _rec(diffs, "2.4.2", "(no title — assistive tech announced the slide as “Untitled”)",
@@ -950,7 +1025,8 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None) -> list[s
             try:
                 if _osx._contrast_ratio(bg, fg) >= 4.5:
                     continue
-                new = "000000" if _osx._contrast_ratio(bg, "000000") >= _osx._contrast_ratio(bg, "FFFFFF") else "FFFFFF"
+                # Hue-preserving fix: keep the run's colour, darken/lighten only to reach AA.
+                new = _osx.min_contrast_recolor(fg, bg)
                 ratio_before = _osx._contrast_ratio(bg, fg)
                 ratio_after = _osx._contrast_ratio(bg, new)
             except Exception:
@@ -1060,6 +1136,58 @@ def _remediate_xlsx_structure(entries: dict, diffs=None) -> list[str]:
              "only lines that actually contained values were unhidden")
 
     return applied
+
+
+def alt_proposals_for_office(doc_bytes: bytes, ext: str, *, ai_enabled: bool = True,
+                             scan_id: str | None = None, context_file: str = "") -> tuple[list, list]:
+    """Assess-time WCAG 1.1.1: enumerate every unlabelled image and return
+    (proposals, evidence) WITHOUT writing the file — so the review card can show a per-image
+    thumbnail and, when a vision model is reachable, a PRE-FILLED AI description for each
+    image, before any remediation runs.
+
+    This reuses the exact alt logic remediate_office uses at fix time (_inject_descr:
+    faithful-source first, decorative inference, the grounded/ungrounded vision split,
+    evidence thumbnails), just run standalone with the rewritten XML discarded — so what the
+    reviewer sees at assess time matches what remediation would do. Grounded (auto-applied)
+    images don't produce a card proposal here (they clear deterministically at fix time);
+    the ungrounded ones — the exact images that used to show only a text template — arrive
+    with a real vision draft. Best-effort: ([], []) on any failure or unsupported ext."""
+    if (ext or "").lower().lstrip(".") not in ("docx", "pptx", "xlsx"):
+        return [], []
+    import io
+    proposals: list = []
+    evidence: list = []
+    vision_enabled = False
+    if ai_enabled:
+        try:
+            import ai as _ai
+            vision_enabled = _ai.vision_is_available()
+        except Exception:
+            vision_enabled = False
+    try:
+        with zipfile.ZipFile(io.BytesIO(doc_bytes)) as z:
+            entries = {n: z.read(n) for n in z.namelist()}
+    except Exception:
+        return [], []
+    vision_budget = [_VISION_MAX_IMAGES]
+    _throwaway_fixes: list = []
+    for name in list(entries):
+        for pat, tag, wrapper, captions in _ALT_TARGETS:
+            if not pat.match(name):
+                continue
+            try:
+                xml = entries[name].decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            try:
+                _inject_descr(xml, tag, pic_only_within=wrapper, captions=captions,
+                              entries=entries, part_name=name, vision_enabled=vision_enabled,
+                              context_file=context_file or name, scan_id=scan_id,
+                              vision_budget=vision_budget, applied_fixes=_throwaway_fixes,
+                              proposals=proposals, evidence=evidence)  # rewritten XML discarded
+            except Exception:
+                continue
+    return proposals, evidence
 
 
 def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True,

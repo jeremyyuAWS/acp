@@ -1445,6 +1445,11 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .covstat.pass { background: #E7F0DC; color: #3B6D11; }
 .covstat.fail { background: #FAEEDA; color: #854F0B; }
 .covstat.skip { background: #f1eff4; color: #716b76; }
+/* Count chips that double as row filters — clickable, with a struck-through "off" state. */
+.covstat-btn { border: 1px solid transparent; font-family: inherit; line-height: 1.5; cursor: pointer; }
+.covstat-btn:hover { filter: brightness(0.95); }
+.covstat-btn:focus-visible { outline: 2px solid #4d3762; outline-offset: 1px; }
+.covstat-off { opacity: 0.5; text-decoration: line-through; }
 .covmanifest-note { font-size: 12px; padding: 0 14px 8px; }
 .covtable { width: 100%; border-collapse: collapse; font-size: 12px; }
 .covtable th { text-align: left; padding: 5px 8px; font-weight: 600; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--line); background: var(--bg); text-transform: uppercase; letter-spacing: 0.04em; }
@@ -1861,11 +1866,64 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .evcard-draft-btn:disabled { opacity: 0.6; cursor: default; }
 .evcard-draft-msg { display: block; font-size: 11.5px; margin-top: 4px; line-height: 1.4; }
 
+/* Auto-draft status (AI Work Inbox — the "Draft with AI" button was removed; drafts generate on
+   sight). A passive, low-emphasis indicator, not a button: the reviewer waits, they don't act. */
+.evcard-drafting { display: inline-block; font-size: 12px; color: var(--muted, #666);
+  font-style: italic; }
+
+/* Details ▾ (AI Work Inbox progressive disclosure) — collapses the trust-state enums, provenance,
+   audit trail, detection evidence and "why human review" so the card leads with the decision, not
+   the machinery. Quiet by default; the body reveals the blocks in their original styling. */
+.evcard-details { margin: 2px 0 10px; }
+.evcard-details > summary { font-size: 12.5px; color: var(--muted, #666); cursor: pointer;
+  list-style: none; padding: 5px 0; user-select: none; }
+.evcard-details > summary::-webkit-details-marker { display: none; }
+.evcard-details > summary::before { content: '▸ '; color: var(--muted, #999); }
+.evcard-details[open] > summary::before { content: '▾ '; }
+.evcard-details > summary:hover { color: var(--fg, #1c1620); }
+.evcard-details-body { padding-top: 4px; }
+/* Inline retry link — recovery affordance shown only after an auto-draft fails, in place of the
+   removed primary button. Text-link weight so it never reads as the main call to action. */
+.evcard-linkbtn { background: none; border: none; padding: 0; font: inherit; font-size: 11.5px;
+  color: var(--plum); text-decoration: underline; cursor: pointer; }
+
 /* Approve-similar (#132) — apply one description to every identical copy of an image. */
 .evcard-similar-btn { margin-left: 8px; background: none; border: 1px solid var(--line);
   border-radius: 6px; padding: 2px 9px; font-size: 11.5px; font-weight: 500; color: var(--plum);
   cursor: pointer; white-space: nowrap; }
 .evcard-similar-btn:hover { background: var(--bg); border-color: var(--plum); }
+
+/* Review Intent (AI Work Inbox) — the one plain-language sentence at the top of every review
+   card. Reads as the reviewer's brief, not a system label: slightly larger, calm, task-first. */
+.evcard-intent { font-size: 14px; line-height: 1.5; font-weight: 500; color: var(--fg, #1c1620);
+  margin: 0 0 12px; }
+
+/* "Why this is safe to approve" (AI Work Inbox P0) — the affirmative, up-front evidence summary.
+   Green so it reads as reassurance, not another warning; only rendered when the signals are
+   genuinely positive (see whySafeToApprove), so the colour is never a false promise. */
+.evcard-safe { margin: 0 0 12px; padding: 9px 12px; border: 1px solid var(--ok-line, #b7dfc0);
+  border-left: 3px solid var(--ok, #1f8a4c); border-radius: 8px;
+  background: var(--ok-bg, #eef8f1); font-size: 12.5px; }
+.evcard-safe b { display: block; font-size: 12px; color: var(--ok-fg, #1a6b3c); margin-bottom: 3px; }
+.evcard-safe ul { margin: 0; padding-left: 18px; color: var(--fg, #244a33); line-height: 1.45; }
+.evcard-safe li { margin: 2px 0; }
+
+/* Suggested-outline scaffold — shown in place of a bare "type the value" box when there is no AI
+   draft, so a reviewer authoring from scratch is never staring at an empty field. */
+.evcard-scaffold { margin: 6px 0 0; padding: 8px 11px; border: 1px dashed var(--line);
+  border-radius: 8px; background: var(--surface-1, #f6f5f2); font-size: 12px; }
+.evcard-scaffold b { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted, #666); }
+.evcard-scaffold ul { margin: 4px 0 0; padding-left: 18px; color: var(--muted, #555); }
+.evcard-scaffold li { margin: 1px 0; }
+
+/* WCAG-exception resolution (HITL-six) — decorative (1.1.1) / essential logo (1.4.5/1.4.9). A
+   quiet, secondary affordance beside the primary actions: the reviewer applies the standard's own
+   exception instead of authoring a fix. Not a loud CTA — it's the honest "this doesn't need a
+   description" path, so it reads calmer than approve. */
+.evcard-exception { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 0 8px; padding: 8px 11px; border: 1px dashed var(--line); border-radius: 8px;
+  background: var(--surface-1, #f6f5f2); font-size: 12.5px; }
+.evcard-exception .muted { flex: 1; min-width: 180px; }
 
 /* Refine-the-draft (#131) — shorter / more detail / regenerate. */
 .evcard-refine { display: inline-flex; gap: 6px; margin-left: 8px; flex-wrap: wrap; }
@@ -1894,6 +1952,12 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .audit-zone { white-space: nowrap; font-weight: 600; }
 .audit-zone-local { color: #0F6E56; }
 .audit-zone-cloud { color: #854F0B; }
+
+/* Isolated-image hero (ADR 0018 / xlsx) — the flagged embedded image shown large on its own,
+   instead of a whole-sheet render that buries it. Centred, with a quiet caption. */
+.evcard-hero-img { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 0; }
+.evcard-hero-img img { max-width: 100%; }
+.evcard-hero-img figcaption { font-size: 11.5px; text-align: center; }
 
 /* Multi-image hero pager (#122) — step the large preview through each flagged image. */
 .evcard-hero-pager { display: flex; align-items: center; justify-content: center; gap: 12px;

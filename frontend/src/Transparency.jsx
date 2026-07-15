@@ -4,7 +4,7 @@ import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer from './FileDrawer.jsx'
 import { WCAG } from './wcagCatalog.js'
 import { allRules } from './rules/index.js'
-import { DEVA_20 } from './deva20.js'
+import { DOCUMENTS_20 } from './documents20.js'
 
 // SCs a rule module exists for — distinguishes "check built, no data in this scan"
 // from "no automated check exists yet".
@@ -129,7 +129,8 @@ export function RuleBreakdown({ scanId, files }) {
   const [open, setOpen] = useState(false)
   const [seg, setSeg] = useState(null)
   const [sel, setSel] = useState(null)
-  const [devaOnly, setDevaOnly] = useState(false)
+  const documentsOnly = true                    // always scoped to the 20-check document core
+  const [hideNA, setHideNA] = useState(true)   // default to hiding the N/A rows; the toggle reveals them
   const [exporting, setExporting] = useState(false)
   const doScanExport = async () => {
     setExporting(true)
@@ -160,24 +161,31 @@ export function RuleBreakdown({ scanId, files }) {
     byRule[k].findings += r.finding_count || 0
   })
   const rulesAll = Object.values(byRule).sort((a, b) => b.fail - a.fail || a.id.localeCompare(b.id))
-  const rules = devaOnly ? rulesAll.filter((r) => DEVA_20.has(r.id)) : rulesAll
+  const targetLevel = assessLevel(scanId)
+  const targetRank = LEVEL_RANK[targetLevel] || 2
+  // Show only rules at/below the assessed level (no AAA above an AA target — e.g. 1.4.9), and,
+  // by default, only the 20-check document core. A rule with no known level is kept.
+  const rules = rulesAll.filter((r) =>
+    (LEVEL_RANK[r.level] || 1) <= targetRank && DOCUMENTS_20.has(r.id))
   if (!rules.length) return null
-  const shown = (open || devaOnly) ? rules : rules.slice(0, 6)
+  // A row is "N/A" when the criterion doesn't apply to this file type — the engine ran it but it
+  // can't fire (no pass, no fail, only skip). The Hide-N/A toggle collapses those to the ones that
+  // actually produced a result.
+  const naCount = rules.filter((r) => r.pass === 0 && r.fail === 0).length
+  const shown = hideNA ? rules.filter((r) => r.pass > 0 || r.fail > 0) : rules
   const fileCount = new Set((rows || []).map((r) => r.file)).size
   const failingRules = rules.filter((r) => r.fail > 0).slice(0, 8)
 
   // Checklist parity: every in-scope success criterion appears, not just the ones
   // the scanner automates. Scope = the assessed conformance level + document-applicable
   // (same rules as the per-file coverage table in FileDrawer).
-  const targetLevel = assessLevel(scanId)
-  const targetRank = LEVEL_RANK[targetLevel] || 2
-  const inScope = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) <= targetRank && (!devaOnly || DEVA_20.has(c.sc)))
+  const inScope = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) <= targetRank && (!documentsOnly || DOCUMENTS_20.has(c.sc)))
   const hiddenAboveLevel = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) > targetRank).length
   const hiddenWebOnly = WCAG.filter((c) => c.docApplies === false).length
   const evaluatedIds = new Set(rules.map((r) => r.id))
-  // Evaluated rows always render (they're real scan data), but the "X of Y"
-  // header only counts the in-scope ones — e.g. 3.1.4 (AAA) is checked by the
-  // scanner yet shouldn't inflate coverage at an AA target.
+  // `rules` is already scoped to the assessed level (and the 20-core by default), so an
+  // above-target criterion the scanner happens to check (e.g. 1.4.9 / 3.1.4 at an AA target)
+  // never appears as a row here.
   const inScopeIds = new Set(inScope.map((c) => c.sc))
   const evaluatedInScope = rules.filter((r) => inScopeIds.has(r.id) || !WCAG.some((c) => c.sc === r.id)).length
   const unevaluated = inScope
@@ -194,11 +202,11 @@ export function RuleBreakdown({ scanId, files }) {
     <section className="panel rulebreak">
       <div className="rubrichdr">
         <h2 style={{ margin: 0 }}>By WCAG criterion <span className="muted">· what each check found across {fileCount.toLocaleString()} documents</span></h2>
-        <span className="muted" style={{ fontSize: 12 }}>{evaluatedInScope} of {inScope.length} {devaOnly ? "Deva document-core" : "in-scope"} criteria automated · target {targetLevel}
-          <button className={`ghost small${devaOnly ? " on" : ""}`} style={{ marginLeft: 8, fontSize: 11 }}
-                  onClick={() => { setDevaOnly((v) => !v); if (!devaOnly) setOpen(true) }}
-                  title="Filter to Deva's 20-check document core (US-regulated A/AA criteria that apply to documents)">
-            {devaOnly ? "\u2713 Deva 20-core" : "Deva 20-core"}
+        <span className="muted" style={{ fontSize: 12 }}>{evaluatedInScope} of {inScope.length} document-core criteria automated · target {targetLevel}
+          <button className={`ghost small${hideNA ? " on" : ""}`} style={{ marginLeft: 8, fontSize: 11 }}
+                  onClick={() => setHideNA((v) => !v)}
+                  title="Hide the criteria that don't apply to this file type (N/A) \u2014 show only the ones with a pass or fail result">
+            {hideNA ? `\u2713 Hiding ${naCount} N/A` : `Hide N/A (${naCount})`}
           </button>
           <button className="ghost small" style={{ marginLeft: 8, fontSize: 11 }} disabled={exporting}
                   onClick={doScanExport}
@@ -212,21 +220,27 @@ export function RuleBreakdown({ scanId, files }) {
           return (
             <div className="rulerow" key={r.id}>
               <div className="rulemeta"><b>{r.id}</b> <span className="lvlpill">{r.level}</span> <span>{r.name}</span></div>
-              <div className="rulebar" title={`${r.pass} pass · ${r.fail} fail · ${r.skip} N/A`}>
+              <div className="rulebar" title={`${r.pass} pass · ${r.fail} document(s) failed${r.findings > r.fail ? ` · ${r.findings} findings` : ''} · ${r.skip} N/A`}>
                 <i className="rb-pass" style={{ width: `${(r.pass / total) * 100}%` }} />
                 <i className="rb-fail" style={{ width: `${(r.fail / total) * 100}%` }} />
                 <i className="rb-skip" style={{ width: `${(r.skip / total) * 100}%` }} />
               </div>
               <div className="rulecounts">
                 <span className="rc-pass">{r.pass.toLocaleString()} pass</span>
-                {r.fail ? <span className="rc-fail">{r.fail.toLocaleString()} fail</span> : null}
+                {r.fail ? (() => {
+                  // Show the FINDING count, not the document count — one criterion can fail with
+                  // several findings (e.g. two images missing alt), and those all count as blocking
+                  // issues. `finding_count` is the per-rule finding total the scanner recorded.
+                  const found = r.findings || r.fail
+                  return <span className="rc-fail" title={`${r.fail.toLocaleString()} document(s) failed`}>{found.toLocaleString()} finding{found === 1 ? '' : 's'}</span>
+                })() : null}
                 {r.skip ? <span className="rc-skip">{r.skip.toLocaleString()} N/A</span> : null}
               </div>
             </div>
           )
         })}
       </div>
-      {(open || devaOnly) && unevaluated.length > 0 && (
+      {(open || documentsOnly) && unevaluated.length > 0 && (
         <>
           <h3 className="rulesubhdr">Not evaluated in this scan <span className="muted">· {humanCount} need human / AT validation{unevaluated.length - humanCount - builtNoData > 0 ? ` · ${unevaluated.length - humanCount - builtNoData} automatable, not yet built` : ''}{builtNoData > 0 ? ` · ${builtNoData} built, no data this scan` : ''}</span></h3>
           <div className="rulerows">

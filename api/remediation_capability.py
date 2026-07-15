@@ -29,8 +29,11 @@ Every lane below was DERIVED by running that round-trip, not copied from a catal
     the AAA contrast finding (1.4.6); labelling a bare control (1.3.1) also clears 3.3.2 and 4.1.2.
     Those are marked "auto" because the re-scan proves they clear, not because a fixer is named
     after them.
-  * pdf can only set language/title/outline deterministically; contrast and structure (re-tagging)
-    have no safe automated fix, so they are human. Figure alt and reading order are AI proposals.
+  * pdf sets language/title/outline deterministically, and darkens light TEXT fill colours in
+    the content streams (1.4.3, clearing 1.4.6 incidentally — text-scoped, shapes untouched).
+    Structure (re-tagging) can't be auto-written, but an untagged PDF gets a deterministic
+    heading-map proposal (font-size rank) a human confirms — assisted, like figure alt and
+    reading order (which are AI proposals).
 
 Reconciliation with the earlier sparse version
 ----------------------------------------------
@@ -74,16 +77,17 @@ CAPABILITY: dict[str, dict[str, str]] = {
     "docx": {
         "1.1.1": ASSISTED,   # image alt — vision proposal / human alt, never a silent guess
         "1.3.1": AUTO,       # pseudo-heading promotion, table header rows, single H1
+        "1.3.2": ASSISTED,   # floating-text reading order → per-box "move it inline here" proposal (propose_reading_order)
         "1.3.3": ASSISTED,   # sensory rewrite (local text model)
         "1.4.3": AUTO,       # low-contrast run recolour
         "1.4.5": ASSISTED,   # images-of-text — OCR the text back out for a human to paste
-        "1.4.8": HUMAN,      # justified body text — no deterministic fix (does NOT clear on re-scan)
+        "1.4.8": ASSISTED,   # justified text — exact one-click left-align card, human elects
         "1.4.9": ASSISTED,   # images-of-text (AAA, no exception) — same OCR proposer as 1.4.5
         "2.4.2": AUTO,       # document title (docProps/core.xml)
-        "2.4.4": HUMAN,      # link purpose — no Office link-text proposer wired; routed to review
+        "2.4.4": ASSISTED,   # link purpose — derived/AI-drafted link-text proposal (propose_link_texts)
         "2.4.6": AUTO,       # heading-skip closure after the 1.3.1 outline fix
-        "2.4.9": HUMAN,      # link purpose (link only) — routed to review
-        "2.4.10": HUMAN,     # section headings — an authoring decision
+        "2.4.9": ASSISTED,   # reused link text — same link-text proposer, per destination
+        "2.4.10": ASSISTED,  # AI names the document's own sections; a human approves placement
         "3.1.1": AUTO,       # document language (docProps/core.xml)
         "3.1.2": ASSISTED,   # language-of-parts (langdetect proposal)
         "3.1.5": ASSISTED,      # reading level — re-writing prose
@@ -100,6 +104,8 @@ CAPABILITY: dict[str, dict[str, str]] = {
         "1.4.6": AUTO,       # same contrast fix reaches the AAA threshold
         "1.4.9": ASSISTED,
         "2.4.2": AUTO,
+        "2.4.4": ASSISTED,   # vague cell-hyperlink text → descriptive link-text proposal (propose_link_texts, xlsx)
+        "2.4.6": ASSISTED,   # default sheet tabs / table columns → AI-named label proposal (propose_xlsx_labels)
         "3.1.1": AUTO,
         "3.1.2": ASSISTED,
         "3.1.5": ASSISTED,
@@ -108,19 +114,26 @@ CAPABILITY: dict[str, dict[str, str]] = {
     # tables/keyboard/link/heading criteria have no pptx remediator, so they are human.
     "pptx": {
         "1.1.1": ASSISTED,
-        "1.3.1": HUMAN,      # slide table structure — no pptx structural remediator
-        "1.4.2": HUMAN,      # auto-starting embedded audio — removing/re-timing it is authoring
+        "1.3.1": AUTO,       # multi-row tables get firstRow="1" (_pptx_mark_table_headers) — round-trip proven
+        "1.4.2": ASSISTED,   # auto-starting audio — exact play-on-click card, human elects
         "1.3.2": AUTO,       # shapes reordered to visual top-to-bottom reading order
         "1.3.3": ASSISTED,
         "1.4.3": AUTO,       # low-contrast run recolour
         "1.4.5": ASSISTED,
         "1.4.6": AUTO,       # same recolour reaches the AAA threshold
         "1.4.9": ASSISTED,
-        "2.1.1": HUMAN,      # keyboard operability — an authoring/runtime concern
+        # 2.1.1 Keyboard is the ONE remaining human-only document lane, and it is correctly so —
+        # not a coverage gap. A .pptx is a static document with no interactive/keyboard model to
+        # remediate; keyboard operability is a property of the runtime that PRESENTS it (the slide
+        # viewer / any embedded control), not of the file. There is nothing in the OOXML a
+        # remediator could safely rewrite to make it "keyboard operable", so we detect and route
+        # to a human rather than fabricate a fix (ADR 0016). docx/xlsx/pdf carry zero human-only
+        # lanes; this is the single, intentional exception.
+        "2.1.1": HUMAN,
         "2.4.2": AUTO,       # missing slide/document title
-        "2.4.4": HUMAN,
-        "2.4.6": HUMAN,      # empty title placeholder guidance — routed to review
-        "2.4.9": HUMAN,
+        "2.4.4": ASSISTED,   # link purpose — same link-text proposer as docx (a:hlinkClick)
+        "2.4.6": ASSISTED,   # empty title placeholder — AI names the slide from its own content
+        "2.4.9": ASSISTED,   # reused link text — link-text proposer, per destination
         "3.1.1": AUTO,       # presentation language (docProps/core.xml)
         "3.1.2": ASSISTED,
         "3.1.5": ASSISTED,
@@ -129,15 +142,17 @@ CAPABILITY: dict[str, dict[str, str]] = {
     # (re-tagging) need re-authoring; figure alt and reading order are AI proposals.
     "pdf": {
         "1.1.1": ASSISTED,   # tagged-figure alt — vision proposal
-        "1.3.1": HUMAN,      # tag structure — re-tagging, no safe automated fix
+        "1.3.1": ASSISTED,   # tag structure — deterministic heading-map proposal, human confirms
         "1.3.2": ASSISTED,   # reading order — vision proposal for an untagged/scanned PDF
         "1.3.3": ASSISTED,
-        "1.4.3": HUMAN,      # contrast — no PDF recolour fixer
+        "1.4.3": AUTO,       # text fill colours darkened in content streams (text-scoped)
         "1.4.5": ASSISTED,
-        "1.4.6": HUMAN,
+        "1.4.6": AUTO,       # cleared incidentally by the 1.4.3 darken (below the AAA floor)
         "1.4.9": ASSISTED,
         "2.4.1": AUTO,       # bookmark outline built from the document's headings
         "2.4.2": AUTO,       # /Title + ViewerPreferences DisplayDocTitle
+        "2.4.4": ASSISTED,   # raw-URL link text — descriptive label derived from the target, human confirms
+        "2.4.6": ASSISTED,   # tagged PDF, no headings — heading map derived from the font hierarchy, human confirms
         "3.1.1": AUTO,       # catalog /Lang
         "3.1.2": ASSISTED,
         "3.1.5": ASSISTED,
@@ -152,6 +167,7 @@ CAPABILITY: dict[str, dict[str, str]] = {
         "1.2.2": HUMAN,      # video captions
         "1.2.3": HUMAN,      # video audio description
         "1.3.1": AUTO,       # unlabeled control → aria-label
+        "1.3.2": HUMAN,      # CSS visual-reorder detected; the fix is a layout/source-order edit
         "1.3.3": ASSISTED,   # sensory rewrite (format-agnostic text proposer)
         "1.3.4": AUTO,       # orientation lock removed + responsive viewport
         "1.3.5": AUTO,       # input purpose → autocomplete
@@ -159,6 +175,7 @@ CAPABILITY: dict[str, dict[str, str]] = {
         "1.4.2": AUTO,       # autoplay removed
         "1.4.3": AUTO,       # low-contrast inline colour darkened
         "1.4.4": AUTO,       # zoom-blocking viewport restored
+        "1.4.5": HUMAN,      # image-of-text detected; replacing it with real text is a human edit
         "1.4.6": AUTO,       # cleared incidentally by the 1.4.3 darken
         "1.4.10": AUTO,      # responsive viewport for reflow
         "1.4.11": HUMAN,     # non-text (border) contrast — no auto fix

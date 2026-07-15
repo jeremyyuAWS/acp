@@ -65,9 +65,9 @@ export default function HitlBell() {
     <div className="hitlbell" ref={wrap}>
       <button
         className={`hitlbell-btn hitlbell-${sev}`}
-        aria-label={`Human review queue — ${pending.length} pending`}
+        aria-label={`AI Work Inbox — ${pending.length} pending`}
         aria-expanded={open}
-        title={err ? 'Human review queue (unavailable)' : `Human review queue — ${pending.length} pending`}
+        title={err ? 'AI Work Inbox (unavailable)' : `AI Work Inbox — ${pending.length} pending`}
         onClick={() => setOpen((v) => !v)}>
         <span aria-hidden="true">🔔</span>
         {pending.length > 0 && <span className="hitlbell-badge">{pending.length > 99 ? '99+' : pending.length}</span>}
@@ -76,7 +76,7 @@ export default function HitlBell() {
       {open && (
         <div className="hitlbell-pop" role="menu">
           <div className="hitlbell-pophead">
-            <b>Human review queue</b>
+            <b>AI Work Inbox</b>
             <span className="muted">{pending.length} awaiting approval</span>
           </div>
           <div className="hitlbell-tally">

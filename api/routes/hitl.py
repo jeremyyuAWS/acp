@@ -24,9 +24,21 @@ class HitlUpdate(BaseModel):
     # Reviewer Feedback Intelligence: WHY a rejection happened. A fixed vocabulary so the
     # rollup can answer "which rules are weakest" — free text goes in reviewer_note.
     reject_reason: str | None = None    # incorrect_object | too_vague | hallucinated | missed_text | org_preference | other
+    # WCAG exception the reviewer applied INSTEAD of authoring a fix — the honest resolution for a
+    # finding a model can't decide. 'decorative' (1.1.1: the image conveys nothing, so no text
+    # alternative is required) or 'essential_exception' (1.4.5/1.4.9: a logo/brand mark is exempt
+    # from the images-of-text rule). Recorded in the immutable audit trail as WHY the finding was
+    # resolved, so the certification report never implies a written fix that never happened.
+    resolution: str | None = None       # decorative | essential_exception
 
 
 REJECT_REASONS = {"incorrect_object", "too_vague", "hallucinated", "missed_text", "org_preference", "other", "unspecified"}
+# Human-judgment exceptions that resolve a finding without a written value. Each maps to the WCAG
+# clause that makes the exception legitimate — kept beside the enum so the audit note is honest.
+RESOLUTIONS = {
+    "decorative": "reviewer marked image decorative — no text alternative required (WCAG 1.1.1)",
+    "essential_exception": "reviewer marked essential logo/brand mark — exempt from images-of-text (WCAG 1.4.5/1.4.9)",
+}
 
 
 @router.post("/hitl/queue/{scan_id}/auto")
@@ -90,6 +102,8 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
         raise HTTPException(422, f"status must be one of {sorted(valid)}")
     if body.reject_reason is not None and body.reject_reason not in REJECT_REASONS:
         raise HTTPException(422, f"reject_reason must be one of {sorted(REJECT_REASONS)}")
+    if body.resolution is not None and body.resolution not in RESOLUTIONS:
+        raise HTTPException(422, f"resolution must be one of {sorted(RESOLUTIONS)}")
     updated = core.store.update_hitl_item(item_id, body.status, body.reviewer_note, body.approved_value)
     # Record the reviewer's final text per proposal, so the applier knows which image gets which
     # description. Only on approval: rejecting or skipping approves no content.
@@ -108,6 +122,10 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     # whom `request` is None) — we record what we actually know and never invent a name.
     actor = getattr(getattr(request, "state", None), "user_email", None) or "reviewer"
     _detail = body.reviewer_note or None
+    # A WCAG-exception resolution IS the evidence for this finding — record it verbatim, so an
+    # auditor reading the log sees the finding was resolved by human judgment (not a written fix).
+    if body.resolution:
+        _detail = f"{_detail + ' | ' if _detail else ''}resolution: {RESOLUTIONS[body.resolution]}"
     if body.approved_value:
         _detail = f"{_detail + ' | ' if _detail else ''}approved: {body.approved_value[:160]}"
     core.store.log_decision(

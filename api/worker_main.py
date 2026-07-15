@@ -18,6 +18,7 @@ import signal
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 
 # Same sys.path convention app.py relies on, so `python worker_main.py` resolves siblings.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -50,7 +51,22 @@ def run(poll_seconds: float = 2.0, _install_signals: bool = True) -> None:
     n = core.start_workers()
     print(f"[worker_main] started {n} job worker(s) + sweeper + scheduler; awaiting work", flush=True)
 
+    # Heartbeat: in the split topology the API tier runs ACP_WORKERS=0, so its "are there
+    # workers?" scan guard can't look at its own pool. A fresh timestamp in the shared store is
+    # real liveness the API can check (worker_tier_alive) — not a config flag that could lie.
+    # Throttled and best-effort: a transient DB blip must never kill the pool.
+    last_beat = 0.0
     while not _stop.is_set():
+        now = time.monotonic()
+        if now - last_beat >= 15:
+            last_beat = now
+            try:
+                core.get_store().set_setting(
+                    "worker_tier_heartbeat",
+                    datetime.now(timezone.utc).isoformat(),
+                )
+            except Exception:
+                pass
         time.sleep(poll_seconds)
 
     try:

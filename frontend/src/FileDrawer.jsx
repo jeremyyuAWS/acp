@@ -4,7 +4,7 @@ import Tag from './Tag.jsx'
 import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
-import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, getFileRemediationDiffs, downloadRemediated, getRules, getRubric, getConfig, getCapability, listHitlQueue, updateHitlItem, openTraceUrl } from './api.js'
+import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, getFileRemediationDiffs, downloadRemediated, getRules, getRubric, getConfig, getCapability, listHitlQueue, updateHitlItem, openTraceUrl, getDocumentTimeline } from './api.js'
 import EvidenceCard from './EvidenceCard.jsx'
 import { CAPABILITY_FALLBACK, fmtOf, autoSCs, modeFor, reviewRecommended } from './capability.js'
 import PagePreview from './PagePreview.jsx'
@@ -12,7 +12,8 @@ import { WCAG } from './wcagCatalog.js'
 import { confidenceForFinding, confidenceForCoverage, confClass } from './confidence.js'
 import { TraceChip } from './Transparency.jsx'
 import Thumbnail from './Thumbnail.jsx'
-import { DEVA_20 } from './deva20.js'
+import { DOCUMENTS_20 } from './documents20.js'
+import { statusIn } from './assessCoverage.js'
 import { fmtEffort, EFFORT_BASIS } from './effort.js'
 export { fmtEffort, EFFORT_BASIS }
 
@@ -68,6 +69,48 @@ const fixLabel = (sc, mode, aiEnabled) => {
 // Office formats would need a LibreOffice round-trip, so for a deck we show the slide
 // number and no image — rather than a row of "preview unavailable" placeholders.
 const PAGE_RENDERABLE = new Set(['pdf'])
+
+// Audit trail (maturity Phase 4): the document's REAL recorded history — scanned, AI drafted
+// (with provider/zone), human decided (with who + why), fix written, published — every row a
+// persisted event, in order. Lazy: fetched only when the section is opened. The static
+// "Document journey" above shows the pipeline's stages; this shows what actually happened.
+const TIMELINE_GLYPH = { scan: '🔍', ai: '🤖', review: '📥', human: '👤', fix: '🔧', publish: '📤', decision: '📝' }
+function AuditTimeline({ scanId, file }) {
+  const [events, setEvents] = useState(null)
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!open || events !== null || !scanId || !file) return
+    let live = true
+    getDocumentTimeline(scanId, file).then((r) => { if (live) setEvents(Array.isArray(r) ? r : []) })
+    return () => { live = false }
+  }, [open, events, scanId, file])
+  if (!scanId || !file) return null
+  const fmtTs = (ts) => { try { return new Date(ts).toLocaleString() } catch { return ts } }
+  return (
+    <details className="covmanifest" onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary className="covmanifest-sum">History — audit trail{events?.length ? ` (${events.length} events)` : ''}</summary>
+      {events === null && <p className="muted" style={{ fontSize: 12 }}>loading…</p>}
+      {events !== null && !events.length && (
+        <p className="muted" style={{ fontSize: 12 }}>No recorded events for this document yet.</p>
+      )}
+      {events?.length > 0 && (
+        <ol style={{ listStyle: 'none', margin: '8px 0 0', padding: 0 }}>
+          {events.map((e, i) => (
+            <li key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '4px 0', borderLeft: '2px solid #e1e1e1', paddingLeft: 10 }}>
+              <span aria-hidden="true" style={{ flexShrink: 0 }}>{TIMELINE_GLYPH[e.kind] || '•'}</span>
+              <div style={{ fontSize: 12, lineHeight: 1.45 }}>
+                <b>{e.title}</b>
+                {e.actor && <span className="muted"> · {e.actor}</span>}
+                {e.detail && <div className="muted">{e.detail}</div>}
+                <div className="muted" style={{ fontSize: 11 }}>{fmtTs(e.ts)}</div>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </details>
+  )
+}
 
 // Click-to-reveal, not eager: a drawer can list 20+ findings and rendering a PNG per row
 // would fire that many page-render requests the reviewer never asked for.
@@ -241,9 +284,8 @@ const STATE_NOTE = {
 
 export default function FileDrawer({ file, onClose, context = 'full', overrideOwner = null, delegatedFrom = null, decision = null, aiEnabled = true, scanId = null, readOnly = false }) {
   const [explanations, setExplanations] = useState({})
-  // The coverage table defaults to Deva's 20-check document core. Listing all 42 in-scope
-  // criteria buried the 20 that actually gate certification among rows nobody is assessed on.
-  const [coreOnly, setCoreOnly] = useState(true)
+  // The coverage table shows exactly the 20-check document core — the list the customer
+  // certifies against. No "show all" escape hatch: the other in-scope criteria are noise here.
   // Engine rule catalog (docx/pptx/xlsx/pdf groups) — tells the coverage table
   // which WCAG criteria the engine ACTUALLY evaluates for this file type, so a
   // PASS is never claimed for something that was never checked. Fetched once.
@@ -255,6 +297,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   // criteria the remediator auto-fixes per format. Seeded with the bundled table so the
   // coverage/finding badges are correct synchronously; refreshed from the backend.
   const [cap, setCap] = useState(CAPABILITY_FALLBACK)
+  const [hidden, setHidden] = useState(() => new Set(['NA']))   // coverage table: outcome groups filtered out (click a count chip to toggle). N/A hidden by default; 'clear filters' reveals it.
   useEffect(() => {
     let on = true
     getRules().then((r) => { if (on) setCatalogRules(r) }).catch(() => {})
@@ -438,7 +481,12 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   if (!file) return null
   const st = statusOf(file)
   const [sbg, sfg] = STATUS_BADGE[st]
-  const issues = file.issues || []
+  // Scope every finding-derived surface in this drawer — the Findings list, Document Health,
+  // the auto/review counts, and the "Remediate this file" CTA — to the 20-check document
+  // core, the same list the coverage table below certifies against. The engine also reports
+  // criteria outside the 20 (e.g. 3.3.2, 2.4.10, 1.4.8, 2.4.9); those are outside the document core's
+  // certification scope, so surfacing them here would contradict the "20-check core" framing.
+  const issues = (file.issues || []).filter((i) => DOCUMENTS_20.has(scOfWcag(i.wcag)))
   // This file's format and the set of criteria the remediator auto-fixes for it — the
   // single format-aware source for every "was this fixed / can this be fixed" decision
   // below (coverage table, finding badges, certification export).
@@ -877,12 +925,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         const checkedSCs = fmt === 'html'
           ? new Set(allRules.map((m) => m.meta.id))
           : new Set((((catalogRules || {})[fmt]) || []).map(scFromRule).filter(Boolean))
-        const isHuman = (c) => /Human/i.test(c.approach || '') || c.source === 'MDK HITL'
-        // Required criteria auto-detected for HTML but not (yet) for document
-        // formats — they genuinely apply to PDF/Office forms and colour-coded
-        // content, so on a document they route to human review instead of reading
-        // as 'not auto-checked'. NOT a blanket flip: web-only criteria (Resize
-        // Text, Reflow, Focus Order/Visible…) stay N-A for a static document.
+        // Required criteria detected for HTML but historically not for document formats — they
+        // genuinely apply to PDF/Office forms, so on a document they route to human review rather
+        // than reading as 'not auto-checked'. (Capability status via statusIn now handles most of
+        // this; kept as a floor for the few not yet in the capability table.)
         const DOC_HUMAN_WHEN_UNCHECKED = new Set(['1.4.1', '1.3.5', '2.5.3', '4.1.2'])
         const fixOf = (c) => fixLabel(c.sc, modeFor(cap, fileFmt, c.sc), aiEnabled)
         // An unreadable file ran ZERO checks — claiming any PASS would be false.
@@ -894,15 +940,16 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
             </details>
           )
         }
-        const LEVEL_RANK = { A: 1, AA: 2, AAA: 3 }
-        const targetRank = LEVEL_RANK[targetLevel] || 2
-        const OUT_RANK = { FAIL: 0, FIXED: 0.5, PASS: 1, HUMAN: 2, UNCHECKED: 3, WEB: 4 }
-        const OUT_TXT = { PASS: 'pass', FAIL: 'fail', FIXED: 'fixed · re-validate', HUMAN: 'human review', UNCHECKED: 'not auto-checked', WEB: 'web-only' }
+        const OUT_RANK = { FAIL: 0, FIXED: 0.5, PASS: 1, HUMAN: 2, GAP: 2.4, AT: 2.6, UNCHECKED: 3, WEB: 4, NA: 5 }
+        const OUT_TXT = { PASS: 'pass', FAIL: 'fail', FIXED: 'fixed · re-validate', HUMAN: 'human review', GAP: 'gap · not built', AT: 'needs AT test', UNCHECKED: 'not auto-checked', WEB: 'web-only', NA: 'n/a for this type' }
         const OUT_TIP = {
           FIXED: 'Remediated in this session — the fixed copy is stored; re-validate (re-scan the fixed copy) to confirm the pass',
-          HUMAN: 'This criterion needs a person to verify — it routes through the HITL workflow, not the engine',
+          HUMAN: 'ACP assesses this; the fix needs a person (routes through the HITL workflow)',
+          GAP: 'Applies to this file type and is statically detectable, but a check is not built yet',
+          AT: 'Keyboard operability — provable only by interaction / assistive-tech testing; no static check can assess it',
           UNCHECKED: 'Not yet automated for this file type — no engine rule evaluates it',
           WEB: 'Web-page criterion — cannot apply to a document file',
+          NA: 'This barrier cannot exist in this file type',
         }
         // Issues carry wcag as either 'SC_1_3_1' (engine records) or '1.3.1 name'
         // (axe-style) — normalize both to the bare SC id.
@@ -912,53 +959,82 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           const sc = scOfIssue(i.wcag)
           if (sc) { if (!issuesBySc[sc]) issuesBySc[sc] = []; issuesBySc[sc].push(i) }
         })
-        // Scope: only criteria that can apply to documents, at or below the certification
-        // target. Web-only and above-target rows are counted in the footnote instead of
-        // listed — 87 rows of mostly-N/A is noise. Narrowed again, by default, to the
-        // 20-check document core: the list the customer certifies against.
-        const scoped = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) <= targetRank)
-        const inScope = coreOnly ? scoped.filter((c) => DEVA_20.has(c.sc)) : scoped
-        const hiddenAboveLevel = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) > targetRank).length
-        const hiddenWebOnly = WCAG.length - scoped.length - hiddenAboveLevel
+        // Scope: exactly the 20-check document core — the list the customer certifies against.
+        // No "show all" toggle; the other in-scope criteria are noise in this per-file drawer.
+        const inScope = WCAG.filter((c) => c.docApplies !== false && DOCUMENTS_20.has(c.sc))
         const rows = inScope.map((c) => {
           const fileIssues = issuesBySc[c.sc] || []
           const count = fileIssues.length
           const wasFixed = count > 0 && (remediatedRuleIds.has(c.sc)
             || (effectiveRemediated && remAutoSet.has(c.sc)))
-          const outcome = wasFixed ? 'FIXED'
-            : count > 0 ? 'FAIL'
+          // Capability truth for THIS file's format (assessCoverage.js, same source the Assess
+          // scorecard uses): assessable (auto/ai/human), a buildable gap, needs-AT, or
+          // not-applicable. Drives the honest label when the scan found nothing — so a criterion
+          // that can't exist in this file type reads "n/a", not "not auto-checked", and a
+          // detector-not-built-yet reads "gap".
+          const capStatus = fmt ? statusIn(c.sc, fmt) : 'na'
+          const assessable = capStatus === 'auto' || capStatus === 'ai' || capStatus === 'human'
+          const outcome = count > 0 ? (wasFixed ? 'FIXED' : 'FAIL')
+            : capStatus === 'na' ? 'NA'
+            : capStatus === 'gap' ? 'GAP'
+            : capStatus === 'at' ? 'AT'
+            : capStatus === 'human' ? 'HUMAN'
             : checkedSCs.has(c.sc) ? 'PASS'
-            : isHuman(c) ? 'HUMAN'
             : (DOC_HUMAN_WHEN_UNCHECKED.has(c.sc) && fmt && fmt !== 'html') ? 'HUMAN'
-            : 'UNCHECKED'
+            : 'PASS'   // auto/ai lane per capability → ACP assesses it deterministically/with AI; no finding
           const confidence = confidenceForCoverage({ sc: c.sc, outcome, verifiedCleared: remediatedRuleIds.has(c.sc) })
-          return { id: c.sc, name: c.name, plain: PLAIN_NAMES[c.sc] || c.name, req: c.req, level: c.level, fix: fixOf(c), outcome, count, fileIssues, confidence }
+          const fix = assessable ? fixOf(c) : '—'
+          return { id: c.sc, name: c.name, plain: PLAIN_NAMES[c.sc] || c.name, req: c.req, level: c.level, fix, outcome, count, fileIssues, confidence }
         }).sort((a, b) => (OUT_RANK[a.outcome] ?? 3) - (OUT_RANK[b.outcome] ?? 3))
         const n = (o) => rows.filter((r) => r.outcome === o).length
+        // Header count-chips double as filters: click one to hide those rows. Lets a reviewer
+        // collapse the greyed-out criteria (n/a, human-review, not-built) and focus on results.
+        const toggleOutcome = (o) => setHidden((prev) => {
+          const next = new Set(prev); next.has(o) ? next.delete(o) : next.add(o); return next
+        })
+        const shown = rows.filter((r) => !hidden.has(r.outcome))
+        const chip = (o, cls, label) => {
+          const c = n(o); if (!c) return null
+          const off = hidden.has(o)
+          return (
+            <button type="button" key={o} aria-pressed={off}
+                    className={`covstat ${cls} covstat-btn${off ? ' covstat-off' : ''}`}
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleOutcome(o) }}
+                    title={`${off ? 'Show' : 'Hide'} the ${c} “${label}” row${c === 1 ? '' : 's'}`}>
+              {c} {label}
+            </button>
+          )
+        }
         return (
           <details className="covmanifest" open>
             <summary className="covmanifest-sum">
-              WCAG coverage · {rows.length} criteria · {coreOnly ? 'document core' : `at ${targetLevel} · documents`}
-              <span className="covstat pass">{n('PASS')} pass</span>
-              {n('FAIL') > 0 && <span className="covstat fail">{n('FAIL')} fail</span>}
-              {n('FIXED') > 0 && <span className="covstat pass">{n('FIXED')} fixed · re-validate</span>}
-              {n('HUMAN') > 0 && <span className="covstat skip">{n('HUMAN')} human review</span>}
-              {n('UNCHECKED') > 0 && <span className="covstat skip">{n('UNCHECKED')} not auto-checked</span>}
+              WCAG coverage · the 20-check document core
+              {chip('PASS', 'pass', 'pass')}
+              {chip('FAIL', 'fail', 'fail')}
+              {chip('FIXED', 'pass', 'fixed · re-validate')}
+              {chip('HUMAN', 'skip', 'human')}
+              {chip('GAP', 'fail', 'gap')}
+              {chip('AT', 'skip', 'AT')}
+              {chip('NA', 'skip', 'n/a')}
+              {chip('UNCHECKED', 'skip', 'not auto-checked')}
+              {hidden.size > 0 && (
+                <button type="button" className="ghost small" style={{ marginLeft: 8, fontSize: 11 }}
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setHidden(new Set()) }}
+                        title="Show all rows again">clear filters</button>
+              )}
             </summary>
             <div className="covmanifest-note muted">
-              {coreOnly
-                ? <>The <b>20-check document core</b> — 87 WCAG 2.2 criteria → 50 US-regulated (A/AA) → the 20 that apply to documents. </>
-                : <>Criteria that apply to documents, at your {targetLevel} certification target. Hidden: {hiddenAboveLevel} above-{targetLevel} and {hiddenWebOnly} web-only criteria. </>}
-              <b>pass</b> is only claimed where the {fmt || 'file'} engine actually evaluates the criterion; <b>human review</b> routes through the HITL workflow.
-              <button className="explain-btn" style={{ marginLeft: 6 }} aria-pressed={!coreOnly}
-                      onClick={() => setCoreOnly((v) => !v)}>
-                {coreOnly ? `Show all ${scoped.length} at ${targetLevel}` : 'Show only the 20-check core'}
-              </button>
+              The <b>20-check document core</b> — 87 WCAG 2.2 criteria → 50 US-regulated (A/AA) → the 20 that apply to documents. Each row shows how this {fmt || 'file'} assessed and how the fix is delivered.
+              {' '}<b>Outcome</b>: pass / fail (with count) / fixed, or <b>human</b> (ACP assesses it, a person fixes), <b>gap</b> (no check built yet), <b>n/a</b> (can’t exist in this file type). <b>Fix</b> is the remediation lane: <b>⚡ auto</b> deterministic · <b>✎ AI</b> 1-click · <b>✋ human</b>. A <b>pass</b> is only claimed where ACP actually assesses the criterion for this format.
+              {' '}<span style={{ opacity: 0.8 }}>Tip: click a count tag above to hide those rows.</span>
             </div>
+            {shown.length === 0 && (
+              <div className="covmanifest-note muted" style={{ paddingTop: 0 }}>All rows hidden by your filters — <b>clear filters</b> to show them again.</div>
+            )}
             <table className="covtable">
               <thead><tr><th>SC</th><th>Name</th><th>Lvl</th><th>Fix</th><th>Outcome</th><th>Confidence</th></tr></thead>
               <tbody>
-                {rows.map((r) => {
+                {shown.map((r) => {
                   const exp = explanations[r.id]
                   return (
                     <Fragment key={r.id}>
@@ -977,7 +1053,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                             : r.fix
                         })()}</td>
                         <td className={`covoutcome ${r.outcome === 'FAIL' ? 'fail' : (r.outcome === 'PASS' || r.outcome === 'FIXED') ? 'pass' : 'skip'}`} title={OUT_TIP[r.outcome]}>
-                          {(r.outcome === 'PASS' || r.outcome === 'FIXED') ? '✓' : r.outcome === 'FAIL' ? `✕ ${r.count}` : r.outcome === 'HUMAN' ? '👤' : '—'}
+                          {(r.outcome === 'PASS' || r.outcome === 'FIXED') ? '✓' : r.outcome === 'FAIL' ? `✕ ${r.count}` : r.outcome === 'HUMAN' ? '👤' : r.outcome === 'AT' ? '⌨' : r.outcome === 'GAP' ? '◔' : '—'}
                           <span className="covouttxt">{r.outcome === 'PASS' && remediatedRuleIds.has(r.id) ? 'pass — remediated' : OUT_TXT[r.outcome]}</span>
                           {r.outcome === 'FAIL' && scanId && !exp && (
                             <button className="explain-btn" onClick={() => fetchExplanation(r.id)} title="Get AI explanation">Why?</button>
@@ -985,7 +1061,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                         </td>
                         <td className="covconf">
                           {r.confidence
-                            ? <span className={confClass(r.confidence.level)} title={`Trust signal (tier: ${r.confidence.level.label})`}>{r.confidence.basis}</span>
+                            ? <span className={confClass(r.confidence.level)}
+                                    title={`${r.confidence.level.label} confidence — ${r.confidence.basis}`}>
+                                {r.confidence.short || r.confidence.level.label}
+                              </span>
                             : <span className="muted">—</span>}
                         </td>
                       </tr>
@@ -1049,6 +1128,8 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           )
         })}
       </ol>
+
+      <AuditTimeline scanId={scanId} file={file?.file} />
     </Drawer>
   )
 }

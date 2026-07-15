@@ -203,9 +203,12 @@ def test_html_serious_no_lang(report):
 # ── XLSX engine oracles ──────────────────────────────────────────────────────
 
 def test_xlsx_synthetic_violations(report):
-    """Synthetic XLSX hits 5 rules: SHEET, MERGE, HIDDEN, TABLE, TITLE, LANG."""
+    """Synthetic XLSX hits: SHEET, MERGE, HIDDEN, TABLE, TITLE, LANG, and DEFAULT_LABELS
+    (2.4.6 — the workbook's only sheet is the default 'Sheet1'; added when the xlsx 2.4.6
+    assessment gap was closed)."""
     expected = {"XLSX-SHEET-001", "XLSX-MERGE-001", "XLSX-HIDDEN-001",
-                "XLSX-TABLE-001", "XLSX-TITLE-001", "XLSX-LANG-001"}
+                "XLSX-TABLE-001", "XLSX-TITLE-001", "XLSX-LANG-001",
+                "XLSX_DEFAULT_LABELS"}
     f = by_file(report).get("xlsx-synthetic-violations.xlsx")
     assert f is not None and f["status"] == "analysed"
     assert _rules(f) == expected, f"rule drift: {sorted(_rules(f))}"

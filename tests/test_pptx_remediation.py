@@ -66,6 +66,37 @@ def test_pptx_contrast_passes_high_contrast(tmp_path):
     assert osx.pptx_contrast_checks(_pptx_from(slide, tmp_path)) == []
 
 
+def test_pptx_remediation_survives_a_malformed_ampersand_slide():
+    # A real-world slide with an unescaped '&' in a text run ("Workforce & Headcount") — the .NET
+    # analyser tolerates it, but ElementTree (the reading-order pass) rejects it. That parse error
+    # used to raise out of _remediate_pptx_slides and abort the whole deck partway, so later slides
+    # silently lost their titles. Now the reading-order pass is skipped for that one slide and the
+    # string-surgical fixes (title/headers/contrast) still apply to EVERY slide.
+    good = _slide(_shape(text="Clean Slide", y=0))
+    bad = _slide(_shape(text="Workforce & Headcount", y=0))   # raw & — not &amp;
+    entries = {"ppt/slides/slide1.xml": bad.encode("utf-8"),
+               "ppt/slides/slide2.xml": good.encode("utf-8")}
+    applied = rem._remediate_pptx_slides(entries)              # must NOT raise
+    assert 'type="title"' in entries["ppt/slides/slide1.xml"].decode("utf-8")   # bad slide titled
+    assert 'type="title"' in entries["ppt/slides/slide2.xml"].decode("utf-8")   # later slide reached
+    assert any("title" in a.lower() for a in applied)
+
+
+def test_pptx_title_uses_first_text_not_longest():
+    # A slide with a short REAL title first and a long body paragraph after it (no title
+    # placeholder). The auto-title must announce the heading, not the longest body run.
+    slide = _slide(
+        _shape(text="Quarterly Results", y=0),
+        _shape(text="This slide summarises the full set of quarterly financial outcomes in detail", y=100_000),
+    )
+    entries = {"ppt/slides/slide1.xml": slide.encode("utf-8")}
+    rem._remediate_pptx_slides(entries)
+    out = entries["ppt/slides/slide1.xml"].decode("utf-8")
+    title_sp = re.search(r'type="title".*?</p:sp>', out, re.S).group(0)
+    assert "Quarterly Results" in title_sp           # the first text — the actual heading
+    assert "summarises the full set" not in title_sp  # NOT the longest run (body copy)
+
+
 def test_pptx_contrast_skips_text_without_explicit_fill(tmp_path):
     # No shape fill -> background is inherited/unknown -> not guessed (conservative).
     slide = _slide(_shape(text="on unknown background", color="FFFFFF"))
@@ -94,10 +125,12 @@ def test_remediate_pptx_slides_applies_all_three():
 
     out = entries["ppt/slides/slide1.xml"].decode("utf-8")
     assert rem._pptx_has_title(out)
-    # the white run on the orange fill was recoloured (>=4.5:1 -> black on this orange).
+    # The white run on the orange fill was recoloured to reach AA — hue-preserving, so it darkens
+    # only as far as it must (a grayscale input lands on a dark gray), NOT flattened to pure black.
     orange_sp = re.search(r'val="F07D00".*?</p:sp>', out, re.S).group(0)
     assert 'srgbClr val="FFFFFF"' not in orange_sp
-    assert 'srgbClr val="000000"' in orange_sp
+    new_col = re.search(r'<a:rPr><a:solidFill><a:srgbClr val="([0-9A-F]{6})"', orange_sp).group(1)
+    assert osx._contrast_ratio("F07D00", new_col) >= 4.5    # the written colour genuinely passes AA
 
 
 def test_reorder_sorts_shapes_by_visual_position():

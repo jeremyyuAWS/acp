@@ -26,7 +26,8 @@ describe('the approve payload carries one value per image', () => {
 
   it('EvidenceCard sends the per-image values, and only on approval', () => {
     const src = read('EvidenceCard.jsx')
-    expect(src).toMatch(/status === 'approved' && instances\.length/)
+    // A WCAG-exception resolution (decorative / essential logo) writes no value, hence !resolution.
+    expect(src).toMatch(/status === 'approved' && !resolution && instances\.length/)
     expect(src).toMatch(/approvedValues/)
   })
 

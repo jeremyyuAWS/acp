@@ -165,6 +165,34 @@ def _duplicate_href_findings(links: list[tuple[str, str]], rule_id: str, wcag: s
             if href and text.strip().lower() in ambiguous_texts]
 
 
+# Floating text that a screen reader reads at its anchor, not its visual position (1.3.2).
+_TXBX_CONTENT = re.compile(r"<w:txbxContent>(.*?)</w:txbxContent>", re.S)   # DrawingML / VML text box body
+_FRAMEPR = re.compile(r"<w:framePr\b")                                       # positioned (floating) text frame
+
+# xlsx structure labels + hyperlinks (2.4.4 / 2.4.6).
+_XLSX_HL = re.compile(r"<hyperlink\b[^>]*>")
+_HL_DISPLAY = re.compile(r'display="([^"]*)"')
+_WB_SHEET = re.compile(r'<sheet\b[^>]*\bname="([^"]*)"')
+_TBL_COL = re.compile(r'<tableColumn\b[^>]*\bname="([^"]*)"')
+_DEFAULT_SHEET = re.compile(r"^Sheet\d+$")
+_DEFAULT_COL = re.compile(r"^Column\d+$")
+
+_VAGUE_LINK_TEXT = frozenset({
+    "click here", "here", "click", "read more", "more", "learn more", "this", "this link",
+    "link", "go", "details", "view", "download", "open", "see more", "more info", "info",
+    "continue", "read",
+})
+
+
+def _is_vague_link_text(text: str) -> bool:
+    """Link text that fails 2.4.4 in isolation: empty, a generic filler phrase, or a raw URL
+    used as its own label."""
+    t = (text or "").strip().lower()
+    if not t or t in _VAGUE_LINK_TEXT:
+        return True
+    return bool(re.match(r"^(https?://|www\.)", t))
+
+
 def docx_checks(path: Path) -> list[dict]:
     findings: list[dict] = []
     try:
@@ -236,8 +264,69 @@ def docx_checks(path: Path) -> list[dict]:
             )
             if justified >= _MIN_JUSTIFIED_PARAS:
                 findings.append(_finding("DOCX_JUSTIFIED_TEXT", "1.4.8 Visual Presentation", "MODERATE"))
+
+            # 1.3.2 — floating text (DrawingML / VML text boxes, positioned frames) is read by
+            # assistive tech at its anchor point, which need not match the visual order. Fires
+            # only when the document actually contains text-bearing floating objects (conservative,
+            # so an ordinary linear document never trips it).
+            floating = sum(
+                1 for inner in _TXBX_CONTENT.findall(doc) if "".join(_WT.findall(inner)).strip()
+            ) + len(_FRAMEPR.findall(doc))
+            if floating:
+                f = _finding("DOCX_READING_ORDER_RISK", "1.3.2 Meaningful Sequence", "MODERATE")
+                f["detail"] = (f"{floating} floating text box(es)/frame(s) — a screen reader may read "
+                               "them out of the visual reading order")
+                findings.append(f)
     except Exception:
         pass
+    return findings
+
+
+def xlsx_structure_checks(path: Path) -> list[dict]:
+    """2.4.4 Link Purpose (In Context) — cell hyperlinks whose display text is vague, empty or a
+    raw URL. 2.4.6 Headings and Labels — uninformative structure labels (multiple default 'SheetN'
+    tabs, or default 'ColumnN' table headers). Detection only; both route to human remediation."""
+    findings: list[dict] = []
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = zf.namelist()
+            # 2.4.4 — judge only links that carry an explicit display text; a link with no display
+            # attribute takes its label from the cell value (not resolved here), so skipping it
+            # avoids false positives.
+            vague = 0
+            for n in names:
+                if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", n):
+                    xml = _read(zf, n) or ""
+                    for tag in _XLSX_HL.findall(xml):
+                        m = _HL_DISPLAY.search(tag)
+                        if m and _is_vague_link_text(m.group(1)):
+                            vague += 1
+            if vague:
+                f = _finding("XLSX_LINK_PURPOSE_VAGUE", "2.4.4 Link Purpose (In Context)", "MODERATE")
+                f["detail"] = (f"{vague} hyperlink(s) with unclear text (e.g. “click here” or a raw URL) — "
+                               "a screen-reader user cannot tell where the link goes")
+                findings.append(f)
+
+            # 2.4.6 — uninformative labels. A lone default 'Sheet1' is normal, so require either
+            # several default sheet tabs or a default table-column header before flagging.
+            wb = _read(zf, "xl/workbook.xml") or ""
+            default_sheets = [nm for nm in _WB_SHEET.findall(wb) if _DEFAULT_SHEET.match(nm.strip())]
+            default_cols: list[str] = []
+            for n in names:
+                if re.fullmatch(r"xl/tables/table\d+\.xml", n):
+                    default_cols += [c for c in _TBL_COL.findall(_read(zf, n) or "")
+                                     if _DEFAULT_COL.match(c.strip())]
+            if len(default_sheets) >= 2 or default_cols:
+                f = _finding("XLSX_DEFAULT_LABELS", "2.4.6 Headings and Labels", "MODERATE")
+                bits = []
+                if len(default_sheets) >= 2:
+                    bits.append(f"{len(default_sheets)} default sheet tabs ({', '.join(default_sheets[:3])})")
+                if default_cols:
+                    bits.append(f"{len(default_cols)} default table column label(s) (e.g. “{default_cols[0]}”)")
+                f["detail"] = "Uninformative labels: " + "; ".join(bits)
+                findings.append(f)
+    except Exception:
+        return []
     return findings
 
 
@@ -319,6 +408,53 @@ def _contrast_ratio(hex_a: str, hex_b: str) -> float:
     la, lb = _wcag_luminance(hex_a), _wcag_luminance(hex_b)
     hi, lo = max(la, lb), min(la, lb)
     return (hi + 0.05) / (lo + 0.05)
+
+
+def min_contrast_recolor(fg_hex: str, bg_hex: str, target: float = 4.5) -> str:
+    """The smallest perceptual change to `fg_hex` that reaches `target` contrast on `bg_hex`.
+
+    A contrast fix that flattens every failing colour to pure black or white is compliant but
+    destroys the design — a brand's muted-blue heading should not become #000000. Instead this
+    keeps the text colour's HUE and SATURATION and moves only its LIGHTNESS, toward whichever
+    extreme the background allows (darker on a light bg, lighter on a dark one), stopping at the
+    first lightness that clears the ratio. So the recoloured text is the SAME colour, only as dark
+    (or light) as it must be — the brand survives the fix.
+
+    Returns an upper-case #RRGGBB (no '#'). Idempotent: a colour that already passes is returned
+    unchanged. The extreme (black/white) is the guaranteed fallback — for any background, one of
+    the two always clears 4.5:1 — so this never fails to reach `target`. The returned hex is what
+    gets written, and it is what the ratio is measured against, so the fix is real post-rounding.
+    """
+    import colorsys
+    fg = fg_hex.lstrip("#").upper()
+    bg = bg_hex.lstrip("#")
+    if len(fg) != 6 or len(bg) != 6:
+        return fg
+    if _contrast_ratio(bg, fg) >= target:
+        return fg
+    r, g, b = (int(fg[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    h, l0, s = colorsys.rgb_to_hls(r, g, b)
+    # Darken toward black when the background favours it (dark text on light paper); else lighten.
+    darken = _contrast_ratio(bg, "000000") >= _contrast_ratio(bg, "FFFFFF")
+    best = "000000" if darken else "FFFFFF"           # guaranteed to clear target
+    lo, hi = (0.0, l0) if darken else (l0, 1.0)        # search lightness between origin and extreme
+    for _ in range(24):
+        mid = (lo + hi) / 2
+        rr, gg, bb = colorsys.hls_to_rgb(h, mid, s)
+        cand = f"{round(rr * 255):02X}{round(gg * 255):02X}{round(bb * 255):02X}"
+        if _contrast_ratio(bg, cand) >= target:
+            best = cand
+            # Passing — preserve more of the original by nudging lightness back toward it.
+            if darken:
+                lo = mid
+            else:
+                hi = mid
+        else:
+            if darken:
+                hi = mid
+            else:
+                lo = mid
+    return best
 
 
 def pptx_contrast_checks(path: Path) -> list[dict]:
@@ -463,6 +599,83 @@ def pdf_bypass_blocks_check(path: Path) -> list[dict]:
     return [_finding("PDF_NO_BOOKMARKS", "2.4.1 Bypass Blocks", "MODERATE")]
 
 
+_PDF_HEADING_TAGS = {"/H", "/H1", "/H2", "/H3", "/H4", "/H5", "/H6", "/Title"}
+
+
+def pdf_headings_labels_check(path: Path) -> list[dict]:
+    """2.4.6 Headings and Labels — a TAGGED PDF (has a structure tree) that contains no heading
+    structure elements at all: assistive tech then has no headings to navigate by. Untagged PDFs
+    are handled by 1.3.1/2.4.1, so this fires only when tagging exists but omits headings, and
+    only past a page floor (a one-pager legitimately needs none)."""
+    try:
+        import pikepdf
+        with pikepdf.open(str(path)) as pdf:
+            if len(pdf.pages) < _MIN_PAGES_FOR_OUTLINE:
+                return []
+            st = pdf.Root.get("/StructTreeRoot")
+            if st is None:
+                return []          # untagged → not this check's concern
+            stack = [st.get("/K")]
+            budget = 5000
+            while stack and budget > 0:
+                budget -= 1
+                node = stack.pop()
+                if node is None:
+                    continue
+                try:
+                    if isinstance(node, pikepdf.Array):
+                        stack.extend(list(node))
+                        continue
+                    s = node.get("/S")
+                    if s is not None and str(s) in _PDF_HEADING_TAGS:
+                        return []   # a heading exists → pass
+                    k = node.get("/K")
+                    if k is not None:
+                        stack.append(k)
+                except Exception:
+                    continue
+    except Exception:
+        return []
+    return [_finding("PDF_NO_HEADINGS", "2.4.6 Headings and Labels", "MODERATE")]
+
+
+def pdf_link_purpose_check(path: Path) -> list[dict]:
+    """2.4.4 Link Purpose (In Context) — a link annotation whose visible text is the raw URL: the
+    URL string of a /Link's /URI action appears verbatim in the page text. A bare URL is not a
+    meaningful link label. Conservative — the URL must literally appear as text, so a link with
+    descriptive text is never flagged."""
+    try:
+        import pikepdf
+        uris: list[str] = []
+        with pikepdf.open(str(path)) as pdf:
+            for page in pdf.pages:
+                for annot in (page.get("/Annots") or []):
+                    try:
+                        if str(annot.get("/Subtype")) != "/Link":
+                            continue
+                        action = annot.get("/A")
+                        uri = action.get("/URI") if action is not None else None
+                        if uri:
+                            uris.append(str(uri))
+                    except Exception:
+                        continue
+        if not uris:
+            return []
+        wanted = {u for u in uris if u} | {re.sub(r"^https?://", "", u) for u in uris if u}
+        import pdfplumber
+        text = ""
+        with pdfplumber.open(str(path)) as pdf:
+            for page in pdf.pages[:20]:
+                text += (page.extract_text() or "") + " "
+                if len(text) > 20000:
+                    break
+        if any(u and u in text for u in wanted):
+            return [_finding("PDF_LINK_RAW_URL", "2.4.4 Link Purpose (In Context)", "MODERATE")]
+    except Exception:
+        return []
+    return []
+
+
 # styles.xml holds several look-alike collections. The real cell formats a cell's
 # s="N" indexes live ONLY in <cellXfs>; <cellStyleXfs> (named styles) and the
 # <dxfs> differential formats (conditional formatting) share the <xf>/<font>/<fill>
@@ -594,6 +807,77 @@ def xlsx_contrast_checks(path: Path) -> list[dict]:
     return findings
 
 
+# ── 4.1.2 Name, Role, Value — PDF AcroForm fields lacking an accessible name ─────
+# A terminal interactive form field (/FT present: /Tx text, /Btn button/checkbox/radio,
+# /Ch choice/combo, /Sig signature) exposes its accessible name to assistive tech via /TU
+# (the "tooltip"). A field with no /TU is announced only by its cryptic partial name /T
+# (or nothing), so a screen-reader user cannot tell what to enter. One finding per unnamed
+# terminal field. Self-gating: no AcroForm, no pikepdf, or a malformed tree yields [] — a
+# structural check must never fail a scan. The remediator (`_fix_pdf_form_fields`) clears
+# each by writing /TU, and this same walk re-run on the fixed file verifies it.
+def _pdf_terminal_fields(node, out, seen):
+    """Recursively collect terminal AcroForm fields (those with /FT), following /Kids."""
+    try:
+        import pikepdf
+    except Exception:
+        return
+    if not isinstance(node, pikepdf.Dictionary):
+        return
+    oid = id(node)
+    if oid in seen:
+        return
+    seen.add(oid)
+    kids = node.get("/Kids")
+    if "/FT" in node and not (isinstance(kids, pikepdf.Array) and len(kids)
+                              and any("/FT" in k for k in kids if isinstance(k, pikepdf.Dictionary))):
+        out.append(node)          # a terminal field (its kids, if any, are widgets, not fields)
+    if isinstance(kids, pikepdf.Array):
+        for k in kids:
+            _pdf_terminal_fields(k, out, seen)
+
+
+def _pdf_field_unnamed(field) -> bool:
+    try:
+        tu = field.get("/TU")
+        return tu is None or not str(tu).strip()
+    except Exception:
+        return False
+
+
+def pdf_form_field_checks(path: Path) -> list[dict]:
+    """One 4.1.2 finding per interactive form field with no accessible name (/TU)."""
+    try:
+        import pikepdf
+    except Exception:
+        return []
+    findings: list[dict] = []
+    try:
+        with pikepdf.open(str(path)) as pdf:
+            root = pdf.Root
+            if "/AcroForm" not in root or "/Fields" not in root["/AcroForm"]:
+                return []
+            fields: list = []
+            for f in root["/AcroForm"]["/Fields"]:
+                _pdf_terminal_fields(f, fields, set())
+            for fld in fields:
+                if _pdf_field_unnamed(fld):
+                    name = ""
+                    try:
+                        name = str(fld.get("/T", "")).strip()
+                    except Exception:
+                        name = ""
+                    findings.append({
+                        "ruleId": "PDF_FORM_NO_ACCESSIBLE_NAME",
+                        "wcag": "4.1.2 Name, Role, Value",
+                        "severity": "CRITICAL",
+                        "detail": (f"form field “{name}” has no accessible name (/TU)" if name
+                                   else "an interactive form field has no accessible name (/TU)"),
+                    })
+    except Exception:
+        return []
+    return findings
+
+
 def checks_for(path: Path, ext: str) -> list[dict]:
     """Dispatch by extension; returns [] for formats with no structural check yet."""
     ext = ext.lower()
@@ -602,9 +886,10 @@ def checks_for(path: Path, ext: str) -> list[dict]:
     if ext == ".pptx":
         return pptx_checks(path) + pptx_contrast_checks(path) + pptx_audio_autoplay_checks(path)
     if ext == ".pdf":
-        return pdf_contrast_checks(path) + pdf_bypass_blocks_check(path)
+        return (pdf_contrast_checks(path) + pdf_bypass_blocks_check(path) + pdf_form_field_checks(path)
+                + pdf_headings_labels_check(path) + pdf_link_purpose_check(path))
     if ext == ".xlsx":
-        return xlsx_contrast_checks(path)
+        return xlsx_contrast_checks(path) + xlsx_structure_checks(path)
     return []
 
 
