@@ -465,7 +465,7 @@ REVIEW = "REVIEW"   # 🟡 advisory Review-Recommended outcome (ADR 0023) — as
 REVIEW_FORMATS: dict[str, frozenset[str]] = {
     "2.1.2": frozenset({"docx", "pptx", "xlsx"}),   # No Keyboard Trap — controls present
     "4.1.2": frozenset({"docx", "pptx", "xlsx"}),   # Name/Role/Value — controls present
-    "1.4.1": frozenset({"docx", "xlsx"}),           # Use of Color — colour-only status / links
+    "1.4.1": frozenset({"docx", "xlsx", "pdf"}),    # Use of Color — colour-only status/links (pdf: colour-only link, ADR 0025)
     "2.4.3": frozenset({"pptx"}),                   # Focus Order — title not first in reading order
     "1.4.11": frozenset({"pptx", "docx"}),          # Non-text Contrast — faint shape outline (docx DrawingML shapes too)
     # ADR 0024 Tier A — render-gated structural proxies (no rendering). 1.4.3 is NOT here: its

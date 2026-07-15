@@ -633,6 +633,85 @@ def pdf_text_spacing_checks(path: Path) -> list[dict]:
         "a reader's request for looser (1.5×) line spacing; verify the text stays legible")]
 
 
+def _pdf_is_chromatic(color) -> bool:
+    """True if a pdfplumber colour carries a HUE (not gray/black) — i.e. colour used to convey
+    meaning. A single float is grayscale; RGB is chromatic when its channels spread; CMYK is
+    chromatic when any of C/M/Y is present (K is just darkness)."""
+    try:
+        if color is None or isinstance(color, (int, float)):
+            return False
+        vals = [float(v) for v in color]
+        if len(vals) == 3:
+            return (max(vals) - min(vals)) > 0.15
+        if len(vals) == 4:
+            return max(vals[:3]) > 0.15
+    except (TypeError, ValueError):
+        return False
+    return False
+
+
+def _pdf_link_has_underline(page, link: dict) -> bool:
+    """A drawn horizontal line / thin rect spanning most of the link's width near its bottom edge —
+    a second (non-colour) cue that the run is a link."""
+    lx0, lx1, lbottom = link["x0"], link["x1"], link["bottom"]
+    lw = lx1 - lx0
+    if lw <= 0:
+        return False
+
+    def spans(x0, x1) -> bool:
+        return (min(x1, lx1) - max(x0, lx0)) >= 0.6 * lw
+
+    for ln in getattr(page, "lines", []) or []:
+        if abs(ln["top"] - ln["bottom"]) <= 1.5 and abs(ln["bottom"] - lbottom) <= 4 and spans(ln["x0"], ln["x1"]):
+            return True
+    for r in getattr(page, "rects", []) or []:
+        if (r.get("height") or 99) <= 2.5 and abs(r["bottom"] - lbottom) <= 4 and spans(r["x0"], r["x1"]):
+            return True
+    return False
+
+
+def pdf_use_of_color_checks(path: Path) -> list[dict]:
+    """1.4.1 Use of Color (Review) for PDF (ADR 0025 Tier A) — a hyperlink distinguished ONLY by a
+    chromatic text colour, with no underline, relies on colour alone to signal it is a link.
+    Conservative: needs a real chromatic colour in the link's text AND no drawn underline; anything
+    it can't read (no annotation, no chars, ambiguous) is skipped (ADR 0016). Advisory, never a
+    pass. Never raises."""
+    colour_only = 0
+    try:
+        import pdfplumber
+        with pdfplumber.open(str(path)) as pdf:
+            for page in pdf.pages[:_MAX_PAGES_SPACING]:
+                links = getattr(page, "hyperlinks", []) or []
+                if not links:
+                    continue
+                chars = page.chars
+                for link in links:
+                    try:
+                        lx0, lx1, ltop, lbot = link["x0"], link["x1"], link["top"], link["bottom"]
+                    except (KeyError, TypeError):
+                        continue
+                    inside = [c for c in chars
+                              if c["x0"] >= lx0 - 1 and c["x1"] <= lx1 + 1
+                              and c["top"] >= ltop - 1 and c["bottom"] <= lbot + 1]
+                    if not inside:
+                        continue
+                    if not any(_pdf_is_chromatic(c.get("non_stroking_color")) for c in inside):
+                        continue                     # not colour-distinguished → not a 1.4.1 signal
+                    if _pdf_link_has_underline(page, link):
+                        continue                     # has a second, non-colour cue → fine
+                    colour_only += 1
+                if colour_only:
+                    break                            # one finding per file is enough
+    except Exception:
+        return []
+    if not colour_only:
+        return []
+    return [_review_finding(
+        "PDF_COLOUR_ONLY_LINK", "1.4.1 Use of Color",
+        "a link is set apart only by its text colour, with no underline — colour alone can't be the "
+        "only way to tell a link from surrounding text; verify it's distinguishable without colour")]
+
+
 # A short memo/letter has no real "bypass repeated blocks" problem — bookmarks
 # only start pulling their weight once a reader would otherwise have to scroll
 # past several pages of unrelated content to find a section. Matches common
@@ -958,7 +1037,7 @@ def checks_for(path: Path, ext: str) -> list[dict]:
     if ext == ".pdf":
         return (pdf_contrast_checks(path) + pdf_bypass_blocks_check(path) + pdf_form_field_checks(path)
                 + pdf_headings_labels_check(path) + pdf_link_purpose_check(path)
-                + pdf_text_spacing_checks(path))
+                + pdf_text_spacing_checks(path) + pdf_use_of_color_checks(path))
     if ext == ".xlsx":
         return (xlsx_contrast_checks(path) + xlsx_structure_checks(path)
                 + office_control_review_checks(path, ext) + office_color_only_checks(path, ext))
