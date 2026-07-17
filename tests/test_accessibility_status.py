@@ -180,3 +180,54 @@ def test_scan_status_unapplied_gate_aggregates():
     m = st.scan_status(_FakeStore2(docs, [], {"b.pdf": 3}), "s1")
     assert m["unapplied_approved"] == 3
     assert m["state"] == st.STATE_APPLY_APPROVED
+
+
+# ── confirm-the-pass (ADR 0026 / Epic 3) ──────────────────────────────────────
+class _FakeStore3(_FakeStore):
+    def __init__(self, trace_rows):
+        super().__init__([], [], 0)
+        self._traces = trace_rows
+        self.logged = []
+    def get_trace_row(self, sid, file, rule_id):
+        return self._traces.get((file, rule_id))
+    def log_decision(self, actor, action, *, scan_id=None, file=None, rule_id=None, detail=None):
+        self.logged.append({"actor": actor, "action": action, "scan_id": scan_id,
+                            "file": file, "rule_id": rule_id, "detail": detail})
+
+
+def test_confirm_writes_the_same_immutable_approval():
+    store = _FakeStore3({("a.pdf", "1.4.11"): {"outcome": "REVIEW"}})
+    r = st.confirm_review_criterion(store, "s1", "a.pdf", "1.4.11", "reviewer@org")
+    assert r["ok"] is True
+    assert store.logged == [{
+        "actor": "reviewer@org", "action": "hitl.approved", "scan_id": "s1",
+        "file": "a.pdf", "rule_id": "1.4.11",
+        "detail": "Criterion confirmed by human review (confirm-the-pass)"}]
+
+
+def test_confirm_refuses_non_review_outcomes():
+    store = _FakeStore3({("a.pdf", "1.4.3"): {"outcome": "FAIL"},
+                         ("a.pdf", "2.4.2"): {"outcome": "PASS"}})
+    fail = st.confirm_review_criterion(store, "s1", "a.pdf", "1.4.3", "r@org")
+    assert fail == {"ok": False, "reason": "not_a_review_criterion", "outcome": "FAIL"}
+    ok_pass = st.confirm_review_criterion(store, "s1", "a.pdf", "2.4.2", "r@org")
+    assert ok_pass["ok"] is False                      # a PASS needs nothing — no wave-through
+    assert store.logged == []                          # nothing written on refusal
+
+
+def test_confirm_rejects_bad_input():
+    store = _FakeStore3({})
+    assert st.confirm_review_criterion(store, "s1", "a.pdf", "DROP TABLE", "r@org")["reason"] == "invalid_criterion"
+    assert st.confirm_review_criterion(store, "s1", "a.pdf", "9.9.9", "r@org")["reason"] == "criterion_not_in_scan"
+    assert store.logged == []
+
+
+def test_confirmed_review_flows_into_human_verified():
+    """The end-to-end honesty loop: confirm writes hitl.approved → file_status counts it."""
+    store = _FakeStore3({("a.pdf", "1.4.11"): {"outcome": "REVIEW"}})
+    st.confirm_review_criterion(store, "s1", "a.pdf", "1.4.11", "r@org")
+    doc = _doc(file="a.pdf", evaluated=18, review=2, review_criteria=["1.4.1", "1.4.11"])
+    store._docs = [doc]
+    store._decisions = store.logged                    # the write IS the read
+    m = st.file_status(store, "s1", "a.pdf")
+    assert m["human_verified"] == 1 and m["needs_review"] == 1

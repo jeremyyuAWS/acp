@@ -230,6 +230,26 @@ def get_scan_accessibility_status(sid: str, request: Request):
     return _status.scan_status(core.store, sid)
 
 
+@router.post("/scans/{sid}/files/{filename:path}/confirm")
+async def confirm_review_criterion(sid: str, filename: str, request: Request):
+    """Confirm-the-pass (ADR 0026 / Epic 3): record a human's verification of a 🟡 review
+    criterion. Body: {"sc": "1.4.11", "note": "..."} — writes the same immutable hitl.approved
+    decision the review queue writes, so every downstream surface (status buckets, certification
+    facts, Assessment Timeline) picks it up unchanged. Guarded: only a REVIEW-outcome criterion can
+    be confirmed (a FAIL needs a fix, not a signature). Owner-scoped."""
+    import accessibility_status as _status
+
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return _status.confirm_review_criterion(
+        core.store, sid, filename, (body.get("sc") or "").strip(), owner, body.get("note"))
+
+
 @router.post("/scans/{sid}/assess")
 def assess(sid: str, request: Request, level: str = Query("AA")):
     """Run the assessment. In the deferred-analysis model (ADR 0020) a Discover-only scan has an

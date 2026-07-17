@@ -2061,3 +2061,7 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .confdash-tile.na .confdash-pct { color: #64748b; }
 .confdash-lbl { font-size: 11.5px; font-weight: 700; }
 .confdash-counts { font-size: 11px; font-variant-numeric: tabular-nums; }
+
+/* Confirm-the-pass (ADR 0026/Epic 3) — the recorded-human-verification chip. */
+.covconfirmed { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  background: #e9f6ec; color: #17a34a; font-weight: 700; font-size: 10.5px; }

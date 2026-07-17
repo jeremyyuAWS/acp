@@ -186,3 +186,29 @@ def scan_status(store, scan_id: str, *, per_item_secs: int = DEFAULT_REVIEW_SECS
         "state": state,
         "cta": CTA.get(state),
     }
+
+
+def confirm_review_criterion(store, scan_id: str, file: str, sc: str, actor: str,
+                             note: str | None = None) -> dict:
+    """Confirm-the-pass (ADR 0026 / Epic 3): a human records that a 🟡 review criterion is verified.
+    Writes the SAME immutable `hitl.approved` decision the HITL queue writes — so the status model's
+    `human_verified` bucket, the certification facts' approvals, and the Assessment Timeline's
+    Human-review stage all pick it up with zero model changes.
+
+    Honesty guard (ADR 0016): only a criterion whose recorded outcome is REVIEW can be confirmed —
+    a FAIL needs remediation and a PASS needs nothing; neither may be waved through. Never raises."""
+    import re
+    if not re.match(r"^\d+\.\d+\.\d+$", sc or ""):
+        return {"ok": False, "reason": "invalid_criterion"}
+    try:
+        row = store.get_trace_row(scan_id, file, sc)
+    except Exception:
+        row = None
+    if not row:
+        return {"ok": False, "reason": "criterion_not_in_scan"}
+    if row.get("outcome") != "REVIEW":
+        return {"ok": False, "reason": "not_a_review_criterion",
+                "outcome": row.get("outcome")}
+    store.log_decision(actor, "hitl.approved", scan_id=scan_id, file=file, rule_id=sc,
+                       detail=(note or "").strip() or "Criterion confirmed by human review (confirm-the-pass)")
+    return {"ok": True, "sc": sc, "actor": actor}

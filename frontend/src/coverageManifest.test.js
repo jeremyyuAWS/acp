@@ -28,3 +28,11 @@ describe('Coverage Manifest — criterion resolved, with the evidence counts tha
     expect(src).toMatch(/import EvidenceHeader, \{ fmtEvidence \} from '\.\/EvidenceHeader\.jsx'/)
   })
 })
+
+describe('Confirm-the-pass — the honest way a 🟡 turns green (recorded, never waved through)', () => {
+  it('the affordance exists only on REVIEW rows and records via confirmCriterion', () => {
+    expect(src).toMatch(/r\.outcome === 'REVIEW' && scanId && \(confirmedScs\.has\(r\.id\)/)
+    expect(src).toMatch(/confirmCriterion\(scanId, file\.file, r\.id\)/)
+    expect(src).toMatch(/if \(res\?\.ok\) setConfirmedScs/)   // flips only on a server-acknowledged write
+  })
+})

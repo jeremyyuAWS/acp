@@ -17,6 +17,7 @@ import ResizeHeadroomCheck from './ResizeHeadroomCheck.jsx'
 import PdfImageContrastCheck from './PdfImageContrastCheck.jsx'
 import AccessibilityStatus from './AccessibilityStatus.jsx'
 import EvidenceHeader, { fmtEvidence } from './EvidenceHeader.jsx'
+import { confirmCriterion } from './api.js'
 import { DOCUMENTS_20 } from './documents20.js'
 import { statusIn, remediationIn } from './assessCoverage.js'
 import { fmtEffort, EFFORT_BASIS } from './effort.js'
@@ -342,7 +343,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   // criteria the remediator auto-fixes per format. Seeded with the bundled table so the
   // coverage/finding badges are correct synchronously; refreshed from the backend.
   const [cap, setCap] = useState(CAPABILITY_FALLBACK)
-  const [hidden, setHidden] = useState(() => new Set(['NA']))   // coverage table: outcome groups filtered out (click a count chip to toggle). N/A hidden by default; 'clear filters' reveals it.
+  const [hidden, setHidden] = useState(() => new Set(['NA']))
+  // Confirm-the-pass (ADR 0026/Epic 3): SCs the reviewer verified this session — the immutable
+  // decision is on the server; this just flips the affordance without a refetch.
+  const [confirmedScs, setConfirmedScs] = useState(() => new Set())   // coverage table: outcome groups filtered out (click a count chip to toggle). N/A hidden by default; 'clear filters' reveals it.
   useEffect(() => {
     let on = true
     getRules().then((r) => { if (on) setCatalogRules(r) }).catch(() => {})
@@ -1136,6 +1140,14 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                           {r.outcome === 'FAIL' && scanId && !exp && (
                             <button className="explain-btn" onClick={() => fetchExplanation(r.id)} title="Get AI explanation">Why?</button>
                           )}
+                          {/* Confirm-the-pass (ADR 0026/Epic 3): the honest way a 🟡 turns green —
+                              a RECORDED human verification, never an automated wave-through. */}
+                          {r.outcome === 'REVIEW' && scanId && (confirmedScs.has(r.id)
+                            ? <span className="covconfirmed">✓ human verified</span>
+                            : <button className="explain-btn" title="Record that you verified this criterion (writes an immutable decision)"
+                                onClick={() => confirmCriterion(scanId, file.file, r.id).then((res) => {
+                                  if (res?.ok) setConfirmedScs((prev) => new Set(prev).add(r.id))
+                                })}>✓ Confirm verified</button>)}
                         </td>
                         <td className="covconf">
                           {r.confidence

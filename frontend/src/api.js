@@ -572,6 +572,17 @@ export const getScanStatus = (scanId) => (SIM
           .then((r) => (r.ok ? r.json() : { available: false }))
           .catch(() => ({ available: false }))))
 
+// Confirm-the-pass (ADR 0026 / Epic 3): record a human's verification of a 🟡 review criterion.
+// Writes the same immutable hitl.approved decision the review queue writes; the backend refuses
+// anything whose outcome isn't REVIEW (a FAIL needs a fix, not a signature).
+export const confirmCriterion = (scanId, file, sc, note) => (SIM || !scanId || !file
+  ? sim({ ok: true, sc })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/confirm`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ sc, note }),
+    }).then((r) => (r.ok ? r.json() : { ok: false, reason: 'error' }))
+      .catch(() => ({ ok: false, reason: 'error' })))
+
 export const uploadToDrive = (scanId, file, blob, contentType) => {
   if (SIM) return sim({ url: 'https://drive.google.com/file/d/sim/view', file_id: 'sim' })
   const fd = new FormData()
