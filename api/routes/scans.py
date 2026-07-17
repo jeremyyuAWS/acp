@@ -203,6 +203,20 @@ def scan(sid: str, request: Request):
     return res
 
 
+@router.get("/scans/{sid}/files/{filename:path}/status")
+def get_file_accessibility_status(sid: str, filename: str, request: Request):
+    """ADR 0026 — the authoritative Accessibility Status for one file. Derived-at-read over the
+    per-file certification facts (the SAME `_rule_outcome` the coverage matrix uses), so the hero
+    card can never disagree with the detail. Owner-scoped; always 200 — an unknown scan/file returns
+    `{available: false}` so the card degrades rather than erroring."""
+    import accessibility_status as _status
+
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        return {"available": False, "reason": "scan_not_found"}
+    return _status.file_status(core.store, sid, filename)
+
+
 @router.post("/scans/{sid}/assess")
 def assess(sid: str, request: Request, level: str = Query("AA")):
     """Run the assessment. In the deferred-analysis model (ADR 0020) a Discover-only scan has an
