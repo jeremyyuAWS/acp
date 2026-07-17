@@ -10,10 +10,13 @@ const METHOD_LABEL = {
 }
 
 // 3.0 + ":1" → "3:1" · 2.4 + ":1" → "2.4:1" · 1.5 + "×" → "1.5×" · 4 + "%" → "4%"
-const fmt = (v, unit = '') => {
+// Exported so the coverage manifest can render the same measured value inline (one formatter,
+// one rounding rule — the manifest and the header can never disagree).
+export const fmtEvidence = (v, unit = '') => {
   const n = Number.isFinite(v) ? (Number.isInteger(v) ? v : +v.toFixed(2)) : v
   return unit === ':1' ? `${n}:1` : `${n}${unit}`
 }
+const fmt = fmtEvidence
 
 export default function EvidenceHeader({ evidence, severity }) {
   if (!evidence || !evidence.method) return null

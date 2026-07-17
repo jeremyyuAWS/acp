@@ -16,7 +16,7 @@ import HybridContrastCheck from './HybridContrastCheck.jsx'
 import ResizeHeadroomCheck from './ResizeHeadroomCheck.jsx'
 import PdfImageContrastCheck from './PdfImageContrastCheck.jsx'
 import AccessibilityStatus from './AccessibilityStatus.jsx'
-import EvidenceHeader from './EvidenceHeader.jsx'
+import EvidenceHeader, { fmtEvidence } from './EvidenceHeader.jsx'
 import { DOCUMENTS_20 } from './documents20.js'
 import { statusIn, remediationIn } from './assessCoverage.js'
 import { fmtEffort, EFFORT_BASIS } from './effort.js'
@@ -958,6 +958,13 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         // Scope: exactly the 20-check document core — the list the customer certifies against.
         // No "show all" toggle; the other in-scope criteria are noise in this per-file drawer.
         const inScope = WCAG.filter((c) => c.docApplies !== false && DOCUMENTS_20.has(c.sc))
+        // Coverage Manifest (ADR 0026 Epic 1): pending human-review items per criterion, so each
+        // row can state its evidence counts ("2 awaiting your review") from REAL queue data.
+        const hitlBySc = {}
+        ;(hitlItems || []).forEach((h) => {
+          const hsc = scOfWcag(h.rule_id) || h.rule_id
+          if (hsc) hitlBySc[hsc] = (hitlBySc[hsc] || 0) + (h.finding_count || 1)
+        })
         const rows = inScope.map((c) => {
           const allIssues = issuesBySc[c.sc] || []
           // A finding is advisory (🟡 Review, ADR 0023) when its severity is REVIEW; everything
@@ -995,7 +1002,11 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           const confidence = confidenceForCoverage({ sc: c.sc, outcome, verifiedCleared: remediatedRuleIds.has(c.sc) })
           const fix = remLane !== 'na' ? fixOf(c) : '—'
           const fileIssues = count > 0 ? blockingIssues : reviewIssues
-          return { id: c.sc, name: c.name, plain: PLAIN_NAMES[c.sc] || c.name, req: c.req, level: c.level, fix, outcome, count, fileIssues, confidence }
+          return { id: c.sc, name: c.name, plain: PLAIN_NAMES[c.sc] || c.name, req: c.req, level: c.level, fix, outcome, count, fileIssues, confidence,
+            // Coverage Manifest evidence counts (ADR 0026 Epic 1) — every number is a real count
+            // from this file's findings/queue, never estimated (ADR 0016).
+            reviewCount: reviewIssues.length, pending: hitlBySc[c.sc] || 0,
+            verifiedFixed: remediatedRuleIds.has(c.sc) }
         }).sort((a, b) => (OUT_RANK[a.outcome] ?? 3) - (OUT_RANK[b.outcome] ?? 3))
         const n = (o) => rows.filter((r) => r.outcome === o).length
         // Header count-chips double as filters: click one to hide those rows. Lets a reviewer
@@ -1052,7 +1063,20 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                     <Fragment key={r.id}>
                       <tr className={`covrow ${r.outcome === 'FAIL' ? 'fail' : (r.outcome === 'PASS' || r.outcome === 'FIXED') ? 'pass' : r.outcome === 'REVIEW' ? 'review' : 'skip'}`}>
                         <td className="covsc">{r.id}</td>
-                        <td>{r.plain}<div className="muted" style={{ fontSize: 11 }}>{r.plain === r.name ? (r.req || '').slice(0, 90) : r.name}</div></td>
+                        <td>{r.plain}<div className="muted" style={{ fontSize: 11 }}>{r.plain === r.name ? (r.req || '').slice(0, 90) : r.name}</div>
+                          {/* Coverage Manifest (ADR 0026 Epic 1): the criterion's evidence counts —
+                              "criterion resolved", with what backs it. Real counts only. */}
+                          {(r.count > 0 || r.reviewCount > 0 || r.pending > 0 || r.verifiedFixed) && (
+                            <div className="covev">
+                              {[
+                                r.count > 0 && `${r.count} finding${r.count !== 1 ? 's' : ''}`,
+                                r.reviewCount > 0 && `${r.reviewCount} review flag${r.reviewCount !== 1 ? 's' : ''}`,
+                                r.pending > 0 && `${r.pending} awaiting your review`,
+                                r.verifiedFixed && '✓ verified fixed',
+                              ].filter(Boolean).join(' · ')}
+                            </div>
+                          )}
+                        </td>
                         <td className="muted">{r.level}</td>
                         {/* Split a "primary · note" fix label (e.g. contrast's "auto-fixable ·
                             review recommended") onto two deliberate lines so it reads cleanly in
@@ -1094,6 +1118,15 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                                     {/* 19 rows of "Image missing alt text" are indistinguishable
                                         without this. Only shown when the analyser attributed one. */}
                                     {issue.page && <b style={{ marginRight: 5 }}>{file.type === 'pptx' ? 'Slide' : 'Page'} {issue.page}</b>}
+                                    {/* Coverage Manifest: the measured value inline, ONLY from the
+                                        detector's structured evidence (same formatter as the header,
+                                        so the manifest and the finding row can never disagree). */}
+                                    {issue.evidence && issue.evidence.value != null && (
+                                      <span className="covev-val">
+                                        {issue.evidence.metric} {fmtEvidence(issue.evidence.value, issue.evidence.unit)}
+                                        {issue.evidence.required != null && ` (needs ${fmtEvidence(issue.evidence.required, issue.evidence.unit)})`}
+                                      </span>
+                                    )}
                                     {issue.fix && <span>{issue.fix}</span>}
                                     {issue.detail && !issue.fix && <span>{issue.detail}</span>}
                                     <span className={findingAuto(issue) ? 'fixauto' : 'fixreview'} style={{ marginLeft: 6, fontSize: 11 }}>{findingAuto(issue) ? '⚡ auto' : '✎ review'}</span>

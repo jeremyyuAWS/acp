@@ -2029,3 +2029,8 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .evh-item b { color: inherit; font-variant-numeric: tabular-nums; }
 .evh-status { margin-left: auto; font-weight: 700; font-size: 11px; color: #8a5a00;
   background: #fdf3e0; padding: 2px 8px; border-radius: 999px; }
+
+/* Coverage Manifest (ADR 0026 Epic 1) — per-criterion evidence counts + inline measured value. */
+.covev { font-size: 11px; color: var(--muted, #697892); margin-top: 3px; font-variant-numeric: tabular-nums; }
+.covev-val { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 6px;
+  background: #eaf1ff; color: #2563eb; font-weight: 700; font-size: 11px; font-variant-numeric: tabular-nums; }
