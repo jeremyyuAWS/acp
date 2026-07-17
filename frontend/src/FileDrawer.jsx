@@ -17,7 +17,7 @@ import ResizeHeadroomCheck from './ResizeHeadroomCheck.jsx'
 import PdfImageContrastCheck from './PdfImageContrastCheck.jsx'
 import AccessibilityStatus from './AccessibilityStatus.jsx'
 import EvidenceHeader, { fmtEvidence } from './EvidenceHeader.jsx'
-import { confirmCriterion } from './api.js'
+import { confirmCriterion, getFileStatus } from './api.js'
 import { DOCUMENTS_20 } from './documents20.js'
 import { statusIn, remediationIn } from './assessCoverage.js'
 import { fmtEffort, EFFORT_BASIS } from './effort.js'
@@ -344,8 +344,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   // coverage/finding badges are correct synchronously; refreshed from the backend.
   const [cap, setCap] = useState(CAPABILITY_FALLBACK)
   const [hidden, setHidden] = useState(() => new Set(['NA']))
-  // Confirm-the-pass (ADR 0026/Epic 3): SCs the reviewer verified this session — the immutable
-  // decision is on the server; this just flips the affordance without a refetch.
+  // Confirm-the-pass (ADR 0026/Epic 3): SCs a human has verified. Seeded from the persisted
+  // decision log via the file-status model (human_verified_criteria — the same derivation the
+  // hero's human_verified count uses, so the ✓ chips can never disagree with it), then extended
+  // optimistically when the reviewer confirms in this session.
   const [confirmedScs, setConfirmedScs] = useState(() => new Set())   // coverage table: outcome groups filtered out (click a count chip to toggle). N/A hidden by default; 'clear filters' reveals it.
   useEffect(() => {
     let on = true
@@ -357,6 +359,20 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
     getCapability().then((r) => { if (on && r?.capability) setCap(r.capability) }).catch(() => {})
     return () => { on = false }
   }, [])
+  // F2 (Epic 3): a confirmed criterion keeps its ✓ across drawer reopen/reload — the chip state
+  // is re-derived from the server, not trusted to session memory.
+  useEffect(() => {
+    let on = true
+    setConfirmedScs(new Set())
+    if (scanId && file?.file) {
+      getFileStatus(scanId, file.file).then((m) => {
+        if (on && Array.isArray(m?.human_verified_criteria) && m.human_verified_criteria.length) {
+          setConfirmedScs(new Set(m.human_verified_criteria))
+        }
+      }).catch(() => {})
+    }
+    return () => { on = false }
+  }, [scanId, file?.file])
   const fetchExplanation = (ruleId) => {
     if (!scanId || explanations[ruleId]?.loading) return   // error/stale results are retryable
     setExplanations((e) => ({ ...e, [ruleId]: { loading: true } }))

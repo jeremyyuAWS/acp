@@ -60,7 +60,11 @@ def derive_file_status(doc: dict, approved_review_scs, unapplied_approved: int, 
     # Clamp so the human-overlay can never make the buckets exceed the base partition:
     #   remediated fails ⊆ fails, approved reviews ⊆ reviews.
     remediated_eff = max(0, min(remediated, failing))
-    approved_reviews = len(set(approved_review_scs) & set(review_scs))
+    # Keep the SC identities, not just the count: the drawer seeds its ✓ chips and the Coverage
+    # Manifest marks human-approved rows from this list — same derivation as human_verified, so the
+    # chips can never disagree with the hero's numbers.
+    approved_sc_list = sorted(set(approved_review_scs) & set(review_scs))
+    approved_reviews = len(approved_sc_list)
 
     automatically_verified = max(0, evaluated - failing)     # deterministic PASS
     needs_remediation = max(0, failing - remediated_eff)     # unresolved FAIL
@@ -95,6 +99,7 @@ def derive_file_status(doc: dict, approved_review_scs, unapplied_approved: int, 
         "resolved": resolved,
         "automatically_verified": automatically_verified,
         "human_verified": human_verified,
+        "human_verified_criteria": approved_sc_list,
         "needs_review": needs_review,
         "needs_remediation": needs_remediation,
         "not_automatically_assessable": not_automatically_assessable,

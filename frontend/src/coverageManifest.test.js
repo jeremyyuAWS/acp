@@ -35,4 +35,13 @@ describe('Confirm-the-pass — the honest way a 🟡 turns green (recorded, neve
     expect(src).toMatch(/confirmCriterion\(scanId, file\.file, r\.id\)/)
     expect(src).toMatch(/if \(res\?\.ok\) setConfirmedScs/)   // flips only on a server-acknowledged write
   })
+
+  it('the \u2713 chips are seeded from the persisted decision log, not session memory (F2)', () => {
+    // reopening the drawer re-derives confirmed criteria from the file-status model \u2014 the SAME
+    // derivation behind the hero's human_verified count, so chip and count can never disagree
+    expect(src).toMatch(/getFileStatus\(scanId, file\.file\)/)
+    expect(src).toMatch(/m\?\.human_verified_criteria/)
+    expect(src).toMatch(/setConfirmedScs\(new Set\(m\.human_verified_criteria\)\)/)
+    expect(src).toMatch(/setConfirmedScs\(new Set\(\)\)/)   // reset on file change \u2014 no chip bleed-through
+  })
 })

@@ -263,3 +263,14 @@ def test_folder_status_empty_prefix_degrades_honestly():
     docs = [_doc(file="reports/q1.pdf", evaluated=20)]
     m = st.scan_status(_FakeStore2(docs, [], {}), "s1", path_prefix="nope/")
     assert m == {"available": False, "reason": "no_documents"}
+
+
+# ── F2/F3: the model names WHICH review criteria a human approved, not just how many ─────────────
+def test_human_verified_criteria_lists_the_approved_intersection():
+    d = _doc(evaluated=10, review=3, review_criteria=["1.4.1", "1.4.11", "1.3.3"])
+    # approvals outside the file's review set are clamped out — never inflate the chips
+    m = st.derive_file_status(d, ["1.4.11", "1.4.1", "9.9.9"], 0)
+    assert m["human_verified_criteria"] == ["1.4.1", "1.4.11"]   # sorted, intersection only
+    assert m["human_verified"] == len(m["human_verified_criteria"])
+    m0 = st.derive_file_status(d, [], 0)
+    assert m0["human_verified_criteria"] == []
