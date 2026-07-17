@@ -1059,6 +1059,16 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           const next = new Set(prev); next.has(o) ? next.delete(o) : next.add(o); return next
         })
         const shown = rows.filter((r) => !hidden.has(r.outcome))
+        // "What we did NOT check automatically" (ADR 0026 Epic 1): the automated boundary,
+        // stated plainly — each unassessable criterion with its honest reason. Never hidden.
+        const notChecked = rows.filter((r) => ['HUMAN', 'AT', 'GAP', 'NA'].includes(r.outcome))
+        const NOT_CHECKED_REASON = {
+          HUMAN: 'Author intent / runtime behaviour — WCAG defines no objective automated test; a person verifies it.',
+          AT: 'Only provable by interaction / assistive-technology testing — outside any static engine.',
+          GAP: 'Statically detectable but the check isn\u2019t built yet — a roadmap gap, stated plainly.',
+          NA: `This barrier can\u2019t exist in a ${fmt || 'file of this'} file.`,
+        }
+        const NOT_CHECKED_GLYPH = { HUMAN: '👤', AT: '⌨', GAP: '◔', NA: '⚪' }
         const chip = (o, cls, label) => {
           const c = n(o); if (!c) return null
           const off = hidden.has(o)
@@ -1072,6 +1082,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           )
         }
         return (
+          <>
           <details className="covmanifest" open>
             <summary className="covmanifest-sum">
               WCAG coverage · the 20-check document core
@@ -1210,6 +1221,25 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
               </tbody>
             </table>
           </details>
+          {notChecked.length > 0 && (
+            <details className="covmanifest">
+              <summary className="covmanifest-sum">What we did NOT check automatically ({notChecked.length} criteri{notChecked.length === 1 ? 'on' : 'a'})</summary>
+              <div className="covmanifest-note muted">
+                Transparency about the automated boundary (ADR 0026): these criteria receive no automated
+                verdict for this file — each with the honest reason. Nothing was skipped silently.
+              </div>
+              <ul className="notchecked">
+                {notChecked.map((r) => (
+                  <li key={r.id}>
+                    <span aria-hidden="true">{NOT_CHECKED_GLYPH[r.outcome]}</span>{' '}
+                    <b>{r.id} {r.plain}</b>
+                    <span className="muted"> — {NOT_CHECKED_REASON[r.outcome]}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+          </>
         )
       })()}
 

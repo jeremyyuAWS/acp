@@ -507,10 +507,15 @@ def _rule_outcome(rule_id: str, fmt: str | None, fail_count: int, review_count: 
         if fail_count > 0:
             return "FAIL"
         return REVIEW if review_count > 0 else NOT_EVALUATED
-    if fmt is None or fmt not in RULE_FORMATS.get(rule_id, _ALL_FORMATS):
-        return NOT_EVALUATED
+    # A recorded blocking finding is a FACT: it must surface as FAIL no matter what the format
+    # bookkeeping says. Before this hoist, a fail on a (rule, format) pair missing from
+    # RULE_FORMATS was silently reclassified NOT_EVALUATED — the exact detector/catalog-drift
+    # hazard the no-silent-gaps contract test exists to catch (a finding visible in the drawer
+    # while its manifest row claimed "not checked").
     if fail_count > 0:
         return "FAIL"
+    if fmt is None or fmt not in RULE_FORMATS.get(rule_id, _ALL_FORMATS):
+        return NOT_EVALUATED
     if review_count > 0:
         return REVIEW
     # Validator ran, no finding. A 🟢 auto-assess criterion → a certified PASS. But a 🟡 review-lane
