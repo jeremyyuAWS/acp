@@ -1553,13 +1553,40 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .rc-metric b { font-size: 22px; font-weight: 600; }
 .rc-body { overflow-y: auto; padding: 4px 22px 22px; }
 .rc-empty { padding: 40px 0; text-align: center; color: var(--muted); }
-/* Document Health header — THE question first: can this be certified, what stands in the way. */
-.dochealth { margin: 0 0 12px; padding: 11px 14px; border: 1px solid var(--line);
-  border-left: 4px solid #8A5A00; border-radius: 10px; background: var(--surface-1, #FBF9F4); }
-.dochealth-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.dochealth-status { font-size: 13.5px; }
-.dochealth-counts { font-size: 12.5px; margin-top: 4px; }
-.dochealth-cta { flex: 0 0 auto; }
+/* ADR 0026 — Accessibility Status hero: the decision first, then coverage/evidence, then one CTA. */
+.acstatus { margin: 0 0 12px; padding: 13px 15px; border: 1px solid var(--line);
+  border-left: 4px solid var(--acc, #2563eb); border-radius: 12px; background: var(--surface-1, #FBF9F4); }
+.acstatus-ok { border-left-color: #17a34a; }
+.acstatus-review { border-left-color: #e0900a; }
+.acstatus-fail { border-left-color: #d61f45; }
+.acstatus-busy { border-left-color: #8494ab; }
+.acstatus-coverage { display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.acstatus-coverage-val { font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.acstatus-head { display: flex; align-items: center; gap: 11px; }
+.acstatus-glyph { font-size: 22px; line-height: 1; }
+.acstatus-glyph.spin { display: inline-block; animation: acspin 1s linear infinite; }
+@keyframes acspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .acstatus-glyph.spin { animation: none; } }
+.acstatus-decision { display: flex; flex-direction: column; }
+.acstatus-decision b { font-size: 16px; line-height: 1.2; }
+.acstatus-resolved { font-size: 12px; color: var(--muted); }
+.acstatus-est { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.acstatus-trust { font-size: 13px; color: var(--ink2, inherit); margin: 9px 0 0; }
+.acstatus-why-btn { background: none; border: none; padding: 0 0 0 2px; color: var(--acc, #2563eb);
+  font: inherit; font-size: 12px; cursor: pointer; }
+.acstatus-why-btn:focus-visible { outline: 2px solid var(--acc, #2563eb); outline-offset: 2px; border-radius: 3px; }
+.acstatus-why { font-size: 12.5px; margin: 6px 0 0; }
+.acstatus-bar { display: flex; height: 8px; border-radius: 999px; overflow: hidden; margin: 11px 0 7px; gap: 2px; }
+.acstatus-seg { min-width: 3px; }
+.seg-auto { background: #17a34a; } .seg-human { background: #12805f; }
+.seg-review { background: #e0900a; } .seg-fail { background: #d61f45; } .seg-na { background: #9aa7bb; }
+.acstatus-legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11.5px; color: var(--muted); }
+.acstatus-legitem i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; vertical-align: baseline; }
+.acstatus-cta { margin-top: 11px; padding: 7px 14px; border: none; border-radius: 8px;
+  background: var(--acc, #2563eb); color: #fff; font: inherit; font-weight: 700; font-size: 13px; cursor: pointer; }
+.acstatus-cta:hover { filter: brightness(1.05); }
+.acstatus-cta:focus-visible { outline: 2px solid var(--acc, #2563eb); outline-offset: 2px; }
 
 /* Three review types — each section header is the contract for the work beneath it. */
 .rc-type { margin-top: 20px; }

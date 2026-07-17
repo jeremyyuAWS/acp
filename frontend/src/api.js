@@ -543,6 +543,22 @@ export const getFilePdfContrast = (scanId, file) => (SIM || !scanId || !file
       .then(r => (r.ok ? r.json() : { measured: false, reason: 'error' }))
       .catch(() => ({ measured: false, reason: 'error' })))
 
+// ADR 0026 — the authoritative Accessibility Status for one file. Derived-at-read from the same
+// certification facts the coverage matrix uses, so the hero card never disagrees with the detail.
+// Returns the six-bucket model + coverage + state + one CTA, or {available:false}.
+export const getFileStatus = (scanId, file) => (SIM
+  ? sim({
+      available: true, in_scope: 20, coverage: { evaluable: 18, total: 20 }, resolved: 16,
+      automatically_verified: 16, human_verified: 0, needs_review: 2, needs_remediation: 0,
+      not_automatically_assessable: 2, not_applicable: 0, unapplied_approved: 0,
+      est_review_secs: 120, state: 'ready_after_review', cta: 'Review Findings',
+    })
+  : (!scanId || !file
+      ? sim({ available: false })
+      : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/status`, { headers: headers() })
+          .then((r) => (r.ok ? r.json() : { available: false }))
+          .catch(() => ({ available: false }))))
+
 export const uploadToDrive = (scanId, file, blob, contentType) => {
   if (SIM) return sim({ url: 'https://drive.google.com/file/d/sim/view', file_id: 'sim' })
   const fd = new FormData()

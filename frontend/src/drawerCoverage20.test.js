@@ -23,7 +23,7 @@ describe('Assess drawer coverage table — the document-core 20, assessed + reme
     for (const sc of ['1.1.1', '3.1.1', '1.4.3', '2.4.2']) expect(DOCUMENTS_20.has(sc)).toBe(true)
   })
 
-  it('the Findings list + Document Health are scoped to the 20 too, not just the coverage table', () => {
+  it('the Findings list is scoped to the 20 too, not just the coverage table', () => {
     // The engine also emits findings outside the 20 (3.3.2, 2.4.10, 1.4.8, 2.4.9, …); the whole
     // drawer must stay on the document core, so `issues` is filtered at its single source.
     expect(src).toMatch(/const issues = \(file\.issues \|\| \[\]\)\.filter\(\(i\) => DOCUMENTS_20\.has\(scOfWcag\(i\.wcag\)\)\)/)

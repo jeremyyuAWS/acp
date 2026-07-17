@@ -15,6 +15,7 @@ import Thumbnail from './Thumbnail.jsx'
 import HybridContrastCheck from './HybridContrastCheck.jsx'
 import ResizeHeadroomCheck from './ResizeHeadroomCheck.jsx'
 import PdfImageContrastCheck from './PdfImageContrastCheck.jsx'
+import AccessibilityStatus from './AccessibilityStatus.jsx'
 import { DOCUMENTS_20 } from './documents20.js'
 import { statusIn, remediationIn } from './assessCoverage.js'
 import { fmtEffort, EFFORT_BASIS } from './effort.js'
@@ -484,7 +485,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   if (!file) return null
   const st = statusOf(file)
   const [sbg, sfg] = STATUS_BADGE[st]
-  // Scope every finding-derived surface in this drawer — the Findings list, Document Health,
+  // Scope every finding-derived surface in this drawer — the Findings list, Accessibility Status,
   // the auto/review counts, and the "Remediate this file" CTA — to the 20-check document
   // core, the same list the coverage table below certifies against. The engine also reports
   // criteria outside the 20 (e.g. 3.3.2, 2.4.10, 1.4.8, 2.4.9); those are outside the document core's
@@ -593,42 +594,17 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           when absent, same as before this existed. */}
       {scanId && <div style={{ margin: '0 0 12px' }}><TraceChip scanId={scanId} kind="file" file={file.file} label="View this document's trace" refreshKey={remNow?.done ? 1 : 0} /></div>}
       <Thumbnail scanId={scanId} file={file.file} className="drawer-thumb" />
-      {issues.length > 0 && st !== 'unanalysable' && (() => {
-        // Document Health (canonical HITL vision): answer THE question first — can this
-        // document be certified, and what exactly stands in the way? Every number is a real
-        // count from this file's findings and its pending review items; nothing is estimated
-        // and no time/effort guess is shown (ADR 0016).
-        const autoN = issues.filter((i) => findingAuto(i)).length
-        const reviewN = issues.length - autoN
-        const pendingReviews = hitlItems.reduce((n, h) => n + (h.finding_count || 1), 0)
-        const [icon, label] = allFailingFixed
-          ? ['🟢', 'Fixes applied — re-validate to certify']
-          : pendingReviews > 0
-            ? ['🟡', 'Needs human review before it can be certified']
-            : autoN === issues.length
-              ? ['🟢', 'Every blocking finding is auto-fixable — run remediation']
-              : ['🔴', `Blocked — needs remediation${reviewN ? ' and human judgement' : ''}`]
-        return (
-          <div className="dochealth" role="status">
-            <div className="dochealth-row">
-              <span className="dochealth-status">{icon} <b>{label}</b></span>
-              {hitlItems.length > 0 && (
-                <button className="qbtn approve dochealth-cta" onClick={() => {
-                  // One CTA: open the first pending review right here in the drawer.
-                  setReviewSc(scOfWcag(hitlItems[0].rule_id) || hitlItems[0].rule_id)
-                  setTimeout(() => document.querySelector('.evcard')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150)
-                }}>⚖ Review now</button>
-              )}
-            </div>
-            <div className="muted dochealth-counts">
-              <b>{issues.length}</b> blocking finding{issues.length !== 1 ? 's' : ''}
-              <span> · <b>{autoN}</b> auto-fixable</span>
-              <span> · <b>{reviewN}</b> need judgement</span>
-              {pendingReviews > 0 && <span> · <b>{pendingReviews}</b> awaiting your review below</span>}
-            </div>
-          </div>
-        )
-      })()}
+      {/* ADR 0026 — the authoritative Accessibility Status hero replaces the client-side Document
+          Health header: one backend-driven status surface (decision-first, coverage vs status,
+          segmented bar, Why?, one dynamic CTA) that can never disagree with the coverage matrix. */}
+      <AccessibilityStatus scanId={scanId} file={file.file} onAction={(state) => {
+        // The one CTA is state-matched. Review is the in-place action the drawer already owns; other
+        // states hand off to the parent tabs (remediate / report) — wired as those flows adopt it.
+        if (state === 'ready_after_review' && hitlItems.length > 0) {
+          setReviewSc(scOfWcag(hitlItems[0].rule_id) || hitlItems[0].rule_id)
+          setTimeout(() => document.querySelector('.evcard')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150)
+        }
+      }} />
       <div className="drawerstats">
         <span className="badge" style={{ background: sbg, color: sfg }}>{st}</span>
         <span className="drawerscore">{file.score === null ? 'n/a' : `${st === 'uncertain' ? '≤' : ''}${file.score}`}<span className="muted"> / 100</span></span>
