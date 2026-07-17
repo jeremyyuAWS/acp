@@ -80,9 +80,22 @@ const PAGE_RENDERABLE = new Set(['pdf'])
 // persisted event, in order. Lazy: fetched only when the section is opened. The static
 // "Document journey" above shows the pipeline's stages; this shows what actually happened.
 const TIMELINE_GLYPH = { scan: '🔍', ai: '🤖', review: '📥', human: '👤', fix: '🔧', publish: '📤', decision: '📝' }
-function AuditTimeline({ scanId, file }) {
+// Assessment Timeline (ADR 0026 Epic 5): the same persisted events, grouped into the pipeline's
+// STAGES — Scanned → AI assessment → Human review → Remediation → Published — each node timestamped
+// from its real events and expandable to them. A stage with no events renders as ⬜ pending, never a
+// fabricated timestamp (ADR 0016). This is the auditable view: every node's claim is click-through
+// verifiable against the append-only record.
+const TIMELINE_STAGES = [
+  ['Scanned', ['scan']],
+  ['AI assessment', ['ai']],
+  ['Human review', ['review', 'human', 'decision']],
+  ['Remediation', ['fix']],
+  ['Published', ['publish']],
+]
+function AssessmentTimeline({ scanId, file }) {
   const [events, setEvents] = useState(null)
   const [open, setOpen] = useState(false)
+  const [expanded, setExpanded] = useState(() => new Set())
   useEffect(() => {
     if (!open || events !== null || !scanId || !file) return
     let live = true
@@ -91,26 +104,53 @@ function AuditTimeline({ scanId, file }) {
   }, [open, events, scanId, file])
   if (!scanId || !file) return null
   const fmtTs = (ts) => { try { return new Date(ts).toLocaleString() } catch { return ts } }
+  const toggleStage = (label) => setExpanded((prev) => {
+    const next = new Set(prev); next.has(label) ? next.delete(label) : next.add(label); return next
+  })
+  const eventRow = (e, i) => (
+    <li key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '4px 0', borderLeft: '2px solid #e1e1e1', paddingLeft: 10 }}>
+      <span aria-hidden="true" style={{ flexShrink: 0 }}>{TIMELINE_GLYPH[e.kind] || '•'}</span>
+      <div style={{ fontSize: 12, lineHeight: 1.45 }}>
+        <b>{e.title}</b>
+        {e.actor && <span className="muted"> · {e.actor}</span>}
+        {e.detail && <div className="muted">{e.detail}</div>}
+        <div className="muted" style={{ fontSize: 11 }}>{fmtTs(e.ts)}</div>
+      </div>
+    </li>
+  )
   return (
     <details className="covmanifest" onToggle={(e) => setOpen(e.currentTarget.open)}>
-      <summary className="covmanifest-sum">History — audit trail{events?.length ? ` (${events.length} events)` : ''}</summary>
+      <summary className="covmanifest-sum">Assessment Timeline{events?.length ? ` (${events.length} recorded events)` : ''}</summary>
       {events === null && <p className="muted" style={{ fontSize: 12 }}>loading…</p>}
       {events !== null && !events.length && (
         <p className="muted" style={{ fontSize: 12 }}>No recorded events for this document yet.</p>
       )}
       {events?.length > 0 && (
-        <ol style={{ listStyle: 'none', margin: '8px 0 0', padding: 0 }}>
-          {events.map((e, i) => (
-            <li key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '4px 0', borderLeft: '2px solid #e1e1e1', paddingLeft: 10 }}>
-              <span aria-hidden="true" style={{ flexShrink: 0 }}>{TIMELINE_GLYPH[e.kind] || '•'}</span>
-              <div style={{ fontSize: 12, lineHeight: 1.45 }}>
-                <b>{e.title}</b>
-                {e.actor && <span className="muted"> · {e.actor}</span>}
-                {e.detail && <div className="muted">{e.detail}</div>}
-                <div className="muted" style={{ fontSize: 11 }}>{fmtTs(e.ts)}</div>
-              </div>
-            </li>
-          ))}
+        <ol className="atl" style={{ listStyle: 'none', margin: '8px 0 0', padding: 0 }}>
+          {TIMELINE_STAGES.map(([label, kinds]) => {
+            const evs = events.filter((e) => kinds.includes(e.kind))
+            const done = evs.length > 0
+            const last = done ? evs[evs.length - 1] : null
+            const isOpen = expanded.has(label)
+            return (
+              <li key={label} className={`atl-stage${done ? ' done' : ''}`}>
+                <button type="button" className="atl-node" disabled={!done}
+                  aria-expanded={isOpen} onClick={() => done && toggleStage(label)}
+                  title={done ? 'Show the recorded events behind this stage' : 'No recorded events yet'}>
+                  <span className="atl-dot" aria-hidden="true">{done ? '✓' : '⬜'}</span>
+                  <span className="atl-label">{label}</span>
+                  {done
+                    ? <span className="atl-meta muted">{evs.length} event{evs.length !== 1 ? 's' : ''} · {fmtTs(last.ts)}</span>
+                    : <span className="atl-meta muted">pending</span>}
+                </button>
+                {isOpen && done && (
+                  <ol style={{ listStyle: 'none', margin: '2px 0 6px 26px', padding: 0 }}>
+                    {evs.map(eventRow)}
+                  </ol>
+                )}
+              </li>
+            )
+          })}
         </ol>
       )}
     </details>
@@ -1176,7 +1216,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         })}
       </ol>
 
-      <AuditTimeline scanId={scanId} file={file?.file} />
+      <AssessmentTimeline scanId={scanId} file={file?.file} />
     </Drawer>
   )
 }

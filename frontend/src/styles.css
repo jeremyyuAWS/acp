@@ -2034,3 +2034,15 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .covev { font-size: 11px; color: var(--muted, #697892); margin-top: 3px; font-variant-numeric: tabular-nums; }
 .covev-val { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 6px;
   background: #eaf1ff; color: #2563eb; font-weight: 700; font-size: 11px; font-variant-numeric: tabular-nums; }
+
+/* Assessment Timeline (ADR 0026 Epic 5) — stage pipeline over the persisted audit events. */
+.atl-stage { padding: 2px 0; }
+.atl-node { display: flex; align-items: baseline; gap: 9px; width: 100%; background: none; border: none;
+  padding: 4px 2px; font: inherit; text-align: left; cursor: pointer; border-radius: 6px; }
+.atl-node:disabled { cursor: default; opacity: 0.65; }
+.atl-node:not(:disabled):hover { background: var(--surface-1, #FBF9F4); }
+.atl-node:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
+.atl-dot { flex-shrink: 0; width: 18px; text-align: center; color: #17a34a; }
+.atl-stage:not(.done) .atl-dot { color: var(--muted, #9aa7bb); }
+.atl-label { font-weight: 700; font-size: 12.5px; }
+.atl-meta { font-size: 11px; margin-left: auto; font-variant-numeric: tabular-nums; }
