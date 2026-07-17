@@ -16,6 +16,7 @@ import HybridContrastCheck from './HybridContrastCheck.jsx'
 import ResizeHeadroomCheck from './ResizeHeadroomCheck.jsx'
 import PdfImageContrastCheck from './PdfImageContrastCheck.jsx'
 import AccessibilityStatus from './AccessibilityStatus.jsx'
+import EvidenceHeader from './EvidenceHeader.jsx'
 import { DOCUMENTS_20 } from './documents20.js'
 import { statusIn, remediationIn } from './assessCoverage.js'
 import { fmtEffort, EFFORT_BASIS } from './effort.js'
@@ -783,6 +784,9 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                       if (!autoFixable && isRemediated) return <span className="dectag" style={{ background: '#ECECF6', color: '#4A4A8A' }}>→ human review</span>
                       return null
                     })()}</div>
+                    {/* ADR 0026 Epic 2 — compact evidence header: method + measured value + threshold
+                        at a glance, only when the detector attached structured evidence. */}
+                    {i.evidence && <EvidenceHeader evidence={i.evidence} severity={i.severity} />}
                     {i.detail && <div className="findingdetail">{i.detail}</div>}
                     {/* ADR 0024 Tier B.1 — the 1.4.3-hybrid flag can be render-verified into a
                         MEASURED contrast on demand (text over a picture/gradient fill). */}

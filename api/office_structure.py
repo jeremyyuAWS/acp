@@ -149,12 +149,21 @@ def _finding(rule_id: str, wcag: str, severity: str) -> dict:
     return {"ruleId": rule_id, "wcag": wcag, "severity": severity}
 
 
-def _review_finding(rule_id: str, wcag: str, detail: str) -> dict:
+def _review_finding(rule_id: str, wcag: str, detail: str, evidence: dict | None = None) -> dict:
     """A Review-Recommended finding (ADR 0023): advisory, evidence-carrying, and
     NON-blocking. Severity "REVIEW" has a zero penalty weight in the rubric, so it
     never lowers the score or blocks certification — it flags a concrete risk a human
-    must adjudicate, never claims a pass, and offers no ACP fix (ADR 0016)."""
-    return {"ruleId": rule_id, "wcag": wcag, "severity": "REVIEW", "advisory": True, "detail": detail}
+    must adjudicate, never claims a pass, and offers no ACP fix (ADR 0016).
+
+    `evidence` (ADR 0026 Epic 2, optional) is the STRUCTURED form of the measurement already
+    worded in `detail` — e.g. {"method": "structural", "metric": "contrast", "value": 2.4,
+    "required": 3.0, "unit": ":1"} — so the UI's compact evidence header can show
+    "Structural · Contrast 2.4:1 · Required 3:1" instead of parsing prose. Only attached where a
+    detector holds a REAL number (ADR 0016: a value or nothing, never a synthesized one)."""
+    f = {"ruleId": rule_id, "wcag": wcag, "severity": "REVIEW", "advisory": True, "detail": detail}
+    if evidence:
+        f["evidence"] = evidence
+    return f
 
 
 def _duplicate_href_findings(links: list[tuple[str, str]], rule_id: str, wcag: str) -> list[dict]:
@@ -607,7 +616,9 @@ def pdf_nontext_contrast_checks(path: Path) -> list[dict]:
     return [_review_finding(
         "PDF_NONTEXT_LOW_CONTRAST", "1.4.11 Non-text Contrast",
         f"a shape outline #{border_hex} on its #{fill_hex} fill is {ratio:.1f}:1 (needs 3:1) — if the "
-        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative")]
+        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative",
+        evidence={"method": "structural", "metric": "Contrast", "value": round(ratio, 2),
+                  "required": 3.0, "unit": ":1"})]
 
 
 _MAX_PAGES_OVER_IMAGE = 20     # cap the pages we scan for text-over-image
@@ -697,8 +708,10 @@ def pdf_over_image_locators(data) -> list[dict]:
                            for b in boxes):
                         lines.setdefault(round(ctop), []).append((cx0, ctop, cx1, cbot))
                 for chs in lines.values():
-                    x0 = min(c[0] for c in chs); top = min(c[1] for c in chs)
-                    x1 = max(c[2] for c in chs); bot = max(c[3] for c in chs)
+                    x0 = min(c[0] for c in chs)
+                    top = min(c[1] for c in chs)
+                    x1 = max(c[2] for c in chs)
+                    bot = max(c[3] for c in chs)
                     runs.append({"page": pno, "chars": len(chs), "bbox": {
                         "x": x0 / pw, "y": top / ph, "w": (x1 - x0) / pw, "h": (bot - top) / ph,
                         "page": pno}})
@@ -785,7 +798,9 @@ def pdf_text_spacing_checks(path: Path) -> list[dict]:
     return [_review_finding(
         "PDF_TIGHT_LINE_SPACING", "1.4.12 Text Spacing",
         f"text lines are set at {ratio:.2f}× the font size — tight, and a flattened PDF can't honour "
-        "a reader's request for looser (1.5×) line spacing; verify the text stays legible")]
+        "a reader's request for looser (1.5×) line spacing; verify the text stays legible",
+        evidence={"method": "structural", "metric": "Line spacing", "value": round(ratio, 2),
+                  "required": 1.5, "unit": "×"})]
 
 
 def _pdf_is_chromatic(color) -> bool:
@@ -1450,7 +1465,9 @@ def pptx_nontext_contrast_checks(path: Path) -> list[dict]:
     return [_review_finding(
         "PPTX_NONTEXT_LOW_CONTRAST", "1.4.11 Non-text Contrast",
         f"a shape outline #{border_hex} on its #{fill_hex} fill is {ratio:.1f}:1 (needs 3:1) — if the "
-        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative")]
+        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative",
+        evidence={"method": "structural", "metric": "Contrast", "value": round(ratio, 2),
+                  "required": 3.0, "unit": ":1"})]
 
 
 def docx_nontext_contrast_checks(path: Path) -> list[dict]:
@@ -1571,7 +1588,10 @@ def office_reflow_checks(path: Path, ext: str) -> list[dict]:
                         f"{round(frac * 100)}% of the table (≈{round(frac * 360)}px when the table "
                         "is fit to a 360px-wide phone) — verify it stays readable without "
                         "two-dimensional scrolling")
-                findings.append(_review_finding("OFFICE_WIDE_TABLE_REFLOW", "1.4.10 Reflow", detail))
+                ev = ({"method": "structural", "metric": "Narrowest column",
+                       "value": round(frac * 100), "unit": "%"} if frac is not None else None)
+                findings.append(_review_finding("OFFICE_WIDE_TABLE_REFLOW", "1.4.10 Reflow", detail,
+                                                evidence=ev))
     except Exception:
         return findings
     return findings
@@ -1645,7 +1665,10 @@ def office_text_spacing_checks(path: Path, ext: str) -> list[dict]:
                            if ratio < 1.0 else
                            "a reader who increases line spacing will see text clip; ")
                         + "verify it reflows without loss")
-                findings.append(_review_finding("OFFICE_EXACT_LINE_SPACING", "1.4.12 Text Spacing", detail))
+                ev = ({"method": "structural", "metric": "Line spacing", "value": round(ratio, 2),
+                       "required": 1.5, "unit": "×"} if ratio is not None else None)
+                findings.append(_review_finding("OFFICE_EXACT_LINE_SPACING", "1.4.12 Text Spacing", detail,
+                                                evidence=ev))
     except Exception:
         return findings
     return findings

@@ -2018,3 +2018,14 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .evcard-todo b { font-weight: 600; }
 .evcard-todo p { margin: 4px 0 0; }
 .evcard-todo p.muted { font-size: 11.5px; }
+
+/* ADR 0026 Epic 2 — compact evidence header on a finding row. */
+.evheader { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 6px 0 2px;
+  padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px;
+  background: var(--surface-1, #FBF9F4); }
+.evh-method { font-weight: 800; letter-spacing: .05em; text-transform: uppercase; font-size: 10.5px;
+  color: #2563eb; background: #eaf1ff; padding: 2px 8px; border-radius: 999px; }
+.evh-item { color: var(--muted, #697892); }
+.evh-item b { color: inherit; font-variant-numeric: tabular-nums; }
+.evh-status { margin-left: auto; font-weight: 700; font-size: 11px; color: #8a5a00;
+  background: #fdf3e0; padding: 2px 8px; border-radius: 999px; }
