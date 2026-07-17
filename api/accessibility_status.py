@@ -152,8 +152,8 @@ def scan_status(store, scan_id: str, *, per_item_secs: int = DEFAULT_REVIEW_SECS
     the file cards below them by construction. Estate/org scopes (across scans) are a named
     follow-on: they need a cross-scan document model, not another sum here.
 
-    NB: one count_unapplied_approved_values call per document — fine at demo/estate-slice sizes;
-    batch it before pointing this at 100K-file estates (noted, not silently ignored)."""
+    Uses the batched count_unapplied_approved_values_by_file (one query per scan) when the store
+    provides it, falling back to the per-document call otherwise."""
     facts = store.get_certification_facts(scan_id)
     docs = facts.get("documents", [])
     if path_prefix:
@@ -166,13 +166,24 @@ def scan_status(store, scan_id: str, *, per_item_secs: int = DEFAULT_REVIEW_SECS
         if d.get("action") == "hitl.approved" and d.get("file") and d.get("rule_id"):
             approved_by_file.setdefault(d["file"], set()).add(d["rule_id"])
 
+    batch = getattr(store, "count_unapplied_approved_values_by_file", None)
+    unapplied_by_file: dict | None = None
+    if callable(batch):
+        try:
+            unapplied_by_file = batch(scan_id)
+        except Exception:
+            unapplied_by_file = None   # fall back to per-doc below
+
     totals = {k: 0 for k in _SUM_FIELDS}
     coverage_evaluable = coverage_total = 0
     for doc in docs:
-        try:
-            unapplied = store.count_unapplied_approved_values(scan_id, doc.get("file"))
-        except Exception:
-            unapplied = 0
+        if unapplied_by_file is not None:
+            unapplied = unapplied_by_file.get(str(doc.get("file") or ""), 0)
+        else:
+            try:
+                unapplied = store.count_unapplied_approved_values(scan_id, doc.get("file"))
+            except Exception:
+                unapplied = 0
         m = derive_file_status(doc, approved_by_file.get(doc.get("file"), ()), unapplied,
                                per_item_secs=per_item_secs)
         for k in _SUM_FIELDS:

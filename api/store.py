@@ -2474,6 +2474,23 @@ class Store:
                 n += 1
         return n
 
+    def count_unapplied_approved_values_by_file(self, scan_id: str) -> dict[str, int]:
+        """Batch form of count_unapplied_approved_values: ONE query for the whole scan, the same
+        per-row predicate, keyed by file. scan_status calls this once instead of once per document
+        (the 100K-estate hazard its docstring flagged). Files with no counting rows are absent."""
+        counts: dict[str, int] = {}
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM hitl_queue WHERE scan_id=%s AND status='approved' "
+                "AND (applied IS NULL OR applied=0)", (scan_id,))
+            for r in self._db.fetchall(cur):
+                row = self._decode_proposals(r)
+                legacy = (row.get("approved_value") or "").strip()
+                if self._row_approved_values(row) or legacy:
+                    f = str(row.get("file") or "")
+                    counts[f] = counts.get(f, 0) + 1
+        return counts
+
     def approved_alt_values(self, scan_id: str, file: str) -> dict[str, str]:
         """{locator: alt text} awaiting a write into `file`, from its approved 1.1.1 rows.
 

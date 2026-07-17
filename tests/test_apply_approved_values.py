@@ -288,3 +288,18 @@ def test_link_purpose_approvals_have_no_applier_and_keep_the_file_out_of_publish
 
     assert store.approved_alt_values(SID, FILE) == {}                # not an alt-text value
     assert store.count_unapplied_approved_values(SID, FILE) >= 1     # still gates Publish
+
+
+# ── F4: the batched per-scan form agrees with the per-file gate, in one query ──────────────────
+
+def test_batched_unapplied_counts_match_the_per_file_gate(store):
+    item_id = _seed(store)
+    store.update_hitl_item(item_id, "approved", None, None)
+    store.approve_proposal_values(item_id, [])
+
+    by_file = store.count_unapplied_approved_values_by_file(SID)
+    assert by_file == {FILE: store.count_unapplied_approved_values(SID, FILE)} == {FILE: 1}
+
+    # a scan with nothing approved-and-unapplied → empty dict (absent, not zero-filled)
+    store.init_scan_run("s2", "drive", 0, "2026-07-10T00:00:00Z", "rubric", "hash")
+    assert store.count_unapplied_approved_values_by_file("s2") == {}

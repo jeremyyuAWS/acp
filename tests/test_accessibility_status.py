@@ -274,3 +274,29 @@ def test_human_verified_criteria_lists_the_approved_intersection():
     assert m["human_verified"] == len(m["human_verified_criteria"])
     m0 = st.derive_file_status(d, [], 0)
     assert m0["human_verified_criteria"] == []
+
+
+# ── F4: scan_status prefers the batched store query (one call per scan, not per doc) ─────────────
+def test_scan_status_uses_the_batched_unapplied_query_when_available():
+    docs = [_doc(file="a.pdf", evaluated=20), _doc(file="b.pdf", evaluated=20)]
+
+    class _BatchStore(_FakeStore2):
+        def __init__(self):
+            super().__init__(docs, [], {})
+            self.batch_calls = 0
+            self.per_file_calls = 0
+        def count_unapplied_approved_values_by_file(self, sid):
+            self.batch_calls += 1
+            return {"b.pdf": 3}
+        def count_unapplied_approved_values(self, sid, file):
+            self.per_file_calls += 1
+            return 0
+
+    st_store = _BatchStore()
+    m = st.scan_status(st_store, "s1")
+    assert st_store.batch_calls == 1 and st_store.per_file_calls == 0
+    assert m["unapplied_approved"] == 3 and m["state"] == st.STATE_APPLY_APPROVED
+
+    # a store without the batch method still works (per-doc fallback)
+    m2 = st.scan_status(_FakeStore2(docs, [], {"b.pdf": 2}), "s1")
+    assert m2["unapplied_approved"] == 2
