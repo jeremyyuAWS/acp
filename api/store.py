@@ -2598,6 +2598,14 @@ class Store:
             self._db.execute(cur,
                 "UPDATE file_records SET compliant=1, score=100, status='pass' "
                 "WHERE scan_id=%s AND file=%s", (scan_id, file))
+        # The certification MOMENT is a fact worth recording (ADR 0026 Epic 5): one immutable
+        # decision-log row gives the Assessment Timeline's Certification stage a real timestamp —
+        # without it the stage could only be inferred, and we don't fabricate events (ADR 0016).
+        try:
+            self.log_decision("system", "file.certified", scan_id=scan_id, file=file,
+                              detail="All review items approved; no unapplied approved content")
+        except Exception:
+            pass   # certification itself must not fail on a logging error
         self.refresh_scan_aggregate(scan_id)
         return True
 
@@ -2994,9 +3002,15 @@ class Store:
                  detail=(r.get("value") or "")[:160] or None, rule_id=r.get("rule_id"))
         for r in _rows("SELECT * FROM decision_log WHERE scan_id=%s AND file=%s ORDER BY ts",
                        (scan_id, file)):
-            _add(r.get("ts"), "decision", r.get("action") or "decision",
-                 detail=(r.get("detail") or "")[:160] or None, actor=r.get("actor"),
-                 rule_id=r.get("rule_id"))
+            action = r.get("action") or "decision"
+            if action == "file.certified":
+                # its own timeline stage, not a generic review decision
+                _add(r.get("ts"), "certify", "Certified conformant",
+                     detail=(r.get("detail") or "")[:160] or None, actor=r.get("actor"))
+            else:
+                _add(r.get("ts"), "decision", action,
+                     detail=(r.get("detail") or "")[:160] or None, actor=r.get("actor"),
+                     rule_id=r.get("rule_id"))
         events.sort(key=lambda e: e["ts"])
         return events[:limit]
 

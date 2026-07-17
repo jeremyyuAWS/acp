@@ -78,3 +78,5 @@ def test_route_and_frontend_wiring():
     drawer = (root / "frontend" / "src" / "FileDrawer.jsx").read_text()
     # #35 reshaped the flat audit trail into the staged Assessment Timeline (same data, new frame)
     assert "AssessmentTimeline" in drawer and "Assessment Timeline" in drawer
+    # F5: the pipeline ends at a Certification stage driven by the recorded file.certified decision
+    assert "['Certification', ['certify']]" in drawer

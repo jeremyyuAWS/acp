@@ -106,3 +106,29 @@ def test_unremediated_file_never_certifies(st):
     _queue(st, scan_id, file, "1.4.3", 1)
     st.update_hitl_item(1, "approved", None, None)
     assert st.mark_file_compliant_if_reviewed(scan_id, file) is False
+
+
+# ── F5 (ADR 0026 Epic 5): certification is a RECORDED moment, not an inferred one ────────────────
+
+def test_certification_writes_an_immutable_decision_with_a_real_timestamp(st):
+    scan_id, file = _remediated_file(st)
+    _queue(st, scan_id, file, "1.4.3", 1)
+    st.update_hitl_item(1, "approved", None, None)
+    assert st.mark_file_compliant_if_reviewed(scan_id, file) is True
+
+    certs = [d for d in st.list_decisions(scan_id) if d.get("action") == "file.certified"]
+    assert len(certs) == 1 and certs[0]["file"] == file and certs[0]["ts"]
+
+    # and the timeline surfaces it as its own Certification stage kind, not a generic decision
+    tl = st.document_timeline(scan_id, file)
+    cert_events = [e for e in tl if e["kind"] == "certify"]
+    assert len(cert_events) == 1 and cert_events[0]["title"] == "Certified conformant"
+    assert cert_events[0]["ts"] == certs[0]["ts"]           # the REAL recorded moment
+
+
+def test_no_certification_no_certify_event(st):
+    """An uncertified file must show a pending Certification stage — never a fabricated one."""
+    scan_id, file = _remediated_file(st)
+    _queue(st, scan_id, file, "1.4.3", 1)                   # still pending review
+    assert st.mark_file_compliant_if_reviewed(scan_id, file) is False
+    assert [e for e in st.document_timeline(scan_id, file) if e["kind"] == "certify"] == []

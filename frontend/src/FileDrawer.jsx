@@ -80,9 +80,9 @@ const PAGE_RENDERABLE = new Set(['pdf'])
 // (with provider/zone), human decided (with who + why), fix written, published — every row a
 // persisted event, in order. Lazy: fetched only when the section is opened. The static
 // "Document journey" above shows the pipeline's stages; this shows what actually happened.
-const TIMELINE_GLYPH = { scan: '🔍', ai: '🤖', review: '📥', human: '👤', fix: '🔧', publish: '📤', decision: '📝' }
+const TIMELINE_GLYPH = { scan: '🔍', ai: '🤖', review: '📥', human: '👤', fix: '🔧', publish: '📤', decision: '📝', certify: '🏅' }
 // Assessment Timeline (ADR 0026 Epic 5): the same persisted events, grouped into the pipeline's
-// STAGES — Scanned → AI assessment → Human review → Remediation → Published — each node timestamped
+// STAGES — Scanned → AI assessment → Human review → Remediation → Published → Certification — each node timestamped
 // from its real events and expandable to them. A stage with no events renders as ⬜ pending, never a
 // fabricated timestamp (ADR 0016). This is the auditable view: every node's claim is click-through
 // verifiable against the append-only record.
@@ -92,6 +92,9 @@ const TIMELINE_STAGES = [
   ['Human review', ['review', 'human', 'decision']],
   ['Remediation', ['fix']],
   ['Published', ['publish']],
+  // Driven by the immutable file.certified decision the store writes at the certification moment —
+  // a real recorded timestamp, never inferred from compliant=1 alone.
+  ['Certification', ['certify']],
 ]
 function AssessmentTimeline({ scanId, file }) {
   const [events, setEvents] = useState(null)
