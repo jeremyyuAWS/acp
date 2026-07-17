@@ -230,6 +230,21 @@ def get_scan_accessibility_status(sid: str, request: Request, prefix: str | None
     return _status.scan_status(core.store, sid, path_prefix=prefix or None)
 
 
+@router.get("/scans/{sid}/files/{filename:path}/examined")
+def get_examined_counts(sid: str, filename: str, request: Request):
+    """Engine-reported examined-element counts for one document (ADR 0026 Epic 2): the classify()
+    inventory persisted at scan time — a real walk of the package/PDF, so the manifest can say
+    "of N images examined" honestly. Owner-scoped, always-200 degrade ({available:false} when the
+    document was never classified)."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        return {"available": False, "reason": "scan_not_found"}
+    row = core.store.get_document_examined(filename)
+    if not row:
+        return {"available": False, "reason": "not_classified"}
+    return {"available": True, "pages": row.get("pages"), "images": row.get("images"),
+            "has_text": bool(row.get("has_text")), "is_scanned": bool(row.get("is_scanned"))}
+
+
 @router.post("/scans/{sid}/files/{filename:path}/confirm")
 async def confirm_review_criterion(sid: str, filename: str, request: Request):
     """Confirm-the-pass (ADR 0026 / Epic 3): record a human's verification of a 🟡 review

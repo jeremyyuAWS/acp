@@ -3274,6 +3274,18 @@ class Store:
                  b(c.get("is_scanned")), c.get("doc_class"),
                  (last_seen if classify else None)))
 
+    def get_document_examined(self, path: str) -> dict | None:
+        """The engine-reported inventory counts for a document, by path (latest classification
+        wins). Backs the honest examined-element denominators (ADR 0026 Epic 2): classify() walks
+        every raster media part / PDF page at scan time, so "of N images examined" is a real count,
+        not an estimate. None when the document was never classified — the UI then shows nothing."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT pages, images, has_text, is_scanned, classified_at FROM documents "
+                "WHERE path=%s AND classified_at IS NOT NULL ORDER BY classified_at DESC", (path,))
+            row = self._db.fetchone(cur)
+            return dict(row) if row else None
+
     def get_document(self, doc_id: str) -> dict | None:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT * FROM documents WHERE doc_id=%s", (doc_id,))

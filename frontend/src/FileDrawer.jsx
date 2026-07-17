@@ -17,7 +17,7 @@ import ResizeHeadroomCheck from './ResizeHeadroomCheck.jsx'
 import PdfImageContrastCheck from './PdfImageContrastCheck.jsx'
 import AccessibilityStatus from './AccessibilityStatus.jsx'
 import EvidenceHeader, { fmtEvidence } from './EvidenceHeader.jsx'
-import { confirmCriterion, getFileStatus } from './api.js'
+import { confirmCriterion, getFileStatus, getExamined } from './api.js'
 import { DOCUMENTS_20 } from './documents20.js'
 import { statusIn, remediationIn } from './assessCoverage.js'
 import { fmtEffort, EFFORT_BASIS } from './effort.js'
@@ -80,6 +80,10 @@ const PAGE_RENDERABLE = new Set(['pdf'])
 // (with provider/zone), human decided (with who + why), fix written, published — every row a
 // persisted event, in order. Lazy: fetched only when the section is opened. The static
 // "Document journey" above shows the pipeline's stages; this shows what actually happened.
+// F6 (ADR 0026 Epic 2): criteria whose detectors walk EVERY image in the document — the classify()
+// image count is therefore their true examined denominator. Other criteria (links, headings) get
+// denominators only once their detectors report examined counts (named follow-on, not estimated).
+const IMAGE_CRITERIA = new Set(['1.1.1', '1.4.5', '1.4.9'])
 const TIMELINE_GLYPH = { scan: '🔍', ai: '🤖', review: '📥', human: '👤', fix: '🔧', publish: '📤', decision: '📝', certify: '🏅' }
 // Assessment Timeline (ADR 0026 Epic 5): the same persisted events, grouped into the pipeline's
 // STAGES — Scanned → AI assessment → Human review → Remediation → Published → Certification — each node timestamped
@@ -362,11 +366,21 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
     getCapability().then((r) => { if (on && r?.capability) setCap(r.capability) }).catch(() => {})
     return () => { on = false }
   }, [])
+  // F6 (Epic 2): engine-reported examined-element counts — classify() walked every raster media
+  // part / PDF page at scan time, so "of N images examined" is a real denominator. Absent → the
+  // manifest line simply omits it (nothing is estimated).
+  const [examined, setExamined] = useState(null)
   // F2 (Epic 3): a confirmed criterion keeps its ✓ across drawer reopen/reload — the chip state
   // is re-derived from the server, not trusted to session memory.
   useEffect(() => {
     let on = true
     setConfirmedScs(new Set())
+    setExamined(null)
+    if (scanId && file?.file) {
+      getExamined(scanId, file.file).then((m) => {
+        if (on && m?.available) setExamined(m)
+      }).catch(() => {})
+    }
     if (scanId && file?.file) {
       getFileStatus(scanId, file.file).then((m) => {
         if (on && Array.isArray(m?.human_verified_criteria) && m.human_verified_criteria.length) {
@@ -1147,6 +1161,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                                 r.reviewCount > 0 && `${r.reviewCount} review flag${r.reviewCount !== 1 ? 's' : ''}`,
                                 r.pending > 0 && `${r.pending} awaiting your review`,
                                 r.verifiedFixed && '✓ verified fixed',
+                                // F6: the honest denominator — only on criteria whose detector
+                                // walks every image, and only when the engine reported a count.
+                                IMAGE_CRITERIA.has(r.id) && examined?.images != null &&
+                                  `of ${examined.images} image${examined.images !== 1 ? 's' : ''} examined`,
                               ].filter(Boolean).join(' · ')}
                             </div>
                           )}

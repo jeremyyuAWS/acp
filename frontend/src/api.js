@@ -572,6 +572,16 @@ export const getScanStatus = (scanId) => (SIM
           .then((r) => (r.ok ? r.json() : { available: false }))
           .catch(() => ({ available: false }))))
 
+// Examined-element denominators (ADR 0026 Epic 2): the engine-reported inventory counts from
+// classify() at scan time — real walks, so "of N images examined" is a count, never an estimate.
+export const getExamined = (scanId, file) => (SIM
+  ? sim({ available: true, pages: 12, images: 18, has_text: true, is_scanned: false })
+  : (!scanId || !file
+      ? sim({ available: false })
+      : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/examined`, { headers: headers() })
+          .then((r) => (r.ok ? r.json() : { available: false }))
+          .catch(() => ({ available: false }))))
+
 // Confirm-the-pass (ADR 0026 / Epic 3): record a human's verification of a 🟡 review criterion.
 // Writes the same immutable hitl.approved decision the review queue writes; the backend refuses
 // anything whose outcome isn't REVIEW (a FAIL needs a fix, not a signature).
