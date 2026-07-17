@@ -217,6 +217,19 @@ def get_file_accessibility_status(sid: str, filename: str, request: Request):
     return _status.file_status(core.store, sid, filename)
 
 
+@router.get("/scans/{sid}/status")
+def get_scan_accessibility_status(sid: str, request: Request):
+    """ADR 0026 PR 3 — the Accessibility Status for a whole scan: the per-file models summed and the
+    state machine re-derived over the totals (same derivation → the roll-up can never disagree with
+    the per-file cards). Powers the scan-level card + the Confidence Dashboard. Owner-scoped,
+    always-200 degrade."""
+    import accessibility_status as _status
+
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        return {"available": False, "reason": "scan_not_found"}
+    return _status.scan_status(core.store, sid)
+
+
 @router.post("/scans/{sid}/assess")
 def assess(sid: str, request: Request, level: str = Query("AA")):
     """Run the assessment. In the deferred-analysis model (ADR 0020) a Discover-only scan has an

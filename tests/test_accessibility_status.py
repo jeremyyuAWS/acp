@@ -136,3 +136,47 @@ def test_file_status_missing_file():
     store = _FakeStore([_doc(file="a.pdf")], [], 0)
     m = st.file_status(store, "s1", "gone.pdf")
     assert m == {"available": False, "reason": "file_not_in_scan"}
+
+
+# ── scan-scope aggregation (ADR 0026 PR 3) ────────────────────────────────────
+class _FakeStore2(_FakeStore):
+    def __init__(self, docs, decisions, unapplied_by_file):
+        super().__init__(docs, decisions, 0)
+        self._by_file = unapplied_by_file
+    def count_unapplied_approved_values(self, sid, file):
+        return self._by_file.get(file, 0)
+
+
+def test_scan_status_sums_files_and_rederives_state():
+    docs = [
+        _doc(file="a.pdf", evaluated=18, failing=0, review=2, not_evaluated=0,
+             review_criteria=["1.4.1", "1.4.11"]),
+        _doc(file="b.docx", evaluated=15, failing=2, review=1, not_evaluated=2,
+             remediated=1, review_criteria=["1.3.3"]),
+    ]
+    decisions = [{"action": "hitl.approved", "file": "a.pdf", "rule_id": "1.4.1"}]
+    m = st.scan_status(_FakeStore2(docs, decisions, {}), "s1")
+    assert m["available"] and m["scope"] == "scan" and m["documents"] == 2
+    assert m["in_scope"] == 38   # 20 (a.pdf) + 18 (b.docx: 15 evaluated + 1 review + 2 not_evaluated)
+    # buckets sum across files and the identity still holds at scan scope
+    assert sum(m[b] for b in ("automatically_verified", "human_verified", "needs_review",
+                              "needs_remediation", "not_automatically_assessable")) == m["in_scope"]
+    assert m["needs_review"] == 2          # (2-1 approved) on a.pdf + 1 on b.docx
+    assert m["human_verified"] == 2        # 1 approved review + 1 remediated fail
+    assert m["needs_remediation"] == 1     # b.docx: 2 failing − 1 remediated
+    assert m["state"] == st.STATE_NEEDS_REMEDIATION   # fails dominate at scan scope too
+
+
+def test_scan_status_ready_and_empty():
+    clean = [_doc(file="a.pdf", evaluated=20)]
+    m = st.scan_status(_FakeStore2(clean, [], {}), "s1")
+    assert m["state"] == st.STATE_READY and m["needs_review"] == 0
+    empty = st.scan_status(_FakeStore2([], [], {}), "s1")
+    assert empty == {"available": False, "reason": "no_documents"}
+
+
+def test_scan_status_unapplied_gate_aggregates():
+    docs = [_doc(file="a.pdf", evaluated=20), _doc(file="b.pdf", evaluated=20)]
+    m = st.scan_status(_FakeStore2(docs, [], {"b.pdf": 3}), "s1")
+    assert m["unapplied_approved"] == 3
+    assert m["state"] == st.STATE_APPLY_APPROVED

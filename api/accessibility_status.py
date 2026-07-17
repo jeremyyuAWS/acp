@@ -124,3 +124,65 @@ def file_status(store, scan_id: str, file: str, *, per_item_secs: int = DEFAULT_
     except Exception:
         unapplied = 0
     return derive_file_status(doc, approved, unapplied, per_item_secs=per_item_secs)
+
+
+# The aggregation-summable fields (ADR 0026 PR 3): a scan/folder/estate status is the SUM of its
+# files' models with the state machine re-derived over the totals — no new measurement, so the
+# roll-up reconciles with the per-file cards by construction.
+_SUM_FIELDS = (
+    "in_scope", "resolved", "automatically_verified", "human_verified", "needs_review",
+    "needs_remediation", "not_automatically_assessable", "not_applicable", "unapplied_approved",
+)
+
+
+def scan_status(store, scan_id: str, *, per_item_secs: int = DEFAULT_REVIEW_SECS) -> dict:
+    """The Accessibility Status for a whole SCAN (ADR 0026 PR 3, first aggregation scope): derive
+    the file model for every document via the SAME per-file logic, sum the buckets, and re-run the
+    state machine over the totals. Powers the scan-level card and the Confidence Dashboard —
+    process confidence (coverage & resolution counts), never a model % (ADR 0016).
+
+    NB: one count_unapplied_approved_values call per document — fine at demo/estate-slice sizes;
+    batch it before pointing this at 100K-file estates (noted, not silently ignored)."""
+    facts = store.get_certification_facts(scan_id)
+    docs = facts.get("documents", [])
+    if not docs:
+        return {"available": False, "reason": "no_documents"}
+
+    approved_by_file: dict[str, set] = {}
+    for d in store.list_decisions(scan_id, limit=5000):
+        if d.get("action") == "hitl.approved" and d.get("file") and d.get("rule_id"):
+            approved_by_file.setdefault(d["file"], set()).add(d["rule_id"])
+
+    totals = {k: 0 for k in _SUM_FIELDS}
+    coverage_evaluable = coverage_total = 0
+    for doc in docs:
+        try:
+            unapplied = store.count_unapplied_approved_values(scan_id, doc.get("file"))
+        except Exception:
+            unapplied = 0
+        m = derive_file_status(doc, approved_by_file.get(doc.get("file"), ()), unapplied,
+                               per_item_secs=per_item_secs)
+        for k in _SUM_FIELDS:
+            totals[k] += int(m.get(k, 0))
+        coverage_evaluable += m["coverage"]["evaluable"]
+        coverage_total += m["coverage"]["total"]
+
+    if totals["needs_remediation"] > 0:
+        state = STATE_NEEDS_REMEDIATION
+    elif totals["unapplied_approved"] > 0:
+        state = STATE_APPLY_APPROVED
+    elif totals["needs_review"] > 0:
+        state = STATE_READY_AFTER_REVIEW
+    else:
+        state = STATE_READY
+
+    return {
+        "available": True,
+        "scope": "scan",
+        "documents": len(docs),
+        "coverage": {"evaluable": coverage_evaluable, "total": coverage_total},
+        **totals,
+        "est_review_secs": totals["needs_review"] * int(per_item_secs),
+        "state": state,
+        "cta": CTA.get(state),
+    }

@@ -559,6 +559,19 @@ export const getFileStatus = (scanId, file) => (SIM
           .then((r) => (r.ok ? r.json() : { available: false }))
           .catch(() => ({ available: false }))))
 
+// ADR 0026 PR 3 — the scan-scope Accessibility Status: per-file models summed server-side, state
+// re-derived over the totals. Powers the scan-level card + the Confidence Dashboard.
+export const getScanStatus = (scanId) => (SIM
+  ? sim({ available: true, scope: 'scan', documents: 12, in_scope: 240,
+      coverage: { evaluable: 210, total: 240 }, resolved: 190,
+      automatically_verified: 180, human_verified: 10, needs_review: 14, needs_remediation: 6,
+      not_automatically_assessable: 30, not_applicable: 0, unapplied_approved: 0,
+      est_review_secs: 630, state: 'needs_remediation', cta: 'Start Remediation' })
+  : (!scanId ? sim({ available: false })
+      : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/status`, { headers: headers() })
+          .then((r) => (r.ok ? r.json() : { available: false }))
+          .catch(() => ({ available: false }))))
+
 export const uploadToDrive = (scanId, file, blob, contentType) => {
   if (SIM) return sim({ url: 'https://drive.google.com/file/d/sim/view', file_id: 'sim' })
   const fd = new FormData()

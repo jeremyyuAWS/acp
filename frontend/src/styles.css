@@ -2046,3 +2046,18 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .atl-stage:not(.done) .atl-dot { color: var(--muted, #9aa7bb); }
 .atl-label { font-weight: 700; font-size: 12.5px; }
 .atl-meta { font-size: 11px; margin-left: auto; font-variant-numeric: tabular-nums; }
+
+/* Confidence Dashboard (ADR 0026 Epic 5) — process confidence: real ratios WITH their counts. */
+.confdash { margin: 0 0 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; }
+.confdash-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.confdash-line { font-size: 12.5px; font-weight: 700; }
+.confdash-line.ok { color: #17a34a; } .confdash-line.review { color: #b45309; }
+.confdash-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.confdash-tile { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px;
+  background: var(--surface-1, #FBF9F4); border: 1px solid var(--line); }
+.confdash-pct { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.confdash-tile.ok .confdash-pct { color: #17a34a; }
+.confdash-tile.review .confdash-pct { color: #b45309; }
+.confdash-tile.na .confdash-pct { color: #64748b; }
+.confdash-lbl { font-size: 11.5px; font-weight: 700; }
+.confdash-counts { font-size: 11px; font-variant-numeric: tabular-nums; }
