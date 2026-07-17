@@ -231,3 +231,35 @@ def test_confirmed_review_flows_into_human_verified():
     store._decisions = store.logged                    # the write IS the read
     m = st.file_status(store, "s1", "a.pdf")
     assert m["human_verified"] == 1 and m["needs_review"] == 1
+
+
+# ── folder scope (ADR 0026 PR 3): the same summation over a path-prefix subset ────────────────
+def test_folder_status_is_the_scan_summation_over_a_prefix_subset():
+    docs = [
+        _doc(file="reports/q1.pdf", evaluated=18, failing=0, review=2, not_evaluated=0,
+             review_criteria=["1.4.1", "1.4.11"]),
+        _doc(file="reports/q2.pdf", evaluated=20),
+        _doc(file="slides/deck.pptx", evaluated=15, failing=2, review=1, not_evaluated=2,
+             review_criteria=["1.3.3"]),
+    ]
+    store = _FakeStore2(docs, [], {})
+    folder = st.scan_status(store, "s1", path_prefix="reports/")
+    assert folder["available"] and folder["scope"] == "folder"
+    assert folder["path_prefix"] == "reports/" and folder["documents"] == 2
+    # the failing deck is outside the folder → the folder is only waiting on its reviews
+    assert folder["needs_remediation"] == 0 and folder["needs_review"] == 2
+    assert folder["state"] == st.STATE_READY_AFTER_REVIEW
+    # identity holds at folder scope too
+    assert sum(folder[b] for b in ("automatically_verified", "human_verified", "needs_review",
+                                   "needs_remediation", "not_automatically_assessable")) == folder["in_scope"]
+    # and folder + complement reconcile with the whole scan (sum-over-subset by construction)
+    whole = st.scan_status(store, "s1")
+    rest = st.scan_status(store, "s1", path_prefix="slides/")
+    for k in ("in_scope", "resolved", "needs_review", "needs_remediation"):
+        assert folder[k] + rest[k] == whole[k]
+
+
+def test_folder_status_empty_prefix_degrades_honestly():
+    docs = [_doc(file="reports/q1.pdf", evaluated=20)]
+    m = st.scan_status(_FakeStore2(docs, [], {}), "s1", path_prefix="nope/")
+    assert m == {"available": False, "reason": "no_documents"}

@@ -218,16 +218,16 @@ def get_file_accessibility_status(sid: str, filename: str, request: Request):
 
 
 @router.get("/scans/{sid}/status")
-def get_scan_accessibility_status(sid: str, request: Request):
+def get_scan_accessibility_status(sid: str, request: Request, prefix: str | None = None):
     """ADR 0026 PR 3 — the Accessibility Status for a whole scan: the per-file models summed and the
     state machine re-derived over the totals (same derivation → the roll-up can never disagree with
-    the per-file cards). Powers the scan-level card + the Confidence Dashboard. Owner-scoped,
-    always-200 degrade."""
+    the per-file cards). ?prefix= narrows to a folder (same summation over the subset). Powers the
+    scan-level card + the Confidence Dashboard. Owner-scoped, always-200 degrade."""
     import accessibility_status as _status
 
     if core.store.get_scan(sid, owner=_owner(request)) is None:
         return {"available": False, "reason": "scan_not_found"}
-    return _status.scan_status(core.store, sid)
+    return _status.scan_status(core.store, sid, path_prefix=prefix or None)
 
 
 @router.post("/scans/{sid}/files/{filename:path}/confirm")

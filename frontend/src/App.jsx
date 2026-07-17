@@ -24,6 +24,7 @@ import Overview from './Overview.jsx'
 import AssessRunner from './AssessRunner.jsx'
 import CoverageScorecard from './CoverageScorecard.jsx'
 import ConfidenceDashboard from './ConfidenceDashboard.jsx'
+import AccessibilityStatus from './AccessibilityStatus.jsx'
 import RiskScore from './RiskScore.jsx'
 import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
@@ -678,7 +679,7 @@ export default function App() {
                 above still pretended to be working. assessPhase tracks AssessRunner's actual
                 idle/running/done state (via onPhase), so results now appear exactly when the
                 animation finishes — same instant a real assessment would land. */}
-            {assessed && assessPhase === 'done' && <><ConfidenceDashboard scanId={run.id} /><CoverageScorecard files={files} /><RuleBreakdown scanId={run.id} files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
+            {assessed && assessPhase === 'done' && <><AccessibilityStatus scanId={run.id} onAction={(state) => { setView(state === 'ready_for_certification' || state === 'certified' ? 'publish' : 'remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><ConfidenceDashboard scanId={run.id} /><CoverageScorecard files={files} /><RuleBreakdown scanId={run.id} files={files} /><Dashboard run={run} files={files} trend={trend} delta={delta} deltaKey={deltaKey} scanList={scanList} onPickScan={switchScan} /></>}
             {assessed && assessPhase === 'done' && <RiskScore run={run} files={files} />}
           </>
         ) : placeholder)}

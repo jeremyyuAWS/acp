@@ -135,16 +135,24 @@ _SUM_FIELDS = (
 )
 
 
-def scan_status(store, scan_id: str, *, per_item_secs: int = DEFAULT_REVIEW_SECS) -> dict:
+def scan_status(store, scan_id: str, *, per_item_secs: int = DEFAULT_REVIEW_SECS,
+                path_prefix: str | None = None) -> dict:
     """The Accessibility Status for a whole SCAN (ADR 0026 PR 3, first aggregation scope): derive
     the file model for every document via the SAME per-file logic, sum the buckets, and re-run the
     state machine over the totals. Powers the scan-level card and the Confidence Dashboard —
     process confidence (coverage & resolution counts), never a model % (ADR 0016).
 
+    path_prefix narrows the roll-up to a FOLDER (files whose path starts with the prefix) — the
+    same summation over a subset, so folder cards reconcile with both the scan card above them and
+    the file cards below them by construction. Estate/org scopes (across scans) are a named
+    follow-on: they need a cross-scan document model, not another sum here.
+
     NB: one count_unapplied_approved_values call per document — fine at demo/estate-slice sizes;
     batch it before pointing this at 100K-file estates (noted, not silently ignored)."""
     facts = store.get_certification_facts(scan_id)
     docs = facts.get("documents", [])
+    if path_prefix:
+        docs = [d for d in docs if str(d.get("file") or "").startswith(path_prefix)]
     if not docs:
         return {"available": False, "reason": "no_documents"}
 
@@ -178,7 +186,8 @@ def scan_status(store, scan_id: str, *, per_item_secs: int = DEFAULT_REVIEW_SECS
 
     return {
         "available": True,
-        "scope": "scan",
+        "scope": "folder" if path_prefix else "scan",
+        **({"path_prefix": path_prefix} if path_prefix else {}),
         "documents": len(docs),
         "coverage": {"evaluable": coverage_evaluable, "total": coverage_total},
         **totals,

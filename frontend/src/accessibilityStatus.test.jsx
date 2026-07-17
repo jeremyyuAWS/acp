@@ -8,7 +8,11 @@ import { act } from 'react-dom/test-utils'
 // the honesty rules (no fabricated %, "Automatically Verified" not "Certified", degrade on unavailable).
 
 const getFileStatus = vi.fn()
-vi.mock('./api.js', () => ({ getFileStatus: (...a) => getFileStatus(...a) }))
+const getScanStatus = vi.fn()
+vi.mock('./api.js', () => ({
+  getFileStatus: (...a) => getFileStatus(...a),
+  getScanStatus: (...a) => getScanStatus(...a),
+}))
 
 const { default: AccessibilityStatus } = await import('./AccessibilityStatus.jsx')
 
@@ -29,7 +33,7 @@ const READY_AFTER = {
   est_review_secs: 120, state: 'ready_after_review', cta: 'Review Findings',
 }
 
-beforeEach(() => { getFileStatus.mockReset() })
+beforeEach(() => { getFileStatus.mockReset(); getScanStatus.mockReset() })
 
 describe('AccessibilityStatus (ADR 0026 hero)', () => {
   it('leads with the decision, shows coverage separately, resolved count, and the estimate', async () => {
@@ -88,5 +92,38 @@ describe('AccessibilityStatus (ADR 0026 hero)', () => {
     getFileStatus.mockResolvedValue({ available: false })
     await mount(); await settle()
     expect(container.querySelector('.acstatus')).toBeNull()
+  })
+})
+
+// ── scope unification (ADR 0026 PR 3): omit `file` → the SAME card renders the scan roll-up ──
+describe('scan scope (one component, every scope)', () => {
+  const SCAN = {
+    ...READY_AFTER,
+    scope: 'scan', documents: 12, in_scope: 240, coverage: { evaluable: 210, total: 240 },
+    resolved: 190, automatically_verified: 180, human_verified: 10, needs_review: 14,
+    needs_remediation: 6, not_automatically_assessable: 30,
+    est_review_secs: 630, state: 'needs_remediation', cta: 'Start Remediation',
+  }
+
+  const mountScan = async () => {
+    container = document.createElement('div'); document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => { root.render(createElement(AccessibilityStatus, { scanId: 's1' })) })
+  }
+
+  it('omitting file calls getScanStatus and shows the documents count', async () => {
+    getScanStatus.mockResolvedValue(SCAN)
+    await mountScan(); await settle()
+    expect(getScanStatus).toHaveBeenCalledWith('s1')
+    expect(getFileStatus).not.toHaveBeenCalled()
+    expect(text()).toContain('190 of 240 criteria resolved across 12 documents')
+    expect(text()).toContain('6 issues need remediation')     // state re-derived over the totals
+    expect(container.querySelector('[role="status"]').getAttribute('aria-label')).toContain('scan')
+  })
+
+  it('the per-file mount keeps its per-document aria label', async () => {
+    getFileStatus.mockResolvedValue(READY_AFTER)
+    await mount(); await settle()
+    expect(container.querySelector('[role="status"]').getAttribute('aria-label')).toContain('document')
   })
 })

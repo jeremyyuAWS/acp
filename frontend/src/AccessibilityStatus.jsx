@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getFileStatus } from './api.js'
+import { getFileStatus, getScanStatus } from './api.js'
 
 // ADR 0026 — the authoritative Accessibility Status hero. The FIRST thing a reviewer reads on a file:
 // the decision (not the numbers), the coverage behind it, an honest account of what needs a human, a
@@ -60,6 +60,8 @@ function estimateLabel(secs) {
   return `~${Math.round(secs / 60)} min`
 }
 
+// One component, every scope (ADR 0026 PR 3): pass `file` for the per-file card, omit it for the
+// scan roll-up (per-file models summed server-side — the levels reconcile by construction).
 export default function AccessibilityStatus({ scanId, file, onAction }) {
   const [m, setM] = useState(null)
   const [why, setWhy] = useState(false)
@@ -67,7 +69,8 @@ export default function AccessibilityStatus({ scanId, file, onAction }) {
   useEffect(() => {
     let live = true
     setM(null)
-    getFileStatus(scanId, file).then((r) => { if (live) setM(r || { available: false }) })
+    const fetchStatus = file ? getFileStatus(scanId, file) : getScanStatus(scanId)
+    fetchStatus.then((r) => { if (live) setM(r || { available: false }) })
     return () => { live = false }
   }, [scanId, file])
 
@@ -80,7 +83,7 @@ export default function AccessibilityStatus({ scanId, file, onAction }) {
 
   return (
     <div className={`acstatus acstatus-${s.tone}`} role="status"
-      aria-label="Accessibility status for this document">
+      aria-label={file ? 'Accessibility status for this document' : 'Accessibility status for this scan'}>
       {/* Coverage — "did ACP look?" — distinct from status ("is it ready?") */}
       <div className="acstatus-coverage">
         <span className="acstatus-coverage-lbl">Assessment Coverage</span>
@@ -95,7 +98,10 @@ export default function AccessibilityStatus({ scanId, file, onAction }) {
         <div className="acstatus-decision">
           <b>{loading ? 'Assessing…' : s.head(headCount(m))}</b>
           {!loading && !busy && (
-            <span className="acstatus-resolved">{m.resolved} of {inScope} criteria resolved</span>
+            <span className="acstatus-resolved">
+              {m.resolved} of {inScope} criteria resolved
+              {m.documents > 1 ? ` across ${m.documents} documents` : ''}
+            </span>
           )}
         </div>
         {est && !busy && <span className="acstatus-est" title="Based on the number of items awaiting review">Est. review {est}</span>}
