@@ -589,6 +589,15 @@ def _pdf_color_hex(color) -> str | None:
         return None
 
 
+
+def _cap_note(pages_total: int, cap: int) -> str:
+    """Honest-caps suffix (ADR 0026 Epic 1): when a document exceeds a detector's page cap, the
+    finding SAYS so — silent truncation reads as full coverage, which is a lie by omission."""
+    if pages_total > cap:
+        return f" — measured the first {cap} of {pages_total} pages"
+    return ""
+
+
 def pdf_nontext_contrast_checks(path: Path) -> list[dict]:
     """1.4.11 Non-text Contrast (Review) for PDF (ADR 0025) — the lowest-contrast bordered rectangle
     (its stroke colour against its own fill, < 3:1). The PDF analogue of the docx/pptx solid
@@ -596,9 +605,11 @@ def pdf_nontext_contrast_checks(path: Path) -> list[dict]:
     declare BOTH a stroke and a fill are measured — real measurement or nothing (ADR 0016).
     Advisory, never a pass. Never raises."""
     worst = None      # (ratio, border_hex, fill_hex)
+    pages_total = 0
     try:
         import pdfplumber
         with pdfplumber.open(str(path)) as pdf:
+            pages_total = len(pdf.pages)
             for page in pdf.pages[:_MAX_PAGES_SPACING]:
                 for r in page.rects:
                     border = _pdf_color_hex(r.get("stroking_color"))
@@ -616,9 +627,12 @@ def pdf_nontext_contrast_checks(path: Path) -> list[dict]:
     return [_review_finding(
         "PDF_NONTEXT_LOW_CONTRAST", "1.4.11 Non-text Contrast",
         f"a shape outline #{border_hex} on its #{fill_hex} fill is {ratio:.1f}:1 (needs 3:1) — if the "
-        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative",
+        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative"
+        + _cap_note(pages_total, _MAX_PAGES_SPACING),
         evidence={"method": "structural", "metric": "Contrast", "value": round(ratio, 2),
-                  "required": 3.0, "unit": ":1"})]
+                  "required": 3.0, "unit": ":1",
+                  **({"pages_checked": _MAX_PAGES_SPACING, "pages_total": pages_total}
+                     if pages_total > _MAX_PAGES_SPACING else {})})]
 
 
 _MAX_PAGES_OVER_IMAGE = 20     # cap the pages we scan for text-over-image
@@ -647,9 +661,11 @@ def pdf_text_over_image_checks(path: Path) -> list[dict]:
     the char is the documented follow-on. Rides the existing 1.4.3 lane as a per-file finding — 1.4.3
     stays 🟢 at the format level. Advisory, never a pass. Never raises."""
     hits = 0
+    pages_total = 0
     try:
         import pdfplumber
         with pdfplumber.open(str(path)) as pdf:
+            pages_total = len(pdf.pages)
             for page in pdf.pages[:_MAX_PAGES_OVER_IMAGE]:
                 images = page.images
                 if not images:
@@ -673,7 +689,7 @@ def pdf_text_over_image_checks(path: Path) -> list[dict]:
         "PDF_TEXT_OVER_IMAGE", "1.4.3 Contrast (Minimum)",
         f"{hits} character{'s' if hits != 1 else ''} sit over an image, where the real background is "
         "the picture's pixels — the declared text colour can't prove contrast here; verify the text "
-        "stays legible against the image behind it")]
+        "stays legible against the image behind it" + _cap_note(pages_total, _MAX_PAGES_OVER_IMAGE))]
 
 
 def pdf_over_image_locators(data) -> list[dict]:
@@ -763,9 +779,11 @@ def pdf_text_spacing_checks(path: Path) -> list[dict]:
     Never raises."""
     import statistics
     worst = None      # (ratio, pitch_pt, font_pt)
+    pages_total = 0
     try:
         import pdfplumber
         with pdfplumber.open(str(path)) as pdf:
+            pages_total = len(pdf.pages)
             for page in pdf.pages[:_MAX_PAGES_SPACING]:
                 tops: dict[int, list[float]] = {}
                 for ch in page.chars[:_MAX_CHARS_PER_PAGE]:
@@ -798,9 +816,12 @@ def pdf_text_spacing_checks(path: Path) -> list[dict]:
     return [_review_finding(
         "PDF_TIGHT_LINE_SPACING", "1.4.12 Text Spacing",
         f"text lines are set at {ratio:.2f}× the font size — tight, and a flattened PDF can't honour "
-        "a reader's request for looser (1.5×) line spacing; verify the text stays legible",
+        "a reader's request for looser (1.5×) line spacing; verify the text stays legible"
+        + _cap_note(pages_total, _MAX_PAGES_SPACING),
         evidence={"method": "structural", "metric": "Line spacing", "value": round(ratio, 2),
-                  "required": 1.5, "unit": "×"})]
+                  "required": 1.5, "unit": "×",
+                  **({"pages_checked": _MAX_PAGES_SPACING, "pages_total": pages_total}
+                     if pages_total > _MAX_PAGES_SPACING else {})})]
 
 
 def _pdf_is_chromatic(color) -> bool:
@@ -847,9 +868,11 @@ def pdf_use_of_color_checks(path: Path) -> list[dict]:
     it can't read (no annotation, no chars, ambiguous) is skipped (ADR 0016). Advisory, never a
     pass. Never raises."""
     colour_only = 0
+    pages_total = 0
     try:
         import pdfplumber
         with pdfplumber.open(str(path)) as pdf:
+            pages_total = len(pdf.pages)
             for page in pdf.pages[:_MAX_PAGES_SPACING]:
                 links = getattr(page, "hyperlinks", []) or []
                 if not links:
@@ -879,7 +902,8 @@ def pdf_use_of_color_checks(path: Path) -> list[dict]:
     return [_review_finding(
         "PDF_COLOUR_ONLY_LINK", "1.4.1 Use of Color",
         "a link is set apart only by its text colour, with no underline — colour alone can't be the "
-        "only way to tell a link from surrounding text; verify it's distinguishable without colour")]
+        "only way to tell a link from surrounding text; verify it's distinguishable without colour"
+        + _cap_note(pages_total, _MAX_PAGES_SPACING))]
 
 
 # A short memo/letter has no real "bypass repeated blocks" problem — bookmarks

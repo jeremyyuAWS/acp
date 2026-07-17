@@ -57,3 +57,36 @@ def test_text_over_image_has_no_fabricated_evidence(tmp_path):
     c.save()
     f = os_.pdf_text_over_image_checks(p)
     assert f and "evidence" not in f[0]
+
+
+def _many_page_pdf_with_faint_rect(tmp: Path, pages: int) -> Path:
+    from reportlab.pdfgen import canvas
+    p = tmp / "many.pdf"
+    c = canvas.Canvas(str(p), pagesize=(200, 200))
+    c.setStrokeColorRGB(0.9, 0.9, 0.9)
+    c.setFillColorRGB(1, 1, 1)
+    c.rect(30, 30, 120, 80, stroke=1, fill=1)     # faint border on page 1 only
+    for _ in range(pages):
+        c.showPage()
+    c.save()
+    return p
+
+
+def test_honest_caps_surface_when_pages_exceed_the_cap(tmp_path):
+    """ADR 0026 Epic 1: a truncated measurement SAYS so — never silent full-coverage."""
+    pytest.importorskip("reportlab")
+    pytest.importorskip("pdfplumber")
+    big = _many_page_pdf_with_faint_rect(tmp_path, 25)
+    f = os_.pdf_nontext_contrast_checks(big)
+    assert f and "measured the first 20 of" in f[0]["detail"]
+    assert f[0]["evidence"]["pages_checked"] == 20
+    assert f[0]["evidence"]["pages_total"] > 20
+
+
+def test_no_cap_note_on_small_documents(tmp_path):
+    pytest.importorskip("reportlab")
+    pytest.importorskip("pdfplumber")
+    small = _many_page_pdf_with_faint_rect(tmp_path, 2)
+    f = os_.pdf_nontext_contrast_checks(small)
+    assert f and "measured the first" not in f[0]["detail"]
+    assert "pages_checked" not in f[0]["evidence"]
