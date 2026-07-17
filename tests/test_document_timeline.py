@@ -76,4 +76,5 @@ def test_route_and_frontend_wiring():
     api = (root / "frontend" / "src" / "api.js").read_text()
     assert "getDocumentTimeline" in api
     drawer = (root / "frontend" / "src" / "FileDrawer.jsx").read_text()
-    assert "AuditTimeline" in drawer and "History — audit trail" in drawer
+    # #35 reshaped the flat audit trail into the staged Assessment Timeline (same data, new frame)
+    assert "AssessmentTimeline" in drawer and "Assessment Timeline" in drawer
