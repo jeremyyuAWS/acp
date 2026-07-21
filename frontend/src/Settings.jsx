@@ -25,9 +25,12 @@ function ResetData() {
     <div style={{ maxWidth: 560 }}>
       <h3 style={{ marginTop: 0 }}>Reset demo data</h3>
       <p className="muted" style={{ fontSize: 13 }}>
-        Wipes scan results so Grafana, Langfuse, and the in-app charts start fresh.
-        <strong> Your settings are preserved</strong> — worker count, AI mode, schedule, rubric.
-        This cannot be undone.
+        Wipes <strong>all customer data</strong> for a completely fresh app: scan results,
+        findings, per-file decisions, inventory, disposition audit, and the learned review
+        memory — plus every remediated file, cached original and preview in blob storage, and
+        Langfuse traces. Nothing from a prior customer is left behind.
+        <strong> Your configuration is preserved</strong> — worker count, AI mode, schedule,
+        rubric, and remediation programs. This cannot be undone.
       </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '14px 0' }}>
         {SCOPES.map(([v, label, desc]) => (

@@ -169,3 +169,43 @@ def download_source(owner: str | None, scan_id: str, filename: str) -> bytes | N
         return blob.download_blob().readall()
     except Exception:
         return None
+
+
+# Every container this module writes scan-derived artifacts into. All three are DATA
+# (remediated copies, cached originals, rendered previews) that a scan re-populates —
+# none holds configuration — so a demo reset should wipe them alongside the DB analytics
+# tables. Kept as a list so purge_all() and any future infra tooling share one source of
+# truth for "what does acp store in blob".
+_DATA_CONTAINERS = (_CONTAINER, _SOURCES_CONTAINER, _RENDER_CONTAINER)
+
+
+def purge_all(owner: str | None = None) -> dict:
+    """Delete every scan-derived blob so a demo reset is a TRUE clean slate — the DB reset
+    (store.reset_analytics) drops the remediation_state / applied_fixes / … rows but leaves
+    the fixed-file bytes, cached originals and previews sitting in blob storage.
+
+    Deletes the blobs, NOT the containers: `remediated` is provisioned once by deploy infra
+    and upload_remediated does not self-heal a missing container, so dropping it would break
+    the next remediation. owner=None purges the whole account (matching reset_analytics, which
+    is global); pass an owner to scope to one tenant's `{owner}/` prefix. Best-effort and never
+    raises: returns {container: deleted_count}, with -1 for a container that errored. No-op
+    ({} ) when blob storage isn't configured (local dev)."""
+    svc = _service_client()
+    if svc is None:
+        return {}
+    prefix = f"{owner}/" if owner else None
+    out: dict = {}
+    for cname in _DATA_CONTAINERS:
+        try:
+            cc = svc.get_container_client(cname)
+            n = 0
+            for b in cc.list_blobs(name_starts_with=prefix):
+                try:
+                    cc.delete_blob(b.name)
+                    n += 1
+                except Exception:
+                    pass  # blob vanished mid-iteration or a lease — skip, keep going
+            out[cname] = n
+        except Exception:
+            out[cname] = -1  # container missing / listing failed — surface, don't abort the rest
+    return out

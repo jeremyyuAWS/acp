@@ -26,7 +26,14 @@ const assessLevel = (scanId) => {
   try { return JSON.parse(sessionStorage.getItem(`acp-assess-${scanId || 'none'}`) || 'null')?.level || 'AA' } catch { return 'AA' }
 }
 // Same verdict FileDrawer's statusOf uses — inlined to avoid importing the heavy drawer.
-const statusOf = (f) => (f.status === 'error' ? 'unanalysable' : f.status === 'uncertain' ? 'uncertain' : f.compliant ? 'certifiable' : 'issues')
+// 'issues' requires open findings; a not-certifiable file with zero findings is 'clean'.
+const statusOf = (f) => (
+  f.status === 'error' ? 'unanalysable'
+  : f.status === 'uncertain' ? 'uncertain'
+  : f.compliant ? 'certifiable'
+  : (f.issues && f.issues.length) ? 'issues'
+  : 'clean'
+)
 const deptOf = (f) => f.department || f.dept || 'Unassigned'
 const avgOf = (fs) => { const s = fs.filter((f) => f.score != null); return s.length ? Math.round(s.reduce((a, f) => a + f.score, 0) / s.length) : null }
 
@@ -111,7 +118,7 @@ export async function generateScanReport({ scanId, files = [], org = 'your organ
   const conformantN = files.filter((f) => statusOf(f) === 'certifiable').length
   const conformantPct = totalFiles ? Math.round((conformantN / totalFiles) * 100) : 0
   const avgScore = avgOf(files)
-  const statusCounts = { certifiable: 0, issues: 0, uncertain: 0, unanalysable: 0 }
+  const statusCounts = { certifiable: 0, issues: 0, uncertain: 0, unanalysable: 0, clean: 0 }
   files.forEach((f) => { statusCounts[statusOf(f)]++ })
 
   const groupBy = (fn) => files.reduce((m, f) => { const k = fn(f); if (k != null) (m[k] = m[k] || []).push(f); return m }, {})

@@ -33,8 +33,12 @@ describe('no screen claims a time saving', () => {
 describe('durations that survive are labelled as estimates', () => {
   it('RiskScore renders effort through fmtEffort, not a bare {n}h', () => {
     const c = code('RiskScore.jsx')
-    expect(c).toMatch(/fmtEffort\(rec\.remediateMin\)/)
-    expect(c).not.toMatch(/\{effortH\}h|remediateMin \|\| 0\) \/ 60/)
+    // Effort is now grounded on the capability-derived finding split (estimateEffortMin), not the
+    // SIM-only rec.remediateMin — but it must STILL flow through fmtEffort ("est.") and carry the
+    // EFFORT_BASIS tooltip so it can never read as a measurement.
+    expect(c).toMatch(/fmtEffort\(effortMin\)/)
+    expect(c).toMatch(/estimateEffortMin\(/)
+    expect(c).not.toMatch(/rec\.remediateMin|\{effortH\}h|remediateMin \|\| 0\) \/ 60/)
     expect(c).toMatch(/title=\{EFFORT_BASIS\}/)
   })
 

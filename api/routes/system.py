@@ -43,14 +43,26 @@ def admin_reset(request: Request,
         raise HTTPException(400, "confirmation required — pass confirm=true")
     cleared: list[str] = []
     lf_deleted = 0
+    blobs_purged: dict = {}
     if scope in ("all", "grafana"):
         cleared = core.store.reset_analytics()
+        # reset_analytics drops the remediation_state / applied_fixes / … ROWS but the fixed
+        # file bytes, cached originals and previews live in blob storage — purge them too so
+        # "reset" is a true clean slate and no legacy remediation survives. Best-effort:
+        # no-op when blob isn't configured (local dev), never raises into the reset.
+        try:
+            from blob import purge_all
+            blobs_purged = purge_all()
+        except Exception as e:  # pragma: no cover - defensive; blob purge must not fail the reset
+            blobs_purged = {"error": str(e)}
     if scope in ("all", "langfuse"):
         lf_deleted = core.reset_langfuse_traces()
     # Logged AFTER the wipe so the reset itself is recorded.
+    _blob_total = sum(v for v in blobs_purged.values() if isinstance(v, int) and v > 0)
     core.store.log_decision("admin", "demo.reset",
-                            detail=f"scope={scope} · tables={len(cleared)} · langfuse_traces={lf_deleted}")
-    return {"scope": scope, "cleared_tables": cleared, "langfuse_traces_deleted": lf_deleted}
+                            detail=f"scope={scope} · tables={len(cleared)} · langfuse_traces={lf_deleted} · blobs={_blob_total}")
+    return {"scope": scope, "cleared_tables": cleared, "langfuse_traces_deleted": lf_deleted,
+            "blobs_purged": blobs_purged}
 
 
 @router.post("/alerts/webhook")

@@ -5,6 +5,7 @@ import { assessScan, getCapability, getScan, refreshScanDriveToken } from './api
 import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
 import { TraceChip } from './Transparency.jsx'
 import { assessLine } from './phaseNarration.js'
+import { coreStats } from './coreStats.js'
 
 // Re-assess the whole estate against a chosen WCAG 2.1 conformance level. A finding blocks
 // conformance when its level is at or below the target (A ⊆ AA ⊆ AAA), so the numbers
@@ -107,8 +108,17 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
       autoFix += blocking.filter((x) => autoOf(cap, x, fmt)).length
       if (!blocking.length) conformant++
     })
+    // The tile leads with the DOCUMENT-CORE numbers so it reconciles exactly with the "By WCAG
+    // criterion" table below (also the document-core lens) — no more "6 in the tile vs 4 in the
+    // table". coreStats() is the shared source of that lens; RiskScore reads the SAME function
+    // so the leadership panel can't disagree with this tile.
+    const core = coreStats(scored, cap, lvl)
     const total = Math.max(1, scored.length)
+    // Three aggregation levels, kept distinct so the UI can reconcile them: findings (individual
+    // issues) → criteria (distinct WCAG rules) → documents. `applicable`/`autoFix` remain the
+    // ALL-criteria totals (used elsewhere); the core* fields are the document-core subset the tile leads with.
     return { level: lvl, total, conformant, failing: total - conformant, applicable, autoFix,
+             coreFindings: core.coreFindings, coreCriteria: core.coreCriteria, coreAutoFix: core.coreAutoFix,
              pct: Math.round((conformant / total) * 100) }
   }
   const computeResult = (lvl) => computeResultFrom(docs, lvl)
@@ -295,13 +305,26 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                 Showing results from a previous assessment — click Assess to run again.
               </p>
             )}
-            {/* conformant + failing is ALREADY a strict partition (failing = total - conformant,
-                see computeResult above) — the only gap was that `total` was never shown to a
-                sighted user, so the two tiles below never visibly summed to anything. This line
-                makes that sum explicit instead of leaving it implicit / sr-only. */}
-            <p className="assesssummary" style={{ fontSize: 13.5, margin: '0 0 10px' }}>
-              <b>{result.total.toLocaleString()}</b> documents assessed at WCAG 2.1 {result.level} → <b style={{ color: '#3B6D11' }}>{result.conformant.toLocaleString()} conformant</b> + <b style={{ color: '#854F0B' }}>{result.failing.toLocaleString()} with blocking findings</b>.
-            </p>
+            {/* Actionability-first verdict (Scan → Understand → Fix): answer "what do I need to
+                fix, and can ACP fix it?" in plain language BEFORE the WCAG taxonomy below. All
+                counts are the document-core numbers, so they reconcile with the tiles + the
+                "By WCAG criterion" table. */}
+            {result.failing > 0 ? (
+              <div style={{ margin: '0 0 12px', padding: '12px 14px', borderRadius: 8, background: '#FBF1E3', border: '1px solid #E8C98A' }}>
+                <div style={{ fontSize: 14.5, fontWeight: 700, color: '#7A4A0B' }}>⚠ Needs attention — what to fix</div>
+                <div style={{ fontSize: 13.5, margin: '5px 0 0', color: '#3D3A34', lineHeight: 1.5 }}>
+                  <b>{result.coreFindings.toLocaleString()}</b> issue{result.coreFindings !== 1 ? 's' : ''} across <b>{result.coreCriteria.toLocaleString()}</b> WCAG criteria in <b>{result.failing.toLocaleString()}</b> of <b>{result.total.toLocaleString()}</b> document{result.total !== 1 ? 's' : ''}.
+                  {' '}<b style={{ color: '#3B6D11' }}>{result.coreAutoFix.toLocaleString()}</b> ACP can fix automatically · <b style={{ color: '#854F0B' }}>{(result.coreFindings - result.coreAutoFix).toLocaleString()}</b> need a person.
+                </div>
+              </div>
+            ) : (
+              <div style={{ margin: '0 0 12px', padding: '12px 14px', borderRadius: 8, background: '#EDF6E4', border: '1px solid #B7D89B' }}>
+                <div style={{ fontSize: 14.5, fontWeight: 700, color: '#3B6D11' }}>✓ Ready to certify</div>
+                <div style={{ fontSize: 13.5, margin: '5px 0 0', color: '#3D3A34' }}>
+                  No blocking findings at WCAG 2.1 {result.level} — all {result.total.toLocaleString()} document{result.total !== 1 ? 's' : ''} pass the document core.
+                </div>
+              </div>
+            )}
             <div className="assesstiles">
               <div className="atile" title={`Documents with zero blocking findings at WCAG 2.1 ${result.level} — they pass as-is`}>
                 <b style={{ color: '#3B6D11' }}>{result.conformant.toLocaleString()}</b>
@@ -315,9 +338,9 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                 <b style={{ color: '#1F5FA8' }}>{result.pct}%</b>
                 <span>pass rate at {result.level}</span>
               </div>
-              <div className="atile" title={`Individual findings that block conformance at ${result.level}, summed across every document — one document can carry many. ${result.autoFix.toLocaleString()} can be fixed automatically from the Remediate tab; the rest need a person.`}>
-                <b>{result.applicable.toLocaleString()}</b>
-                <span>blocking findings <span className="muted">· {result.autoFix.toLocaleString()} auto-fixable, {(result.applicable - result.autoFix).toLocaleString()} need review</span></span>
+              <div className="atile" title={`${result.coreFindings.toLocaleString()} findings across ${result.coreCriteria.toLocaleString()} document-core WCAG criteria (the 20 shown in the table below) at ${result.level}. ${result.coreAutoFix.toLocaleString()} can be fixed automatically from the Remediate tab; the rest need a person. Reconciles with the "By WCAG criterion" table below.`}>
+                <b>{result.coreFindings.toLocaleString()}</b>
+                <span>issues found <span className="muted">· across {result.coreCriteria.toLocaleString()} criteria · {result.coreAutoFix.toLocaleString()} auto-fixable, {(result.coreFindings - result.coreAutoFix).toLocaleString()} need review</span></span>
               </div>
             </div>
             <p className="muted assessnote">{note}</p>

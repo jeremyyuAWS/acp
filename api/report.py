@@ -82,9 +82,11 @@ WCAG_META = {
 # Back-compat alias (older callers/tests referenced CRIT for the name lookup).
 CRIT = {k: v[0] for k, v in WCAG_META.items()}
 
-STATUS_COLOR = {"certifiable": GREEN, "issues": AMBER, "uncertain": BLUE, "unanalysable": GREY}
+STATUS_COLOR = {"certifiable": GREEN, "issues": AMBER, "uncertain": BLUE, "unanalysable": GREY,
+                "clean": BLUE}
 STATUS_LABEL = {"certifiable": "certifiable", "issues": "open findings",
-                "uncertain": "uncertain", "unanalysable": "could not analyse"}
+                "uncertain": "uncertain", "unanalysable": "could not analyse",
+                "clean": "no findings"}
 SEV_COLOR = {"CRITICAL": RED, "SERIOUS": AMBER, "MODERATE": BLUE, "MINOR": GREY}
 SEV_ORDER = ["CRITICAL", "SERIOUS", "MODERATE", "MINOR"]
 
@@ -100,7 +102,12 @@ def _status(f):
         return "unanalysable"
     if f["status"] == "uncertain":
         return "uncertain"
-    return "certifiable" if f["compliant"] else "issues"
+    if f["compliant"]:
+        return "certifiable"
+    # 'issues' means OPEN FINDINGS. A not-certifiable file with zero findings (an unscored
+    # discover/skip record) is 'clean', not 'issues' — mirrors FileDrawer.statusOf so the app,
+    # the certification PDF and the dashboards classify a file identically.
+    return "issues" if f.get("issues") else "clean"
 
 
 def _fmt(f):
@@ -480,7 +487,7 @@ def _donut(counts: dict[str, int]) -> Drawing:
     d = Drawing(250, 130)
     pie = Pie()
     pie.x, pie.y, pie.width, pie.height = 5, 15, 100, 100
-    order = [k for k in ("certifiable", "issues", "uncertain", "unanalysable") if counts.get(k)]
+    order = [k for k in ("certifiable", "issues", "clean", "uncertain", "unanalysable") if counts.get(k)]
     pie.data = [counts[k] for k in order] or [1]
     pie.labels = None
     pie.slices.strokeColor = colors.white

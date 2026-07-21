@@ -293,11 +293,26 @@ const SEV_LEGEND = [
   ['moderate', '#854F0B', '#FAEEDA', "Noticeable difficulty, but the content is still reachable — e.g. wrong reading order or undeclared language."],
   ['minor', '#5F5E5A', '#F1EFE8', "A minor annoyance or best-practice gap — e.g. unclear worksheet names."],
 ]
-export const statusOf = (f) => (f.status === 'error' ? 'unanalysable' : f.status === 'uncertain' ? 'uncertain' : f.compliant ? 'certifiable' : 'issues')
+// A file's verdict. 'issues' means it has OPEN FINDINGS — so it must key on the findings,
+// not just on `compliant`. A file that is not certifiable but has ZERO findings (a still-
+// unscored discover/skip record, score=null) is 'clean', NOT 'issues': calling it "open
+// findings" put it on the Remediate-in-progress path with nothing to remediate. The rubric
+// gives a genuinely-analysed clean file compliant=true (→ certifiable), so 'clean' only ever
+// catches the not-yet-scored / partial-coverage case.
+export const statusOf = (f) => (
+  f.status === 'error' ? 'unanalysable'
+  : f.status === 'uncertain' ? 'uncertain'
+  : f.compliant ? 'certifiable'
+  : (f.issues && f.issues.length) ? 'issues'
+  : 'clean'
+)
 export const STATUS_BADGE = {
   certifiable: ['#E7F0DC', '#3B6D11'], issues: ['#FAEEDA', '#854F0B'],
   uncertain: ['#E6EFFB', '#2A5E9E'], unanalysable: ['#EEEDEA', '#5F5E5A'],
+  clean: ['#E8F0FB', '#2A5E9E'],
 }
+// Badge caption per status — 'clean' reads better as "no findings" than the raw key.
+export const STATUS_TAG_LABEL = { clean: 'no findings' }
 
 // Retention/lifecycle recommendation (step 3 · Retain / Archive / Delete) — based
 // purely on metadata + risk flags, NOT on accessibility findings (that's Assess).
@@ -314,6 +329,10 @@ function journeyStates(st, remNow) {
   if (st === 'unanalysable') return ['done', 'done', 'done', 'blocked', 'blocked', 'blocked', 'blocked', 'blocked', 'blocked', 'blocked']
   const base = ['done', 'done', 'done', 'done', 'done']
   if (st === 'certifiable') return [...base, 'remediated', 'reviewed', 'done', 'proj', 'proj']
+  // Clean = no findings, so there is nothing to remediate: Remediate is 'not needed', not
+  // 'in progress'. Human review stays projected (some criteria may still need human sign-off
+  // for full certification, but that's optional, not blocking work).
+  if (st === 'clean') return [...base, 'skip', 'proj', 'proj', 'proj', 'proj']
   // `st` is derived from the file prop, which the parent doesn't refresh after a
   // remediate-now run completes -- so without this, the journey stays stuck on
   // "Remediate · in progress" even once the job is done. remNow is this component's
@@ -671,7 +690,9 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           caller passes yet (Discover/Integrations/KnowledgeGraph don't) — renders nothing
           when absent, same as before this existed. */}
       {scanId && <div style={{ margin: '0 0 12px' }}><TraceChip scanId={scanId} kind="file" file={file.file} label="View this document's trace" refreshKey={remNow?.done ? 1 : 0} /></div>}
-      <Thumbnail scanId={scanId} file={file.file} className="drawer-thumb" />
+      {/* Visual evidence is ACP's differentiator — give the preview real estate (~2× the old
+          240px) so the reviewer can actually see the document, not a stamp. */}
+      <Thumbnail scanId={scanId} file={file.file} className="drawer-thumb" maxHeight={440} />
       {/* ADR 0026 — the authoritative Accessibility Status hero replaces the client-side Document
           Health header: one backend-driven status surface (decision-first, coverage vs status,
           segmented bar, Why?, one dynamic CTA) that can never disagree with the coverage matrix. */}
@@ -684,8 +705,11 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         }
       }} />
       <div className="drawerstats">
-        <span className="badge" style={{ background: sbg, color: sfg }}>{st}</span>
-        <span className="drawerscore">{file.score === null ? 'n/a' : `${st === 'uncertain' ? '≤' : ''}${file.score}`}<span className="muted"> / 100</span></span>
+        <span className="badge" style={{ background: sbg, color: sfg }}>{STATUS_TAG_LABEL[st] || st}</span>
+        {st === 'clean' && file.score === null
+          ? <span className="drawerscore">no findings</span>
+          : <span className="drawerscore">{file.score === null ? 'n/a' : `${st === 'uncertain' ? '≤' : ''}${file.score}`}<span className="muted"> / 100</span></span>}
+        {st === 'clean' && <span className="muted">no blocking findings — not yet certified; some criteria still need human validation (see coverage below)</span>}
         {st === 'uncertain' && <span className="muted">{file.skipped_rules} rule(s) skipped — score is an upper bound</span>}
         {effectiveRemediated && st === 'issues' && <span className="muted">score reflects the original scan — the fixed copy is stored; re-validate to refresh</span>}
         {(remNow?.done || effectiveRemediated) && (
@@ -757,7 +781,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
 
       {ontBlock}
 
-      {file.rec && (() => {
+      {file.rec && issues.length > 0 && (() => {
+        // Suppress the remediation recommendation entirely when there are no findings — a
+        // clean file has nothing to auto-fix, so an "Auto-remediate · no human needed" card
+        // (built from the empty findings list) directly contradicted the coverage table.
         const r = file.rec; const [label, bg, fg, icon] = REC_STYLE[r.action] || REC_STYLE.review
         return (
           <div className="reccard" style={{ borderColor: fg + '55' }}>
@@ -833,9 +860,22 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                   if (i.page && !g.pages.includes(i.page)) g.pages.push(i.page)
                 }
               })
+              // Action-first grouping: the reviewer thinks in WORK, not WCAG numbers. Show the
+              // auto-fixable findings (ACP handles them) first, then the ones a person must decide,
+              // each under a lane header — so the panel answers "what happens next" at a glance.
+              const laneOf = (g) => (findingAuto(g) ? 'auto' : 'review')
+              groups.sort((a, b) => (laneOf(a) === 'auto' ? 0 : 1) - (laneOf(b) === 'auto' ? 0 : 1))
+              const autoCount = groups.filter((g) => laneOf(g) === 'auto').length
+              const reviewCount = groups.length - autoCount
               return groups.map((i, n) => {
               const [bg, fg] = SEV[i.severity] || SEV.MINOR
-              return (
+              const lane = laneOf(i)
+              const laneHeader = (n === 0 || laneOf(groups[n - 1]) !== lane) ? (
+                <div className="findlane" key={`lane-${lane}`} style={{ margin: n === 0 ? '2px 0 6px' : '14px 0 6px', fontSize: 12.5, fontWeight: 700, color: lane === 'auto' ? '#2E6B0E' : '#854F0B' }}>
+                  {lane === 'auto' ? `⚡ Automatic — ACP fixes these (${autoCount})` : `✎ Needs review — a person decides (${reviewCount})`}
+                </div>
+              ) : null
+              const card = (
                 <div className="finding" key={n}>
                   <span className="badge" style={{ background: bg, color: fg }}>{(i.severity || '').toLowerCase()}</span>
                   <div className="findingmain">
@@ -934,6 +974,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                   </div>
                 </div>
               )
+              return laneHeader ? [laneHeader, card] : card
             }) })()}
           </div>
           <details className="sevhelp">
@@ -1280,22 +1321,30 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         )
       })()}
 
-      <h4 className="drawerh">Document journey</h4>
-      <ol className="journeyline">
-        {STEPS.map((label, i) => {
-          const [glyph, color, bg] = STATE[states[i]]
-          const note = STATE_NOTE[states[i]]
-          return (
-            <li className="jrow" key={label}>
-              <span className="jdot" style={{ color, background: bg }} aria-hidden="true">{glyph}</span>
-              <span className="jlabel">{label}{i === 3 && file.score !== null ? ` · ${st === 'uncertain' ? '≤' : ''}${file.score}` : ''}</span>
-              {note && <span className="muted jnote">{note}</span>}
-            </li>
-          )
-        })}
-      </ol>
-
-      <AssessmentTimeline scanId={scanId} file={file?.file} />
+      {/* Audit detail (journey · trace · history) is for auditors, not the "is this OK?" question —
+          collapse it so the drawer leads with status/findings, not a diagnostic dump. The journey
+          is now a compact HORIZONTAL row (was a tall vertical list eating ~1/5 of the panel). */}
+      <details className="drawer-audit">
+        <summary style={{ cursor: 'pointer', color: '#1F5FA8', fontWeight: 600, margin: '14px 0 0' }}>
+          Audit details <span className="muted" style={{ fontWeight: 400 }}>· journey · trace · history</span>
+        </summary>
+        <h4 className="drawerh" style={{ marginTop: 12 }}>Document journey</h4>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center', margin: '4px 0 0' }}>
+          {STEPS.map((label, i) => {
+            const [glyph, color, bg] = STATE[states[i]]
+            const note = STATE_NOTE[states[i]]
+            return (
+              <span key={label} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span title={note || undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 8px', borderRadius: 12, background: bg, color, fontSize: 12, whiteSpace: 'nowrap' }}>
+                  <b aria-hidden="true">{glyph}</b>{label}{i === 3 && file.score !== null ? ` · ${st === 'uncertain' ? '≤' : ''}${file.score}` : ''}
+                </span>
+                {i < STEPS.length - 1 && <span aria-hidden="true" style={{ color: '#c4c2c8' }}>→</span>}
+              </span>
+            )
+          })}
+        </div>
+        <AssessmentTimeline scanId={scanId} file={file?.file} />
+      </details>
     </Drawer>
   )
 }

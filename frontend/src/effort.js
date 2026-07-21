@@ -19,3 +19,11 @@ export const EFFORT_BASIS =
 
 export const fmtEffort = (m) =>
   m == null ? '—' : m === 0 ? 'no work' : m >= 90 ? `est. ${(m / 60).toFixed(1)} hrs` : `est. ${Math.round(m)} min`
+
+// Per-finding planning constants (minutes) — the same fixed heuristic sim.js's recommendFor uses
+// (~a minute to run an automated fix, ~35 to do one by hand), surfaced here so a surface can
+// estimate effort from a capability-grounded finding split WITHOUT the SIM-only f.rec (which is 0
+// on real scans). Still a planning estimate, never a measurement — always rendered via fmtEffort
+// ("est.") with EFFORT_BASIS as the tooltip.
+export const EFFORT_MIN = { auto: 1, person: 35 }
+export const estimateEffortMin = ({ auto = 0, person = 0 }) => auto * EFFORT_MIN.auto + person * EFFORT_MIN.person

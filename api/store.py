@@ -1185,9 +1185,19 @@ class Store:
     # (campaign, campaign_batch) so a reset wipes DATA but keeps settings + programs —
     # matching the panel's "Your settings are preserved" promise. Everything here is
     # scan-derived and re-populates on the next scan.
+    # Tables holding scan / review DATA (what the dashboards chart, plus per-file decisions,
+    # scan inventory, disposition audit, and the org review memory). Cleared by reset_analytics
+    # for a TRUE clean slate — everything here is customer/scan-derived and must not survive a
+    # reset when the app is handed to a new customer. Deliberately EXCLUDES only genuine
+    # configuration (app_settings, schedule_config, disposition_policy, ai_provider_config) and
+    # user-authored programs (campaign, campaign_batch), matching the panel's "Your settings are
+    # preserved" promise. If you add a table that stores scan/review output, ADD IT HERE — the
+    # reset-completeness test (test_reset_leaves_no_customer_data) fails closed if a data table
+    # is left out.
     _ANALYTICS_TABLES = ["scan_runs", "file_records", "issue_records", "scan_rule_traces",
-                         "scan_file_manifests", "pii_findings", "hitl_queue", "hitl_events",
-                         "decision_log", "inventory", "jobs", "documents",
+                         "scan_file_manifests", "scan_inventory", "scan_decisions",
+                         "pii_findings", "hitl_queue", "hitl_events", "disposition_audit",
+                         "decision_log", "inventory", "jobs", "documents", "org_memory",
                          "remediation_state", "remediation_diff", "applied_fixes", "ai_calls"]
 
     def reset_analytics(self) -> list[str]:

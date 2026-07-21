@@ -29,7 +29,10 @@ def test_report_status_matches_frontend_statusof():
     assert report._status({"status": "error", "compliant": 0}) == "unanalysable"
     assert report._status({"status": "uncertain", "compliant": 0}) == "uncertain"
     assert report._status({"status": "done", "compliant": 1}) == "certifiable"
-    assert report._status({"status": "done", "compliant": 0}) == "issues"
+    # 'issues' requires OPEN FINDINGS; a non-compliant file with none is 'clean' (mirrors the
+    # frontend statusOf). See tests/test_status_clean.py for the full matrix.
+    assert report._status({"status": "done", "compliant": 0, "issues": [{"wcag": "1.1.1"}]}) == "issues"
+    assert report._status({"status": "done", "compliant": 0, "issues": []}) == "clean"
 
 
 def test_file_extent_size_and_ooxml_counts(tmp_path):
