@@ -31,6 +31,11 @@ public static class LocationHelper
         Description = $"xlsx:sheet:{sheetName}:col:{colIndex}"
     };
 
+    public static IssueLocation FromCell(string sheetName, string cellReference) => new()
+    {
+        Description = $"xlsx:sheet:{sheetName}:cell:{cellReference}"
+    };
+
     public static IssueLocation FromDocument() => new()
     {
         Description = "xlsx:document"

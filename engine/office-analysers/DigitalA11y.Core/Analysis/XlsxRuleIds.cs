@@ -9,6 +9,8 @@ public static class XlsxRuleIds
     public const string HiddenContent = "XLSX-HIDDEN-001";
     public const string MergedCells = "XLSX-MERGE-001";
     public const string DocumentTitle = "XLSX-TITLE-001";
+    public const string BlankWorksheet = "XLSX-BLANK-001";
+    public const string LinkPurpose = "XLSX-LINK-001";
 
     public static IReadOnlyList<string> All =>
     [
@@ -19,5 +21,7 @@ public static class XlsxRuleIds
         HiddenContent,
         MergedCells,
         DocumentTitle,
+        BlankWorksheet,
+        LinkPurpose,
     ];
 }

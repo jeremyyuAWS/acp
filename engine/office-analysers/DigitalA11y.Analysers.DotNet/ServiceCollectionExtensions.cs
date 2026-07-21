@@ -84,6 +84,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IXlsxRule, Xlsx.Rules.TableHeaderRule>();
         services.AddScoped<IXlsxRule, Xlsx.Rules.HiddenContentRule>();
         services.AddScoped<IXlsxRule, Xlsx.Rules.MergedCellsRule>();
+        services.AddScoped<IXlsxRule, Xlsx.Rules.BlankWorksheetRule>();
+        services.AddScoped<IXlsxRule, Xlsx.Rules.LinkPurposeRule>();
 
         return services;
     }

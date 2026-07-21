@@ -39,7 +39,7 @@ public class HiddenContentRule : IXlsxRule
                 if (!hidden) continue;
 
                 var hasContent = row.Descendants<Cell>()
-                    .Any(c => !string.IsNullOrWhiteSpace(GetCellValue(c, sharedStrings)));
+                    .Any(c => !string.IsNullOrWhiteSpace(CellValueHelper.GetCellValue(c, sharedStrings)));
 
                 if (hasContent)
                 {
@@ -80,7 +80,7 @@ public class HiddenContentRule : IXlsxRule
                     {
                         var colIndex = GetColumnIndex(c.CellReference?.Value);
                         return colIndex >= minCol && colIndex <= maxCol &&
-                               !string.IsNullOrWhiteSpace(GetCellValue(c, sharedStrings));
+                               !string.IsNullOrWhiteSpace(CellValueHelper.GetCellValue(c, sharedStrings));
                     });
 
                 if (hasContent)
@@ -106,32 +106,6 @@ public class HiddenContentRule : IXlsxRule
                 }
             }
         }
-    }
-
-    private static string? GetCellValue(Cell cell, SharedStringTable? sharedStrings)
-    {
-        // Inline strings (t="inlineStr") carry their text in the cell's InlineString child,
-        // not CellValue — a writer such as openpyxl emits them by default. Reading only
-        // CellValue.Text left inline content looking empty, so hidden inline-string cells
-        // were never flagged.
-        if (cell.DataType?.Value == CellValues.InlineString)
-        {
-            return cell.InlineString?.InnerText;
-        }
-
-        var value = cell.CellValue?.Text;
-        if (value is null) return null;
-
-        if (cell.DataType?.Value == CellValues.SharedString && sharedStrings is not null)
-        {
-            if (int.TryParse(value, out var idx))
-            {
-                var item = sharedStrings.ElementAtOrDefault(idx) as SharedStringItem;
-                return item?.InnerText;
-            }
-        }
-
-        return value;
     }
 
     private static uint GetColumnIndex(string? cellReference)

@@ -162,6 +162,18 @@ public static class RuleMetadataRegistry
                 "A table has no header row. Header rows are required for assistive technologies to identify column context when navigating data cells.",
                 "Convert the first row to a header row via Table Design → Header Row."),
 
+            [XlsxRuleIds.BlankWorksheet] = new(
+                XlsxRuleIds.BlankWorksheet,
+                "Sheet has no content",
+                "A sheet contains no cell data, charts, or images. Blank sheets add confusing, empty stops for screen reader users navigating between sheet tabs.",
+                "Delete the sheet if it is not needed, or add content to it."),
+
+            [XlsxRuleIds.LinkPurpose] = new(
+                XlsxRuleIds.LinkPurpose,
+                "Link text does not describe the link purpose",
+                "A cell hyperlink's display text is empty, generic (\"click here\"), or the raw URL — screen reader users skimming a links list cannot tell where it goes without following it.",
+                "Replace the cell's display text with a description that identifies the destination or purpose of the link."),
+
             // ── PDF ──────────────────────────────────────────────────────────────
 
             [PdfRuleIds.Tagged] = new(

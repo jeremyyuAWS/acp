@@ -295,6 +295,30 @@
       "severity": "MODERATE",
       "fix_mode": "human-only",
       "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/HiddenContentRule.cs"
+    },
+    {
+      "id": "XLSX-BLANK-001",
+      "title": "Blank worksheet",
+      "description": "A visible sheet with no cell data, charts, or images is an empty stop for screen reader users tabbing through the workbook. Delete it or add content.",
+      "wcag": "SC_1_3_2",
+      "wcag_sc": "1.3.2",
+      "wcag_display": "Meaningful Sequence",
+      "wcag_level": "A",
+      "severity": "MODERATE",
+      "fix_mode": "human-only",
+      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/BlankWorksheetRule.cs"
+    },
+    {
+      "id": "XLSX-LINK-001",
+      "title": "Link text not descriptive",
+      "description": "A cell hyperlink's display text is empty, generic ('click here'), or the raw URL. Covers both standard cell hyperlinks and =HYPERLINK() formula cells, which never appear in the worksheet's own hyperlinks list.",
+      "wcag": "SC_2_4_4",
+      "wcag_sc": "2.4.4",
+      "wcag_display": "Link Purpose (In Context)",
+      "wcag_level": "A",
+      "severity": "MODERATE",
+      "fix_mode": "human-only",
+      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/LinkPurposeRule.cs"
     }
   ],
   "pdf": [
