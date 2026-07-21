@@ -50,7 +50,10 @@ public class DocumentLanguageRule : IPptxRule
     }
 
     // True when any run or end-paragraph mark on a slide, layout, or master declares a
-    // language via its lang attribute — the signal assistive tech actually reads.
+    // language via its lang or altLang attribute — the signals assistive tech actually
+    // reads. altLang is DrawingML's east-Asian-language counterpart to lang (e.g. CJK text
+    // in a deck whose primary language is Latin-script); PowerPoint treats a run tagged only
+    // via altLang as language-declared, so this must too.
     private static bool HasContentLanguage(PresentationDocument document)
     {
         var pres = document.PresentationPart;
@@ -65,9 +68,11 @@ public class DocumentLanguageRule : IPptxRule
             var root = part.RootElement;
             if (root is null) continue;
             foreach (var rpr in root.Descendants<A.RunProperties>())
-                if (!string.IsNullOrWhiteSpace(rpr.Language)) return true;
+                if (!string.IsNullOrWhiteSpace(rpr.Language) || !string.IsNullOrWhiteSpace(rpr.AlternativeLanguage))
+                    return true;
             foreach (var epr in root.Descendants<A.EndParagraphRunProperties>())
-                if (!string.IsNullOrWhiteSpace(epr.Language)) return true;
+                if (!string.IsNullOrWhiteSpace(epr.Language) || !string.IsNullOrWhiteSpace(epr.AlternativeLanguage))
+                    return true;
         }
 
         return false;

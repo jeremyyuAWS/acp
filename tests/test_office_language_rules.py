@@ -65,6 +65,21 @@ def _strip_pptx_lang(src: Path, dst: Path) -> None:
             z.writestr(n, data[n])
 
 
+def _pptx_lang_to_altlang(src: Path, dst: Path) -> None:
+    """Rewrite every run-level `lang="..."` attribute to `altLang="..."`, so the only
+    declared language anywhere in the deck is via altLang (DrawingML's east-Asian-language
+    counterpart to lang, e.g. CJK text in an otherwise Latin-script deck)."""
+    with zipfile.ZipFile(src) as z:
+        names = z.namelist()
+        data = {n: z.read(n) for n in names}
+    for n in names:
+        if n.startswith("ppt/") and n.endswith(".xml"):
+            data[n] = re.sub(rb'\blang="', b'altLang="', data[n])
+    with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as z:
+        for n in names:
+            z.writestr(n, data[n])
+
+
 def _build_fixtures(d: Path) -> None:
     # Content language via run-level w:lang, blank metadata -> must PASS.
     doc = Document()
@@ -84,6 +99,7 @@ def _build_fixtures(d: Path) -> None:
     pres.core_properties.language = ""
     pres.save(d / "run_lang.pptx")
     _strip_pptx_lang(d / "run_lang.pptx", d / "no_lang.pptx")
+    _pptx_lang_to_altlang(d / "run_lang.pptx", d / "altlang_only.pptx")
 
     # metadata set + long same-language run without run-lang -> must NOT false-positive.
     same = Document()
@@ -131,6 +147,10 @@ def test_document_language_reads_content_not_only_metadata(tmp_path):
     # No language anywhere -> still FLAGGED.
     assert _has_lang_finding(res["no_lang.docx"])
     assert _has_lang_finding(res["no_lang.pptx"])
+
+    # Language declared only via altLang (DrawingML's east-Asian-language counterpart to
+    # lang) -> must PASS, not be treated as undeclared.
+    assert not _has_lang_finding(res["altlang_only.pptx"])
 
 
 def test_language_of_parts_only_flags_foreign_script(tmp_path):
