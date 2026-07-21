@@ -73,6 +73,87 @@ def test_xlsx_contrast_noop_when_already_ok():
     assert rem._remediate_xlsx_contrast(entries) == []
 
 
+# ── theme-color contrast: xl/theme/theme1.xml resolution ────────────────────────
+# A minimal, real Office theme scheme. `theme=` cell attributes index this list in
+# SpreadsheetML order (lt1, dk1, lt2, dk2, accent1-6, hlink, folHlink) — NOT clrScheme's
+# XML order (dk1 first) — see office_structure._XLSX_THEME_SLOT_ORDER.
+_THEME = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office">'
+    '<a:themeElements><a:clrScheme name="Office">'
+    '<a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>'
+    '<a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>'
+    '<a:dk2><a:srgbClr val="44546A"/></a:dk2>'
+    '<a:lt2><a:srgbClr val="E7E6E6"/></a:lt2>'
+    '<a:accent1><a:srgbClr val="4472C4"/></a:accent1>'
+    '<a:accent2><a:srgbClr val="ED7D31"/></a:accent2>'
+    '<a:accent3><a:srgbClr val="A5A5A5"/></a:accent3>'
+    '<a:accent4><a:srgbClr val="FFC000"/></a:accent4>'
+    '<a:accent5><a:srgbClr val="5B9BD5"/></a:accent5>'
+    '<a:accent6><a:srgbClr val="70AD47"/></a:accent6>'
+    '<a:hlink><a:srgbClr val="0563C1"/></a:hlink>'
+    '<a:folHlink><a:srgbClr val="954F72"/></a:folHlink>'
+    '</a:clrScheme></a:themeElements></a:theme>'
+)
+
+
+def _themed_styles(font_color_attrs: str, fill_color_attrs: str) -> str:
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        f'<fonts count="1"><font><sz val="11"/><color {font_color_attrs}/></font></fonts>'
+        '<fills count="3">'
+        '<fill><patternFill patternType="none"/></fill>'
+        '<fill><patternFill patternType="gray125"/></fill>'
+        f'<fill><patternFill patternType="solid"><fgColor {fill_color_attrs}/></patternFill></fill>'
+        '</fills>'
+        '<cellXfs count="1"><xf fontId="0" fillId="2" xfId="0"/></cellXfs>'
+        '</styleSheet>'
+    )
+
+
+def test_xlsx_theme_color_low_contrast_detected():
+    # accent1 (4472C4) tinted toward white (tint=0.5 → A2B8E2, luma .71) on lt1 (white,
+    # theme=0) — a themed pairing that was previously invisible to the detector entirely.
+    entries = {
+        "xl/theme/theme1.xml": _THEME.encode(),
+        "xl/styles.xml": _themed_styles('theme="4" tint="0.5"', 'theme="0"').encode(),
+        "xl/worksheets/sheet1.xml": _SHEET.encode(),
+    }
+    found = osx.xlsx_contrast_checks(_write_xlsx(entries))
+    assert {f["ruleId"] for f in found} == {"XLSX_LOW_CONTRAST_AA", "XLSX_LOW_CONTRAST_AAA"}
+
+
+def test_xlsx_theme_color_high_contrast_not_flagged():
+    # accent1 at full strength (no tint) on white — genuinely high contrast; proves
+    # theme resolution isn't just always-flagging themed cells.
+    entries = {
+        "xl/theme/theme1.xml": _THEME.encode(),
+        "xl/styles.xml": _themed_styles('theme="4"', 'theme="0"').encode(),
+        "xl/worksheets/sheet1.xml": _SHEET.encode(),
+    }
+    assert osx.xlsx_contrast_checks(_write_xlsx(entries)) == []
+
+
+def test_xlsx_theme_color_unresolvable_without_theme_part():
+    # No xl/theme/theme1.xml at all — theme= colors stay unresolvable and the cell is
+    # skipped, not guessed at (same honest posture as indexed= colors).
+    entries = {
+        "xl/styles.xml": _themed_styles('theme="4" tint="0.5"', 'theme="0"').encode(),
+        "xl/worksheets/sheet1.xml": _SHEET.encode(),
+    }
+    assert osx.xlsx_contrast_checks(_write_xlsx(entries)) == []
+
+
+def test_xlsx_theme_tint_formula_matches_spreadsheetml_spec():
+    # Negative tint darkens toward black; positive tint lightens toward white — the
+    # SpreadsheetML float formula, distinct from DOCX's byte-fraction themeTint/themeShade.
+    darker = osx._apply_xlsx_tint("4472C4", -0.5)
+    lighter = osx._apply_xlsx_tint("4472C4", 0.5)
+    assert osx._hex_luma(darker) < osx._hex_luma("4472C4") < osx._hex_luma(lighter)
+    assert osx._apply_xlsx_tint("4472C4", 0.0) == "4472C4"
+
+
 def test_html_contrast_darkens_light_text():
     fixed, applied, _ = remediate_html('<html><body><p style="color:#cccccc">Body</p></body></html>')
     assert "color:#111111" in fixed.replace(" ", "")

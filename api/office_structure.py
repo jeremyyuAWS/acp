@@ -27,16 +27,17 @@ the zip/XML/PDF ourselves).
         the SC's full width/spacing/colour surface.
   1.4.3 / 1.4.6 Contrast (xlsx) — cell font vs. fill color, resolved through
         xl/styles.xml's cellXfs -> fonts/fills chain and luma-diffed the same
-        heuristic way as the HTML/PDF contrast checks. DELIBERATELY NARROW:
-        only <color rgb="..."/> is resolved (direct RGB). theme= and
-        indexed= colors, and non-solid pattern fills (stripes/half-tones),
-        resolve to "unknown" and the cell is skipped rather than guessed at
-        — theme colors are exactly what Excel's built-in header/table styles
-        use, and guessing wrong there is the false-positive risk (flagging
-        routine formatting) this check exists to avoid. A cell with no
-        explicit fill resolves to white with high confidence (Excel's actual
-        default), which is different from "unresolvable" — that's a real,
-        positive signal, not a guess.
+        heuristic way as the HTML/PDF contrast checks. Direct <color rgb="..."/>
+        and theme=<N> (resolved against xl/theme/theme1.xml's <a:clrScheme>,
+        tint applied per the SpreadsheetML tint formula — see _apply_xlsx_tint)
+        both resolve deterministically. indexed= colors (the legacy 56-entry
+        palette) and non-solid pattern fills (stripes/half-tones) still resolve
+        to "unknown" and the cell is skipped rather than guessed at — that
+        remaining population is genuinely ambiguous without also parsing the
+        legacy indexed-color table. A cell with no explicit fill resolves to
+        white with high confidence (Excel's actual default), which is
+        different from "unresolvable" — that's a real, positive signal, not a
+        guess.
 
 docx/pptx style IDs (Heading1..9, title placeholder type) are locale-invariant
 OOXML identifiers — only the *display* name is localized — so no styles.xml
@@ -1036,21 +1037,90 @@ _FG_COLOR = re.compile(r"<fgColor\b([^/]*)/>")
 _CELL = re.compile(r'<c\b[^>]*\bs="(\d+)"[^>]*(?:/>|>(.*?)</c>)', re.S)
 
 
+# xl/theme/theme1.xml's <a:clrScheme> lists dk1,lt1,dk2,lt2,accent1-6,hlink,folHlink in
+# that XML order — but a cell's <color theme="N"/> index does NOT follow that order.
+# SpreadsheetML swaps the first two pairs (a documented OOXML/Excel quirk, matched by
+# openpyxl and SheetJS): index 0/1 are lt1/dk1, not dk1/lt1.
+_XLSX_THEME_SLOT_ORDER = (
+    "lt1", "dk1", "lt2", "dk2",
+    "accent1", "accent2", "accent3", "accent4", "accent5", "accent6",
+    "hlink", "folHlink",
+)
+_CLR_SCHEME = re.compile(r"<a:clrScheme\b[^>]*>(.*?)</a:clrScheme>", re.S)
+_CLR_SLOT = re.compile(r"<a:(dk1|lt1|dk2|lt2|accent[1-6]|hlink|folHlink)>(.*?)</a:\1>", re.S)
+_SRGB_CLR = re.compile(r'<a:srgbClr\s+val="([0-9A-Fa-f]{6})"')
+_SYS_CLR = re.compile(r'<a:sysClr\b[^>]*\blastClr="([0-9A-Fa-f]{6})"')
+
+
+def _parse_xlsx_theme(theme_xml: str) -> list[str | None]:
+    """Returns the 12 theme colors in SpreadsheetML `theme=` index order
+    (see _XLSX_THEME_SLOT_ORDER), or None per-slot if unresolvable."""
+    scheme_m = _CLR_SCHEME.search(theme_xml)
+    if not scheme_m:
+        return [None] * 12
+    slots: dict[str, str] = {}
+    for name, body in _CLR_SLOT.findall(scheme_m.group(1)):
+        m = _SRGB_CLR.search(body) or _SYS_CLR.search(body)
+        if m:
+            slots[name] = m.group(1).upper()
+    return [slots.get(name) for name in _XLSX_THEME_SLOT_ORDER]
+
+
+def _apply_xlsx_tint(hexcolor: str, tint: float) -> str:
+    """SpreadsheetML tint (ECMA-376 §18.8.3): a float in [-1.0, 1.0] applied to the
+    HSL Lightness channel — negative darkens toward black, positive lightens toward
+    white. This is NOT the same formula as DOCX's themeTint/themeShade byte-fraction
+    math; reusing that formula here would produce a wrong ratio, not just a missing one."""
+    import colorsys
+    if tint == 0:
+        return hexcolor
+    r, g, b = (int(hexcolor[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    l = l * (1.0 + tint) if tint < 0 else l * (1.0 - tint) + tint
+    l = max(0.0, min(1.0, l))
+    rr, gg, bb = colorsys.hls_to_rgb(h, l, s)
+    return f"{round(rr * 255):02X}{round(gg * 255):02X}{round(bb * 255):02X}"
+
+
+def _theme_rgb(color_attrs: str, theme_colors: list[str | None]) -> str | None:
+    """Resolves <color theme="N" tint="F"/> (or <fgColor theme=.../>) through the
+    workbook's theme colour scheme. None if the theme index is out of range or that
+    slot itself didn't resolve (e.g. an unrecognised sysClr) — unresolvable stays
+    unresolvable, never guessed at."""
+    theme_m = re.search(r'theme="(\d+)"', color_attrs)
+    if not theme_m:
+        return None
+    idx = int(theme_m.group(1))
+    if idx < 0 or idx >= len(theme_colors) or theme_colors[idx] is None:
+        return None
+    base = theme_colors[idx]
+    tint_m = re.search(r'tint="(-?[\d.]+)"', color_attrs)
+    if not tint_m:
+        return base
+    try:
+        return _apply_xlsx_tint(base, float(tint_m.group(1)))
+    except ValueError:
+        return base
+
+
 def _explicit_rgb(color_attrs: str) -> str | None:
-    """Only <color rgb="XXXXXXXX"/> (or <fgColor rgb=.../>) resolves — theme=
-    and indexed= colors return None (unresolvable), matching the module-level
-    stance: guessing at a theme/indexed color is exactly the false-positive
-    risk (flagging routine header/table styling) this check must avoid."""
+    """Only <color rgb="XXXXXXXX"/> (or <fgColor rgb=.../>) resolves — indexed=
+    colors return None (unresolvable), matching the module-level stance: guessing
+    at an indexed color is exactly the false-positive risk (flagging routine
+    header/table styling) this check must avoid. theme= colors are resolved
+    separately via _theme_rgb, given they're now safe to resolve deterministically."""
     m = re.search(r'rgb="([0-9A-Fa-f]{6,8})"', color_attrs)
     return m.group(1)[-6:].upper() if m else None
 
 
-def _xlsx_font_color(font_xml: str) -> str | None:
+def _xlsx_font_color(font_xml: str, theme_colors: list[str | None] | None = None) -> str | None:
     m = re.search(r"<color\b([^/]*)/>", font_xml)
-    return _explicit_rgb(m.group(1)) if m else None
+    if not m:
+        return None
+    return _explicit_rgb(m.group(1)) or (_theme_rgb(m.group(1), theme_colors) if theme_colors else None)
 
 
-def _xlsx_fill_color(fill_xml: str) -> str | None:
+def _xlsx_fill_color(fill_xml: str, theme_colors: list[str | None] | None = None) -> str | None:
     """None = truly unresolvable (skip). '#FFFFFF' (as a real value, not a
     sentinel) for a confidently-white default: absent/none pattern type IS
     Excel's real default background, a positive signal, not a guess. Any
@@ -1062,7 +1132,9 @@ def _xlsx_fill_color(fill_xml: str) -> str | None:
     if pattern_type != "solid":
         return None
     fg_m = _FG_COLOR.search(fill_xml)
-    return _explicit_rgb(fg_m.group(1)) if fg_m else None
+    if not fg_m:
+        return None
+    return _explicit_rgb(fg_m.group(1)) or (_theme_rgb(fg_m.group(1), theme_colors) if theme_colors else None)
 
 
 def _hex_luma(hexcolor: str) -> float:
@@ -1080,8 +1152,10 @@ def xlsx_contrast_checks(path: Path) -> list[dict]:
             styles = _read(zf, "xl/styles.xml")
             if not styles:
                 return []
-            fonts = [_xlsx_font_color(m) for m in _FONT_BLOCK.findall(_container(_FONTS_CONTAINER, styles))]
-            fills = [_xlsx_fill_color(m) for m in _FILL_BLOCK.findall(_container(_FILLS_CONTAINER, styles))]
+            theme_xml = _read(zf, "xl/theme/theme1.xml")
+            theme_colors = _parse_xlsx_theme(theme_xml) if theme_xml else [None] * 12
+            fonts = [_xlsx_font_color(m, theme_colors) for m in _FONT_BLOCK.findall(_container(_FONTS_CONTAINER, styles))]
+            fills = [_xlsx_fill_color(m, theme_colors) for m in _FILL_BLOCK.findall(_container(_FILLS_CONTAINER, styles))]
 
             style_colors: dict[int, tuple[str, str]] = {}
             for i, xf in enumerate(_XF.findall(_container(_CELLXFS_CONTAINER, styles))):

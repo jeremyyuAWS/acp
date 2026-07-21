@@ -22,6 +22,7 @@ public class ColourContrastRule : IDocxRule
 
         var stylesPart = document.MainDocumentPart?.StyleDefinitionsPart;
         var themePart = document.MainDocumentPart?.ThemePart;
+        var themeScheme = ThemeColorHelper.BuildScheme(themePart);
 
         var paragraphs = body.Descendants<Paragraph>().ToList();
 
@@ -42,11 +43,32 @@ public class ColourContrastRule : IDocxRule
             {
                 var rpr = run.RunProperties;
                 var colorVal = rpr?.Color?.Val?.Value;
+                string? foregroundHex = null;
 
-                if (string.IsNullOrWhiteSpace(colorVal) || colorVal.Equals("auto", StringComparison.OrdinalIgnoreCase))
+                if (!string.IsNullOrWhiteSpace(colorVal) && !colorVal.Equals("auto", StringComparison.OrdinalIgnoreCase))
+                {
+                    foregroundHex = NormaliseHex(colorVal);
+                }
+                else
+                {
+                    // No direct hex (or "auto") — fall back to the run's theme colour
+                    // reference, if any. Unresolvable theme references are skipped, same
+                    // honest posture as an absent colour: never guess.
+                    var themeColorVal = rpr?.Color?.ThemeColor?.Value;
+                    if (themeColorVal is not null)
+                    {
+                        foregroundHex = ThemeColorHelper.Resolve(
+                            themeColorVal,
+                            rpr?.Color?.ThemeTint?.Value,
+                            rpr?.Color?.ThemeShade?.Value,
+                            themeScheme);
+                    }
+                }
+
+                if (foregroundHex is null)
                     continue;
 
-                string foreground = NormaliseHex(colorVal);
+                string foreground = foregroundHex;
                 string background = paraBackground ?? DefaultBackground;
 
                 bool isBold = IsBold(run, stylesPart);
