@@ -38,11 +38,20 @@ public class HeadingStructureRule : IDocxRule
         for (int i = 0; i < paragraphs.Count; i++)
         {
             var styleId = paragraphs[i].ParagraphProperties?.ParagraphStyleId?.Val?.Value ?? string.Empty;
-            if (HeadingLevels.TryGetValue(styleId, out int level))
+            var outlineLevelValue = paragraphs[i].ParagraphProperties?.OutlineLevel?.Val?.Value;
+
+            int level;
+            if (outlineLevelValue is >= 0 and <= 8)
             {
-                var text = string.Concat(paragraphs[i].Descendants<Text>().Select(t => t.Text));
-                headings.Add((i, level, text));
+                level = outlineLevelValue.Value + 1;
             }
+            else if (!HeadingLevels.TryGetValue(styleId, out level))
+            {
+                continue;
+            }
+
+            var text = string.Concat(paragraphs[i].Descendants<Text>().Select(t => t.Text));
+            headings.Add((i, level, text));
         }
 
         if (headings.Count == 0)
