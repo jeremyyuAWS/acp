@@ -1,4 +1,6 @@
 using System.Text.RegularExpressions;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Office2019.Drawing;
 
 namespace DigitalA11y.Analysers.DotNet.Helpers;
 
@@ -39,5 +41,19 @@ public static class AltTextHeuristics
         if (trimmed.Any(char.IsWhiteSpace)) return false;
         if (trimmed.Contains('/') || trimmed.Contains('\\')) return true;
         return ImageFilename.IsMatch(trimmed);
+    }
+
+    /// <summary>
+    /// True when <paramref name="nonVisualProps"/> (DocProperties or NonVisualDrawingProperties)
+    /// carries the OOXML decorative marker (<c>&lt;adec:decorative val="1"/&gt;</c> in its
+    /// extLst). An author who correctly marks an image decorative leaves descr empty on
+    /// purpose — that empty descr must not be flagged as missing alt text. Mirrors the check
+    /// already applied on the remediation side in api/remediate_office.py's _inject_descr,
+    /// which skips writing alt text into images marked decorative this same way.
+    /// </summary>
+    public static bool IsMarkedDecorative(OpenXmlElement? nonVisualProps)
+    {
+        if (nonVisualProps is null) return false;
+        return nonVisualProps.Descendants<Decorative>().Any(d => d.Val?.Value == true);
     }
 }

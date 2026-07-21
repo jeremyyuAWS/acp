@@ -7,7 +7,7 @@
 
 ## What it checks
 
-Every image in `xl/drawings/*.xml` must have a non-empty `descr` on its `<xdr:cNvPr>`. NOT checked: charts (see the chart-specific oracle corpus file — chart alt lives on the chart part), sparklines, or conditional-format icons.
+Every image in `xl/drawings/*.xml` must have a non-empty `descr` on its `<xdr:cNvPr>`, unless the drawing carries the OOXML decorative extension (`adec:decorative val="1"` in `<xdr:cNvPr>`'s `extLst`) — the same shared Office marker Word and PowerPoint use for "Mark as decorative". NOT checked: charts (see the chart-specific oracle corpus file — chart alt lives on the chart part), sparklines, or conditional-format icons.
 
 ## Why it matters
 
@@ -40,5 +40,4 @@ assert undescribed("xlsx-compliant.xlsx") == 0
 
 ## Failure modes
 
-- **False positive:** Decorative divider images (Excel has no decorative marker) are always flagged.
 - **False negative:** Charts without alt text are missed by THIS rule when the drawing anchor itself carries a descr.

@@ -58,6 +58,7 @@ public class AltTextRule : IDocxRule
 
         if (string.IsNullOrWhiteSpace(description))
         {
+            if (AltTextHeuristics.IsMarkedDecorative(props)) return null;
             return MakeIssue(paragraphIndex, drawingId, "(empty)", "The image has no alt text description.");
         }
 

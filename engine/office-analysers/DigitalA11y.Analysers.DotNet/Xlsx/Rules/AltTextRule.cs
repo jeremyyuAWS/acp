@@ -76,6 +76,7 @@ public class AltTextRule : IXlsxRule
 
         if (string.IsNullOrWhiteSpace(description))
         {
+            if (AltTextHeuristics.IsMarkedDecorative(nvPr)) return null;
             return MakeIssue(sheetName, "(empty)", drawingId, "The image or chart has no alt text description.");
         }
 

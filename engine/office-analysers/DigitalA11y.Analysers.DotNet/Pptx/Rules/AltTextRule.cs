@@ -33,7 +33,8 @@ public class AltTextRule : IPptxRule
             var issue = EvaluateDrawingProps(
                 nvPr.Name?.Value ?? "unknown",
                 nvPr.Description?.Value,
-                slideIndex);
+                slideIndex,
+                nvPr);
             if (issue is not null) yield return issue;
         }
 
@@ -46,7 +47,8 @@ public class AltTextRule : IPptxRule
             var issue = EvaluateDrawingProps(
                 nvPr.Name?.Value ?? "unknown",
                 nvPr.Description?.Value,
-                slideIndex);
+                slideIndex,
+                nvPr);
             if (issue is not null) yield return issue;
         }
     }
@@ -54,10 +56,12 @@ public class AltTextRule : IPptxRule
     private A11yIssue? EvaluateDrawingProps(
         string elementName,
         string? description,
-        int slideIndex)
+        int slideIndex,
+        DocumentFormat.OpenXml.OpenXmlElement nvPr)
     {
         if (string.IsNullOrWhiteSpace(description))
         {
+            if (AltTextHeuristics.IsMarkedDecorative(nvPr)) return null;
             return MakeIssue(slideIndex, elementName, "(empty)", "The element has no alt text description.");
         }
 

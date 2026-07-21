@@ -7,7 +7,7 @@
 
 ## What it checks
 
-Every `<w:drawing>` element that contains a `<wp:docPr>` node must have a non-empty `descr` attribute. The check excludes images whose `descr` is explicitly set to an empty string AND whose `title` attribute is `""` with the drawing marked as decorative (which is the correct way to mark a decorative image in Word).
+Every `<w:drawing>` element that contains a `<wp:docPr>` node must have a non-empty `descr` attribute, unless the drawing carries the OOXML decorative extension (`adec:decorative val="1"` in `<wp:docPr>`'s `extLst`) — the correct way to mark a decorative image in Word, and the mark reviewers use via "Mark as decorative".
 
 ## Why it matters
 
@@ -41,5 +41,4 @@ assert rule.check(make_drawing("Bar chart showing Q4 revenue")) == "PASS"
 
 ## Failure modes
 
-- **False positive:** decorative images where the author set `descr=""` but did NOT mark the shape as decorative — the engine still flags these. Correct fix: mark as decorative or provide alt text.
 - **False negative:** images embedded via OLE (not `<w:drawing>`) are not checked by this rule. Tracked in backlog.
