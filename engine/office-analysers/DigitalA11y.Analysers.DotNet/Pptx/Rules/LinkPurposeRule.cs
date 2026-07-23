@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using DigitalA11y.Analysers.DotNet.Pptx.Helpers;
 using DigitalA11y.Core.Analysis;
 using DigitalA11y.Core.Enums;
@@ -14,6 +15,11 @@ public class LinkPurposeRule : IPptxRule
     private static readonly HashSet<string> GenericLinkTexts =
         new(StringComparer.OrdinalIgnoreCase)
         { "click here", "here", "read more", "link", "more" };
+
+    // Mirrors DOCX's LinkPurposeRule and office_structure.py's _is_vague_link_text — a bare
+    // URL used as its own label is the same failure as "click here", spelled differently.
+    private static readonly Regex RawUrlPattern =
+        new(@"^(https?://|www\.)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public IEnumerable<A11yIssue> AnalyseSlide(
         SlidePart slidePart,
@@ -54,14 +60,20 @@ public class LinkPurposeRule : IPptxRule
                 ? string.Concat(para.Descendants<A.Text>().Select(t => t.Text ?? string.Empty)).Trim()
                 : string.Concat(run.Descendants<A.Text>().Select(t => t.Text ?? string.Empty)).Trim();
 
-            if (string.IsNullOrWhiteSpace(linkText) || GenericLinkTexts.Contains(linkText))
+            bool isEmpty = string.IsNullOrWhiteSpace(linkText);
+            bool isGeneric = !isEmpty && GenericLinkTexts.Contains(linkText);
+            bool isRawUrl = !isEmpty && !isGeneric && RawUrlPattern.IsMatch(linkText);
+
+            if (isEmpty || isGeneric || isRawUrl)
             {
                 yield return new A11yIssue
                 {
                     IssueId = Guid.NewGuid(),
                     RuleId = RuleId,
                     Title = "Link text does not describe its purpose",
-                    Description = $"A hyperlink on slide {slideIndex + 1} has non-descriptive link text \"{(string.IsNullOrWhiteSpace(linkText) ? "(empty)" : linkText)}\". Users cannot determine the link destination without context.",
+                    Description = isRawUrl
+                        ? $"A hyperlink on slide {slideIndex + 1} uses the raw URL \"{linkText}\" as its text, not a description of the destination."
+                        : $"A hyperlink on slide {slideIndex + 1} has non-descriptive link text \"{(isEmpty ? "(empty)" : linkText)}\". Users cannot determine the link destination without context.",
                     Severity = IssueSeverity.MODERATE,
                     Category = IssueCategory.LINKS,
                     WcagCriterion = WcagCriterion.SC_2_4_4,

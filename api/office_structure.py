@@ -1137,15 +1137,14 @@ def _xlsx_fill_color(fill_xml: str, theme_colors: list[str | None] | None = None
     return _explicit_rgb(fg_m.group(1)) or (_theme_rgb(fg_m.group(1), theme_colors) if theme_colors else None)
 
 
-def _hex_luma(hexcolor: str) -> float:
-    r, g, b = (int(hexcolor[i:i + 2], 16) for i in (0, 2, 4))
-    return (0.299 * r + 0.587 * g + 0.114 * b) / 255
-
-
 def xlsx_contrast_checks(path: Path) -> list[dict]:
     """1.4.3 / 1.4.6 Contrast — see module docstring for the deliberately
     narrow resolution scope (direct RGB only; theme/indexed/patterned fills
-    are skipped, not guessed at)."""
+    are skipped, not guessed at). Uses the true WCAG relative-luminance ratio
+    (_contrast_ratio, the same function pptx_contrast_checks already uses),
+    not a luma-difference proxy — a cell can have a large luma gap and still
+    fail the ratio (or vice versa), so the proxy could both over- and
+    under-flag relative to the real thresholds."""
     findings: list[dict] = []
     try:
         with zipfile.ZipFile(path) as zf:
@@ -1180,18 +1179,14 @@ def xlsx_contrast_checks(path: Path) -> list[dict]:
                     colors = style_colors.get(int(style_idx))
                     if not colors:
                         continue
-                    diff = abs(_hex_luma(colors[0]) - _hex_luma(colors[1]))
-                    if diff < 0.5:
+                    f6, b6 = colors[0][-6:], colors[1][-6:]
+                    ratio = _contrast_ratio(f6, b6)
+                    if ratio < 7.0:
                         seen_aaa = True
-                    if diff < 0.3:
+                    if ratio < 4.5:
                         seen_aa = True
-                    # Track the worst pairing by the TRUE WCAG ratio (for the review card's colour
-                    # swatch) — detection above is unchanged; this only records the colours+ratio.
-                    if diff < 0.5:
-                        f6, b6 = colors[0][-6:], colors[1][-6:]
-                        r = _contrast_ratio(f6, b6)
-                        if worst is None or r < worst[0]:
-                            worst = (r, f6, b6)
+                    if ratio < 7.0 and (worst is None or ratio < worst[0]):
+                        worst = (ratio, f6, b6)
                 if seen_aa and seen_aaa:
                     break
     except Exception:

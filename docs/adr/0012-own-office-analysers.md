@@ -72,3 +72,18 @@ rubric/coverage).
   unchanged, as expected (neither `tests/` nor `docs/` enters the build context).
 - The Python remediator's `dc:language` stuffing is now largely redundant for well-authored
   files; it remains a valid fallback and is unchanged here.
+
+## Amendment — 2026-07-23: SC_3_1_2 remap lands
+
+The 2026-07-08 deferral above is resolved. `WcagCriterion.cs` gained a `SC_3_1_2` member
+(Language of Parts) and `LanguageOfPartsRule.cs` now reports under it directly instead of
+sharing `SC_3_1_1` with `DocumentLanguageRule`. `config/rule-catalog.json`'s
+`DOCX-LANGPART-001` entry was corrected to match (`wcag`/`wcag_sc`/`wcag_display`, the
+display string had also drifted to say "Language of Page"). `config/rubric.default.json`
+and `api/report.py` already modelled `SC_3_1_2` independently on the Python side — this
+closes the gap between the .NET engine's output and what those already expected, rather
+than introducing a new concept on either side. `tests/test_office_language_rules.py`'s
+DOCX language-mismatch test previously discriminated the two findings by title substring
+(both shared `SC_3_1_1`); it now asserts on the distinct SC codes directly. Not a "config
+change" as originally hoped when this was scoped — required the enum addition above,
+which is source, not config.

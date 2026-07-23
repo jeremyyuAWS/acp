@@ -62,9 +62,13 @@ def test_xlsx_contrast_detected_then_cleared():
     # a new black/white font was cloned and the cell style repointed to it
     styles = entries["xl/styles.xml"].decode()
     assert 'count="2"' in styles and ('FF000000' in styles or 'FFFFFFFF' in styles)
-    # detector no longer flags it
+    # detector no longer flags AA (4.5:1) — the fixer's guarantee, matching
+    # min_contrast_recolor's target=4.5 for docx/pptx. AAA (7:1) is a stricter bar
+    # a mid-grey #808080 fill can't reach with black text alone (best case is
+    # ~5.3:1) — that's a genuine, correctly-surfaced AAA finding, not a fixer bug;
+    # closing it would mean also recolouring the fill, out of scope for this fixer.
     after = osx.xlsx_contrast_checks(_write_xlsx(entries))
-    assert after == []
+    assert {f["ruleId"] for f in after} == {"XLSX_LOW_CONTRAST_AAA"}
 
 
 def test_xlsx_contrast_noop_when_already_ok():
@@ -124,15 +128,19 @@ def test_xlsx_theme_color_low_contrast_detected():
     assert {f["ruleId"] for f in found} == {"XLSX_LOW_CONTRAST_AA", "XLSX_LOW_CONTRAST_AAA"}
 
 
-def test_xlsx_theme_color_high_contrast_not_flagged():
-    # accent1 at full strength (no tint) on white — genuinely high contrast; proves
-    # theme resolution isn't just always-flagging themed cells.
+def test_xlsx_theme_color_passes_aa_not_aaa():
+    # accent1 at full strength (no tint) on white — 4472C4 on FFFFFF is 4.7:1: clears
+    # AA (4.5:1) but not AAA (7:1). Proves theme resolution isn't just always-flagging
+    # themed cells (AA is silent here) while still measuring accurately at the AAA
+    # bar, rather than the old luma-diff proxy's looser "genuinely high contrast" call
+    # that missed this AAA failure entirely.
     entries = {
         "xl/theme/theme1.xml": _THEME.encode(),
         "xl/styles.xml": _themed_styles('theme="4"', 'theme="0"').encode(),
         "xl/worksheets/sheet1.xml": _SHEET.encode(),
     }
-    assert osx.xlsx_contrast_checks(_write_xlsx(entries)) == []
+    found = osx.xlsx_contrast_checks(_write_xlsx(entries))
+    assert {f["ruleId"] for f in found} == {"XLSX_LOW_CONTRAST_AAA"}
 
 
 def test_xlsx_theme_color_unresolvable_without_theme_part():
@@ -148,9 +156,12 @@ def test_xlsx_theme_color_unresolvable_without_theme_part():
 def test_xlsx_theme_tint_formula_matches_spreadsheetml_spec():
     # Negative tint darkens toward black; positive tint lightens toward white — the
     # SpreadsheetML float formula, distinct from DOCX's byte-fraction themeTint/themeShade.
+    # Ordering checked via _wcag_luminance (the true WCAG relative-luminance function
+    # xlsx_contrast_checks now uses) rather than the old _hex_luma proxy, which was
+    # removed once nothing needed it for contrast pass/fail anymore.
     darker = osx._apply_xlsx_tint("4472C4", -0.5)
     lighter = osx._apply_xlsx_tint("4472C4", 0.5)
-    assert osx._hex_luma(darker) < osx._hex_luma("4472C4") < osx._hex_luma(lighter)
+    assert osx._wcag_luminance(darker) < osx._wcag_luminance("4472C4") < osx._wcag_luminance(lighter)
     assert osx._apply_xlsx_tint("4472C4", 0.0) == "4472C4"
 
 
