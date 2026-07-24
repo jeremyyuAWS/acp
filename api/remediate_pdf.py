@@ -464,6 +464,30 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
                      "bookmark outline", "screen-reader/keyboard users can jump between sections")
         except Exception:
             pass
+        # 2.4.3 focus order — set /Tabs = /S (structure order) on every page carrying form-field
+        # widgets that doesn't already declare it, so the keyboard tab sequence follows the
+        # tagged reading order rather than the PDF's default (raw annotation-array order, which
+        # rarely matches visual layout). Existence check only — this does NOT verify the AcroForm
+        # field order itself matches reading order; that needs /StructTreeRoot walking this
+        # codebase doesn't do yet, a real, separate, larger gap.
+        try:
+            from office_structure import _pdf_page_has_widget
+            n_tabs = 0
+            if "/AcroForm" in pdf.Root and "/Fields" in pdf.Root["/AcroForm"]:
+                for page in pdf.pages:
+                    if not _pdf_page_has_widget(page, pikepdf):
+                        continue
+                    tabs = page.obj.get("/Tabs")
+                    if tabs is None or str(tabs) != "/S":
+                        page.obj["/Tabs"] = pikepdf.Name("/S")
+                        n_tabs += 1
+            if n_tabs:
+                applied.append(f"Set /Tabs to structure order on {n_tabs} page(s) with form "
+                               "fields · 2.4.3")
+                _rec("2.4.3", "(/Tabs missing or not /S — tab order may not follow reading order)",
+                     "/Tabs = /S", f"{n_tabs} page(s) now tab in structure (reading) order")
+        except Exception:
+            skipped.append("focus order: could not set /Tabs · 2.4.3")
         pdf.save(str(mid_path))
     finally:
         pdf.close()

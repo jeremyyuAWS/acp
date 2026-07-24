@@ -166,6 +166,47 @@ def test_docx_high_contrast_and_no_outline_not_flagged(tmp_path):
     assert os_.docx_nontext_contrast_checks(bad) == []
 
 
+def _xlsx_drawing(spPr: str, prefixed: bool = True) -> str:
+    """An xl/drawings/drawingN.xml carrying one <xdr:sp> shape with the given spPr — Excel is
+    inconsistent about prefixing the shape-properties element, so both variants are exercised."""
+    tag = "xdr:spPr" if prefixed else "spPr"
+    return (f'<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing">'
+            f'<xdr:twoCellAnchor><xdr:sp><{tag}>{spPr}</{tag}></xdr:sp></xdr:twoCellAnchor></xdr:wsDr>')
+
+
+def test_xlsx_faint_shape_outline_flags_nontext_contrast(tmp_path):
+    spPr = '<a:ln><a:solidFill><a:srgbClr val="EEEEEE"/></a:solidFill></a:ln>' + _FILL
+    p = _zip(tmp_path, "faint.xlsx", {"xl/drawings/drawing1.xml": _xlsx_drawing(spPr)})
+    f = os_.xlsx_nontext_contrast_checks(p)
+    assert _wcags(f) == {"1.4.11 Non-text Contrast"} and _all_review(f)
+    assert "EEEEEE" in f[0]["detail"] and "FFFFFF" in f[0]["detail"]
+    # routed through the xlsx dispatcher too
+    assert any(x["wcag"].startswith("1.4.11") for x in os_.checks_for(p, ".xlsx"))
+
+
+def test_xlsx_faint_outline_flags_with_unprefixed_sppr(tmp_path):
+    """Some Excel-authored files don't prefix the shape-properties element with xdr: — must still
+    be caught, not silently missed just because of the namespace variant."""
+    spPr = '<a:ln><a:solidFill><a:srgbClr val="EEEEEE"/></a:solidFill></a:ln>' + _FILL
+    p = _zip(tmp_path, "faint-unprefixed.xlsx",
+             {"xl/drawings/drawing1.xml": _xlsx_drawing(spPr, prefixed=False)})
+    f = os_.xlsx_nontext_contrast_checks(p)
+    assert _wcags(f) == {"1.4.11 Non-text Contrast"}
+
+
+def test_xlsx_high_contrast_and_no_outline_not_flagged(tmp_path):
+    ok = '<a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln>' + _FILL
+    assert os_.xlsx_nontext_contrast_checks(
+        _zip(tmp_path, "ok.xlsx", {"xl/drawings/drawing1.xml": _xlsx_drawing(ok)})) == []
+    assert os_.xlsx_nontext_contrast_checks(
+        _zip(tmp_path, "noln.xlsx", {"xl/drawings/drawing1.xml": _xlsx_drawing(_FILL)})) == []
+    assert os_.xlsx_nontext_contrast_checks(
+        _zip(tmp_path, "nodraw.xlsx", {"xl/worksheets/sheet1.xml": _sheet("")})) == []
+    bad = tmp_path / "bad.xlsx"
+    bad.write_bytes(b"not a zip")
+    assert os_.xlsx_nontext_contrast_checks(bad) == []
+
+
 # ── dispatcher wiring + robustness ───────────────────────────────────────────
 def test_checks_for_routes_all_three(tmp_path):
     xlsx = _zip(tmp_path, "cf.xlsx", {"xl/worksheets/sheet1.xml": _sheet(

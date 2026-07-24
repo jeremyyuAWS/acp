@@ -116,3 +116,57 @@ def test_unified_dispatch_routes_field_and_figure(tmp_path):
         p.read_bytes(), {loc: "Signature date", "word/x#rId9": "office"})
     assert _tus(fixed)["Text1"] == "Signature date"
     assert unresolved == ["word/x#rId9"]
+
+
+# ── /FT (role) and /V (value) — the two 4.1.2 sub-checks alongside /TU ──────────
+def test_field_with_valid_type_and_name_is_clean(tmp_path):
+    """A named, well-typed, non-required field trips none of the three checks."""
+    p = tmp_path / "clean.pdf"; _form_pdf(p, ["First Name"])
+    pdf = pikepdf.open(str(p))
+    RP._collect_form_fields(pdf)[0]["/TU"] = pikepdf.String("First name")
+    out = tmp_path / "clean-tu.pdf"; pdf.save(str(out)); pdf.close()
+    assert OSX.pdf_form_field_checks(out) == []
+
+
+def test_malformed_field_type_flagged(tmp_path):
+    """A field whose /FT has been corrupted to a non-spec value has no determinable role."""
+    p = tmp_path / "badtype.pdf"; _form_pdf(p, ["First Name"])
+    pdf = pikepdf.open(str(p))
+    fld = RP._collect_form_fields(pdf)[0]
+    fld["/TU"] = pikepdf.String("First name")           # named, so only the type check should fire
+    fld["/FT"] = pikepdf.Name("/Bogus")
+    out = tmp_path / "badtype-2.pdf"; pdf.save(str(out)); pdf.close()
+    findings = OSX.pdf_form_field_checks(out)
+    assert [f["ruleId"] for f in findings] == ["PDF_FORM_NO_FIELD_TYPE"]
+
+
+def test_required_field_without_value_flagged(tmp_path):
+    """A required field (Ff bit 2) with no /V and no /DV has no determinable current value."""
+    p = tmp_path / "req.pdf"; _form_pdf(p, ["First Name"])
+    pdf = pikepdf.open(str(p))
+    fld = RP._collect_form_fields(pdf)[0]
+    fld["/TU"] = pikepdf.String("First name")            # named + valid type, isolate the /V check
+    fld["/Ff"] = pikepdf.Integer(2)                       # Required bit
+    out = tmp_path / "req-2.pdf"; pdf.save(str(out)); pdf.close()
+    findings = OSX.pdf_form_field_checks(out)
+    assert [f["ruleId"] for f in findings] == ["PDF_FORM_REQUIRED_NO_VALUE"]
+
+
+def test_required_field_with_value_not_flagged(tmp_path):
+    p = tmp_path / "reqv.pdf"; _form_pdf(p, ["First Name"])
+    pdf = pikepdf.open(str(p))
+    fld = RP._collect_form_fields(pdf)[0]
+    fld["/TU"] = pikepdf.String("First name")
+    fld["/Ff"] = pikepdf.Integer(2)
+    fld["/V"] = pikepdf.String("Jane")
+    out = tmp_path / "reqv-2.pdf"; pdf.save(str(out)); pdf.close()
+    assert OSX.pdf_form_field_checks(out) == []
+
+
+def test_optional_empty_field_not_flagged_for_value(tmp_path):
+    """A non-required field with no /V is completely normal (an empty optional text box)."""
+    p = tmp_path / "opt.pdf"; _form_pdf(p, ["First Name"])
+    pdf = pikepdf.open(str(p))
+    RP._collect_form_fields(pdf)[0]["/TU"] = pikepdf.String("First name")
+    out = tmp_path / "opt-2.pdf"; pdf.save(str(out)); pdf.close()
+    assert OSX.pdf_form_field_checks(out) == []
