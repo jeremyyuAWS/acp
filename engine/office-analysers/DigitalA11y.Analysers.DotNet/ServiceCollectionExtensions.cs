@@ -63,6 +63,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPptxRule, Pptx.Rules.DocumentLanguageRule>();
         services.AddScoped<IPptxRule, Pptx.Rules.LinkPurposeRule>();
         services.AddScoped<IPptxRule, Pptx.Rules.AnimationOrderRule>();
+        services.AddScoped<IPptxRule, Pptx.Rules.SlideTitleUniquenessRule>();
 
         return services;
     }
@@ -86,6 +87,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IXlsxRule, Xlsx.Rules.MergedCellsRule>();
         services.AddScoped<IXlsxRule, Xlsx.Rules.BlankWorksheetRule>();
         services.AddScoped<IXlsxRule, Xlsx.Rules.LinkPurposeRule>();
+        services.AddScoped<IXlsxRule, Xlsx.Rules.TableNameRule>();
+        services.AddScoped<IXlsxRule, Xlsx.Rules.SheetNameUniquenessRule>();
 
         return services;
     }

@@ -203,11 +203,12 @@ def test_html_serious_no_lang(report):
 # ── XLSX engine oracles ──────────────────────────────────────────────────────
 
 def test_xlsx_synthetic_violations(report):
-    """Synthetic XLSX hits: SHEET, MERGE, HIDDEN, TABLE, TITLE, LANG, and DEFAULT_LABELS
-    (2.4.6 — the workbook's only sheet is the default 'Sheet1'; added when the xlsx 2.4.6
-    assessment gap was closed)."""
+    """Synthetic XLSX hits: SHEET, MERGE, HIDDEN, TABLE, TABLE-NAME, TITLE, LANG, and
+    DEFAULT_LABELS (2.4.6 — the workbook's only sheet is the default 'Sheet1'; added when
+    the xlsx 2.4.6 assessment gap was closed). TABLE-NAME (2.4.2 — the second table is left
+    at Excel's auto-generated 'Table1' DisplayName) added when that assessment gap closed."""
     expected = {"XLSX-SHEET-001", "XLSX-MERGE-001", "XLSX-HIDDEN-001",
-                "XLSX-TABLE-001", "XLSX-TITLE-001", "XLSX-LANG-001",
+                "XLSX-TABLE-001", "XLSX-TABLE-NAME-001", "XLSX-TITLE-001", "XLSX-LANG-001",
                 "XLSX_DEFAULT_LABELS"}
     f = by_file(report).get("xlsx-synthetic-violations.xlsx")
     assert f is not None and f["status"] == "analysed"
@@ -218,6 +219,14 @@ def test_xlsx_noncompliant_exact_rules(report):
     f = by_file(report).get("xlsx-noncompliant.xlsx")
     assert f is not None and f["status"] == "analysed"
     assert _rules(f) == {"XLSX-TITLE-001", "XLSX-LANG-001"}, f"rule drift: {sorted(_rules(f))}"
+
+
+def test_xlsx_duplicate_sheet_names(report):
+    """Two sheets both named 'Data' — neither matches the default ^Sheet\\d+$ pattern
+    (no XLSX-SHEET-001), but they duplicate each other (XLSX-SHEET-002)."""
+    f = by_file(report).get("xlsx-duplicate-sheets.xlsx")
+    assert f is not None and f["status"] == "analysed"
+    assert _rules(f) == {"XLSX-SHEET-002"}, f"rule drift: {sorted(_rules(f))}"
 
 
 # ── PPTX engine oracles ──────────────────────────────────────────────────────
@@ -241,6 +250,14 @@ def test_pptx_noncompliant_exact_rules(report):
     assert f is not None and f["status"] == "analysed"
     assert _rules(f) == {"PPTX-TITLE-001", "PPTX-ALT-001"}, \
         f"rule drift: {sorted(_rules(f))}"
+
+
+def test_pptx_duplicate_titles(report):
+    """Both slides have non-empty titles (no PPTX-TITLE-001), but the second slide's
+    title duplicates the first's (PPTX-TITLE-002)."""
+    f = by_file(report).get("pptx-duplicate-titles.pptx")
+    assert f is not None and f["status"] == "analysed"
+    assert _rules(f) == {"PPTX-TITLE-002"}, f"rule drift: {sorted(_rules(f))}"
 
 
 # ── PDF engine oracles ───────────────────────────────────────────────────────

@@ -139,6 +139,18 @@
       "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/SlideTitleRule.cs"
     },
     {
+      "id": "PPTX-TITLE-002",
+      "title": "Slide title duplicates another slide",
+      "description": "Each slide's title should be unique across the deck. Duplicate titles make it impossible to distinguish slides by title alone when navigating by ear.",
+      "wcag": "SC_2_4_2",
+      "wcag_sc": "2.4.2",
+      "wcag_display": "Page Titled",
+      "wcag_level": "A",
+      "severity": "MODERATE",
+      "fix_mode": "auto",
+      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/SlideTitleUniquenessRule.cs"
+    },
+    {
       "id": "PPTX-LANG-001",
       "title": "Document language not declared",
       "description": "The presentation must declare a default BCP 47 language code in its core document properties.",
@@ -259,6 +271,30 @@
       "severity": "SERIOUS",
       "fix_mode": "auto",
       "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/TableHeaderRule.cs"
+    },
+    {
+      "id": "XLSX-TABLE-NAME-001",
+      "title": "Generic table name",
+      "description": "A formal table's DisplayName must not use Excel's auto-generated default (Table1, Table2, etc.). A descriptive name helps assistive technology and formula users identify the table's purpose.",
+      "wcag": "SC_2_4_2",
+      "wcag_sc": "2.4.2",
+      "wcag_display": "Page Titled",
+      "wcag_level": "A",
+      "severity": "MODERATE",
+      "fix_mode": "auto",
+      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/TableNameRule.cs"
+    },
+    {
+      "id": "XLSX-SHEET-002",
+      "title": "Sheet name duplicates another sheet",
+      "description": "Worksheet tab names should be unique across the workbook, even when they're not Excel's generic defaults. Duplicate names make it impossible to distinguish sheets by name alone.",
+      "wcag": "SC_2_4_6",
+      "wcag_sc": "2.4.6",
+      "wcag_display": "Headings and Labels",
+      "wcag_level": "AA",
+      "severity": "MODERATE",
+      "fix_mode": "auto",
+      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/SheetNameUniquenessRule.cs"
     },
     {
       "id": "XLSX-SHEET-001",

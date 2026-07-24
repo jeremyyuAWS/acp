@@ -65,7 +65,7 @@ print("HTML files written.")
 
 # ── XLSX ─────────────────────────────────────────────────────────────────────
 # Targets: XLSX-SHEET-001, XLSX-MERGE-001, XLSX-HIDDEN-001,
-#          XLSX-TITLE-001, XLSX-LANG-001, XLSX-TABLE-001
+#          XLSX-TITLE-001, XLSX-LANG-001, XLSX-TABLE-001, XLSX-TABLE-NAME-001
 
 from openpyxl import Workbook
 from openpyxl.worksheet.table import Table
@@ -96,6 +96,16 @@ ws.row_dimensions[11].hidden = True
 tab = Table(displayName="NoHeaderTable", ref="A1:C10")
 tab.headerRowCount = 0
 ws.add_table(tab)
+
+# A second table, header row intact but left at Excel's auto-generated default
+# DisplayName → XLSX-TABLE-NAME-001. Separate range so it doesn't overlap the
+# table above; a real header row so it doesn't also trip XLSX-TABLE-001.
+ws.cell(row=1, column=5, value="Header1")
+ws.cell(row=1, column=6, value="Header2")
+ws.cell(row=2, column=5, value="Data1")
+ws.cell(row=2, column=6, value="Data2")
+tab2 = Table(displayName="Table1", ref="E1:F2")
+ws.add_table(tab2)
 
 # Leave document title and language unset → XLSX-TITLE-001, XLSX-LANG-001
 # (defaults are None/empty — rule checks IsNullOrWhiteSpace)
@@ -302,5 +312,51 @@ _doc2.add_picture(_img2_buf, width=_DIn(1))
 
 _doc2.save(CORPUS / "docx-all-violations.docx")
 print("DOCX all-violations written.")
+
+# ── pptx-duplicate-titles.pptx ───────────────────────────────────────────────
+# Targets: PPTX-TITLE-002 (second slide's title duplicates the first's)
+# Avoids: PPTX-TITLE-001 (both titles are non-empty)
+
+prs4 = Presentation()
+_slide4a = prs4.slides.add_slide(prs4.slide_layouts[1])
+_slide4a.shapes.title.text = "Quarterly Report"
+_slide4b = prs4.slides.add_slide(prs4.slide_layouts[1])
+_slide4b.shapes.title.text = "Quarterly Report"          # duplicate → PPTX-TITLE-002
+prs4.core_properties.language = "en-US"                   # avoid PPTX-LANG-001
+
+prs4.save(CORPUS / "pptx-duplicate-titles.pptx")
+print("PPTX duplicate-titles written.")
+
+# ── xlsx-duplicate-sheets.xlsx ───────────────────────────────────────────────
+# Targets: XLSX-SHEET-002 (second sheet's name duplicates the first's)
+# Avoids: XLSX-SHEET-001 (neither name matches the ^Sheet\d+$ default pattern)
+# openpyxl silently deduplicates a colliding create_sheet() name (Data -> Data1), so
+# the true collision is forced by rewriting xl/workbook.xml's <sheet name=...> after save.
+
+_wb3 = Workbook()
+_wb3.active.title = "Data"
+_wb3.active.cell(row=1, column=1, value="not blank")       # avoid XLSX-BLANK-001
+_sheet3b = _wb3.create_sheet("Data1")
+_sheet3b.cell(row=1, column=1, value="not blank")           # avoid XLSX-BLANK-001
+_wb3.properties.title = "Duplicate Sheets Demo"            # avoid XLSX-TITLE-001
+_wb3.properties.language = "en-US"                         # avoid XLSX-LANG-001
+
+import zipfile as _zipfile
+
+_dup_path = CORPUS / "xlsx-duplicate-sheets.xlsx"
+_wb3.save(_dup_path)
+
+_dup_bytes = {}
+with _zipfile.ZipFile(_dup_path) as _zin:
+    for _item in _zin.infolist():
+        _data = _zin.read(_item.filename)
+        if _item.filename == "xl/workbook.xml":
+            _data = _data.replace(b'name="Data1"', b'name="Data"')  # force the collision
+        _dup_bytes[_item.filename] = _data
+with _zipfile.ZipFile(_dup_path, "w", _zipfile.ZIP_DEFLATED) as _zout:
+    for _name, _data in _dup_bytes.items():
+        _zout.writestr(_name, _data)
+
+print("XLSX duplicate-sheets written.")
 
 print("\nAll synthetic corpus files generated successfully.")

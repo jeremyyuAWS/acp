@@ -2504,13 +2504,23 @@ class Store:
     def approved_alt_values(self, scan_id: str, file: str) -> dict[str, str]:
         """{locator: alt text} awaiting a write into `file`, from its approved 1.1.1 rows.
 
-        Scoped to Non-text Content because apply_alt.py writes alt text and nothing else. A
-        link-purpose (2.4.4) approval has no applier yet, so it keeps the file out of Publish
-        rather than being quietly dropped — the gate above still counts it.
+        Scoped to Non-text Content because apply_alt.py writes alt text and nothing else.
         """
         out: dict[str, str] = {}
         for row in self._approved_unapplied_rows(scan_id, file):
             if str(row.get("rule_id") or "").strip() == "1.1.1":
+                out.update(self._row_approved_values(row))
+        return out
+
+    def approved_link_values(self, scan_id: str, file: str) -> dict[str, str]:
+        """{locator: link text} awaiting a write into `file`, from its approved 2.4.4/2.4.9 rows.
+
+        Both criteria share proposals.propose_link_texts' locator scheme (the link's resolved
+        HREF — see apply_link_text.py's module docstring for why), so one map serves both.
+        """
+        out: dict[str, str] = {}
+        for row in self._approved_unapplied_rows(scan_id, file):
+            if str(row.get("rule_id") or "").strip() in ("2.4.4", "2.4.9"):
                 out.update(self._row_approved_values(row))
         return out
 

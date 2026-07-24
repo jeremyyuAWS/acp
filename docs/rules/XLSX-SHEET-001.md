@@ -1,6 +1,6 @@
 # XLSX-SHEET-001 — Generic sheet name
 
-**WCAG:** 2.4.2 Page Titled (Level A)  
+**WCAG:** 2.4.6 Headings and Labels (Level AA)  
 **Severity:** MODERATE  
 **Fix mode:** auto  
 **Source:** `digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/SheetNameRule.cs`
