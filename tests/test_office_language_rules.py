@@ -127,13 +127,14 @@ def _run_cli(indir: Path, tmp_path: Path) -> dict[str, list[dict]]:
 
 
 def _has_lang_finding(issues: list[dict]) -> bool:
-    return any(i.get("wcag") == "SC_3_1_1"
-               and "different script" not in (i.get("title", "") or "").lower()
-               for i in issues)
+    # SC_3_1_1 and SC_3_1_2 are now distinct WcagCriterion members (see ADR 0012's
+    # 2026-07-23 amendment) — DocumentLanguageRule and LanguageOfPartsRule no longer
+    # share a code, so this can key on the SC directly instead of a title substring.
+    return any(i.get("wcag") == "SC_3_1_1" for i in issues)
 
 
 def _has_parts_finding(issues: list[dict]) -> bool:
-    return any("different script" in (i.get("title", "") or "").lower() for i in issues)
+    return any(i.get("wcag") == "SC_3_1_2" for i in issues)
 
 
 def test_document_language_reads_content_not_only_metadata(tmp_path):

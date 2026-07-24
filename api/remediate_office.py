@@ -820,8 +820,13 @@ def _remediate_pptx_slides(entries: dict, diffs=None) -> list[str]:
 def _remediate_xlsx_contrast(entries: dict, diffs=None) -> list[str]:
     """1.4.3 / 1.4.6 xlsx contrast — clone each offending font with a black/white
     colour and repoint its low-contrast cell style, so every flagged font/fill pair
-    reaches the luma-diff the detector requires. Mirrors office_structure's resolver
-    exactly (direct-RGB fonts + solid/none fills only) so it clears what it flags."""
+    reaches the true WCAG AA ratio (4.5:1) — the same guarantee min_contrast_recolor
+    already makes for docx/pptx (one of pure black/white always clears 4.5:1 against
+    any background). AAA (7:1) is a stricter bar some backgrounds can't reach with a
+    text-only recolor (a mid-grey fill caps how far black/white text can separate
+    from it); this fixer doesn't promise AAA, matching the docx/pptx fixer's own
+    target=4.5 default. Mirrors office_structure's resolver exactly (direct-RGB
+    fonts + solid/none fills only) so it clears what it flags at the AA bar."""
     import office_structure as _os
     styles = entries.get("xl/styles.xml", b"").decode("utf-8", "ignore")
     if not styles:
@@ -838,9 +843,12 @@ def _remediate_xlsx_contrast(entries: dict, diffs=None) -> list[str]:
         fid, filid = int(fid_m.group(1)), int(filid_m.group(1))
         fh = font_hexes[fid] if fid < len(font_hexes) else None
         kh = fill_hexes[filid] if filid < len(fill_hexes) else None
-        if not fh or not kh or abs(_os._hex_luma(fh) - _os._hex_luma(kh)) >= 0.5:
+        if not fh or not kh or _os._contrast_ratio(fh[-6:], kh[-6:]) >= 4.5:
             continue
-        target = "FF000000" if _os._hex_luma(kh) >= 0.5 else "FFFFFFFF"
+        # Whichever of pure black/white clears more contrast against this fill — same
+        # darken-vs-lighten decision min_contrast_recolor already makes for docx/pptx.
+        target = ("FF000000" if _os._contrast_ratio(kh[-6:], "000000") >= _os._contrast_ratio(kh[-6:], "FFFFFF")
+                  else "FFFFFFFF")
         base = fonts_raw[fid]
         cloned = (re.sub(r"<color\b[^/]*/>", f'<color rgb="{target}"/>', base, count=1)
                   if re.search(r"<color\b[^/]*/>", base) else base + f'<color rgb="{target}"/>')

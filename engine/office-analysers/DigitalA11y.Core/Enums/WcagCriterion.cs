@@ -17,6 +17,7 @@ public enum WcagCriterion
     SC_2_4_4,   // Link Purpose (In Context)
     SC_2_4_6,   // Headings and Labels
     SC_3_1_1,   // Language of Page
+    SC_3_1_2,   // Language of Parts
     SC_4_1_1,   // Parsing
     SC_4_1_2,   // Name, Role, Value
     SC_4_1_3    // Status Messages

@@ -8,8 +8,10 @@ using DocumentFormat.OpenXml.Wordprocessing;
 namespace DigitalA11y.Analysers.DotNet.Docx.Rules;
 
 // WCAG 3.1.2 (Language of Parts) — a passage in a language different from the document's
-// must carry its own language marker. The engine models this under SC_3_1_1 (the only
-// language criterion in the rubric). The original rule flagged EVERY 20+ word run that
+// must carry its own language marker. ADR 0012 originally deferred giving this its own
+// WcagCriterion member and reported it under SC_3_1_1 instead — SC_3_1_2 is now a real
+// enum value (WcagCriterion.cs) and this rule reports under it directly, distinct from
+// DocumentLanguageRule's SC_3_1_1. The original rule flagged EVERY 20+ word run that
 // lacked an explicit w:lang — but a run with no lang simply inherits the document/style
 // default language and is therefore already programmatically determinable, so that fired
 // on ordinary single-language documents (a false-positive flood). A run is only a genuine
@@ -60,7 +62,7 @@ public class LanguageOfPartsRule : IDocxRule
                     Description = $"A run of text is written predominantly in {runScript} script, different from the document's {docScript} script, but carries no explicit language. Text in a different language must be tagged so screen readers switch to the correct voice.",
                     Severity = IssueSeverity.MODERATE,
                     Category = IssueCategory.LANGUAGE,
-                    WcagCriterion = WcagCriterion.SC_3_1_1,
+                    WcagCriterion = WcagCriterion.SC_3_1_2,
                     RemediationType = RemediationType.HUMAN_REQUIRED,
                     RemediationGuidance = "Select this passage and set its language via Review → Language → Set Proofing Language so it is tagged distinctly from the document language.",
                     Location = LocationHelper.FromParagraph(paraIdx),
