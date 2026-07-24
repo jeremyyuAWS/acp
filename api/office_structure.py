@@ -1249,8 +1249,39 @@ def _pdf_field_unnamed(field) -> bool:
         return False
 
 
+# The four field types the PDF spec (1.7 §12.7.3.1) defines — /FT is guaranteed present on
+# every node _pdf_terminal_fields collects (that's its own inclusion test), but its VALUE is
+# never validated today. A value outside this set has no determinable role: assistive tech
+# can't tell a screen reader whether it's a text box, checkbox, radio button, or signature.
+_PDF_VALID_FIELD_TYPES = {"/Btn", "/Tx", "/Ch", "/Sig"}
+
+
+def _pdf_field_bad_type(field) -> bool:
+    try:
+        ft = field.get("/FT")
+        return ft is None or str(ft) not in _PDF_VALID_FIELD_TYPES
+    except Exception:
+        return False
+
+
+def _pdf_field_required_no_value(field) -> bool:
+    """A REQUIRED field (Ff bit 2 — PDF 1.7 Table 221) with no /V and no fallback /DV has no
+    determinable value — the "Value" half of 4.1.2, distinct from /TU's "Name" half. A field
+    that isn't required is fine empty (a blank optional text box is not a finding)."""
+    try:
+        ff = field.get("/Ff")
+        if ff is None or not (int(ff) & 2):
+            return False
+        has_value = "/V" in field and str(field.get("/V", "")).strip()
+        has_default = "/DV" in field and str(field.get("/DV", "")).strip()
+        return not (has_value or has_default)
+    except Exception:
+        return False
+
+
 def pdf_form_field_checks(path: Path) -> list[dict]:
-    """One 4.1.2 finding per interactive form field with no accessible name (/TU)."""
+    """4.1.2 findings per interactive form field: no accessible name (/TU), no recognized role
+    (/FT), or — for a required field — no determinable value (/V)."""
     try:
         import pikepdf
     except Exception:
@@ -1265,22 +1296,85 @@ def pdf_form_field_checks(path: Path) -> list[dict]:
             for f in root["/AcroForm"]["/Fields"]:
                 _pdf_terminal_fields(f, fields, set())
             for fld in fields:
-                if _pdf_field_unnamed(fld):
+                name = ""
+                try:
+                    name = str(fld.get("/T", "")).strip()
+                except Exception:
                     name = ""
-                    try:
-                        name = str(fld.get("/T", "")).strip()
-                    except Exception:
-                        name = ""
+                label = f"“{name}”" if name else "an interactive form field"
+                if _pdf_field_unnamed(fld):
                     findings.append({
                         "ruleId": "PDF_FORM_NO_ACCESSIBLE_NAME",
                         "wcag": "4.1.2 Name, Role, Value",
                         "severity": "CRITICAL",
-                        "detail": (f"form field “{name}” has no accessible name (/TU)" if name
-                                   else "an interactive form field has no accessible name (/TU)"),
+                        "detail": f"form field {label} has no accessible name (/TU)" if name
+                                  else f"{label} has no accessible name (/TU)",
+                    })
+                if _pdf_field_bad_type(fld):
+                    findings.append({
+                        "ruleId": "PDF_FORM_NO_FIELD_TYPE",
+                        "wcag": "4.1.2 Name, Role, Value",
+                        "severity": "CRITICAL",
+                        "detail": f"form field {label} has no recognized /FT — its role (button, "
+                                  "text box, choice, signature) isn't determinable",
+                    })
+                if _pdf_field_required_no_value(fld):
+                    findings.append({
+                        "ruleId": "PDF_FORM_REQUIRED_NO_VALUE",
+                        "wcag": "4.1.2 Name, Role, Value",
+                        "severity": "SERIOUS",
+                        "detail": f"required form field {label} has no value (/V) and no "
+                                  "default (/DV) — its current state isn't determinable",
                     })
     except Exception:
         return []
     return findings
+
+
+def _pdf_page_has_widget(page, pikepdf) -> bool:
+    try:
+        annots = page.obj.get("/Annots")
+        return bool(annots) and any(
+            str(a.get("/Subtype", "")) == "/Widget" for a in annots if isinstance(a, pikepdf.Dictionary))
+    except Exception:
+        return False
+
+
+def pdf_focus_order_checks(path: Path) -> list[dict]:
+    """2.4.3 Focus Order — a page carrying interactive form-field widgets whose /Tabs entry is
+    missing or isn't /S (structure order — the PDF spec's other options, /R row-order and
+    /C column-order, are legitimate for some layouts, but the widely-recommended default for
+    accessible tab order is /S). Scoped to the existence check only: this does NOT verify the
+    AcroForm field order itself matches visual/reading order — that needs walking
+    /StructTreeRoot, which nothing in this codebase does yet (a real, separate, larger gap).
+    Pages with no widgets are untouched — nothing to tab through, /Tabs is moot there."""
+    try:
+        import pikepdf
+    except Exception:
+        return []
+    bad_pages = 0
+    try:
+        with pikepdf.open(str(path)) as pdf:
+            root = pdf.Root
+            if "/AcroForm" not in root or "/Fields" not in root["/AcroForm"]:
+                return []
+            for page in pdf.pages:
+                if not _pdf_page_has_widget(page, pikepdf):
+                    continue
+                tabs = page.obj.get("/Tabs")
+                if tabs is None or str(tabs) != "/S":
+                    bad_pages += 1
+    except Exception:
+        return []
+    if not bad_pages:
+        return []
+    return [{
+        "ruleId": "PDF_TAB_ORDER_NOT_STRUCTURE",
+        "wcag": "2.4.3 Focus Order",
+        "severity": "MODERATE",
+        "detail": (f"{bad_pages} page(s) with form fields have no /Tabs entry set to /S "
+                   "(structure order) — the keyboard tab sequence may not follow reading order"),
+    }]
 
 
 def checks_for(path: Path, ext: str) -> list[dict]:
@@ -1301,10 +1395,12 @@ def checks_for(path: Path, ext: str) -> list[dict]:
         return (pdf_contrast_checks(path) + pdf_bypass_blocks_check(path) + pdf_form_field_checks(path)
                 + pdf_headings_labels_check(path) + pdf_link_purpose_check(path)
                 + pdf_text_spacing_checks(path) + pdf_use_of_color_checks(path)
-                + pdf_nontext_contrast_checks(path) + pdf_text_over_image_checks(path))
+                + pdf_nontext_contrast_checks(path) + pdf_text_over_image_checks(path)
+                + pdf_focus_order_checks(path))
     if ext == ".xlsx":
         return (xlsx_contrast_checks(path) + xlsx_structure_checks(path)
-                + office_control_review_checks(path, ext) + office_color_only_checks(path, ext))
+                + office_control_review_checks(path, ext) + office_color_only_checks(path, ext)
+                + xlsx_nontext_contrast_checks(path))
     return []
 
 
@@ -1590,6 +1686,48 @@ def docx_nontext_contrast_checks(path: Path) -> list[dict]:
     ratio, border_hex, fill_hex = worst
     return [_review_finding(
         "DOCX_NONTEXT_LOW_CONTRAST", "1.4.11 Non-text Contrast",
+        f"a shape outline #{border_hex} on its #{fill_hex} fill is {ratio:.1f}:1 (needs 3:1) — if the "
+        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative")]
+
+
+# xlsx shapes live in xl/drawings/drawingN.xml under the spreadsheetDrawing namespace (<xdr:sp>),
+# but Excel is inconsistent about prefixing the inner shape-properties element — some files write
+# <xdr:spPr>, others the bare <spPr> — so this tolerates both, unlike docx/pptx's single fixed
+# namespace. The <a:ln>/<a:solidFill> content inside is the same DrawingML as docx/pptx either way.
+_XDR_SPPR = re.compile(r"<(?:xdr:)?spPr\b.*?</(?:xdr:)?spPr>", re.S)
+
+
+def xlsx_nontext_contrast_checks(path: Path) -> list[dict]:
+    """1.4.11 Non-text Contrast (Review) for xlsx — the lowest-contrast solid outline-on-fill
+    DrawingML shape (<3:1) across every worksheet's drawing part. Mirrors
+    docx_nontext_contrast_checks/pptx_nontext_contrast_checks; only the drawing-part glob and the
+    shape-properties element's namespace tolerance differ. Never raises."""
+    worst = None      # (ratio, border_hex, fill_hex)
+    try:
+        with zipfile.ZipFile(path) as zf:
+            for drawing_name in sorted(n for n in zf.namelist()
+                                        if re.fullmatch(r"xl/drawings/drawing\d+\.xml", n)):
+                xml = _read(zf, drawing_name)
+                if not xml:
+                    continue
+                for sppr in _XDR_SPPR.findall(xml):
+                    ln_m = _A_LN_BLOCK.search(sppr)
+                    if not ln_m:
+                        continue
+                    border_m = _SOLID_SRGB.search(ln_m.group(0))              # the outline colour
+                    fill_m = _SOLID_SRGB.search(_A_LN_BLOCK.sub("", sppr))    # the fill (border stripped)
+                    if not border_m or not fill_m:
+                        continue
+                    ratio = _contrast_ratio(border_m.group(1), fill_m.group(1))
+                    if ratio < 3.0 and (worst is None or ratio < worst[0]):
+                        worst = (ratio, border_m.group(1), fill_m.group(1))
+    except Exception:
+        return []
+    if worst is None:
+        return []
+    ratio, border_hex, fill_hex = worst
+    return [_review_finding(
+        "XLSX_NONTEXT_LOW_CONTRAST", "1.4.11 Non-text Contrast",
         f"a shape outline #{border_hex} on its #{fill_hex} fill is {ratio:.1f}:1 (needs 3:1) — if the "
         "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative")]
 
