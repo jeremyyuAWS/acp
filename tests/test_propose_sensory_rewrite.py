@@ -39,7 +39,12 @@ def _model_stub(monkeypatch):
     """
     calls: list[str] = []
 
-    def _suggest(sc, name, level, filename, detail=""):
+    # Signature must match ai.suggest_fix's real one (rule_id, rule_name, level, filename,
+    # detail="", image_bytes=None, style="", guidance="") — ADR 0021 added guidance after this
+    # test was first written; propose_sensory_rewrite always passes it by keyword, so a stub
+    # missing it raises TypeError, which propose_sensory_rewrite's bare `except Exception`
+    # silently swallows into an empty proposal list rather than a visible test failure.
+    def _suggest(sc, name, level, filename, detail="", image_bytes=None, style="", guidance=""):
         calls.append(detail)
         return {"suggestion": "Click the Approve button.", "model": "stub"}
 

@@ -31,8 +31,12 @@ public partial class SheetNameRule : IXlsxRule
                     Title = "Sheet has a generic default name",
                     Description = $"The sheet named \"{name}\" uses a generic default name. Meaningful sheet names help users navigate and understand the spreadsheet structure.",
                     Severity = IssueSeverity.MODERATE,
-                    Category = IssueCategory.DOCUMENT_TITLE,
-                    WcagCriterion = WcagCriterion.SC_2_4_2,
+                    // A generic sheet NAME/label, not the workbook's document TITLE (SC_2_4_2 is
+                    // docProps/core.xml's dc:title, a separate, already-correctly-mapped check —
+                    // see DocumentTitleRule.cs). This rule is WCAG 2.4.6 Headings and Labels: sheet
+                    // names function as navigation labels, exactly the criterion's own wording.
+                    Category = IssueCategory.HEADING_STRUCTURE,
+                    WcagCriterion = WcagCriterion.SC_2_4_6,
                     RemediationType = RemediationType.HUMAN_REQUIRED,
                     RemediationGuidance = "Double-click the sheet tab and rename it to a concise, descriptive name.",
                     Location = LocationHelper.FromSheet(name),
