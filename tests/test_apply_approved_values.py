@@ -71,13 +71,13 @@ class _Blob:
         self.data = data; self.uploads.append((f, mime)); return "http://b/2"
 
 
-def _run_handler(monkeypatch, store, blob, *, residual):
+def _run_handler(monkeypatch, store, blob, *, residual, file=FILE):
     """Drive the handler with Blob and the residual re-scan stubbed."""
     import core, handlers
     monkeypatch.setattr(core, "store", store)
     monkeypatch.setitem(sys.modules, "blob", blob)
     monkeypatch.setattr(handlers, "_verify_residual_scs", lambda b, f: residual)
-    handlers._apply_approved_values({"scan_id": SID, "file": FILE}, {})
+    handlers._apply_approved_values({"scan_id": SID, "file": file}, {})
 
 
 # ── the gate, before anything is written ──────────────────────────────────────
@@ -190,6 +190,124 @@ def test_applying_twice_is_idempotent(store, monkeypatch):
     assert blob.data == first                                        # no second write
     assert len(blob.uploads) == 1
     assert len(store.get_remediation_diffs(SID, FILE)) == 2          # diffs not duplicated
+
+
+# ── link text (2.4.4 / 2.4.9) ──────────────────────────────────────────────────
+# The write-back apply_link_text.py adds — same loop, different locator scheme (href, not
+# part#name), so a separate seed helper and its own pass through the same gates.
+
+DOC_FILE = "report.docx"
+_DOC_RELS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+             '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+             '<Relationship Id="rId1" '
+             'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" '
+             'Target="https://example.com/pricing" TargetMode="External"/>'
+             '</Relationships>')
+
+
+def _report(text: str = "click here") -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("word/document.xml",
+                   '<w:document><w:body>'
+                   f'<w:hyperlink r:id="rId1"><w:r><w:t>{text}</w:t></w:r></w:hyperlink>'
+                   '</w:body></w:document>')
+        z.writestr("word/_rels/document.xml.rels", _DOC_RELS)
+    return buf.getvalue()
+
+
+def _doc_xml(data: bytes) -> str:
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        return z.read("word/document.xml").decode("utf-8")
+
+
+def _seed_link(store):
+    """A remediated docx with one 2.4.4 HITL row carrying one link-text proposal."""
+    store.init_scan_run(SID, "drive", 1, "2026-07-10T00:00:00Z", "rubric", "hash")
+    store.save_file_result(SID, {
+        "file": DOC_FILE, "engine": "office", "status": "pass", "score": 80, "compliant": 0,
+        "skipped_rules": 0, "drive_file_id": "drv2",
+        "issues": [{"ruleId": "DOCX-LINK-001", "wcag": "2.4.4", "severity": "SERIOUS"}],
+    }, "2026-07-10T00:00:00Z")
+    store.record_remediation(SID, DOC_FILE, drive_write_url="http://d/2", blob_url="http://b/2")
+    return store.enqueue_proposals(SID, DOC_FILE, "2.4.4", [
+        {"locator": "https://example.com/pricing", "before": "click here",
+         "proposed_value": "Pricing details", "rationale": "r", "source": "derived"},
+    ], rule_name="Link Purpose")
+
+
+def test_link_text_lands_on_the_hyperlink_and_certifies(store, monkeypatch):
+    item_id = _seed_link(store)
+    store.update_hitl_item(item_id, "approved", None, None)
+    store.approve_proposal_values(item_id, [])                       # accept the draft unedited
+
+    blob = _Blob(_report())
+    _run_handler(monkeypatch, store, blob, residual=set(), file=DOC_FILE)
+
+    xml = _doc_xml(blob.data)
+    assert "Pricing details" in xml and "click here" not in xml
+    assert store.count_unapplied_approved_values(SID, DOC_FILE) == 0
+    assert store.get_file_record(SID, DOC_FILE)["compliant"] == 1
+    diffs = store.get_remediation_diffs(SID, DOC_FILE)
+    assert len(diffs) == 1
+    d = diffs[0]
+    assert (d["rule_id"], d["before"], d["after"]) == ("2.4.4", "click here", "Pricing details")
+    assert d["note"] == "approved by a reviewer · https://example.com/pricing"
+
+
+def test_link_text_not_cleared_credits_nothing(store, monkeypatch):
+    item_id = _seed_link(store)
+    store.update_hitl_item(item_id, "approved", None, None)
+    store.approve_proposal_values(item_id, [])
+
+    blob = _Blob(_report())
+    _run_handler(monkeypatch, store, blob, residual={"2.4.4"}, file=DOC_FILE)       # still failing
+
+    assert store.count_unapplied_approved_values(SID, DOC_FILE) == 1
+    assert store.get_file_record(SID, DOC_FILE)["compliant"] == 0
+    assert blob.uploads == []
+
+
+def test_alt_and_link_approvals_on_the_same_file_both_apply(store, monkeypatch):
+    """A file can carry both an approved alt-text row and an approved link-text row; both
+    writes must land in the one uploaded copy, not just whichever ran first."""
+    store.init_scan_run(SID, "drive", 1, "2026-07-10T00:00:00Z", "rubric", "hash")
+    store.save_file_result(SID, {
+        "file": DOC_FILE, "engine": "office", "status": "pass", "score": 60, "compliant": 0,
+        "skipped_rules": 0, "drive_file_id": "drv3",
+        "issues": [{"ruleId": "DOCX-LINK-001", "wcag": "2.4.4", "severity": "SERIOUS"}],
+    }, "2026-07-10T00:00:00Z")
+    store.record_remediation(SID, DOC_FILE, drive_write_url="http://d/3", blob_url="http://b/3")
+    link_item = store.enqueue_proposals(SID, DOC_FILE, "2.4.4", [
+        {"locator": "https://example.com/pricing", "before": "click here",
+         "proposed_value": "Pricing details", "rationale": "r", "source": "derived"},
+    ], rule_name="Link Purpose")
+    alt_item = store.enqueue_proposals(SID, DOC_FILE, "1.1.1", [
+        {"locator": "word/document.xml#Figure 1", "before": "(no alt text)",
+         "proposed_value": "A pricing chart.", "rationale": "r", "source": "llava"},
+    ], rule_name="Non-text Content")
+    store.update_hitl_item(link_item, "approved", None, None)
+    store.approve_proposal_values(link_item, [])
+    store.update_hitl_item(alt_item, "approved", None, None)
+    store.approve_proposal_values(alt_item, [])
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("word/document.xml",
+                   '<w:document><w:body>'
+                   '<w:hyperlink r:id="rId1"><w:r><w:t>click here</w:t></w:r></w:hyperlink>'
+                   '<wp:docPr id="1" name="Figure 1"/>'
+                   '</w:body></w:document>')
+        z.writestr("word/_rels/document.xml.rels", _DOC_RELS)
+
+    blob = _Blob(buf.getvalue())
+    _run_handler(monkeypatch, store, blob, residual=set(), file=DOC_FILE)
+
+    xml = _doc_xml(blob.data)
+    assert "Pricing details" in xml
+    assert 'descr="A pricing chart."' in xml
+    assert len(blob.uploads) == 1                                    # one upload, both writes in it
+    assert store.count_unapplied_approved_values(SID, DOC_FILE) == 0
 
 
 # ── unedited approval means "the drafts I was shown are correct" ──────────────

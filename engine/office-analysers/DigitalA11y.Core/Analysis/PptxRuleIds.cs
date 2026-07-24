@@ -10,6 +10,7 @@ public static class PptxRuleIds
     public const string DocumentLanguage = "PPTX-LANG-001";
     public const string LinkPurpose = "PPTX-LINK-001";
     public const string AnimationOrder = "PPTX-ANIM-001";
+    public const string SlideTitleUniqueness = "PPTX-TITLE-002";
 
     public static IReadOnlyList<string> All =>
     [
@@ -21,5 +22,6 @@ public static class PptxRuleIds
         DocumentLanguage,
         LinkPurpose,
         AnimationOrder,
+        SlideTitleUniqueness,
     ];
 }

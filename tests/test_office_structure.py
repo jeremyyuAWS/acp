@@ -195,6 +195,50 @@ def test_docx_toc_content_control_without_alias_not_flagged(tmp_path):
     assert not any(f["ruleId"] == "DOCX_FORM_FIELD_NO_LABEL" for f in findings)
 
 
+# --- docx: 4.1.2 form-field content controls with no w:tag -------------------
+# w:alias is the human-visible label (3.3.2); w:tag is the stable programmatic
+# identifier assistive tech reads for Name — a field can have one without the
+# other, so this is a separate check from the 3.3.2 alias check above.
+
+def test_docx_checkbox_with_no_tag_flagged(tmp_path):
+    doc = """<w:document><w:body>
+    <w:sdt><w:sdtPr><w:alias w:val="Agree to terms"/><w:id w:val="1"/><w:checkbox/></w:sdtPr>
+    <w:sdtContent><w:r><w:t>[ ]</w:t></w:r></w:sdtContent></w:sdt>
+    </w:body></w:document>"""
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert any(f["ruleId"] == "DOCX_FORM_FIELD_NO_TAG" for f in findings)
+
+
+def test_docx_checkbox_with_empty_tag_flagged(tmp_path):
+    doc = """<w:document><w:body>
+    <w:sdt><w:sdtPr><w:alias w:val="Agree to terms"/><w:tag w:val=""/><w:checkbox/></w:sdtPr>
+    <w:sdtContent><w:r><w:t>[ ]</w:t></w:r></w:sdtContent></w:sdt>
+    </w:body></w:document>"""
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert any(f["ruleId"] == "DOCX_FORM_FIELD_NO_TAG" for f in findings)
+
+
+def test_docx_checkbox_with_tag_not_flagged(tmp_path):
+    doc = """<w:document><w:body>
+    <w:sdt><w:sdtPr><w:alias w:val="Agree to terms"/><w:tag w:val="agree_terms"/><w:id w:val="1"/><w:checkbox/></w:sdtPr>
+    <w:sdtContent><w:r><w:t>[ ]</w:t></w:r></w:sdtContent></w:sdt>
+    </w:body></w:document>"""
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert not any(f["ruleId"] == "DOCX_FORM_FIELD_NO_TAG" for f in findings)
+
+
+def test_docx_toc_content_control_without_tag_not_flagged(tmp_path):
+    """Same non-form-input gate as the alias check — a TOC placeholder isn't
+    a form field, so a missing w:tag on it is not a 4.1.2 finding."""
+    doc = """<w:document><w:body>
+    <w:sdt><w:sdtPr><w:id w:val="2"/>
+    <w:docPartObj><w:docPartGallery w:val="Table of Contents"/></w:docPartObj>
+    </w:sdtPr><w:sdtContent><w:r><w:t>Contents...</w:t></w:r></w:sdtContent></w:sdt>
+    </w:body></w:document>"""
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert not any(f["ruleId"] == "DOCX_FORM_FIELD_NO_TAG" for f in findings)
+
+
 # --- docx: 2.4.10 section headings -------------------------------------------
 
 def _para(text):

@@ -121,6 +121,7 @@ _SDT = re.compile(r"<w:sdt>(.*?)</w:sdt>", re.S)
 _SDT_PR = re.compile(r"<w:sdtPr>(.*?)</w:sdtPr>", re.S)
 _SDT_INPUT_TYPE = re.compile(r"<w:(checkbox|date|dropDownList|comboBox|picture)\b")
 _SDT_ALIAS = re.compile(r'<w:alias\s+w:val="([^"]*)"')
+_SDT_TAG = re.compile(r'<w:tag\s+w:val="([^"]*)"')
 
 # "title" = normal slide layouts; "ctrTitle" = the Title Slide layout's centered
 # title — both are the slide's title for 2.4.6 purposes. Match the whole <p:ph>
@@ -257,6 +258,10 @@ def docx_checks(path: Path) -> list[dict]:
 
             # 3.3.2 — interactive content-control form fields (checkbox, date
             # picker, dropdown, combo box, picture) with no alias/title set.
+            # 4.1.2 — same fields with no w:tag set. Distinct from 3.3.2: alias is
+            # the human-visible label, tag is the stable programmatic identifier
+            # assistive tech uses to expose the field's Name — a field can have
+            # one without the other.
             for sdt_inner in _SDT.findall(doc):
                 pr_m = _SDT_PR.search(sdt_inner)
                 if not pr_m or not _SDT_INPUT_TYPE.search(pr_m.group(1)):
@@ -264,6 +269,9 @@ def docx_checks(path: Path) -> list[dict]:
                 alias_m = _SDT_ALIAS.search(pr_m.group(1))
                 if not alias_m or not alias_m.group(1).strip():
                     findings.append(_finding("DOCX_FORM_FIELD_NO_LABEL", "3.3.2 Labels or Instructions", "SERIOUS"))
+                tag_m = _SDT_TAG.search(pr_m.group(1))
+                if not tag_m or not tag_m.group(1).strip():
+                    findings.append(_finding("DOCX_FORM_FIELD_NO_TAG", "4.1.2 Name, Role, Value", "SERIOUS"))
 
             # 2.4.10 — a document long enough to need section structure that uses
             # no heading styles at all. A short letter/memo legitimately has none,
@@ -691,6 +699,56 @@ def pdf_text_over_image_checks(path: Path) -> list[dict]:
         f"{hits} character{'s' if hits != 1 else ''} sit over an image, where the real background is "
         "the picture's pixels — the declared text colour can't prove contrast here; verify the text "
         "stays legible against the image behind it" + _cap_note(pages_total, _MAX_PAGES_OVER_IMAGE))]
+
+
+_MAX_PAGES_SCANNED = 20         # cap the pages we scan for the scanned-page heuristic
+_SCANNED_MAX_CHARS = 5          # a page with this few extractable chars is treated as textless
+_SCANNED_MIN_IMAGE_AREA_FRAC = 0.8   # an image covering this much of the page reads as "the whole page"
+
+
+def pdf_scanned_page_checks(path: Path) -> list[dict]:
+    """1.4.5 Images of Text (Review) for PDF — a cheap, deterministic pre-OCR heuristic (ADR 0025
+    style): a page with near-zero extractable text AND one image covering most of the page is very
+    likely a scanned photocopy, not a genuine born-digital PDF. Distinct from ocr.py's
+    `images_of_text`, which OCRs embedded images and needs the OCR stack available/enabled — this
+    needs neither, so it still surfaces the risk when OCR is unavailable or disabled, and it's far
+    cheaper to run. Structural only (pdfplumber char + image bboxes, no render, no OCR). Purely
+    advisory (ADR 0023) — a full page of chars extracted from an unusual font can still trip the
+    char-count floor, so this never claims a fail on its own. Never raises."""
+    hits = 0
+    pages_total = 0
+    try:
+        import pdfplumber
+        with pdfplumber.open(str(path)) as pdf:
+            pages_total = len(pdf.pages)
+            for page in pdf.pages[:_MAX_PAGES_SCANNED]:
+                if len(page.chars) > _SCANNED_MAX_CHARS:
+                    continue
+                pw, ph = float(page.width or 0), float(page.height or 0)
+                page_area = pw * ph
+                if page_area <= 0:
+                    continue
+                for im in page.images:
+                    try:
+                        ix0, itop, ix1, ibot = (float(im["x0"]), float(im["top"]),
+                                                 float(im["x1"]), float(im["bottom"]))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    img_area = max(0.0, ix1 - ix0) * max(0.0, ibot - itop)
+                    if img_area / page_area >= _SCANNED_MIN_IMAGE_AREA_FRAC:
+                        hits += 1
+                        break
+    except Exception:
+        return []
+    if hits == 0:
+        return []
+    return [_review_finding(
+        "PDF_LIKELY_SCANNED", "1.4.5 Images of Text",
+        f"{hits} page{'s' if hits != 1 else ''} have almost no extractable text and are dominated "
+        "by a single full-page image — this looks like a scanned document with no real text layer; "
+        "verify whether OCR text was added or the page needs to be re-authored as real text"
+        + _cap_note(pages_total, _MAX_PAGES_SCANNED),
+        evidence={"method": "structural", "metric": "pages flagged", "value": hits})]
 
 
 def pdf_over_image_locators(data) -> list[dict]:
@@ -1396,7 +1454,7 @@ def checks_for(path: Path, ext: str) -> list[dict]:
                 + pdf_headings_labels_check(path) + pdf_link_purpose_check(path)
                 + pdf_text_spacing_checks(path) + pdf_use_of_color_checks(path)
                 + pdf_nontext_contrast_checks(path) + pdf_text_over_image_checks(path)
-                + pdf_focus_order_checks(path))
+                + pdf_focus_order_checks(path) + pdf_scanned_page_checks(path))
     if ext == ".xlsx":
         return (xlsx_contrast_checks(path) + xlsx_structure_checks(path)
                 + office_control_review_checks(path, ext) + office_color_only_checks(path, ext)

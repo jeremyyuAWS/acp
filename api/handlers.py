@@ -1084,21 +1084,78 @@ _OFFICE_ALT_MIME = {
 }
 
 
+_OFFICE_LINK_EXTS = ("docx", "pptx", "xlsx")
+
+
+def _apply_one_value_kind(
+        *, scan_id: str, filename: str, working: bytes,
+        values: dict[str, str], scs_to_clear: set[str],
+        write_fn, diff_rule_id: str, credit_rule_ids: tuple[str, ...],
+        noun: str, job: dict) -> tuple[bytes, bool]:
+    """Shared write → verify → credit sequence for one kind of approved value (alt text or
+    link text) applied on top of `working`. Returns (new_working, uploaded_this_kind).
+
+    The values are NOT credited on a successful write. They are credited when a re-scan of the
+    written bytes shows the criterion no longer failing, exactly as `verified_diffs` credits an
+    automatic fix. A write that does not clear the criterion leaves the row unapplied and the
+    file uncertified, which is the honest outcome: something about the document still fails.
+    """
+    if not values:
+        return working, False
+
+    _phase(job, f"writing the approved {noun}")
+    fixed, applied, unresolved = write_fn(working, values)
+    if unresolved:
+        # A locator that no longer resolves means the reviewer approved a value for content
+        # this document no longer has. Never guess at different content — record and move on.
+        core.store.log_decision(
+            "system", "apply.unresolved", scan_id=scan_id, file=filename,
+            detail=f"{len(unresolved)} approved {noun} value(s) had no matching content: "
+                   + ", ".join(unresolved[:5]))
+    if not applied:
+        return working, False
+
+    _phase(job, f"re-verifying the corrected copy ({noun})")
+    residual = _verify_residual_scs(fixed, filename)
+    cleared = residual is None or not (scs_to_clear & residual)
+    if not cleared:
+        # The value went in but the criterion still fails (content we never saw, or the engine
+        # reads it differently). Credit nothing: the row stays unapplied and the file stays
+        # uncertified, which is what is actually true of the document.
+        core.store.log_decision(
+            "system", "apply.unverified", scan_id=scan_id, file=filename,
+            detail=f"wrote {len(applied)} {noun} value(s) but {sorted(scs_to_clear)} still fails on re-scan")
+        return working, False
+
+    try:
+        existing = core.store.get_remediation_diffs(scan_id, filename) or []
+        core.store.record_remediation_diffs(scan_id, filename, list(existing) + [
+            {"rule_id": diff_rule_id, "before": a["before"], "after": a["after"],
+             "note": f"approved by a reviewer · {a['locator']}"} for a in applied])
+    except Exception:
+        pass
+
+    for rule_id in credit_rule_ids:
+        for item_id in core.store.approved_unapplied_item_ids(scan_id, filename, rule_id):
+            core.store.mark_row_applied(item_id)
+    core.store.log_decision(
+        "system", "apply.applied", scan_id=scan_id, file=filename,
+        detail=f"wrote {len(applied)} reviewer-approved {noun} value(s); "
+               f"{sorted(scs_to_clear)} cleared on re-scan")
+    return fixed, True
+
+
 @handler("apply_approved_values")
 def _apply_approved_values(payload: dict, job: dict) -> None:
-    """Write the reviewer-approved alt text into the remediated copy, then verify it.
+    """Write reviewer-approved content (alt text, link text) into the remediated copy, then
+    verify it.
 
-    This closes the remediate → review → publish loop. Approving a 1.1.1 item used to store
-    the text as evidence and stop: nothing wrote it in, so the images stayed undescribed and
+    This closes the remediate → review → publish loop. Approving a 1.1.1 or 2.4.4/2.4.9 item
+    used to store the value as evidence and stop: nothing wrote it in, so
     store.mark_file_compliant_if_reviewed correctly refused to certify — leaving the file
     approved but permanently unpublishable.
 
     payload: {scan_id, file}
-
-    The values are NOT credited on a successful write. They are credited when a re-scan of the
-    written bytes shows 1.1.1 no longer failing, exactly as `verified_diffs` credits an
-    automatic fix. A write that does not clear the criterion leaves the row unapplied and the
-    file uncertified, which is the honest outcome: something about the document still fails.
     """
     scan_id = payload.get("scan_id") or job.get("scan_id")
     filename = payload.get("file")
@@ -1107,74 +1164,52 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
 
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext not in _OFFICE_ALT_MIME:
-        # Only Office alt text has an applier today. Say so rather than silently succeeding:
-        # the row stays unapplied, so the file stays out of Publish.
+        # Only Office alt/link text has an applier today. Say so rather than silently
+        # succeeding: the row stays unapplied, so the file stays out of Publish.
         core.store.log_decision("system", "apply.unsupported", scan_id=scan_id, file=filename,
                                 detail=f".{ext}: no approved-value applier for this format")
         return
 
-    values = core.store.approved_alt_values(scan_id, filename)
-    if not values:
+    alt_values = core.store.approved_alt_values(scan_id, filename)
+    link_values = core.store.approved_link_values(scan_id, filename) if ext in _OFFICE_LINK_EXTS else {}
+    if not alt_values and not link_values:
         return                                   # nothing approved awaiting a write
 
     import blob as _blob
     owner = (core.store.get_scan(scan_id) or {}).get("run", {}).get("owner_email")
     _phase(job, "fetching the corrected copy")
-    current = _blob.download_remediated(owner, scan_id, filename)
-    if not current:
+    working = _blob.download_remediated(owner, scan_id, filename)
+    if not working:
         # The remediated copy is what we edit; the original is never modified. Without it
         # there is nothing to write into, and pretending otherwise would strand the reviewer.
         core.store.log_decision("system", "apply.no_remediated_copy", scan_id=scan_id,
                                 file=filename, detail="no stored remediated copy to write into")
         return
 
-    _phase(job, "writing the approved descriptions")
-    # Alt write-back branches only on extension: PDF figures carry `pdf:fig:…` locators written
-    # into /Figure /Alt by pikepdf; office images carry part#rId locators written by apply_alt.
-    if str(filename).lower().endswith(".pdf"):
-        from remediate_pdf import apply_pdf_approved
-        fixed, applied, unresolved = apply_pdf_approved(current, values)
-    else:
-        from apply_alt import apply_alt_text
-        fixed, applied, unresolved = apply_alt_text(current, values)
-    if unresolved:
-        # A locator that no longer resolves means the reviewer approved text for an image this
-        # document no longer has. Never guess at a different image — record and move on.
-        core.store.log_decision(
-            "system", "apply.unresolved", scan_id=scan_id, file=filename,
-            detail=f"{len(unresolved)} approved value(s) had no matching image: "
-                   + ", ".join(unresolved[:5]))
-    if not applied:
-        return
+    # Office images carry part#rId locators written by apply_alt. (PDF alt text has its own
+    # writer, apply_pdf_approved, for `pdf:fig:…` locators — but this handler only reaches
+    # here for ext in _OFFICE_ALT_MIME, which never includes "pdf"; PDF alt write-back is a
+    # separate, pre-existing gap, not touched by this change.)
+    from apply_alt import apply_alt_text
+    working, alt_uploaded = _apply_one_value_kind(
+        scan_id=scan_id, filename=filename, working=working,
+        values=alt_values, scs_to_clear={"1.1.1"}, write_fn=apply_alt_text,
+        diff_rule_id="1.1.1", credit_rule_ids=("1.1.1",), noun="description", job=job)
 
-    _phase(job, "re-verifying the corrected copy")
-    residual = _verify_residual_scs(fixed, filename)
-    cleared = residual is None or "1.1.1" not in residual
-    if not cleared:
-        # The text went in but the criterion still fails (an image we never saw, a part the
-        # engine reads differently). Credit nothing: the row stays unapplied and the file
-        # stays uncertified, which is what is actually true of the document.
-        core.store.log_decision(
-            "system", "apply.unverified", scan_id=scan_id, file=filename,
-            detail=f"wrote {len(applied)} description(s) but 1.1.1 still fails on re-scan")
+    link_uploaded = False
+    if link_values:
+        from apply_link_text import apply_link_text
+        link_write_fn = lambda data, values: apply_link_text(data, ext, values)  # noqa: E731
+        working, link_uploaded = _apply_one_value_kind(
+            scan_id=scan_id, filename=filename, working=working,
+            values=link_values, scs_to_clear={"2.4.4", "2.4.9"}, write_fn=link_write_fn,
+            diff_rule_id="2.4.4", credit_rule_ids=("2.4.4", "2.4.9"), noun="link text", job=job)
+
+    if not (alt_uploaded or link_uploaded):
         return
 
     _phase(job, "storing the corrected copy")
-    _blob.upload_remediated(owner, scan_id, filename, fixed, _OFFICE_ALT_MIME[ext])
-
-    try:
-        existing = core.store.get_remediation_diffs(scan_id, filename) or []
-        core.store.record_remediation_diffs(scan_id, filename, list(existing) + [
-            {"rule_id": "1.1.1", "before": a["before"], "after": a["after"],
-             "note": f"approved by a reviewer · {a['locator']}"} for a in applied])
-    except Exception:
-        pass
-
-    for item_id in core.store.approved_unapplied_item_ids(scan_id, filename, "1.1.1"):
-        core.store.mark_row_applied(item_id)
-    core.store.log_decision(
-        "system", "apply.applied", scan_id=scan_id, file=filename,
-        detail=f"wrote {len(applied)} reviewer-approved description(s); 1.1.1 cleared on re-scan")
+    _blob.upload_remediated(owner, scan_id, filename, working, _OFFICE_ALT_MIME.get(ext, "application/pdf"))
 
     # The file may now be fully resolved. This is the same seam routes/hitl.py runs on every
     # approval; it was returning False for this file until the values actually landed.

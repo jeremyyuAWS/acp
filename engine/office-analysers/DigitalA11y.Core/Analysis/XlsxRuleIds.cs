@@ -11,6 +11,8 @@ public static class XlsxRuleIds
     public const string DocumentTitle = "XLSX-TITLE-001";
     public const string BlankWorksheet = "XLSX-BLANK-001";
     public const string LinkPurpose = "XLSX-LINK-001";
+    public const string TableName = "XLSX-TABLE-NAME-001";
+    public const string SheetNameUniqueness = "XLSX-SHEET-002";
 
     public static IReadOnlyList<string> All =>
     [
@@ -23,5 +25,7 @@ public static class XlsxRuleIds
         DocumentTitle,
         BlankWorksheet,
         LinkPurpose,
+        TableName,
+        SheetNameUniqueness,
     ];
 }
