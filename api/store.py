@@ -494,6 +494,74 @@ except Exception:
     REVIEW_ASSESS_FORMATS = {}
 
 
+# ── Conformance target ────────────────────────────────────────────────────────
+# WCAG levels nest: A ⊆ AA ⊆ AAA. Assessing "at level AA" means assessing every criterion at
+# AA OR BELOW — so a target of AA covers A and AA, and a target of A covers only A.
+#
+# Only A and AA are selectable. AAA is a real level in the catalog (1.4.6, 1.4.8, 1.4.9, 2.4.9,
+# 2.4.10, 3.1.4, 3.1.5 all carry it) and several detectors emit AAA findings as a by-product of
+# their AA work — the contrast checks compute both thresholds in one pass. Those findings were
+# being recorded and scored against files whose target was AA, which reports a document as
+# failing a bar nobody asked it to meet.
+LEVEL_RANK: dict[str, int] = {"A": 1, "AA": 2, "AAA": 3}
+TARGET_LEVELS: tuple[str, ...] = ("A", "AA")     # what a user may choose
+DEFAULT_TARGET = "AA"
+
+_SC_LEVEL: dict[str, str] = {r["id"]: (r.get("level") or "A") for r in RULE_CATALOG}
+
+
+def parse_target(value: str | None) -> str:
+    """'WCAG 2.1 AA' / 'aa' / None -> 'AA'. The rubric stores a display string, not a bare level.
+
+    Anything unrecognised falls back to the default rather than raising: a malformed target must
+    not take a scan down, and AA is both the common case and the safer one (it assesses more
+    than A, so nothing is silently skipped by a typo)."""
+    token = str(value or "").strip().upper().split()[-1] if value else ""
+    return token if token in TARGET_LEVELS else DEFAULT_TARGET
+
+
+_CONFIG_TARGET: str | None = None
+
+
+def config_target() -> str:
+    """The conformance target from the active rubric (config/rubric.default.json).
+
+    Cached: this is read on every persisted file and the value cannot change without a restart,
+    since the rubric is content-addressed and a different rubric is a different scan.
+    """
+    global _CONFIG_TARGET
+    if _CONFIG_TARGET is None:
+        try:
+            import json as _json
+            cfg = _json.loads((Path(__file__).resolve().parent.parent / "config"
+                               / "rubric.default.json").read_text())
+            _CONFIG_TARGET = parse_target(cfg.get("conformance_target"))
+        except Exception:
+            _CONFIG_TARGET = DEFAULT_TARGET
+    return _CONFIG_TARGET
+
+
+def in_target(rule_id: str, target: str | None = None) -> bool:
+    """Is this criterion at or below the conformance target the scan was run for?"""
+    tgt = LEVEL_RANK.get(parse_target(target), LEVEL_RANK[DEFAULT_TARGET])
+    return LEVEL_RANK.get(_SC_LEVEL.get(rule_id, "A"), 1) <= tgt
+
+
+def filter_issues_to_target(issues: list[dict], target: str | None = None) -> list[dict]:
+    """Drop findings for criteria above the target level.
+
+    Applied where counts are computed rather than where issues are stored: the raw findings stay
+    on the record, so re-reporting the same scan at a different target needs no re-scan. What
+    changes is what gets ASSESSED and scored — which is what the target actually means.
+    """
+    out = []
+    for i in issues:
+        sc = _extract_sc(i.get("wcag", ""))
+        if not sc or in_target(sc, target):
+            out.append(i)
+    return out
+
+
 # ── Capability registry bridge ────────────────────────────────────────────────
 # Imported lazily and defensively. store.py is imported by a lot of tooling that has no
 # business pulling in pikepdf and the format parsers, and a registry that fails to load must
@@ -525,7 +593,8 @@ def _registry_for(rule_id: str, fmt: str | None):
     return _registry_mod.get(rule_id, fmt)
 
 
-def _rule_outcome(rule_id: str, fmt: str | None, fail_count: int, review_count: int = 0) -> str:
+def _rule_outcome(rule_id: str, fmt: str | None, fail_count: int, review_count: int = 0,
+                  target: str | None = None) -> str:
     """The per-(criterion, format) outcome from its finding counts.
 
     `fail_count` = blocking findings, `review_count` = advisory (severity REVIEW) findings.
@@ -533,7 +602,25 @@ def _rule_outcome(rule_id: str, fmt: str | None, fail_count: int, review_count: 
     because a review detector doesn't certify conformance (ADR 0016). Pass/fail-lane pairs: FAIL
     if a blocking finding fired, else PASS if the validator ran, else NOT_EVALUATED. An advisory
     review finding on a pass/fail-lane criterion (rare) surfaces as REVIEW only when nothing
-    blocking fired. A definite FAIL always outranks an advisory REVIEW."""
+    blocking fired. A definite FAIL always outranks an advisory REVIEW.
+
+    `target` is the conformance level the scan was run for (A or AA). A criterion ABOVE it is
+    not assessed at all — see the gate below."""
+    # Conformance target gate, before everything else including the blocking-finding hoist.
+    #
+    # A criterion above the target was never in scope, so there is nothing to report about it —
+    # not a pass, not a fail, and not a review. It reads NOT_EVALUATED, which is literally what
+    # happened: we did not evaluate it, because the scan was run for a lower level.
+    #
+    # This deliberately outranks the "a recorded finding is a FACT" hoist below, and that is the
+    # one place in this function where a finding does not surface. The justification is that the
+    # finding should never have been collected: several detectors compute AA and AAA thresholds
+    # in a single pass (the contrast checks do), so an AAA finding can exist on an AA scan as a
+    # by-product. Reporting it would fail a document against a bar nobody asked it to meet.
+    # `filter_issues_to_target` drops those upstream; this is the backstop for callers that
+    # pass raw counts.
+    if not in_target(rule_id, target):
+        return NOT_EVALUATED
     if fmt is not None and fmt in REVIEW_FORMATS.get(rule_id, frozenset()):
         if fail_count > 0:
             return "FAIL"
@@ -870,6 +957,8 @@ class Store:
         # and the DB scan_id are the same — enables join in Langfuse by scan_id.
         sid = report.pop("_scan_id", None) or uuid.uuid4().hex[:12]
         s = report["summary"]
+        # The level this scan was run for. A criterion above it is not assessed (see in_target).
+        target = parse_target((report.get("rubric") or {}).get("target") or config_target())
         import json as _json
         catalog = _json.loads(
             (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text()
@@ -897,12 +986,16 @@ class Store:
                         (sid, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
                          i.get("page"), i.get("location")))
                 # Per-rule trace: one row per catalog rule per file — PASS/FAIL/REVIEW/NOT_EVALUATED.
-                fail_counts, review_counts = _split_sc_counts(f["issues"])
+                # Counts feed the per-rule trace, so they must reflect the conformance target:
+                # an AAA finding picked up as a by-product of an AA check is not this scan's
+                # business and must not drive an outcome.
+                fail_counts, review_counts = _split_sc_counts(
+                    filter_issues_to_target(f["issues"], target))
                 fmt = _file_format(f["file"])
                 for rule in RULE_CATALOG:
                     rid = rule["id"]
                     fc, rc = fail_counts.get(rid, 0), review_counts.get(rid, 0)
-                    outcome = _rule_outcome(rid, fmt, fc, rc)
+                    outcome = _rule_outcome(rid, fmt, fc, rc, target)
                     count = fc if fc else rc   # findings that drove the outcome
                     self._db.execute(cur,
                         "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "
@@ -1001,6 +1094,7 @@ class Store:
     def save_file_result(self, scan_id: str, f: dict, completed_at: str) -> None:
         """Persist one assessed file (same shape save_scan writes). Idempotent so a
         retried scan_file job doesn't double-insert."""
+        target = config_target()
         import json as _json
         catalog = _json.loads(
             (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text())
@@ -1022,12 +1116,13 @@ class Store:
                     "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
                     (scan_id, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
                      i.get("page"), i.get("location")))
-            fail_counts, review_counts = _split_sc_counts(f.get("issues", []))
+            fail_counts, review_counts = _split_sc_counts(
+                filter_issues_to_target(f.get("issues", []), target))
             fmt = _file_format(f["file"])
             for rule in RULE_CATALOG:
                 rid = rule["id"]
                 fc, rc = fail_counts.get(rid, 0), review_counts.get(rid, 0)
-                outcome = _rule_outcome(rid, fmt, fc, rc)
+                outcome = _rule_outcome(rid, fmt, fc, rc, target)
                 count = fc if fc else rc
                 self._db.execute(cur,
                     "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "
