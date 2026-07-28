@@ -26,6 +26,21 @@ Trailer format (git trailers — `Key: value` lines at the end of the commit bod
 
 `WCAG:` may repeat. Formats are optional — omitted means "all four".
 
+A commit that changed several independent things should say so as a list. Any continuation
+line starting `- ` or `* ` becomes a bullet in the rendered entry; everything before the first
+bullet is the lead sentence, which is REQUIRED (a note that is only bullets has no summary to
+show when the entry is collapsed):
+
+    Matrix-Note: Five Tier-1 gaps closed across all four formats.
+      - **DOCX 4.1.2** — the form-field detector now also reads w:tag.
+      - **PDF 1.4.5** — a deterministic pre-OCR heuristic surfaces likely-scanned PDFs.
+
+A bullet may open with an explicit `**label**`, which the matrix renders in bold so the list
+can be scanned by format/SC. The marker is required rather than inferred: a label can't be told
+from prose that merely opens with a dash-terminated phrase, and guessing gets it wrong in both
+directions (SC numbers contain dots; ordinary clauses use em dashes). Unmarked bullets are
+plain text.
+
 Usage:
     python scripts/gen_progress_log.py                    # whole history -> stdout
     python scripts/gen_progress_log.py --since <sha>      # only newer commits
@@ -89,15 +104,57 @@ def _repo_slug() -> str:
     return m.group(1) if m else "jeremyyuAWS/acp"
 
 
+_BULLET_RE = re.compile(r"^[-*]\s+(.*)$")
+# A bullet's optional label, written **like this** at the very start.
+#
+# An earlier version inferred the label from a leading "DOCX 4.1.2 — " and guessed wrong in both
+# directions: SC numbers contain dots, so any "no sentence punctuation" test rejects the real
+# labels, while an ordinary clause set off by an em dash sails through and gets bolded. There is
+# no reliable way to tell a label from prose that merely opens with a dash-terminated phrase, so
+# the marker is explicit. Unmarked bullets are plain text, which is a fine default.
+_LABEL_RE = re.compile(r"^\*\*\s*(.+?)\s*\*\*\s*(?:—|–|--)?\s*(.+)$", re.S)
+
+
+def _split_label(text: str) -> dict:
+    m = _LABEL_RE.match(text)
+    return {"label": m.group(1), "text": m.group(2).strip()} if m else {"text": text}
+
+
+def parse_note(raw: str) -> tuple[str, list[dict]]:
+    """A Matrix-Note body -> (lead sentence, bullets).
+
+    Whitespace inside a paragraph is collapsed (git wraps trailers at will, and the matrix
+    re-flows the text anyway), but LINE STRUCTURE is preserved long enough to find the bullets —
+    which is why this can't just be `" ".join(raw.split())` the way it used to be.
+    """
+    lead: list[str] = []
+    bullets: list[str] = []
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        m = _BULLET_RE.match(stripped)
+        if m:
+            bullets.append(m.group(1).strip())
+        elif bullets:
+            bullets[-1] += " " + stripped      # wrapped continuation of the current bullet
+        else:
+            lead.append(stripped)
+    return " ".join(" ".join(lead).split()), [_split_label(b) for b in bullets if b]
+
+
 def parse_commit(raw: str, repo: str) -> dict | None:
     """One `git log` record -> a PROGRESS_LOG entry, or None if it didn't opt in."""
     sha, date, subject, body = raw.split("\x1f", 3)
     note = _NOTE_RE.search(body)
     if not note:
         return None
-    summary = " ".join(note.group(1).split())
+    summary, points = parse_note(note.group(1))
     if summary.lower() in ("none", "n/a", "-"):
         return None            # explicit, deliberate omission
+    if points and not summary:
+        raise SystemExit(f"{sha[:7]}: Matrix-Note: is all bullets with no lead sentence — the "
+                         f"matrix shows the lead when the entry is collapsed, so it needs one.")
 
     scs: list[str] = []
     formats: set[str] = set()
@@ -118,7 +175,7 @@ def parse_commit(raw: str, repo: str) -> dict | None:
                          f"matrix needs to know which SC the entry belongs to.")
 
     pr = _PR_RE.search(subject)
-    return {
+    entry = {
         "date": date,
         "hash": sha[:7],
         "pr": int(pr.group(1)) if pr else None,
@@ -130,6 +187,11 @@ def parse_commit(raw: str, repo: str) -> dict | None:
         "formats": [f for f in FORMATS if f in formats],
         "summary": summary,
     }
+    # Omitted entirely when there are no bullets, so a single-change note produces exactly the
+    # entry shape it always did and the matrix renders it exactly as before.
+    if points:
+        entry["points"] = points
+    return entry
 
 
 def collect(since: str | None) -> list[dict]:
