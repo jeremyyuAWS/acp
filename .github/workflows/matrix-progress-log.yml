@@ -1,9 +1,19 @@
-# Tell the WCAG matrix that a capability change landed.
+# Tell the WCAG matrix that something landed here. Two independent signals:
 #
-# On a push to main, check whether any pushed commit opted into publication with a
-# `Matrix-Note:` trailer (see scripts/gen_progress_log.py). If so, fire a
-# repository_dispatch at jeremyyuAWS/wcag-matrix, whose own workflow clones this repo,
-# regenerates the entries and splices them into index.html.
+#   acp-progress-log      — a pushed commit opted into the public changelog with a
+#                           `Matrix-Note:` trailer (see scripts/gen_progress_log.py). The matrix
+#                           splices it into its PROGRESS_LOG. Opt-in and curated.
+#   acp-capability-change — a pushed commit touched a file the matrix's per-cell capability
+#                           CEILING is computed from (scripts/gen_matrix_coverage.py --sources).
+#                           The matrix re-derives the ceiling and opens a PR for any grid cell
+#                           now claiming more than this code supports. NOT opt-in: a ceiling can
+#                           move without anyone writing a trailer, and an over-claiming cell is
+#                           a correctness bug rather than a changelog omission.
+#
+# The two overlap often and that is fine — both are idempotent on the far side.
+#
+# On a push to main, fire a repository_dispatch at jeremyyuAWS/wcag-matrix, whose own workflows
+# clone this repo, run ITS generators, and update index.html.
 #
 # The dispatch carries NO entry data on purpose. It is a bare "something landed, go
 # look" signal:
@@ -62,8 +72,21 @@ jobs:
           echo "count=$count" >> "$GITHUB_OUTPUT"
           echo "$count publishable commit(s) in this push"
 
+          # Did this push touch anything a capability ceiling is computed from? The path list
+          # lives in the generator, next to the loaders that read those files, so it cannot
+          # drift from what actually feeds a ceiling.
+          from_ref="${range_args#--since }"
+          changed=$(git diff --name-only "$from_ref" HEAD)
+          touched=no
+          while IFS= read -r src; do
+            [ -z "$src" ] && continue
+            if grep -qxF "$src" <<<"$changed"; then touched=yes; break; fi
+          done < <(python3 scripts/gen_matrix_coverage.py --sources)
+          echo "capability=$touched" >> "$GITHUB_OUTPUT"
+          echo "capability sources touched: $touched"
+
       - name: Dispatch to wcag-matrix
-        if: steps.scan.outputs.count != '0'
+        if: steps.scan.outputs.count != '0' || steps.scan.outputs.capability == 'yes'
         env:
           GH_TOKEN: ${{ secrets.MATRIX_DISPATCH_TOKEN }}
         run: |
@@ -73,7 +96,14 @@ jobs:
                  "note in .github/workflows/matrix-progress-log.yml."
             exit 0
           fi
-          gh api repos/jeremyyuAWS/wcag-matrix/dispatches \
-            -f event_type=acp-progress-log \
-            -F "client_payload[sha]=${{ github.sha }}"
-          echo "dispatched acp-progress-log for ${GITHUB_SHA:0:7}"
+          dispatch() {
+            gh api repos/jeremyyuAWS/wcag-matrix/dispatches \
+              -f event_type="$1" -F "client_payload[sha]=${{ github.sha }}"
+            echo "dispatched $1 for ${GITHUB_SHA:0:7}"
+          }
+          if [ "${{ steps.scan.outputs.count }}" != "0" ]; then
+            dispatch acp-progress-log
+          fi
+          if [ "${{ steps.scan.outputs.capability }}" = "yes" ]; then
+            dispatch acp-capability-change
+          fi
