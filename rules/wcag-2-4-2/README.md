@@ -1,6 +1,6 @@
 # WCAG 2.4.2 — Page Titled
 
-> **GENERATED FILE.** Edit the sources (rule-catalog.json, frontend/src/rules/, test-corpus/manifest.json), then run `python scripts/gen_rules_index.py`. Do not hand-edit.
+> **GENERATED FILE.** Edit the sources (rule-catalog.json, frontend/src/rules/, api/office_structure.py, api/textchecks.py, api/ocr.py, test-corpus/manifest.json), then run `python scripts/gen_rules_index.py`. Do not hand-edit.
 
 - **Success Criterion:** 2.4.2 Page Titled (Level A)
 - **Understanding doc:** https://www.w3.org/WAI/WCAG21/Understanding/page-titled.html
@@ -18,8 +18,9 @@
 | `pdf` | `pdf.display-doc-title` | MODERATE | auto | `deploy/public/vendor/worker-python/analysers/rules/pdf/display_title.py` |
 | `pdf` | `pdf.missing-bookmarks` | MINOR | auto | `deploy/public/vendor/worker-python/analysers/rules/pdf/bookmarks.py` |
 | `pptx` | `PPTX-TITLE-001` | SERIOUS | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/SlideTitleRule.cs` |
+| `pptx` | `PPTX-TITLE-002` | MODERATE | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/SlideTitleUniquenessRule.cs` |
 | `xlsx` | `XLSX-TITLE-001` | SERIOUS | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/DocumentTitleRule.cs` |
-| `xlsx` | `XLSX-SHEET-001` | MODERATE | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/SheetNameRule.cs` |
+| `xlsx` | `XLSX-TABLE-NAME-001` | MODERATE | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/TableNameRule.cs` |
 
 ### HTML engine (deterministic, in-app)
 

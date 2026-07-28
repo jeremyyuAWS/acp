@@ -1,6 +1,6 @@
 # WCAG 1.1.1 — Non-text Content
 
-> **GENERATED FILE.** Edit the sources (rule-catalog.json, frontend/src/rules/, test-corpus/manifest.json), then run `python scripts/gen_rules_index.py`. Do not hand-edit.
+> **GENERATED FILE.** Edit the sources (rule-catalog.json, frontend/src/rules/, api/office_structure.py, api/textchecks.py, api/ocr.py, test-corpus/manifest.json), then run `python scripts/gen_rules_index.py`. Do not hand-edit.
 
 - **Success Criterion:** 1.1.1 Non-text Content (Level A)
 - **Understanding doc:** https://www.w3.org/WAI/WCAG21/Understanding/non-text-content.html

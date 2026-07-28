@@ -1,6 +1,6 @@
 # WCAG 1.3.1 — Info and Relationships
 
-> **GENERATED FILE.** Edit the sources (rule-catalog.json, frontend/src/rules/, test-corpus/manifest.json), then run `python scripts/gen_rules_index.py`. Do not hand-edit.
+> **GENERATED FILE.** Edit the sources (rule-catalog.json, frontend/src/rules/, api/office_structure.py, api/textchecks.py, api/ocr.py, test-corpus/manifest.json), then run `python scripts/gen_rules_index.py`. Do not hand-edit.
 
 - **Success Criterion:** 1.3.1 Info and Relationships (Level A)
 - **Understanding doc:** https://www.w3.org/WAI/WCAG21/Understanding/info-and-relationships.html
@@ -21,13 +21,21 @@
 ### HTML engine (deterministic, in-app)
 
 - Module: [`frontend/src/rules/wcag-1-3-1.js`](../../frontend/src/rules/wcag-1-3-1.js)
-- Fix mode: `auto`
+- Fix mode: `ai-assisted`
 - Exports `check(doc)` and `fix(doc)` — see [frontend/src/rules/index.js](../../frontend/src/rules/index.js).
+
+### First-party checks (Python, in-repo)
+
+| Rule ID | Formats | Source |
+|---------|---------|--------|
+| `DOCX_PSEUDO_HEADING` | docx | `api/office_structure.py:docx_checks` |
+| `MODERATE` | docx | `api/office_structure.py:docx_checks` |
 
 ## How to change this rule
 
 - **Office/PDF (docx, pdf, pptx, xlsx):** the detection logic lives in the partner DigitalA11y engine (see `source` paths above). You own the *mapping and parameters* here, not the .NET source. To change a threshold or disable a rule, edit `config/rule-catalog.json` and/or the active rubric (`config/rubric.active.json` → `disabled_rules`).
 - **HTML:** edit [`frontend/src/rules/wcag-1-3-1.js`](../../frontend/src/rules/wcag-1-3-1.js). Change `check()` to alter detection, `fix()` to alter the deterministic remediation. The orchestrator picks it up automatically — no other file changes needed.
+- **First-party Python:** edit the `source` function above. These run in-process on top of the engine result (`api/scanner.py`), and `office_structure.checks_for()` decides which formats each one reaches — add a check there or it will never be dispatched.
 
 ## Test fixtures
 

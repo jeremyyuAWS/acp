@@ -1,6 +1,6 @@
 # WCAG 1.4.3 — Contrast (Minimum)
 
-> **GENERATED FILE.** Edit the sources (rule-catalog.json, frontend/src/rules/, test-corpus/manifest.json), then run `python scripts/gen_rules_index.py`. Do not hand-edit.
+> **GENERATED FILE.** Edit the sources (rule-catalog.json, frontend/src/rules/, api/office_structure.py, api/textchecks.py, api/ocr.py, test-corpus/manifest.json), then run `python scripts/gen_rules_index.py`. Do not hand-edit.
 
 - **Success Criterion:** 1.4.3 Contrast (Minimum) (Level AA)
 - **Understanding doc:** https://www.w3.org/WAI/WCAG21/Understanding/contrast-minimum.html
@@ -21,10 +21,24 @@
 - Fix mode: `auto`
 - Exports `check(doc)` and `fix(doc)` — see [frontend/src/rules/index.js](../../frontend/src/rules/index.js).
 
+### First-party checks (Python, in-repo)
+
+| Rule ID | Formats | Source |
+|---------|---------|--------|
+| `PDF_LOW_CONTRAST_AA` | pdf | `api/office_structure.py:pdf_contrast_checks` |
+| `PDF_TEXT_OVER_IMAGE` | pdf | `api/office_structure.py:pdf_text_over_image_checks` |
+| `PPTX_LOW_CONTRAST_AA` | pptx | `api/office_structure.py:pptx_contrast_checks` |
+| `PPTX_TEXT_OVER_COMPLEX_BG` | pptx | `api/office_structure.py:pptx_complex_bg_contrast_checks` |
+| `SERIOUS` | pptx | `api/office_structure.py:pptx_contrast_checks` |
+| `SERIOUS` | pdf | `api/office_structure.py:pdf_contrast_checks` |
+| `SERIOUS` | xlsx | `api/office_structure.py:xlsx_contrast_checks` |
+| `XLSX_LOW_CONTRAST_AA` | xlsx | `api/office_structure.py:xlsx_contrast_checks` |
+
 ## How to change this rule
 
 - **Office/PDF (docx, pptx):** the detection logic lives in the partner DigitalA11y engine (see `source` paths above). You own the *mapping and parameters* here, not the .NET source. To change a threshold or disable a rule, edit `config/rule-catalog.json` and/or the active rubric (`config/rubric.active.json` → `disabled_rules`).
 - **HTML:** edit [`frontend/src/rules/wcag-1-4-3.js`](../../frontend/src/rules/wcag-1-4-3.js). Change `check()` to alter detection, `fix()` to alter the deterministic remediation. The orchestrator picks it up automatically — no other file changes needed.
+- **First-party Python:** edit the `source` function above. These run in-process on top of the engine result (`api/scanner.py`), and `office_structure.checks_for()` decides which formats each one reaches — add a check there or it will never be dispatched.
 
 ## Test fixtures
 

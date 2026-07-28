@@ -1,6 +1,6 @@
 # WCAG 3.1.1 — Language of Page
 
-> **GENERATED FILE.** Edit the sources (rule-catalog.json, frontend/src/rules/, test-corpus/manifest.json), then run `python scripts/gen_rules_index.py`. Do not hand-edit.
+> **GENERATED FILE.** Edit the sources (rule-catalog.json, frontend/src/rules/, api/office_structure.py, api/textchecks.py, api/ocr.py, test-corpus/manifest.json), then run `python scripts/gen_rules_index.py`. Do not hand-edit.
 
 - **Success Criterion:** 3.1.1 Language of Page (Level A)
 - **Understanding doc:** https://www.w3.org/WAI/WCAG21/Understanding/language-of-page.html
@@ -13,7 +13,6 @@
 | Engine | Rule ID | Severity | Fix mode | Source |
 |--------|---------|----------|----------|--------|
 | `docx` | `DOCX-LANG-001` | SERIOUS | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/DocumentLanguageRule.cs` |
-| `docx` | `DOCX-LANGPART-001` | MODERATE | human-only | `digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/LanguageOfPartsRule.cs` |
 | `pdf` | `pdf.document-language` | SERIOUS | auto | `deploy/public/vendor/worker-python/analysers/rules/pdf/document_language.py` |
 | `pptx` | `PPTX-LANG-001` | SERIOUS | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/DocumentLanguageRule.cs` |
 | `xlsx` | `XLSX-LANG-001` | SERIOUS | auto | `digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/DocumentLanguageRule.cs` |
