@@ -1,0 +1,79 @@
+# Tell the WCAG matrix that a capability change landed.
+#
+# On a push to main, check whether any pushed commit opted into publication with a
+# `Matrix-Note:` trailer (see scripts/gen_progress_log.py). If so, fire a
+# repository_dispatch at jeremyyuAWS/wcag-matrix, whose own workflow clones this repo,
+# regenerates the entries and splices them into index.html.
+#
+# The dispatch carries NO entry data on purpose. It is a bare "something landed, go
+# look" signal:
+#   * no 64KB client_payload ceiling to design around;
+#   * the generator lives in exactly one place (here) rather than being duplicated or
+#     vendored into the matrix repo;
+#   * the matrix regenerates from full history and de-duplicates by commit hash, so a
+#     dropped or missed dispatch is self-healing — the next one catches up, and a
+#     manual workflow_dispatch over there re-syncs from scratch.
+#
+# This repo's primary CI is Azure Pipelines (azure-pipelines.yml); this workflow is
+# notification only and deliberately runs no tests.
+#
+# SETUP — one secret is required:
+#   MATRIX_DISPATCH_TOKEN: a PAT with write access to jeremyyuAWS/wcag-matrix.
+#   The default GITHUB_TOKEN cannot dispatch to a different repository.
+#   Fine-grained PAT: repository = jeremyyuAWS/wcag-matrix, Contents = read & write.
+#   Add via: gh secret set MATRIX_DISPATCH_TOKEN --repo jeremyyuAWS/acp
+# Without the secret this job logs a notice and exits 0 — it never fails a push.
+
+name: Notify WCAG matrix
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # gen_progress_log.py reads commit bodies across the range
+
+      - name: Find publishable commits in this push
+        id: scan
+        run: |
+          set -euo pipefail
+          before="${{ github.event.before }}"
+          # First push to a branch, a force-push, or a manual run: `before` is absent or
+          # the all-zero sha and is not a usable range endpoint. Fall back to the single
+          # head commit — the matrix de-duplicates, so a narrow range is always safe.
+          if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$before^{commit}" 2>/dev/null; then
+            range_args="--since HEAD~1"
+          else
+            range_args="--since $before"
+          fi
+          echo "scanning $range_args"
+          python3 scripts/gen_progress_log.py $range_args > /tmp/entries.json
+          count=$(python3 -c "import json;print(len(json.load(open('/tmp/entries.json'))))")
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "$count publishable commit(s) in this push"
+
+      - name: Dispatch to wcag-matrix
+        if: steps.scan.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.MATRIX_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::notice::MATRIX_DISPATCH_TOKEN is not set — skipping. See the setup" \
+                 "note in .github/workflows/matrix-progress-log.yml."
+            exit 0
+          fi
+          gh api repos/jeremyyuAWS/wcag-matrix/dispatches \
+            -f event_type=acp-progress-log \
+            -F "client_payload[sha]=${{ github.sha }}"
+          echo "dispatched acp-progress-log for ${GITHUB_SHA:0:7}"
