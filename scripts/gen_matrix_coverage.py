@@ -79,6 +79,10 @@ R_TIERS = ("NA", "N", "M", "AI", "AP", "AC", "A")
 # so the notify workflow can ask "did this push touch anything that could move a ceiling?"
 # without keeping a second copy of the list in YAML that would drift from this one.
 SOURCES = (
+    "api/rule_registry.py",            # the capability registry — authoritative where migrated
+    "api/capabilities.py",             # what each format can physically expose
+    "api/assessment.py",               # the coverage vocabulary the ceilings map from
+    "api/formats/",                    # per-format registrations + detectors
     "api/remediation_capability.py",   # the proven lane table (primary)
     "api/store.py",                    # REVIEW_FORMATS — the second, review-only scope table
     "api/handlers.py",                 # write-back applier surface
@@ -117,6 +121,50 @@ def load_capability() -> dict[str, dict[str, dict[str, str]]]:
     round-trip-proven module. Imported rather than parsed: it is a dependency-free data
     module, and importing means this script cannot misread a table its own tests guarantee."""
     return _load("acp_remediation_capability", API / "remediation_capability.py").CAPABILITY
+
+
+# ── 1a. the capability registry (authoritative wherever a pair has been migrated) ─────
+# Maps the registry's coverage vocabulary onto the matrix's assessment tiers. The rule is the
+# same one assessment.CAN_CERTIFY_PASS encodes: only FULL coverage can certify a pass, so only
+# FULL can reach Certified. A partial or heuristic technique genuinely runs and genuinely
+# reports — that is Guided, not Human.
+_COVERAGE_CEILING_A = {
+    "full": "C",
+    "partial": "Q",
+    "heuristic": "Q",
+    "declared": "H",       # applicable, nothing built — a human is the only route today
+    "unsupported": "NA",   # the format cannot express it; not a gap, a fact
+}
+
+
+def load_registry() -> dict[tuple[str, str], dict]:
+    """{(sc, fmt): {coverage, confidence, reason, detector}} for every migrated pair.
+
+    Imported rather than parsed: the registry is the authoritative statement and importing it
+    means this generator cannot misread its own source of truth. api/ goes on the path because
+    the registry's modules import each other by bare name, the way the running app does.
+    """
+    # A plain import, NOT _load(). The format packages register themselves with
+    # `from rule_registry import register`, which resolves to the canonical module — loading a
+    # second copy under a private name here would mean the registrations land in one module
+    # object while this function reads an empty `_REGISTRY` on another, and the failure is
+    # silent (zero entries, no error, ceilings quietly falling back to the legacy tables).
+    sys.path.insert(0, str(API))
+    try:
+        import rule_registry as reg
+        reg.load()
+    except Exception as exc:
+        # The matrix must still be derivable when the format parsers aren't installed — this
+        # script runs in a bare CI container. An unmigrated-looking registry degrades to the
+        # legacy tables, which is exactly the pre-registry behaviour.
+        print(f"note: capability registry unavailable ({exc.__class__.__name__}: {exc}) — "
+              f"falling back to the legacy tables", file=sys.stderr)
+        return {}
+    return {(r.rule, r.fmt): {"coverage": r.coverage.value,
+                              "confidence": r.confidence.value,
+                              "reason": r.reason,
+                              "detector": r.detector is not None}
+            for r in reg.all_registrations()}
 
 
 # ── 1b. the review-only scope table ───────────────────────────────────────────────────
@@ -329,6 +377,7 @@ _CATALOG_LANE = {"auto": "auto", "ai-assisted": "assisted", "human-only": "human
 
 def build() -> dict:
     cap = load_capability()
+    registry = load_registry()
     review_fmts = load_review_formats()
     appliers = load_appliers()
     ai_pairs = load_ai_pairs()
@@ -353,7 +402,16 @@ def build() -> dict:
             # scope table, or simply have a dispatched detector: either way ACP surfaces evidence
             # a human adjudicates, which is the Guided tier — it just can never certify a PASS,
             # so the ceiling stops at Q and never reaches C.
-            if cell is None and (in_review_lane or has_detectors):
+            # The registry outranks every heuristic below it: where a pair has been migrated,
+            # its coverage is an explicit, tested statement of how much the technique reaches,
+            # rather than something inferred from which table happens to mention the pair.
+            reg = registry.get((sc, fmt))
+            if reg is not None:
+                a_ceiling = _COVERAGE_CEILING_A.get(reg["coverage"], "H")
+                notes.append(
+                    f"capability registry: coverage={reg['coverage']}, "
+                    f"confidence={reg['confidence']} — {reg['reason'] or 'no reason recorded'}")
+            elif cell is None and (in_review_lane or has_detectors):
                 a_ceiling = "Q"
                 because = ("store.REVIEW_FORMATS admits this pair as a review lane"
                            if in_review_lane else
@@ -391,7 +449,10 @@ def build() -> dict:
             # as FAIL (the no-silent-gaps hoist), but the pair can never PASS and carries no
             # declared lane, so the criterion's status is decided by an accident of wiring.
             # Reported as acp's bug to fix, not the matrix's — the ceiling already handles it.
-            orphaned = cell is None and has_detectors and not in_review_lane
+            # A registered pair is by definition declared, so it can never be orphaned — that
+            # is what migrating it to the registry accomplished.
+            orphaned = (cell is None and has_detectors and not in_review_lane
+                        and reg is None)
             if orphaned:
                 notes.append(
                     f"{len(detectors[fmt][sc])} detector(s) emit {sc} for {fmt} "
@@ -422,16 +483,33 @@ def build() -> dict:
                 "applier": has_applier,
                 "ai_in_path": ai_in_path,
                 "orphaned_detectors": orphaned,
+                # None when the pair hasn't been migrated yet. That is a different statement
+                # from "unsupported", and the matrix renders the two differently.
+                "registry_coverage": reg["coverage"] if reg else None,
+                "registry_confidence": reg["confidence"] if reg else None,
                 "notes": notes,
                 "evidence": evidence,
             }
 
+    # The support-maturity grid the matrix renders: {sc: {fmt: coverage}}, migrated pairs only.
+    # An absent cell means "not migrated", NOT "unsupported" — conflating the two would turn
+    # an incomplete migration into a false claim about what the format can do.
+    maturity = {}
+    for (sc, fmt), reg in sorted(registry.items()):
+        maturity.setdefault(sc, {})[fmt] = {
+            "coverage": reg["coverage"],
+            "confidence": reg["confidence"],
+            "reason": reg["reason"],
+        }
+
     return {
-        "schema": 1,
+        "schema": 2,
         "source": "acp",
         "formats": list(FORMATS),
         "a_tiers": list(A_TIERS),
         "r_tiers": list(R_TIERS),
+        "coverage_levels": ["unsupported", "declared", "heuristic", "partial", "full"],
+        "maturity": maturity,
         "cells": cells,
     }
 

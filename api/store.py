@@ -494,6 +494,37 @@ except Exception:
     REVIEW_ASSESS_FORMATS = {}
 
 
+# ── Capability registry bridge ────────────────────────────────────────────────
+# Imported lazily and defensively. store.py is imported by a lot of tooling that has no
+# business pulling in pikepdf and the format parsers, and a registry that fails to load must
+# degrade to the legacy tables rather than take the scan down with it — an unmigrated pair
+# behaves exactly as it did before the registry existed, which is what makes the migration
+# safe to do one pair at a time.
+_CAN_CERTIFY_PASS: frozenset = frozenset()
+_NEEDS_REVIEW_ON_CLEAN: frozenset = frozenset()
+_registry_mod = None
+_registry_failed = False
+
+
+def _registry_for(rule_id: str, fmt: str | None):
+    """The registration for a pair, or None when it hasn't been migrated (or can't load)."""
+    global _registry_mod, _registry_failed, _CAN_CERTIFY_PASS, _NEEDS_REVIEW_ON_CLEAN
+    if fmt is None or _registry_failed:
+        return None
+    if _registry_mod is None:
+        try:
+            import assessment as _a
+            import rule_registry as _r
+            _r.load()
+            _CAN_CERTIFY_PASS = _a.CAN_CERTIFY_PASS
+            _NEEDS_REVIEW_ON_CLEAN = _a.NEEDS_REVIEW_ON_CLEAN
+            _registry_mod = _r
+        except Exception:
+            _registry_failed = True
+            return None
+    return _registry_mod.get(rule_id, fmt)
+
+
 def _rule_outcome(rule_id: str, fmt: str | None, fail_count: int, review_count: int = 0) -> str:
     """The per-(criterion, format) outcome from its finding counts.
 
@@ -514,6 +545,24 @@ def _rule_outcome(rule_id: str, fmt: str | None, fail_count: int, review_count: 
     # while its manifest row claimed "not checked").
     if fail_count > 0:
         return "FAIL"
+    # ── Registry-backed pairs (api/rule_registry.py) ──────────────────────────────────
+    # For a (criterion, format) that has been migrated to the capability registry, COVERAGE
+    # decides what a clean scan is worth — the thing RULE_FORMATS cannot express.
+    #
+    # 4.1.2 and 2.4.3 on PDF are why this exists. Both run a real detector on every PDF, but
+    # only over AcroForm fields, and neither pair appeared in RULE_FORMATS or REVIEW_FORMATS.
+    # So a clean scan fell through to NOT_EVALUATED — "we did not look" — for work that had in
+    # fact been done. Partial coverage can't certify a pass either, so the honest answer is
+    # REVIEW: we checked what our technique reaches, a human confirms the rest.
+    reg = _registry_for(rule_id, fmt)
+    if reg is not None:
+        if review_count > 0:
+            return REVIEW
+        if reg.coverage in _CAN_CERTIFY_PASS:
+            return "PASS"
+        if reg.coverage in _NEEDS_REVIEW_ON_CLEAN:
+            return REVIEW
+        return NOT_EVALUATED          # DECLARED / UNSUPPORTED — applicable, nothing ran
     if fmt is None or fmt not in RULE_FORMATS.get(rule_id, _ALL_FORMATS):
         return NOT_EVALUATED
     if review_count > 0:
