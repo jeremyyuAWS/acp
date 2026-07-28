@@ -156,6 +156,77 @@ def healthz():
             "rubric_hash": core.active_rubric().hash, **info}
 
 
+def pdf_engine_status() -> dict:
+    """Is the PDF analyser importable in THIS process?
+
+    worker-python is not vendored (unlike the Office analysers, which ADR 0012 brought in) —
+    it is loaded at runtime from ACP_PDF_ENGINE. When that path is wrong the failure surfaces
+    as a ModuleNotFoundError partway through scanning a PDF, which reads as "the scan broke"
+    rather than "an engine was never installed". Probing it here turns a mid-scan crash into
+    something an operator can see before anyone runs a scan.
+
+    Import-only: the module is imported and discarded, never used to analyse anything.
+    """
+    import importlib.util
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    import scanner
+    engine = _Path(str(scanner.WP))
+    if not engine.exists():
+        return {"available": False, "path": str(engine),
+                "reason": "ACP_PDF_ENGINE path does not exist"}
+    added = str(engine) not in _sys.path
+    if added:
+        _sys.path.insert(0, str(engine))
+    try:
+        found = importlib.util.find_spec("analysers.pdf_analyser") is not None
+    except Exception as exc:
+        return {"available": False, "path": str(engine),
+                "reason": f"{exc.__class__.__name__}: {exc}"}
+    return {"available": found, "path": str(engine),
+            "reason": None if found else "analysers.pdf_analyser not importable from that path"}
+
+
+@router.get("/readyz")
+def readyz():
+    """Functional readiness: can this deployment actually do work right now?
+
+    DELIBERATELY SEPARATE FROM /healthz. That route answers "is this image what we think it
+    is" — build provenance — and its docstring notes ACA runs no probe against it. Readiness
+    is a different question with a different failure mode, and conflating them is a trap: if a
+    platform probe were ever pointed at a combined route, a worker-tier outage would restart
+    the API container, which cannot fix a worker tier and loses the API too.
+
+    So: /healthz stays liveness + provenance, this is readiness, and an alert targets
+    `ready` or a specific entry in `degraded`.
+
+    `degraded` is a list of machine-readable reasons rather than prose, so a monitor can alert
+    on one condition without pattern-matching a sentence.
+    """
+    workers = core.store.worker_tier_status()
+    local_pool = int(getattr(core, "WORKERS", 0) or 0)
+    # Either tier can man the queue: the split topology (#113) runs the pool in a standalone
+    # worker container, the single-tier setup runs it in-process. Readiness is the OR — the
+    # scan-start guard in routes/scans.py makes exactly the same call.
+    can_run_scans = bool(local_pool) or workers["alive"]
+
+    degraded: list[str] = []
+    if not can_run_scans:
+        degraded.append("no_workers" if workers["ever_seen"] else "worker_tier_never_started")
+    pdf = pdf_engine_status()
+    if not pdf["available"]:
+        degraded.append("pdf_engine_missing")
+
+    return {
+        "ready": not degraded,
+        "degraded": degraded,
+        "workers": {**workers, "local_pool": local_pool, "can_run_scans": can_run_scans},
+        "engines": {"pdf": pdf},
+        "service": "acp",
+    }
+
+
 @router.get("/config")
 def config():
     """Tells the SPA how to authenticate: GIS per-user (client id present) vs demo."""
