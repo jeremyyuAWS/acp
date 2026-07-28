@@ -341,6 +341,14 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
                 q=f"'{fid}' in parents and trashed=false",
                 fields=f"nextPageToken,files({provenance.DRIVE_FIELDS})",
                 pageSize=200,
+                # Newest first, matching _list_drive_page_all. Without it Drive returns its own
+                # default order, so when the max_files cap bites the files dropped are arbitrary
+                # — and a file uploaded five minutes ago is as likely to be cut as one from last
+                # year. That is the "I added files and the rescan didn't see them" symptom, and
+                # it only appears on subtrees big enough to hit the cap, which is exactly where
+                # nobody notices it. Discovery itself never caches; this is the other way a new
+                # upload can go missing.
+                orderBy="modifiedTime desc",
                 pageToken=page_token,
                 includeItemsFromAllDrives=True,
                 supportsAllDrives=True,
