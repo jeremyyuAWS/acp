@@ -5,12 +5,39 @@
     "level": "A",
     "engines": [
       "docx",
+      "html",
       "pdf",
       "pptx",
-      "xlsx",
-      "html"
+      "xlsx"
     ],
     "dir": "wcag-1-1-1"
+  },
+  {
+    "sc": "1.2.1",
+    "name": "Audio-only & Video-only (Prerecorded)",
+    "level": "A",
+    "engines": [
+      "html"
+    ],
+    "dir": "wcag-1-2-1"
+  },
+  {
+    "sc": "1.2.2",
+    "name": "Captions (Prerecorded)",
+    "level": "A",
+    "engines": [
+      "html"
+    ],
+    "dir": "wcag-1-2-2"
+  },
+  {
+    "sc": "1.2.3",
+    "name": "Audio Description or Media Alternative",
+    "level": "A",
+    "engines": [
+      "html"
+    ],
+    "dir": "wcag-1-2-3"
   },
   {
     "sc": "1.3.1",
@@ -18,10 +45,10 @@
     "level": "A",
     "engines": [
       "docx",
+      "html",
       "pdf",
       "pptx",
-      "xlsx",
-      "html"
+      "xlsx"
     ],
     "dir": "wcag-1-3-1"
   },
@@ -30,6 +57,7 @@
     "name": "Meaningful Sequence",
     "level": "A",
     "engines": [
+      "docx",
       "pdf",
       "pptx",
       "xlsx"
@@ -37,13 +65,56 @@
     "dir": "wcag-1-3-2"
   },
   {
+    "sc": "1.3.3",
+    "name": "Sensory Characteristics",
+    "level": "A",
+    "engines": [
+      "docx",
+      "pdf",
+      "pptx",
+      "xlsx"
+    ],
+    "dir": "wcag-1-3-3"
+  },
+  {
+    "sc": "1.3.4",
+    "name": "Orientation",
+    "level": "AA",
+    "engines": [
+      "html"
+    ],
+    "dir": "wcag-1-3-4"
+  },
+  {
+    "sc": "1.3.5",
+    "name": "Identify Input Purpose",
+    "level": "AA",
+    "engines": [
+      "html"
+    ],
+    "dir": "wcag-1-3-5"
+  },
+  {
     "sc": "1.4.1",
     "name": "Use of Color",
     "level": "A",
     "engines": [
-      "html"
+      "docx",
+      "html",
+      "pdf",
+      "xlsx"
     ],
     "dir": "wcag-1-4-1"
+  },
+  {
+    "sc": "1.4.2",
+    "name": "Audio Control",
+    "level": "A",
+    "engines": [
+      "html",
+      "pptx"
+    ],
+    "dir": "wcag-1-4-2"
   },
   {
     "sc": "1.4.3",
@@ -51,8 +122,10 @@
     "level": "AA",
     "engines": [
       "docx",
+      "html",
+      "pdf",
       "pptx",
-      "html"
+      "xlsx"
     ],
     "dir": "wcag-1-4-3"
   },
@@ -61,16 +134,64 @@
     "name": "Resize Text",
     "level": "AA",
     "engines": [
-      "html"
+      "html",
+      "pptx"
     ],
     "dir": "wcag-1-4-4"
+  },
+  {
+    "sc": "1.4.5",
+    "name": "Images of Text",
+    "level": "AA",
+    "engines": [
+      "docx",
+      "pdf",
+      "pptx",
+      "xlsx"
+    ],
+    "dir": "wcag-1-4-5"
+  },
+  {
+    "sc": "1.4.6",
+    "name": "Contrast (Enhanced)",
+    "level": "AAA",
+    "engines": [
+      "html",
+      "pdf",
+      "pptx",
+      "xlsx"
+    ],
+    "dir": "wcag-1-4-6"
+  },
+  {
+    "sc": "1.4.8",
+    "name": "Visual Presentation",
+    "level": "AAA",
+    "engines": [
+      "docx"
+    ],
+    "dir": "wcag-1-4-8"
+  },
+  {
+    "sc": "1.4.9",
+    "name": "Images of Text (No Exception)",
+    "level": "AAA",
+    "engines": [
+      "docx",
+      "pdf",
+      "pptx",
+      "xlsx"
+    ],
+    "dir": "wcag-1-4-9"
   },
   {
     "sc": "1.4.10",
     "name": "Reflow",
     "level": "AA",
     "engines": [
-      "html"
+      "docx",
+      "html",
+      "pptx"
     ],
     "dir": "wcag-1-4-10"
   },
@@ -79,7 +200,11 @@
     "name": "Non-text Contrast",
     "level": "AA",
     "engines": [
-      "html"
+      "docx",
+      "html",
+      "pdf",
+      "pptx",
+      "xlsx"
     ],
     "dir": "wcag-1-4-11"
   },
@@ -88,7 +213,10 @@
     "name": "Text Spacing",
     "level": "AA",
     "engines": [
-      "html"
+      "docx",
+      "html",
+      "pdf",
+      "pptx"
     ],
     "dir": "wcag-1-4-12"
   },
@@ -97,10 +225,31 @@
     "name": "Keyboard",
     "level": "A",
     "engines": [
-      "pptx",
-      "html"
+      "html",
+      "pptx"
     ],
     "dir": "wcag-2-1-1"
+  },
+  {
+    "sc": "2.1.2",
+    "name": "No Keyboard Trap",
+    "level": "A",
+    "engines": [
+      "docx",
+      "pptx",
+      "xlsx"
+    ],
+    "dir": "wcag-2-1-2"
+  },
+  {
+    "sc": "2.4.1",
+    "name": "Bypass Blocks",
+    "level": "A",
+    "engines": [
+      "html",
+      "pdf"
+    ],
+    "dir": "wcag-2-4-1"
   },
   {
     "sc": "2.4.2",
@@ -108,10 +257,10 @@
     "level": "A",
     "engines": [
       "docx",
+      "html",
       "pdf",
       "pptx",
-      "xlsx",
-      "html"
+      "xlsx"
     ],
     "dir": "wcag-2-4-2"
   },
@@ -120,7 +269,9 @@
     "name": "Focus Order",
     "level": "A",
     "engines": [
-      "html"
+      "html",
+      "pdf",
+      "pptx"
     ],
     "dir": "wcag-2-4-3"
   },
@@ -130,8 +281,10 @@
     "level": "A",
     "engines": [
       "docx",
+      "html",
+      "pdf",
       "pptx",
-      "html"
+      "xlsx"
     ],
     "dir": "wcag-2-4-4"
   },
@@ -140,7 +293,11 @@
     "name": "Headings and Labels",
     "level": "AA",
     "engines": [
-      "html"
+      "docx",
+      "html",
+      "pdf",
+      "pptx",
+      "xlsx"
     ],
     "dir": "wcag-2-4-6"
   },
@@ -154,17 +311,67 @@
     "dir": "wcag-2-4-7"
   },
   {
+    "sc": "2.4.9",
+    "name": "Link Purpose (Link Only)",
+    "level": "AAA",
+    "engines": [
+      "docx",
+      "html",
+      "pptx"
+    ],
+    "dir": "wcag-2-4-9"
+  },
+  {
+    "sc": "2.4.10",
+    "name": "Section Headings",
+    "level": "AAA",
+    "engines": [
+      "docx"
+    ],
+    "dir": "wcag-2-4-10"
+  },
+  {
+    "sc": "2.5.3",
+    "name": "Label in Name",
+    "level": "A",
+    "engines": [
+      "html"
+    ],
+    "dir": "wcag-2-5-3"
+  },
+  {
+    "sc": "2.5.8",
+    "name": "Target Size (Minimum)",
+    "level": "AA",
+    "engines": [
+      "html"
+    ],
+    "dir": "wcag-2-5-8"
+  },
+  {
     "sc": "3.1.1",
     "name": "Language of Page",
     "level": "A",
     "engines": [
       "docx",
+      "html",
       "pdf",
       "pptx",
-      "xlsx",
-      "html"
+      "xlsx"
     ],
     "dir": "wcag-3-1-1"
+  },
+  {
+    "sc": "3.1.2",
+    "name": "Language of Parts",
+    "level": "AA",
+    "engines": [
+      "docx",
+      "pdf",
+      "pptx",
+      "xlsx"
+    ],
+    "dir": "wcag-3-1-2"
   },
   {
     "sc": "3.1.4",
@@ -176,11 +383,37 @@
     "dir": "wcag-3-1-4"
   },
   {
+    "sc": "3.1.5",
+    "name": "Reading Level",
+    "level": "AAA",
+    "engines": [
+      "docx",
+      "pdf",
+      "pptx",
+      "xlsx"
+    ],
+    "dir": "wcag-3-1-5"
+  },
+  {
+    "sc": "3.3.2",
+    "name": "Labels or Instructions",
+    "level": "A",
+    "engines": [
+      "docx",
+      "html"
+    ],
+    "dir": "wcag-3-3-2"
+  },
+  {
     "sc": "4.1.2",
     "name": "Name, Role, Value",
     "level": "A",
     "engines": [
-      "html"
+      "docx",
+      "html",
+      "pdf",
+      "pptx",
+      "xlsx"
     ],
     "dir": "wcag-4-1-2"
   }

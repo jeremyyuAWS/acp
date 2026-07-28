@@ -1,6 +1,6 @@
 # WCAG 2.1.1 — Keyboard
 
-> **GENERATED FILE.** Edit the sources (rule-catalog.json, frontend/src/rules/, test-corpus/manifest.json), then run `python scripts/gen_rules_index.py`. Do not hand-edit.
+> **GENERATED FILE.** Edit the sources (rule-catalog.json, frontend/src/rules/, api/office_structure.py, api/textchecks.py, api/ocr.py, test-corpus/manifest.json), then run `python scripts/gen_rules_index.py`. Do not hand-edit.
 
 - **Success Criterion:** 2.1.1 Keyboard (Level A)
 - **Understanding doc:** https://www.w3.org/WAI/WCAG21/Understanding/keyboard.html

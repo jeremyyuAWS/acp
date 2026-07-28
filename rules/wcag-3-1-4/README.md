@@ -1,6 +1,6 @@
 # WCAG 3.1.4 — Abbreviations
 
-> **GENERATED FILE.** Edit the sources (rule-catalog.json, frontend/src/rules/, test-corpus/manifest.json), then run `python scripts/gen_rules_index.py`. Do not hand-edit.
+> **GENERATED FILE.** Edit the sources (rule-catalog.json, frontend/src/rules/, api/office_structure.py, api/textchecks.py, api/ocr.py, test-corpus/manifest.json), then run `python scripts/gen_rules_index.py`. Do not hand-edit.
 
 - **Success Criterion:** 3.1.4 Abbreviations (Level AAA)
 - **Understanding doc:** https://www.w3.org/WAI/WCAG21/Understanding/abbreviations.html
