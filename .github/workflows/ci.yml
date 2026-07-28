@@ -5,6 +5,11 @@
 # ModuleNotFoundError in the backend suite went unnoticed. This workflow is the same
 # gate on infrastructure that actually executes on every PR.
 #
+# "Step for step" is a live invariant, not a description: when azure-pipelines.yml gains a
+# step, this gains it too, or the two gates disagree about what "trusted" means. It has
+# already drifted once — the three matrix/backlog guards landed there while this ran without
+# them, so a capability change could have gone green here and red there.
+#
 # azure-pipelines.yml is deliberately left in place, not deleted — mova-io/acp may still
 # build from it, and removing it is a separate decision.
 #
@@ -36,10 +41,16 @@ concurrency:
 
 jobs:
   backend:
-    name: Backend suite (incl. Office engine + auth-coverage guard)
+    name: Backend suite (incl. Office engine + matrix guards)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The matrix guards below read commit bodies and diff against the target branch.
+          # actions/checkout defaults to depth 1, which would make gen_progress_log.py --check
+          # silently vacuous — it would find no commits to inspect and pass. Same reason
+          # azure-pipelines.yml sets fetchDepth: 0.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -69,6 +80,40 @@ jobs:
 
       - name: Backend suite
         run: python -m pytest tests/ -q --junitxml=test-results.xml
+
+      # ── WCAG-matrix + backlog guards ──────────────────────────────────────────────
+      # Mirrors azure-pipelines.yml. Each one exists because something drifted silently
+      # first; a guard that only runs after a merge cannot stop the drift it detects, and
+      # this workflow is the gate that actually executes on every PR here.
+
+      - name: Matrix guard — capability ceiling still derivable
+        run: python scripts/gen_matrix_coverage.py --check
+        # Every source a per-cell ceiling is derived from is parsed structurally. When one
+        # moves, the generator raises rather than quietly producing a wrong ceiling.
+
+      - name: Backlog guard — docs/TODO.md coverage block is current
+        run: python scripts/gen_todo_status.py --check
+        # docs/TODO.md carries generated coverage facts beside its authored backlog. They went
+        # 387 commits stale because nothing checked them, and read as current the whole time.
+
+      - name: Matrix guard — rule changes declare their matrix impact
+        run: |
+          set -euo pipefail
+          # On a PR the checkout is the merge commit, so origin/<base>..HEAD is exactly the
+          # PR's own commits. A merge commit lists no files under --name-only, so it is
+          # skipped rather than being flagged for a trailer it could never carry.
+          if [ -n "${BASE_REF:-}" ]; then
+            git fetch --quiet origin "$BASE_REF"
+            python scripts/gen_progress_log.py --check --since "origin/$BASE_REF"
+          else
+            python scripts/gen_progress_log.py --check
+          fi
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        # Fails when a commit changed rule code without declaring its matrix impact. Add a
+        # `Matrix-Note:` (+ `WCAG:`) trailer, or `Matrix-Note: none` for a deliberate omission.
+        # NOTE for whoever squashes a PR: the trailers live in the COMMIT MESSAGE, and a
+        # rewritten squash body drops them. That happened on #12 and took #13 to repair.
 
       - name: Publish test results
         if: always()
