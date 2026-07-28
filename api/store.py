@@ -2875,6 +2875,38 @@ class Store:
                 "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value",
                 (key, value))
 
+    def worker_tier_status(self, window_s: int = 120) -> dict:
+        """The heartbeat with its AGE, not just a boolean.
+
+        `worker_tier_alive` answers the scan-start guard's yes/no question, which is all that
+        guard needs. It is useless for alerting: "false" cannot distinguish a worker that died
+        thirty seconds ago from one that has been gone for a fortnight, and those want different
+        responses. This returns the timestamp and its age so a monitor can say which.
+
+        Age is None when no worker has EVER beaten — a fresh deploy that never started its
+        worker tier, which is a different failure from one that stopped, and reads differently
+        in an alert.
+        """
+        from datetime import datetime, timezone
+        raw = self.get_setting("worker_tier_heartbeat")
+        out = {"alive": False, "heartbeat_at": raw or None, "age_s": None,
+               "window_s": window_s, "ever_seen": bool(raw)}
+        if not raw:
+            return out
+        try:
+            beat = datetime.fromisoformat(raw)
+        except ValueError:
+            # A malformed timestamp is a real fault, not "no heartbeat" — say so rather than
+            # letting it read identically to a tier that never started.
+            out["heartbeat_at"] = f"unparseable: {raw!r}"
+            return out
+        if beat.tzinfo is None:
+            beat = beat.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - beat).total_seconds()
+        out["age_s"] = round(age, 1)
+        out["alive"] = age <= window_s
+        return out
+
     def worker_tier_alive(self, window_s: int = 120) -> bool:
         """True if a standalone worker container (worker_main, #113) beat within `window_s`.
 

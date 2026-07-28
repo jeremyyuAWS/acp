@@ -580,8 +580,25 @@ def _issue_with_loc(base: dict, loc) -> dict:
 def _analyse_pdf(path: Path) -> dict:
     import asyncio
     sys.path.insert(0, str(WP))
-    from analysers.pdf_analyser import PdfAnalyser
-    from models.manifest import AnalysisJob, FileType
+    try:
+        from analysers.pdf_analyser import PdfAnalyser
+        from models.manifest import AnalysisJob, FileType
+    except ModuleNotFoundError as exc:
+        # worker-python is not vendored — it is loaded at runtime from ACP_PDF_ENGINE. Bare, this
+        # import raised mid-scan, and the resulting ModuleNotFoundError read as "the scan broke on
+        # this file" when the real state is "a required engine was never installed on this host".
+        # Every PDF in the estate then failed one at a time with the same opaque error.
+        #
+        # This does NOT invent a result: the file is reported as errored and un-analysed, exactly
+        # as any other engine failure would be, so nothing is scored as passing. What changes is
+        # that the message names the cause and where to fix it, and /readyz reports the same
+        # condition BEFORE a scan starts. Vendoring the engine the way ADR 0012 vendored the
+        # Office analysers is what actually closes this.
+        return {"succeeded": False, "issues": [], "errors": [{
+            "message": (f"PDF engine unavailable: {exc}. worker-python is loaded at runtime from "
+                        f"ACP_PDF_ENGINE (currently {WP}); this host has no importable analyser "
+                        f"there, so no PDF can be assessed. See /readyz."),
+            "rule": None}]}
     job = AnalysisJob(job_id=uuid.uuid4(), batch_run_id=uuid.uuid4(), file_id=uuid.uuid4(),
                       file_path=str(path), file_type=FileType.PDF, queue="pdf",
                       enqueued_at=datetime.now(timezone.utc), department_id=uuid.uuid4(), disabled_rule_ids=[])
