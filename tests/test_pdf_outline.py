@@ -17,6 +17,12 @@ import remediate_pdf  # noqa: E402
 pikepdf = pytest.importorskip("pikepdf")
 pytest.importorskip("reportlab")
 
+# remediate_pdf reaches into worker-python's `remediation` package, which is not vendored
+# here — without it these fail with ModuleNotFoundError rather than skipping honestly.
+from engines import NO_PDF, PDF_OK  # noqa: E402
+
+pytestmark = pytest.mark.skipif(not PDF_OK, reason=NO_PDF)
+
 
 def _pdf(path: Path, pages: list[tuple[str | None, str]]):
     """Build a PDF; each page is (heading_or_None, body). A heading is 18pt bold, body 11pt."""

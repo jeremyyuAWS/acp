@@ -20,7 +20,15 @@ ACP = Path(__file__).resolve().parent.parent
 # Engine + corpus locations default to the local dev layout but are env-overridable
 # so the same code runs inside the deploy container (paths set in the Dockerfile).
 WP = Path(os.environ.get("ACP_PDF_ENGINE") or os.path.expanduser("~/projects/_review-digital-accessibility/worker-python"))
-DOTNET = os.environ.get("ACP_DOTNET") or os.path.expanduser("~/.dotnet/dotnet")
+# Resolve dotnet the same way the test capability gates do (tests/engines.py): explicit
+# override, then PATH, then the dev-machine install location. PATH matters wherever the
+# SDK is installed by a package manager or CI action rather than the dotnet-install
+# script — Homebrew puts it in /opt/homebrew/bin, actions/setup-dotnet on PATH — and
+# neither creates ~/.dotnet/dotnet. Without the PATH lookup those environments resolved
+# to a nonexistent path and every Office scan died with FileNotFoundError, while the
+# gates (which DO check PATH) had already decided the engine was available.
+DOTNET = (os.environ.get("ACP_DOTNET") or shutil.which("dotnet")
+          or os.path.expanduser("~/.dotnet/dotnet"))
 CLI_DLL = Path(os.environ.get("ACP_OFFICE_CLI")
                or (ACP / "spike/dotnet/AcpScan.Cli/bin/Release/net10.0/AcpScan.Cli.dll"))
 # Demo corpus folder (ADC / keyless mode). Overridden by ACP_DRIVE_FOLDER env var.
@@ -609,8 +617,14 @@ def _office_err(e: dict) -> dict:
 
 def _analyse_office(dest: Path) -> dict:
     out = dest / "_o.json"
-    env = {**os.environ, "DOTNET_ROOT": os.path.expanduser("~/.dotnet"),
-           "DOTNET_CLI_TELEMETRY_OPTOUT": "1", "DOTNET_NOLOGO": "1"}
+    # DOTNET_ROOT only when that install actually exists, and never clobbering one the
+    # environment already set (actions/setup-dotnet and the Docker image both set it
+    # correctly). Forcing ~/.dotnet unconditionally pointed the muxer at a missing root
+    # anywhere the SDK came from a package manager or CI action.
+    _root = os.path.expanduser("~/.dotnet")
+    env = {**os.environ, "DOTNET_CLI_TELEMETRY_OPTOUT": "1", "DOTNET_NOLOGO": "1"}
+    if "DOTNET_ROOT" not in env and os.path.isdir(_root):
+        env["DOTNET_ROOT"] = _root
     # Bounded: a hung dotnet process would otherwise stall the worker thread forever —
     # and since the fan-out scan finalizes only when every file reports in, one hang
     # froze the whole scan. On timeout/failure res stays {} and the affected files

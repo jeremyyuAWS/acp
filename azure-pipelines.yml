@@ -16,12 +16,23 @@ pr:
 pool:
   vmImage: ubuntu-latest
 
-# KNOWN GAP — office engine oracle tests (tests/test_scan.py, ~18 tests) skip on
-# CI: AcpScan.Cli.csproj references DigitalA11y.* projects from the SIBLING
-# _review-digital-accessibility checkout, which exists only on dev machines, and
-# the built DLL is gitignored (prod ships the laptop-built artifact via the
-# Docker context). Until the engine is vendored or published as a reproducible
-# artifact, those tests are local-only and CI says so in the skip reason.
+# Office engine: BUILT AND EXERCISED HERE (was a known gap until ADR 0012).
+# The old note said AcpScan.Cli.csproj referenced DigitalA11y.* from the sibling
+# _review-digital-accessibility checkout, so CI agents could never have it. ADR 0012
+# vendored those projects into engine/office-analysers/ and repointed the csproj, so
+# the CLI now builds standalone from a fresh clone — verified by building this repo
+# with no sibling checkout present. The comment outlived the constraint by ~3 weeks
+# and cost every CI run the engine-gated suites.
+#
+# REMAINING GAP — the PDF analyser (worker-python) is still NOT vendored. It is loaded
+# at runtime from ACP_PDF_ENGINE (api/scanner.py:WP) and lives outside this repo, so:
+#   * tests/test_scan.py still skips here — it scans the whole oracle corpus in one
+#     pass, PDFs included, and scanner._analyse_pdf imports the analyser OUTSIDE its
+#     try/except, so a missing PDF engine is a hard ModuleNotFoundError, not a
+#     degraded scan;
+#   * tests/test_remediation_capability.py::test_pdf_auto_entries_clear likewise.
+# Both now say exactly that in their skip reason. Vendoring worker-python the way
+# ADR 0012 vendored the Office analysers is what closes this.
 steps:
   # The matrix guards below read commit bodies and diff against the target branch, so they
   # need real history — the default shallow fetch would make both silently useless.
@@ -33,8 +44,27 @@ steps:
       versionSpec: '3.12'
     displayName: Python 3.12
 
-  - script: python -m pip install --quiet -r api/requirements.txt
-    displayName: Install API dependencies
+  - task: UseDotNet@2
+    inputs:
+      packageType: sdk
+      version: '10.0.x'
+    displayName: .NET 10 SDK (Office analyser engine)
+
+  - script: dotnet build spike/dotnet/AcpScan.Cli/AcpScan.Cli.csproj -c Release --nologo
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    displayName: Build the Office analyser CLI
+    # Produces spike/dotnet/AcpScan.Cli/bin/Release/net10.0/AcpScan.Cli.dll — the exact
+    # path the tests' capability gates probe. bin/ stays gitignored; this is built, not
+    # committed.
+
+  - script: python -m pip install --quiet -r api/requirements.txt -r tests/requirements.txt
+    displayName: Install API + test dependencies
+    # tests/requirements.txt carries the OOXML authoring libs (python-docx/pptx/openpyxl)
+    # that ~12 test modules use to build fixtures on the fly. They were undeclared and
+    # only ever present ambiently on dev machines — harmless while the engine-gated tests
+    # skipped here, load-bearing now that the engine is built.
 
   - script: python -m pytest tests/ -q --junitxml=test-results.xml
     displayName: Backend suite (incl. auth-coverage guard)

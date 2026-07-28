@@ -25,6 +25,13 @@ import gen_demo_fixtures as gen  # noqa: E402
 import ocr  # noqa: E402
 import scanner  # noqa: E402
 
+# Every parametrisation scans through the shared pipeline, and scanner._analyse_pdf
+# imports worker-python's `analysers` OUTSIDE its try/except — so without the (un-vendored)
+# PDF engine even the docx/xlsx/pptx cases error rather than skipping honestly.
+from engines import NO_PDF, PDF_OK  # noqa: E402
+
+pytestmark = pytest.mark.skipif(not PDF_OK, reason=NO_PDF)
+
 
 def _sc(wcag: str) -> str:
     """Normalize a finding's wcag label to a bare SC number: 'SC_1_1_1' and

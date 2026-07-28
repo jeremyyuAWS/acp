@@ -1,0 +1,107 @@
+# ACP CI — the gate between "committed" and "trusted".
+#
+# Mirrors azure-pipelines.yml step for step. That pipeline is not wired to this GitHub
+# repo (only Netlify checks run on PRs here), which is how a collection-time
+# ModuleNotFoundError in the backend suite went unnoticed. This workflow is the same
+# gate on infrastructure that actually executes on every PR.
+#
+# azure-pipelines.yml is deliberately left in place, not deleted — mova-io/acp may still
+# build from it, and removing it is a separate decision.
+#
+# Both engines, and why only one is built here:
+#   * Office (.NET) — vendored in engine/office-analysers/ since ADR 0012, so the CLI
+#     builds standalone from a fresh clone. Built below; its test suites run.
+#   * PDF (worker-python) — NOT vendored, loaded at runtime from ACP_PDF_ENGINE. The
+#     suites needing it skip with an honest reason (see tests/engines.py). Vendoring it
+#     the way ADR 0012 vendored the Office analysers is what turns those on.
+#
+# Ollama-backed tests self-skip here (ai.is_available() is false on a runner), so no
+# model is needed and none is installed.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # A new push to a PR supersedes the in-flight run for that PR.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend suite (incl. Office engine + auth-coverage guard)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            api/requirements.txt
+            tests/requirements.txt
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build the Office analyser CLI
+        env:
+          DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+          DOTNET_NOLOGO: '1'
+        run: dotnet build spike/dotnet/AcpScan.Cli/AcpScan.Cli.csproj -c Release --nologo
+        # Lands the DLL at spike/dotnet/AcpScan.Cli/bin/Release/net10.0/AcpScan.Cli.dll —
+        # the exact path tests/engines.py probes. bin/ stays gitignored: built, not committed.
+
+      - name: Install API + test dependencies
+        run: python -m pip install --quiet -r api/requirements.txt -r tests/requirements.txt
+        # tests/requirements.txt carries the OOXML authoring libs (python-docx/pptx/openpyxl)
+        # that ~12 test modules use to build fixtures on the fly. Without them the suite
+        # aborts during collection, not merely at runtime.
+
+      - name: Backend suite
+        run: python -m pytest tests/ -q --junitxml=test-results.xml
+
+      - name: Publish test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-results
+          path: test-results.xml
+          if-no-files-found: warn
+
+  frontend:
+    name: Frontend tests + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'          # pdfjs-dist requires >=22.13
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm 11
+        run: npm install -g npm@11 --no-audit --no-fund
+        # The lockfile is npm-11 authored; npm 10 rejects its nested entries.
+
+      - name: Install frontend dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: frontend
+
+      - name: Frontend unit tests (rule round-trips + WCAG coverage contract)
+        run: npx vitest run
+        working-directory: frontend
+
+      - name: Frontend build
+        run: npx vite build
+        working-directory: frontend
