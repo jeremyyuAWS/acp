@@ -87,6 +87,12 @@ steps:
   - script: python scripts/gen_matrix_coverage.py --check
     displayName: Matrix guard — capability ceiling still derivable
 
+  # docs/TODO.md carries generated coverage facts alongside its authored backlog. Those facts
+  # went 387 commits stale because nothing checked them, and the stalest part was the headline.
+  # This is the thing that stops it recurring; it is cheap and it fails loudly.
+  - script: python scripts/gen_todo_status.py --check
+    displayName: Backlog guard — docs/TODO.md coverage block is current
+
   # Fails when a commit changed rule code without declaring its matrix impact. Add a
   # `Matrix-Note:` (+ `WCAG:`) trailer, or `Matrix-Note: none` to record a deliberate omission.
   - script: |

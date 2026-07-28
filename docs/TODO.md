@@ -1,12 +1,25 @@
 # ACP — comprehensive to-do
 
-Snapshot as of `9d7c7a3` (main, all three remotes in sync; DEPLOYED live as
-revision acp-app--0000194, version 2026.7.7). Verified against current source
-(`frontend/src/wcagCatalog.js`, `api/store.py` RULE_FORMATS, `docs/adr/`)
-rather than carried forward from memory — every item below is either a real,
-buildable gap or an explicit decision waiting on someone.
+Authored sections reviewed against `d289a63` (main, 2026-07-28). The previous
+snapshot was `9d7c7a3` — **387 commits and 19 days earlier**, and several items
+below had shipped without being struck through. That is the failure this file's
+new split is meant to prevent:
 
-Current coverage (87 WCAG 2.1/2.2 success criteria):
+* **Generated** — the coverage-status block below is derived from the code that
+  decides it, and `scripts/gen_todo_status.py --check` fails CI when it drifts.
+  Nothing forced the old counts to stay current, so they didn't.
+* **Authored** — everything else. Whether we build a thing, when, who owns it,
+  and why it was deferred are judgements no generator should fake.
+
+Items are struck through when the code says they shipped, with the evidence
+named — not when someone remembers closing them.
+
+Current coverage (87 WCAG 2.1/2.2 success criteria) — **authored, and NOT
+re-verified in this pass.** These counts are derived from
+`frontend/src/wcagCatalog.js`, which is not present in this checkout, so they
+carry the same staleness risk the rest of this header just shed. Treat them as
+2026-07-09 figures until someone re-counts against the catalog. The generated
+block further down is the part that is guaranteed current.
 
 | Bucket | Count | Meaning |
 |---|---|---|
@@ -20,14 +33,53 @@ HITL (45), or Partner (6). **No Required (A/AA) gap** — every Required
 criterion is auto-detected or HITL-routed matching the checklist's own
 "Human / AT" designation.
 
-**Last genuinely-open-for-documents item:** the 4 Required format gaps
-(1.4.1, 1.3.5, 2.5.3, 4.1.2) are auto-detected for HTML but show UNCHECKED for
-PDF/Office in the per-file coverage manifest. Closing them to HUMAN-tier needs
-a small per-format-applicability pass in the manifest (distinguish
-"doc-applicable, not-auto-here → HUMAN" from "web-only → N-A" — NOT a blanket
-flip, since e.g. Resize Text is genuinely N-A for a static PDF). Lives in
-`FileDrawer.jsx` (concurrent-session-contested) → coordinate with T, or do via
-the isolation-dance as a scoped follow-up.
+**The 4 Required format gaps (1.4.1, 1.3.5, 2.5.3, 4.1.2)** were this file's
+headline open item for months, described as "auto-detected for HTML but
+UNCHECKED for PDF/Office". Two thirds of that is no longer true, and the
+generated table below now answers it with live data every run instead of a
+sentence nobody re-checked.
+
+The distinction it asked for — *"doc-applicable, not-auto-here"* versus
+*"web-only → N-A"* — is exactly what `Coverage.DECLARED` and
+`Coverage.UNSUPPORTED` encode in `api/rule_registry.py`, arrived at from the
+other direction while fixing 4.1.2 on PDF. `1.4.1` and `4.1.2` now carry real
+per-format signal; `1.3.5` and `2.5.3` remain HTML-only and are the genuine
+remainder.
+
+<!-- BEGIN GENERATED: coverage-status — written by scripts/gen_todo_status.py. Do not
+     hand-edit: the next run overwrites it, and `--check` fails CI if it is stale. -->
+
+### Coverage status — generated, do not edit by hand
+
+Regenerate with `python scripts/gen_todo_status.py`; CI fails if this block is stale (`--check`). Everything below is read from `api/rule_registry.py`, `api/store.py` (`RULE_FORMATS` / `REVIEW_FORMATS`) and `config/rule-catalog.json` — the code that actually decides it. Intent, priority and ownership are authored above and below; this block never speaks to those.
+
+**Conformance target: AA.** Criteria above the target are not assessed at all (`store.in_target`). Selectable targets are A, AA, so the 7 AAA criteria are never assessed: `1.4.6`, `1.4.8`, `1.4.9`, `2.4.10`, `2.4.9`, `3.1.4`, `3.1.5`.
+
+This is a behaviour change, not bookkeeping: several detectors compute the AA and AAA thresholds in one pass, so AAA findings were previously scored against AA-target files.
+
+**Capability registry — 4 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
+
+| Criterion | Format | Coverage | Confidence | Not covered |
+|---|---|---|---|---|
+| `1.4.11` | xlsx | **partial** | medium | theme-coloured shapes, gradients, images and control affordances are not examined, and whether a shape conveys |
+| `2.4.3` | pdf | **heuristic** | medium | actually comparing the widget order to the structure order needs a /StructTreeRoot walk that is not built |
+| `3.1.1` | html | **full** | high | whether the declared language is the CORRECT one is a content question 3.1.1 does not ask |
+| `4.1.2` | pdf | **partial** | high | components expressed through the tagged-structure tree are not examined, which needs a /StructTreeRoot walker  |
+
+**The four Required format gaps** this file's header has tracked since the first snapshot — auto-detected for HTML, historically UNCHECKED for PDF/Office:
+
+| Criterion | HTML | DOCX | XLSX | PPTX | PDF |
+|---|---|---|---|---|---|
+| `1.4.1` | pass/fail | review | review | — | review |
+| `1.3.5` | pass/fail | — | — | — | — |
+| `2.5.3` | pass/fail | — | — | — | — |
+| `4.1.2` | pass/fail | review | review | review | partial |
+
+`partial` / `heuristic` / `full` come from the registry and mean a real detector runs. `review` means a review-lane detector surfaces evidence but never certifies. `—` means no signal of any kind — the genuine remaining gap.
+
+**Undeclared coverage** — detectors emitting for a (criterion, format) that no scope table admits. `scripts/gen_matrix_coverage.py` reports these; all known instances (`1.4.11` xlsx, `2.4.3` pdf, `4.1.2` pdf) are now declared in the registry.
+
+<!-- END GENERATED: coverage-status -->
 
 All of this session's new detection code (`office_structure.py` +
 `textchecks.py`) went through an adversarial correctness review (`9d7c7a3`)
@@ -60,15 +112,18 @@ implementing — no guessed detection logic.
    (`22a7202`). `pdf_bypass_blocks_check()` in `office_structure.py`, via
    pikepdf's `/Root/Outlines`. Only checked at 5+ pages (a short memo has no
    real bypass-blocks problem).
-2. **pptx embedded-audio autoplay (1.4.2 Audio Control)** — BLOCKED. Verified
-   the audio-attachment marker (`<a:audioFile r:link="rId">` inside
-   `<p:nvPr>`) via Microsoft's own Open XML SDK docs, but could not verify
-   the exact `<p:timing>` trigger-condition XML that distinguishes autoplay
-   from click-to-play — Microsoft's docs don't spell it out precisely, and
-   no PowerPoint/LibreOffice is available in this environment to generate a
-   real ground-truth fixture. Do not implement this from memory/guesswork —
-   next attempt needs either a real PowerPoint install somewhere, or a
-   donated real autoplay-audio .pptx to inspect.
+2. ~~**pptx embedded-audio autoplay (1.4.2 Audio Control)**~~ — SHIPPED, and
+   this entry was stale for most of those 387 commits. `pptx_audio_autoplay_checks()`
+   is in `office_structure.py`, dispatched from `checks_for()`'s `.pptx` branch,
+   covered by `tests/test_office_structure_audio.py`, and carries an `assisted`
+   remediation lane (`remediation_capability.REMEDIATION["pptx"]["1.4.2"]` — a
+   one-click play-on-click card a human elects).
+
+   The blocker recorded here was real when written: the `<p:timing>` trigger XML
+   distinguishing autoplay from click-to-play could not be verified without a
+   ground-truth fixture. It was resolved by reading the condition structurally —
+   `<p:cond delay="0">` starts it, `evt="onClick"` does not — rather than by
+   obtaining the fixture the entry was waiting on.
 3. ~~**docx/pptx form-field labeling (3.3.2 / 4.1.2)**~~ — SHIPPED
    (`a916068`), docx only. `docx_checks()` flags content-control form fields
    (checkbox/date/dropdown/comboBox/picture — the unambiguous input gallery
@@ -160,7 +215,7 @@ Route legend: **Auto** (deterministic/AI fix) · **HITL** (human review) · **Op
 | 1 | Fix live "Couldn't remediate this file" | Remediate | Auto | M · 1–2 d | Runtime failure in the Drive round-trip (re-download via per-user token / write-back), NOT a remediator bug — `remediate_pdf` runs clean locally on the same file (applies language + display-title). Likely the write-back needs a Drive *write* scope the read-only sign-in token lacks, and the Blob fallback isn't catching it. Lives in `handlers.py` / `routes/scans.py` — **T-contested; coordinate**. |
 | 2 | Complete the DB-backed HITL queue | Remediate | HITL | In progress (T) | Assignment, status, notifications — this IS the HITL route. Owned by the concurrent session (~M if scoped fresh). |
 | 3 | 3.1.3 Unusual Words | Assess | HITL | ~~XS~~ DONE | Re-tagged Human / AT · Tier 3 HITL in `wcagCatalog.js` (was aspirational "Automated + Agentic"). No AI check built, by decision. |
-| 4 | 1.4.2 pptx audio autoplay | Assess | HITL | XS · 0.5 d | Detection is blocked on a real fixture. Per the HITL decision, surface 1.4.2-on-pptx as HUMAN-tier in the per-file coverage manifest instead of UNCHECKED — a one-liner in `FileDrawer.jsx` (**T-contested; coordinate**). Not built here to avoid colliding. |
+| 4 | ~~1.4.2 pptx audio autoplay~~ | Assess | — | DONE | Detection shipped (`pptx_audio_autoplay_checks`, dispatched, tested) with an `assisted` remediation lane — no longer blocked on a fixture, and no longer HITL-only. See P1 #2. |
 | 5 | Deploy the mislabel fix (`e83d775`) | Release | — | XS · 0.25 d | Frontend rebuild — makes corrected auto-vs-assisted labeling live. |
 | 6 | Drive credential + folder | Ops | Ops | S · 0.5 d | Regenerate the demo SA key with `drive.readonly`, share Deva's folder with the SA email, set `ACP_DRIVE_FOLDER`. Unblocks demo Drive scans (the 403 below) and closes P2 #1. Ops, not eng. |
 | 7 | Measure Ollama 8B latency | Verify | — | XS · 0.25 d | Needs live access; include a cold-start number (scale-to-zero). |
@@ -205,6 +260,13 @@ unaffected; only the demo/ADC path is broken.)
 ---
 
 ## P3 — In-flight in another concurrent session — do not touch
+
+> **Almost certainly resolved — verify before acting on anything here.** This
+> section described *uncommitted* work in a shared checkout as of `9d7c7a3`,
+> 387 commits and 19 days ago. Uncommitted work does not survive that; either it
+> landed or it was lost. Kept verbatim rather than deleted because it names the
+> files that were contested, which is useful history if a conflict shows up —
+> but treat every "do not touch" below as expired until re-confirmed.
 
 A second autonomous session ("T") has uncommitted work sharing this same
 checkout as of this snapshot. This is **not this backlog's to implement** —
