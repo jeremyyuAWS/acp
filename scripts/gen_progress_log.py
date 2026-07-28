@@ -6,12 +6,16 @@ timeline of acp commits that changed detection or remediation capability for one
 the 20 WCAG SCs it tracks. It has always been hand-transcribed from `git log`, which
 is why it drifts. This script derives it instead.
 
-OPT-IN, NOT AUTOMATIC. The matrix is a PUBLIC site; this repo is PRIVATE. A commit
-appears only if its message carries a `Matrix-Note:` trailer — text written knowing
-it will be published. Raw commit subjects are never published on their own. That also
+OPT-IN, NOT AUTOMATIC. A commit appears only if its message carries a `Matrix-Note:`
+trailer — a sentence written for the matrix's audience. This is a CURATION rule, and it
 matches the log's own stated posture ("Deliberately curated, not exhaustive"): most
-commits here are real work that doesn't target one specific SC, and those are omitted
-on purpose rather than folded in as noise.
+commits here are real work that doesn't target one specific SC, and those are omitted on
+purpose rather than folded in as noise. Auto-publishing every subject line would bury
+the capability changes the log exists to show.
+
+(It was also a privacy boundary while this repo was private and the matrix public. That
+no longer applies — the repo is public as of 2026-07-28 — so the commit/PR links in the
+log now actually resolve for readers, which they previously did not.)
 
 Trailer format (git trailers — `Key: value` lines at the end of the commit body):
 
