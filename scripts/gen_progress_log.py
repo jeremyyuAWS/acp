@@ -146,9 +146,30 @@ def parse_note(raw: str) -> tuple[str, list[dict]]:
     return " ".join(" ".join(lead).split()), [_split_label(b) for b in bullets if b]
 
 
+def _split_when(authored: str) -> tuple[str, str]:
+    """A commit's author timestamp -> ("YYYY-MM-DD", "HH:MM"), normalised to UTC.
+
+    UTC, not the author's local zone, for the same reason the matrix's build stamp is UTC:
+    contributors and CI runners sit in different zones, and a log mixing them is not orderable
+    by eye — two entries an hour apart can read as five hours apart, or backwards. The matrix
+    labels the column UTC so the reader knows which clock they are on.
+
+    A commit whose date git cannot format falls back to date-only rather than failing the run;
+    an entry with no time is rendered without one, which is also how the pre-timestamp entries
+    already in the log behave.
+    """
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromisoformat(authored.strip()).astimezone(timezone.utc)
+    except ValueError:
+        return authored.strip()[:10], ""
+    return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M")
+
+
 def parse_commit(raw: str, repo: str) -> dict | None:
     """One `git log` record -> a PROGRESS_LOG entry, or None if it didn't opt in."""
-    sha, date, subject, body = raw.split("\x1f", 3)
+    sha, authored, subject, body = raw.split("\x1f", 3)
+    date, time = _split_when(authored)
     note = _NOTE_RE.search(body)
     if not note:
         return None
@@ -180,6 +201,7 @@ def parse_commit(raw: str, repo: str) -> dict | None:
     pr = _PR_RE.search(subject)
     entry = {
         "date": date,
+        "time": time,
         "hash": sha[:7],
         "pr": int(pr.group(1)) if pr else None,
         "repo": repo,
@@ -200,7 +222,9 @@ def parse_commit(raw: str, repo: str) -> dict | None:
 def collect(since: str | None) -> list[dict]:
     repo = _repo_slug()
     rng = [f"{since}..HEAD"] if since else []
-    out = _git("log", *rng, f"--format=%H\x1f%ad\x1f%s\x1f%b{_SEP}", "--date=short")
+    # %aI (strict ISO, author date with offset) rather than --date=short: the date alone
+    # cannot order two commits that landed the same day, which is most of a busy day's log.
+    out = _git("log", *rng, f"--format=%H\x1f%aI\x1f%s\x1f%b{_SEP}")
     entries = []
     for raw in out.split(_SEP):
         if raw.strip():
