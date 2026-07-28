@@ -23,6 +23,11 @@ pool:
 # Docker context). Until the engine is vendored or published as a reproducible
 # artifact, those tests are local-only and CI says so in the skip reason.
 steps:
+  # The matrix guards below read commit bodies and diff against the target branch, so they
+  # need real history — the default shallow fetch would make both silently useless.
+  - checkout: self
+    fetchDepth: 0
+
   - task: UsePythonVersion@0
     inputs:
       versionSpec: '3.12'
@@ -40,6 +45,30 @@ steps:
       testResultsFiles: test-results.xml
       testRunTitle: acp backend
     displayName: Publish test results
+
+  # ── WCAG-matrix guards ────────────────────────────────────────────────────────────────
+  # The matrix (jeremyyuAWS/wcag-matrix) mirrors this repo's capability claims. Both guards
+  # run here, in the pipeline that actually gates main, rather than in the notification
+  # workflow — a check that only runs after a merge cannot stop the drift it detects.
+
+  # Every source a capability ceiling is derived from is parsed structurally. When one moves,
+  # the generator raises rather than quietly producing a wrong ceiling — so running it IS the
+  # check, and it fails here instead of in the matrix's PR job where nobody would see it.
+  - script: python scripts/gen_matrix_coverage.py --check
+    displayName: Matrix guard — capability ceiling still derivable
+
+  # Fails when a commit changed rule code without declaring its matrix impact. Add a
+  # `Matrix-Note:` (+ `WCAG:`) trailer, or `Matrix-Note: none` to record a deliberate omission.
+  - script: |
+      set -euo pipefail
+      if [ -n "${SYSTEM_PULLREQUEST_TARGETBRANCH:-}" ]; then
+        target="origin/${SYSTEM_PULLREQUEST_TARGETBRANCH#refs/heads/}"
+        git fetch --quiet origin "${SYSTEM_PULLREQUEST_TARGETBRANCH#refs/heads/}"
+        python scripts/gen_progress_log.py --check --since "$target"
+      else
+        python scripts/gen_progress_log.py --check
+      fi
+    displayName: Matrix guard — rule changes declare their matrix impact
 
   - task: NodeTool@0
     inputs:
