@@ -18,7 +18,7 @@
 
 | Rule ID | Formats | Source |
 |---------|---------|--------|
-| `PDF_TAB_ORDER_NOT_STRUCTURE` | pdf | `api/office_structure.py:pdf_focus_order_checks` |
+| `PDF_TAB_ORDER_NOT_STRUCTURE` | pdf | `api/formats/pdf/detectors/focus_order.py` |
 | `PPTX_FOCUS_ORDER` | pptx | `api/office_structure.py:pptx_focus_order_checks` |
 
 ## How to change this rule
