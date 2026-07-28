@@ -227,6 +227,19 @@ def load_first_party() -> dict[str, list[dict]]:
         for rid, sc, name in _rules_in(ast.parse(path.read_text())):
             _add(rid, sc, name, formats, f"api/{mod}")
 
+    # Detectors migrated to the capability registry (api/rule_registry.py) live under
+    # api/formats/<fmt>/detectors/. Without this walk they would vanish from the index the
+    # moment they moved out of office_structure.py — the file looks smaller, the rules folder
+    # quietly loses a criterion, and nothing fails. The format comes from the path, which is
+    # the whole point of a format-first tree: the directory IS the declaration.
+    for det in sorted((API / "formats").glob("*/detectors/*.py")):
+        if det.name == "__init__.py":
+            continue
+        fmt = det.parent.parent.name
+        rel = det.relative_to(API.parent)
+        for rid, sc, name in _rules_in(ast.parse(det.read_text())):
+            _add(rid, sc, name, [fmt], str(rel))
+
     return {sc: sorted(rules, key=lambda r: r["id"]) for sc, rules in by_sc.items()}
 
 

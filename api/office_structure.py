@@ -1278,161 +1278,31 @@ def xlsx_contrast_checks(path: Path) -> list[dict]:
 # terminal field. Self-gating: no AcroForm, no pikepdf, or a malformed tree yields [] — a
 # structural check must never fail a scan. The remediator (`_fix_pdf_form_fields`) clears
 # each by writing /TU, and this same walk re-run on the fixed file verifies it.
-def _pdf_terminal_fields(node, out, seen):
-    """Recursively collect terminal AcroForm fields (those with /FT), following /Kids."""
-    try:
-        import pikepdf
-    except Exception:
-        return
-    if not isinstance(node, pikepdf.Dictionary):
-        return
-    oid = id(node)
-    if oid in seen:
-        return
-    seen.add(oid)
-    kids = node.get("/Kids")
-    if "/FT" in node and not (isinstance(kids, pikepdf.Array) and len(kids)
-                              and any("/FT" in k for k in kids if isinstance(k, pikepdf.Dictionary))):
-        out.append(node)          # a terminal field (its kids, if any, are widgets, not fields)
-    if isinstance(kids, pikepdf.Array):
-        for k in kids:
-            _pdf_terminal_fields(k, out, seen)
-
-
-def _pdf_field_unnamed(field) -> bool:
-    try:
-        tu = field.get("/TU")
-        return tu is None or not str(tu).strip()
-    except Exception:
-        return False
-
-
-# The four field types the PDF spec (1.7 §12.7.3.1) defines — /FT is guaranteed present on
-# every node _pdf_terminal_fields collects (that's its own inclusion test), but its VALUE is
-# never validated today. A value outside this set has no determinable role: assistive tech
-# can't tell a screen reader whether it's a text box, checkbox, radio button, or signature.
-_PDF_VALID_FIELD_TYPES = {"/Btn", "/Tx", "/Ch", "/Sig"}
-
-
-def _pdf_field_bad_type(field) -> bool:
-    try:
-        ft = field.get("/FT")
-        return ft is None or str(ft) not in _PDF_VALID_FIELD_TYPES
-    except Exception:
-        return False
-
-
-def _pdf_field_required_no_value(field) -> bool:
-    """A REQUIRED field (Ff bit 2 — PDF 1.7 Table 221) with no /V and no fallback /DV has no
-    determinable value — the "Value" half of 4.1.2, distinct from /TU's "Name" half. A field
-    that isn't required is fine empty (a blank optional text box is not a finding)."""
-    try:
-        ff = field.get("/Ff")
-        if ff is None or not (int(ff) & 2):
-            return False
-        has_value = "/V" in field and str(field.get("/V", "")).strip()
-        has_default = "/DV" in field and str(field.get("/DV", "")).strip()
-        return not (has_value or has_default)
-    except Exception:
-        return False
+# 4.1.2 and 2.4.3 for PDF moved to api/formats/pdf/ when they became the first pairs behind
+# the capability registry (see api/rule_registry.py). They were the two whose coverage this
+# module could not express: both detectors ran on every PDF, but neither pair was declared in
+# store.RULE_FORMATS or REVIEW_FORMATS, so a clean scan reported NOT_EVALUATED — "we did not
+# look" — for work that had in fact been done. Coverage lives in the registration now.
+#
+# These wrappers stay because `checks_for` below, `remediate_pdf`, and their existing tests all
+# call them by these names. They are a thin forward, not a second implementation.
+def _pdf_page_has_widget(page, pikepdf) -> bool:
+    from formats.pdf.acroform import page_has_widget
+    return page_has_widget(page, pikepdf)
 
 
 def pdf_form_field_checks(path: Path) -> list[dict]:
-    """4.1.2 findings per interactive form field: no accessible name (/TU), no recognized role
-    (/FT), or — for a required field — no determinable value (/V)."""
-    try:
-        import pikepdf
-    except Exception:
-        return []
-    findings: list[dict] = []
-    try:
-        with pikepdf.open(str(path)) as pdf:
-            root = pdf.Root
-            if "/AcroForm" not in root or "/Fields" not in root["/AcroForm"]:
-                return []
-            fields: list = []
-            for f in root["/AcroForm"]["/Fields"]:
-                _pdf_terminal_fields(f, fields, set())
-            for fld in fields:
-                name = ""
-                try:
-                    name = str(fld.get("/T", "")).strip()
-                except Exception:
-                    name = ""
-                label = f"“{name}”" if name else "an interactive form field"
-                if _pdf_field_unnamed(fld):
-                    findings.append({
-                        "ruleId": "PDF_FORM_NO_ACCESSIBLE_NAME",
-                        "wcag": "4.1.2 Name, Role, Value",
-                        "severity": "CRITICAL",
-                        "detail": f"form field {label} has no accessible name (/TU)" if name
-                                  else f"{label} has no accessible name (/TU)",
-                    })
-                if _pdf_field_bad_type(fld):
-                    findings.append({
-                        "ruleId": "PDF_FORM_NO_FIELD_TYPE",
-                        "wcag": "4.1.2 Name, Role, Value",
-                        "severity": "CRITICAL",
-                        "detail": f"form field {label} has no recognized /FT — its role (button, "
-                                  "text box, choice, signature) isn't determinable",
-                    })
-                if _pdf_field_required_no_value(fld):
-                    findings.append({
-                        "ruleId": "PDF_FORM_REQUIRED_NO_VALUE",
-                        "wcag": "4.1.2 Name, Role, Value",
-                        "severity": "SERIOUS",
-                        "detail": f"required form field {label} has no value (/V) and no "
-                                  "default (/DV) — its current state isn't determinable",
-                    })
-    except Exception:
-        return []
-    return findings
-
-
-def _pdf_page_has_widget(page, pikepdf) -> bool:
-    try:
-        annots = page.obj.get("/Annots")
-        return bool(annots) and any(
-            str(a.get("/Subtype", "")) == "/Widget" for a in annots if isinstance(a, pikepdf.Dictionary))
-    except Exception:
-        return False
+    """4.1.2 findings per interactive form field. Implementation: formats/pdf/detectors/
+    name_role_value.py — registered as PARTIAL coverage (AcroForm fields only)."""
+    from formats.pdf.detectors.name_role_value import detect
+    return detect(path)
 
 
 def pdf_focus_order_checks(path: Path) -> list[dict]:
-    """2.4.3 Focus Order — a page carrying interactive form-field widgets whose /Tabs entry is
-    missing or isn't /S (structure order — the PDF spec's other options, /R row-order and
-    /C column-order, are legitimate for some layouts, but the widely-recommended default for
-    accessible tab order is /S). Scoped to the existence check only: this does NOT verify the
-    AcroForm field order itself matches visual/reading order — that needs walking
-    /StructTreeRoot, which nothing in this codebase does yet (a real, separate, larger gap).
-    Pages with no widgets are untouched — nothing to tab through, /Tabs is moot there."""
-    try:
-        import pikepdf
-    except Exception:
-        return []
-    bad_pages = 0
-    try:
-        with pikepdf.open(str(path)) as pdf:
-            root = pdf.Root
-            if "/AcroForm" not in root or "/Fields" not in root["/AcroForm"]:
-                return []
-            for page in pdf.pages:
-                if not _pdf_page_has_widget(page, pikepdf):
-                    continue
-                tabs = page.obj.get("/Tabs")
-                if tabs is None or str(tabs) != "/S":
-                    bad_pages += 1
-    except Exception:
-        return []
-    if not bad_pages:
-        return []
-    return [{
-        "ruleId": "PDF_TAB_ORDER_NOT_STRUCTURE",
-        "wcag": "2.4.3 Focus Order",
-        "severity": "MODERATE",
-        "detail": (f"{bad_pages} page(s) with form fields have no /Tabs entry set to /S "
-                   "(structure order) — the keyboard tab sequence may not follow reading order"),
-    }]
+    """2.4.3 Focus Order for PDF. Implementation: formats/pdf/detectors/focus_order.py —
+    registered as HEURISTIC coverage (/Tabs = /S is a proxy, not a proof)."""
+    from formats.pdf.detectors.focus_order import detect
+    return detect(path)
 
 
 def checks_for(path: Path, ext: str) -> list[dict]:

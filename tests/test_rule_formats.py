@@ -20,6 +20,22 @@ _ALL_FORMATS = frozenset({"html", "docx", "pptx", "xlsx", "pdf"})
 _OFFICE_PDF = frozenset({"docx", "pptx", "xlsx", "pdf"})
 
 
+def registry_covers(rule: str, fmt: str) -> bool:
+    """Whether this pair has been migrated to the capability registry.
+
+    Several expectations below differ for a migrated pair — it has a real detector, so its
+    clean result is REVIEW rather than NOT_EVALUATED. Asking the registry keeps those tests
+    describing the invariant ("never a silent pass") instead of hard-coding today's roster,
+    so migrating the next pair doesn't require editing assertions that are still correct.
+    """
+    try:
+        import rule_registry
+        rule_registry.load()
+        return rule_registry.is_registered(rule, fmt)
+    except Exception:
+        return False
+
+
 def _wcag_scs(path: Path) -> set[str]:
     return set(re.findall(r'"wcag":\s*"(\d+\.\d+\.\d+)', path.read_text()))
 
@@ -92,15 +108,26 @@ def test_rule_formats_matches_derived_ground_truth():
 
 
 def test_no_html_only_rule_shows_pass_on_a_non_html_file():
-    """The actual bug this fix closes: an HTML-only rule must read NOT_EVALUATED,
-    never PASS, for a format it was never evaluated against."""
+    """The actual bug this fix closes: an HTML-only rule must never read PASS for a format it
+    was not evaluated against.
+
+    The invariant is "never a silent PASS", not "always NOT_EVALUATED" — those were the same
+    statement only while no non-HTML detector existed for these criteria. A pair registered in
+    the capability registry HAS a detector, so its clean result is REVIEW: weaker than PASS,
+    stronger than "we did not look". Asserting the exact token here would make the test fail
+    the moment a criterion gained real coverage, which is backwards.
+    """
     html_only = [rid for rid, fmts in store.RULE_FORMATS.items() if fmts == frozenset({"html"})]
     assert html_only, "expected at least one HTML-only rule to exist"
     for rid in html_only:
-        for fmt, filename in (("docx", "x.docx"), ("pptx", "x.pptx"), ("xlsx", "x.xlsx"), ("pdf", "x.pdf")):
-            assert store._rule_outcome(rid, fmt, 0) == "NOT_EVALUATED", (
-                f"{rid} should be NOT_EVALUATED on a .{fmt} file, not silently PASS"
+        for fmt in ("docx", "pptx", "xlsx", "pdf"):
+            assert store._rule_outcome(rid, fmt, 0) != "PASS", (
+                f"{rid} must not silently PASS on a .{fmt} file"
             )
+            if not registry_covers(rid, fmt):
+                assert store._rule_outcome(rid, fmt, 0) == "NOT_EVALUATED", (
+                    f"{rid} has no {fmt} detector, so it must read NOT_EVALUATED"
+                )
 
 
 def test_an_unrun_check_never_claims_the_criterion_is_inapplicable():
@@ -108,12 +135,26 @@ def test_an_unrun_check_never_claims_the_criterion_is_inapplicable():
 
     2.4.3 Focus Order and 4.1.2 Name/Role/Value are html-only in RULE_FORMATS, but both
     genuinely apply to a tagged PDF — PDF/UA specifies them. Emitting NOT_APPLICABLE there
-    asserted they were out of scope, which nothing in this codebase ever determined. The
-    outcome token must state only the fact we hold: no validator ran.
+    asserted they were out of scope, which nothing in this codebase ever determined.
+
+    UPDATED: this test used to assert both read NOT_EVALUATED on pdf, reasoning "no validator
+    ran". That reason expired. `pdf_form_field_checks` and `pdf_focus_order_checks` both ship
+    and run on every PDF, so the outcome must now state the fact we actually hold — we checked
+    the AcroForm layer and nothing else — which is REVIEW. Reporting NOT_EVALUATED for work
+    that was genuinely done is the mirror image of the original bug, and the reason both pairs
+    were the first migrated to the capability registry.
+
+    The principle the test was written to defend is untouched: the token still never claims
+    inapplicability, and still never fabricates a pass.
     """
     assert store.NOT_EVALUATED == "NOT_EVALUATED"
     for rid in ("2.4.3", "4.1.2"):
-        assert store._rule_outcome(rid, "pdf", 0) == store.NOT_EVALUATED
+        assert registry_covers(rid, "pdf"), (
+            f"{rid} × pdf lost its registry entry — if the detector was deliberately removed, "
+            f"this expectation should go back to NOT_EVALUATED"
+        )
+        assert store._rule_outcome(rid, "pdf", 0) == store.REVIEW
+        assert store._rule_outcome(rid, "pdf", 1) == "FAIL"
     # A rule with no format restriction at all still evaluates where it has a validator. 1.1.1 is
     # a 🟡 review-lane criterion, so a clean scan is REVIEW ("verify"), not a certified pass (#174).
     assert store._rule_outcome("1.1.1", "pdf", 0) == store.REVIEW

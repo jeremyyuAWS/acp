@@ -76,6 +76,9 @@ FORMATS = ("docx", "xlsx", "pptx", "pdf")
 # Paths whose change implies a capability change worth declaring. Used by --check only.
 RULE_PATHS = (
     "engine/office-analysers/",
+    "api/formats/",             # per-format detectors behind the capability registry
+    "api/rule_registry.py",     # a coverage change IS a capability change worth declaring
+    "api/capabilities.py",
     "api/office_structure.py",
     "api/textchecks.py",
     "api/ocr.py",

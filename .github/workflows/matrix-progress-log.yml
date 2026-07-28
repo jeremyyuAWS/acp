@@ -80,7 +80,13 @@ jobs:
           touched=no
           while IFS= read -r src; do
             [ -z "$src" ] && continue
-            if grep -qxF "$src" <<<"$changed"; then touched=yes; break; fi
+            # A trailing slash means "this whole subtree" — api/formats/ holds one package per
+            # format, so a new detector is a new FILE and an exact-match test would never see it.
+            if [ "${src%/}" != "$src" ]; then
+              if grep -q "^${src}" <<<"$changed"; then touched=yes; break; fi
+            elif grep -qxF "$src" <<<"$changed"; then
+              touched=yes; break
+            fi
           done < <(python3 scripts/gen_matrix_coverage.py --sources)
           echo "capability=$touched" >> "$GITHUB_OUTPUT"
           echo "capability sources touched: $touched"

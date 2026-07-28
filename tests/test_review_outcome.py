@@ -35,9 +35,21 @@ def test_review_lane_blocking_finding_outranks_review():
 
 
 def test_review_lane_is_format_scoped():
-    # 4.1.2's review lane is office-only; on pdf (not in REVIEW_FORMATS[4.1.2]) it falls to the
-    # pass/fail lane, where 4.1.2 is html-only → NOT_EVALUATED for pdf.
-    assert store._rule_outcome("4.1.2", "pdf", 0, 0) == store.NOT_EVALUATED
+    # 4.1.2's REVIEW_FORMATS lane is office-only, and pdf is not in it. pdf reaches REVIEW by a
+    # different route: it is registered in the capability registry with PARTIAL coverage (the
+    # AcroForm technique in formats/pdf/detectors/name_role_value.py), and partial coverage
+    # cannot certify a pass. Same token, different reason — which is the point of the coverage
+    # axis. It read NOT_EVALUATED before the registry, despite the detector having shipped.
+    assert store._rule_outcome("4.1.2", "pdf", 0, 0) == store.REVIEW
+    # The two routes to REVIEW differ in when they fire, and that difference is real. A
+    # REVIEW_FORMATS lane needs a signal — its detector surfaces evidence or says nothing — so
+    # docx with no findings is still "we did not look". A registry lane with PARTIAL coverage
+    # reports REVIEW on a CLEAN scan, because the technique ran and covered part of the
+    # criterion. Same token; one is "found something to look at", the other "looked partially".
+    assert store._rule_outcome("4.1.2", "docx", 0, 0) == store.NOT_EVALUATED
+    assert store._rule_outcome("4.1.2", "docx", 0, 1) == store.REVIEW
+    # A format with neither a review lane nor a registry entry still reads "we did not look".
+    assert store._rule_outcome("2.4.3", "xlsx", 0, 0) == store.NOT_EVALUATED
     # html keeps its real pass/fail lane for 4.1.2.
     assert store._rule_outcome("4.1.2", "html", 0, 0) == "PASS"
     assert store._rule_outcome("4.1.2", "html", 1, 0) == "FAIL"
