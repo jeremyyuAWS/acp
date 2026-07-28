@@ -42,6 +42,11 @@ _CLI_DLL = Path(os.environ.get("ACP_OFFICE_CLI")
 _ENGINE_OK = (shutil.which("dotnet") is not None or _DOTNET.exists()) and _CLI_DLL.exists()
 _NO_ENGINE = "the .NET Office analyser CLI is not built (spike/dotnet/…/AcpScan.Cli.dll)"
 
+# The PDF analyser (worker-python) is not vendored, unlike the Office engine, and
+# scanner._analyse_pdf imports it OUTSIDE its try/except — so a PDF test gated only on
+# _ENGINE_OK fails hard on an agent that has the Office engine but no PDF tree.
+from engines import NO_PDF as _NO_PDF, PDF_OK as _PDF_OK  # noqa: E402
+
 
 def _ocr_ok() -> bool:
     try:
@@ -276,7 +281,7 @@ def test_pptx_auto_entries_clear(tmp_path):
     assert not still_firing, f"pptx 'auto' criteria still fail: {sorted(still_firing)}"
 
 
-@pytest.mark.skipif(not _ENGINE_OK, reason=_NO_ENGINE)
+@pytest.mark.skipif(not (_ENGINE_OK and _PDF_OK), reason=_NO_PDF)
 def test_pdf_auto_entries_clear(tmp_path):
     pytest.importorskip("pikepdf")
     pytest.importorskip("pypdf")

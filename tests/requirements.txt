@@ -1,0 +1,13 @@
+# Test-only dependencies. NOT shipped — api/requirements.txt is the runtime set, and
+# nothing under api/ imports these (verified: only scripts/ and tests/ do).
+#
+# The OOXML authoring libraries build fixtures on the fly (scripts/gen_demo_fixtures.py
+# and ~12 test modules construct .docx/.pptx/.xlsx inputs rather than committing
+# binaries). They were previously undeclared and only ever present ambiently on dev
+# machines: CI installed api/requirements.txt alone and never noticed, because every
+# test that needs them is gated on the Office engine and the engine wasn't built on CI.
+# Building the engine there (see azure-pipelines.yml) makes them load-bearing.
+python-docx
+python-pptx
+openpyxl
+pytest

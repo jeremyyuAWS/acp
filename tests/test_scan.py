@@ -24,21 +24,23 @@ ACP = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ACP / "api"))
 sys.path.insert(0, str(ACP / "scripts"))
 
-# The office engine (dotnet + AcpScan.Cli.dll) currently builds only against the
-# sibling _review-digital-accessibility checkout, so CI agents can't have it --
-# skip the whole module there instead of erroring, LOUDLY, so a green CI run is
-# honest about what it did and didn't cover. Locally these always run.
-import os as _os
-import shutil as _shutil
+# This module scans the WHOLE oracle corpus in one pass, so it needs BOTH engines --
+# skip loudly rather than error, so a green run is honest about what it did not cover.
+#
+# Office: dotnet + AcpScan.Cli.dll. Since ADR 0012 the analyser projects are vendored in
+# engine/office-analysers/ and the CLI builds standalone from a fresh clone, so CI builds
+# this itself (azure-pipelines.yml) -- it is no longer a dev-machine-only artifact.
+#
+# PDF: the worker-python analyser tree, which is NOT vendored and is loaded at runtime
+# from ACP_PDF_ENGINE (scanner.WP). Without it scanner._analyse_pdf raises
+# ModuleNotFoundError('analysers') -- its imports sit outside the try, so a missing PDF
+# engine is a hard error, not a degraded scan -- and the corpus contains PDFs. So the
+# Office half being available is not sufficient to run this module.
+from engines import NO_OFFICE, NO_PDF, OFFICE_OK, PDF_OK  # noqa: E402
 
-_DOTNET_OK = _shutil.which("dotnet") or Path(
-    _os.environ.get("ACP_DOTNET") or _os.path.expanduser("~/.dotnet/dotnet")).exists()
-_CLI_DLL = ACP / "spike/dotnet/AcpScan.Cli/bin/Release/net10.0/AcpScan.Cli.dll"
 pytestmark = pytest.mark.skipif(
-    not (_DOTNET_OK and _CLI_DLL.exists()),
-    reason="office engine unavailable (needs dotnet + AcpScan.Cli.dll built from the "
-           "sibling _review-digital-accessibility repo) -- engine oracle tests are "
-           "local-only until the engine is vendored/reproducible (see azure-pipelines.yml)")
+    not (OFFICE_OK and PDF_OK),
+    reason=NO_OFFICE if not OFFICE_OK else NO_PDF)
 from scanner import run_scan  # noqa: E402
 from rubric import Rubric  # noqa: E402
 

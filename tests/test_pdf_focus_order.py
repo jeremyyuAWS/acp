@@ -22,6 +22,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "api"))
 import office_structure as OSX  # noqa: E402
 import remediate_pdf as RP  # noqa: E402
 
+# The detection half (office_structure.pdf_focus_order_checks) is first-party and runs
+# anywhere; only the remediation half calls into worker-python's `remediation` package,
+# which is not vendored here. So the gate is per-test, not module-wide — the six detection
+# tests keep running without a PDF engine, which is most of this file's value.
+from engines import NO_PDF, PDF_OK  # noqa: E402
+
 
 def _form_pdf(path: Path, names: list[str]) -> None:
     c = canvas.Canvas(str(path))
@@ -81,6 +87,7 @@ def test_corrupt_pdf_never_raises(tmp_path):
 
 
 # ── remediation ───────────────────────────────────────────────────────────────
+@pytest.mark.skipif(not PDF_OK, reason=NO_PDF)
 def test_remediate_pdf_sets_tabs_on_widget_pages(tmp_path):
     p = tmp_path / "form.pdf"; _form_pdf(p, ["First Name"])
     out_path, applied, skipped = RP.remediate_pdf(p)
@@ -93,6 +100,7 @@ def test_remediate_pdf_sets_tabs_on_widget_pages(tmp_path):
     assert OSX.pdf_focus_order_checks(out_path) == []
 
 
+@pytest.mark.skipif(not PDF_OK, reason=NO_PDF)
 def test_remediate_pdf_leaves_already_correct_tabs_alone(tmp_path):
     p = tmp_path / "form.pdf"; _form_pdf(p, ["First Name"])
     pre = tmp_path / "pre-tabbed.pdf"
