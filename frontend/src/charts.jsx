@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { statusOf } from './docStatus.js'
 
 // arcs grow from 0 on mount → reads as "live"
 export function Donut({ segments, size = 138, thickness = 18, caption, onPick }) {
@@ -63,13 +64,29 @@ export function Bars({ items, cols = '108px 1fr 30px', onPick, max, suffix }) {
 }
 
 // status / severity helpers from a scan
-export function statusSegments(run) {
-  const issues = Math.max(0, run.files - run.certifiable - run.uncertain - run.error)
+//
+// COUNT THE DOCUMENTS, DON'T SUBTRACT THEM. This used to derive the amber bucket as
+// `run.files - run.certifiable - run.uncertain - run.error`, which is wrong twice over:
+//
+//   • It has no 'clean' bucket, so a not-certifiable document with ZERO findings landed in
+//     "issues" by elimination — even though statusOf() and the certification PDF (report.py
+//     `_status`) have both called that case 'clean' for exactly this reason.
+//   • The run counters are NULL on a scan that never reached finalize_scan_run (cancelled, or
+//     a worker lost mid-deploy). JS coerces those nulls to 0, so the subtraction quietly
+//     returned the whole estate: a 258-document scan with no findings at all reported
+//     "issues 258" beside a "No open findings." severity panel.
+//
+// So classify each file with the SAME statusOf() the drill-in filters by — the donut and the
+// list it opens can no longer disagree, and a bucket is only shown if a document is really in it.
+export function statusSegments(run, files) {
+  const c = {}
+  ;(files || []).forEach((f) => { const s = statusOf(f); c[s] = (c[s] || 0) + 1 })
   return [
-    { label: 'certifiable', value: run.certifiable, color: '#639922' },
-    { label: 'issues', value: issues, color: '#BF8C00' },
-    { label: 'uncertain', value: run.uncertain, color: '#D85A30' },
-    { label: 'unanalysable', value: run.error, color: '#9a948f' },
+    { label: 'certifiable', value: c.certifiable || 0, color: '#639922' },
+    { label: 'issues', value: c.issues || 0, color: '#BF8C00' },
+    { label: 'clean', value: c.clean || 0, color: '#2A5E9E' },
+    { label: 'uncertain', value: c.uncertain || 0, color: '#D85A30' },
+    { label: 'unanalysable', value: c.unanalysable || 0, color: '#9a948f' },
   ].filter((s) => s.value > 0)
 }
 

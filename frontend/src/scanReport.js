@@ -7,6 +7,7 @@
 // Truthful metrics only: "conformant" is a real count of certifiable documents,
 // never an estimated confidence %. Sections with no data are simply omitted.
 import { getScanTraces, listHitlQueue, getConfig } from './api.js'
+import { statusOf } from './docStatus.js'
 import { WCAG } from './wcagCatalog.js'
 import { recommendationSummary } from './sim.js'
 import { fixSteps, hasGuidance, appName } from './remediationGuide.js'
@@ -25,15 +26,6 @@ const LEVEL_RANK = { A: 1, AA: 2, AAA: 3 }
 const assessLevel = (scanId) => {
   try { return JSON.parse(sessionStorage.getItem(`acp-assess-${scanId || 'none'}`) || 'null')?.level || 'AA' } catch { return 'AA' }
 }
-// Same verdict FileDrawer's statusOf uses — inlined to avoid importing the heavy drawer.
-// 'issues' requires open findings; a not-certifiable file with zero findings is 'clean'.
-const statusOf = (f) => (
-  f.status === 'error' ? 'unanalysable'
-  : f.status === 'uncertain' ? 'uncertain'
-  : f.compliant ? 'certifiable'
-  : (f.issues && f.issues.length) ? 'issues'
-  : 'clean'
-)
 const deptOf = (f) => f.department || f.dept || 'Unassigned'
 const avgOf = (fs) => { const s = fs.filter((f) => f.score != null); return s.length ? Math.round(s.reduce((a, f) => a + f.score, 0) / s.length) : null }
 

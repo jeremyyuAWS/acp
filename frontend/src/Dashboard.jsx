@@ -4,17 +4,12 @@ import { ScoreRing } from './ScoreRing.jsx'
 import FileDrawer from './FileDrawer.jsx'
 import Tag from './Tag.jsx'
 import { baseName, groupDuplicates, duplicateFiles } from './dedupe.js'
+import { statusOf } from './docStatus.js'
 
 const scoreColor = (s) => (s >= 90 ? '#639922' : s >= 50 ? '#BF8C00' : '#2E72C9')
-// Mirrors FileDrawer's statusOf: 'issues' requires OPEN FINDINGS; a not-certifiable file with
-// zero findings (an unscored discover/skip record) is 'clean', not 'issues'.
-const statusOf = (f) => (
-  f.status === 'error' ? 'unanalysable'
-  : f.status === 'uncertain' ? 'uncertain'
-  : f.compliant ? 'certifiable'
-  : (f.issues && f.issues.length) ? 'issues'
-  : 'clean'
-)
+// The third verbatim copy of this verdict, now folded into the shared module with the other
+// two. "Mirrors FileDrawer's statusOf" was the comment on all of them, and the mirror is
+// exactly what fails silently — nothing makes a copy follow the original when it changes.
 const BADGE = {
   certifiable: ['#E7F0DC', '#3B6D11'], issues: ['#FAEEDA', '#854F0B'],
   uncertain: ['#E6EFFB', '#2A5E9E'], unanalysable: ['#EEEDEA', '#5F5E5A'],
