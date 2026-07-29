@@ -3,7 +3,7 @@ import { Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer, { statusOf, critLabel } from './FileDrawer.jsx'
-import { analysedCount } from './docStatus.js'
+import { analysedCount, avgScore } from './docStatus.js'
 import { IDENTITY, SIM, remediableCount, recommendationSummary } from './sim.js'
 import { openReport } from './api.js'
 import { loadPublished } from './ontology.js'
@@ -118,6 +118,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   // inventory distributions
   const countBy = (fn) => Object.entries(files.reduce((m, f) => { const k = fn(f); if (k != null) m[k] = (m[k] || 0) + 1; return m }, {})).sort((a, b) => b[1] - a[1])
   const PLUM = '#7a5c8e'
+  const NA_GREY = '#9a948f'   // "not measured" — never a score band, so it reads as absent, not bad
   const bySource = countBy((f) => f.sourceName).map(([label, value]) => ({ label, value, color: PLUM }))
   const byType = countBy((f) => (f.type || '').toUpperCase()).map(([label, value]) => ({ label, value, color: PLUM }))
   const byDept = countBy((f) => f.department).map(([label, value]) => ({ label, value, color: PLUM }))
@@ -125,13 +126,21 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const wcCloud = Object.entries(wm).sort((a, b) => b[1] - a[1]).map(([w, n]) => ({ text: critLabel(w).replace(/^[\d.]+\s*/, ''), value: n, full: critLabel(w) }))
 
   // --- analysis by dimension (score / severity / WCAG level) — not just counts ---
-  const scoreColor = (s) => s >= 90 ? '#639922' : s >= 50 ? '#BF8C00' : '#2E72C9'
-  const avgScore = (fs) => { const sc = fs.filter((f) => f.score != null).map((f) => f.score); return sc.length ? Math.round(sc.reduce((a, b) => a + b, 0) / sc.length) : 0 }
+  // UNSCORED IS NOT ZERO. `avgScore` (docStatus.js) returns null for a group nobody analysed,
+  // and null travels all the way to the bar: NA_GREY, no fill, '—' in place of the number.
+  // Overview's own copy of the average used to return 0, which rendered "Finance 0" for a
+  // cancelled scan of unopened inventory rows — a failing grade for work never done.
+  const scoreColor = (s) => s == null ? NA_GREY : s >= 90 ? '#639922' : s >= 50 ? '#BF8C00' : '#2E72C9'
   const groupBy = (fn) => files.reduce((m, f) => { const k = fn(f); if (k != null) (m[k] = m[k] || []).push(f); return m }, {})
-  const scoreByDept = Object.entries(groupBy((f) => f.department)).map(([label, fs]) => ({ label, value: avgScore(fs), color: scoreColor(avgScore(fs)) })).sort((a, b) => a.value - b.value)
+  const scoreItem = ([label, fs]) => { const v = avgScore(fs); return { label, value: v, color: scoreColor(v) } }
+  // Unscored groups sort last — they are not the lowest score, they are absent from the ranking.
+  const byScoreAsc = (a, b) => (a.value == null) - (b.value == null) || a.value - b.value
+  const scoreByDept = Object.entries(groupBy((f) => f.department)).map(scoreItem).sort(byScoreAsc)
   const SR_ORDER = ['Executive', 'Director', 'Manager', 'Staff']
   const senGroups = groupBy((f) => f.seniority)
-  const scoreBySeniority = SR_ORDER.filter((s) => senGroups[s]).map((label) => ({ label, value: avgScore(senGroups[label]), color: scoreColor(avgScore(senGroups[label])) }))
+  const scoreBySeniority = SR_ORDER.filter((s) => senGroups[s]).map((s) => scoreItem([s, senGroups[s]]))
+  // Only the groups with a real measurement can carry a claim about scores.
+  const deptRanked = scoreByDept.filter((d) => d.value != null)
   const levelC = { A: 0, AA: 0, AAA: 0 }; files.forEach((f) => (f.issues || []).forEach((i) => { if (levelC[i.level] != null) levelC[i.level] += 1 }))
   const byLevel = [['A', '#1F5FA8', 'Level A · must-have'], ['AA', '#D85A30', 'Level AA · legal target'], ['AAA', '#9a948f', 'Level AAA · optional']].filter(([k]) => levelC[k]).map(([k, color, label]) => ({ label, value: levelC[k], color, lvl: k }))
   const band = (lo, hi) => files.filter((f) => f.score != null && f.score >= lo && f.score <= hi).length
@@ -139,7 +148,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
     { label: '90–100 · certifiable', value: band(90, 100), color: '#639922' },
     { label: '50–89 · needs work', value: band(50, 89), color: '#BF8C00' },
     { label: 'below 50 · at risk', value: band(0, 49), color: '#2E72C9' },
-    { label: 'n/a · unreadable', value: files.filter((f) => f.score == null).length, color: '#9a948f' },
+    { label: 'n/a · unreadable', value: files.filter((f) => f.score == null).length, color: NA_GREY },
   ].filter((d) => d.value)
 
   // On-demand insights — computed strictly from this scan's data, with correct units
@@ -160,8 +169,21 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
     type: byType[0] ? `${byType[0].label} is your largest format (${byType[0].value} of ${n} document${n !== 1 ? 's' : ''}).${/pdf/i.test(byType[0].label) ? ' PDFs are typically the hardest to remediate — tagging and reading order.' : ''}` : '',
     dept: byDept[0] ? `${byDept[0].label} has the most documents (${byDept[0].value} of ${n}).` : '',
     wcag: wcCloud[0] ? `WCAG ${wcCloud[0].full} is the most common failure (${wcCloud[0].value} finding${wcCloud[0].value !== 1 ? 's' : ''} across ${n} document${n !== 1 ? 's' : ''}). It's largely automatable — one class of fix clears a big share of your findings.` : '',
-    scoreByDept: scoreByDept.length ? `${scoreByDept[0].label} has the lowest average score (${scoreByDept[0].value}/100) — the highest-leverage starting point. ${scoreByDept.at(-1)?.label} leads at ${scoreByDept.at(-1)?.value}/100; their approach is worth studying.` : '',
-    scoreBySeniority: scoreBySeniority.length ? `Executive-owned documents score ${scoreBySeniority.find((s) => s.label === 'Executive')?.value ?? '—'}/100. Leadership content drives legal exposure and sets the tone — keep these on the fast track.` : '',
+    // A ranking needs at least one measured group; with none, say that instead of naming a
+    // "lowest" department on the strength of a score nobody computed.
+    scoreByDept: !deptRanked.length
+      ? (scoreByDept.length ? 'No document in these departments has been analysed yet, so there is no average score to compare.' : '')
+      : deptRanked.length === 1
+        ? `${deptRanked[0].label} is the only department with an analysed document (${deptRanked[0].value}/100); the rest have nothing scored to compare against yet.`
+        : `${deptRanked[0].label} has the lowest average score (${deptRanked[0].value}/100) — the highest-leverage starting point. ${deptRanked.at(-1).label} leads at ${deptRanked.at(-1).value}/100; their approach is worth studying.`,
+    scoreBySeniority: (() => {
+      if (!scoreBySeniority.length) return ''
+      const exec = scoreBySeniority.find((s) => s.label === 'Executive')
+      if (!exec) return 'No Executive-owned documents in this scan.'
+      return exec.value == null
+        ? 'No Executive-owned document has been analysed yet, so there is no score for leadership content. These drive legal exposure — worth putting on the fast track.'
+        : `Executive-owned documents score ${exec.value}/100. Leadership content drives legal exposure and sets the tone — keep these on the fast track.`
+    })(),
     wcagLevel: byLevel.length ? `${byLevel[0]?.value || 0} Level A findings are the legal floor and most automatable — address these first. Level AA (${levelC.AA || 0} findings) is the ADA/EAA/508 statutory target; Level AAA is optional.` : 'No findings by WCAG level.',
     scoreBand: `${band(90, 100)} documents are certifiable now (${pct(band(90, 100), n)}% of the estate). The ${band(50, 89)} in the 50–89 band are within striking distance — remediation here produces the fastest estate-level lift.`,
   }
@@ -270,8 +292,8 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
 
       <div className="muted" style={{ margin: '20px 0 2px' }}>Compliance by dimension · scores, severity &amp; WCAG level <span style={{ fontWeight: 400 }}>· click a bar to drill in</span></div>
       <div className="chartrow">
-        <section className="panel"><h2>Average score by department <span className="muted" style={{ fontWeight: 400 }}>· /100</span></h2><Bars items={scoreByDept} max={100} cols="150px 1fr 34px" onPick={(it) => { const fs = files.filter((f) => f.department === it.label); setSeg({ title: `${it.label} · avg ${it.value} / 100`, subtitle: `${fs.length} documents`, files: fs }) }} /><Insight text={INS.scoreByDept} /></section>
-        <section className="panel"><h2>Average score by owner seniority <span className="muted" style={{ fontWeight: 400 }}>· /100</span></h2><Bars items={scoreBySeniority} max={100} cols="100px 1fr 34px" onPick={(it) => { const fs = files.filter((f) => f.seniority === it.label); setSeg({ title: `${it.label}-owned · avg ${it.value} / 100`, subtitle: `${fs.length} documents`, files: fs }) }} /><Insight text={INS.scoreBySeniority} /></section>
+        <section className="panel"><h2>Average score by department <span className="muted" style={{ fontWeight: 400 }}>· /100</span></h2><Bars items={scoreByDept} max={100} cols="150px 1fr 34px" onPick={(it) => { const fs = files.filter((f) => f.department === it.label); setSeg({ title: it.value == null ? `${it.label} · not yet scored` : `${it.label} · avg ${it.value} / 100`, subtitle: `${fs.length} documents`, files: fs }) }} /><Insight text={INS.scoreByDept} /></section>
+        <section className="panel"><h2>Average score by owner seniority <span className="muted" style={{ fontWeight: 400 }}>· /100</span></h2><Bars items={scoreBySeniority} max={100} cols="100px 1fr 34px" onPick={(it) => { const fs = files.filter((f) => f.seniority === it.label); setSeg({ title: it.value == null ? `${it.label}-owned · not yet scored` : `${it.label}-owned · avg ${it.value} / 100`, subtitle: `${fs.length} documents`, files: fs }) }} /><Insight text={INS.scoreBySeniority} /></section>
       </div>
       <div className="chartrow">
         <section className="panel"><h2>Findings by WCAG level</h2>{byLevel.length ? <Bars items={byLevel} cols="150px 1fr 30px" onPick={(it) => { const fs = files.filter((f) => (f.issues || []).some((i) => i.level === it.lvl)); setSeg({ title: `Level ${it.lvl} findings`, subtitle: `${fs.length} document(s)`, files: fs }) }} /> : <p className="muted">No open findings.</p>}<Insight text={INS.wcagLevel} /></section>
