@@ -676,16 +676,33 @@ def propose_link_texts(path, ext: str, *, ai_enabled: bool = True, guidance: str
     """Descriptive link-text proposals for a docx/pptx/xlsx. Each proposal carries `sc` ('2.4.4'
     for vague text, '2.4.9' for text reused across destinations) so the caller enqueues it
     onto the right card. Self-gating: a document whose links are all descriptive and unique
-    yields [] — safe to run on every remediated Office file."""
+    yields [] — safe to run on every remediated Office file.
+
+    Where this stands relative to the DETECTORS, stated exactly rather than assumed as parity.
+    It matters because an approved value is credited only when a re-scan no longer reports the
+    criterion (handlers._apply_one_value_kind): a proposal carrying an `sc` this format has no
+    detector for is approvable but never creditable, and the criterion would be cleared on a
+    re-scan that never looked for it.
+
+      * 2.4.4 — detected on all three formats (office_structure._vague_link_findings). The
+        predicate here is NOT the detector's function: is_vague_link_text matches phrasings
+        ("view details", "check it out") that the detector's word list does not, so this
+        proposes a superset. That direction is the safe one — the extra card only improves
+        text the detector never called a failure, and nothing gets credited unverified.
+      * 2.4.9 — detected for docx/pptx only (_duplicate_href_findings). xlsx has no
+        duplicate-display-text check, so no 2.4.9 proposal is raised there.
+    """
     links = extract_office_links(path, ext)
     if not links:
         return []
-    # Text reused for a DIFFERENT destination — the 2.4.9 signal, same rule as the detector.
+    # Text reused for a DIFFERENT destination — the 2.4.9 signal, the same comparison
+    # _duplicate_href_findings makes, and only for the formats that actually make it.
     by_text: dict[str, set[str]] = {}
-    for text, href in links:
-        t = " ".join((text or "").split()).lower()
-        if t:
-            by_text.setdefault(t, set()).add(href)
+    if (ext or "").lower().lstrip(".") in ("docx", "pptx"):
+        for text, href in links:
+            t = " ".join((text or "").split()).lower()
+            if t:
+                by_text.setdefault(t, set()).add(href)
     ambiguous = {t for t, hrefs in by_text.items() if len(hrefs) > 1}
 
     out: list[dict] = []

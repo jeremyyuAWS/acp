@@ -29,8 +29,14 @@ Every lane below was DERIVED by running that round-trip, not copied from a catal
     the AAA contrast finding (1.4.6); labelling a bare control (1.3.1) also clears 3.3.2 and 4.1.2.
     Those are marked "auto" because the re-scan proves they clear, not because a fixer is named
     after them.
-  * pdf sets language/title/outline deterministically, and darkens light TEXT fill colours in
-    the content streams (1.4.3, clearing 1.4.6 incidentally — text-scoped, shapes untouched).
+  * pdf sets language/title/outline deterministically, and recolours failing TEXT fill colours
+    in the content streams (1.4.3, clearing 1.4.6 incidentally — text-scoped, shapes untouched).
+    "auto" here is a real but PARTIAL lane, and the honest-partial rule is why it still counts:
+    the fixer measures each colour against the background structurally resolved behind its own
+    glyphs, and abstains where structure can't answer (text over an image) or where one colour
+    is painted on backgrounds that pull opposite ways. What it abstains on stays a finding and
+    routes to a human — it is never recoloured on an assumption, which is what the earlier
+    white-page model did (it turned compliant white-on-dark text into an AA failure).
     Structure (re-tagging) can't be auto-written, but an untagged PDF gets a deterministic
     heading-map proposal (font-size rank) a human confirms — assisted, like figure alt and
     reading order (which are AI proposals).
@@ -170,9 +176,10 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "1.3.1": ASSISTED,   # tag structure — deterministic heading-map proposal, human confirms
         "1.3.2": ASSISTED,   # reading order — vision proposal for an untagged/scanned PDF
         "1.3.3": ASSISTED,
-        "1.4.3": AUTO,       # text fill colours darkened in content streams (text-scoped)
+        "1.4.3": AUTO,       # text fill colours recoloured in content streams vs the resolved
+                             # background (text-scoped; abstains where it can't resolve one)
         "1.4.5": ASSISTED,
-        "1.4.6": AUTO,       # cleared incidentally by the 1.4.3 darken (below the AAA floor)
+        "1.4.6": AUTO,       # cleared incidentally by the 1.4.3 recolour (it targets 7:1 first)
         "1.4.9": ASSISTED,
         "2.4.1": AUTO,       # bookmark outline built from the document's headings
         "2.4.2": AUTO,       # /Title + ViewerPreferences DisplayDocTitle

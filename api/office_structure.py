@@ -213,6 +213,28 @@ def _is_vague_link_text(text: str) -> bool:
     return bool(re.match(r"^(https?://|www\.)", t))
 
 
+def _vague_link_findings(texts: list[str], rule_id: str, wcag: str) -> list[dict]:
+    """2.4.4 — display text that names nothing about where the link goes ("click here", a
+    bare URL). One finding per file carrying the count and a REAL example off the document,
+    so the review card shows what actually tripped it.
+
+    Shared by every Office format so docx/pptx/xlsx judge link text by one predicate — the
+    same one proposals.propose_link_texts derives replacements for, which is what lets an
+    approved link-text fix be verified by a re-scan instead of credited on trust.
+
+    Empty text is skipped rather than flagged: a hyperlink with no text of its own wraps a
+    drawing, and an image link's purpose comes from the image's alt text — 1.1.1's subject,
+    not this one. Flagging it here would report one problem twice.
+    """
+    vague = [s for t in texts if (s := (t or "").strip()) and _is_vague_link_text(s)]
+    if not vague:
+        return []
+    f = _finding(rule_id, wcag, "MODERATE")
+    f["detail"] = (f"{len(vague)} hyperlink(s) with unclear text (e.g. “{vague[0]}”) — "
+                   "a screen-reader user cannot tell where the link goes")
+    return [f]
+
+
 def docx_checks(path: Path) -> list[dict]:
     findings: list[dict] = []
     try:
@@ -246,7 +268,11 @@ def docx_checks(path: Path) -> list[dict]:
                     findings.append(_finding("DOCX_PSEUDO_HEADING", "1.3.1 Info and Relationships", "MODERATE"))
                     break
 
-            # 2.4.9 — hyperlink display text reused for a different destination
+            # 2.4.4 — link text that conveys nothing about its destination, and 2.4.9 — display
+            # text reused for a different destination. The partner engine's DOCX-LINK-001 is
+            # mapped to 2.4.4 as well, but it only runs when the .NET analyser is reachable;
+            # ACP's own re-scan is what credits an approved link-text fix (handlers
+            # _apply_one_value_kind), so that criterion needs a check ACP always runs itself.
             rels = _relationships(zf, "word/_rels/document.xml.rels")
             links = []
             for rid, inner in _HYPERLINK.findall(doc):
@@ -254,6 +280,8 @@ def docx_checks(path: Path) -> list[dict]:
                 href = rels.get(rid)
                 if href:
                     links.append((text, href))
+            findings += _vague_link_findings([t for t, _ in links], "DOCX_LINK_PURPOSE_VAGUE",
+                                             "2.4.4 Link Purpose (In Context)")
             findings += _duplicate_href_findings(links, "DOCX_LINK_PURPOSE_AMBIGUOUS", "2.4.9 Link Purpose (Link Only)")
 
             # 3.3.2 — interactive content-control form fields (checkbox, date
@@ -310,7 +338,7 @@ def docx_checks(path: Path) -> list[dict]:
 
 
 def xlsx_structure_checks(path: Path) -> list[dict]:
-    """2.4.4 Link Purpose (In Context) — cell hyperlinks whose display text is vague, empty or a
+    """2.4.4 Link Purpose (In Context) — cell hyperlinks whose display text is vague or a
     raw URL. 2.4.6 Headings and Labels — uninformative structure labels (multiple default 'SheetN'
     tabs, or default 'ColumnN' table headers). Detection only; both route to human remediation."""
     findings: list[dict] = []
@@ -319,20 +347,17 @@ def xlsx_structure_checks(path: Path) -> list[dict]:
             names = zf.namelist()
             # 2.4.4 — judge only links that carry an explicit display text; a link with no display
             # attribute takes its label from the cell value (not resolved here), so skipping it
-            # avoids false positives.
-            vague = 0
+            # avoids false positives. Same shared judgement as docx/pptx (_vague_link_findings).
+            displays: list[str] = []
             for n in names:
                 if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", n):
                     xml = _read(zf, n) or ""
                     for tag in _XLSX_HL.findall(xml):
                         m = _HL_DISPLAY.search(tag)
-                        if m and _is_vague_link_text(m.group(1)):
-                            vague += 1
-            if vague:
-                f = _finding("XLSX_LINK_PURPOSE_VAGUE", "2.4.4 Link Purpose (In Context)", "MODERATE")
-                f["detail"] = (f"{vague} hyperlink(s) with unclear text (e.g. “click here” or a raw URL) — "
-                               "a screen-reader user cannot tell where the link goes")
-                findings.append(f)
+                        if m:
+                            displays.append(m.group(1))
+            findings += _vague_link_findings(displays, "XLSX_LINK_PURPOSE_VAGUE",
+                                             "2.4.4 Link Purpose (In Context)")
 
             # 2.4.6 — uninformative labels. A lone default 'Sheet1' is normal, so require either
             # several default sheet tabs or a default table-column header before flagging.
@@ -383,7 +408,11 @@ def pptx_checks(path: Path) -> list[dict]:
                     if not _AT.search(shape_text) or not "".join(_AT.findall(shape_text)).strip():
                         findings.append(_finding("PPTX_TITLE_EMPTY", "2.4.6 Headings and Labels", "MODERATE"))
 
-                # 2.4.9 — hyperlink display text reused for a different destination.
+                # 2.4.4 — link text that conveys nothing about its destination, and 2.4.9 —
+                # display text reused for a different destination (both judged once, after the
+                # loop, over every slide's links). PPTX-LINK-001 in the partner engine is mapped
+                # to 2.4.4 too, but ACP's own re-scan is what credits an approved link-text fix
+                # (handlers _apply_one_value_kind), so it needs a check ACP always runs itself.
                 # hlinkClick lives inside <a:rPr>, which precedes the run's own
                 # <a:t> text — the link and its text share a <a:r>...</a:r> run,
                 # so extract both from within the same run rather than scanning
@@ -399,6 +428,8 @@ def pptx_checks(path: Path) -> list[dict]:
                         continue
                     text = "".join(_AT.findall(run_inner))
                     all_links.append((text, href))
+            findings += _vague_link_findings([t for t, _ in all_links], "PPTX_LINK_PURPOSE_VAGUE",
+                                             "2.4.4 Link Purpose (In Context)")
             findings += _duplicate_href_findings(all_links, "PPTX_LINK_PURPOSE_AMBIGUOUS", "2.4.9 Link Purpose (Link Only)")
     except Exception:
         pass

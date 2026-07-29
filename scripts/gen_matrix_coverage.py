@@ -95,6 +95,8 @@ SOURCES = (
     "scripts/gen_rules_index.py",
 )
 
+_SC_RE = re.compile(r"\d+\.\d+\.\d+")
+
 # lane -> the strongest matrix tier that lane can honestly support.
 # A missing lane (ACP does not evaluate this pair) is NOT "not applicable": the criterion may
 # still apply to the format in WCAG terms, ACP simply automates nothing for it. So the ceiling
@@ -203,7 +205,7 @@ def load_review_formats() -> dict[str, set[str]]:
 
 
 # ── 2. applier presence ───────────────────────────────────────────────────────────────
-def load_appliers() -> dict[str, set[str]]:
+def load_appliers(*, keyword: str = "scs_to_clear") -> dict[str, set[str]]:
     """{format: {SCs whose approved value is actually written back into the file}}.
 
     Read from handlers._apply_approved_values' calls to `_apply_one_value_kind`, which is the
@@ -211,6 +213,17 @@ def load_appliers() -> dict[str, set[str]]:
     (`scs_to_clear=`) and is gated on a module-level format constant; pairing the two gives the
     true applier surface. A proposal outside it is a no-op on approval no matter how confident
     the catalog is — see the module docstring.
+
+    `keyword` selects which of the call's SC arguments to read. The default is what the lane
+    VERIFIES on the re-scan; pass "credit_rule_ids" for what it CREDITS, which is how
+    tests/test_applier_detector_parity.py asserts the second never outruns the first.
+
+    `scs_to_clear` comes in two shapes, and both are read here. A LITERAL set is one lane for
+    every format the call is gated to. A module-level PER-FORMAT map ({fmt: (sc, ...)}, as the
+    link-text lane uses) says the lane clears different criteria per format — because a
+    criterion no detector emits for a format can only be "cleared" vacuously on the re-scan, so
+    it is not claimed there. Flattening that map to its union would hand the matrix exactly the
+    over-claim this generator exists to catch.
     """
     src = (API / "handlers.py").read_text()
     tree = ast.parse(src)
@@ -218,6 +231,8 @@ def load_appliers() -> dict[str, set[str]]:
     # Module-level format constants the gates are expressed with (dict of ext -> mime, or a
     # tuple of exts). Collected generically so renaming one doesn't silently drop a lane.
     consts: dict[str, set[str]] = {}
+    # …and the per-format SC maps ({fmt: (sc, ...)}), which are also format constants.
+    sc_maps: dict[str, dict[str, set[str]]] = {}
     for node in tree.body:
         if not isinstance(node, ast.Assign) or not isinstance(node.targets[0], ast.Name):
             continue
@@ -227,11 +242,23 @@ def load_appliers() -> dict[str, set[str]]:
                     if isinstance(k, ast.Constant) and isinstance(k.value, str)}
             if keys & set(FORMATS):
                 consts[name] = keys
+                per_fmt = {k.value: {e.value for e in v.elts if isinstance(e, ast.Constant)}
+                           for k, v in zip(val.keys, val.values)
+                           if isinstance(k, ast.Constant) and isinstance(v, (ast.Tuple, ast.List, ast.Set))}
+                if per_fmt and all(all(_SC_RE.fullmatch(str(s)) for s in scs)
+                                   for scs in per_fmt.values()):
+                    sc_maps[name] = per_fmt
         elif isinstance(val, (ast.Tuple, ast.List, ast.Set)):
             items = {e.value for e in val.elts
                      if isinstance(e, ast.Constant) and isinstance(e.value, str)}
             if items & set(FORMATS):
                 consts[name] = items
+        elif (isinstance(val, ast.Call) and getattr(val.func, "id", None) in
+                ("tuple", "list", "set", "frozenset") and len(val.args) == 1
+                and getattr(val.args[0], "id", None) in consts):
+            # `_OFFICE_LINK_EXTS = tuple(_LINK_SCS_BY_EXT)` — the gate derived from the map's
+            # own keys, so the two can never disagree. Resolve it rather than dropping the gate.
+            consts[name] = consts[val.args[0].id]
 
     fn = next((n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
                and n.name == "_apply_approved_values"), None)
@@ -254,10 +281,18 @@ def load_appliers() -> dict[str, set[str]]:
         if fname != "_apply_one_value_kind":
             continue
         kw = {k.arg: k.value for k in call.keywords}
-        scs_node = kw.get("scs_to_clear")
+        scs_node = kw.get(keyword)
+        per_fmt = _per_format_scs(scs_node, fn, sc_maps)
+        if per_fmt is not None:
+            calls += 1
+            for f, fmt_scs in per_fmt.items():
+                if f in outer and f in out:
+                    out[f] |= fmt_scs
+            continue
         if not isinstance(scs_node, (ast.Set, ast.List, ast.Tuple)):
-            raise SystemExit("gen_matrix_coverage: _apply_one_value_kind called without a "
-                             "literal scs_to_clear — update this generator.")
+            raise SystemExit(f"gen_matrix_coverage: _apply_one_value_kind called without a "
+                             f"literal {keyword} or a per-format SC map — update this "
+                             f"generator.")
         scs = {e.value for e in scs_node.elts if isinstance(e, ast.Constant)}
         calls += 1
         # Narrow to this call's own gate when it has one, else the function-wide gate.
@@ -271,6 +306,32 @@ def load_appliers() -> dict[str, set[str]]:
         raise SystemExit("gen_matrix_coverage: no _apply_one_value_kind calls found — "
                          "update this generator.")
     return out
+
+
+def _per_format_scs(scs_node, fn: ast.FunctionDef,
+                    sc_maps: dict[str, dict[str, set[str]]]) -> dict[str, set[str]] | None:
+    """{fmt: {sc, ...}} when this call's SC argument resolves to a per-format SC map, else None.
+
+    The map is rarely named at the call site — the lane reads it into a local first
+    (`link_scs = _LINK_SCS_BY_EXT.get(ext, ())` … `scs_to_clear=set(link_scs)`), so follow one
+    hop through the local's assignment, the same cheap structural question `_guards` asks.
+    """
+    if scs_node is None:
+        return None
+    names = {n.id for n in ast.walk(scs_node) if isinstance(n, ast.Name)}
+    for local in list(names):
+        for stmt in ast.walk(fn):
+            if isinstance(stmt, ast.Assign) and any(
+                    getattr(t, "id", None) == local for t in stmt.targets):
+                names |= {n.id for n in ast.walk(stmt.value) if isinstance(n, ast.Name)}
+    hits = [sc_maps[n] for n in sorted(names) if n in sc_maps]
+    if not hits:
+        return None
+    merged: dict[str, set[str]] = {}
+    for m in hits:
+        for fmt, scs in m.items():
+            merged.setdefault(fmt, set()).update(scs)
+    return merged
 
 
 def _guards(call: ast.Call, fn: ast.FunctionDef, const_name: str) -> bool:
