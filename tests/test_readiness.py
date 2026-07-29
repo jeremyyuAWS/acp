@@ -147,6 +147,15 @@ def test_a_missing_pdf_engine_errors_the_file_instead_of_crashing_the_scan(tmp_p
     error — never to a result that could be scored as passing."""
     import scanner
     monkeypatch.setattr(scanner, "WP", tmp_path / "definitely-not-an-engine")
+    # Since ADR 0029 the engine is vendored in-repo, so it IMPORTS — and any earlier test in the
+    # run that exercised a PDF leaves it in sys.modules, where a later `import analysers...`
+    # succeeds no matter what WP says. Pointing WP at an empty directory is then not enough to
+    # reproduce a missing engine, and this test passed alone while failing in the suite.
+    # Evict the modules so the absence being asserted is real.
+    for mod in [m for m in sys.modules if m.split(".")[0] in ("analysers", "models", "remediation")]:
+        monkeypatch.delitem(sys.modules, mod, raising=False)
+    # ...and drop the engine's own path, which _analyse_pdf inserts at position 0 and never removes.
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if "pdf-analyser" not in str(p)])
     pdf = tmp_path / "x.pdf"
     pdf.write_bytes(b"%PDF-1.4\n")
 

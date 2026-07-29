@@ -65,7 +65,11 @@ COPY test-corpus/files/ /app/test-corpus/files/
 
 # compiled engines (no source)
 COPY spike/dotnet/AcpScan.Cli/bin/Release/net10.0/ /app/engine/office/
-COPY deploy/public/vendor/worker-python/ /app/engine/worker-python/
+# Straight from the tracked tree (ADR 0029). This used to copy deploy/public/vendor/worker-python,
+# a gitignored staging directory the deploy script filled from a checkout OUTSIDE the repo — so the
+# build context depended on a path that existed on one laptop, and an expired token could make the
+# copy a silent 0-module no-op that still built a working-looking image with no PDF engine in it.
+COPY engine/pdf-analyser/ /app/engine/worker-python/
 
 # built SPA
 COPY --from=web /web/dist/ /app/static/

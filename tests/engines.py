@@ -36,13 +36,17 @@ _CLI_DLL = Path(os.environ.get("ACP_OFFICE_CLI")
 OFFICE_OK: bool = ((shutil.which("dotnet") is not None or _DOTNET.exists())
                    and _CLI_DLL.exists())
 
-PDF_ENGINE = Path(os.environ.get("ACP_PDF_ENGINE")
-                  or os.path.expanduser("~/projects/_review-digital-accessibility/worker-python"))
+# Mirrors api/scanner.py's WP: the engine is vendored in-repo (ADR 0029), env-overridable for
+# anyone working against the upstream checkout. This used to default to a personal path outside
+# the repo, so PDF_OK was False on every host but one and ten tests skipped with a message that
+# said the engine "is not vendored in this repo" — true when written, false since ADR 0029, and
+# the kind of stale guard that quietly costs you a test lane.
+PDF_ENGINE = Path(os.environ.get("ACP_PDF_ENGINE") or ROOT / "engine" / "pdf-analyser")
 # `analysers` backs assessment, `remediation` backs the fixers — a partial checkout that
 # has one but not the other would fail confusingly mid-test, so require both.
 PDF_OK: bool = (PDF_ENGINE / "analysers").is_dir() and (PDF_ENGINE / "remediation").is_dir()
 
 NO_OFFICE = ("the .NET Office analyser CLI is not built — run "
              "`dotnet build spike/dotnet/AcpScan.Cli/AcpScan.Cli.csproj -c Release`")
-NO_PDF = ("the worker-python PDF engine is unavailable: it is not vendored in this repo "
-          "(unlike the Office analysers, ADR 0012). Set ACP_PDF_ENGINE to a checkout.")
+NO_PDF = (f"the PDF engine is missing from {PDF_ENGINE} — it is vendored in-repo (ADR 0029), so "
+          "this means a truncated checkout or an ACP_PDF_ENGINE override pointing somewhere empty.")

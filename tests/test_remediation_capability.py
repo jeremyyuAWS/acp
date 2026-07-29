@@ -327,7 +327,12 @@ def test_pptx_auto_entries_clear(tmp_path):
     assert not still_firing, f"pptx 'auto' criteria still fail: {sorted(still_firing)}"
 
 
-@pytest.mark.skipif(not (_ENGINE_OK and _PDF_OK), reason=_NO_PDF)
+# Two gates, so the reason must name the one that actually fired. Reporting _NO_PDF for both was
+# harmless while the PDF engine was never present; since ADR 0029 vendored it, a .NET-only
+# shortfall was being reported as "the PDF engine is missing" — pointing whoever reads it at a
+# directory that is right there in the repo.
+@pytest.mark.skipif(not (_ENGINE_OK and _PDF_OK),
+                    reason=(_NO_ENGINE if not _ENGINE_OK else _NO_PDF))
 def test_pdf_auto_entries_clear(tmp_path):
     pytest.importorskip("pikepdf")
     pytest.importorskip("pypdf")

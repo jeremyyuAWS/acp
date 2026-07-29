@@ -50,8 +50,19 @@ from rubric import Rubric  # noqa: E402
 # lang="en-US" into every deck's template (docDefaults + slide master/layouts), so these
 # generated fixtures DO declare a language and correctly do NOT fire *-LANG-001. The no-language
 # negative case is covered directly with crafted XML in test_office_language_rules.py.
+# DOCX-LINK-001 and DOCX_LINK_PURPOSE_VAGUE both fire, and both belong. They are two detectors
+# for one criterion (2.4.4) by design — see api/office_structure.py:345. The dashed ID is the
+# partner .NET analyser's, which only runs when the Office CLI is built; the underscored one is
+# ACP's own, which always runs, because ACP's re-scan is what credits an approved link-text fix
+# and that cannot depend on a partner engine being reachable. They collapse to a single criterion
+# downstream (_split_sc_counts keys by SC), so nothing is double-counted at the outcome layer.
+#
+# This set was stale for as long as it went unchecked: the test gates on PDF_OK, which was False
+# on every host without an out-of-tree engine checkout, so it never ran. ADR 0029 vendored the
+# engine and the assertion started executing for the first time.
 EXPECTED_DOCX_NONCOMPLIANT = {
     "DOCX-TITLE-001", "DOCX-ALT-001", "DOCX-LINK-001", "DOCX-TABLE-001",
+    "DOCX_LINK_PURPOSE_VAGUE",
 }
 CLEAN_COMPLIANT = ["docx-compliant.docx", "pptx-compliant.pptx", "xlsx-compliant.xlsx"]
 MALFORMED = ["edge-corrupt.docx", "edge-plaintext.docx", "edge-pdf-as.docx", "pdf-encrypted.pdf"]
@@ -236,7 +247,10 @@ def test_xlsx_duplicate_sheet_names(report):
 def test_pptx_vague_links(report):
     f = by_file(report).get("pptx-vague-links.pptx")
     assert f is not None and f["status"] == "analysed"
-    assert _rules(f) == {"PPTX-LINK-001"}, f"rule drift: {sorted(_rules(f))}"  # *-LANG-001: see ADR 0012 note above
+    # Both link detectors fire, and both belong — see EXPECTED_DOCX_NONCOMPLIANT above for why
+    # ACP keeps its own 2.4.4 check alongside the partner engine's. (*-LANG-001: see the ADR 0012
+    # note above.)
+    assert _rules(f) == {"PPTX-LINK-001", "PPTX_LINK_PURPOSE_VAGUE"}, f"rule drift: {sorted(_rules(f))}"
 
 
 def test_pptx_reading_order(report):
