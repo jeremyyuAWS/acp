@@ -126,6 +126,79 @@ def test_html_2_4_6_meaningless_headings_scan_clean_but_do_not_certify():
         assert store._rule_outcome("2.4.6", "html", len(fails), 0) == store.REVIEW, name
 
 
+def test_no_non_certifying_lane_can_ever_return_pass():
+    """The CLASS guard: only a 🟢 auto lane may certify a PASS. Every other lane, on every format.
+
+    docx 2.4.6, html 2.4.6 and pptx 2.1.1 were the same defect found three times, one cell at a
+    time, because each fix pinned its own instance. This asserts the invariant over the whole
+    assessment table instead, so a new 🟡/🔴 cell cannot regress into a green PASS unnoticed —
+    including a lane token that does not exist yet, since the rule is `!= auto` rather than a
+    list of the non-certifying lanes (the omission that let 🔴 human through in the first place).
+    """
+    import remediation_capability as rc
+
+    offenders = [
+        (fmt, sc, lane)
+        for fmt, scs in rc.assessment_table().items()
+        for sc, lane in scs.items()
+        if lane != rc.A_AUTO and store._rule_outcome(sc, fmt, 0, 0) == "PASS"
+    ]
+    assert not offenders, (
+        "these (format, criterion) pairs certify a PASS their assessment lane says ACP "
+        f"cannot judge: {offenders}"
+    )
+
+
+def test_auto_lanes_still_certify_so_the_guard_is_not_vacuous():
+    """The guard above is a negative; this proves it did not simply delete certification.
+
+    A blanket "never PASS" would satisfy the invariant and be worthless. 🟢 auto cells must still
+    resolve a clean scan to a real PASS.
+    """
+    import remediation_capability as rc
+
+    certifying = [(fmt, sc) for fmt, scs in rc.assessment_table().items() for sc, lane in scs.items()
+                  if lane == rc.A_AUTO and store._rule_outcome(sc, fmt, 0, 0) == "PASS"]
+    assert len(certifying) > 20, f"expected the 🟢 lane to still certify broadly, got {certifying}"
+    # The named control from the bug report: pptx 1.4.3 is deterministic and must stay green.
+    assert store._rule_outcome("1.4.3", "pptx", 0, 0) == "PASS"
+
+
+def test_pptx_2_1_1_clean_deck_is_review_not_a_certified_pass():
+    """pptx 2.1.1 Keyboard — the 🔴 human cell that resolved to a certified PASS.
+
+    Third instance of the docx/html 2.4.6 shape, and the worst of the three: those two at least
+    ran a detector whose narrow signal was over-read. There is NO 2.1.1 detector on any pptx path
+    — office_structure.checks_for dispatches ten pptx checks and not one emits 2.1.1 — so bare
+    RULE_FORMATS membership alone was being read as "the validator ran". A clean deck therefore
+    scored green on keyboard operability, which is a property of the runtime presenting the deck
+    and not of the file, and which the lane table in the same breath said only a person can judge.
+
+    Run through the real pipeline (checks_for → filter_issues_to_target → _rule_outcome).
+    """
+    import tempfile
+
+    import office_structure
+    from pptx import Presentation
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "Quarterly Accessibility Review"
+    slide.placeholders[1].text = "Findings and next steps for the platform team."
+    deck = Path(tempfile.mkdtemp()) / "clean.pptx"
+    prs.save(str(deck))
+
+    issues = store.filter_issues_to_target(office_structure.checks_for(deck, ".pptx"), "AA")
+    fails = [i for i in issues if str(i.get("wcag", "")).startswith("2.1.1")]
+    assert not fails, f"no pptx detector emits 2.1.1, so a clean deck must scan clean: {fails}"
+    assert store._rule_outcome("2.1.1", "pptx", len(fails), 0) == store.REVIEW
+    # A recorded blocking finding still outranks the lane — this is not a mute button.
+    assert store._rule_outcome("2.1.1", "pptx", 1, 0) == "FAIL"
+    # The lane table and the outcome function now agree, which is what the bug was about.
+    import remediation_capability as rc
+    assert rc.assessment_table()["pptx"]["2.1.1"] == rc.A_HUMAN
+
+
 def test_advisory_review_on_a_pass_fail_criterion_surfaces_as_review():
     # An advisory finding on an in-scope pass/fail criterion (no blocking finding) → REVIEW.
     assert store._rule_outcome("1.1.1", "pdf", 0, 1) == store.REVIEW
