@@ -108,6 +108,19 @@ def _parse_chart(xml: bytes, entries: dict | None = None) -> dict | None:
     return {"type": ctype, "title": title, "series": series}
 
 
+def parse_chart_part(xml: bytes, entries: dict | None = None) -> dict | None:
+    """Public single-part parser: one chart part's bytes → {type, title, series:[{name,
+    points:[(cat, val)]}]}, or None when it carries nothing plottable. Pass `entries` (the whole
+    package, part name → bytes) so an xlsx chart that stores only cell REFERENCES can resolve its
+    real values. Namespace-correct (ElementTree), so it reads both the `c:`-prefixed chartSpace
+    Excel/PowerPoint write and the default-namespace one openpyxl-family generators write. Never
+    raises — an unparseable part is simply None."""
+    try:
+        return _parse_chart(xml, entries)
+    except Exception:
+        return None
+
+
 def _ref_formula(el) -> str:
     """The <c:f> cell-range formula inside a <c:cat>/<c:val>, e.g. "'Sheet'!$B$6:$B$9", or ''."""
     if el is None:
@@ -212,7 +225,9 @@ def _read_cells(sheet_xml: bytes, cells: list[str], shared: list[str]) -> list[s
             continue
         v = c.find(f"{ns}v")
         val = (v.text or "") if v is not None else ""
-        if c.get("t") == "s":                              # shared-string index
+        if c.get("t") == "inlineStr":                      # text lives in <is><t>, not <v>
+            val = _txt(c.find(f"{ns}is"))                  # (openpyxl writes these; Excel shares)
+        elif c.get("t") == "s":                            # shared-string index
             try:
                 val = shared[int(val)]
             except (ValueError, IndexError):
@@ -271,10 +286,19 @@ _HAS_DESCR = re.compile(r'\bdescr="[^"]*\S[^"]*"')
 # Per-format: which parts carry a drawing, which element wraps a chart, and which element carries the
 # alt (descr). pptx → <p:graphicFrame>/<p:cNvPr>; xlsx → <xdr:graphicFrame>/<xdr:cNvPr>; docx → the
 # inline/anchor drawing wrapper with alt on <wp:docPr>.
+#
+# The tag entries are regex fragments, so xlsx can carry an optional `xdr:` prefix: spreadsheet
+# drawings come in two namespace flavours — Excel authors the prefixed `<xdr:graphicFrame>/
+# <xdr:cNvPr>`, while openpyxl-family generators (and some export paths) emit the SAME parts in the
+# DEFAULT spreadsheetDrawing namespace as `<graphicFrame>/<cNvPr>`. Matching only the prefixed form
+# silently skipped every native chart in a default-namespace workbook: chart_descr_edits returned {}
+# and the chart got no deterministic 1.1.1 alt at all. (Same bug class as `_ALT_TARGETS` in
+# remediate_office.py, fixed the same way. docx/pptx are single-flavour, left as-is.)
 _CHART_CFG = {
-    ".pptx": (re.compile(r"^ppt/slides/slide\d+\.xml$"), ["p:graphicFrame"], "p:cNvPr"),
-    ".xlsx": (re.compile(r"^xl/drawings/drawing\d+\.xml$"), ["xdr:graphicFrame"], "xdr:cNvPr"),
-    ".docx": (re.compile(r"^word/document\.xml$"), ["wp:inline", "wp:anchor"], "wp:docPr"),
+    ".pptx": (re.compile(r"^ppt/slides/slide\d+\.xml$"), [r"p:graphicFrame"], r"p:cNvPr"),
+    ".xlsx": (re.compile(r"^xl/drawings/drawing\d+\.xml$"), [r"(?:xdr:)?graphicFrame"],
+              r"(?:xdr:)?cNvPr"),
+    ".docx": (re.compile(r"^word/document\.xml$"), [r"wp:inline", r"wp:anchor"], r"wp:docPr"),
 }
 
 
@@ -313,7 +337,9 @@ def chart_descr_edits(entries: dict, ext: str) -> dict:
     if not cfg:
         return {}
     part_re, block_tags, descr_tag = cfg
-    descr_re = re.compile(rf"<{descr_tag}\b([^>]*?)(/?)>")
+    # Group 1 captures the tag name AS WRITTEN in this file (`cNvPr` or `xdr:cNvPr`) — the
+    # replacement below must re-emit that exact name, never the pattern it was matched with.
+    descr_re = re.compile(rf"<({descr_tag})\b([^>]*?)(/?)>")
     changed: dict = {}
     for name in list(entries):
         if not part_re.match(name):
@@ -327,7 +353,9 @@ def chart_descr_edits(entries: dict, ext: str) -> dict:
             continue
         alts, new_xml, moved = [], xml, False
         for btag in block_tags:
-            for bm in re.finditer(rf"<{btag}\b.*?</{btag}>", new_xml, re.S):
+            # \1 backreference: a block must close with the SAME spelling it opened with, so an
+            # unprefixed <graphicFrame> can never be paired with an </xdr:graphicFrame>.
+            for bm in re.finditer(rf"<({btag})\b.*?</\1>", new_xml, re.S):
                 block = bm.group(0)
                 rid_m = _CHART_RID.search(block)
                 if not rid_m:
@@ -343,9 +371,11 @@ def chart_descr_edits(entries: dict, ext: str) -> dict:
                     continue
                 alt = describe_chart(chart)
                 dm = descr_re.search(block)
-                if not dm or _HAS_DESCR.search(dm.group(1)):
+                if not dm or _HAS_DESCR.search(dm.group(2)):
                     continue                               # no target element, or already has a real descr
-                new_block = block[:dm.start()] + f"<{descr_tag}{dm.group(1)} descr=\"{_xml_escape(alt)}\"{dm.group(2)}>" + block[dm.end():]
+                new_block = (block[:dm.start()]
+                             + f"<{dm.group(1)}{dm.group(2)} descr=\"{_xml_escape(alt)}\"{dm.group(3)}>"
+                             + block[dm.end():])
                 new_xml = new_xml.replace(block, new_block, 1)
                 alts.append(alt); moved = True
         if moved:

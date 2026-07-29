@@ -254,6 +254,17 @@ def check(since: str | None) -> int:
     shas = _git("log", rng, "--format=%H").split()
     bad = []
     for sha in shas:
+        # Merge commits are skipped EXPLICITLY, by parent count. They author nothing: every
+        # change they carry arrived in a commit this loop already judged on its own trailer,
+        # and a merge has no authored message to put one in.
+        #
+        # This used to rely on `git show --name-only` printing nothing for a merge, which is
+        # only true when the two sides touched DISJOINT files. `git show` renders a merge as a
+        # combined diff, listing whatever differs from every parent — so the moment a PR and
+        # its base both edited one rule file, CI flagged GitHub's own merge ref for a trailer
+        # that cannot exist, and the PR could not go green by any action its author could take.
+        if len(_git("log", "-1", "--format=%P", sha).split()) > 1:
+            continue
         files = _git("show", "--name-only", "--format=", sha).split()
         if not any(f.startswith(p) for f in files for p in RULE_PATHS):
             continue

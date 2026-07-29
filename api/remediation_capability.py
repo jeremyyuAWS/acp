@@ -39,7 +39,10 @@ Every lane below was DERIVED by running that round-trip, not copied from a catal
     white-page model did (it turned compliant white-on-dark text into an AA failure).
     Structure (re-tagging) can't be auto-written, but an untagged PDF gets a deterministic
     heading-map proposal (font-size rank) a human confirms — assisted, like figure alt and
-    reading order (which are AI proposals).
+    reading order (which are AI proposals). pdf 2.4.4 is the counter-example that fixes the
+    rule's edge: a descriptive label IS derivable from the link target, but no PDF write-back
+    can put it in the file, and a proposal nobody can honour is not an assisted lane. It is
+    "human" — assessed, explained, re-authored by a person (see remediate_pdf.py).
 
 Reconciliation with the earlier sparse version
 ----------------------------------------------
@@ -183,7 +186,10 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "1.4.9": ASSISTED,
         "2.4.1": AUTO,       # bookmark outline built from the document's headings
         "2.4.2": AUTO,       # /Title + ViewerPreferences DisplayDocTitle
-        "2.4.4": ASSISTED,   # raw-URL link text — descriptive label derived from the target, human confirms
+        "2.4.4": HUMAN,      # raw-URL link text — EXPLAIN-ONLY. A label derived from the target
+                             # is easy; writing it is not (the text-showing operators re-flow),
+                             # and there is no PDF link write-back, so an approval could never
+                             # be honoured. Assessed and routed to a human, never proposed.
         "2.4.6": ASSISTED,   # tagged PDF, no headings — heading map derived from the font hierarchy, human confirms
         "3.1.1": AUTO,       # catalog /Lang
         "3.1.2": ASSISTED,

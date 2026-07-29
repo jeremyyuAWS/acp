@@ -1599,6 +1599,19 @@ def pdf_focus_order_checks(path: Path) -> list[dict]:
     return detect(path)
 
 
+def pdf_non_text_content_checks(path: Path) -> list[dict]:
+    """1.1.1 findings per tagged /Figure with no /Alt. Implementation: formats/pdf/detectors/
+    non_text_content.py.
+
+    RULE_FORMATS already lists pdf for 1.1.1 — the pass/fail lane was declared, and only the
+    partner catalog's `pdf.missing-alt-text` implemented it. That left the in-process re-scan
+    (proposals.verify_residual_scs, first-party checks only) unable to observe 1.1.1 on a PDF,
+    so the write-back lane's credit gate cleared it on no evidence. This fills the declaration
+    in rather than making a new claim."""
+    from formats.pdf.detectors.non_text_content import detect
+    return detect(path)
+
+
 def checks_for(path: Path, ext: str) -> list[dict]:
     """Dispatch by extension; returns [] for formats with no structural check yet."""
     ext = ext.lower()
@@ -1618,7 +1631,8 @@ def checks_for(path: Path, ext: str) -> list[dict]:
                 + pdf_headings_labels_check(path) + pdf_link_purpose_check(path)
                 + pdf_text_spacing_checks(path) + pdf_use_of_color_checks(path)
                 + pdf_nontext_contrast_checks(path) + pdf_text_over_image_checks(path)
-                + pdf_focus_order_checks(path) + pdf_scanned_page_checks(path))
+                + pdf_focus_order_checks(path) + pdf_scanned_page_checks(path)
+                + pdf_non_text_content_checks(path))
     if ext == ".xlsx":
         return (xlsx_contrast_checks(path) + xlsx_structure_checks(path)
                 + office_control_review_checks(path, ext) + office_color_only_checks(path, ext)

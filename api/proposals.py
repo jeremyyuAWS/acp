@@ -1170,6 +1170,38 @@ def _describe_chart(xml: str) -> dict | None:
     return {"title": title, "type": ctype, "series": series, "categories": categories}
 
 
+def _describe_chart_via_chart_data(raw: bytes, entries: dict) -> dict | None:
+    """Same {title, type, series, categories} shape, but parsed by chart_data's namespace-correct
+    ElementTree reader instead of the `c:`-prefixed regexes above.
+
+    Two chart flavours the regex parser above cannot see, both common in openpyxl-authored
+    workbooks: (a) the chart part written in the DEFAULT chart namespace (`<ser>`, not `<c:ser>`),
+    and (b) an xlsx chart that caches NO values at all — the numbers live in worksheet cells and
+    only a `<c:f>` range is stored. chart_data resolves both (it reads the cells out of the
+    package), so a workbook that would otherwise yield no chart proposal at all yields an exact,
+    grounded one. Used as a fallback so the established parse — and its output — is untouched
+    wherever it already works."""
+    try:
+        import chart_data
+    except Exception:
+        return None
+    c = chart_data.parse_chart_part(raw, entries)
+    if not c:
+        return None
+    series, categories = [], []
+    for s in c.get("series", [])[:_CHART_SERIES_CAP]:
+        pts = s.get("points") or []
+        if not pts:
+            continue
+        if not categories:
+            categories = [cat for cat, _ in pts]
+        series.append({"name": s.get("name") or "", "values": [val for _, val in pts]})
+    if not series:
+        return None
+    return {"title": c.get("title") or "", "type": c.get("type") or "Chart",
+            "series": series, "categories": categories}
+
+
 def _chart_alt_and_sheet(desc: dict) -> tuple[str, str]:
     """(concise alt text, full datasheet) from a parsed chart. Alt names what the chart shows
     and its range; the datasheet is the exact value table — both grounded in the chart's data."""
@@ -1205,11 +1237,17 @@ def propose_chart_datasheet(path, ext: str) -> list[dict]:
     try:
         with zipfile.ZipFile(path) as zf:
             parts = sorted(n for n in zf.namelist() if _CHART_PART.search(n))
+            entries = None
             for i, name in enumerate(parts):
+                raw = zf.read(name)
                 try:
-                    desc = _describe_chart(zf.read(name).decode("utf-8", "ignore"))
+                    desc = _describe_chart(raw.decode("utf-8", "ignore"))
                 except Exception:
-                    continue
+                    desc = None
+                if not desc:                               # cell-referenced / default-namespace chart
+                    if entries is None:                    # read the package once, only if needed
+                        entries = {n: zf.read(n) for n in zf.namelist()}
+                    desc = _describe_chart_via_chart_data(raw, entries)
                 if not desc:
                     continue
                 alt, sheet = _chart_alt_and_sheet(desc)
