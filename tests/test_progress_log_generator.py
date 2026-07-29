@@ -188,6 +188,28 @@ def test_one_unparseable_commit_does_not_suppress_the_others(repo):
     assert "skipped" in r.stderr                                               # announced
 
 
+def test_a_skip_is_annotated_so_a_green_run_still_shows_it(repo):
+    """A skip is the whole safety net for severity-follows-fixability: the entry never reaches
+    the matrix, and the job stays green. Without the `::warning::` prefix that report is a line
+    in a log nobody opens for a passing job — announced in principle, invisible in practice."""
+    _commit(repo, "fix(b): malformed\n\nMatrix-Note: A note with no WCAG line at all.")
+
+    r = subprocess.run([sys.executable, str(SCRIPT)], cwd=repo, capture_output=True, text=True)
+    assert r.returncode == 0
+    assert "::warning::" in r.stderr, "the skip must surface on the Actions run summary"
+
+
+def test_a_dropped_sc_is_annotated_too(repo):
+    """The other skip: the entry survives, one criterion silently does not."""
+    _commit(repo, "fix(c): part-tracked\n\nWCAG: 1.4.3 (pdf)\nWCAG: 1.4.6 (pdf)\n"
+                  "Matrix-Note: Real note.")
+
+    r = subprocess.run([sys.executable, str(SCRIPT)], cwd=repo, capture_output=True, text=True)
+    assert r.returncode == 0
+    assert [e["scs"] for e in json.loads(r.stdout)] == [["1.4.3"]]
+    assert "::warning::" in r.stderr and "1.4.6" in r.stderr
+
+
 def test_generation_succeeds_over_this_repos_real_history():
     """The end-to-end claim, against the history that actually broke it. Guards the whole chain —
     a future trailer style that defeats the parser fails here rather than in the published log."""
