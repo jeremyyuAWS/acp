@@ -38,15 +38,43 @@ from urllib.parse import unquote, urlparse
 #                    The vision provenance names the model that actually ran (res["model"]),
 #                    never a hardcoded name — so a model swap can't leave a lie in the trail.
 #   thumb          — optional base64 image thumbnail for image proposals.
+#   explain_only   — see below. Default (absent) means the value is content to write back.
+#
+# EXPLAIN-ONLY proposals. Nearly every proposal's `proposed_value` is content destined for the
+# document, and the certify gate is built on that: store.count_unapplied_approved_values counts
+# any approved row holding a locator + value, so a file cannot certify until an applier has
+# written those values in and marked the row applied.
+#
+# A few proposals are not like that. A PDF structure/heading map, or a page reading order, is
+# derived and handed to a human to CONFIRM — the approved map is the tagging instruction for
+# re-authoring and the compliance evidence of what the structure should be. Re-tagging a PDF
+# re-authors the file (ADR 0016), so nothing is ever written back, and no applier will ever
+# mark the row applied. Left unflagged such a card is a trap: the reviewer confirms the map,
+# the gate counts a promise no writer can keep, and the file can never certify or reach
+# Publish — permanently, on an approval that was entirely correct.
+#
+# `explain_only=True` says "this value IS the deliverable; it is never written into the file".
+# store._row_approved_values skips those values, so confirming the card resolves the finding
+# instead of blocking it. The flag lives on the PROPOSAL, not on the reviewer's action, because
+# _row_approved_values falls back to `proposed_value` when a client sends no approved value —
+# any client-side suppression would be undone by that fallback.
+#
+# The alternative for such a card is to not offer it at all (WCAG 2.4.4 Link Purpose on PDF went
+# that way: see tests/test_pdf_link_purpose_explain_only.py). That is right when the value is
+# only useful once written — an unwritten link label helps nobody. It is wrong here, where the
+# confirmed map is the useful artefact.
 
 
-def proposal(locator, before, proposed_value, rationale, source, thumb=None, kind=None) -> dict:
+def proposal(locator, before, proposed_value, rationale, source, thumb=None, kind=None,
+             explain_only=False) -> dict:
     p = {"locator": locator, "before": before, "proposed_value": proposed_value,
          "rationale": rationale, "source": source}
     if thumb:
         p["thumb"] = thumb
     if kind:
         p["kind"] = kind   # e.g. 'decorative' → the card offers "Mark decorative", not an alt field
+    if explain_only:
+        p["explain_only"] = True
     return p
 
 

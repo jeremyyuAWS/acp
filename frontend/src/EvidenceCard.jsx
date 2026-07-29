@@ -274,7 +274,13 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // silently hid the box exactly when the human was most needed.
   // An item carrying a proposal always takes a value, even if its SC isn't a classic VALUE_FIX
   // (e.g. a 1.3.3 sensory rewrite) — otherwise the reviewer sees a proposal they cannot accept.
-  const editable = card.track.track !== 'auto' && (isValueFix(card.sc) || !!card.proposal)
+  // An EXPLAIN-ONLY row (a PDF structure/heading map, a page reading order) is confirmed, not
+  // authored: its value is the re-authoring instruction and the compliance evidence, and nothing
+  // is ever written into the file. An editable box would promise a write-back that no applier
+  // performs — the same lie the server-side flag stops the certify gate believing (api/store.py
+  // _row_approved_values). So the map renders read-only and the card asks for a confirmation.
+  const explainOnly = proposalList.length > 0 && proposalList.every((p) => p.explain_only)
+  const editable = !explainOnly && card.track.track !== 'auto' && (isValueFix(card.sc) || !!card.proposal)
   // The primary button reads by workflow (primaryAction, above) — "Approve AI fix" / "Confirm
   // fix" / "Approve description". The honest "writes into the document vs records sign-off"
   // distinction stays in the "What you need to do" prose below, not on the button.
@@ -339,12 +345,16 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
     // with `instances` (proposals or deferred evidence). Only on approval: rejecting approves no
     // content. A WCAG-exception resolution (decorative / essential logo) writes NO value — the
     // finding is resolved by human judgment, not by authoring alt text — so suppress the values.
-    const approvedValues = (status === 'approved' && !resolution && instances.length)
+    // An explain-only row is the same shape of thing: confirming a derived map authors no content
+    // for the document, so it sends no values either. The server ignores them for such a row in any
+    // case (store._row_approved_values / _row_is_explain_only) — this keeps the record honest at the
+    // source rather than relying on the far end to discard a value we should never have claimed.
+    const approvedValues = (status === 'approved' && !resolution && !explainOnly && instances.length)
       ? (multi ? values : [value || ''])
       : null
     // A resolution stands in for the authored value: send no finalValue (nothing was written), and
     // if the reviewer left the note blank, self-describe the exception so the audit line is legible.
-    const finalValue = resolution ? null : t.finalValue
+    const finalValue = (resolution || explainOnly) ? null : t.finalValue
     const noteOut = note || (resolution === 'decorative' ? 'Marked decorative — no description needed'
       : resolution === 'essential_exception' ? 'Marked essential logo/brand — exempt' : null)
     try {
@@ -616,6 +626,20 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
                 </details>
               )}
             </label>
+          ) : explainOnly ? (
+            /* Confirm-the-map, not write-this-back. The derived map is shown verbatim and
+               read-only: approving records that a human agrees this IS the document's structure,
+               which is both the instruction for re-authoring it and the evidence of what the
+               structure should be. Nothing here is written into the PDF. */
+            <div className="evcard-rec-static evcard-explain-only">
+              <span className="muted" style={{ fontSize: 12 }}>
+                Confirm this map — it is recorded as the required structure and used to re-author
+                the file. Nothing is written into the document.
+              </span>
+              {instances.map((p, i) => (
+                <pre key={i} className="evcard-explain-map">{p.proposed_value}</pre>
+              ))}
+            </div>
           ) : card.recommendation ? (
             <p className="evcard-rec-static"><b>AI recommendation:</b> {card.recommendation}</p>
           ) : null}

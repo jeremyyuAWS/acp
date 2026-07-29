@@ -26,9 +26,21 @@ describe('the approve payload carries one value per image', () => {
 
   it('EvidenceCard sends the per-image values, and only on approval', () => {
     const src = read('EvidenceCard.jsx')
-    // A WCAG-exception resolution (decorative / essential logo) writes no value, hence !resolution.
-    expect(src).toMatch(/status === 'approved' && !resolution && instances\.length/)
+    // Two approvals author no content, and neither may send values:
+    //   !resolution  — a WCAG exception (decorative / essential logo) applied instead of a fix.
+    //   !explainOnly — a confirmed PDF structure/heading map or reading order, which is evidence
+    //                  and a re-authoring instruction, never bytes written into the document.
+    expect(src).toMatch(/status === 'approved' && !resolution && !explainOnly && instances\.length/)
     expect(src).toMatch(/approvedValues/)
+  })
+
+  it('an explain-only row is confirmed, never edited', () => {
+    // The card must not offer a write-back field for a value nothing writes back: that is the
+    // promise store._row_approved_values stopped believing, and the UI should not make it either.
+    const src = read('EvidenceCard.jsx')
+    expect(src).toMatch(/const explainOnly = proposalList\.length > 0 && proposalList\.every\(\(p\) => p\.explain_only\)/)
+    expect(src).toMatch(/const editable = !explainOnly &&/)
+    expect(src).toMatch(/const finalValue = \(resolution \|\| explainOnly\) \? null : t\.finalValue/)
   })
 
   it('every instance is rendered beside its own textarea — never a value for unseen evidence', () => {
