@@ -437,6 +437,15 @@ def _remediate_file(payload: dict, job: dict) -> None:
                                    [p for p in _pdf_proposals if p.get("kind") == "headings-map"])
                 _enqueue_proposals(scan_id, filename, "2.4.4", "Link Purpose (In Context)",
                                    [p for p in _pdf_proposals if p.get("kind") == "link-purpose"])
+                # 1.1.1 per-figure alt + 4.1.2 per-field accessible name. Both carry a
+                # `pdf:fig:`/`pdf:field:` locator, and _apply_approved_values writes the
+                # approved text back through remediate_pdf.apply_pdf_approved. Without these
+                # two lines the cards were built by remediate_pdf and then dropped here — the
+                # reviewer never saw them, so the deferral existed only as a tally.
+                _enqueue_proposals(scan_id, filename, "1.1.1", "Non-text Content",
+                                   [p for p in _pdf_proposals if p.get("kind") == "pdf-figure-alt"])
+                _enqueue_proposals(scan_id, filename, "4.1.2", "Name, Role, Value",
+                                   [p for p in _pdf_proposals if p.get("kind") == "pdf-field-name"])
             else:  # docx / pptx / xlsx
                 from remediate_office import remediate_office
                 _applied_fixes: list = []
@@ -1100,6 +1109,16 @@ _LINK_SCS_BY_EXT = {
 }
 _OFFICE_LINK_EXTS = tuple(_LINK_SCS_BY_EXT)
 
+# The lanes that exist only for PDF: figure alt (`pdf:fig:…` → /Alt) and form-field accessible
+# names (`pdf:field:…` → /TU), both written by remediate_pdf.apply_pdf_approved.
+_PDF_APPLY_EXTS = ("pdf",)
+
+# Every format an approved value can actually be WRITTEN into — the format scope
+# _apply_approved_values gates on, derived from the per-lane constants rather than restated, so
+# the two can never disagree. scripts/gen_matrix_coverage.py reads it to derive the matrix's
+# applier surface, so a format here with no real writer behind it would over-claim.
+_APPLY_VALUE_EXTS = tuple(_OFFICE_ALT_MIME) + _PDF_APPLY_EXTS
+
 
 def _apply_one_value_kind(
         *, scan_id: str, filename: str, working: bytes,
@@ -1161,13 +1180,17 @@ def _apply_one_value_kind(
 
 @handler("apply_approved_values")
 def _apply_approved_values(payload: dict, job: dict) -> None:
-    """Write reviewer-approved content (alt text, link text) into the remediated copy, then
-    verify it.
+    """Write reviewer-approved content (alt text, link text, PDF form-field names) into the
+    remediated copy, then verify it.
 
-    This closes the remediate → review → publish loop. Approving a 1.1.1 or 2.4.4/2.4.9 item
-    used to store the value as evidence and stop: nothing wrote it in, so
+    This closes the remediate → review → publish loop. Approving a 1.1.1, 2.4.4/2.4.9 or 4.1.2
+    item used to store the value as evidence and stop: nothing wrote it in, so
     store.mark_file_compliant_if_reviewed correctly refused to certify — leaving the file
     approved but permanently unpublishable.
+
+    Each criterion is its own write → verify → credit lane (_apply_one_value_kind), because a
+    lane may only credit what its own re-scan observed. They run in sequence on the same
+    `working` bytes, so a file with both alt text and field names approved gets one upload.
 
     payload: {scan_id, file}
     """
@@ -1177,16 +1200,18 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         raise FatalJobError("apply_approved_values job missing scan_id/file")
 
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if ext not in _OFFICE_ALT_MIME:
-        # Only Office alt/link text has an applier today. Say so rather than silently
-        # succeeding: the row stays unapplied, so the file stays out of Publish.
+    if ext not in _APPLY_VALUE_EXTS:
+        # No applier for this format. Say so rather than silently succeeding: the row stays
+        # unapplied, so the file stays out of Publish.
         core.store.log_decision("system", "apply.unsupported", scan_id=scan_id, file=filename,
                                 detail=f".{ext}: no approved-value applier for this format")
         return
 
     alt_values = core.store.approved_alt_values(scan_id, filename)
     link_values = core.store.approved_link_values(scan_id, filename) if ext in _OFFICE_LINK_EXTS else {}
-    if not alt_values and not link_values:
+    field_values = (core.store.approved_field_values(scan_id, filename)
+                    if ext in _PDF_APPLY_EXTS else {})
+    if not alt_values and not link_values and not field_values:
         return                                   # nothing approved awaiting a write
 
     import blob as _blob
@@ -1200,15 +1225,31 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
                                 file=filename, detail="no stored remediated copy to write into")
         return
 
-    # Office images carry part#rId locators written by apply_alt. (PDF alt text has its own
-    # writer, apply_pdf_approved, for `pdf:fig:…` locators — but this handler only reaches
-    # here for ext in _OFFICE_ALT_MIME, which never includes "pdf"; PDF alt write-back is a
-    # separate, pre-existing gap, not touched by this change.)
-    from apply_alt import apply_alt_text
+    # Office images carry part#rId locators written by apply_alt; PDF figures carry the
+    # `pdf:fig:{page}:{seq}` locator minted by remediate_pdf and are written by
+    # apply_pdf_approved. Same (bytes, {locator: value}) -> (fixed, applied, unresolved)
+    # contract either way, so only the writer differs.
+    if ext in _PDF_APPLY_EXTS:
+        from remediate_pdf import apply_pdf_approved
+        alt_write_fn = apply_pdf_approved
+    else:
+        from apply_alt import apply_alt_text
+        alt_write_fn = apply_alt_text
     working, alt_uploaded = _apply_one_value_kind(
         scan_id=scan_id, filename=filename, working=working,
-        values=alt_values, scs_to_clear={"1.1.1"}, write_fn=apply_alt_text,
+        values=alt_values, scs_to_clear={"1.1.1"}, write_fn=alt_write_fn,
         diff_rule_id="1.1.1", credit_rule_ids=("1.1.1",), noun="description", job=job)
+
+    # 4.1.2 form-field accessible names (PDF only) — same writer, keyed by `pdf:field:…`.
+    # Run as its own lane because it verifies and credits a DIFFERENT criterion: folding it
+    # into the alt lane would credit 1.1.1 for a field name, and clear 4.1.2 on no evidence.
+    field_uploaded = False
+    if ext in _PDF_APPLY_EXTS and field_values:
+        from remediate_pdf import apply_pdf_approved
+        working, field_uploaded = _apply_one_value_kind(
+            scan_id=scan_id, filename=filename, working=working,
+            values=field_values, scs_to_clear={"4.1.2"}, write_fn=apply_pdf_approved,
+            diff_rule_id="4.1.2", credit_rule_ids=("4.1.2",), noun="field name", job=job)
 
     link_uploaded = False
     if link_values:
@@ -1222,7 +1263,7 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             values=link_values, scs_to_clear=set(link_scs), write_fn=link_write_fn,
             diff_rule_id="2.4.4", credit_rule_ids=link_scs, noun="link text", job=job)
 
-    if not (alt_uploaded or link_uploaded):
+    if not (alt_uploaded or link_uploaded or field_uploaded):
         return
 
     _phase(job, "storing the corrected copy")

@@ -2668,6 +2668,31 @@ class Store:
                 out.update(self._row_approved_values(row))
         return out
 
+    def approved_field_values(self, scan_id: str, file: str) -> dict[str, str]:
+        """{locator: accessible name} awaiting a write into `file`, from its approved 4.1.2 rows.
+
+        Scoped to Name, Role, Value because the only writer behind it (remediate_pdf's
+        `pdf:field:…` → /TU lane) writes form-field accessible names and nothing else.
+        """
+        out: dict[str, str] = {}
+        for row in self._approved_unapplied_rows(scan_id, file):
+            if str(row.get("rule_id") or "").strip() == "4.1.2":
+                out.update(self._row_approved_values(row))
+        return out
+
+    def has_approved_values_to_write(self, scan_id: str, file: str) -> bool:
+        """True when `file` holds approved content some applier can write into the document.
+
+        The union of every value kind, in one place, because the approve route has to schedule
+        the write job on ALL of them: each kind lives in its own hitl row, so a gate naming only
+        some of them silently strands the others — the values sit in the database, the document
+        never carries them, and the file cannot certify. Add a kind to the handler and it must
+        be added here too, or its approvals never reach a job at all.
+        """
+        return bool(self.approved_alt_values(scan_id, file)
+                    or self.approved_link_values(scan_id, file)
+                    or self.approved_field_values(scan_id, file))
+
     def approve_proposal_values(self, item_id: str, values: list[str | None]) -> int:
         """Record the reviewer's final text per instance, positionally.
 
