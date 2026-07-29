@@ -131,3 +131,26 @@ def test_missing_markers_fail_loudly_rather_than_silently_skipping(gri, tmp_path
     monkeypatch.setattr(gri, "OUT", tmp_path)
     with pytest.raises(SystemExit, match="missing the ownership-table markers"):
         gri.update_readme([("1.1.1", "Non-text Content", "A", ["docx"], "wcag-1-1-1")])
+
+
+def test_per_sc_page_shows_the_same_owner_as_the_table():
+    """The per-SC page is what a person lands on from a finding, and it used to hardcode
+    "_unassigned_" — so the moment anyone claimed a criterion the two pages disagreed about
+    who owned it. Both now read from the one place a claim is made."""
+    rows = dict(gri_owner_rows())
+    for slug, owner in rows.items():
+        page = (ACP / "rules" / f"wcag-{slug}" / "README.md").read_text()
+        line = next(ln for ln in page.splitlines() if ln.startswith("- **Owner:**"))
+        if owner == "_unassigned_":
+            assert "_unassigned_" in line, f"{slug}: table unclaimed, page says {line!r}"
+        else:
+            assert owner in line, f"{slug}: table says {owner!r}, page says {line!r}"
+
+
+def gri_owner_rows():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "acp_gri_rows", ACP / "scripts" / "gen_rules_index.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod._OWNER_ROW.findall((ACP / "rules" / "README.md").read_text())

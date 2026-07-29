@@ -334,7 +334,7 @@ def fixtures_for(sc: str, name: str, manifest: list[dict]) -> list[dict]:
 
 def render_sc(sc: str, name: str, level: str, cat_rules: list[dict],
               fe: dict | None, fixtures: list[dict],
-              fp_rules: list[dict] | None = None) -> str:
+              fp_rules: list[dict] | None = None, owner: str = "") -> str:
     lines = [
         f"# WCAG {sc} — {name}",
         "",
@@ -345,7 +345,12 @@ def render_sc(sc: str, name: str, level: str, cat_rules: list[dict],
         "",
         f"- **Success Criterion:** {sc} {name} (Level {level or '—'})",
         f"- **Understanding doc:** {_understanding_url(sc, name)}",
-        f"- **Owner:** _unassigned_ — claim this SC in [rules/README.md](../README.md)",
+        # Mirrors the owner from rules/README.md's table, which is the one place a claim is
+        # made. Hardcoding "_unassigned_" here meant the per-SC page flatly contradicted the
+        # table the moment anyone claimed a criterion — and this page is the one a person
+        # actually lands on from a finding.
+        (f"- **Owner:** {owner} — see [rules/README.md](../README.md)" if owner else
+         "- **Owner:** _unassigned_ — claim this SC in [rules/README.md](../README.md)"),
         "",
         "## Where this is checked",
         "",
@@ -497,15 +502,20 @@ def main():
                          f"add them to _SC_LEVEL.")
 
     OUT.mkdir(exist_ok=True)
+    # Read the claims BEFORE rendering — the per-SC pages carry the owner too, and
+    # update_readme() below writes the same values back, so both surfaces agree.
+    owners = _existing_owners((OUT / "README.md").read_text()) if (OUT / "README.md").exists() else {}
     index_rows = []
     for sc in sorted(names, key=_sc_sort_key):
         slug = f"wcag-{sc.replace('.', '-')}"
         d = OUT / slug
         d.mkdir(exist_ok=True)
         fixtures = fixtures_for(sc, names[sc], manifest)
+        owner = owners.get(sc, "")
         (d / "README.md").write_text(
             render_sc(sc, names[sc], levels[sc], cat.get(sc, []),
-                      fe.get(sc), fixtures, fp.get(sc)))
+                      fe.get(sc), fixtures, fp.get(sc),
+                      owner="" if owner == _DEFAULT_OWNER else owner))
         engines = {r["_engine"] for r in cat.get(sc, [])}
         engines.update(f for r in fp.get(sc, []) for f in r["formats"])
         if sc in fe:
