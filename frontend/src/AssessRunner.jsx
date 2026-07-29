@@ -167,6 +167,11 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
         const total = run.files || fs.length || 1
         setProgress(Math.min(scored.length, total))
         setCurrentPhase(`Opening & assessing ${scored.length} of ${total}…`)
+        // The first file with no score yet is the one in flight. `currentFile` state has
+        // existed since this component was written but was never populated or rendered, so a
+        // long scan showed a moving bar and no indication of what it was moving through.
+        const nextUp = fs.find((x) => x.score == null)
+        setCurrentFile(nextUp ? (nextUp.name || null) : null)
         if (run.assessed_at || run.finalized_at) {
           clearInterval(timer.current)
           const computed = computeResultFrom(scored, level)
@@ -310,6 +315,13 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               <span className="muted"><b style={{ color: '#1F5FA8' }}>Computing conformance</b> · {docs.length.toLocaleString()} documents at WCAG 2.1 {level}</span>
               <span className="assesspct">{pct}%</span>
             </div>
+            {(currentFile || currentPhase) && (
+              <div className="assessnow" title={currentFile || ''}>
+                {currentFile
+                  ? <>Reading <b>{currentFile}</b> — checking all {ruleCount} criteria</>
+                  : currentPhase}
+              </div>
+            )}
           </div>
         )}
         {scanGone && (

@@ -5,23 +5,27 @@ import { coverageSummary, assessmentIn, remediationIn, GAP_REASON, AT_REASON } f
 // question in CUSTOMER-OUTCOME language — not implementation (deterministic/OCR/vision):
 //
 //   ASSESSMENT — can ACP determine compliance?   🟢 Auto · 🟡 Review · 🔴 Human-only · ⚪ N/A
-//   REMEDIATION — if it fails, how is it fixed?   ⚡ Automatic · 🤖 AI-assisted · 👤 Human
+//   REMEDIATION — if it fails, how is it fixed?   ⚡ Automatically Fixed · 🤖 AI Generated Fix · 👤 Guided
+//   Wording matches the WCAG matrix (A4/A3/A2/NA · R4/R3/R2) so the two surfaces cannot
+//   disagree. There is no R1 lane here on purpose: the engine never asserts "nothing
+//   remediates this" — R_CEILING maps human->M (Guided), and R1 is a matrix-only
+//   observation about a specific cell.
 //
 // Computed from the capability tables, never from scan data. Companion to RuleBreakdown (what
 // THIS scan found). See assessCoverage.js.
 
 // Assessment lanes.
 const A = {
-  auto: { emoji: '🟢', bg: '#e6f2e0', ink: '#2b6a1e', bd: '#c3ddb2', label: 'Auto assessment' },
-  review: { emoji: '🟡', bg: '#fbf3d6', ink: '#8a6a0e', bd: '#eeda9a', label: 'Review recommended' },
-  human: { emoji: '🔴', bg: '#f8e3e0', ink: '#98392b', bd: '#eec2bb', label: 'Human only' },
+  auto: { emoji: '🟢', bg: '#e6f2e0', ink: '#2b6a1e', bd: '#c3ddb2', label: 'Fully Assessed' },
+  review: { emoji: '🟡', bg: '#fbf3d6', ink: '#8a6a0e', bd: '#eeda9a', label: 'Potential Issue' },
+  human: { emoji: '🔴', bg: '#f8e3e0', ink: '#98392b', bd: '#eec2bb', label: 'Human Assessment Required' },
   na: { emoji: '⚪', bg: '#f1eff4', ink: '#7a7386', bd: '#e0dae6', label: 'Not applicable' },
 }
 // Remediation paths.
 const R = {
-  auto: { emoji: '⚡', ink: '#2f4c78', bg: '#e6edf7', bd: '#c4d3ea', label: 'Automatic' },
-  ai: { emoji: '🤖', ink: '#5a3d86', bg: '#efe7f7', bd: '#d8c6ea', label: 'AI-assisted' },
-  human: { emoji: '👤', ink: '#5a5566', bg: '#f1eff4', bd: '#e0dae6', label: 'Human' },
+  auto: { emoji: '⚡', ink: '#2f4c78', bg: '#e6edf7', bd: '#c4d3ea', label: 'Automatically Fixed' },
+  ai: { emoji: '🤖', ink: '#5a3d86', bg: '#efe7f7', bd: '#d8c6ea', label: 'AI Generated Fix' },
+  human: { emoji: '👤', ink: '#5a5566', bg: '#f1eff4', bd: '#e0dae6', label: 'Guided Remediation' },
 }
 const fmtLabel = (f) => '.' + f
 
@@ -55,8 +59,8 @@ function RuleFormatMatrix({ rows }) {
               {GRID_FMTS.map((f) => {
                 const a = foldLane(assessmentIn(p.sc, f))
                 const rem = remediationIn(p.sc, f)
-                const remTxt = rem === 'na' ? 'no ACP fix' : `${REM_EMOJI[rem]} ${rem === 'ai' ? 'AI-assisted' : rem} remediation`
-                const label = a === 'auto' ? 'Auto assessment' : a === 'review' ? 'Review recommended' : a === 'human' ? 'Human-only' : 'N/A for this format'
+                const remTxt = rem === 'na' ? 'no ACP fix' : `${REM_EMOJI[rem]} ${rem === 'ai' ? 'AI Generated Fix' : rem} remediation`
+                const label = a === 'auto' ? 'Fully Assessed' : a === 'review' ? 'Potential Issue' : a === 'human' ? 'Human-only' : 'N/A for this format'
                 return (
                   <td key={f} style={{ textAlign: 'center', fontSize: 16 }} title={`${p.sc} · .${f} — ${label} · ${remTxt}`}>
                     {LANE_EMOJI[a] || '⚪'}
