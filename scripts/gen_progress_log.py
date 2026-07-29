@@ -146,30 +146,43 @@ def parse_note(raw: str) -> tuple[str, list[dict]]:
     return " ".join(" ".join(lead).split()), [_split_label(b) for b in bullets if b]
 
 
-def _split_when(authored: str) -> tuple[str, str]:
-    """A commit's author timestamp -> ("YYYY-MM-DD", "HH:MM"), normalised to UTC.
+def _split_when(authored: str) -> tuple[str, str, str]:
+    """A commit's author timestamp -> ("YYYY-MM-DD", "HH:MM", "PDT"), in Pacific time.
 
-    UTC, not the author's local zone, for the same reason the matrix's build stamp is UTC:
+    PACIFIC, not UTC. The reason for normalising at all is unchanged and still the point:
     contributors and CI runners sit in different zones, and a log mixing them is not orderable
-    by eye — two entries an hour apart can read as five hours apart, or backwards. The matrix
-    labels the column UTC so the reader knows which clock they are on.
+    by eye — two entries an hour apart can read as five hours apart, or backwards. What changed
+    is WHICH single clock. UTC is the neutral choice for machines; this log is read by people
+    who work Pacific hours, and "shipped 00:31" meaning late morning is a small tax paid on
+    every read.
 
-    A commit whose date git cannot format falls back to date-only rather than failing the run;
-    an entry with no time is rendered without one, which is also how the pre-timestamp entries
-    already in the log behave.
+    The zone is `America/Los_Angeles`, not a fixed -8 offset, so the conversion stays correct
+    across a DST boundary instead of silently going an hour wrong every March. That is also why
+    the abbreviation is RETURNED rather than hardcoded: half the year it is PST and half PDT,
+    and a log stamped "PST" in July is simply false. The renderer prints whatever this returns.
+
+    Falls back to date-only when the timestamp cannot be parsed, or when the host has no tz
+    database (a bare container can lack one) — a missing zone must degrade to no time rather
+    than to a wrong time, and an entry with no time renders without one, exactly as the
+    pre-timestamp entries in the log already do.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
     try:
-        dt = datetime.fromisoformat(authored.strip()).astimezone(timezone.utc)
+        from zoneinfo import ZoneInfo
+        pacific = ZoneInfo("America/Los_Angeles")
+    except Exception:
+        return authored.strip()[:10], "", ""
+    try:
+        dt = datetime.fromisoformat(authored.strip()).astimezone(pacific)
     except ValueError:
-        return authored.strip()[:10], ""
-    return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M")
+        return authored.strip()[:10], "", ""
+    return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M"), dt.strftime("%Z")
 
 
 def parse_commit(raw: str, repo: str) -> dict | None:
     """One `git log` record -> a PROGRESS_LOG entry, or None if it didn't opt in."""
     sha, authored, subject, body = raw.split("\x1f", 3)
-    date, time = _split_when(authored)
+    date, time, tz = _split_when(authored)
     note = _NOTE_RE.search(body)
     if not note:
         return None
@@ -202,6 +215,7 @@ def parse_commit(raw: str, repo: str) -> dict | None:
     entry = {
         "date": date,
         "time": time,
+        "tz": tz,
         "hash": sha[:7],
         "pr": int(pr.group(1)) if pr else None,
         "repo": repo,
