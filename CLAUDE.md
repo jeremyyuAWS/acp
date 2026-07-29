@@ -8,6 +8,13 @@ once you have edits in the shared tree the move gets expensive (see below).
 Exempt: read-only work — answering a question, reading code, reviewing a diff, running tests
 you don't intend to change anything from. Isolation costs more than it saves there.
 
+Confirm where you actually are before editing — the answer must be a worktree, not the shared
+checkout, and it is easy to believe you moved when you did not:
+
+```
+git rev-parse --show-toplevel    # .../.claude/worktrees/<name>, NOT .../projects/acp
+```
+
 **Why.** This repo is routinely worked by many concurrent sessions. On 2026-07-28 seven of them
 shared this one checkout — one index, one HEAD, one working tree between them — and it cost real
 work:
@@ -63,3 +70,72 @@ last 30 commits on `main` arrived as numbered PR merges. The ten exceptions are 
 published — rewriting shared history to undo it costs more than it recovers, and a force-push on
 a branch four sessions are working from is far worse than an unreviewed commit. Tell the user it
 happened and let them decide.
+
+## Claim the files before you start
+
+Before your first edit, look for someone already doing the work:
+
+```
+git fetch -q origin && git log --oneline origin/main -15
+gh pr list --state open --json number,title,files -q '.[]|"#\(.number) \(.title)\n  \(.files[].path)"'
+```
+
+**If an open PR or a recent commit already touches the file you are about to edit, say so and
+stop.** Do not open a competing PR. Tell the user what you found and let them decide whether to
+join that work, wait for it, or proceed anyway.
+
+**Why.** Isolation stops sessions from corrupting each other's *files*; it does nothing to stop
+them doing the same *task*. On 2026-07-29 several sessions independently found and fixed the
+same defect, and the duplication only surfaced at merge time — by which point every one of them
+had written tests, a commit message, and a PR body for it. Worktrees make this failure quieter,
+not rarer: nobody sees a conflict, everybody sees a clean branch.
+
+Thirty seconds of looking is cheaper than a second correct fix nobody needed.
+
+## Verify before you diagnose
+
+Reproduce a failure yourself before you believe what it says, and ship a test with the fix.
+
+**Why.** Error messages describe a symptom, not a cause, and a plausible reading of one
+propagates fast. On 2026-07-29 a session read "no `WCAG:` trailer" from an error, repeated that
+diagnosis in a commit message, a PR body, and a message to another session — and the trailer was
+there all along, comma-separated, with the parser at fault (fixed in #47/#48). The session that
+took the time to build a fixture found the truth in minutes.
+
+The same day, a session reported **32 pre-existing test failures across 8 modules** and carried
+that claim through four PRs. Every one was a missing dependency in its own venv — the suite is
+green on a complete install. Nothing in the repo was broken; the environment was, and "the tests
+were already failing" is a claim that stops anybody from looking.
+
+If you are about to describe something as pre-existing, broken, or unrelated, that is exactly
+the claim to check first — it is the one that ends the investigation.
+
+## Never merge red, and don't trust `mergeable` alone
+
+Read the checks themselves:
+
+```
+gh pr checks <N> --json name,state -q '.[]|"\(.name): \(.state)"'
+```
+
+**Why.** `mergeable` is computed asynchronously and reports `UNKNOWN` while GitHub is still
+thinking — on 2026-07-29 it did so for PRs that were perfectly mergeable, and a session only
+established that by trial-merging. `UNKNOWN` means *ask again*, never *blocked* and never *safe*.
+
+Two more things that day's merges cost:
+
+- **A squash merge deletes the base branch, and that auto-closes anything stacked on it.** #36
+  was closed two seconds after its base merged, and GitHub will not reopen a PR whose base is
+  gone — it had to be reopened as a new PR. Retarget dependents to `main` *before* merging their
+  base.
+- **A local suite passing is not CI passing.** Wait for the real run.
+
+## Retire your worktree after the merge
+
+```
+git worktree remove .claude/worktrees/<name> && git branch -d <branch>
+```
+
+**Why.** On 2026-07-29 this repo held 16 worktrees and none had been retired. Each one is a full
+checkout that goes stale the moment `main` moves, and a stale worktree is where the next session
+runs tests against code that was replaced a day ago.
