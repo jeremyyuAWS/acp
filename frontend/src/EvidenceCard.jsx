@@ -842,13 +842,16 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
               decide alone. Instead of authoring alt text, the reviewer applies the exception the
               standard allows: a decorative image needs no description (1.1.1), and an essential
               logo/brand mark is exempt from the images-of-text rule (1.4.5/1.4.9). One tap resolves
-              the finding by human judgment; the reason is recorded in the audit trail (no value is
-              written into the document, so nothing is misrepresented as a fix). */}
+              the finding by human judgment; the reason is recorded in the audit trail, and no
+              DESCRIPTION is written, so nothing is misrepresented as a fix. Decorative on an Office
+              file additionally writes the OOXML decorative MARKING (empty alt + the marker the
+              analysers honour), so the decision lives in the document and a later scan does not
+              re-raise the same finding — see api/apply_alt.py. */}
           {card.sc === '1.1.1' && (
             <div className="evcard-exception">
               <span className="muted">Is this image purely decorative? Then it needs no description.</span>
               <button type="button" className="ghost small" disabled={busy}
-                      title="Resolve as decorative — records that this image needs no text alternative (WCAG 1.1.1). No description is written."
+                      title="Resolve as decorative — records that this image needs no text alternative (WCAG 1.1.1). No description is written; the image is marked decorative instead."
                       onClick={() => decide('approved', null, 'decorative')}>🚫 Decorative — no alt needed</button>
             </div>
           )}

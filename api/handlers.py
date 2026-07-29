@@ -1128,7 +1128,7 @@ def _apply_one_value_kind(
         *, scan_id: str, filename: str, working: bytes,
         values: dict[str, str], scs_to_clear: set[str],
         write_fn, diff_rule_id: str, credit_rule_ids: tuple[str, ...],
-        noun: str, job: dict) -> tuple[bytes, bool]:
+        noun: str, job: dict, extra_work: bool = False) -> tuple[bytes, bool]:
     """Shared write → verify → credit sequence for one kind of approved value (alt text or
     link text) applied on top of `working`. Returns (new_working, uploaded_this_kind).
 
@@ -1136,8 +1136,13 @@ def _apply_one_value_kind(
     written bytes shows the criterion no longer failing, exactly as `verified_diffs` credits an
     automatic fix. A write that does not clear the criterion leaves the row unapplied and the
     file uncertified, which is the honest outcome: something about the document still fails.
+
+    extra_work: this lane's `write_fn` carries approved work of its own that is not expressible
+    as {locator: text} — today, the decorative markings closed over by the alt lane, whose whole
+    point is that they write no text. Without it a file whose only approved 1.1.1 decision was
+    "decorative" short-circuits here and the marking never reaches the document.
     """
-    if not values:
+    if not values and not extra_work:
         return working, False
 
     _phase(job, f"writing the approved {noun}")
@@ -1212,10 +1217,15 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         return
 
     alt_values = core.store.approved_alt_values(scan_id, filename)
+    # Images a reviewer resolved as DECORATIVE. Office only: the marking is an OOXML extLst
+    # marker (apply_alt), and the PDF equivalent — re-tagging the figure as an /Artifact — is a
+    # structure edit no writer here performs, so on PDF the exception stays a recorded judgement.
+    deco_locators = (core.store.approved_decorative_locators(scan_id, filename)
+                     if ext in _OFFICE_ALT_MIME else [])
     link_values = core.store.approved_link_values(scan_id, filename) if ext in _OFFICE_LINK_EXTS else {}
     field_values = (core.store.approved_field_values(scan_id, filename)
                     if ext in _PDF_APPLY_EXTS else {})
-    if not alt_values and not link_values and not field_values:
+    if not alt_values and not deco_locators and not link_values and not field_values:
         return                                   # nothing approved awaiting a write
 
     import blob as _blob
@@ -1238,10 +1248,15 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         alt_write_fn = apply_pdf_approved
     else:
         from apply_alt import apply_alt_text
-        alt_write_fn = apply_alt_text
+        # Decorative markings go through the SAME lane as the descriptions, not one of their own.
+        # A lane only credits what its own re-scan observed, and a re-scan cannot see 1.1.1 clear
+        # while the other lane's images are still unresolved — split in two, each would verify
+        # against the other's unfinished work and neither would ever be credited.
+        alt_write_fn = lambda d, v: apply_alt_text(d, v, decorative=deco_locators)  # noqa: E731
     working, alt_uploaded = _apply_one_value_kind(
         scan_id=scan_id, filename=filename, working=working,
-        values=alt_values, scs_to_clear={"1.1.1"}, write_fn=alt_write_fn,
+        values=alt_values, extra_work=bool(deco_locators),
+        scs_to_clear={"1.1.1"}, write_fn=alt_write_fn,
         diff_rule_id="1.1.1", credit_rule_ids=("1.1.1",), noun="description", job=job)
 
     # 4.1.2 form-field accessible names (PDF only) — same writer, keyed by `pdf:field:…`.
