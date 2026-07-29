@@ -5,41 +5,56 @@
 # Build context is the acp/ repo root.  Base images via mirror.gcr.io to dodge
 # the docker.io 429s the Temporal standup hit.
 
+# ---- base images ----------------------------------------------------------------------
+# Both default to the upstream images, so `az acr build -f deploy/public/Dockerfile .` still
+# works from scratch with no bases in the registry — a first deploy, a fork, or anyone who has
+# never run redeploy.sh gets exactly the old behaviour.
+#
+# redeploy.sh overrides them with acp-base-web:<hash> / acp-base-api:<hash>, which already
+# contain node_modules and the apt+.NET+pip layers. That is where the build time went: the apt
+# block pulls LibreOffice and downloads the .NET 10 runtime, and `az acr build` has no
+# --cache-from (az 2.86.0), so every QuickRun re-ran all of it for a one-line source change.
+#
+# The hash is over the dependency inputs only. When it does not move, the base is reused; when
+# it moves, redeploy.sh rebuilds the base first. Correctness does not depend on remembering to.
+ARG BASE_WEB=mirror.gcr.io/library/node:20-slim
+ARG BASE_API=mirror.gcr.io/library/python:3.12-slim
+
 # ---- stage 1: build the SPA (same-origin → relative API base) ----
-FROM mirror.gcr.io/library/node:20-slim AS web
+FROM ${BASE_WEB} AS web
 WORKDIR /web
 # VITE_SIM=false → the SPA calls the real backend (scans persist to Postgres +
 # emit Langfuse traces). Default false for this deployed image; override with
 # --build-arg VITE_SIM=true to ship the offline synthetic-data demo instead.
 ARG VITE_SIM=false
+# Present in the base image; re-copied so a from-scratch build (BASE_WEB unset) still resolves
+# deps. When BASE_WEB is a prebuilt base these are already satisfied and npm install is a no-op
+# against the existing node_modules.
 COPY frontend/package.json frontend/package-lock.json ./
-# npm install instead of npm ci: avoids lockfile/npm-version mismatch between
-# local macOS npm and the container's npm when optional peer deps (esbuild) resolve
-# to different minor versions across npm releases.
-RUN npm install --prefer-offline 2>/dev/null || npm install
+RUN [ -d node_modules ] || npm install --prefer-offline 2>/dev/null || npm install
 COPY frontend/ ./
 RUN printf 'VITE_API=\nVITE_SIM=%s\n' "$VITE_SIM" > .env.production && npm run build   # -> /web/dist
 
 # ---- stage 2: runtime ----
-FROM mirror.gcr.io/library/python:3.12-slim AS runtime
+FROM ${BASE_API} AS runtime
 WORKDIR /app
 
-# .NET 10 runtime (for the Office analyser CLI); libicu is required by the CLR.
-# tesseract-ocr backs the 1.4.5 images-of-text check (api/ocr.py) — a lightweight
-# binary (unlike easyocr, which OOMs small containers).
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates libicu-dev tesseract-ocr \
-       libreoffice-impress libreoffice-writer libreoffice-calc fonts-liberation \
-    && curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
-    && bash /tmp/dotnet-install.sh --runtime dotnet --channel 10.0 --install-dir /usr/share/dotnet \
-    && ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet \
-    && rm /tmp/dotnet-install.sh \
-    && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
-
-# python deps — the PDF engine only needs pikepdf+pdfplumber+pydantic, all already
-# in api/requirements.txt, so the engine's own (playwright-heavy) reqs are skipped.
+# apt + .NET + pip live in BASE_API. /app/.acp-base-ready is the marker it stamps; when it is
+# present this whole block is skipped, which is the entire point — it is ~3 minutes of
+# LibreOffice, a downloaded .NET runtime, and a pip resolve. When BASE_API is the bare upstream
+# python image the marker is absent and the from-scratch path runs unchanged.
 COPY api/requirements.txt /app/api/requirements.txt
-RUN pip install --no-cache-dir -r /app/api/requirements.txt
+RUN if [ ! -f /app/.acp-base-ready ]; then \
+      apt-get update \
+      && apt-get install -y --no-install-recommends curl ca-certificates libicu-dev tesseract-ocr \
+         libreoffice-impress libreoffice-writer libreoffice-calc fonts-liberation \
+      && curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
+      && bash /tmp/dotnet-install.sh --runtime dotnet --channel 10.0 --install-dir /usr/share/dotnet \
+      && ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet \
+      && rm /tmp/dotnet-install.sh \
+      && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* \
+      && pip install --no-cache-dir -r /app/api/requirements.txt; \
+    fi
 
 # app code + config + bundled sample corpus
 COPY api/ /app/api/

@@ -1,0 +1,42 @@
+# acp runtime BASE — the expensive, rarely-changing half of the app image.
+#
+# Everything here is a function of api/requirements.txt and the apt/.NET block below, and of
+# nothing else in the repo. Source changes never invalidate it. `az acr build` has no
+# --cache-from (checked on az 2.86.0), so a QuickRun cannot reuse layers from a previous
+# build — every app build was re-running this from scratch. Splitting it out and pinning it by
+# a content hash is the only way to stop paying for it on a one-line CSS change.
+#
+# What is in here, and why it costs what it costs:
+#   - LibreOffice writer/calc/impress — hundreds of MB, the single largest item
+#   - the .NET 10 runtime, DOWNLOADED from dot.net at build time (network-bound)
+#   - tesseract-ocr, libicu-dev, fonts
+#   - every pip dependency in api/requirements.txt
+#
+# Rebuild it ONLY when the deps hash changes; redeploy.sh does that automatically. Base images
+# via mirror.gcr.io to dodge the docker.io 429s the Temporal standup hit.
+FROM mirror.gcr.io/library/python:3.12-slim
+WORKDIR /app
+
+# .NET 10 runtime (for the Office analyser CLI); libicu is required by the CLR.
+# tesseract-ocr backs the 1.4.5 images-of-text check (api/ocr.py) — a lightweight
+# binary (unlike easyocr, which OOMs small containers).
+#
+# KEEP IN SYNC with the hash inputs in redeploy.sh (_deps_hash). If you edit this block
+# without the script seeing it, a stale base is silently reused and the change never ships.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates libicu-dev tesseract-ocr \
+       libreoffice-impress libreoffice-writer libreoffice-calc fonts-liberation \
+    && curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
+    && bash /tmp/dotnet-install.sh --runtime dotnet --channel 10.0 --install-dir /usr/share/dotnet \
+    && ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet \
+    && rm /tmp/dotnet-install.sh \
+    && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
+# python deps — the PDF engine only needs pikepdf+pdfplumber+pydantic, all already
+# in api/requirements.txt, so the engine's own (playwright-heavy) reqs are skipped.
+COPY api/requirements.txt /app/api/requirements.txt
+RUN pip install --no-cache-dir -r /app/api/requirements.txt
+# The marker the app image tests for. Its presence means "apt + .NET + pip are all satisfied in
+# this base", which is a single unambiguous signal — inferring it from `command -v dotnet` would
+# be true in a base that had .NET but a stale pip set.
+RUN touch /app/.acp-base-ready

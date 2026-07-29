@@ -1,0 +1,12 @@
+# acp SPA BASE — node_modules only, keyed on frontend/package-lock.json.
+#
+# `npm install` is the whole of this image. It is a function of the lockfile and nothing else,
+# so a source change must not re-run it — see Dockerfile.base-api for why `az acr build` cannot
+# do this with a cache flag.
+FROM mirror.gcr.io/library/node:20-slim
+WORKDIR /web
+COPY frontend/package.json frontend/package-lock.json ./
+# npm install instead of npm ci: avoids lockfile/npm-version mismatch between
+# local macOS npm and the container's npm when optional peer deps (esbuild) resolve
+# to different minor versions across npm releases.
+RUN npm install --prefer-offline 2>/dev/null || npm install
