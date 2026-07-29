@@ -464,6 +464,12 @@ NOT_EVALUATED = "NOT_EVALUATED"
 _LEGACY_NOT_EVALUATED = "NOT_APPLICABLE"   # rows written before this rename; see _SCHEMA
 REVIEW = "REVIEW"   # 🟡 advisory Review-Recommended outcome (ADR 0023) — assessed-for-review, never certified
 
+# The outcomes that mean a queued review item has stopped being work, so the inbox retracts it
+# (_superseded_items). Both are "nothing for a human to do here": PASS is certified conformant,
+# NOT_EVALUATED is nobody asked. FAIL and REVIEW are absent on purpose — REVIEW especially, since
+# it is the resting state of every criterion whose detector cannot certify a pass.
+_SUPERSEDING_OUTCOMES = frozenset({"PASS", NOT_EVALUATED, _LEGACY_NOT_EVALUATED})
+
 # ── Review-lane detectors (ADR 0023, Option A) ─────────────────────────────────
 # The criteria + formats where ACP runs a REVIEW detector (surfaces evidence of a likely
 # issue for a human to adjudicate) rather than a pass/fail validator. This is a SEPARATE map
@@ -2975,7 +2981,7 @@ class Store:
         return True
 
     def list_hitl_queue(self, status: str | None = None, scan_id: str | None = None,
-                        owner: str | None = None) -> list[dict]:
+                        owner: str | None = None, include_superseded: bool = False) -> list[dict]:
         """List HITL items. `owner` scopes to the signed-in user's own documents (joined via
         the scan's owner_email) — the inbox must not show another tenant's review items.
 
@@ -2984,6 +2990,9 @@ class Store:
         identical review cards, the second asking a human to write alt text for the file ACP
         itself produced — and the vision proposals landed on that phantom's row, so opening the
         real document's card showed no AI draft at all.
+
+        SUPERSEDED items are dropped too — see _superseded_items. Pass include_superseded=True
+        to get them back, each annotated with `superseded: True`; that is the audit view.
 
         Same posture as get_scan: this filters the READ. The rows stay on disk, so the audit
         trail of what was queued is never destroyed."""
@@ -3005,7 +3014,56 @@ class Store:
             shadowed: set[tuple[str, str]] = set()
             for sid in {r["scan_id"] for r in rows}:
                 shadowed.update((sid, f) for f in self._shadowed_files(cur, sid))
-        return [r for r in rows if (r["scan_id"], r["file"]) not in shadowed]
+            rows = [r for r in rows if (r["scan_id"], r["file"]) not in shadowed]
+            superseded = self._superseded_items(cur, rows)
+        if include_superseded:
+            for r in rows:
+                r["superseded"] = r["id"] in superseded
+            return rows
+        return [r for r in rows if r["id"] not in superseded]
+
+    def _superseded_items(self, cur, rows: list[dict]) -> set[str]:
+        """The ids of queue rows whose finding has stopped being work.
+
+        queue_hitl_items is additive and idempotent, and nothing in api/ ever withdrew a row.
+        scan_rule_traces, meanwhile, refresh: save_file_result upserts them ON CONFLICT
+        DO UPDATE SET outcome. So a re-scan or a remediation that clears a FAIL updated the
+        trace and left the queue row pending forever, inflating the one number a reviewer
+        plans their day around.
+
+        A row is superseded when its (scan, file, criterion) trace now reads PASS or
+        NOT_EVALUATED. Deliberately NOT on REVIEW: almost no ai-assisted criterion can reach
+        PASS at all — 1.1.1, 1.4.5, 2.4.4 and 3.1.2 land on REVIEW for every format, because
+        the detector finds whether alt text EXISTS and cannot certify that it is any good. For
+        those, REVIEW is precisely "a human still has to look", which is the item's whole
+        reason to exist. Retracting on REVIEW would empty the inbox of exactly the work it is
+        for.
+
+        Three things are never retracted:
+          - Rows a human already decided (status != 'pending'). An approved item is the record
+            of a decision, not a work-list entry; its finding passing now is the CONSEQUENCE of
+            that approval, and hiding it would erase the reason the document certifies.
+          - Rows with no trace at all — deferrals ('1.1.1/deferred') and post-fix verification
+            ('auto/verify') carry rule_ids that scan_rule_traces never holds. Absence of a
+            trace is not evidence of a pass.
+          - Anything whose trace still reads FAIL or REVIEW.
+
+        Computed at read time rather than stamped into a column. A column needs a writer at
+        every site that touches an outcome, and one missed site leaves a row lying in the
+        opposite direction — a retracted item that never comes back. Deriving it from the
+        trace cannot drift, and it self-heals: a criterion that regresses to FAIL reappears in
+        the inbox with no sweep to run."""
+        pending = [r for r in rows if (r.get("status") or "pending") == "pending"]
+        if not pending:
+            return set()
+        outcomes: dict[tuple[str, str, str], str] = {}
+        for sid in {r["scan_id"] for r in pending}:
+            self._db.execute(cur,
+                "SELECT file, rule_id, outcome FROM scan_rule_traces WHERE scan_id=%s", (sid,))
+            for t in self._db.fetchall(cur):
+                outcomes[(sid, t["file"], t["rule_id"])] = t["outcome"]
+        return {r["id"] for r in pending
+                if outcomes.get((r["scan_id"], r["file"], r["rule_id"])) in _SUPERSEDING_OUTCOMES}
 
     def _shadowed_files(self, cur, scan_id: str) -> set[str]:
         """The files in this scan that are ACP's own output shadowing their source."""

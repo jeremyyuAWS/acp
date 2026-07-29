@@ -73,11 +73,18 @@ def hitl_verify_queue(scan_id: str, file: str = Query(...)):
 
 
 @router.get("/hitl/queue")
-def hitl_list(request: Request, status: str | None = None, scan_id: str | None = None):
+def hitl_list(request: Request, status: str | None = None, scan_id: str | None = None,
+              include_superseded: bool = False):
     """List HITL review items, scoped to the signed-in user's own documents. Filter by
-    status (pending/approved/rejected/skipped) or scan_id."""
+    status (pending/approved/rejected/skipped) or scan_id.
+
+    Superseded items — queued while a finding failed, and since re-verified to PASS or
+    NOT_EVALUATED — are omitted, so the inbox count is work outstanding rather than work ever
+    queued. include_superseded=true returns them as well, each flagged `superseded`; that is
+    the audit view of everything this scan ever asked a human to look at."""
     owner = getattr(request.state, "user_email", None)
-    return core.store.list_hitl_queue(status=status, scan_id=scan_id, owner=owner)
+    return core.store.list_hitl_queue(status=status, scan_id=scan_id, owner=owner,
+                                      include_superseded=include_superseded)
 
 
 @router.get("/hitl/analytics")
