@@ -95,6 +95,10 @@ steps:
 
   # Fails when a commit changed rule code without declaring its matrix impact. Add a
   # `Matrix-Note:` (+ `WCAG:`) trailer, or `Matrix-Note: none` to record a deliberate omission.
+  # Merge commits are skipped by check() itself, explicitly and by parent count: a merge authors
+  # nothing, and the commits it joins are single-parent and judged individually. Do not "simplify"
+  # that back to relying on a merge's combined diff being empty — that only holds while the two
+  # sides touch disjoint files, and #38 is what it looks like when they don't (see #32).
   - script: |
       set -euo pipefail
       if [ -n "${SYSTEM_PULLREQUEST_TARGETBRANCH:-}" ]; then
