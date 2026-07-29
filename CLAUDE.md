@@ -92,6 +92,27 @@ not rarer: nobody sees a conflict, everybody sees a clean branch.
 
 Thirty seconds of looking is cheaper than a second correct fix nobody needed.
 
+**Checking once is not enough, and this is the part that actually bit.** On 2026-07-29 a session
+checked `main` before every piece of work it started and was still duplicated three times — by
+#30, #38 and #47. Every collision landed *after* its check and *before* its push, in the minutes
+CI takes to run. A check at the start proves nothing about the state at the end.
+
+So re-check immediately before you push, and treat what you find as a real answer rather than a
+formality:
+
+```
+git fetch -q origin main && git log --oneline <your-branch-point>..origin/main -- <files you touched>
+```
+
+When it comes back non-empty, read the commit before you push. Twice that day the honest outcome
+was to drop most of a branch and keep only the part the other fix had missed — which is a better
+result than merging a second implementation of the same thing, and it is only available if you
+look before the merge rather than after.
+
+Better still where you can: say what you are about to work on *before* you start. Checking makes
+*you* discover a collision; announcing prevents one for everybody else. Nothing in the check-first
+rule stops two sessions that both looked, both saw nothing, and both began.
+
 ## Verify before you diagnose
 
 Reproduce a failure yourself before you believe what it says, and ship a test with the fix.
@@ -130,6 +151,19 @@ gh pr checks <N> --json name,state -q '.[]|"\(.name): \(.state)"'
 thinking — on 2026-07-29 it did so for PRs that were perfectly mergeable, and a session only
 established that by trial-merging. `UNKNOWN` means *ask again*, never *blocked* and never *safe*.
 
+It reads as "probably fine" and it is not. The same day, the same `UNKNOWN` on #48 turned out to
+be a genuine conflict: `gh pr view 48` reported `UNKNOWN`, the merge was attempted on the strength
+of that, and GitHub refused it —
+
+```
+GraphQL: Pull Request has merge conflicts (mergePullRequest)
+```
+
+— because #47 had landed in the gap. Both directions came from the same value on the same day, so
+do not learn "`UNKNOWN` is usually mergeable" from the first story. Resolve it before you act,
+either by re-reading it or by letting the merge attempt itself be the test; a refused merge is
+free, and merging on the assumption is not.
+
 Two more things that day's merges cost:
 
 - **A squash merge deletes the base branch, and that auto-closes anything stacked on it.** #36
@@ -152,3 +186,16 @@ git worktree remove .claude/worktrees/<name> && git branch -d <branch>
 **Why.** On 2026-07-29 this repo held 16 worktrees and none had been retired. Each one is a full
 checkout that goes stale the moment `main` moves, and a stale worktree is where the next session
 runs tests against code that was replaced a day ago.
+
+Later that day one session retired its four, and the count is now in single figures — so this is
+a habit that works, not a lost cause. Two things make it safe to do:
+
+- **A squash merge gives your commit a NEW sha, so your branch will never be an ancestor of
+  `main`.** `git log origin/main..<branch>` therefore lists your commit forever and looks like
+  unmerged work. Compare CONTENT instead, scoped to the files you changed —
+  `git diff origin/main <branch> -- <paths>` empty means it landed. Read that way, a branch that
+  appeared to hold 968 unmerged lines turned out to be merged and simply behind.
+- **Do not remove the worktree you are standing in.** Leave it first (`ExitWorktree`, or `cd` to
+  the main checkout); `git worktree remove` on your own cwd leaves the shell in a deleted
+  directory. Removing another session's worktree is worse — check `git worktree list` and retire
+  only your own.
