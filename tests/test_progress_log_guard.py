@@ -113,6 +113,31 @@ def test_a_non_rule_commit_needs_no_trailer(repo):
     assert _check(repo, base).returncode == 0
 
 
+def test_a_malformed_trailer_is_caught_on_a_commit_that_touches_no_rule_code(repo):
+    """The rule paths decide ONE question — whether a note is REQUIRED. They must not also gate
+    whether a note that IS there gets parsed.
+
+    A note on a docs commit went unvalidated: it passed review, and generation then skipped it
+    for good, the message being unfixable by then. That is exactly how b13c700 ("docs: never push
+    from the shared checkout") reached main carrying a note the generator could not read.
+    """
+    base = _git(repo, "rev-parse", "HEAD")
+    _commit(repo, "README.md", "docs\n",
+            "docs: something\n\nMatrix-Note: A real note with prose and no WCAG line at all.")
+
+    r = _check(repo, base)
+    assert r.returncode == 1, "a malformed trailer slipped through review on a non-rule commit"
+    assert "no WCAG" in r.stderr
+
+
+def test_a_non_rule_commit_with_a_WELL_FORMED_trailer_still_passes(repo):
+    """The complement — validating more must not start demanding more."""
+    base = _git(repo, "rev-parse", "HEAD")
+    _commit(repo, "README.md", "docs\n",
+            "docs: something\n\nWCAG: 1.1.1 (pdf)\nMatrix-Note: A real, valid note.")
+    assert _check(repo, base).returncode == 0
+
+
 def test_an_untrailered_commit_behind_a_merge_is_still_caught(repo):
     """Skipping the merge must not amnesty the commits it brought in — otherwise every
     undeclared change could be laundered through a PR."""

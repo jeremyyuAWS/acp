@@ -257,7 +257,12 @@ def parse_commit(raw: str, repo: str, strict: bool = False) -> dict | None:
         problem = TrailerProblem(f"{sha[:7]}: {msg}")
         if strict:
             raise problem
-        print(f"skipped {problem} ", file=sys.stderr)
+        # `::warning::` is how a line on stderr becomes a GitHub Actions ANNOTATION — surfaced on
+        # the run summary instead of buried in a log nobody opens for a green job. These skips
+        # are the whole safety net for the severity-follows-fixability rule above: an entry the
+        # matrix will never receive, reported at the only volume left once the commit is
+        # published. Outside Actions the prefix is inert text, so local runs read the same.
+        print(f"::warning::skipped {problem} ", file=sys.stderr)
         return None
 
     if points and not summary:
@@ -280,7 +285,7 @@ def parse_commit(raw: str, repo: str, strict: bool = False) -> dict | None:
             # matrix CAN render. Three of this history's eight entries were being lost that way.
             # The untracked SC is announced and omitted; "must not silently vanish" is preserved,
             # because stderr is not silence.
-            print(f"skipped SC {sha[:7]}: {msg} ", file=sys.stderr)
+            print(f"::warning::skipped SC {sha[:7]}: {msg} ", file=sys.stderr)
             continue
         if sc not in scs:
             scs.append(sc)
@@ -347,18 +352,25 @@ def check(since: str | None) -> int:
         # that cannot exist, and the PR could not go green by any action its author could take.
         if len(_git("log", "-1", "--format=%P", sha).split()) > 1:
             continue
-        files = _git("show", "--name-only", "--format=", sha).split()
-        if not any(f.startswith(p) for f in files for p in RULE_PATHS):
-            continue
         body = _git("log", "-1", "--format=%b", sha)
         subject = _git("log", "-1", "--format=%s", sha).strip()
         if not _NOTE_RE.search(body):
-            bad.append((sha[:7], subject, "touches rule code but has no Matrix-Note: trailer"))
+            # Only a commit that touches rule code is REQUIRED to carry a note. This is the one
+            # question the rule paths decide; validating a note that IS there is a separate
+            # matter, handled below for every commit.
+            files = _git("show", "--name-only", "--format=", sha).split()
+            if any(f.startswith(p) for f in files for p in RULE_PATHS):
+                bad.append((sha[:7], subject, "touches rule code but has no Matrix-Note: trailer"))
             continue
         # A trailer that is PRESENT but malformed used to sail through here and only surface
         # later, in generation — by which time the commit is merged and the message can no
         # longer be fixed. Validating it on the PR is the only point where the author can act,
-        # so --check now parses what it previously only detected the presence of.
+        # so --check parses what it previously only detected the presence of.
+        #
+        # That validation now runs WHATEVER the commit touched. The rule-path test above used to
+        # gate it as well, so a note on a commit outside those paths was never parsed at all: it
+        # passed review, then was skipped at generation forever. That is how b13c700 — docs-only
+        # — reached main carrying a note the generator could not read.
         raw = _git("log", "-1", f"--format=%H\x1f%aI\x1f%s\x1f%b", sha).strip("\n")
         try:
             # The slug only ever reaches the rendered entry, which validation never builds, so
