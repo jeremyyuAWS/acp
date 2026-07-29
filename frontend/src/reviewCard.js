@@ -255,6 +255,14 @@ export function proposalMeta(item) {
   return { list, validated: !!item?.validated, subjective }
 }
 
+// Split a stored file reference for display. hitl_queue.file is sometimes a bare name and
+// sometimes a path; both must render, and neither may invent the other half.
+const baseOf = (p) => String(p || '').split('/').filter(Boolean).pop() || ''
+const dirOf = (p) => {
+  const parts = String(p || '').split('/').filter(Boolean)
+  return parts.length > 1 ? parts.slice(0, -1).join('/') : ''
+}
+
 // item: a HITL queue row { id, scan_id, file, rule_id, rule_name, finding_count, approved_value,
 //                          proposals, validated }
 // diffs: this file's remediation_diff rows (getFileRemediationDiffs) — filtered to this SC here.
@@ -271,6 +279,16 @@ export function buildEvidenceCard(item, diffs = []) {
     evidence: evidenceOf(item),
     page: pageOf(item),
     file: item?.file,
+    // The document this card is asking about, split for display. The card showed format,
+    // criterion and severity but never the filename — its accessible name was literally
+    // "Review —", so a screen-reader user was told nothing about what they were approving.
+    //
+    // Name AND folder, because the name alone does not identify the document: this estate
+    // holds Clinical-FAQ-39.html and Clinical-FAQ-54.html, and elsewhere the same basename
+    // appears under different folders. `dir` is '' when the row carries a bare filename, and
+    // the card then shows nothing rather than a fabricated path.
+    fileName: baseOf(item?.file),
+    fileDir: dirOf(item?.file),
     sc,
     fmt,
     wcag: sc ? `WCAG ${sc}` : '—',

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { ineligibleReason, remediableFiles, emptyScopeReason, SCOPE_REASONS } from './remediableScope.js'
+import { ineligibleReason, remediableFiles, emptyScopeReason, scopeSummary, SCOPE_REASONS } from './remediableScope.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const code = (f) => readFileSync(join(here, f), 'utf8')
@@ -128,5 +128,85 @@ describe('an empty scope explains itself before the round trip', () => {
 
   it('the refusal is not styled as muted chatter', () => {
     expect(rem).toMatch(/remMsg\.startsWith\('Nothing to remediate'\) \? '#8A4B00'/)
+  })
+})
+
+// ── the scope panel must say what it is skipping ──────────────────────────────────────
+//
+// On 2026-07-29 the deployed Remediation panel read "Documents · 258" with the badges
+// "2 in scope · 0 N/A · 0 deferred", all 258 rows listed, and 256 of them showing untouched
+// ✓/N/A/⏸ buttons. Both readings a user could take from that were wrong in the same direction:
+// the badges count only EXPLICIT decisions, AND `ineligibleReason` drops every unmarked file
+// once any file is marked — so 256 documents were excluded from the run with nothing saying so.
+describe('scopeSummary: the number the panel was missing', () => {
+  const files = (n) => Array.from({ length: n }, (_, i) => ok(`f${i}.pptx`))
+
+  it('with no selection, every eligible document is in and nothing is excluded by scope', () => {
+    const s = scopeSummary(files(258), OPTS)
+    expect(s.total).toBe(258)
+    expect(s.eligible).toBe(258)
+    expect(s.restrictedBySelection).toBe(false)
+    expect(s.excluded.outOfScope).toBeUndefined()
+  })
+
+  it('marking 2 of 258 excludes the other 256 — the case the panel hid', () => {
+    const opts = { ...OPTS, hasInscopeSelections: true, triage: { 'f0.pptx': 'inscope', 'f1.pptx': 'inscope' } }
+    const s = scopeSummary(files(258), opts)
+    expect(s.eligible).toBe(2)
+    expect(s.excluded.outOfScope).toBe(256)
+    expect(s.restrictedBySelection).toBe(true)
+  })
+
+  it('counts each document once, under the FIRST rule that excluded it', () => {
+    // already-remediated AND unmarked: 'remediated' wins, so the two buckets cannot double-count.
+    const opts = { ...OPTS, hasInscopeSelections: true, triage: { 'a': 'inscope' } }
+    const s = scopeSummary([ok('a'), { ...ok('b'), remediated_at: 'x' }, ok('c')], opts)
+    expect(s.excluded.remediated).toBe(1)
+    expect(s.excluded.outOfScope).toBe(1)
+    expect(s.eligible + Object.values(s.excluded).reduce((a, b) => a + b, 0)).toBe(s.total)
+  })
+
+  it('agrees with remediableFiles exactly — the panel cannot promise what the button will not do', () => {
+    const opts = { ...OPTS, hasInscopeSelections: true, triage: { 'f3.pptx': 'inscope' } }
+    expect(scopeSummary(files(10), opts).eligible).toBe(remediableFiles(files(10), opts).length)
+  })
+
+  it('a triage flag is not reported as a scope exclusion', () => {
+    const opts = { ...OPTS, triage: { 'f0.pptx': 'na', 'f1.pptx': 'defer' } }
+    const s = scopeSummary(files(5), opts)
+    expect(s.excluded.triaged).toBe(2)
+    expect(s.restrictedBySelection).toBe(false)
+  })
+})
+
+describe('the panel renders the exclusion, rather than leaving it to be inferred', () => {
+  const rem = code('Remediate.jsx')
+
+  it('derives the summary from the same opts the button uses', () => {
+    expect(rem).toMatch(/scopeSummary\(files, scopeOpts\)/)
+  })
+
+  it('shows an excluded chip in the badge row when a selection is restricting the run', () => {
+    expect(rem).toMatch(/scopeInfo\.restrictedBySelection/)
+    expect(rem).toMatch(/excluded — not marked/)
+  })
+
+  it('marks each excluded row, so it cannot read as merely undecided', () => {
+    expect(rem).toMatch(/const outOfScope = ineligibleReason\(f, scopeOpts\) === 'outOfScope'/)
+    expect(rem).toMatch(/outOfScope \? 'docrow outofscope' : 'docrow'/)
+    expect(rem).toMatch(/outOfScope && <span className="docexcl">/)
+  })
+
+  it('keys the row marker on the SCOPE reason, not merely on a selection existing', () => {
+    // A document with no automatic fix is already ineligible for its own reason, and marking it
+    // ✓ would not change that — labelling it "excluded by your selection" would be false
+    // precision. Rendering showed 173 marked rows against a badge of 117 before this.
+    expect(rem).not.toMatch(/hasInscopeSelections && <span className="trstatchip out"/)
+  })
+
+  it('no longer claims only that "Only in-scope files are remediated"', () => {
+    // The old sentence was true and uninformative — it never said unset means excluded.
+    expect(rem).not.toMatch(/Only in-scope files are remediated/)
+    expect(rem).toMatch(/Marking even one ✓ restricts the run/)
   })
 })

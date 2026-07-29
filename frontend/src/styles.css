@@ -1351,6 +1351,26 @@ input:focus-visible, [role="tab"]:focus-visible {
 .trstatchip.na      { background: #efedea; color: #5f5e5a; }
 .trstatchip.defer   { background: #e2edfb; color: #1F5FA8; }
 .trstatchip.pending { background: #faeeda; color: #854F0B; }
+/* Documents an in-scope selection is holding back. Warm/warning rather than neutral grey: this
+   is the state a user creates by accident, so it has to read as "something is being skipped",
+   not as another calm category. Contrast 5.9:1 on its own background. */
+.trstatchip.out     { background: #FBE9E7; color: #8A2A20; }
+/* A row an in-scope selection is holding back. The note lives on the name cell, not the Scope
+   cell: that cell is a fixed 130px holding three buttons, and an inline chip overflowed it and
+   clipped the ⏸ defer button off the row — a control silently removed by the change meant to
+   stop things being silently removed.
+   No opacity dimming. This is an accessibility product; the row still has to meet contrast, so
+   it is marked with a left accent and a coloured note, not by being faded out. */
+.docrow.outofscope { border-left: 3px solid #E7B4AC; padding-left: 9px; }
+.docexcl { color: #8A2A20; font-weight: 500; }
+
+/* WHICH DOCUMENT a review card is about. The name carries full ink at body weight — it is the
+   first thing a reviewer needs — and the folder trails it quieter, because two documents in this
+   estate share a basename and the folder is what tells them apart. min-width:0 + ellipsis so a
+   long path shortens instead of pushing the risk chip off the header. */
+.evcard-file { display: inline-flex; align-items: baseline; gap: 0; min-width: 0; max-width: 100%; }
+.evcard-filename { font-size: 13.5px; color: var(--ink); white-space: nowrap; }
+.evcard-filedir { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .junkbanner { background: #faf6e8; border: 1px solid #e8d98a; border-radius: 8px; padding: 8px 12px; font-size: 13px; color: #6b5700; margin-bottom: 10px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 .triagetools { display: flex; align-items: center; gap: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; margin-bottom: 8px; flex-wrap: wrap; }
 .trlist { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
