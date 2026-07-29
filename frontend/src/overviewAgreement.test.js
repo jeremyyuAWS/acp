@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { statusSegments, severityItems } from './charts.jsx'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { statusSegments, severityItems, Bars } from './charts.jsx'
 import { statusOf, analysedCount, avgScore } from './docStatus.js'
 import { recommendFor, remediableCount, REMEDIATION_ACTIONS } from './sim.js'
 
@@ -250,10 +252,32 @@ describe('an average over nothing is absent, not zero', () => {
 // defect one layer down — the blank `certifiable` tile was exactly that.
 describe('an unmeasured group renders as absent all the way to the bar', () => {
   const barsSrc = readFileSync(join(here, 'charts.jsx'), 'utf8')
+  // Rendered, not grepped — the bug was what reached the screen. Read the VALUE CELL's own
+  // text, not the whole markup: the row also carries an explanatory title attribute containing
+  // an em dash, so a substring check on the html passes even when the cell renders empty.
+  const cellText = (value) => {
+    const html = renderToStaticMarkup(createElement(Bars, { items: [{ label: 'Finance', value, color: '#9a948f' }], max: 100 }))
+    const m = html.match(/<span class="critn"[^>]*>([^<]*)<\/span>/)
+    return m ? m[1] : null
+  }
 
-  it('draws no bar and shows an em dash for a null value', () => {
-    expect(barsSrc).toMatch(/const absent = it\.value == null/)
-    expect(barsSrc).toMatch(/absent \? '—'/)
+  it('shows an em dash, not a number, for a group with no score', () => {
+    // Pre-fix this cell read "0". Rendering `{null}` instead is no better — that is the blank
+    // `certifiable` tile, which is the defect this panel's sibling was just fixed for.
+    expect(cellText(null)).toBe('—')
+  })
+
+  it('still renders a real average unchanged', () => {
+    expect(cellText(74)).toBe('74')
+  })
+
+  it('renders a genuine measured zero as 0, not as absent', () => {
+    // The distinction the whole fix rests on: a department that WAS analysed and scored 0 is a
+    // real measurement and must still read "0". Only null is unknown.
+    expect(cellText(0)).toBe('0')
+  })
+
+  it('leaves no bar to fill for an unmeasured group', () => {
     expect(barsSrc).toMatch(/width: on && !absent \?/)
   })
 
