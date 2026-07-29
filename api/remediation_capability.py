@@ -273,6 +273,15 @@ ASSESSMENT_OVERRIDES: dict[tuple[str, str], str] = {
     # judgment no OOXML property settles, so 🟡 review is the honest ceiling here, matching
     # pdf/pptx/xlsx (all already review). The ⚡ auto REMEDIATION lane is untouched and correct.
     ("docx", "2.4.6"): A_REVIEW,  # level well-formedness ≠ descriptive headings — can't certify
+    # html 2.4.6 is the same defect in the same shape, one detector over: scanner.HTML_HEADING_SKIP
+    # judges heading LEVELS (h1 → h3), remediate._fix_heading_skip clamps every gap, and the clean
+    # re-scan was read as certifying the criterion. A page whose outline is a perfect h1→h2→h3 but
+    # whose headings read "Section 1" / "Untitled" / "asdf" scanned clean and resolved PASS; so did
+    # a page starting at h3 with no h1 or h2, since the `prev_level > 0` guard never judges the
+    # first heading. Nothing in the loop bears on whether a heading describes its topic, which is
+    # what 2.4.6 asks — and no HTML property settles that. All five formats are now 🟡 review. The
+    # ⚡ auto REMEDIATION lane is untouched and correct: the heading-skip closure is deterministic.
+    ("html", "2.4.6"): A_REVIEW,  # level well-formedness ≠ descriptive headings — can't certify
 }
 
 

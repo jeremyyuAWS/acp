@@ -762,15 +762,25 @@ def _analyse_html(path: Path) -> dict:
         if vague or duplicated:
             issues.append({"ruleId": "HTML_LINK_PURPOSE_AMBIGUOUS", "wcag": "2.4.9 Link Purpose (Link Only)", "severity": "MODERATE"})
 
-    # 2.4.6 Headings and Labels — skipped heading levels (e.g. h1 → h3)
+    # 2.4.6 Headings and Labels — skipped heading levels (e.g. h1 → h3). EVERY gap is reported,
+    # not just the first: _fix_heading_skip closes them all in one pass, so stopping at the first
+    # understated the work and left a page looking one edit away from clean when it was several.
+    # `prev_level` advances to the level actually in the document (not the clamped prev+1), which
+    # is what keeps h1→h3→h4 a single finding — the outline has one gap there, and the h3→h4 step
+    # is well-formed. Mirrors office_structure.docx_checks' DOCX_HEADING_SKIP.
     HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
     prev_level = 0
+    ordinal = 0
     for el in root.iter():
         if el.tag in HEADING_TAGS:
             level = int(el.tag[1])
+            ordinal += 1
             if prev_level > 0 and level > prev_level + 1:
-                issues.append({"ruleId": "HTML_HEADING_SKIP", "wcag": "2.4.6 Headings and Labels", "severity": "MODERATE"})
-                break
+                # The ordinal keeps two identical gaps (two separate h1→h3s) distinguishable.
+                issues.append({"ruleId": "HTML_HEADING_SKIP", "wcag": "2.4.6 Headings and Labels",
+                               "severity": "MODERATE",
+                               "detail": f"Heading {ordinal}: level jumps from h{prev_level} to h{level} "
+                                         f"(should step to h{prev_level + 1})"})
             prev_level = level
 
     # 1.3.2 Meaningful Sequence — CSS that visually reorders content away from source order

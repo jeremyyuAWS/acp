@@ -166,11 +166,16 @@ def test_an_unrun_check_never_claims_the_criterion_is_inapplicable():
 
 
 def test_rule_outcome_still_computes_pass_fail_for_applicable_formats():
-    # 2.4.6 html + 3.1.1 pdf are 🟢 auto-assess → a clean scan is a real PASS.
-    assert store._rule_outcome("2.4.6", "html", 0) == "PASS"
-    assert store._rule_outcome("2.4.6", "html", 3) == "FAIL"
+    # 3.1.1 Language of Page is 🟢 auto-assess (a lang attribute is present or it is not) →
+    # a clean scan is a real PASS.
     assert store._rule_outcome("3.1.1", "pdf", 0) == "PASS"   # cross-format auto-assess rule
     assert store._rule_outcome("3.1.1", "pdf", 1) == "FAIL"
+    # 2.4.6 html used to be asserted here as a PASS-on-clean alongside it. It is not one: its
+    # detector (HTML_HEADING_SKIP) judges heading LEVELS, never whether a heading describes its
+    # topic, so a clean scan is REVIEW ("verify"), not a certified pass (ADR 0023 audit,
+    # Correction 2). A real FAIL still outranks the review lane — that half was always right.
+    assert store._rule_outcome("2.4.6", "html", 0) == store.REVIEW
+    assert store._rule_outcome("2.4.6", "html", 3) == "FAIL"
 
 
 def test_file_format_recognizes_every_scanned_extension():

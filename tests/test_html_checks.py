@@ -119,6 +119,36 @@ def test_2_4_3_ignores_zero_or_no_tabindex():
     assert not _fired(r, "2.4.3")
 
 
+def _skips(result):
+    return [i for i in result["issues"] if i["ruleId"] == "HTML_HEADING_SKIP"]
+
+
+def test_2_4_6_every_heading_skip_reported_not_just_the_first():
+    """The detector used to `break` after the first gap, so a page with several reported one —
+    understating the work and reading as one edit from clean when it was several. The remediator
+    (_fix_heading_skip) has always closed every gap in a single pass, so the report now matches
+    it. Mirror of test_office_structure's docx case."""
+    r = _scan("<html><body><h1>One</h1><h3>Three</h3><h1>Two</h1><h4>Four</h4></body></html>")
+    skips = _skips(r)
+    assert len(skips) == 2, [i.get("detail") for i in skips]
+    details = " | ".join(i["detail"] for i in skips)
+    assert "h1 to h3" in details and "h1 to h4" in details
+    # Each finding names the offending heading's position, so two identical gaps stay distinct.
+    assert len({i["detail"] for i in skips}) == 2
+
+
+def test_2_4_6_single_gap_not_double_reported_when_outline_resumes():
+    """h1→h3→h4 is ONE gap: the h3→h4 step is well-formed. `prev_level` must advance to the level
+    actually in the document, not the clamped prev+1, or the rest of the outline cascades."""
+    r = _scan("<html><body><h1>One</h1><h3>Three</h3><h4>Four</h4></body></html>")
+    assert len(_skips(r)) == 1, [i.get("detail") for i in _skips(r)]
+
+
+def test_2_4_6_sequential_headings_not_flagged():
+    r = _scan("<html><body><h1>One</h1><h2>Two</h2><h3>Three</h3></body></html>")
+    assert not _fired(r, "2.4.6")
+
+
 def test_2_4_7_flags_suppressed_outline_with_interactive_content():
     r = _scan("<html><head><style>a:focus{outline:none}</style></head>"
               '<body><a href="/x">go</a></body></html>')

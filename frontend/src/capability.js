@@ -159,7 +159,7 @@ export const ASSESSMENT_FALLBACK = {
     "1.3.2": "review", "1.3.3": "review", "1.3.4": "auto", "1.3.5": "auto", "1.4.1": "auto",
     "1.4.2": "auto", "1.4.3": "auto", "1.4.4": "auto", "1.4.5": "review", "1.4.6": "auto",
     "1.4.10": "auto", "1.4.11": "review", "1.4.12": "auto", "2.4.1": "auto", "2.4.2": "auto",
-    "2.4.3": "auto", "2.4.4": "review", "2.4.6": "auto", "2.4.7": "auto", "2.4.9": "review",
+    "2.4.3": "auto", "2.4.4": "review", "2.4.6": "review", "2.4.7": "auto", "2.4.9": "review",
     "2.5.3": "auto", "2.5.8": "review", "3.1.1": "auto", "3.1.2": "review", "3.1.4": "auto",
     "3.1.5": "review", "3.3.2": "auto", "4.1.2": "auto"
   }
