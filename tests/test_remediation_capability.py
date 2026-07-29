@@ -92,6 +92,24 @@ def _inscope(fmt: str) -> set[str]:
     return {sc for sc, fmts in store.RULE_FORMATS.items() if fmt in fmts}
 
 
+def _registry_scope(fmt: str) -> set[str]:
+    """The SCs this format is in scope for via the CAPABILITY REGISTRY rather than RULE_FORMATS.
+
+    ADR 0023 moved the scope statement for migrated pairs into `api/rule_registry.py`: pdf 4.1.2
+    and pdf 2.4.3 run real detectors on every PDF and are deliberately absent from RULE_FORMATS,
+    because RULE_FORMATS cannot express what a clean scan is worth (store._rule_outcome consults
+    the registry's `coverage` for exactly that reason). A lane for a registry-declared pair is
+    therefore in scope, not an orphan.
+
+    Deliberately not wrapped in try/except: this widens a drift guard, so a registry that fails
+    to load must fail the test loudly rather than silently narrow the scope back and turn a
+    legitimate lane into a reported orphan.
+    """
+    import rule_registry
+    rule_registry.load()
+    return {r.rule for r in rule_registry.all_registrations() if r.fmt == fmt}
+
+
 def _rescan(path: Path, name: str, tmp: Path):
     """Copy `path` into a clean dir named `name` and run the real scan pipeline over it.
     Returns (set of SCs that fire, engine_ran)."""
@@ -152,11 +170,24 @@ def test_capability_formats_match_rule_formats():
 
 @pytest.mark.parametrize("fmt", sorted(set().union(*store.RULE_FORMATS.values())))
 def test_no_orphans_either_way(fmt):
-    """Every in-scope (format, SC) has a lane, and no lane exists for an out-of-scope SC."""
+    """Every in-scope (format, SC) has a lane, and no lane exists for an out-of-scope SC.
+
+    The two halves are checked against DIFFERENT scope sets, and the asymmetry is deliberate:
+
+      missing — RULE_FORMATS only. Every pass/fail-lane pair must carry a lane, unchanged.
+      extra   — RULE_FORMATS ∪ the capability registry. A registry-declared pair is in scope
+                (see `_registry_scope`), so a lane for one is legitimate.
+
+    Widening `extra` alone means this test never demands a lane for a registry pair that has
+    none. That gap is real (pdf 2.4.3, xlsx 1.4.11 have detectors and no remediation lane) but
+    it is not this test's to force: inventing a lane to satisfy an assertion is precisely the
+    unproven claim the file exists to prevent. `scripts/gen_matrix_coverage.py` reports those
+    pairs as an explicit NO REMEDIATION LANE gap with a null ceiling instead.
+    """
     inscope = _inscope(fmt)
     keyed = set(cap.CAPABILITY[fmt])
     missing = inscope - keyed
-    extra = keyed - inscope
+    extra = keyed - (inscope | _registry_scope(fmt))
     assert not missing, f"{fmt}: in-scope criteria with no capability lane: {sorted(missing)}"
     assert not extra, f"{fmt}: capability lane for out-of-scope criteria: {sorted(extra)}"
 
@@ -334,6 +365,19 @@ def test_pdf_auto_entries_clear(tmp_path):
         c.drawString(72, 660, "Figure caption set in light grey that fails the contrast floors.")
         c.setFillColor(Color(0, 0, 0))
         c.showPage()
+    # A form page LAST, so the 4.1.2 lane has something to clear in this whole-file round trip
+    # too. Every /T is a readable label, which is what `_fix_pdf_form_fields` copies into /TU;
+    # a generic auto-name is REFUSED and keeps firing, and that honest-partial half is proven
+    # in test_pdf_form_field_name_lane_round_trips below — which needs no engine, so it still
+    # runs in the bare container where this test skips.
+    #
+    # Its own page, not the cover: the cover assertion at the end of this test reads every char
+    # colour on page 1, and a fixture change has no business sharing a page with it.
+    c.setFont("Helvetica-Bold", 20)
+    c.drawString(72, 720, "Enrolment form")
+    for i, fld in enumerate(["First Name", "dateOfBirth", "employer_address"]):
+        c.acroForm.textfield(name=fld, x=72, y=650 - i * 40, width=200, height=20, borderWidth=1)
+    c.showPage()
     c.save()
 
     before, engine_ran = _rescan(src, name, tmp_path)
@@ -356,6 +400,116 @@ def test_pdf_auto_entries_clear(tmp_path):
     with pdfplumber.open(str(fixed)) as _pdf:
         cover = {ch.get("non_stroking_color") for ch in _pdf.pages[0].chars}
     assert cover == {(1, 1, 1)}, f"the fixer altered compliant cover text: {cover}"
+
+
+def test_pdf_form_field_name_lane_round_trips(tmp_path):
+    """pdf 4.1.2 — the whole lane, end to end, with no partner engine involved.
+
+    `test_pdf_auto_entries_clear` above proves this lane through the shipped `remediate_pdf`
+    entry point, but that entry point loads the vendored worker-python tree (fixers, engine),
+    so it skips wherever the PDF engine is absent — including the container this repo's CI
+    normally runs in. The 4.1.2 detector and fixer need neither: both are first-party pikepdf
+    code, registered through `api/rule_registry.py`. So the lane is proven HERE against the real
+    scan pipeline (`scanner.analyse_and_assess`, the same one `_rescan` drives), and the check
+    above covers the entry-point wiring where the engine exists.
+
+    Both halves of the honest-partial claim are asserted, because "auto" for this lane means
+    exactly the same thing it means for pdf 1.4.3 — deterministic where the data supports it,
+    abstaining where it does not, never guessing:
+
+      1. a MEANINGFUL /T ("First Name", "dateOfBirth") is copied into /TU mechanically — the
+         value is already in the field dictionary, so no model and no human is consulted — and
+         the criterion stops firing for those fields on re-scan;
+      2. a GENERIC auto-name ("Text1", "fld_03") is refused by `_field_name_meaningful`, KEEPS
+         firing, and defers to a review card carrying an EMPTY draft for a human to author —
+         asserted empty on purpose: a prefilled guess here would make this an assisted lane,
+         and there is nothing to prefill it from;
+      3. approving those two values drives the detector to zero, which is what makes the
+         residual a genuine guided lane rather than an explain-only dead end (contrast pdf
+         2.4.4, where no write-back exists and the lane is correctly "human").
+    """
+    pytest.importorskip("pikepdf")
+    pytest.importorskip("reportlab")
+    from reportlab.pdfgen import canvas
+    import remediate_pdf
+
+    assert cap.mode_for("pdf", "4.1.2") == cap.AUTO, (
+        "this test proves the auto lane; if the lane moved, fix the table or this proof")
+
+    d = tmp_path / "form"; d.mkdir()
+    src = d / "enrolment-form.pdf"
+    meaningful = ["First Name", "dateOfBirth", "employer_address"]
+    generic = ["Text1", "fld_03"]
+    c = canvas.Canvas(str(src))
+    for i, nm in enumerate(meaningful + generic):
+        c.acroForm.textfield(name=nm, x=72, y=700 - i * 40, width=200, height=20, borderWidth=1)
+    c.showPage(); c.save()
+
+    import scanner
+    def _fires(path: Path) -> list[dict]:
+        dd = tmp_path / f"scan-{path.stem}"; dd.mkdir(exist_ok=True)
+        shutil.copy(path, dd / path.name)
+        fdict, _ = scanner.analyse_and_assess(dd, path.name, detect_pii=False)
+        return [i for i in fdict.get("issues", []) if _sc(i.get("wcag", "")) == "4.1.2"]
+
+    before = _fires(src)
+    assert len(before) == len(meaningful + generic), (
+        f"fixture did not trip 4.1.2 once per unnamed field: {before}")
+
+    # ── 1. the deterministic half ──────────────────────────────────────────────
+    import pikepdf
+    pdf = pikepdf.open(str(src))
+    proposals: list[dict] = []
+    applied, deferred = remediate_pdf._fix_pdf_form_fields(
+        pdf, proposals=proposals, applied_fixes=[])
+    remediated = d / "remediated.pdf"
+    pdf.save(str(remediated)); pdf.close()
+
+    assert len(applied) == len(meaningful), f"expected {len(meaningful)} /TU writes, got {applied}"
+    after = _fires(remediated)
+    assert len(after) == len(generic), (
+        f"4.1.2 should now fire only for the refused generic names, got: "
+        f"{[i.get('detail') for i in after]}")
+    assert all(any(g in str(i.get("detail", "")) for g in generic) for i in after), (
+        f"a field with a meaningful name is still firing: {[i.get('detail') for i in after]}")
+
+    # ── 2. the abstention half ─────────────────────────────────────────────────
+    cards = [p for p in proposals if p.get("kind") == "pdf-field-name"]
+    assert deferred == len(generic) and len(cards) == len(generic), (
+        f"expected one review card per generic name, got deferred={deferred} cards={len(cards)}")
+    assert all(p.get("proposed_value") == "" for p in cards), (
+        "a pdf-field-name card carries a prefilled value — that would make this an assisted "
+        f"lane, but nothing can honestly draft it: {[p.get('proposed_value') for p in cards]}")
+
+    # ── 3. the residual is guided, not a dead end ──────────────────────────────
+    approved = dict(zip([p["locator"] for p in cards], ["Home address", "Policy number"]))
+    data, written, unresolved = remediate_pdf.apply_pdf_approved(remediated.read_bytes(), approved)
+    assert not unresolved and len(written) == len(cards), (
+        f"approved names did not reach the file: written={written} unresolved={unresolved}")
+    final = d / "approved.pdf"; final.write_bytes(data)
+    assert _fires(final) == [], (
+        f"4.1.2 still fires after every field was named: {[i.get('detail') for i in _fires(final)]}")
+
+
+def test_pdf_form_field_names_do_not_certify_the_criterion():
+    """…and the assessment axis must NOT follow that lane to 🟢.
+
+    The fixer clears every finding its detector can emit, which is what "auto" records. But
+    `formats/pdf/detectors/name_role_value.py` walks AcroForm terminal fields and nothing else,
+    so a clean re-scan proves the FORM FIELDS are named — not that 4.1.2 is met, which also
+    covers components expressed through the tagged-structure tree. This is the ⚡-without-🟢
+    case the derivation's caveat exists for; the capability registry states the same limit on
+    its own axis (coverage=PARTIAL) and `store._rule_outcome` resolves a clean PDF scan to
+    REVIEW accordingly. All three must agree, or one of them is over-claiming.
+    """
+    import rule_registry
+    from assessment import Coverage
+    rule_registry.load()
+
+    assert cap.assessment_lane("pdf", "4.1.2") == cap.A_REVIEW
+    assert cap.CAPABILITY["pdf"]["4.1.2"] == {"assessment": cap.A_REVIEW, "remediation": cap.AUTO}
+    assert rule_registry.get("4.1.2", "pdf").coverage is Coverage.PARTIAL
+    assert store._rule_outcome("4.1.2", "pdf", fail_count=0, target="AA") == store.REVIEW
 
 
 # One minimal HTML fixture per html 'auto' criterion — each must trip the criterion and clear

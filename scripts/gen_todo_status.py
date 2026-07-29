@@ -54,6 +54,34 @@ def _load():
     return store, rule_registry
 
 
+def _remediation_gaps() -> list[tuple[str, str]]:
+    """(criterion, format) pairs ACP assesses but declares no remediation lane for.
+
+    Derived by asking `gen_matrix_coverage.py` rather than re-deriving it here: that script
+    already owns the definition (and the awkward parts of it — the write-back applier surface
+    is read out of handlers.py's AST), and a second copy of the rule in this file is precisely
+    the kind of quietly-diverging fact the whole script exists to stop writing.
+
+    Degrades to an empty list rather than failing the doc build: this runs in a bare CI
+    container, and a TODO block is not worth breaking a pipeline over. The generator's own
+    `--check` is where a moved source is supposed to fail loudly.
+    """
+    try:
+        import importlib.util
+        path = ROOT / "scripts" / "gen_matrix_coverage.py"
+        spec = importlib.util.spec_from_file_location("acp_gen_matrix_coverage_todo", path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+        data = mod.build()
+    except Exception as exc:
+        print(f"note: matrix coverage unavailable ({exc.__class__.__name__}: {exc})",
+              file=sys.stderr)
+        return []
+    return [(sc, fmt) for sc, fmts in data["cells"].items()
+            for fmt, cell in fmts.items() if cell["remediation_gap"]]
+
+
 def signals_for(store, registry, sc: str, fmt: str) -> str:
     """How this (criterion, format) is covered today, in one word.
 
@@ -133,6 +161,26 @@ def build(store, registry) -> str:
     add("**Undeclared coverage** — detectors emitting for a (criterion, format) that no scope "
         "table admits. `scripts/gen_matrix_coverage.py` reports these; all known instances "
         "(`1.4.11` xlsx, `2.4.3` pdf, `4.1.2` pdf) are now declared in the registry.")
+    add("")
+    # ── undeclared REMEDIATION, which is a different gap on a different axis ───────────
+    # Registering a pair answers "what does the detector examine?" and nothing else. Whether a
+    # fixer writes is `api/remediation_capability.REMEDIATION`, and a pair can be fully declared
+    # on the assessment axis while the remediation axis says nothing at all. It used to be
+    # invisible: the matrix generator turned a missing lane into a confident "No Remediation",
+    # which read as a settled fact rather than the gap it is (pdf 4.1.2 shipped a working fixer
+    # under that label until the lane was added). The generator now emits a null ceiling and a
+    # NO REMEDIATION LANE note per cell, so the remaining ones are worth naming here too.
+    gaps = _remediation_gaps()
+    listed = (", ".join(f"`{sc}` {fmt}" for sc, fmt in gaps) if gaps
+              else "none — every assessed pair has a declared lane")
+    add(f"**Undeclared remediation ({len(gaps)})** — a pair ACP assesses (a detector emits it, "
+        f"a review lane admits it, or the registry declares it) with no entry in "
+        f"`api/remediation_capability.REMEDIATION`. Registration says what the DETECTOR "
+        f"examines and nothing about whether a FIXER writes, so the two go stale separately. "
+        f"`scripts/gen_matrix_coverage.py` reports each as an explicit gap with an unknown "
+        f"(null) remediation ceiling rather than inferring \"no remediation\" from the "
+        f"assessment axis — the inference that hid a working PDF form-field fixer behind "
+        f"\"No Remediation\" until `4.1.2` pdf got its lane. Open: {listed}.")
     add("")
     return "\n".join(lines)
 
