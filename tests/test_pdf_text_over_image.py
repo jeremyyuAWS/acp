@@ -1,8 +1,9 @@
 """ADR 0025 — pdf_text_over_image_checks (1.4.3 Contrast, text-over-image case).
 
-`pdf_contrast_checks` judges declared text colour vs an assumed page background; it's blind to text
-laid over a raster image. This flags that case for review. reportlab draws text over an embedded
-image (flags) and plain text on a blank page (doesn't).
+`pdf_contrast_checks` resolves a glyph's background from page structure (fill rects, page default)
+and abstains where that can't answer — text laid over a raster image, where the background is the
+pixels. This owns that case as a review finding. reportlab draws text over an embedded image
+(flags) and plain text on a blank page (doesn't).
 """
 from __future__ import annotations
 

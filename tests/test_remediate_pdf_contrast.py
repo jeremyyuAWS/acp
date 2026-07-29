@@ -1,10 +1,17 @@
-"""PDF text-contrast fixer (1.4.3/1.4.6) — deterministic content-stream darkening.
+"""PDF text-contrast fixer (1.4.3/1.4.6) — deterministic content-stream recolouring.
 
-The oracle is the detector itself: office_structure.pdf_contrast_checks flags text
-whose fill luma exceeds the AA (0.62) / AAA (0.45) floors, so the round-trip proof is
-"detector flags the original → fix → detector finds nothing". Text-scoped by
-construction: a shape/background fill must never be darkened (that would invert the
+The oracle is the detector itself: office_structure.pdf_contrast_checks measures each
+glyph's colour against the background structurally resolved behind it, so the round-trip
+proof is "detector flags the original → fix → detector finds nothing". Text-scoped by
+construction: a shape/background fill must never be recoloured (that would invert the
 contrast problem), which the shape-safety test pins.
+
+This fixer runs UNATTENDED, so the tests that matter most are the ones proving what it
+leaves alone. It used to inherit the detector's white-page assumption and darken any text
+above a luma floor, which turned compliant dark-theme documents non-compliant with no
+human in the loop — white-on-black went from 21:1 to #666666 at 3.66:1, an AA failure.
+`test_white_text_on_*` pin that; `test_dark_page_text_is_lightened_not_darkened` pins the
+positive half (on a dark page the fix is to move AWAY from the background, not toward it).
 """
 from __future__ import annotations
 
@@ -97,6 +104,87 @@ def test_dark_text_untouched(tmp_path):
     src = _pdf_with(tmp_path, draw)
     with pikepdf.open(str(src)) as pdf:
         assert rp._fix_pdf_text_contrast(pdf) == 0
+
+
+# ── what the fixer must NOT touch: text that already passes on its real background ──
+
+def _rgb(*channels):
+    from reportlab.lib.colors import Color
+    return Color(*(v / 255 for v in channels))
+
+
+def _text_colours(path: Path) -> list[str]:
+    import office_structure as _os
+    import pdfplumber
+    with pdfplumber.open(str(path)) as pdf:
+        return [_os._pdf_color_hex(ch["non_stroking_color"]) for ch in pdf.pages[0].chars]
+
+
+def _fix_count(src: Path) -> tuple[int, Path]:
+    out = src.with_name("fixed.pdf")
+    with pikepdf.open(str(src)) as pdf:
+        n = rp._fix_pdf_text_contrast(pdf)
+        pdf.save(str(out))
+    return n, out
+
+
+def test_white_text_on_dark_panel_left_alone(tmp_path):
+    """21:1 — passes AA and AAA. The white-page model rewrote it to a 3.66:1 AA FAILURE."""
+    def draw(c):
+        c.setFillColor(_rgb(0, 0, 0))
+        c.rect(50, 50, 500, 700, stroke=0, fill=1)
+        c.setFillColor(_rgb(255, 255, 255))
+        c.drawString(72, 400, "White text on a black panel")
+    src = _pdf_with(tmp_path, draw)
+    n, out = _fix_count(src)
+    assert n == 0
+    assert "FFFFFF" in _text_colours(out)
+    assert os_.pdf_contrast_checks(out) == []
+
+
+def test_white_text_on_full_page_dark_fill_left_alone(tmp_path):
+    """The dark-cover variant of the same defect."""
+    def draw(c):
+        c.setFillColor(_rgb(0x10, 0x1C, 0x3A))
+        c.rect(0, 0, 612, 792, stroke=0, fill=1)
+        c.setFillColor(_rgb(255, 255, 255))
+        c.drawString(72, 400, "White text on a navy cover")
+    n, out = _fix_count(_pdf_with(tmp_path, draw))
+    assert n == 0 and "FFFFFF" in _text_colours(out)
+
+
+def test_dark_page_text_is_lightened_not_darkened(tmp_path):
+    """#4C4C4C on #262626 is 1.76:1 — a real failure whose only fix is a LIGHTER text
+    colour. Darkening toward black is the one move that makes it worse."""
+    def draw(c):
+        c.setFillColor(_rgb(0x26, 0x26, 0x26))
+        c.rect(0, 0, 612, 792, stroke=0, fill=1)
+        c.setFillColor(_rgb(0x4C, 0x4C, 0x4C))
+        c.drawString(72, 400, "Dark grey on a dark grey page")
+    src = _pdf_with(tmp_path, draw)
+    assert "PDF_LOW_CONTRAST_AA" in {f["ruleId"] for f in os_.pdf_contrast_checks(src)}
+    n, out = _fix_count(src)
+    assert n == 1
+    new = [h for h in _text_colours(out) if h != "262626"][0]
+    assert os_._contrast_ratio(new, "262626") > os_._contrast_ratio("4C4C4C", "262626")
+    assert os_.pdf_contrast_checks(out) == []
+
+
+def test_same_colour_on_light_and_dark_backgrounds_abstains(tmp_path):
+    """One body-text colour shared between a white page and a dark-grey callout box: no
+    colour clears 4.5:1 on both #FFFFFF and #333333, so no fix is claimed and the finding
+    routes to a human rather than being "fixed" into a failure on one of the two."""
+    def draw(c):
+        c.setFillColor(_rgb(0x33, 0x33, 0x33))
+        c.rect(50, 500, 500, 200, stroke=0, fill=1)
+        c.setFillColor(_rgb(0x80, 0x80, 0x80))
+        c.drawString(72, 560, "mid grey inside the dark callout")
+        c.drawString(72, 300, "the same mid grey on the white page")
+    src = _pdf_with(tmp_path, draw)
+    n, out = _fix_count(src)
+    assert n == 0
+    assert set(_text_colours(out)) <= {"808080", "333333"}
+    assert os_.pdf_contrast_checks(out)          # still reported, not silently "fixed"
 
 
 def test_capability_table_promoted():

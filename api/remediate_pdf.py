@@ -18,6 +18,7 @@ StructTreeRoot) are a separate structural-tagging finding and still route to hum
 review, as does any figure the vision model can't caption (AI off / unavailable).
 """
 from __future__ import annotations
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -39,42 +40,48 @@ _PAGE_THUMB_EDGE = 320
 _FIX_THUMB_EDGE = 96
 
 
-# ── 1.4.3 / 1.4.6 — deterministic text-contrast darkening ──────────────────────
-# Darken to below the detector's AAA floor (office_structure.pdf_contrast_checks flags
-# luma > 0.45 for AAA, > 0.62 for AA), with margin — one darken clears both criteria and
-# the post-fix re-scan can verify it. Same luma model as the detector, so fixer and
-# finding can never disagree about what "too light" means.
-_CONTRAST_TARGET_LUMA = 0.40
+# ── 1.4.3 / 1.4.6 — deterministic text-contrast recolouring ────────────────────
+# WHICH colours move, and where to, is decided entirely by
+# office_structure.pdf_contrast_recolor_plan — the same per-glyph measurement the detector
+# reports, against the background structurally resolved BEHIND the glyphs. This fixer runs
+# unattended, so it must never act on an assumption about the page: the earlier
+# white-background model darkened white-on-black cover text from a passing 21:1 to a 3.66:1
+# AA FAILURE, silently. Now a colour is only rewritten where it is proved to fail on every
+# background it is actually painted on, and only toward a colour proved to clear them all.
 # Fill-colour operators this fixer understands. sc/scn (arbitrary colourspaces) are left
-# alone — darkening a colour we can't interpret risks corrupting it, and the re-scan
+# alone — recolouring a value we can't interpret risks corrupting it, and the re-scan
 # verify-guard means an unclear fix is simply never claimed.
 _FILL_GRAY, _FILL_RGB, _FILL_CMYK = "g", "rg", "k"
+# Operand count that makes each operator's colour readable as a pdfplumber-shaped colour.
+_FILL_ARITY = {_FILL_GRAY: 1, _FILL_RGB: 3, _FILL_CMYK: 4}
 # Path-painting operators: a fill colour consumed by one of these coloured a SHAPE, and a
 # shape/background fill must never be darkened (it would invert the contrast problem).
 _PAINT_OPS = {"f", "F", "f*", "B", "B*", "b", "b*", "S", "s"}
 _TEXT_SHOW_OPS = {"Tj", "TJ", "'", '"'}
 
 
-def _fill_luma(op: str, vals: list[float]) -> float | None:
-    if op == _FILL_GRAY and len(vals) == 1:
-        return vals[0]
-    if op == _FILL_RGB and len(vals) == 3:
-        r, g, b = vals
-        return 0.299 * r + 0.587 * g + 0.114 * b
-    if op == _FILL_CMYK and len(vals) == 4:
-        c, m, y, k = vals
-        return ((1 - c) * 0.299 + (1 - m) * 0.587 + (1 - y) * 0.114) * (1 - k)
-    return None
+def _fill_hex(op: str, vals: list[float]) -> str | None:
+    """A fill operator's operands → the 6-hex the recolour plan is keyed by. Runs them
+    through office_structure._pdf_color_hex — the same function that hexed the pdfplumber
+    colour the plan was built from — so the two sides round identically and the lookup is
+    an exact match or nothing."""
+    if len(vals) != _FILL_ARITY.get(op, -1):
+        return None
+    import office_structure as _os
+    return _os._pdf_color_hex(vals)
 
 
-def _darken(op: str, vals: list[float], luma: float) -> list[float]:
-    """Scale a too-light fill colour toward black until its luma hits the target —
-    hue-preserving for RGB (all channels scale together), K-boosting for CMYK."""
-    scale = _CONTRAST_TARGET_LUMA / luma
+def _fill_operands(op: str, hex6: str) -> tuple[str, list[float]]:
+    """A replacement hex → (operator, operands), keeping the original colourspace wherever
+    that is exact. DeviceGray stays `g` while the colour is neutral (a hue-preserving
+    recolour of a grey always is) and widens to `rg` only if it somehow isn't; DeviceCMYK
+    stays `k` as a zero-black mix, which `_pdf_color_hex` reads back to exactly this RGB."""
+    r, g, b = (int(hex6[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    if op == _FILL_GRAY:
+        return (_FILL_GRAY, [r]) if r == g == b else (_FILL_RGB, [r, g, b])
     if op == _FILL_CMYK:
-        c, m, y, k = vals
-        return [c, m, y, 1 - (1 - k) * scale]
-    return [v * scale for v in vals]
+        return _FILL_CMYK, [1 - r, 1 - g, 1 - b, 0.0]
+    return _FILL_RGB, [r, g, b]
 
 
 def _colours_text(ops, idx: int, in_text: bool) -> bool:
@@ -95,14 +102,31 @@ def _colours_text(ops, idx: int, in_text: bool) -> bool:
 
 
 def _fix_pdf_text_contrast(pdf) -> int:
-    """Darken light TEXT fill colours in every page's content stream so the document's
-    text meets the contrast floors (WCAG 1.4.3/1.4.6, white-background model — the same
-    assumption the detector makes). Deterministic content-stream rewrite via pikepdf;
-    only text-scoped colours are touched (see _colours_text), so shapes, backgrounds and
-    images are never altered. Returns the number of colour operations darkened."""
+    """Recolour failing TEXT fill colours in every page's content stream so the document's
+    text meets the contrast floors (WCAG 1.4.3/1.4.6). Deterministic content-stream rewrite
+    via pikepdf, gated on `office_structure.pdf_contrast_recolor_plan`: a colour moves only
+    where it is measured to fail against the background actually resolved behind its
+    glyphs, and only to a colour proved to clear every such background — so white text on a
+    dark cover, which already passes at 21:1, is left alone. Two guards, both required: the
+    plan says WHICH colour and WHAT to, `_colours_text` says the operator colours TEXT, so
+    shapes, backgrounds and images are never altered. Anything unresolved is left untouched
+    rather than guessed at. Returns the number of colour operations recoloured."""
+    import io
     import pikepdf
+    import office_structure as _os
+    try:
+        buf = io.BytesIO()
+        pdf.save(buf)                    # measure the document exactly as it stands now
+        plan = _os.pdf_contrast_recolor_plan(buf.getvalue())
+    except Exception:
+        return 0                         # backgrounds unresolvable → change nothing
+    if not plan:
+        return 0
     changed_total = 0
-    for page in pdf.pages:
+    for page_index, page in enumerate(pdf.pages):
+        page_plan = plan.get(page_index)
+        if not page_plan:
+            continue
         try:
             ops = [[list(operands), operator] for operands, operator
                    in pikepdf.parse_content_stream(page)]
@@ -124,12 +148,15 @@ def _fix_pdf_text_contrast(pdf) -> int:
                 vals = [float(v) for v in operands]
             except (TypeError, ValueError):
                 continue
-            luma = _fill_luma(name, vals)
-            if luma is None or luma <= 0.45:      # detector's AAA floor — already fine
+            hex6 = _fill_hex(name, vals)
+            new_hex = page_plan.get(hex6) if hex6 else None
+            if not new_hex:                       # passes already, or not resolvable
                 continue
             if not _colours_text(ops, i, in_text):
                 continue
-            ops[i][0] = _darken(name, vals, luma)
+            new_op, new_vals = _fill_operands(name, new_hex)
+            ops[i][0] = new_vals
+            ops[i][1] = pikepdf.Operator(new_op)
             changed += 1
         if changed:
             try:
