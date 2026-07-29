@@ -1,14 +1,31 @@
 """Write a reviewer-approved alt text into an Office document (WCAG 1.1.1).
 
 The proposal lane (api/proposals.py) drafts alt text and stores it on the file's HITL row,
-one proposal per image, each carrying a `locator` minted by remediate_office:
+one proposal per image, each carrying a `locator` minted by remediate_office. There are TWO
+kinds of fragment, because the proposers reach an image in two different ways:
 
-    locator = "<part name>#<cNvPr/docPr name>"      e.g. "ppt/slides/slide3.xml#Picture 4"
+    "<part>#<cNvPr/docPr name>"   e.g. "ppt/slides/slide3.xml#Picture 4"
+    "<part>#<r:embed id>"         e.g. "ppt/slides/slide3.xml#rId2"
 
-Approving those drafts used to store text and stop there: nothing wrote it into the document,
-so the images stayed undescribed and store.mark_file_compliant_if_reviewed correctly refused
-to certify the file — which left it stranded, approved but never conformant. This module is
-the missing write: it resolves each locator back to its element and sets `descr`.
+A proposer that read the image's BYTES — the vision alt draft, the xlsx chart-data draft, the
+evidence thumbnail — got there through the blip's relationship id (remediate_office's
+`_image_bytes_for`), and mints that id. Only the decorative-inference branch, which never opens
+the image, names the element.
+
+This module used to understand names alone, so every rId locator missed: `_set_descr_in_xml`
+looked for an element named "rId2", found none, and reported it unresolved. That is the whole
+vision alt-text lane — the flagship AI-drafts / human-approves path for Office images. The
+reviewer's description was stored, counted by store.count_unapplied_approved_values as content
+the document owed, handed here, dropped, and the row was never marked applied: the file could
+never certify or reach Publish. Silent, because an unresolved locator is (correctly) only
+logged, and because tests/test_apply_approved_values.py seeds NAME locators, so no test ever
+fed this module what the proposers actually emit.
+
+`resolve_target` now understands both, by walking the blips: within a pic/drawing block the
+alt-bearing element precedes its `<a:blip r:embed>`, which is the same adjacency
+`_image_bytes_for` relies on to find the image in the first place. Resolving here rather than
+re-minting locators at proposal time is deliberate — it repairs rows already sitting approved
+in the database, which a change at the source could not reach.
 
 A reviewer may instead resolve a 1.1.1 finding by marking the image DECORATIVE — WCAG's own
 exception for an image that conveys nothing. That is still a write, just not of prose: the
@@ -71,6 +88,12 @@ DECORATIVE_AFTER = "(marked decorative — no alt text needed)"
 # marker we are looking for may have been written by Word, not by us.
 _HAS_MARKER = re.compile(r'decorative[^>]*\bval=["\'](?:1|true)["\']')
 
+# The relationship reference on a drawing's blip — how a bytes-reading proposer identified the
+# image, and so what its locator says. Kept loose (any id, not just `rId\d+`) because the value
+# we compare against is one WE minted from this same attribute; a stricter pattern here could
+# only ever reject a locator that is in fact correct.
+_R_EMBED = re.compile(r'\br:embed="([^"]+)"')
+
 
 def _xesc(s: str) -> str:
     """Escape for an XML attribute value. A reviewer's alt text is free-form human prose —
@@ -80,7 +103,11 @@ def _xesc(s: str) -> str:
 
 
 def tag_for_part(part: str) -> str | None:
-    """The alt-bearing element name in `part`, or None if that part carries no images."""
+    """Regex for the alt-bearing element in `part`, or None if that part carries no images.
+
+    A PATTERN, not a literal tag — one part may carry either namespace flavour of the same
+    element. Callers must take the tag they actually rewrite from the match, never from this.
+    """
     for pat, tag in _ALT_TAG_FOR_PART:
         if pat.match(part):
             return tag
@@ -99,54 +126,88 @@ def parse_locator(locator: str) -> tuple[str, str] | None:
     return (part, name) if part and name else None
 
 
-def _set_descr_in_xml(xml: str, tag: str, name: str, alt: str) -> tuple[str, str | None]:
-    """Set descr="alt" on the `tag` element whose name attribute is `name`.
+def _alt_elements(xml: str, tag: str) -> list[re.Match]:
+    """Every alt-bearing element in the part, in document order.
+
+    `tag` is a pattern (see _ALT_TAG_FOR_PART), so group 1 is the tag text as this document
+    actually spells it — `xdr:cNvPr` or bare `cNvPr`. Groups: (tag, attrs, self-closing slash).
+    """
+    return list(re.finditer(rf"<({tag})\b([^>]*?)(/?)>", xml))
+
+
+def resolve_target(xml: str, tag: str, fragment: str) -> int | None:
+    """Offset of the element a locator fragment addresses, or None if nothing does.
+
+    Two fragment kinds, tried in that order (see the module docstring for why both exist):
+
+      NAME     — the element's own `name` attribute. First match wins, which is the behaviour
+                 this module always had; a part with two shapes of one name is a document we
+                 cannot disambiguate, and picking the first is at least stable.
+      r:embed  — the relationship id of the image the element describes. Within a pic/drawing
+                 block the alt-bearing element comes first and its `<a:blip r:embed>` follows,
+                 so an element owns the first blip between it and the NEXT such element. A
+                 shape with no image of its own (a group's cNvPr, a slide's root cNvPr) has no
+                 blip before the next element and simply matches nothing.
+
+    Name is tried first so a document that literally names a shape "rId2" still resolves to the
+    shape the reviewer was looking at, not to whatever image carries that relationship.
+    """
+    els = _alt_elements(xml, tag)
+    for m in els:
+        if _ATTR(m.group(2), "name").strip() == fragment:
+            return m.start()
+    for i, m in enumerate(els):
+        stop = els[i + 1].start() if i + 1 < len(els) else len(xml)
+        blip = _R_EMBED.search(xml, m.end(), stop)
+        if blip and blip.group(1) == fragment:
+            return m.start()
+    return None
+
+
+def _set_descr_in_xml(xml: str, tag: str, at: int, alt: str) -> tuple[str, str | None]:
+    """Set descr="alt" on the alt-bearing element starting at offset `at` (from resolve_target).
 
     Returns (new_xml, previous_descr) — previous_descr is None when no such element exists,
     which is how the caller tells "applied" from "locator did not resolve". An empty string
     means the element was there and simply had no description, which is the normal case.
+
+    Targeted by OFFSET rather than by name because a locator may name no element at all (an
+    r:embed id names an image, not a shape). resolve_target answers "which element", once and
+    for both fragment kinds; this only writes.
     """
-    out, last, found = [], 0, None
-    # `tag` is a PATTERN, not a literal — the xlsx entry is `(?:xdr:)?cNvPr`, matching both the
-    # prefixed form Excel authors and the default-namespace form other generators emit. So it is
-    # not re.escape'd, and the element is rebuilt from group 1 (the spelling this document
-    # actually used) rather than from the pattern, which would otherwise be written into the XML.
-    for m in re.finditer(rf"<({tag})\b([^>]*?)(/?)>", xml):
-        real_tag, attrs, selfclose = m.group(1), m.group(2), m.group(3)
-        if found is not None or _ATTR(attrs, "name").strip() != name:
-            continue
-        found = _ATTR(attrs, "descr")
-        stripped = re.sub(r'\s*\bdescr="[^"]*"', "", attrs)   # drop any existing descr
-        out.append(xml[last:m.start()])
-        out.append(f'<{real_tag}{stripped} descr="{_xesc(alt)}"{selfclose}>')
-        last = m.end()
-    if found is None:
+    m = re.compile(rf"<({tag})\b([^>]*?)(/?)>").match(xml, at)
+    if not m:
         return xml, None
-    out.append(xml[last:])
-    return "".join(out), found
+    # The tag as THIS document spells it, never the pattern — rebuilding from the pattern would
+    # write a literal `(?:xdr:)?cNvPr` element into the part.
+    real_tag, attrs, selfclose = m.group(1), m.group(2), m.group(3)
+    found = _ATTR(attrs, "descr")
+    stripped = re.sub(r'\s*\bdescr="[^"]*"', "", attrs)   # drop any existing descr
+    return (xml[:m.start()] + f'<{real_tag}{stripped} descr="{_xesc(alt)}"{selfclose}>'
+            + xml[m.end():]), found
 
 
-def _set_decorative_in_xml(xml: str, tag: str, name: str) -> tuple[str, str | None]:
-    """Mark the `tag` element named `name` decorative: drop `descr`, add the OOXML marker.
+def _set_decorative_in_xml(xml: str, tag: str, at: int) -> tuple[str, str | None]:
+    """Mark the element at offset `at` decorative: drop `descr`, add the OOXML marker.
 
-    Same (new_xml, previous_descr) contract as _set_descr_in_xml — None means the element was
-    not there. An element that ALREADY carries the marker is reported as applied and left
-    untouched: the document already says what the reviewer just said, and re-stating it would
-    add a second marker to satisfy nobody.
+    Same (new_xml, previous_descr) contract as _set_descr_in_xml, and targeted the same way —
+    by offset, from resolve_target, so a decorative resolution reaches its image whether the
+    locator names the shape or the shape's r:embed relationship.
+
+    An element that ALREADY carries the marker is reported as applied and left untouched: the
+    document already says what the reviewer just said, and re-stating it would add a second
+    marker to satisfy nobody.
     """
-    m = None
-    for cand in re.finditer(rf"<{re.escape(tag)}\b([^>]*?)(/?)>", xml):
-        if _ATTR(cand.group(1), "name").strip() == name:
-            m = cand
-            break
-    if m is None:
+    m = re.compile(rf"<({tag})\b([^>]*?)(/?)>").match(xml, at)
+    if not m:
         return xml, None
-    attrs, selfclose = m.group(1), m.group(2)
-    # The element's full extent, so we can see (and edit) any children it already has.
+    real_tag, attrs, selfclose = m.group(1), m.group(2), m.group(3)
+    # The element's full extent, so we can see (and edit) any children it already has. The
+    # closing tag is matched against the document's own spelling, never the pattern.
     if selfclose:
         body, end = "", m.end()
     else:
-        close = re.compile(rf"</{re.escape(tag)}>").search(xml, m.end())
+        close = re.compile(rf"</{re.escape(real_tag)}>").search(xml, m.end())
         if not close:
             return xml, None                    # malformed part: report, never guess
         body, end = xml[m.end():close.start()], close.end()
@@ -168,7 +229,8 @@ def _set_decorative_in_xml(xml: str, tag: str, name: str) -> tuple[str, str | No
         if close_lst == -1:
             return xml, None
         new_body = body[:close_lst] + _DECORATIVE_EXT + body[close_lst:]
-    return xml[:m.start()] + f"<{tag}{stripped}>{new_body}</{tag}>" + xml[end:], before
+    return (xml[:m.start()] + f"<{real_tag}{stripped}>{new_body}</{real_tag}>"
+            + xml[end:]), before
 
 
 def apply_alt_text(data: bytes, values: dict[str, str],
@@ -202,7 +264,8 @@ def apply_alt_text(data: bytes, values: dict[str, str],
         entries = {n: zin.read(n) for n in names}
 
     # Group by part so each XML part is parsed and rewritten once, not once per image.
-    by_part: dict[str, list[tuple[str, str, str | None]]] = {}  # part → [(locator, name, alt|None)]
+    # part → [(locator, fragment, alt)]; alt is None for a decorative marking, which writes no text
+    by_part: dict[str, list[tuple[str, str, str | None]]] = {}
     unresolved: list[str] = []
     for locator, alt in list(values.items()) + [(k, None) for k in deco]:
         parsed = parse_locator(locator)
@@ -220,13 +283,19 @@ def apply_alt_text(data: bytes, values: dict[str, str],
         except UnicodeDecodeError:
             unresolved.extend(loc for loc, _, _ in targets)
             continue
-        for locator, name, alt in targets:
-            if alt is None:
-                xml, before = _set_decorative_in_xml(xml, tag, name)
-            else:
-                xml, before = _set_descr_in_xml(xml, tag, name, alt)
-            if before is None:
+        for locator, fragment, alt in targets:
+            # Resolved against the CURRENT xml, once per write: an earlier write to this same
+            # part has already shifted every offset after it.
+            at = resolve_target(xml, tag, fragment)
+            if at is None:
                 unresolved.append(locator)                  # element gone: report, never guess
+                continue
+            if alt is None:
+                xml, before = _set_decorative_in_xml(xml, tag, at)
+            else:
+                xml, before = _set_descr_in_xml(xml, tag, at, alt)
+            if before is None:
+                unresolved.append(locator)
                 continue
             applied.append({"locator": locator,
                             "before": before or "(no alt text)",
