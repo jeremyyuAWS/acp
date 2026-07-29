@@ -43,6 +43,12 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     }
     // pdf keyboard-trap is 🔴/⚪ for now (no pdf control detector wired) — not review.
     expect(assessmentIn('2.1.2', 'pdf')).toBe('na')
+    // pdf 4.1.2 reaches the same 🟡 by a different route: not controls-gated but coverage-
+    // gated. The AcroForm detector always runs and is exact over the fields it reads, yet it
+    // never sees the tagged-structure components the criterion also covers, so a clean scan
+    // cannot certify. Its REMEDIATION lane is ⚡ auto regardless — the axes are independent.
+    expect(assessmentIn('4.1.2', 'pdf')).toBe('review')
+    expect(remediationIn('4.1.2', 'pdf')).toBe('auto')
   })
 
   it('Phase 1b review detectors put their criteria in the 🟡 lane at the format level', () => {
@@ -90,7 +96,11 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     docx: { auto: 4, review: 13, human: 0, gap: 0, at: 0, na: 3, certifiable: 4 },
     xlsx: { auto: 5, review: 9, human: 0, gap: 0, at: 0, na: 6, certifiable: 5 },
     pptx: { auto: 5, review: 13, human: 1, gap: 0, at: 0, na: 1, certifiable: 5 },
-    pdf: { auto: 3, review: 11, human: 0, gap: 0, at: 0, na: 6, certifiable: 3 },  // +1.4.12, +1.4.1, +1.4.11 (ADR 0025)
+    // pdf is 12🟡/5⚪ rather than 11/6 because 4.1.2 gained a remediation lane and, with it, a
+    // derived assessment cell — 🟡 not 🟢, since its detector covers AcroForm fields only.
+    // The criterion moved ⚪ → 🟡 (it was never out of scope, just undeclared), so the estate
+    // still sums to 20.
+    pdf: { auto: 3, review: 12, human: 0, gap: 0, at: 0, na: 5, certifiable: 3 },  // +1.4.12, +1.4.1, +1.4.11 (ADR 0025)
     // html is 10🟢/8🟡 rather than 11/7 for the same reason docx moved: 2.4.6 went 🟢→🟡 once
     // HTML_HEADING_SKIP was recognised as a level check, not a descriptiveness one. The
     // criterion CROSSES buckets rather than leaving, so the estate still sums to 20.

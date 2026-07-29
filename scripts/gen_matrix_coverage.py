@@ -14,6 +14,13 @@ rule makes a deliberate downgrade a valid editorial act — so the consumer
 supports. That asymmetry is the whole design: over-claiming is a correctness bug, under-
 claiming is a judgment call, and only the first can be caught mechanically.
 
+The two axes are derived SEPARATELY, and the separation is load-bearing. Assessment asks what
+the detector examines; remediation asks whether the fixer writes. Neither answers the other's
+question, so no assessment-side source (the capability registry's `coverage`, a review-lane
+entry, detector presence) may set a remediation ceiling, and a pair the lane table does not
+mention gets a null remediation ceiling — unknown, not "none". `_remediation_ceiling` carries
+the full account; pdf 4.1.2 is the case that made the coupling visible.
+
 Sources, in order of authority
 ------------------------------
 1. api/remediation_capability.py — the primary signal. A dense (format x SC) -> lane table
@@ -99,11 +106,13 @@ _SC_RE = re.compile(r"\d+\.\d+\.\d+")
 
 # lane -> the strongest matrix tier that lane can honestly support.
 # A missing lane (ACP does not evaluate this pair) is NOT "not applicable": the criterion may
-# still apply to the format in WCAG terms, ACP simply automates nothing for it. So the ceiling
-# is "a human does it", which lets the matrix say H/NA on the assessment axis and M/N/NA on the
-# remediation axis, but never C/Q or any flavour of automatic.
+# still apply to the format in WCAG terms, ACP simply automates nothing for it. So the assessment
+# ceiling is "a human does it", which lets the matrix say H/NA but never C/Q.
 A_CEILING = {"auto": "C", "review": "Q", "human": "H", None: "H"}
-R_CEILING = {"auto": "A", "assisted": "AI", "human": "M", None: "N"}
+# The REMEDIATION map has no `None` entry ON PURPOSE — see `_remediation_ceiling` below. The two
+# axes answer different questions, and a missing remediation lane is a fact about the lane table,
+# never something an assessment-side source is entitled to answer on its behalf.
+R_CEILING = {"auto": "A", "assisted": "AI", "human": "M"}
 
 
 def _load(name: str, path: Path):
@@ -461,6 +470,61 @@ def load_fix_modes() -> dict[str, dict[str, set[str]]]:
 _CATALOG_LANE = {"auto": "auto", "ai-assisted": "assisted", "human-only": "human"}
 
 
+def _remediation_ceiling(r_lane: str | None, *, has_applier: bool,
+                         covered: bool) -> tuple[str | None, list[str], bool]:
+    """The remediation ceiling for a cell, derived ONLY from remediation-axis evidence.
+
+    Returns `(ceiling, notes, is_gap)`. The ceiling is None when no lane is declared, and that
+    is the whole point of this function existing.
+
+    The axes are independent, and this is the one place that was quietly pretending otherwise.
+    `R_CEILING[None] = "N"` used to turn "the lane table does not mention this pair" into R1
+    "No Remediation" — a positive, confident claim that nothing remediates it. Nothing in the
+    code proved that. Worse, the claim was reached via the ASSESSMENT axis: a pair migrated to
+    the capability registry got an assessment ceiling from its `coverage` value, that same
+    registry entry suppressed the undeclared-coverage warning below, and the remediation axis
+    was left holding a default nobody had to defend. pdf 4.1.2 is the case that exposed it — a
+    registry entry reading `coverage=partial` (a statement about which parts of the criterion
+    the DETECTOR examines) capped a fixer that demonstrably writes /TU at "No Remediation", and
+    the matrix's drift guard duly reported the matrix for over-claiming. It was not.
+
+    So: no lane, no ceiling. A null ceiling means "the code makes no claim here" — the drift
+    consumer skips a null rather than ranking against it (check_grid_drift.find_drift), so a
+    gap can no longer masquerade as a proven upper bound. The gap travels as a loud note and
+    the `is_gap` flag instead, which is what a gap actually is.
+
+    `is_gap` is narrower than "the lane is missing", because those are not the same thing and
+    conflating them just moves the dishonesty into the reporting. A missing lane is only a GAP
+    where ACP touches the pair at all — `covered` (a detector emits it, a review lane admits
+    it, or the registry declares it) or `has_applier` (handlers.py writes an approved value for
+    it). Where nothing in the code mentions the pair on either axis, the lane table is not
+    incomplete; ACP has simply never claimed the pair, and shouting about all 13 of those would
+    bury the 21 that need someone to act. The ceiling stays null in both cases — silence is
+    still not proof — but only one of them is a defect.
+
+    Applier presence gets the sharpest wording because it is the strongest evidence available
+    that a null is right and R1 was wrong: `handlers._apply_approved_values` writing this pair
+    back into the file is remediation-axis proof that SOMETHING remediates it, whatever the
+    lane table forgot to say. That was pdf 4.1.2's exact shape.
+    """
+    if r_lane is not None:
+        return R_CEILING[r_lane], [], False
+    if not (has_applier or covered):
+        return None, ["no remediation lane, and nothing in the code detects or remediates this "
+                      "pair on either axis — ACP makes no claim here, so the remediation "
+                      "ceiling is unknown rather than 'none'"], False
+    why = ("api/handlers.py wires a write-back applier for this pair, so the code demonstrably "
+           "remediates it" if has_applier else
+           "ACP assesses this pair (a detector emits it, a review lane admits it, or the "
+           "registry declares it)")
+    return None, [
+        f"NO REMEDIATION LANE: api/remediation_capability.py:REMEDIATION declares nothing for "
+        f"this pair, and {why}. The remediation ceiling is therefore unknown, NOT 'none' — "
+        f"deriving one from the assessment axis (registry coverage, detector presence) is a "
+        f"cross-axis inference this generator refuses to make. Close the gap by adding the lane "
+        f"with a round-trip proof in tests/test_remediation_capability.py"], True
+
+
 def build() -> dict:
     cap = load_capability()
     registry = load_registry()
@@ -479,19 +543,24 @@ def build() -> dict:
             r_lane = cell["remediation"] if cell else None
             in_review_lane = fmt in review_fmts.get(sc, set())
             has_detectors = bool(detectors[fmt].get(sc))
+            has_applier = sc in appliers.get(fmt, set())
+            reg = registry.get((sc, fmt))
 
             a_ceiling = A_CEILING[a_lane]
-            r_ceiling = R_CEILING[r_lane]
-            notes: list[str] = []
+            r_ceiling, notes, r_gap = _remediation_ceiling(
+                r_lane, has_applier=has_applier,
+                covered=has_detectors or in_review_lane or reg is not None)
 
             # No remediation lane does NOT mean no assessment. A pair can sit in the review-only
             # scope table, or simply have a dispatched detector: either way ACP surfaces evidence
             # a human adjudicates, which is the Guided tier — it just can never certify a PASS,
-            # so the ceiling stops at Q and never reaches C.
+            # so the ceiling stops at Q and never reaches C. Note the traffic is one-way: this
+            # block reads remediation-axis facts to bound the ASSESSMENT ceiling, and says
+            # nothing about the remediation ceiling, which `_remediation_ceiling` already
+            # settled from remediation-axis evidence alone.
             # The registry outranks every heuristic below it: where a pair has been migrated,
             # its coverage is an explicit, tested statement of how much the technique reaches,
             # rather than something inferred from which table happens to mention the pair.
-            reg = registry.get((sc, fmt))
             if reg is not None:
                 a_ceiling = _COVERAGE_CEILING_A.get(reg["coverage"], "H")
                 notes.append(
@@ -504,7 +573,7 @@ def build() -> dict:
                            "a dispatched detector emits this SC for this format")
                 notes.append(
                     f"no remediation lane, but {because} — ACP surfaces evidence it cannot "
-                    f"certify, so assessment tops out at Guided and remediation at none")
+                    f"certify, so assessment tops out at Guided")
 
             # Ground rule 2 — a model in the decision path caps remediation at AI-proposal.
             model_backed = (sc, fmt) in ai_pairs
@@ -516,7 +585,6 @@ def build() -> dict:
                     "auto — ground rule 2 caps a model-backed decision at AI-proposal")
 
             # The risky-direction check: an approved proposal that never reaches the file.
-            has_applier = sc in appliers.get(fmt, set())
             if r_lane == "assisted" and not has_applier:
                 r_ceiling = "M"
                 notes.append(
@@ -552,7 +620,10 @@ def build() -> dict:
                                 f" = {r_lane}")
             if detectors[fmt].get(sc):
                 evidence.append("detectors: " + ", ".join(detectors[fmt][sc]))
-            if r_lane == "assisted":
+            # Applier presence is remediation-axis evidence whenever it could change the reading:
+            # for an assisted lane it decides AI vs guided-manual, and for a MISSING lane it is
+            # the proof that "no lane" must not be read as "nothing remediates this".
+            if r_lane == "assisted" or r_lane is None:
                 evidence.append(f"write-back applier: {'yes' if has_applier else 'NO'} "
                                 f"(api/handlers.py:_apply_approved_values)")
             if ai_in_path:
@@ -563,7 +634,13 @@ def build() -> dict:
                 "assessment_lane": a_lane,
                 "remediation_lane": r_lane,
                 "ceiling_a": a_ceiling,
+                # null when no lane is declared: unknown, not "none". See _remediation_ceiling.
                 "ceiling_r": r_ceiling,
+                # Two different statements, deliberately both kept: the lane is absent, and
+                # that absence is a defect someone should close (as opposed to a pair ACP has
+                # simply never claimed on either axis).
+                "remediation_lane_missing": r_lane is None,
+                "remediation_gap": r_gap,
                 "detectors": detectors[fmt].get(sc, []),
                 "catalog_fix_modes": sorted(fix_modes[fmt].get(sc, set())),
                 "applier": has_applier,
@@ -589,7 +666,10 @@ def build() -> dict:
         }
 
     return {
-        "schema": 2,
+        # 3: `ceiling_r` became nullable (no lane -> no claim, see _remediation_ceiling) and
+        # cells gained `remediation_lane_missing`. The drift consumer already skips a null
+        # ceiling, so this is additive for it; nothing else reads the version.
+        "schema": 3,
         "source": "acp",
         "formats": list(FORMATS),
         "a_tiers": list(A_TIERS),
@@ -605,7 +685,10 @@ def explain(data: dict) -> None:
     print("-" * 100)
     for sc, fmts in data["cells"].items():
         for fmt, c in fmts.items():
-            ceil = f"{c['ceiling_a']}/{c['ceiling_r']}"
+            # "?" is a null remediation ceiling — no lane declared, so no claim. It reads
+            # differently from "N" on purpose: N asserts nothing remediates this, ? admits
+            # the code has not said.
+            ceil = f"{c['ceiling_a']}/{c['ceiling_r'] or '?'}"
             lanes = f"{c['assessment_lane'] or '-':<8}{c['remediation_lane'] or '-':<11}"
             note = c["notes"][0][:52] + "…" if c["notes"] else ""
             print(f"{sc:<8}{fmt:<7}{lanes}{ceil:<10}{note}")

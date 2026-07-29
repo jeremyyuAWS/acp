@@ -39,7 +39,15 @@ Every lane below was DERIVED by running that round-trip, not copied from a catal
     white-page model did (it turned compliant white-on-dark text into an AA failure).
     Structure (re-tagging) can't be auto-written, but an untagged PDF gets a deterministic
     heading-map proposal (font-size rank) a human confirms — assisted, like figure alt and
-    reading order (which are AI proposals). pdf 2.4.4 is the counter-example that fixes the
+    reading order (which are AI proposals). 4.1.2 form-field names are the SAME honest-partial
+    shape as 1.4.3: `_fix_pdf_form_fields` copies a meaningful field name (/T) into the
+    accessible name (/TU), which is a mechanical restatement of data already sitting in the
+    field dictionary — no model, no human, ADR-0016 safe — and the same abstention rule refuses
+    a generic auto-name ("Text1", "fld_03"), which stays a finding and routes to a per-field
+    review card whose approved value `apply_pdf_field_name` writes back into /TU. Note that the
+    ASSESSMENT axis deliberately does NOT follow this lane to 🟢: the detector reads AcroForm
+    fields and nothing else, never the tagged-structure components 4.1.2 also covers, so the
+    cell is overridden to 🟡 review below. pdf 2.4.4 is the counter-example that fixes the
     rule's edge: a descriptive label IS derivable from the link target, but no PDF write-back
     can put it in the file, and a proposal nobody can honour is not an assisted lane. It is
     "human" — assessed, explained, re-authored by a person (see remediate_pdf.py).
@@ -194,6 +202,10 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "3.1.1": AUTO,       # catalog /Lang
         "3.1.2": ASSISTED,
         "3.1.5": ASSISTED,
+        "4.1.2": AUTO,       # AcroForm accessible names — /TU copied from a meaningful /T by
+                             # _fix_pdf_form_fields (mechanical, no model). Honest-partial like
+                             # 1.4.3: a generic /T is refused, stays a finding, and routes to a
+                             # review card that apply_pdf_field_name writes back on approval.
     },
     # HTML — the server-side remediator auto-fixes the broad structural/visual set (several
     # criteria clear incidentally, see module docstring). Media, target size, and non-text
@@ -288,6 +300,17 @@ ASSESSMENT_OVERRIDES: dict[tuple[str, str], str] = {
     # what 2.4.6 asks — and no HTML property settles that. All five formats are now 🟡 review. The
     # ⚡ auto REMEDIATION lane is untouched and correct: the heading-skip closure is deterministic.
     ("html", "2.4.6"): A_REVIEW,  # level well-formedness ≠ descriptive headings — can't certify
+    # pdf 4.1.2 is the ⚡-but-not-🟢 case in its purest form, and the reason the ⟹ carries the
+    # "only when the detector covers the whole criterion" caveat above. The remediation lane is
+    # genuinely ⚡ (a /TU copied from a meaningful /T is deterministic and re-scan proven), but
+    # formats/pdf/detectors/name_role_value.py walks AcroForm terminal fields ONLY. The other
+    # population 4.1.2 covers on a PDF — components expressed through the tagged-structure tree —
+    # needs a /StructTreeRoot walker this codebase does not have, so a clean re-scan proves the
+    # form fields are named, not that the criterion is met. The registry says the same thing on
+    # its own axis (coverage=PARTIAL) and store._rule_outcome already resolves a clean PDF scan
+    # to REVIEW; this override is what keeps the two from disagreeing. When a tag-tree detector
+    # lands and coverage moves to FULL, delete this line.
+    ("pdf", "4.1.2"): A_REVIEW,   # AcroForm-only detector — can't certify the whole criterion
 }
 
 

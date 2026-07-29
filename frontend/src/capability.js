@@ -87,7 +87,8 @@ export const CAPABILITY_FALLBACK = {
     "2.4.6": "assisted",
     "3.1.1": "auto",
     "3.1.2": "assisted",
-    "3.1.5": "assisted"
+    "3.1.5": "assisted",
+    "4.1.2": "auto"
   },
   "html": {
     "1.1.1": "human",
@@ -131,6 +132,14 @@ export const CAPABILITY_FALLBACK = {
 // by tests/test_capability_frontend_sync.py. Values: "auto" (🟢 ACP certifies pass & fail),
 // "review" (🟡 ACP detects a likely issue, human confirms), "human" (🔴 ACP can't assess).
 // A pair absent here is out of scope for that format → render a grey ⚪ N/A (not a verdict).
+//
+// The two axes really can disagree per cell, so read this table on its own rather than
+// inferring it from the one above. pdf 4.1.2 is the clearest case: ⚡ auto to remediate (the
+// fixer copies a meaningful field name into /TU deterministically) but 🟡 review to assess,
+// because the detector reads AcroForm fields only and never the tagged-structure components
+// 4.1.2 also covers — so a clean scan cannot certify it. Both literals below are strict JSON
+// (no comments, no trailing commas): tests/test_capability_frontend_sync.py parses them with
+// json.loads, and anything else makes the drift guard fail to read rather than fail to match.
 export const ASSESSMENT_FALLBACK = {
   "docx": {
     "1.1.1": "review", "1.3.1": "auto", "1.3.2": "review", "1.3.3": "review", "1.4.3": "auto",
@@ -152,7 +161,8 @@ export const ASSESSMENT_FALLBACK = {
   "pdf": {
     "1.1.1": "review", "1.3.1": "review", "1.3.2": "review", "1.3.3": "review", "1.4.3": "auto",
     "1.4.5": "review", "1.4.6": "auto", "1.4.9": "review", "2.4.1": "auto", "2.4.2": "auto",
-    "2.4.4": "review", "2.4.6": "review", "3.1.1": "auto", "3.1.2": "review", "3.1.5": "review"
+    "2.4.4": "review", "2.4.6": "review", "3.1.1": "auto", "3.1.2": "review", "3.1.5": "review",
+    "4.1.2": "review"
   },
   "html": {
     "1.1.1": "review", "1.2.1": "review", "1.2.2": "review", "1.2.3": "review", "1.3.1": "auto",
