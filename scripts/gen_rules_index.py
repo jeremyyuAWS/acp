@@ -26,7 +26,10 @@ Run after any rule change:
     python scripts/gen_rules_index.py
 
 The per-SC READMEs are GENERATED — edit the sources above, not the output. The
-top-level rules/README.md is hand-maintained (ownership table + workflow).
+top-level rules/README.md is hand-written prose EXCEPT its ownership table, which is
+regenerated between the markers in it: the criteria list and Engines column are derived
+here, while each row's Owner cell is parsed out and written back, so a claim survives
+regeneration and only the part a human actually maintains is left to a human.
 """
 from __future__ import annotations
 import ast
@@ -410,6 +413,63 @@ def render_sc(sc: str, name: str, level: str, cat_rules: list[dict],
     return "\n".join(lines)
 
 
+# ── Ownership table (rules/README.md) ────────────────────────────────────────
+# The per-SC READMEs are fully generated; the top-level README is a HUMAN document — prose,
+# workflow, and an Owner column somebody has to fill in. So only the table between the markers
+# is rewritten, and each row's Owner cell survives the rewrite.
+#
+# That split follows the file's own instruction, "keep the ownership column current". Keeping
+# the OWNER current is a job for a person. Keeping the criteria list and the Engines column
+# current is not, and leaving it to one had exactly the effect this index exists to prevent:
+# the table was written once and never revisited, so it listed 18 of 38 criteria and told a
+# reader that 2.4.6 was html-only (docx, pptx, xlsx and pdf all check it) and that 1.3.2 had
+# no html rule (HTML_VISUAL_REORDER). Derived columns belong to the generator.
+_OWNERSHIP_BEGIN = "<!-- BEGIN GENERATED: ownership table (scripts/gen_rules_index.py) -->"
+_OWNERSHIP_END = "<!-- END GENERATED: ownership table -->"
+_DEFAULT_OWNER = "_unassigned_"
+# Matches a row by its link target, which is the stable key — the display name and the
+# Engines cell are both regenerated, so neither can be relied on to find the owner again.
+_OWNER_ROW = re.compile(
+    r"^\|\s*\[[^\]]*\]\(\./wcag-([\d-]+)/\)\s*\|[^|]*\|[^|]*\|\s*(.*?)\s*\|\s*$", re.M)
+
+
+def _existing_owners(text: str) -> dict[str, str]:
+    """{sc: owner} recovered from the table currently in the file, so a claim is never lost
+    to a regeneration. Keyed off the folder slug (wcag-1-4-10 → 1.4.10)."""
+    return {m.group(1).replace("-", "."): m.group(2) for m in _OWNER_ROW.finditer(text)}
+
+
+def render_ownership_table(index_rows, owners: dict[str, str]) -> str:
+    lines = ["| Success Criterion | Level | Engines | Owner |",
+             "|-------------------|-------|---------|-------|"]
+    for sc, name, level, engines, slug in index_rows:
+        owner = owners.get(sc) or _DEFAULT_OWNER
+        lines.append(f"| [{sc} {name}](./{slug}/) | {level} | {', '.join(engines)} | {owner} |")
+    return "\n".join(lines)
+
+
+def update_readme(index_rows) -> tuple[int, int]:
+    """Rewrite the ownership table in place, preserving owners. Returns (criteria, claimed)."""
+    path = OUT / "README.md"
+    text = path.read_text()
+    if _OWNERSHIP_BEGIN not in text or _OWNERSHIP_END not in text:
+        raise SystemExit(
+            f"gen_rules_index: rules/README.md is missing the ownership-table markers.\n"
+            f"  expected: {_OWNERSHIP_BEGIN}\n"
+            f"        and: {_OWNERSHIP_END}\n"
+            "Restore them around the table. Without them the criteria list and Engines column "
+            "silently go stale, which is the drift they exist to prevent.")
+    owners = _existing_owners(text)
+    head, _, rest = text.partition(_OWNERSHIP_BEGIN)
+    _, _, tail = rest.partition(_OWNERSHIP_END)
+    path.write_text(f"{head}{_OWNERSHIP_BEGIN}\n"
+                    f"{render_ownership_table(index_rows, owners)}\n"
+                    f"{_OWNERSHIP_END}{tail}")
+    claimed = sum(1 for sc, _, _, _, _ in index_rows
+                  if (owners.get(sc) or _DEFAULT_OWNER) != _DEFAULT_OWNER)
+    return len(index_rows), claimed
+
+
 def main():
     cat = load_catalog()
     fe = load_frontend()
@@ -458,6 +518,8 @@ def main():
         [{"sc": sc, "name": n, "level": lv, "engines": e, "dir": s}
          for sc, n, lv, e, s in index_rows], indent=2) + "\n")
     print("Wrote rules/index.json")
+    criteria, claimed = update_readme(index_rows)
+    print(f"Updated rules/README.md ownership table — {criteria} criteria, {claimed} claimed")
 
 
 if __name__ == "__main__":
