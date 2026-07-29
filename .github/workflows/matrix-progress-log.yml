@@ -32,7 +32,9 @@
 #   The default GITHUB_TOKEN cannot dispatch to a different repository.
 #   Fine-grained PAT: repository = jeremyyuAWS/wcag-matrix, Contents = read & write.
 #   Add via: gh secret set MATRIX_DISPATCH_TOKEN --repo jeremyyuAWS/acp
-# Without the secret this job logs a notice and exits 0 — it never fails a push.
+# Without a USABLE secret this job logs a notice/warning and exits 0 — it never fails a push.
+# That covers both an absent secret and one the far repo rejects (expired, revoked, wrong
+# scope): the dispatch is best-effort by design, so a credential problem is reported, not fatal.
 
 name: Notify WCAG matrix
 
@@ -102,10 +104,47 @@ jobs:
                  "note in .github/workflows/matrix-progress-log.yml."
             exit 0
           fi
+          # A token that EXISTS but cannot be used — expired, revoked, or scoped to the wrong
+          # repo — used to fail the push, which this workflow promises never to do. The guard
+          # above only ever caught an ABSENT secret, so from 2026-07-29 every push to main went
+          # red on `gh: Bad credentials (HTTP 401)` while the notification it protects is, by
+          # design, best-effort: the matrix regenerates from full history and de-duplicates by
+          # commit hash, so a skipped dispatch costs a delay and nothing else.
+          #
+          # Environmental failures (the token can't do this / GitHub is down) are therefore
+          # treated exactly as an absent secret is: say so loudly, exit 0. Anything else still
+          # fails, because a 4xx that is NOT about credentials means this workflow is asking for
+          # something wrong — a bad event_type, a malformed payload — and that is a defect here
+          # rather than a condition of the environment. Silence on that would leave the matrix
+          # quietly un-notified forever, which is the failure mode this file exists to avoid.
           dispatch() {
-            gh api repos/jeremyyuAWS/wcag-matrix/dispatches \
-              -f event_type="$1" -F "client_payload[sha]=${{ github.sha }}"
-            echo "dispatched $1 for ${GITHUB_SHA:0:7}"
+            local out status code
+            out=$(gh api repos/jeremyyuAWS/wcag-matrix/dispatches \
+                    -f event_type="$1" -F "client_payload[sha]=${{ github.sha }}" 2>&1) \
+              && status=0 || status=$?
+            if [ "$status" -eq 0 ]; then
+              echo "dispatched $1 for ${GITHUB_SHA:0:7}"
+              return 0
+            fi
+            # `|| code=` matters: with `set -o pipefail` a no-match grep would otherwise abort
+            # the function here, failing the push with no message at all — the mystery failure
+            # this whole block exists to replace. No status code just means "unclassified".
+            code=$(grep -oE 'HTTP [0-9]{3}' <<<"$out" | tail -1 | tr -cd '0-9') || code=
+            case "$code" in
+              401|403|404)
+                echo "::warning::MATRIX_DISPATCH_TOKEN cannot dispatch to jeremyyuAWS/wcag-matrix" \
+                     "(HTTP $code) — $1 skipped for ${GITHUB_SHA:0:7}. Rotate the secret: it needs" \
+                     "a PAT with Contents: read & write on that repo. See this file's setup note."
+                return 0 ;;
+              5??)
+                echo "::warning::GitHub returned HTTP $code dispatching $1 — skipped for" \
+                     "${GITHUB_SHA:0:7}. The next push re-syncs the matrix."
+                return 0 ;;
+            esac
+            echo "::error::dispatch $1 failed${code:+ with HTTP $code} — not a credential or" \
+                 "availability problem, so it is not skipped."
+            echo "$out"
+            return 1
           }
           if [ "${{ steps.scan.outputs.count }}" != "0" ]; then
             dispatch acp-progress-log
