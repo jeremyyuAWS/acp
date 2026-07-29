@@ -139,6 +139,32 @@ be *shipping damage* — its fixer assumed a white page and rewrote compliant da
 21:1 down to 3.66:1, an AA failure it created, unattended. No amount of reading the diff would
 have surfaced that. One fixture surfaced it on the first run.
 
+**A pipeline hides whether the command ran at all**, and reports the failure as a pass. Read the
+exit status of the command itself, not of a pipeline, and address the repo explicitly:
+
+```
+git -C <repo> remote prune origin -n > /tmp/out 2>&1; echo "exit=$?"; cat /tmp/out
+```
+
+Two shapes to distrust. `cmd | grep X || echo "clean"` prints `clean` when `cmd` fails outright —
+`grep` cannot distinguish "no matches" from "nothing ran". And `cmd | tail; echo "exit=$?"` reports
+`tail`'s status, which is `0` no matter how `cmd` died.
+
+**Pass `git -C <repo>` rather than trusting the shell's cwd**, which does not survive
+`git worktree remove`: the shell is left in a deleted directory and silently resolves to the
+non-repo parent, where every git command fails identically.
+
+**Why.** On 2026-07-29 one session hit both halves within the hour. It ran
+`gen_progress_log.py --check | tail -4; echo "exit=$?"`, read `exit=0`, and reported the matrix
+guard as passing — that `0` was `tail`'s. Then, having just removed its own worktree, it ran
+`git remote prune origin -n | grep 'would prune' || echo "none"` from the cwd that removal had
+invalidated: every git call died with `fatal: not a git repository`, `grep` matched nothing, and
+the command printed `none`. That was reported as a clean prune. Nothing had run, and the only
+reason it surfaced was an unrelated `fatal:` leaking into the next command's output.
+
+Both commands were written *to verify* — which is what makes the shape worth knowing. A check
+that cannot fail is indistinguishable from a check that passed.
+
 ## Never merge red, and don't trust `mergeable` alone
 
 Read the checks themselves:
