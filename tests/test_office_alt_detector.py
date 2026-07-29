@@ -193,3 +193,41 @@ def test_the_remediator_shares_this_predicate(tmp_path):
     for value in ("", "Picture 1", "image3.png", "media/image1.png"):
         assert RO._is_junk_descr(value) is images.is_junk_descr(value) is True
     assert RO._is_junk_descr("A bar chart of revenue") is False
+
+
+# ── not double-counting the partner engine ────────────────────────────────────
+#
+# The first-party detectors are a FLOOR — they exist so the in-process re-scan can observe
+# 1.1.1 at all. They are not a second opinion. When the .NET analysers also run (CI builds
+# them; most dev machines do not) both answer the same question about the same images, so
+# every undescribed image was counted twice: an inflated finding count on every scan, and two
+# review rows for one picture. Caught by tests/test_alt_text_decorative_marker.py, which runs
+# only where the engine is built — so these exercise the collapse directly, and run everywhere.
+
+def _issue(rule, wcag="1.1.1 Non-text Content"):
+    return {"ruleId": rule, "wcag": wcag, "severity": "CRITICAL"}
+
+
+def test_first_party_alt_findings_yield_to_the_engines():
+    from scanner import _collapse_duplicate_alt
+    issues = [_issue("DOCX-ALT-001", "SC_1_1_1"), _issue("DOCX_IMAGE_NO_ALT")]
+    assert [i["ruleId"] for i in _collapse_duplicate_alt(issues)] == ["DOCX-ALT-001"]
+
+
+def test_first_party_alt_findings_survive_when_the_engine_did_not_run():
+    """The whole point: without them the criterion is invisible to the verifier."""
+    from scanner import _collapse_duplicate_alt
+    for rule in ("DOCX_IMAGE_NO_ALT", "PPTX_IMAGE_NO_ALT", "XLSX_IMAGE_NO_ALT",
+                 "PDF_FIGURE_NO_ALT"):
+        issues = [_issue(rule), _issue("SOMETHING_ELSE", "1.4.3 Contrast (Minimum)")]
+        assert [i["ruleId"] for i in _collapse_duplicate_alt(issues)] == [rule, "SOMETHING_ELSE"]
+
+
+def test_the_collapse_touches_nothing_but_duplicate_1_1_1():
+    """It must never suppress a first-party finding the engine did not also make."""
+    from scanner import _collapse_duplicate_alt
+    issues = [_issue("PPTX-ALT-001", "SC_1_1_1"), _issue("PPTX_IMAGE_NO_ALT"),
+              _issue("PPTX_LINK_PURPOSE_VAGUE", "2.4.4 Link Purpose (In Context)"),
+              _issue("PDF_FORM_NO_ACCESSIBLE_NAME", "4.1.2 Name, Role, Value")]
+    kept = [i["ruleId"] for i in _collapse_duplicate_alt(issues)]
+    assert kept == ["PPTX-ALT-001", "PPTX_LINK_PURPOSE_VAGUE", "PDF_FORM_NO_ACCESSIBLE_NAME"]
