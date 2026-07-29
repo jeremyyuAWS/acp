@@ -46,14 +46,18 @@ export function Donut({ segments, size = 138, thickness = 18, caption, onPick })
 export function Bars({ items, cols = '108px 1fr 30px', onPick, max, suffix }) {
   const [on, setOn] = useState(false)
   useEffect(() => { const t = setTimeout(() => setOn(true), 80); return () => clearTimeout(t) }, [])
-  const mx = max || Math.max(1, ...items.map((i) => i.value))
+  const mx = max || Math.max(1, ...items.map((i) => i.value || 0))
   return (
     <div>
       {items.map((it, i) => {
+        // A null value means NOT MEASURED, and must not be drawn as a bar of length zero with
+        // "0" beside it — that reads as a measured zero. Empty track, em dash, and the row says
+        // so on hover. `{null}` renders as nothing at all, which is the blank-tile defect again.
+        const absent = it.value == null
         const inner = (<>
           <span className="critlabel" style={{ fontSize: 13, textAlign: 'left' }}>{it.label}</span>
-          <span className="track"><i style={{ width: on ? `${(it.value / mx) * 100}%` : '0%', background: it.color, transition: 'width 0.9s ease' }} /></span>
-          <span className="critn">{it.value}{suffix || ''}</span>
+          <span className="track"><i style={{ width: on && !absent ? `${(it.value / mx) * 100}%` : '0%', background: it.color, transition: 'width 0.9s ease' }} /></span>
+          <span className="critn" title={absent ? 'Not measured — no document in this group has been analysed yet' : undefined}>{absent ? '—' : `${it.value}${suffix || ''}`}</span>
         </>)
         return onPick
           ? <button key={i} className="critrow pickrow" style={{ gridTemplateColumns: cols, width: '100%' }} onClick={() => onPick(it)}>{inner}</button>

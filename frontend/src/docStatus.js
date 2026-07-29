@@ -26,3 +26,18 @@ export const statusOf = (f) => (
 // not a measurement, it is a blank denominator wearing a percentage sign.
 export const isUnassessed = (f) => f.status === 'discovered'
 export const analysedCount = (files) => (files || []).filter((f) => !isUnassessed(f)).length
+
+// The mean of the scores that EXIST, or null when the group holds none.
+//
+// null, not 0, for the same reason auditReady is null above: 0/100 is a measurement — it says
+// every document was checked and every one scored zero — and a group of unopened inventory rows
+// has not been checked at all. Overview carried its own copy of this that returned 0, so a
+// cancelled 258-document scan rendered "Finance 0", "Human Resources 0" down the whole
+// "Average score by department" panel, asserting an estate-wide failure nobody had measured.
+//
+// Two copies of an aggregate is how the dashboard came to disagree with itself before; both
+// call sites (Overview's panels, scanReport's PDF rollups) now read this one.
+export const avgScore = (files) => {
+  const scored = (files || []).filter((f) => f.score != null)
+  return scored.length ? Math.round(scored.reduce((a, f) => a + f.score, 0) / scored.length) : null
+}

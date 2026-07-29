@@ -535,7 +535,9 @@ export async function exportScanReport(d) {
     footerVersion: d.platformVersion,
     footerGenerated: d.timestamp || d.date,
   })
-  p.ring(d.avgScore ?? 0, (d.avgScore ?? 0) >= 90 ? GREEN : AMBER)
+  // No ring when nothing was scored — same guard the per-document report uses above. `?? 0`
+  // drew a full red 0/100 dial on the cover of a report whose own summary said "n/a".
+  if (d.avgScore != null) p.ring(d.avgScore, d.avgScore >= 90 ? GREEN : AMBER)
   p.cover({
     title: 'Estate Accessibility Report',
     subtitle: `${d.org} · scan-level conformance`,

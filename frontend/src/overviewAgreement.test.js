@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { statusSegments, severityItems } from './charts.jsx'
-import { statusOf, analysedCount } from './docStatus.js'
+import { statusOf, analysedCount, avgScore } from './docStatus.js'
 import { recommendFor, remediableCount, REMEDIATION_ACTIONS } from './sim.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -208,5 +208,89 @@ describe('Overview reports absent values as absent, not as zero', () => {
   it('derives the open-findings insight by counting documents, not by subtracting counters', () => {
     expect(overviewSrc).toMatch(/const issuesOnly = files\.filter\(\(f\) => statusOf\(f\) === 'issues'\)\.length/)
     expect(overviewSrc).not.toMatch(/n - run\.certifiable - run\.uncertain - run\.error/)
+  })
+})
+
+// Same defect as the blank `certifiable` tile and "0% audit-ready", one panel over. On the same
+// cancelled 258-document scan, "Average score by department" read "Finance 0", "Human Resources
+// 0", … — a failing grade, on a /100 scale, for documents that were listed and never opened.
+// 0/100 is a measurement; an unopened inventory row has none.
+describe('an average over nothing is absent, not zero', () => {
+  const scored = (i, score) => ({ ...unopenedDoc(i), status: 'analysed', score })
+
+  it('returns null when no document in the group was scored', () => {
+    expect(avgScore(CANCELLED_258.files)).toBeNull()
+    expect(avgScore([])).toBeNull()
+    expect(avgScore(undefined)).toBeNull()
+  })
+
+  it('averages only the scored documents, ignoring the unscored ones', () => {
+    // 90 and 70 average to 80. The two unopened rows must not drag it toward zero, and must
+    // not count in the denominator either — that was the other way to get a wrong number here.
+    expect(avgScore([scored(1, 90), scored(2, 70), unopenedDoc(3), unopenedDoc(4)])).toBe(80)
+  })
+
+  it('is the same function scanReport uses, not a second copy', () => {
+    // scanReport's avgOf already returned null; Overview's copy returned 0. Two definitions of
+    // one average is how they came to disagree, so neither file may re-declare it.
+    for (const f of ['Overview.jsx', 'scanReport.js']) {
+      const src = readFileSync(join(here, f), 'utf8')
+      // A DEFINITION, not a use — `const avgScore = avgOf(files)` in scanReport is the report
+      // model's field, which is fine. What must not come back is a second implementation.
+      expect(/\b(avgScore|avgOf)\s*=\s*\([^)]*\)\s*=>/.test(src), `${f} redefines the average as an arrow function`).toBe(false)
+      expect(/function\s+(avgScore|avgOf)\s*\(/.test(src), `${f} redefines the average as a function`).toBe(false)
+      expect(src, `${f} does not import avgScore from docStatus.js`)
+        .toMatch(/import \{[^}]*\bavgScore\b[^}]*\} from '\.\/docStatus\.js'/)
+    }
+  })
+})
+
+// A null has to survive the trip to the screen. Returning null from avgScore and then rendering
+// it as `{it.value}` (nothing at all) or `${it.value}/100` ("null/100") is the same class of
+// defect one layer down — the blank `certifiable` tile was exactly that.
+describe('an unmeasured group renders as absent all the way to the bar', () => {
+  const barsSrc = readFileSync(join(here, 'charts.jsx'), 'utf8')
+
+  it('draws no bar and shows an em dash for a null value', () => {
+    expect(barsSrc).toMatch(/const absent = it\.value == null/)
+    expect(barsSrc).toMatch(/absent \? '—'/)
+    expect(barsSrc).toMatch(/width: on && !absent \?/)
+  })
+
+  it('colours an unmeasured group neutral, never a score band', () => {
+    // scoreColor's fallback used to be the "below 50 · at risk" blue, so an unanalysed
+    // department was painted with the worst band on the chart.
+    expect(overviewSrc).toMatch(/const scoreColor = \(s\) => s == null \? NA_GREY/)
+  })
+
+  it('never interpolates a null score into a drill-in title', () => {
+    // Pre-fix both score panels opened a drawer headed "Finance · avg 0 / 100". The score may
+    // still be interpolated — but only on the branch that has established it is not null.
+    expect(/title: `\$\{it\.label\}[^`]*· avg/.test(overviewSrc), 'a drill-in title interpolates the score with no null guard').toBe(false)
+    expect(overviewSrc).toMatch(/it\.value == null \? `\$\{it\.label\} · not yet scored`/)
+    expect(overviewSrc).toMatch(/it\.value == null \? `\$\{it\.label\}-owned · not yet scored`/)
+  })
+
+  it('does not name a lowest-scoring department when none has a score', () => {
+    // The insight sentence ranked scoreByDept[0] unconditionally: with every group at 0 it
+    // announced an arbitrary department as "the highest-leverage starting point".
+    expect(overviewSrc).toMatch(/const deptRanked = scoreByDept\.filter\(\(d\) => d\.value != null\)/)
+    expect(overviewSrc).toMatch(/!deptRanked\.length/)
+    expect(overviewSrc).not.toMatch(/scoreByDept\[0\]\.value/)
+  })
+
+  it('puts unscored groups last in the ranking rather than at the bottom of it', () => {
+    expect(overviewSrc).toMatch(/const byScoreAsc = \(a, b\) => \(a\.value == null\) - \(b\.value == null\)/)
+  })
+})
+
+// The estate PDF drew a 0/100 dial on its cover from `d.avgScore ?? 0` while the summary two
+// lines later correctly said "n/a" — the same report contradicting itself on one page.
+describe('the estate report omits the score dial it cannot compute', () => {
+  const pdfSrc = readFileSync(join(here, 'pdfReport.js'), 'utf8')
+
+  it('guards the ring instead of defaulting it to zero', () => {
+    expect(pdfSrc).not.toMatch(/p\.ring\(d\.avgScore \?\? 0/)
+    expect(pdfSrc).toMatch(/if \(d\.avgScore != null\) p\.ring\(d\.avgScore/)
   })
 })

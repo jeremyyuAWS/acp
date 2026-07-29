@@ -7,7 +7,7 @@
 // Truthful metrics only: "conformant" is a real count of certifiable documents,
 // never an estimated confidence %. Sections with no data are simply omitted.
 import { getScanTraces, listHitlQueue, getConfig } from './api.js'
-import { statusOf } from './docStatus.js'
+import { statusOf, avgScore as avgOf } from './docStatus.js'
 import { WCAG } from './wcagCatalog.js'
 import { recommendationSummary } from './sim.js'
 import { fixSteps, hasGuidance, appName } from './remediationGuide.js'
@@ -27,7 +27,6 @@ const assessLevel = (scanId) => {
   try { return JSON.parse(sessionStorage.getItem(`acp-assess-${scanId || 'none'}`) || 'null')?.level || 'AA' } catch { return 'AA' }
 }
 const deptOf = (f) => f.department || f.dept || 'Unassigned'
-const avgOf = (fs) => { const s = fs.filter((f) => f.score != null); return s.length ? Math.round(s.reduce((a, f) => a + f.score, 0) / s.length) : null }
 
 const APPENDIX_CAP = 150
 
