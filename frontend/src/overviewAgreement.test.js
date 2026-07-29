@@ -8,6 +8,7 @@ import { recommendFor, remediableCount, REMEDIATION_ACTIONS } from './sim.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const overviewSrc = readFileSync(join(here, 'Overview.jsx'), 'utf8')
+const SHARED_STATUS_CONSUMERS = ['Dashboard.jsx', 'charts.jsx', 'scanReport.js', 'FileDrawer.jsx']
 
 // Observed live on 2026-07-29 against v2026.7.29.2, scope "Full estate · all departments":
 //
@@ -153,6 +154,29 @@ describe('recommendFor — no findings means no remediation action', () => {
     expect(recommendFor({ status: 'error', compliant: 0, issues: [] }).action).toBe('manual')
     expect(recommendFor({ status: 'uncertain', compliant: 0, issues: [], skipped_rules: 2 }).action).toBe('review')
     expect(recommendFor({ status: 'analysed', compliant: 1, issues: [], score: 100 }).action).toBe('keep')
+  })
+})
+
+// There were three verbatim copies of this verdict — FileDrawer.jsx, Dashboard.jsx and
+// scanReport.js — each commented "mirrors FileDrawer's statusOf". A mirror is exactly what
+// fails silently: nothing makes a copy follow the original when it changes, and a dashboard
+// whose panels each hold their own definition of "does this document have findings" is one
+// edit away from disagreeing with itself again. One definition, imported everywhere.
+describe('the document verdict has exactly one definition', () => {
+  it('is not re-declared by any consumer', () => {
+    for (const f of SHARED_STATUS_CONSUMERS) {
+      const src = readFileSync(join(here, f), 'utf8')
+      expect(src, `${f} re-declares statusOf instead of importing it`)
+        .not.toMatch(/^\s*(const|function|export const|export function)\s+statusOf\b/m)
+    }
+  })
+
+  it('is imported from the shared module by every consumer', () => {
+    for (const f of SHARED_STATUS_CONSUMERS.filter((x) => x !== 'FileDrawer.jsx')) {
+      const src = readFileSync(join(here, f), 'utf8')
+      expect(src, `${f} does not import statusOf from docStatus.js`)
+        .toMatch(/import \{[^}]*\bstatusOf\b[^}]*\} from '\.\/docStatus\.js'/)
+    }
   })
 })
 
