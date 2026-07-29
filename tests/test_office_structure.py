@@ -93,6 +93,38 @@ def test_docx_heading_skip_detected(tmp_path):
     assert any(f["ruleId"] == "DOCX_HEADING_SKIP" for f in findings)
 
 
+def test_docx_every_heading_skip_reported_not_just_the_first(tmp_path):
+    """The detector used to `break` after the first gap, so a document with several reported one
+    — understating the work and reading as one edit from clean when it was several. The
+    remediator has always closed every gap in a single pass, so the report now matches it."""
+    doc = """<w:document><w:body>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>One</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading3"/></w:pPr><w:r><w:t>Three</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Two</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading4"/></w:pPr><w:r><w:t>Four</w:t></w:r></w:p>
+    </w:body></w:document>"""
+    skips = [f for f in os_.docx_checks(_docx(tmp_path, doc))
+             if f["ruleId"] == "DOCX_HEADING_SKIP"]
+    assert len(skips) == 2, [f.get("detail") for f in skips]
+    details = " | ".join(f["detail"] for f in skips)
+    assert "H1 to H3" in details and "H1 to H4" in details
+    # Each finding names the offending heading's position, so two identical gaps stay distinct.
+    assert len({f["detail"] for f in skips}) == 2
+
+
+def test_docx_single_gap_not_double_reported_when_outline_resumes(tmp_path):
+    """H1→H3→H4 is ONE gap: the H3→H4 step is well-formed. `prev_level` must advance to the level
+    actually in the document, not the clamped prev+1, or the rest of the outline cascades."""
+    doc = """<w:document><w:body>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>One</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading3"/></w:pPr><w:r><w:t>Three</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading4"/></w:pPr><w:r><w:t>Four</w:t></w:r></w:p>
+    </w:body></w:document>"""
+    skips = [f for f in os_.docx_checks(_docx(tmp_path, doc))
+             if f["ruleId"] == "DOCX_HEADING_SKIP"]
+    assert len(skips) == 1, [f.get("detail") for f in skips]
+
+
 def test_docx_sequential_headings_not_flagged(tmp_path):
     doc = """<w:document><w:body>
     <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Title</w:t></w:r></w:p>

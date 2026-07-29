@@ -238,7 +238,11 @@ FORMATS: tuple[str, ...] = ("html", "docx", "pptx", "xlsx", "pdf")
 # ── Assessment axis, derived from remediation + audited overrides (ADR 0023) ───
 # The honest rule: a criterion is 🟢 auto-assess when ACP can certify a PASS, not merely detect
 # a FAIL. A deterministic remediator that clears the finding on re-scan proves that — so
-# remediation "auto" ⟹ assessment "auto" (one direction). The DEFAULT for a non-auto criterion
+# remediation "auto" ⟹ assessment "auto" (one direction) — but ONLY when the detector's coverage
+# is the whole criterion. Where a deterministic remediator clears the one narrow signal its own
+# detector emits, "clean on re-scan" proves that signal is absent, not that the criterion is met;
+# the loop closes over a subset and the ⟹ over-claims. docx 2.4.6 below is exactly that case, and
+# any new AUTO cell must be checked against it. The DEFAULT for a non-auto criterion
 # is 🟡 review (ACP flags a likely issue for a human to confirm), because "not auto-fixable"
 # strongly correlates with "not deterministically certifiable" (the fix would be deterministic
 # if the check were). The reclassification audit (task #174, docs/adr/0023-reclassification-audit.md)
@@ -253,11 +257,22 @@ FORMATS: tuple[str, ...] = ("html", "docx", "pptx", "xlsx", "pdf")
 #     text is an explicit `<w:jc w:val="both">` attribute (present = fail, absent = certifiable
 #     pass), but the fix is an opt-in left-align a human elects (🤖), not a silent auto-fix. This
 #     is the proof the axes don't collapse: 🟢 assess does NOT require ⚡ remediate.
+#   • 🟡 review — auto-REMEDIABLE but not certifiable, the reverse exception. docx 2.4.6 is the
+#     case: ⚡ auto is correct on the remediation axis (the heading-skip closure is deterministic
+#     and round-trip proven), but the derivation must not read that as a certified pass.
 # Control-gated 🟡 criteria (2.1.2/4.1.2 with no controls) are NOT listed here — they resolve
 # per-file to a grey ⚪ N/A when their detector finds nothing (a per-document outcome, not a lane).
 ASSESSMENT_OVERRIDES: dict[tuple[str, str], str] = {
     ("pptx", "2.1.1"): A_HUMAN,   # keyboard operability of a static deck — nothing to assess
     ("docx", "1.4.8"): A_AUTO,    # justified-text detection is deterministic; fix is opt-in (🤖)
+    # 2.4.6 asks whether a heading DESCRIBES its topic or purpose. The only docx detector,
+    # office_structure.DOCX_HEADING_SKIP, decides a much narrower fact: whether heading LEVELS
+    # step by one. A document can hold a flawless H1→H2→H3 outline whose headings read "Section
+    # 1" / "Untitled" / "asdf" and scan clean — the derivation then certified a green PASS on
+    # evidence that never bore on the criterion. Whether a heading describes its section is a
+    # judgment no OOXML property settles, so 🟡 review is the honest ceiling here, matching
+    # pdf/pptx/xlsx (all already review). The ⚡ auto REMEDIATION lane is untouched and correct.
+    ("docx", "2.4.6"): A_REVIEW,  # level well-formedness ≠ descriptive headings — can't certify
 }
 
 

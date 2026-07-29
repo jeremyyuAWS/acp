@@ -80,7 +80,7 @@ Each cell is `assessment / remediation`.
 | 1.3.1 | Info & Relationships | 🟢/⚡ | 🟢/⚡ | 🟢/⚡ | 🟡/🤖 ⚠ |
 | 1.3.2 | Meaningful Sequence | 🟡/🤖 | 🟢/⚡ | 🟡/⚡ ⚠ | 🟡/🤖 |
 | 1.3.3 | Sensory Characteristics | 🟡/🤖 | 🟡/🤖 | 🟡/🤖 | 🟡/🤖 |
-| 2.4.6 | Headings & Labels | 🟢/⚡ | 🟡/🤖 | 🟡/🤖 | 🟡/🤖 |
+| 2.4.6 | Headings & Labels | 🟡/⚡ ‡ | 🟡/🤖 | 🟡/🤖 | 🟡/🤖 |
 | 3.1.1 | Language of Page | 🟢/⚡ | 🟢/⚡ | 🟢/⚡ | 🟢/⚡ |
 | 3.1.2 | Language of Parts | 🟡/🤖 | 🟡/🤖 | 🟡/🤖 | 🟡/🤖 |
 | 1.4.4 | Resize Text | 🟡/👤 ⚠ | 🟡/👤 ⚠ | 🟡/👤 ⚠ | 🟡/👤 ⚠ |
@@ -96,6 +96,8 @@ Each cell is `assessment / remediation`.
 | 2.1.1 | Keyboard | 🔴/— | 🔴/— | 🔴/— | 🔴/— |
 | 2.1.2 | No Keyboard Trap | 🟡/👤 † | 🟡/👤 † | 🟡/👤 † | 🔴/— ⚠ |
 | 4.1.2 | Name, Role, Value | 🟡/👤 † | 🟡/👤 † | 🟡/👤 † | 🟡/👤 † |
+
+‡ docx 2.4.6 was proposed 🟢/⚡ here and shipped that way; the audit's Correction 2 revised it to **🟡/⚡**. Its detector (`DOCX_HEADING_SKIP`) judges heading *levels*, not whether a heading describes its section, so the ⚡ remediator clearing every finding it raises never certified the criterion — see [0023-reclassification-audit.md](0023-reclassification-audit.md#correction-2-docx-246-headings-and-labels--). This is the one cell where the audit changed the proposed matrix.
 
 † per-file conditional on the interactive-control detector (ADR 0023 Phase 1a, already shipped for office; `2.1.2`/`2.4.3`/`4.1.2` on a file with **no** controls resolve to N/A, not a finding). PDF AcroForm control detection (`pdf_form_field_checks`) already backs `4.1.2` and can extend to `2.1.2`.
 

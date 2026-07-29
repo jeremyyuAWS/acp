@@ -125,8 +125,23 @@ def test_lanes_are_valid():
         for sc, cell in table.items():
             assert cell["remediation"] in cap.LANES, f"{fmt} {sc}: bad remediation {cell['remediation']!r}"
             assert cell["assessment"] in cap.ASSESSMENT_LANES, f"{fmt} {sc}: bad assessment {cell['assessment']!r}"
-    # The one 🟢/non-auto exception is explicit and audited (not accidental drift).
+    # The 🟢/non-auto exception is explicit and audited (not accidental drift).
     assert cap.CAPABILITY["docx"]["1.4.8"] == {"assessment": cap.A_AUTO, "remediation": cap.ASSISTED}
+    # …and its mirror: ⚡ auto-remediable but NOT certifiable. docx 2.4.6's only detector
+    # (DOCX_HEADING_SKIP) judges heading LEVELS, never whether a heading describes its section,
+    # so "the fixer cleared it" must not be read as a certified pass (ADR 0023 audit, Correction 2).
+    # There is deliberately no "⚡ ⟹ 🟢" assertion either — this cell is why.
+    assert cap.CAPABILITY["docx"]["2.4.6"] == {"assessment": cap.A_REVIEW, "remediation": cap.AUTO}
+
+
+def test_2_4_6_is_review_lane_on_every_document_format():
+    """2.4.6 asks whether a heading DESCRIBES its topic — a judgement no file property settles.
+    docx was the lone 🟢 outlier (a derivation artifact: its remediator closes heading-level gaps,
+    which the ⚡⟹🟢 rule misread as certifying the criterion). All four now agree."""
+    for fmt in ("docx", "pptx", "xlsx", "pdf"):
+        assert cap.assessment_lane(fmt, "2.4.6") == cap.A_REVIEW, (
+            f"{fmt} 2.4.6 is {cap.assessment_lane(fmt, '2.4.6')!r}, expected review — ACP detects "
+            "structural heading defects but cannot certify that headings describe their sections.")
 
 
 def test_capability_formats_match_rule_formats():

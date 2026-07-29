@@ -311,17 +311,23 @@ def docx_checks(path: Path) -> list[dict]:
             if not doc:
                 return []
 
-            # 2.4.6 — heading level skips (e.g. Heading1 → Heading3)
+            # 2.4.6 — heading level skips (e.g. Heading1 → Heading3). EVERY gap is reported,
+            # not just the first: remediate_office closes them all in one pass, so stopping at
+            # the first understated the work and left a doc looking one edit away from clean
+            # when it was several. `prev_level` advances to the level actually in the document
+            # (not the clamped prev+1), which is what keeps H1→H3→H4 a single finding — the
+            # outline has one gap there, and the H3→H4 step is well-formed.
             prev_level = 0
-            for m in _HEADING_STYLE.finditer(doc):
+            for ordinal, m in enumerate(_HEADING_STYLE.finditer(doc), start=1):
                 level = int(m.group(1))
                 if prev_level > 0 and level > prev_level + 1:
                     f = _finding("DOCX_HEADING_SKIP", "2.4.6 Headings and Labels", "MODERATE")
                     # Carry the actual levels so the review card can show the before/after outline
                     # (H{prev} → H{level}, should be H{prev} → H{prev+1}) — real, not illustrative.
-                    f["detail"] = f"Heading level jumps from H{prev_level} to H{level} (should step to H{prev_level + 1})"
+                    # The ordinal keeps two identical gaps (two separate H1→H3s) distinguishable.
+                    f["detail"] = (f"Heading {ordinal}: level jumps from H{prev_level} to H{level} "
+                                   f"(should step to H{prev_level + 1})")
                     findings.append(f)
-                    break
                 prev_level = level
 
             # 1.3.1 — a paragraph visually styled as a heading (large/bold) but left in a

@@ -135,7 +135,7 @@ export const ASSESSMENT_FALLBACK = {
   "docx": {
     "1.1.1": "review", "1.3.1": "auto", "1.3.2": "review", "1.3.3": "review", "1.4.3": "auto",
     "1.4.5": "review", "1.4.8": "auto", "1.4.9": "review", "2.4.2": "auto", "2.4.4": "review",
-    "2.4.6": "auto", "2.4.9": "review", "2.4.10": "review", "3.1.1": "auto", "3.1.2": "review",
+    "2.4.6": "review", "2.4.9": "review", "2.4.10": "review", "3.1.1": "auto", "3.1.2": "review",
     "3.1.5": "review", "3.3.2": "auto"
   },
   "xlsx": {
