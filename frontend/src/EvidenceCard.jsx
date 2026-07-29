@@ -388,11 +388,23 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
     }
   }
 
+  // The accessible name carries the document, not just the criterion. It used to read
+  // "Review —" (card.wcag falls back to an em-dash when the row has no SC), so a screen-reader
+  // user was told nothing about what they were being asked to approve.
   return (
-    <section ref={rootRef} className="evcard" aria-label={`Review ${card.wcag}`}
+    <section ref={rootRef} className="evcard"
+             aria-label={['Review', card.sc ? card.wcag : null, card.fileName || null].filter(Boolean).join(' — ')}
              style={{ border: '1px solid var(--line)', borderRadius: 10, padding: 14, marginBottom: 12, background: 'var(--card, #fff)' }}>
-      <header className="evcard-hd" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+      <header className="evcard-hd" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
         <span className="fmtchip">{card.fmt}</span>
+        {/* WHICH DOCUMENT. First thing after the format chip, because a reviewer approving a
+            change to a file needs to know the file before anything else about the finding. */}
+        {card.fileName && (
+          <span className="evcard-file" title={card.file}>
+            <b className="evcard-filename">{card.fileName}</b>
+            {card.fileDir && <span className="evcard-filedir muted"> · {card.fileDir}</span>}
+          </span>
+        )}
         <b className="evcard-wcag">{card.wcag}</b>
         <span className="muted">{card.name}</span>
         {/* Where to look. Rendered only when the analysers attributed a page — the reviewer

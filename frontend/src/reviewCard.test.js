@@ -414,3 +414,41 @@ describe('card.thumb — the reviewer always sees the image, draft or not', () =
     expect(buildEvidenceCard({ id: 'c', rule_id: '1.1.1' }).thumb).toBeNull()
   })
 })
+
+// ── which document is this card about ─────────────────────────────────────────────────
+//
+// The card showed format, criterion and severity but never the filename. On the deployed app a
+// card read "HTML — Automatic fix applied — verify the result" with no document anywhere on it,
+// and axe-core confirmed the same gap in the accessible name: every card's aria-label was
+// literally "Review —", so a screen-reader user was told nothing about what they were approving.
+describe('buildEvidenceCard names the document', () => {
+  it('splits a bare filename into a name and no folder', () => {
+    const c = buildEvidenceCard({ file: 'Clinical-FAQ-39.html', rule_id: '1.1.1' })
+    expect(c.fileName).toBe('Clinical-FAQ-39.html')
+    expect(c.fileDir).toBe('')
+  })
+
+  it('splits a path, keeping the folder that tells two same-named documents apart', () => {
+    const a = buildEvidenceCard({ file: 'Patient Education/2024/Clinical-FAQ-39.html' })
+    const b = buildEvidenceCard({ file: 'Clinical/Archive/Clinical-FAQ-39.html' })
+    expect(a.fileName).toBe('Clinical-FAQ-39.html')
+    expect(a.fileDir).toBe('Patient Education/2024')
+    expect(b.fileName).toBe(a.fileName)
+    expect(b.fileDir).not.toBe(a.fileDir)   // the name alone could not distinguish these
+  })
+
+  it('invents nothing when the row carries no file', () => {
+    const c = buildEvidenceCard({ rule_id: '1.1.1' })
+    expect(c.fileName).toBe('')
+    expect(c.fileDir).toBe('')
+  })
+
+  it('keeps the full reference intact for the title attribute', () => {
+    expect(buildEvidenceCard({ file: 'a/b/c.pdf' }).file).toBe('a/b/c.pdf')
+  })
+
+  it('tolerates a trailing slash and duplicate separators rather than yielding an empty name', () => {
+    expect(buildEvidenceCard({ file: 'a//b/c.pdf' }).fileName).toBe('c.pdf')
+    expect(buildEvidenceCard({ file: 'a/b/c.pdf/' }).fileName).toBe('c.pdf')
+  })
+})

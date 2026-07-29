@@ -34,6 +34,39 @@ export function ineligibleReason(f, { triage = {}, hasInscopeSelections = false,
 
 export const remediableFiles = (files, opts) => (files || []).filter((f) => !ineligibleReason(f, opts))
 
+// What the scope panel must SAY, derived from the same eligibility test the button acts on.
+//
+// The panel used to show three chips — "N in scope · N N/A · N deferred" — each counting only
+// EXPLICIT per-row decisions. On a 258-document scan that read "2 in scope · 0 N/A · 0 deferred"
+// with all 258 rows listed, which invites exactly one reading: two documents have been triaged
+// so far and the rest default in. The opposite was true. `ineligibleReason` excludes every
+// unmarked file the moment ANY file is marked in-scope, so 256 documents were dropped from the
+// run with nothing on screen saying so — while the help text "Only in-scope files are
+// remediated" stayed technically true and completely uninformative.
+//
+// The missing number is `excluded.outOfScope`: documents this run will NOT touch, that the
+// reader believes it will. emptyScopeReason() already named it honestly, but only fires when
+// NOTHING is remediable — the all-or-nothing case. This reports the same buckets at every
+// scope size, so a partial selection is as legible as an empty one.
+export function scopeSummary(files, opts) {
+  const list = files || []
+  const excluded = {}
+  let eligible = 0
+  for (const f of list) {
+    const r = ineligibleReason(f, opts)
+    if (r) excluded[r] = (excluded[r] || 0) + 1
+    else eligible += 1
+  }
+  return {
+    total: list.length,
+    eligible,
+    excluded,
+    // True when the in-scope selection itself is what is holding documents back — the case
+    // that needs saying out loud, because it is the one the user created by accident.
+    restrictedBySelection: (excluded.outOfScope || 0) > 0,
+  }
+}
+
 // Said out loud when the user presses the button and nothing would happen. Names the counts and
 // the next step. Never guesses: every number here is a document this scan actually holds.
 export function emptyScopeReason(files, opts) {

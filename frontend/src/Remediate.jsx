@@ -17,7 +17,7 @@ import { firstProposed, firstBefore, firstThumb, firstKind, firstRationale, firs
          pageNoun, thumbAlt, thumbSize, appliedFixAlt, comparisonFor, noDraftHint } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
 import Thumbnail from './Thumbnail.jsx'
-import { remediableFiles, emptyScopeReason } from './remediableScope.js'
+import { remediableFiles, emptyScopeReason, scopeSummary, ineligibleReason } from './remediableScope.js'
 import { measuredReviewTime, REVIEW_TIME_BASIS } from './reviewerTime.js'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
@@ -154,6 +154,10 @@ function buildHumanQueue(files, triage = {}) {
       meta: ba.meta,
       file: f.file,
       ruleId: sc,
+      // buildEvidenceCard reads the hitl_queue column name, `rule_id`. The SIM item carried only
+      // the camelCase `ruleId`, so every demo card fell back to card.wcag = '—' and showed no
+      // criterion at all — the one number a reviewer needs to know what they are being asked.
+      rule_id: sc,
       aiDraftable: AI_DRAFTABLE_SCS.has(sc),
       source: f.sourceName,
       rule: `WCAG ${sc}${ITEM_NAME[sc] ? ' — ' + ITEM_NAME[sc] : ''}`,
@@ -684,6 +688,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // One eligibility test, shared with emptyScopeReason() — so what the button acts on and what
   // it says when it can't act on anything are derived from the same rules, in the same order.
   const scopeOpts = { triage, hasInscopeSelections, remActions: REM_ACTIONS }
+  // Same eligibility test as `remediable` below, counted rather than filtered — so what the
+  // panel SAYS it will skip and what the button actually skips cannot drift apart.
+  const scopeInfo = scopeSummary(files, scopeOpts)
   const remediable = remediableFiles(files, scopeOpts)
     .sort((a, b) => (ontRank(a) - ontRank(b)) || (priority(b) - priority(a)))
   const ontCount = remediable.filter((f) => f.ont).length
@@ -939,11 +946,22 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             <span className="trstatchip inscope">{inscopeCount} in scope</span>
             <span className="trstatchip na">{naCount} N/A</span>
             <span className="trstatchip defer">{deferCount} deferred</span>
+            {/* The chips above count only EXPLICIT decisions. When an in-scope selection exists it
+                also excludes every unmarked document, so without this chip the panel reported
+                "2 in scope" beside 258 listed rows and said nothing about the 256 being dropped. */}
+            {scopeInfo.restrictedBySelection && (
+              <span className="trstatchip out" title="Marking any document ✓ restricts the run to marked documents only. These are not marked, so Remediate all will skip them.">
+                {scopeInfo.excluded.outOfScope.toLocaleString()} excluded — not marked ✓
+              </span>
+            )}
           </div>
         </div>
         <p className="muted" style={{ fontSize: 12, margin: '0 0 10px' }}>
           Everything about each document in one place — progress, fixes applied, items needing you, and whether it’s in scope.
-          Set scope per row: <b style={{ color: '#3B6D11' }}>✓</b> in scope · <b>N/A</b> skip · <b style={{ color: '#1F5FA8' }}>⏸</b> defer. Only in-scope files are remediated.
+          Set scope per row: <b style={{ color: '#3B6D11' }}>✓</b> in scope · <b>N/A</b> skip · <b style={{ color: '#1F5FA8' }}>⏸</b> defer.
+          {scopeInfo.restrictedBySelection
+            ? <> <b style={{ color: '#8A2A20' }}>Because you marked {inscopeCount.toLocaleString()} document{inscopeCount === 1 ? '' : 's'} ✓, remediation runs on those alone</b> — the other {scopeInfo.excluded.outOfScope.toLocaleString()} are excluded until you mark them or clear the selection.</>
+            : <> No document is marked ✓, so remediation runs on <b>all eligible documents</b>. Marking even one ✓ restricts the run to marked documents only.</>}
         </p>
         <div className="doclist">
           <div className="docrow dochead">
@@ -955,11 +973,22 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             const dec = triage[f.file]
             const nFix = fixesByFile[f.file] || 0
             const nRev = reviewByFile[f.file] || 0
+            // Excluded BY THE SCOPE SELECTION specifically — not merely "unmarked". A document
+            // with no automatic fix is already ineligible for its own reason and marking it ✓
+            // would not change that, so calling it "excluded by your selection" would be the
+            // same false precision this panel is being fixed for.
+            const outOfScope = ineligibleReason(f, scopeOpts) === 'outOfScope'
             return (
-              <div className="docrow" key={f.file}>
+              <div className={outOfScope ? 'docrow outofscope' : 'docrow'} key={f.file}>
                 <div className="doccell-name">
                   <button className="remname" onClick={() => setSel(f)}>{f.file}</button>
-                  <div className="docsub muted">{f.sourceName}{f.department ? ` · ${f.department}` : ''}</div>
+                  <div className="docsub muted">
+                    {f.sourceName}{f.department ? ` · ${f.department}` : ''}
+                    {/* Said on the row itself, because three untouched buttons in the Scope cell
+                        read as "not decided yet" — which is how 256 dropped documents looked
+                        identical to 256 pending ones. */}
+                    {outOfScope && <span className="docexcl"> · excluded — not marked ✓</span>}
+                  </div>
                 </div>
                 <div className="docprog">
                   <div className="docbar"><i style={{ width: `${pct}%`, background: pct >= 90 ? '#3B6D11' : pct >= 60 ? '#BF8C00' : '#B43A2A' }} /></div>
@@ -971,7 +1000,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   {done ? <span className="trstatchip inscope">done</span>
                   : dec ? <><span className={`trstatchip ${dec}`}>{dec === 'inscope' ? '✓ in scope' : dec === 'na' ? 'N/A' : '⏸ deferred'}</span><button className="ghost small" onClick={() => triageFile(f.file, null)} title="Undo">↺</button></>
                   : <span className="scopebtns">
-                      <button className="trbtn inscope" onClick={() => triageFile(f.file, 'inscope')} title="In scope — include in remediation">✓</button>
+                      <button className="trbtn inscope" onClick={() => triageFile(f.file, 'inscope')} title={outOfScope ? 'Excluded — mark ✓ to include this document in remediation' : 'In scope — include in remediation'}>✓</button>
                       <button className="trbtn na" onClick={() => triageFile(f.file, 'na')} title="Not applicable — skip">N/A</button>
                       <button className="trbtn defer" onClick={() => triageFile(f.file, 'defer')} title="Defer — decide later">⏸</button>
                     </span>}
