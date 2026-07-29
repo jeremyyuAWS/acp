@@ -66,6 +66,12 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   // A deferred assess that opened NOTHING (0 scored of N) usually means the Drive sign-in expired
   // between Discover and Assess — surface a clear "sign in again" path instead of a silent 0%.
   const [accessFailed, setAccessFailed] = useState(false)
+  // The scan itself is not loadable for this account (per-scan 404 — api.SCAN_UNAVAILABLE).
+  // Distinct from accessFailed: there, the scan is ours and the DOCUMENTS wouldn't open; here
+  // there is no scan to assess at all, so a conformance number over zero documents would be a
+  // fabrication. Found live 2026-07-29 as "Assess produces no score": the catch below computed
+  // a result from an empty `files` and rendered a completed 0/100.
+  const [scanGone, setScanGone] = useState(null)
   // Remediation capability ({fmt: {sc: mode}}) — fetched once, seeded with the bundled
   // table so the auto-fixable counts are correct synchronously (and never regress to the
   // format-blind view if the fetch is slow or fails).
@@ -171,7 +177,18 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
           onAssessed?.()
           save({ phase: 'done', level, result: computed })
         }
-      }).catch(() => { /* transient poll error — keep polling */ })
+      }).catch((e) => {
+        // An unloadable scan is NOT transient — it will 404 for as long as this tab holds the
+        // id. Polling it was the ~60s of invisible retries in the live incident. Stop, and say so.
+        if (e?.scanUnavailable) {
+          clearInterval(timer.current)
+          setPhase('idle'); setProgress(0); setCurrentFile(null); setCurrentPhase('')
+          setScanGone(e.message)
+          try { sessionStorage.removeItem(SKEY(runId)) } catch { /* ignore */ }
+          return
+        }
+        /* transient poll error — keep polling */
+      })
     }
     tick()
     timer.current = setInterval(tick, 2000)
@@ -183,7 +200,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     if (!runId) return
     clearInterval(timer.current); clearTimeout(phaseTimer.current)
     const startedAt = Date.now()
-    setPhase('running'); setResult(null); setResultFromCache(false); setProgress(0); setAccessFailed(false)
+    setPhase('running'); setResult(null); setResultFromCache(false); setProgress(0); setAccessFailed(false); setScanGone(null)
     // ADR 0020: in the deferred model the DOWNLOAD happens now, at Assess — but GIS Drive tokens
     // live ~1h and are held in-memory per scan, so a scan discovered a while ago (or after a
     // container restart) has a stale/absent token and every file would 401. Push a fresh Drive
@@ -201,8 +218,17 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
         save({ phase: 'running', startedAt, level, result: computed })
         runTicker(startedAt, level, computed)
       }
-    }).catch(() => {
-      // On any error fall back to the immediate behaviour over whatever is already scored.
+    }).catch((e) => {
+      // A scan this account cannot load has NOTHING already scored, so the fallback below would
+      // present a conformance verdict computed over zero documents — the live "no score on
+      // Assess". Never score an absent scan; report it.
+      if (e?.scanUnavailable) {
+        setPhase('idle'); setProgress(0)
+        setScanGone(e.message)
+        try { sessionStorage.removeItem(SKEY(runId)) } catch { /* ignore */ }
+        return
+      }
+      // On any OTHER error fall back to the immediate behaviour over whatever is already scored.
       onAssessed?.()
       const computed = computeResult(level)
       save({ phase: 'running', startedAt, level, result: computed })
@@ -284,6 +310,14 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               <span className="muted"><b style={{ color: '#1F5FA8' }}>Computing conformance</b> · {docs.length.toLocaleString()} documents at WCAG 2.1 {level}</span>
               <span className="assesspct">{pct}%</span>
             </div>
+          </div>
+        )}
+        {scanGone && (
+          <div role="alert" style={{ margin: '4px 0 12px', padding: '11px 14px', borderRadius: 8, fontSize: 13.5,
+               background: '#FBE9E7', border: '1px solid #E7B4AC', color: '#8A2A20' }}>
+            ⚠ <b>No score — this scan can’t be opened.</b> {scanGone} Nothing was assessed, so there
+            is no result to show. Pick one of your own scans from <b>Time-travel</b>, or run a new
+            scan from <b>Discover</b>.
           </div>
         )}
         {phase === 'done' && accessFailed && (

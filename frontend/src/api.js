@@ -25,6 +25,25 @@ const headers = (extra = {}) => ({
 export const SESSION_EXPIRED =
   'Your session expired, so you were signed out. Sign in again to pick up where you left off — anything already saved is safe.'
 
+// Why a scan the client is holding cannot be loaded. Scans are scoped to the user who ran them
+// (per-user isolation, 0a1b167), and a per-scan read for somebody else's scan answers 404 — not
+// 403 — so an id is not an existence oracle across accounts. That is correct, and it is also
+// invisible: found live 2026-07-29, an allow-listed user's client held an id it could never
+// load and re-requested /traces and /diff for ~60s with every failure ending in
+// `.catch(() => null)`. Assess produced no score and said nothing. An empty score the user
+// cannot explain is worse than an error, so say it and move them somewhere that works.
+export const SCAN_UNAVAILABLE =
+  'That scan isn’t available to your account — scans are private to the person who ran them, and this one may belong to another account or have been removed.'
+
+// Backend detail for exactly this case. Coupled deliberately, and NOT by status alone: a 404
+// from a per-file or per-trace route under a scan the user does own is a different problem and
+// must not evict their scan. tests/test_scan_not_found_detail.py pins the string server-side so
+// this coupling cannot drift silently.
+const SCAN_NOT_FOUND_DETAIL = /^scan not found$/i
+// The scan id out of `<base>/scans/<id>[/...]`. Read off the Response, so it works for every
+// wrapper below without threading the id through each one.
+const SCAN_URL_RE = /\/scans\/([^/?#]+)/
+
 const j = async (r) => {
   if (r.status === 401) {
     googleToken = null
@@ -37,6 +56,18 @@ const j = async (r) => {
       const body = await r.json()
       if (body?.detail) detail = body.detail
     } catch (_) { /* body wasn't JSON */ }
+    if (r.status === 404 && SCAN_NOT_FOUND_DETAIL.test(String(detail).trim())) {
+      const m = SCAN_URL_RE.exec(r.url || '')
+      const scanId = m ? decodeURIComponent(m[1]) : null
+      // Announce BEFORE throwing, so the many callers that end in `.catch(() => null)` — the
+      // whole reason this was silent — cannot suppress it.
+      window.dispatchEvent(new CustomEvent('acp:scan-unavailable',
+        { detail: { scanId, reason: SCAN_UNAVAILABLE } }))
+      const e = new Error(SCAN_UNAVAILABLE)
+      e.scanUnavailable = true
+      e.scanId = scanId
+      throw e
+    }
     throw new Error(detail)
   }
   return r.json()

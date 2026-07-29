@@ -328,10 +328,15 @@ def _do_scheduled_scan():
     source = cfg.get("source") or "drive"
     ai = get_store().get_ai_enabled()
 
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+
     try:
         report = run_scan(source, drive_token=None, ai_enabled=ai, user=owner)  # ADC for drive
         sid = get_store().save_scan(report)
         finalize_scan(sid, ai, source)
+        get_store().record_sweep_outcome(ok=True, when=now, source=source, scan_id=sid,
+                                         files=report["summary"]["files"])
         print(f"scheduled {source} sweep complete: {report['summary']['files']} files "
               f"(owner={owner})", flush=True)
     except Exception as e:
@@ -346,6 +351,12 @@ def _do_scheduled_scan():
         # unconfigured, not quietly produce numbers about something else. A sweep that cannot
         # reach its source has nothing to say, so it says nothing and leaves the last real scan
         # standing.
+        #
+        # But "leaves the last real scan standing" is only honest if somebody is told. Until this
+        # was recorded, the sole trace of a failing sweep was this log line inside the container,
+        # while the UI kept presenting an hours-old scan as the live estate — which is how a
+        # 403 insufficient-scopes loop ran unnoticed on 2026-07-29. /schedule reports it now.
+        get_store().record_sweep_outcome(ok=False, when=now, source=source, error=str(e))
         print(f"scheduled {source} sweep FAILED — no scan was saved, the previous scan stands: {e}",
               flush=True)
 

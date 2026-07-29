@@ -210,6 +210,11 @@ export default function App() {
   const [liveScanId, setLiveScanId] = useState(null)
   const [tick, setTick] = useState(0)                  // bumped every minute to keep timeAgo labels fresh
   const [platformVersion, setPlatformVersion] = useState(null)  // full git-derived CalVer from /config (with the daily .N)
+  // Set when the scan this tab is holding cannot be loaded for this account (per-scan 404 —
+  // see api.SCAN_UNAVAILABLE). Shape: { scanId, reason, recoveredTo|null, recovered:boolean }.
+  // Rendered as an alert, because the alternative — which is what shipped — is an empty score.
+  const [scanUnavailable, setScanUnavailable] = useState(null)
+  const recoveringRef = useRef(false)      // one recovery at a time; getScan() below can 404 too
 
   useEffect(() => {
     const t = setInterval(() => setTick((n) => n + 1), 60_000)
@@ -330,6 +335,7 @@ export default function App() {
       }
     } catch { /* ignore */ }
     setSignedOutReason(null)    // the sign-in worked; the expiry notice must not outlive it
+    setScanUnavailable(null)    // ditto: a new session's scan list is about to be re-read
     if (p.token) {
       setGoogleToken(p.token)   // API Bearer auth
       setDriveToken(p.token)    // Same token has Drive scopes — no separate connect needed
@@ -409,6 +415,46 @@ export default function App() {
     if (items.length) saveDecisionsBatch(sid, items).catch(() => {})
     savedDecRef.current = { scanId: sid, decisions: { ...decisions }, triage: { ...triage } }
   }, [decisions, triage]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A per-scan request 404'd (api.js dispatches this before any caller's .catch can eat it).
+  // Say so, then move the user to a scan they CAN load — an unexplained empty score is the
+  // failure this replaces, and retrying an id that will never resolve only prolongs it.
+  useEffect(() => {
+    const onUnavailable = async (e) => {
+      const badId = e?.detail?.scanId || null
+      // Ignore a 404 for some OTHER scan than the one on screen: a stale poll from a tab the
+      // user has already navigated away from must not evict the scan they are reading.
+      const current = scan?.run?.id || null
+      if (badId && current && badId !== current) return
+      if (recoveringRef.current) return
+      recoveringRef.current = true
+      setScanUnavailable({ scanId: badId, reason: e?.detail?.reason || '', recoveredTo: null, recovered: false })
+      try {
+        let list = []
+        try { list = await listScans() } catch { list = [] }
+        setScanList(list)
+        const next = list.find((s) => s.id !== badId) || null
+        if (next) {
+          // getScan can itself 404 (a scan deleted between the list and this read). The
+          // recoveringRef guard above stops that from re-entering; the catch leaves the alert
+          // standing with recovered:false, which is the honest outcome.
+          const loaded = await getScan(next.id)
+          setScan(loaded); resetScanScopedState(); setView('overview')
+          setScanUnavailable({ scanId: badId, reason: e?.detail?.reason || '', recoveredTo: next.id, recovered: true })
+        } else {
+          // Nothing of their own to fall back to. Clear the dead scan and send them to the one
+          // action that can produce one, rather than leaving a scored-looking empty dashboard.
+          setScan(null); resetScanScopedState()
+          setScanUnavailable({ scanId: badId, reason: e?.detail?.reason || '', recoveredTo: null, recovered: true })
+          setView((v) => (me?.allow && !me.allow.includes('discover') ? v : 'discover'))
+        }
+      } finally {
+        recoveringRef.current = false
+      }
+    }
+    window.addEventListener('acp:scan-unavailable', onUnavailable)
+    return () => window.removeEventListener('acp:scan-unavailable', onUnavailable)
+  }, [scan?.run?.id, me?.allow]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!me) return <SignIn onSignedIn={signIn} notice={signedOutReason} />   // SignIn's own BuildStamp shows the full CalVer
 
@@ -686,6 +732,18 @@ export default function App() {
       )}
 
       {err && <div className="err" role="alert">{err}</div>}
+      {scanUnavailable && (
+        <div className="err" role="alert">
+          <span>{scanUnavailable.reason}</span>{' '}
+          {scanUnavailable.recoveredTo
+            ? <span>Showing your most recent scan instead.</span>
+            : scanUnavailable.recovered
+              ? <span>You don’t have a scan of your own yet — run one from <b>Discover</b> to get a score.</span>
+              : <span>Looking for a scan you can open…</span>}
+          <button className="ghost small" style={{ marginLeft: 10 }}
+                  onClick={() => setScanUnavailable(null)}>Dismiss</button>
+        </div>
+      )}
       {busy && progress && (
         <div className="scanprog" role="status" aria-live="polite">
           <div className="scanprogline"><span className="spinner" />

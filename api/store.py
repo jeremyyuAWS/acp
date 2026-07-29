@@ -3264,6 +3264,44 @@ class Store:
                 "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value",
                 (key, value))
 
+    # ── Scheduled-sweep outcome ───────────────────────────────────────────────
+    # A sweep that cannot reach its source deliberately saves NOTHING and leaves the last real
+    # scan standing (core._do_scheduled_scan; the alternative — substituting the bundled samples
+    # — displaced a 258-document estate every five minutes). That is the right call about the
+    # DATA and the wrong one about the UI: with only a container log line, every surface goes on
+    # presenting a scan from hours ago as the current estate, with nothing saying it is stale.
+    # Recorded here so /schedule can report it and the UI can say so. Same trust problem as the
+    # dashboard contradictions: a number nobody can date is a number nobody can act on.
+    _SWEEP_KEY = "last_sweep"
+
+    def record_sweep_outcome(self, *, ok: bool, when: str, source: str,
+                             scan_id: str | None = None, files: int | None = None,
+                             error: str | None = None) -> None:
+        """Persist the most recent scheduled sweep's outcome. Best-effort: a sweep must not fail
+        because its bookkeeping did."""
+        import json as _json
+        try:
+            self.set_setting(self._SWEEP_KEY, _json.dumps({
+                "ok": bool(ok), "at": when, "source": source,
+                "scan_id": scan_id, "files": files,
+                # Truncated: this reaches the browser, and a Google HttpError repr carries the
+                # full request URL. Enough to recognise the failure, not a wall of query string.
+                "error": (error or None) and str(error)[:400],
+            }))
+        except Exception:
+            pass
+
+    def get_last_sweep(self) -> dict | None:
+        """The last recorded sweep outcome, or None if none has run since this was added."""
+        import json as _json
+        raw = self.get_setting(self._SWEEP_KEY)
+        if not raw:
+            return None
+        try:
+            return _json.loads(raw)
+        except Exception:
+            return None
+
     def worker_tier_status(self, window_s: int = 120) -> dict:
         """The heartbeat with its AGE, not just a boolean.
 

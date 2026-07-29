@@ -208,6 +208,18 @@ def _list_drive_page_all(svc, q: str, max_files: int) -> tuple[list[dict], bool]
     return files, bool(page_token)
 
 
+def _flag_on(name: str) -> bool:
+    """Is this env flag on? `"0"` and `"false"` mean OFF.
+
+    `os.environ.get(name)` is a non-empty STRING for `ACP_DRIVE_DISCOVERY_DEBUG=0`, and every
+    non-empty string is truthy — so setting the flag to 0 to turn the diagnostic OFF left it on.
+    Found 2026-07-29: the live container had the flag at "0" and was still emitting
+    `[scan] discovery DEBUG:` on every sweep, including the extra unfiltered Drive listing the
+    gate exists to avoid. Matches the on/off vocabulary core.py already uses for ACP_REVIEW_MEMORY.
+    """
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _debug_dump_account(svc, max_files: int = 60) -> None:
     """Log EVERY file Drive returns for this account, filtered only by trashed=false — so a file
     the scan missed because its MIME type isn't scannable (a legacy .doc, an .odt, an image),
@@ -258,7 +270,7 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False) -
     residual lag in even the plain listing, re-listing and unioning by id until a pass adds
     nothing new.
     """
-    if os.environ.get("ACP_DRIVE_DISCOVERY_DEBUG"):
+    if _flag_on("ACP_DRIVE_DISCOVERY_DEBUG"):
         _debug_dump_account(svc)
 
     q = "trashed=false"

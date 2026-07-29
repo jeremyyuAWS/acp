@@ -81,6 +81,97 @@ def sources(request: Request):
         raise _drive_error(e)
 
 
+def _tokeninfo_scopes(token: str) -> list[str]:
+    """Ask Google what scopes an access token actually carries.
+
+    The seam the diagnostic below is tested through, and the only authoritative source: the
+    scopes on the credential object are what the CLIENT asked for, which for a user ADC is not
+    what was granted. Takes the token as an argument and returns only scope names — the value
+    never enters the response or a log.
+    """
+    import json as _json
+    import urllib.request as _ur
+    with _ur.urlopen(
+        "https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=" + token, timeout=8,
+    ) as r:
+        return (_json.load(r).get("scope") or "").split()
+
+
+@router.get("/drive/adc-scopes")
+def adc_scopes(request: Request):
+    """What Drive scopes the SERVER-SIDE (ADC) credential was actually granted. Owner-only.
+
+    The scheduled sweep runs on ADC, not on any user's token, and asks Drive for a
+    `corpora=allDrives` listing — which needs a broad Drive scope. When that scope is missing
+    Google answers `403 "Request had insufficient authentication scopes."` and the sweep saves
+    nothing, every five minutes, for as long as the credential stands.
+
+    Reading the code does NOT tell you whether the scope is there.
+    `scanner._drive_service(None)` passes `scopes=SCOPES` to `google.auth.default()`, but
+    `default()` deliberately withholds scopes from the credential loader and then relies on
+    `with_scopes_if_required`, which is a no-op for an `authorized_user` credential — the kind
+    `gcloud auth application-default login` writes and `deploy/public/deploy.sh` ships by default.
+    A user credential's scopes are fixed at consent; the client cannot widen them.
+    (tests/test_drive_adc_scopes.py pins both halves of that.)
+
+    So the only authoritative answer comes from Google. This mints the ADC access token and asks
+    the tokeninfo endpoint what it carries. Returns scope NAMES and the credential TYPE — never
+    the token, the refresh token, or the client secret.
+
+    Fixing a missing scope is an OPS action, not a deploy: the account behind the ADC must
+    re-consent (`gcloud auth application-default login --scopes=...`), or the deployment must move
+    to a service account, which does honour `scopes=`.
+    """
+    from .system import _require_admin
+    _require_admin(request)
+
+    import google.auth
+    import google.auth.transport.requests as _gart
+
+    needed = list(core.DRIVE_SCOPES)
+    try:
+        creds, project = google.auth.default(scopes=needed)
+    except Exception as e:
+        return {"available": False, "reason": "no_adc", "detail": str(e)[:300],
+                "scopes_requested": needed}
+
+    cred_type = type(creds).__name__
+    # `requires_scopes` False + `scopes` None is the exact signature of the silent-drop case.
+    scopes_applied_locally = list(creds.scopes) if creds.scopes else []
+
+    granted: list[str] | None = None
+    error = None
+    try:
+        creds.refresh(_gart.Request())
+        granted = _tokeninfo_scopes(str(creds.token))
+    except Exception as e:
+        # A refresh that fails because the scopes were never granted is itself the answer.
+        error = str(e)[:300]
+
+    missing = [s for s in needed if granted is not None and s not in granted]
+    return {
+        "available": True,
+        "credential_type": cred_type,
+        "is_user_credential": cred_type == "Credentials",   # google.oauth2.credentials
+        "project": project,
+        "scopes_requested": needed,
+        "scopes_applied_to_credential": scopes_applied_locally,
+        "scopes_granted": granted,
+        "missing_scopes": missing,
+        "sufficient_for_all_drives_listing": bool(granted) and not missing,
+        "error": error,
+        "remediation": (
+            None if (granted and not missing) else
+            "The ADC credential lacks the Drive scope the sweep needs. This cannot be fixed by "
+            "config or a redeploy: re-consent as the account that owns the ADC "
+            "(gcloud auth application-default login --scopes=openid,"
+            "https://www.googleapis.com/auth/cloud-platform,"
+            "https://www.googleapis.com/auth/drive.readonly) and re-set ACP_GOOGLE_ADC, or move "
+            "the deployment to a service account with Drive access to the folders in scope."
+        ),
+    }
+
+
 @router.get("/folders")
 def folders(request: Request, parent: str = "root"):
     """List immediate subfolders of a Drive folder — drives the frontend folder picker."""

@@ -39,12 +39,22 @@ describe('one reset, used by every path that changes the active scan', () => {
     }
   })
 
-  it('all four call sites use it', () => {
-    // sign-in, time-travel (switchScan), a new scan (doScan), reconnect. The definition reads
-    // `const resetScanScopedState = () => {`, so it does not match this pattern — every hit is
-    // a call. A fifth path appearing without one is the drift this whole change exists to stop.
+  it('all six call sites use it', () => {
+    // sign-in, time-travel (switchScan), a new scan (doScan), reconnect, and the two branches of
+    // the acp:scan-unavailable recovery (opening a different scan, and clearing the dead one when
+    // the user has none of their own — both change the active scan, so both must reset). The
+    // definition reads `const resetScanScopedState = () => {`, so it does not match this pattern
+    // — every hit is a call. A path appearing WITHOUT one is the drift this exists to stop; a new
+    // path appearing WITH one is the rule being followed, so bump the count and name it here.
     const calls = code.match(/resetScanScopedState\(\)/g) || []
-    expect(calls.length).toBe(4)
+    expect(calls.length).toBe(6)
+  })
+
+  it('the scan-unavailable recovery resets too — it changes the active scan', () => {
+    const handler = code.match(/const onUnavailable = async[\s\S]*?\n    \}\n/)
+    expect(handler, 'the acp:scan-unavailable handler should be found').toBeTruthy()
+    expect(handler[0]).toMatch(/setScan\(loaded\); resetScanScopedState\(\)/)
+    expect(handler[0]).toMatch(/setScan\(null\); resetScanScopedState\(\)/)
   })
 
   it('a new scan resets, which is the case that never did', () => {
