@@ -63,3 +63,89 @@ last 30 commits on `main` arrived as numbered PR merges. The ten exceptions are 
 published — rewriting shared history to undo it costs more than it recovers, and a force-push on
 a branch four sessions are working from is far worse than an unreviewed commit. Tell the user it
 happened and let them decide.
+
+## Check whether someone is already fixing it
+
+**Before the first edit**, look for work already in flight on the files you are about to touch:
+
+```
+git fetch -q origin && git log --oneline origin/main -15
+gh pr list --state open --json number,title,files -q '.[]|"#\(.number) \(.title)\n  \(.files[].path)"'
+```
+
+If an open PR or a recent commit already touches your file, say so and stop. Comment on that PR
+instead of opening a competing one.
+
+**Why.** On 2026-07-29 a single parser bug in `scripts/gen_progress_log.py` was diagnosed and
+fixed independently by at least four branches — `claude/fix-progress-log-generator`,
+`fix/matrix-note-none-with-reason`, `worktree-progress-log-warn` and `fix-notify-none-parse` —
+all committed within minutes of each other, and another session counted five sessions hitting
+the same wall. Two of the resulting PRs then blocked each other as CONFLICTING, and one had to
+be closed. Nobody was working from bad information; nobody could see anybody else.
+
+The cost is not just duplicated effort. The PR that merged (#47) had the right diagnosis; two
+others had a plausible-but-partial one, and a reviewer comparing them spent longer than writing
+the fix would have taken.
+
+## Reproduce before you diagnose, and ship the fixture
+
+An error message is a claim, not evidence. Build the smallest input that triggers the behaviour
+and run it before you write down a cause — and commit that fixture with the fix.
+
+**Why.** `gen_progress_log.py` reported `has a Matrix-Note: but no WCAG: trailer` on two
+commits. Both commits *had* the trailer:
+
+```
+676f081:  WCAG: 1.1.1 (pdf), 4.1.2 (pdf)
+51a673b:  WCAG: 1.3.1 (html), 2.4.6 (html)
+```
+
+`_WCAG_RE` anchored `$` after a single criterion, so a comma-separated list matched nothing and
+the code reported the trailer as missing. The message blamed the author for a parser bug. That
+wrong cause was then repeated in a commit message, a PR body and a cross-session message before
+anyone checked it — three artifacts, all confidently wrong, none of them cheap to retract.
+
+The session that got it right wrote a fixture for the trailer format first and found the comma
+case immediately. The session that got it wrong shipped no tests, which is exactly why it never
+saw it. A fix without a fixture is a hypothesis that happens to have been committed.
+
+The same rule applies to the capability grid: a cell moves on an observed detector run, never on
+a plausible reading of a diff. On 2026-07-29 nine cells were corrected because the code was
+checked against built fixtures, and one of them (`1.4.3` on PDF) turned out to be *shipping
+damage* — its fixer rewrote compliant dark-theme PDFs into AA failures. No amount of reading
+would have surfaced that; a fixture surfaced it in one run.
+
+## Merging: green, verified, and actually resolved
+
+- **Never merge red.** Check the suites explicitly, not the summary:
+  `gh pr checks <N> --json name,state -q '.[]|"\(.name): \(.state)"'`
+- **Do not trust `mergeable`.** GitHub reported `UNKNOWN` for a PR that merged perfectly
+  cleanly; it computes lazily and is often stale right after a related merge. When it matters,
+  trial-merge the real head:
+  `git fetch origin refs/pull/<N>/head:pr<N> && git merge --no-commit pr<N>`
+- **After resolving a conflict, verify before continuing.** `git add` followed by
+  `git rebase --continue` will happily commit a file that still contains `<<<<<<<` markers —
+  this happened on 2026-07-29 and was caught only because `node --check` runs over the page.
+  Grep for markers before you stage.
+
+**Holding a red PR is usually right.** Two PRs were held back on 2026-07-29 because they failed
+a coverage-contract fixture whose expected counts they had changed but not updated. The fix for
+that fixture landed on its own within the hour, both PRs went green, and their own sessions
+merged them. Merging them red would have put `main` red for everyone and every later PR would
+have inherited the failure.
+
+## Retire the worktree when the PR merges
+
+```
+git worktree remove .claude/worktrees/<name> && git branch -d <branch>
+```
+
+**Why.** On 2026-07-29 this repo had 17 worktrees open at once, none of them retired after
+their work merged. (They came down to 15 within the hour once sessions started cleaning up, so
+this is a habit worth keeping rather than a one-off tidy.) Beyond the clutter, a merged branch
+still held by a worktree cannot be deleted —
+`gh pr merge --delete-branch` fails with *cannot delete branch used by worktree* — so the
+branch list grows monotonically and stops being a usable index of what is actually in flight.
+
+Name the worktree after the work, not the generator: `worktree-pdf-244-explain-only` can be
+triaged from the list, `claude/unruffled-golick-29268b` has to be opened to find out what it is.
