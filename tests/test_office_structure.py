@@ -11,6 +11,8 @@ import sys
 import zipfile
 from pathlib import Path
 
+import pytest
+
 ACP = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ACP / "api"))
 
@@ -485,6 +487,116 @@ def test_pdf_low_contrast_text_flags_both_aa_and_aaa(tmp_path):
 def test_pdf_dark_text_only_not_flagged(tmp_path):
     findings = os_.pdf_contrast_checks(_pdf(tmp_path, dark=True))
     assert findings == []
+
+
+# --- pdf 1.4.3/1.4.6: the ratio is measured against the RESOLVED background ----
+# These pin the three ways the old declared-luma-vs-assumed-white threshold was wrong.
+
+def _pdf_text_on(tmp: Path, text_rgb, *, panel_rgb=None, full_page_rgb=None,
+                 size=12, name="doc.pdf") -> Path:
+    """One line of `text_rgb` text, optionally over a `panel_rgb` rect or a `full_page_rgb`
+    page fill. Channels are 0..255."""
+    from reportlab.lib.colors import Color
+    from reportlab.pdfgen import canvas
+
+    def _c(rgb):
+        return Color(*(v / 255 for v in rgb))
+
+    p = tmp / name
+    c = canvas.Canvas(str(p), pagesize=(400, 400))
+    if full_page_rgb:
+        c.setFillColor(_c(full_page_rgb))
+        c.rect(0, 0, 400, 400, stroke=0, fill=1)
+    if panel_rgb:
+        c.setFillColor(_c(panel_rgb))
+        c.rect(20, 20, 360, 360, stroke=0, fill=1)
+    c.setFillColor(_c(text_rgb))
+    c.setFont("Helvetica", size)
+    c.drawString(60, 200, "The quick brown fox")
+    c.save()
+    return p
+
+
+def test_pdf_white_text_on_dark_panel_is_not_flagged(tmp_path):
+    """White on black is 21:1 — it passes AA *and* AAA. The declared-luma model called it a
+    SERIOUS 1.4.3 failure because it assumed the page was white."""
+    src = _pdf_text_on(tmp_path, (255, 255, 255), panel_rgb=(0, 0, 0))
+    assert os_.pdf_contrast_checks(src) == []
+
+
+def test_pdf_white_text_on_full_page_dark_fill_is_not_flagged(tmp_path):
+    """Same defect via the other common shape: a dark cover page, not a panel."""
+    src = _pdf_text_on(tmp_path, (255, 255, 255), full_page_rgb=(0x10, 0x1C, 0x3A))
+    assert os_.pdf_contrast_checks(src) == []
+
+
+def test_pdf_dark_text_on_dark_background_is_flagged(tmp_path):
+    """The mirror miss: #4C4C4C on #262626 is 1.76:1 and fired nothing, because both lumas
+    sit below the old floors."""
+    src = _pdf_text_on(tmp_path, (0x4C, 0x4C, 0x4C), full_page_rgb=(0x26, 0x26, 0x26))
+    findings = {f["ruleId"]: f for f in os_.pdf_contrast_checks(src)}
+    assert set(findings) == {"PDF_LOW_CONTRAST_AA", "PDF_LOW_CONTRAST_AAA"}
+    assert findings["PDF_LOW_CONTRAST_AA"]["evidence"]["value"] == pytest.approx(1.76, abs=0.01)
+
+
+def test_pdf_muted_grey_body_text_fails_aa(tmp_path):
+    """#787878 on white is 4.42:1 — a real AA failure the luma floor (0.62 ≈ #9E9E9E) never
+    fired on. The whole muted-body-text band was under-reported this way."""
+    findings = {f["ruleId"]: f for f in
+                os_.pdf_contrast_checks(_pdf_text_on(tmp_path, (0x78, 0x78, 0x78)))}
+    assert "PDF_LOW_CONTRAST_AA" in findings
+    ev = findings["PDF_LOW_CONTRAST_AA"]["evidence"]
+    assert ev["value"] == pytest.approx(4.42, abs=0.01) and ev["required"] == 4.5
+
+
+def test_pdf_large_text_judged_at_the_large_text_bar(tmp_path):
+    """#808080 on white is 3.95:1 — an AA failure as body text, and compliant at 24pt, where
+    WCAG's bar is 3:1. Measuring a real ratio only helps if it's held to the right bar."""
+    grey = (0x80, 0x80, 0x80)
+    large = {f["ruleId"] for f in
+             os_.pdf_contrast_checks(_pdf_text_on(tmp_path, grey, size=24))}
+    small = {f["ruleId"] for f in
+             os_.pdf_contrast_checks(_pdf_text_on(tmp_path, grey, size=10, name="small.pdf"))}
+    assert "PDF_LOW_CONTRAST_AA" not in large and "PDF_LOW_CONTRAST_AA" in small
+
+
+def test_pdf_recolor_plan_abstains_when_no_colour_suits_every_background(tmp_path):
+    """One text colour on backgrounds that pull opposite ways: white and #333333 admit no
+    single colour clearing 4.5:1 on both, so the fixer is given nothing to apply and the
+    finding stays a finding. (White and BLACK do admit one — #767676 — and it is offered.)"""
+    assert os_._pdf_recolor_for_all("808080", {"FFFFFF", "333333"}, 4.5, 7.0) is None
+    assert os_._pdf_recolor_for_all("808080", {"FFFFFF", "000000"}, 4.5, 7.0) == "767676"
+
+
+def test_pdf_text_over_image_is_left_to_the_review_lane(tmp_path, monkeypatch):
+    """A glyph whose background is an image can't be resolved structurally, so this detector
+    abstains rather than judging it against a guessed page colour."""
+    src = _pdf_text_on(tmp_path, (0xCC, 0xCC, 0xCC))
+    real = os_._pdf_char_background
+    monkeypatch.setattr(os_, "_pdf_char_background", lambda *a, **k: None)
+    assert os_.pdf_contrast_checks(src) == []
+    monkeypatch.setattr(os_, "_pdf_char_background", real)
+    assert os_.pdf_contrast_checks(src)            # same file, background resolvable
+
+
+def test_pdf_background_tolerates_snug_panels_and_grazed_rules():
+    """Real glyph boxes don't line up with real fills. A char whose font box overhangs its
+    panel by a few points is still on the panel; a char beside a table rule's thin filled
+    rect is not on the rule. Only a genuine straddle resolves to nothing."""
+    ch = {"x0": 100.0, "top": 100.0, "x1": 110.0, "bottom": 110.0}   # a 10x10 glyph box
+    snug = [(100.0, 101.0, 110.0, 110.0, "101C3A")]                  # panel 1pt short at top
+    rule = [(0.0, 109.5, 400.0, 110.5, "000000")]                    # 1pt rule under the text
+    straddle = [(105.0, 100.0, 400.0, 110.0, "000000")]              # covers half the glyph
+    assert os_._pdf_char_background(ch, snug, []) == "101C3A"
+    assert os_._pdf_char_background(ch, rule, []) == os_._PDF_DEFAULT_BG
+    assert os_._pdf_char_background(ch, straddle, []) is None
+
+
+def test_pdf_contrast_reports_its_character_cap(tmp_path, monkeypatch):
+    """ADR 0026: pdf_contrast_checks was the one PDF detector that truncated silently."""
+    monkeypatch.setattr(os_, "_MAX_CHARS_PER_PAGE", 5)
+    detail = os_.pdf_contrast_checks(_pdf_text_on(tmp_path, (0xCC, 0xCC, 0xCC)))[0]["detail"]
+    assert "measured the first 5 characters on 1 page" in detail
 
 
 def test_pdf_luma_rejects_malformed_color():

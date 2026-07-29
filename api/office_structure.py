@@ -534,10 +534,11 @@ def pptx_contrast_checks(path: Path) -> list[dict]:
     return findings
 
 
-# 4.5:1 (AA) / 7:1 (AAA) approximated the same way as scanner.py's HTML contrast
-# checks — relative luma of the declared color; not a true APCA/WCAG contrast-
-# ratio computation against the actual background, which for a PDF would need
-# per-glyph background sampling. Consistent with the existing HTML heuristic.
+# 4.5:1 (AA) / 7:1 (AAA) measured as a TRUE WCAG contrast ratio (`_contrast_ratio`)
+# between each glyph's declared fill colour and the background structurally resolved
+# behind it (`_pdf_char_background`). This replaced a declared-colour luma threshold that
+# assumed every page was white: it called white-on-black a SERIOUS failure (really 21:1)
+# and passed #4C4C4C on #262626 (really 1.76:1), in both directions with confidence.
 # Caps to bound pdfplumber work on huge PDFs — but large enough to reach body text
 # past a high-contrast heading (the old 40-char slice stopped inside the header and
 # missed light-grey body that followed → false negative).
@@ -662,10 +663,10 @@ def _bbox_overlap_frac(cx0: float, ctop: float, cx1: float, cbot: float,
 
 def pdf_text_over_image_checks(path: Path) -> list[dict]:
     """1.4.3 Contrast (Minimum), text-over-image case (Review) for PDF (ADR 0025). `pdf_contrast_checks`
-    reads each char's DECLARED fill colour against an assumed page background — which is blind to text
-    laid over a raster image (photo/gradient/screenshot), where the real background is the pixels, not
-    the page colour. Rather than fabricate a contrast ratio from the declared colour there (dishonest),
-    this flags the case for review: any char whose box sits ≥60% inside an image XObject. Purely
+    resolves each char's background from page STRUCTURE (fill rects, page default) — which can answer a
+    panel or a coloured page exactly, but never text laid over a raster image (photo/gradient/
+    screenshot), where the real background is the pixels. It abstains there rather than fabricate a
+    ratio, and this owns the case instead: any char whose box sits ≥60% inside an image XObject. Purely
     structural (pdfplumber char + image bboxes, no render); the render-verified pixel measurement under
     the char is the documented follow-on. Rides the existing 1.4.3 lane as a per-file finding — 1.4.3
     stays 🟢 at the format level. Advisory, never a pass. Never raises."""
@@ -795,32 +796,220 @@ def pdf_over_image_locators(data) -> list[dict]:
     return runs
 
 
-def pdf_contrast_checks(path: Path) -> list[dict]:
-    findings: list[dict] = []
-    seen_aa = seen_aaa = False
-    total = 0
+# ── What is actually BEHIND a glyph — structural background resolution (no render) ──
+# A contrast ratio needs two colours. The declared text colour is on the char; the
+# background is not, and assuming the page is white is wrong in BOTH directions. Resolve
+# it from structure instead: the topmost FILLED rect (content-stream order) whose box
+# contains the glyph box, else the page's default background. That answers the ordinary
+# dark-theme / dark-cover document exactly, with no pixel sampling. Two cases structure
+# genuinely cannot answer — a glyph over an IMAGE (the background is the picture's pixels)
+# and a glyph STRADDLING a fill edge (two backgrounds, neither is "the" one) — resolve to
+# None so callers abstain rather than guess; `pdf_text_over_image_checks` already carries
+# the over-image case as its own review finding (ADR 0025 Tier B renders that one).
+_PDF_DEFAULT_BG = "FFFFFF"
+# How much of a glyph's box a fill must cover to BE its background. Strict containment is too
+# brittle for real documents in both directions: a glyph's font box routinely overhangs a
+# snug panel by a few percent (still plainly on the panel), and a glyph beside a table rule
+# grazes that rule's thin filled rect (plainly not on it). So: mostly covered ⇒ that fill is
+# the background; barely touched ⇒ not this fill, keep looking; in between ⇒ the glyph really
+# does sit across a fill edge with two backgrounds, and we resolve nothing rather than pick.
+_PDF_BG_COVERS_FRAC = 0.9
+_PDF_BG_GRAZES_FRAC = 0.1
+_PDF_LARGE_PT = 18.0            # WCAG "large text": ≥18pt, or ≥14pt bold
+_PDF_LARGE_BOLD_PT = 14.0
+
+
+def _pdf_filled_rects(page) -> list[tuple[float, float, float, float, str]]:
+    """(x0, top, x1, bottom, hex) for every rect on the page that PAINTS a fill, kept in
+    content-stream order so the LAST match is the topmost. Rects whose fill colour can't
+    be read are dropped — an unreadable fill is not a background we can measure against."""
+    out = []
+    for r in page.rects:
+        if not r.get("fill"):
+            continue
+        hex6 = _pdf_color_hex(r.get("non_stroking_color"))
+        if not hex6:
+            continue
+        try:
+            out.append((float(r["x0"]), float(r["top"]),
+                        float(r["x1"]), float(r["bottom"]), hex6))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def _pdf_char_background(ch, rects, images) -> str | None:
+    """The background hex behind one glyph, or None when structure can't resolve it (see
+    the note above). `rects` from `_pdf_filled_rects`, `images` as (x0, top, x1, bottom)."""
     try:
-        import pdfplumber
-        with pdfplumber.open(str(path)) as pdf:
-            for page in pdf.pages:
-                for ch in page.chars[:_MAX_CHARS_PER_PAGE]:
-                    total += 1
-                    luma = _pdf_luma(ch.get("non_stroking_color"))
-                    if luma is None:
-                        continue
-                    if luma > 0.45:
-                        seen_aaa = True
-                    if luma > 0.62:
-                        seen_aa = True
-                if (seen_aa and seen_aaa) or total >= _MAX_CHARS_TOTAL:
-                    break
+        cx0, ctop, cx1, cbot = (float(ch["x0"]), float(ch["top"]),
+                                float(ch["x1"]), float(ch["bottom"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    for box in images:
+        if _bbox_overlap_frac(cx0, ctop, cx1, cbot, *box) >= _MIN_OVERLAP_FRAC:
+            return None                              # over a picture — pixels, not structure
+    for x0, top, x1, bot, hex6 in reversed(rects):   # topmost fill wins
+        frac = _bbox_overlap_frac(cx0, ctop, cx1, cbot, x0, top, x1, bot)
+        if frac >= _PDF_BG_COVERS_FRAC:
+            return hex6
+        if frac > _PDF_BG_GRAZES_FRAC:
+            return None                              # straddles this fill's edge
+    return _PDF_DEFAULT_BG
+
+
+def _pdf_required_ratios(ch) -> tuple[float, float]:
+    """(AA, AAA) ratio this glyph must meet — the WCAG large-text bar (3:1 / 4.5:1) at
+    ≥18pt or ≥14pt bold, the normal-text bar (4.5:1 / 7:1) otherwise. Without this, every
+    24pt heading at 4:1 would read as a SERIOUS AA failure it isn't."""
+    try:
+        size = float(ch.get("size") or 0)
+    except (TypeError, ValueError):
+        size = 0.0
+    bold = "bold" in str(ch.get("fontname") or "").lower()
+    if size >= _PDF_LARGE_PT or (bold and size >= _PDF_LARGE_BOLD_PT):
+        return 3.0, 4.5
+    return 4.5, 7.0
+
+
+def _pdf_char_cap_note(pages_total: int, pages_read: int, pages_capped: int) -> str:
+    """Honest-caps suffix for the char-capped PDF text detectors (ADR 0026 Epic 1) — the
+    page-based `_cap_note` can't describe a per-page CHARACTER cap, which is why
+    `pdf_contrast_checks` was the one PDF detector truncating silently. Empty when nothing
+    was actually truncated."""
+    bits = []
+    if pages_capped:
+        bits.append(f"the first {_MAX_CHARS_PER_PAGE} characters on {pages_capped} "
+                    f"page{'s' if pages_capped != 1 else ''}")
+    if pages_read < pages_total:
+        bits.append(f"the first {pages_read} of {pages_total} pages "
+                    f"({_MAX_CHARS_TOTAL}-character limit reached)")
+    return f" — measured {' and '.join(bits)}" if bits else ""
+
+
+def _pdf_contrast_scan(path_or_bytes):
+    """Walk a PDF's glyphs once, yielding (page_index, char, text_hex, bg_hex_or_None) for
+    every char whose colour is readable, honouring both char caps. The single traversal
+    behind BOTH the detector and the fixer's recolour plan, so a finding and a fix can
+    never disagree about what a glyph's background is. Returns
+    (rows, pages_total, pages_read, pages_capped). Raises — callers decide."""
+    import io
+    import pdfplumber
+    rows = []
+    total = pages_total = pages_read = pages_capped = 0
+    src = (io.BytesIO(path_or_bytes) if isinstance(path_or_bytes, (bytes, bytearray))
+           else str(path_or_bytes))
+    with pdfplumber.open(src) as pdf:
+        pages_total = len(pdf.pages)
+        for pi, page in enumerate(pdf.pages):
+            rects = _pdf_filled_rects(page)
+            images = []
+            for im in page.images:
+                try:
+                    images.append((float(im["x0"]), float(im["top"]),
+                                   float(im["x1"]), float(im["bottom"])))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            chars = page.chars
+            if len(chars) > _MAX_CHARS_PER_PAGE:
+                pages_capped += 1
+            for ch in chars[:_MAX_CHARS_PER_PAGE]:
+                total += 1
+                fg = _pdf_color_hex(ch.get("non_stroking_color"))
+                if fg:
+                    rows.append((pi, ch, fg, _pdf_char_background(ch, rects, images)))
+            pages_read = pi + 1
+            if total >= _MAX_CHARS_TOTAL:
+                break
+    return rows, pages_total, pages_read, pages_capped
+
+
+def pdf_contrast_checks(path: Path) -> list[dict]:
+    """1.4.3 / 1.4.6 Contrast for PDF — a REAL WCAG contrast ratio per glyph: its declared
+    fill colour against the background structurally resolved behind it, at the bar its font
+    size earns. Reports the worst genuine failure of each criterion, with the measured
+    ratio as evidence. Glyphs whose background structure can't resolve are not judged here
+    (`pdf_text_over_image_checks` owns that lane) — a real measurement or nothing (ADR
+    0016). Never raises."""
+    worst_aa = worst_aaa = None          # (ratio, text_hex, bg_hex, required)
+    try:
+        rows, pages_total, pages_read, pages_capped = _pdf_contrast_scan(path)
     except Exception:
         return []
-    if seen_aa:
-        findings.append(_finding("PDF_LOW_CONTRAST_AA", "1.4.3 Contrast (Minimum)", "SERIOUS"))
-    if seen_aaa:
-        findings.append(_finding("PDF_LOW_CONTRAST_AAA", "1.4.6 Contrast (Enhanced)", "MODERATE"))
+    for _pi, ch, fg, bg in rows:
+        if bg is None:
+            continue
+        ratio = _contrast_ratio(fg, bg)
+        aa_req, aaa_req = _pdf_required_ratios(ch)
+        if ratio < aa_req and (worst_aa is None or ratio < worst_aa[0]):
+            worst_aa = (ratio, fg, bg, aa_req)
+        if ratio < aaa_req and (worst_aaa is None or ratio < worst_aaa[0]):
+            worst_aaa = (ratio, fg, bg, aaa_req)
+    note = _pdf_char_cap_note(pages_total, pages_read, pages_capped)
+    findings: list[dict] = []
+    for worst, rule_id, wcag, severity in (
+            (worst_aa, "PDF_LOW_CONTRAST_AA", "1.4.3 Contrast (Minimum)", "SERIOUS"),
+            (worst_aaa, "PDF_LOW_CONTRAST_AAA", "1.4.6 Contrast (Enhanced)", "MODERATE")):
+        if worst is None:
+            continue
+        ratio, fg, bg, req = worst
+        f = _finding(rule_id, wcag, severity)
+        f["detail"] = f"text #{fg} on #{bg} is {ratio:.2f}:1 (needs {req:g}:1)" + note
+        f["evidence"] = {"method": "structural", "metric": "Contrast", "value": round(ratio, 2),
+                         "required": req, "unit": ":1"}
+        findings.append(f)
     return findings
+
+
+def _pdf_recolor_for_all(fg: str, bgs: set[str], aa_req: float, aaa_req: float) -> str | None:
+    """The ONE replacement for text colour `fg` that clears `aaa_req` — or failing that
+    `aa_req` — on EVERY background in `bgs`. None when `fg` already clears AAA everywhere
+    (nothing to fix) or when no candidate clears AA everywhere (abstain rather than damage:
+    one colour used on both a light and a dark panel has no single right answer, and
+    `min_contrast_recolor`'s black/white fallback is only guaranteed to reach 4.5:1)."""
+    if not bgs or all(_contrast_ratio(fg, bg) >= aaa_req for bg in bgs):
+        return None
+    worst_bg = min(bgs, key=lambda b: _contrast_ratio(fg, b))
+    for target in (aaa_req, aa_req):
+        cand = min_contrast_recolor(fg, worst_bg, target)
+        if all(_contrast_ratio(cand, bg) >= target for bg in bgs):
+            return cand if cand != fg else None
+    return None
+
+
+def pdf_contrast_recolor_plan(src) -> dict[int, dict[str, str]]:
+    """Per page index (0-based): declared text-colour hex → its replacement hex, for the
+    deterministic 1.4.3/1.4.6 fixer (`remediate_pdf._fix_pdf_text_contrast`). Accepts PDF
+    bytes or a path.
+
+    Built from the SAME resolved background the detector measures, so the fixer can only
+    move a colour it has proved fails, and only the way that colour's real background calls
+    for — a dark cover wants LIGHTER text, not darker. A colour is absent from the plan, and
+    so never touched, when it already clears AAA on every background it is painted on, when
+    any of its glyphs sits over an image or straddles a fill edge (background unresolvable),
+    or when no single replacement clears AA on all of them. Never raises."""
+    groups: dict[int, dict[str, dict]] = {}
+    try:
+        rows, _pt, _pr, _pc = _pdf_contrast_scan(src)
+    except Exception:
+        return {}
+    for pi, ch, fg, bg in rows:
+        g = groups.setdefault(pi, {}).setdefault(
+            fg, {"bgs": set(), "aa": 0.0, "aaa": 0.0, "blocked": False})
+        if bg is None:
+            g["blocked"] = True             # one unresolvable glyph disqualifies the colour
+            continue
+        g["bgs"].add(bg)
+        aa, aaa = _pdf_required_ratios(ch)
+        g["aa"], g["aaa"] = max(g["aa"], aa), max(g["aaa"], aaa)   # strictest bar in the group
+    plan: dict[int, dict[str, str]] = {}
+    for pi, colours in groups.items():
+        page_plan = {fg: new for fg, g in colours.items()
+                     if not g["blocked"]
+                     and (new := _pdf_recolor_for_all(fg, g["bgs"], g["aa"], g["aaa"]))}
+        if page_plan:
+            plan[pi] = page_plan
+    return plan
 
 
 # ── ADR 0025 Tier A — PDF structural measurements from pdfplumber char metrics (no render) ──
