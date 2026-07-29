@@ -201,7 +201,7 @@ where every accessibility rule lives.
 
 ```bash
 # one-time setup
-python -m venv .venv-drive && .venv-drive/bin/pip install -r api/requirements.txt
+python -m venv .venv-drive && .venv-drive/bin/pip install -r api/requirements.txt -r tests/requirements.txt
 (cd frontend && npm install)
 # Drive scans need keyless ADC (local-corpus scans do not):
 gcloud auth application-default login
@@ -238,6 +238,14 @@ keychain.
 ```bash
 .venv-drive/bin/python -m pytest tests/ -q
 ```
+
+Install **both** requirements files, as the one-time setup above does. `tests/requirements.txt`
+carries the OOXML authoring libraries (`python-docx`, `python-pptx`, `openpyxl`) that ~12
+modules use to build `.docx`/`.pptx`/`.xlsx` fixtures on the fly. They are not runtime deps and
+nothing under `api/` pulls them in, so a venv built from `api/requirements.txt` alone **aborts
+collection** with `ModuleNotFoundError: No module named 'docx'` — and a partial install reads
+as a broken suite rather than a missing dependency. On a complete install the suite is green;
+any failure you see is real. CI installs both files for the same reason.
 
 `tests/test_scan.py` runs the real engines against the sample corpus and locks
 the oracle outcomes plus the core safety invariant: **an `error` or `uncertain`
