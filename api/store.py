@@ -650,6 +650,76 @@ def _certify(rule_id: str, fmt: str | None) -> str:
     return "PASS"
 
 
+# ── Operator-selected scan scope ──────────────────────────────────────────────────────
+# RULE_FORMATS already says which formats a criterion CAN be evaluated on. This is the
+# narrower question an operator asks: which of those they want evaluated for THIS engagement.
+#
+# The two are different in kind and must not be conflated. RULE_FORMATS is a fact about the
+# code — 2.4.3 cannot be judged on docx because no detector exists. Scope is a choice — a
+# customer's checklist covers 14 criteria and not the other six. Out-of-scope reads
+# NOT_EVALUATED, exactly like an above-target criterion: we did not evaluate it, because
+# nobody asked us to.
+#
+# Stored as a setting rather than code so it survives a redeploy and is auditable. None (the
+# default) means no restriction — everything RULE_FORMATS allows.
+#
+# WHY THIS IS NOT A FILE-TYPE FILTER. The obvious implementation — "don't scan .pptx" — is
+# coarser and dishonest in a way this is not: dropping a whole format removes its findings AND
+# its passes from the denominator, so excluding a format tends to flatter the score. Scoping by
+# (criterion, format) leaves every file scanned and every in-scope result counted; only the
+# pairs nobody asked about go quiet.
+SCOPE_PRESETS: dict[str, dict[str, frozenset[str]]] = {
+    # Deva's FINAL tab, IN-SCOPE grid — 14 criteria, per-format. Mirrors V5_APPLICABLE in the
+    # WCAG matrix, which was built from the same sheet; the two must not drift.
+    "deva-final": {
+        "1.1.1": frozenset({"docx", "xlsx", "pptx", "pdf"}),
+        "1.3.1": frozenset({"docx", "xlsx", "pptx", "pdf"}),
+        "1.3.2": frozenset({"pptx", "pdf"}),
+        "1.4.1": frozenset({"docx", "xlsx", "pptx", "pdf"}),
+        "1.4.3": frozenset({"docx", "xlsx", "pptx", "pdf"}),
+        "1.4.5": frozenset({"docx", "xlsx", "pptx", "pdf"}),
+        "2.1.1": frozenset({"pptx", "pdf"}),
+        "2.4.2": frozenset({"docx", "xlsx", "pptx", "pdf"}),
+        "2.4.3": frozenset({"pptx", "pdf"}),
+        "2.4.4": frozenset({"docx", "xlsx", "pptx", "pdf"}),
+        "2.4.6": frozenset({"docx", "xlsx", "pptx", "pdf"}),
+        "3.1.1": frozenset({"docx", "xlsx", "pptx", "pdf"}),
+        "3.1.2": frozenset({"docx", "xlsx", "pptx", "pdf"}),
+        "4.1.2": frozenset({"pdf"}),
+    },
+}
+
+SCOPE_SETTING = "scan_scope"          # preset name, or "" / absent for no restriction
+_scope_override: str | None = None    # tests and per-call use; None = read the setting
+
+
+def active_scope(store=None) -> dict[str, frozenset[str]] | None:
+    """The (criterion -> formats) map currently in force, or None for no restriction."""
+    name = _scope_override
+    if name is None and store is not None:
+        try:
+            name = store.get_setting(SCOPE_SETTING, "") or ""
+        except Exception:
+            name = ""
+    return SCOPE_PRESETS.get(name or "")
+
+
+def in_scope(rule_id: str, fmt: str | None, scope: dict | None = None) -> bool:
+    """False only when a scope is set AND it excludes this (criterion, format).
+
+    An unknown format is never excluded: the gate's job is to honour a deliberate choice, not
+    to invent one from a filename it could not parse.
+    """
+    if scope is None:
+        scope = active_scope()
+    if not scope:
+        return True
+    if fmt is None:
+        return True
+    fmts = scope.get(rule_id)
+    return bool(fmts) and fmt in fmts
+
+
 def _rule_outcome(rule_id: str, fmt: str | None, fail_count: int, review_count: int = 0,
                   target: str | None = None) -> str:
     """The per-(criterion, format) outcome from its finding counts.
@@ -677,6 +747,11 @@ def _rule_outcome(rule_id: str, fmt: str | None, fail_count: int, review_count: 
     # `filter_issues_to_target` drops those upstream; this is the backstop for callers that
     # pass raw counts.
     if not in_target(rule_id, target):
+        return NOT_EVALUATED
+    # Operator scope gate, on the same footing as the target gate above and for the same
+    # reason: a pair nobody put in scope was never evaluated, so it reports neither pass nor
+    # fail. Placed after the target gate because level is the coarser filter.
+    if not in_scope(rule_id, fmt):
         return NOT_EVALUATED
     if fmt is not None and fmt in REVIEW_FORMATS.get(rule_id, frozenset()):
         if fail_count > 0:
