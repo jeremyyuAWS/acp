@@ -99,9 +99,16 @@ jobs:
       - name: Matrix guard — rule changes declare their matrix impact
         run: |
           set -euo pipefail
-          # On a PR the checkout is the merge commit, so origin/<base>..HEAD is exactly the
-          # PR's own commits. A merge commit lists no files under --name-only, so it is
-          # skipped rather than being flagged for a trailer it could never carry.
+          # On a PR the checkout is the merge commit, so origin/<base>..HEAD is the PR's own
+          # commits PLUS GitHub's synthetic merge. check() skips that merge explicitly, by
+          # parent count, so it is never asked for a trailer it could never carry.
+          #
+          # This comment used to say a merge "lists no files under --name-only", and the
+          # implementation leaned on that. It is not true of merges — `git show` renders one as
+          # a COMBINED diff, listing only what differs from EVERY parent, which is empty just
+          # when the two sides touched disjoint files. #38 was the counter-example: base and
+          # branch both edited api/remediate_pdf.py, the merge was flagged, and no commit
+          # message could clear it. Fixed there; see #32.
           if [ -n "${BASE_REF:-}" ]; then
             git fetch --quiet origin "$BASE_REF"
             python scripts/gen_progress_log.py --check --since "origin/$BASE_REF"
