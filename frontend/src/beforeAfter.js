@@ -1,7 +1,10 @@
 import { parseContrast } from './contrastEvidence.js'
 
 const scOf = (r) => String(r || '').replace(/^SC[_ ]?/i, '').replace(/_/g, '.').match(/^\d+\.\d+\.\d+/)?.[0] || ''
-const HEADING_RE = /H(\d+)\s+to\s+H(\d+)/
+// Case-insensitive because the two formats spell the same finding differently: office_structure
+// writes "H1 to H3" (Word's Heading N styles), scanner.py writes "h1 to h3" (the html tags). Both
+// are the same skipped-level fact and must render the same outline card.
+const HEADING_RE = /H(\d+)\s+to\s+H(\d+)/i
 
 // A typed before/after descriptor for the card's finding, or null (→ the card keeps its prose).
 // One pattern for every rule (HITL vision: same card anatomy, no per-rule UI). Every value is REAL —

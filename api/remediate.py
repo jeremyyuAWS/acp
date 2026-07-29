@@ -72,11 +72,20 @@ def _fix_title(tree, diffs=None) -> list:
     return ["Added a descriptive page title · 2.4.2"]
 
 
-# ── 1.3.1 Info and Relationships — form labels (auto) ──
-# Mirrors frontend/src/rules/wcag-1-3-1.js: give unlabeled controls an aria-label
-# from a deterministic hint (placeholder → name → "Field").
-@_register("1.3.1", "auto")
-def _fix_form_labels(tree, diffs=None) -> list:
+# ── 1.3.1 Info and Relationships — form labels + pseudo-headings (auto) ──
+# Two distinct ways a document conveys structure visually without exposing it
+# programmatically, both filed under 1.3.1 (FIXERS holds one fixer per SC).
+#
+# Labels mirror frontend/src/rules/wcag-1-3-1.js: give unlabeled controls an
+# aria-label from a deterministic hint (placeholder → name → "Field").
+#
+# Pseudo-headings promote text merely STYLED as a heading into a real one. That
+# check used to live in frontend/src/rules/wcag-2-4-6.js under 2.4.6, which put
+# html at odds with docx — office_structure files the identical signal under
+# 1.3.1 (DOCX_PSEUDO_HEADING). 1.3.1 is the right criterion: the element is not a
+# heading yet, so there is nothing for 2.4.6's "do headings describe their topic"
+# to judge. Both formats now agree.
+def _fix_form_labels(tree, diffs=None) -> bool:
     changed = False
     for inp in tree.xpath("//input | //select | //textarea"):
         cid = inp.get("id")
@@ -92,7 +101,49 @@ def _fix_form_labels(tree, diffs=None) -> list:
         _rec(diffs, "1.3.1", f"<{inp.tag}> control with no label",
              f'aria-label="{hint or "Field"}"', "so a screen reader announces the field's purpose")
         changed = True
-    return ["Labeled form controls · 1.3.1"] if changed else []
+    return changed
+
+
+def _fix_pseudo_headings(tree, diffs=None) -> bool:
+    """Promote styled-but-unmarked text to real <h2> elements.
+
+    Uses the SAME predicate the detector flags (scanner.html_pseudo_headings), so the fix
+    promotes exactly what fired and the re-scan verifiably clears — the lock-step contract
+    office_structure documents for the docx pair. Imported lazily: this fixer runs in a
+    worker that has no reason to pay for the scanner's imports unless a 1.3.1 fix is applied.
+
+    Always <h2>, never a computed level, and that is deliberately safe: HTML_HEADING_SKIP
+    only fires when a level exceeds prev+1, so promoting to level 2 can create a gap only
+    where prev is 0 — and prev 0 is the first-heading guard, which never judges. So this fix
+    cannot introduce a 2.4.6 finding no matter where the element sits in the outline.
+    """
+    try:
+        import scanner as _scanner_mod
+    except Exception:
+        return False        # scanner unavailable in this process — labels above still applied
+    changed = False
+    for el in _scanner_mod.html_pseudo_headings(tree):
+        text = (el.text_content() or "").strip()
+        # Retag in place and KEEP the inline style, as the frontend module did: the defect is
+        # that the structure was never exposed, not that the text looked wrong. Preserving the
+        # style leaves the rendered page identical, so an auto-applied fix never surprises the
+        # author visually. The detector only inspects <p>/<div>, so the style staying put
+        # cannot re-fire it.
+        el.tag = "h2"
+        _rec(diffs, "1.3.1", f"styled text that only looked like a heading: {text[:60]}",
+             f"<h2>{text[:60]}</h2>", "so it appears in the outline assistive tech navigates by")
+        changed = True
+    return changed
+
+
+@_register("1.3.1", "auto")
+def _fix_info_and_relationships(tree, diffs=None) -> list:
+    out = []
+    if _fix_form_labels(tree, diffs):
+        out.append("Labeled form controls · 1.3.1")
+    if _fix_pseudo_headings(tree, diffs):
+        out.append("Promoted styled text to real headings · 1.3.1")
+    return out
 
 
 # ── 1.4.3 / 1.4.6 Contrast — darken low-contrast inline text colour (auto) ──

@@ -13,6 +13,15 @@ describe('beforeAfter — one before/after descriptor for every finding type (ro
     expect(ba).toEqual({ kind: 'heading', before: [2, 4], after: [2, 3] })
   })
 
+  it('heading skip → same outline card whichever format spelled it', () => {
+    // office_structure writes "H1 to H3" (Word's Heading N styles), scanner.py writes
+    // "h1 to h3" (the html tags). Same skipped-level fact; the card must not depend on case.
+    const docx = beforeAfter({ sc: '2.4.6', detail: 'Heading 2: level jumps from H1 to H3 (should step to H2)' })
+    const html = beforeAfter({ sc: '2.4.6', detail: 'Heading 2: level jumps from h1 to h3 (should step to h2)' })
+    expect(html).toEqual({ kind: 'heading', before: [1, 3], after: [1, 2] })
+    expect(html).toEqual(docx)
+  })
+
   it('heading with no parseable levels → null (card keeps prose, no invented outline)', () => {
     expect(beforeAfter({ sc: '2.4.6', detail: 'Headings must form a logical hierarchy' })).toBeNull()
   })

@@ -685,6 +685,64 @@ def _analyse_office(dest: Path) -> dict:
 
 _VAGUE_LINK_TEXT = frozenset({"click here", "here", "read more", "more", "link", "this", "click", "learn more", "details"})
 
+# ── 1.3.1 — text visually styled as a heading but left as body text ───────────
+# The html mirror of office_structure's DOCX_PSEUDO_HEADING, filed under the SAME criterion.
+# A <p>/<div> set large and bold but never marked up as a heading announces "this starts a
+# section" through presentation alone, so it is absent from the outline assistive tech
+# navigates by — that is 1.3.1 Info and Relationships.
+#
+# It is NOT 2.4.6, which is where frontend/src/rules/wcag-2-4-6.js used to file it: 2.4.6
+# asks whether headings that EXIST describe their topic, and this element is not a heading
+# at all yet. html and docx disagreed on the taxonomy for the one identical signal; filing
+# both under 1.3.1 is what makes a cross-format report add up.
+#
+# The predicate is SHARED with the remediator (api/remediate.py imports it) so the fix
+# promotes exactly what this flags and the re-scan verifiably clears — the same lock-step
+# requirement office_structure documents, for the same reason: the fix auto-applies, so a
+# false positive silently restyles real body text as a heading.
+_PSEUDO_HEADING_MIN_PX = 18
+_PSEUDO_HEADING_MAX_CHARS = 50
+_FONT_SIZE_PX = re.compile(r"font-size:\s*(\d+(?:\.\d+)?)\s*px", re.I)
+_FONT_WEIGHT_BOLD = re.compile(r"font-weight:\s*(?:bold|[6-9]00)\b", re.I)
+
+
+def html_pseudo_headings(root) -> list:
+    """<p>/<div> elements that read as a heading but are not marked up as one.
+
+    Detection is the frontend module's original heuristic — a childless <p>/<div> whose
+    inline style is at least 18px AND bold, holding short non-sentence text. Deliberately
+    unchanged in sensitivity: refiling the criterion is one question, and how eagerly to
+    promote body text is another, so this move does not quietly loosen the trigger.
+
+    The one addition is office_structure.looks_like_heading_furniture, which the docx and
+    PDF heading scans already share. "Big and bold" describes a cover-page wordmark, a
+    headline figure and a pull quote just as well as a section title, and the fix writes
+    without review — so html now rejects the same furniture the other formats do instead of
+    promoting "$4.2B" to an <h2>.
+    """
+    try:
+        import office_structure as _off_mod
+        _furniture = _off_mod.looks_like_heading_furniture
+    except Exception:                       # office deps absent — fall back to no filter
+        _furniture = lambda _t: False       # noqa: E731
+    out = []
+    for el in root.iter("p", "div"):
+        if len(el):                         # leaf text only, as the frontend module had it
+            continue
+        text = (el.text_content() or "").strip()
+        if not text or len(text) > _PSEUDO_HEADING_MAX_CHARS or text[-1] in ".?!":
+            continue
+        style = el.get("style") or ""
+        size = _FONT_SIZE_PX.search(style)
+        if not size or float(size.group(1)) < _PSEUDO_HEADING_MIN_PX:
+            continue
+        if not _FONT_WEIGHT_BOLD.search(style):
+            continue
+        if _furniture(text):
+            continue
+        out.append(el)
+    return out
+
 # Phase 1 HTML-check helpers — patterns mirror frontend/src/rules/ modules.
 _INPUT_PURPOSE = re.compile(
     r"e-?mail|(^|[\s_-])(tel|phone|mobile)([\s_-]|$)|(first|given)[-_ ]?name|(last|family|sur)[-_ ]?name"
@@ -933,6 +991,16 @@ def _analyse_html(path: Path) -> dict:
         if inp.get("id", "") in labelled_ids:
             continue
         issues.append({"ruleId": "HTML_FORM_CONTROL_NO_NAME", "wcag": "1.3.1 Info and Relationships", "severity": "CRITICAL"})
+
+    # 1.3.1 — text styled to look like a heading but never marked up as one. One finding per
+    # element (docx emits one per document; html can carry many sections on one page, and the
+    # fix promotes each, so under-reporting here would understate the work the way the 2.4.6
+    # `break` did). See html_pseudo_headings for why this is 1.3.1 and not 2.4.6.
+    for el in html_pseudo_headings(root):
+        issues.append({"ruleId": "HTML_PSEUDO_HEADING", "wcag": "1.3.1 Info and Relationships",
+                       "severity": "MODERATE",
+                       "detail": f"Text styled as a heading but left as <{el.tag}>: "
+                                 f"{(el.text_content() or '').strip()[:60]}"})
 
     # 1.4.1 Use of Color — link styled by inline color alone, no underline
     for a in root.iter("a"):
