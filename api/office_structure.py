@@ -1612,6 +1612,24 @@ def pdf_non_text_content_checks(path: Path) -> list[dict]:
     return detect(path)
 
 
+def office_non_text_content_checks(path: Path, ext: str) -> list[dict]:
+    """1.1.1 findings per docx/pptx/xlsx image with no usable alt text. Implementations:
+    formats/<fmt>/detectors/non_text_content.py, one per format (the rules index reads a
+    detector's format from its path), over one shared walk in formats/office/images.py.
+
+    Same shape as the PDF one above and for the same reason: RULE_FORMATS already lists all
+    three formats for 1.1.1, but the only implementations were the partner catalog's
+    DOCX-ALT-001 / PPTX-ALT-001 / XLSX-ALT-001. The in-process re-scan runs first-party checks
+    only, so it could not observe 1.1.1 on an Office file, and the write-back lane's credit
+    gate cleared it on no evidence."""
+    fmt = ext.lower().lstrip(".")
+    if fmt not in ("docx", "pptx", "xlsx"):
+        return []
+    import importlib
+    mod = importlib.import_module(f"formats.{fmt}.detectors.non_text_content")
+    return mod.detect(path)
+
+
 def checks_for(path: Path, ext: str) -> list[dict]:
     """Dispatch by extension; returns [] for formats with no structural check yet."""
     ext = ext.lower()
@@ -1619,13 +1637,14 @@ def checks_for(path: Path, ext: str) -> list[dict]:
         return (docx_checks(path) + office_control_review_checks(path, ext)
                 + office_color_only_checks(path, ext)
                 + office_reflow_checks(path, ext) + office_text_spacing_checks(path, ext)
-                + docx_nontext_contrast_checks(path))
+                + docx_nontext_contrast_checks(path) + office_non_text_content_checks(path, ext))
     if ext == ".pptx":
         return (pptx_checks(path) + pptx_contrast_checks(path) + pptx_audio_autoplay_checks(path)
                 + office_control_review_checks(path, ext)
                 + pptx_focus_order_checks(path) + pptx_nontext_contrast_checks(path)
                 + office_reflow_checks(path, ext) + office_text_spacing_checks(path, ext)
-                + pptx_resize_text_checks(path) + pptx_complex_bg_contrast_checks(path))
+                + pptx_resize_text_checks(path) + pptx_complex_bg_contrast_checks(path)
+                + office_non_text_content_checks(path, ext))
     if ext == ".pdf":
         return (pdf_contrast_checks(path) + pdf_bypass_blocks_check(path) + pdf_form_field_checks(path)
                 + pdf_headings_labels_check(path) + pdf_link_purpose_check(path)
@@ -1636,7 +1655,7 @@ def checks_for(path: Path, ext: str) -> list[dict]:
     if ext == ".xlsx":
         return (xlsx_contrast_checks(path) + xlsx_structure_checks(path)
                 + office_control_review_checks(path, ext) + office_color_only_checks(path, ext)
-                + xlsx_nontext_contrast_checks(path))
+                + xlsx_nontext_contrast_checks(path) + office_non_text_content_checks(path, ext))
     return []
 
 

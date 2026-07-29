@@ -31,14 +31,19 @@ import io
 import re
 import zipfile
 
-# Which element carries the alt text, per part. Mirrors remediate_office._ALT_TARGETS: the
-# same table that minted the locators must resolve them, or a locator would address an
-# element this module cannot find.
-_ALT_TAG_FOR_PART = [
-    (re.compile(r"^word/(document|header\d*|footer\d*)\.xml$"), "wp:docPr"),
-    (re.compile(r"^ppt/slides/slide\d+\.xml$"), "p:cNvPr"),
-    (re.compile(r"^xl/drawings/drawing\d+\.xml$"), "xdr:cNvPr"),
-]
+from formats.office.images import ALT_TARGETS as _ALT_TARGETS
+
+# Which element carries the alt text, per part — DERIVED from the one shared table rather than
+# restated, because "mirrors remediate_office" was a promise nothing enforced and it broke: when
+# the xlsx entry there gained `(?:xdr:)?` to cover default-namespace drawings, this copy kept the
+# prefixed-only `xdr:cNvPr`. The table that minted a locator could no longer resolve it, so a
+# reviewer's approved alt text for any default-namespace workbook came back unresolved and was
+# never written — the stranded approval this module exists to prevent, reintroduced by a copy.
+#
+# The tag may therefore be a regex ALTERNATION, not a literal; `_set_descr_in_xml` matches with
+# it and rebuilds each element from the text actually found, so whichever spelling the document
+# uses is preserved.
+_ALT_TAG_FOR_PART = [(pat, tag) for pat, tag, _wrapper, _captions in _ALT_TARGETS]
 
 _ATTR = lambda attrs, name: (re.search(rf'\b{name}="([^"]*)"', attrs) or [None, ""])[1]
 
@@ -102,14 +107,18 @@ def _set_descr_in_xml(xml: str, tag: str, name: str, alt: str) -> tuple[str, str
     means the element was there and simply had no description, which is the normal case.
     """
     out, last, found = [], 0, None
-    for m in re.finditer(rf"<{re.escape(tag)}\b([^>]*?)(/?)>", xml):
-        attrs, selfclose = m.group(1), m.group(2)
+    # `tag` is a PATTERN, not a literal — the xlsx entry is `(?:xdr:)?cNvPr`, matching both the
+    # prefixed form Excel authors and the default-namespace form other generators emit. So it is
+    # not re.escape'd, and the element is rebuilt from group 1 (the spelling this document
+    # actually used) rather than from the pattern, which would otherwise be written into the XML.
+    for m in re.finditer(rf"<({tag})\b([^>]*?)(/?)>", xml):
+        real_tag, attrs, selfclose = m.group(1), m.group(2), m.group(3)
         if found is not None or _ATTR(attrs, "name").strip() != name:
             continue
         found = _ATTR(attrs, "descr")
         stripped = re.sub(r'\s*\bdescr="[^"]*"', "", attrs)   # drop any existing descr
         out.append(xml[last:m.start()])
-        out.append(f'<{tag}{stripped} descr="{_xesc(alt)}"{selfclose}>')
+        out.append(f'<{real_tag}{stripped} descr="{_xesc(alt)}"{selfclose}>')
         last = m.end()
     if found is None:
         return xml, None

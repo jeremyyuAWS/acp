@@ -1,0 +1,1 @@
+"""docx format package."""
