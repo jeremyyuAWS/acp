@@ -113,6 +113,19 @@ Better still where you can: say what you are about to work on *before* you start
 *you* discover a collision; announcing prevents one for everybody else. Nothing in the check-first
 rule stops two sessions that both looked, both saw nothing, and both began.
 
+The cheapest way to announce is to push. **Push your branch as soon as you have one commit**,
+mid-task, long before the work is finished:
+
+```
+git push -u origin <your-worktree-branch>
+```
+
+An unpushed branch is invisible to every check above, including other sessions' re-checks. On
+2026-07-29 `39f3c06` fixed the decorative-card defect completely — backend and card — then sat
+unpushed, on no remote, with no PR. #43 independently rewrote the backend; #54 independently
+rewrote the same three frontend files. By the time it was pushed it was redundant, and it never
+merged. Every session involved had checked. There was nothing to find.
+
 ## Verify before you diagnose
 
 Reproduce a failure yourself before you believe what it says, and ship a test with the fix.
@@ -206,8 +219,19 @@ Two more things that day's merges cost:
 ## Retire your worktree after the merge
 
 ```
-git worktree remove .claude/worktrees/<name> && git branch -d <branch>
+git log origin/main --format='%h %s' | grep -F "(#<PR>)"   # confirm the squash actually landed
+git worktree remove .claude/worktrees/<name> && git branch -D <branch>
 ```
+
+**`-D`, not `-d`.** This repo squash-merges, so your commit never becomes an ancestor of `main`
+and `git branch -d` refuses to delete a branch whose work is fully merged. On 2026-07-29 neither
+`7c978f2` (merged as #43) nor `39f3c06` was an ancestor of `main`, so neither appeared in
+`git branch --merged`. `-d` buys you no safety here, only a refusal that looks like a warning —
+so confirm the squash by its PR number first, and then `-D` is a considered act rather than the
+thing you reach for when `-d` fails.
+
+Grep the subject, not the message: `git log --grep` searches the body too, and later commits
+routinely cite earlier PR numbers. Confirming #43 that way returns #51, whose body mentions it.
 
 **Why.** On 2026-07-29 this repo held 16 worktrees and none had been retired. Each one is a full
 checkout that goes stale the moment `main` moves, and a stale worktree is where the next session
