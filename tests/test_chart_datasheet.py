@@ -64,6 +64,33 @@ def test_num_trims_cleanly():
     assert proposals._num("Region") == "Region"             # non-numeric untouched
 
 
+def test_openpyxl_xlsx_chart_yields_an_exact_datasheet(tmp_path):
+    """An openpyxl-authored workbook caches NO chart values (only a cell range) and writes the
+    chart part in the default chart namespace — the `c:`-prefixed regex parser sees nothing there.
+    The chart_data fallback resolves the cells, so the workbook still gets a grounded proposal."""
+    opx = pytest.importorskip("openpyxl")
+    from openpyxl.chart import BarChart, Reference
+    wb = opx.Workbook(); ws = wb.active
+    ws.append(["Region", "Revenue"])
+    for c, v in zip(["North", "South", "East", "West"], [120, 70, 150, 50]):
+        ws.append([c, v])
+    ch = BarChart(); ch.title = "Sales by region"
+    ch.add_data(Reference(ws, min_col=2, min_row=1, max_row=5), titles_from_data=True)
+    ch.set_categories(Reference(ws, min_col=1, min_row=2, max_row=5))
+    ws.add_chart(ch, "E2")
+    p = tmp_path / "book.xlsx"
+    wb.save(str(p))
+
+    out = proposals.propose_chart_datasheet(p, ".xlsx")
+    assert len(out) == 1, "a cell-referenced native chart must still produce a datasheet proposal"
+    prop = out[0]
+    assert "Sales by region" in prop["proposed_value"]
+    assert "North–West" in prop["proposed_value"]                 # real category span
+    # Every figure is the chart's own, read from the worksheet cells it points at.
+    assert "North 120" in prop["rationale"] and "East 150" in prop["rationale"]
+    assert "deterministic" in prop["source"]
+
+
 def test_no_native_chart_yields_nothing(tmp_path):
     import zipfile
     p = tmp_path / "plain.pptx"

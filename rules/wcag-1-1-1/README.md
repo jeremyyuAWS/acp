@@ -28,6 +28,7 @@
 | Rule ID | Formats | Source |
 |---------|---------|--------|
 | `HTML_IMG_MISSING_ALT` | html | `api/scanner.py:_analyse_html` |
+| `PDF_FIGURE_NO_ALT` | pdf | `api/formats/pdf/detectors/non_text_content.py` |
 
 ## How to change this rule
 

@@ -81,6 +81,49 @@ def test_nothing_is_credited_beyond_what_the_re_scan_verifies(gen):
     assert not offenders, "credited but never verified:\n" + "\n".join(offenders)
 
 
+# Applier pairs whose credit still rests on a PARTNER-ENGINE rule, so the in-process re-scan
+# that grants that credit cannot observe the criterion at all.
+#
+# This is the vacuous-credit hole one level down from the test above: a catalog rule satisfies
+# "some detector emits this" while `proposals.verify_residual_scs` — which runs first-party
+# checks only — never sees it. The value is written, the criterion is "cleared" because it was
+# never observable, and the file certifies against a criterion nothing checked.
+#
+# Demonstrated, not theorised: demo-fixtures/powerpoint-accessibility-demo.pptx carries six
+# shapes with no `descr`, and a residual re-scan of it reports no 1.1.1.
+#
+# pdf 1.1.1 was on this list until formats/pdf/detectors/non_text_content.py landed. Office
+# 1.1.1 needs the same treatment — a first-party detector for undescribed docx/pptx/xlsx
+# images — and until it exists the honest thing is to name the gap rather than let a green
+# suite imply it is closed.
+_PARTNER_ENGINE_ONLY_CREDIT = {("docx", "1.1.1"), ("pptx", "1.1.1"), ("xlsx", "1.1.1")}
+
+
+def test_the_partner_engine_only_credit_gaps_are_exactly_the_known_ones(gen):
+    """Pins the gap so it can neither widen silently nor stay listed once it is closed.
+
+    Fails in both directions on purpose. A NEW pair appearing means a lane started crediting a
+    criterion its own verifier cannot see. A LISTED pair disappearing means someone built the
+    first-party detector and this list is now overstating the damage — delete the entry.
+    """
+    gri = _load("acp_gen_rules_index", ACP / "scripts" / "gen_rules_index.py")
+    first_party = gri.load_first_party()
+    actual = {
+        (fmt, sc)
+        for fmt, scs in gen.load_appliers().items()
+        for sc in scs
+        if not any(fmt in chk.get("formats", ()) for chk in first_party.get(sc, []))
+    }
+    assert actual == _PARTNER_ENGINE_ONLY_CREDIT, (
+        "the set of applier lanes credited on a criterion only the partner engine can detect "
+        f"has changed.\n  now:      {sorted(actual)}\n  expected: "
+        f"{sorted(_PARTNER_ENGINE_ONLY_CREDIT)}\n"
+        f"  newly vacuous: {sorted(actual - _PARTNER_ENGINE_ONLY_CREDIT)}\n"
+        f"  newly closed:  {sorted(_PARTNER_ENGINE_ONLY_CREDIT - actual)}\n"
+        "A newly vacuous pair needs a first-party detector before that lane may credit it; a "
+        "newly closed one just needs removing from _PARTNER_ENGINE_ONLY_CREDIT.")
+
+
 def test_link_text_lane_is_verifiable_without_the_partner_engine():
     """The Office link-text lane must clear only criteria a FIRST-PARTY check emits.
 
