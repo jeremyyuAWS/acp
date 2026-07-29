@@ -81,14 +81,17 @@ def _figure_alts(pdf_path: Path) -> list[str]:
     return alts
 
 
-def _stub_vision(monkeypatch, alt="A filled box representing the quarterly figure", available=True):
+def _stub_vision(monkeypatch, alt="A filled box representing the quarterly figure", available=True,
+                 grounded=True):
     calls = {"n": 0}
 
     def fake(image_bytes, **kw):
         calls["n"] += 1
-        # A rendered PDF figure page is inherently text-anchored, so the remediator uses the
-        # returned alt inline regardless of `grounded`; include it for shape-parity with ai.py.
-        return {"alt": alt, "grounded": True, "evidence": "stub", "model": "llava:7b"} if alt else None
+        # `grounded` drives the honesty split, as it does for office: a description anchored in
+        # text read from the page render is written inline; an ungrounded guess is withheld and
+        # deferred to a review card. (It is a weaker anchor here — the render is the whole PAGE,
+        # so it says the page carried text, not the figure. Weaker is not nothing.)
+        return {"alt": alt, "grounded": grounded, "evidence": "stub", "model": "llava:7b"} if alt else None
 
     monkeypatch.setattr(ai, "vision_is_available", lambda: available)
     monkeypatch.setattr(ai, "describe_image_structured", fake)
@@ -142,6 +145,19 @@ def test_pdf_alt_deferred_on_vision_miss(tmp_path, monkeypatch):
     fixed, applied, skipped = RP.remediate_pdf(src, ai_enabled=True)
     assert calls["n"] == 1
     assert _figure_alts(Path(fixed or src)) == [""]
+    assert any("figure(s) need human alt text" in s for s in skipped)
+
+
+def test_pdf_ungrounded_alt_deferred_end_to_end(tmp_path, monkeypatch):
+    # Whole-document path: an ungrounded description leaves the file unlabelled and the 1.1.1
+    # finding open, rather than shipping a guess as the figure's accessible name.
+    calls = _stub_vision(monkeypatch, alt="A person near a building", grounded=False)
+    src = tmp_path / "unground.pdf"
+    _tagged_pdf_with_figure(src)
+    fixed, applied, skipped = RP.remediate_pdf(src, ai_enabled=True)
+    assert calls["n"] == 1                                 # the model ran…
+    assert _figure_alts(Path(fixed or src)) == [""]        # …and its guess was not written
+    assert not any("Alt text" in a for a in applied)
     assert any("figure(s) need human alt text" in s for s in skipped)
 
 

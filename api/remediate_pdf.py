@@ -831,8 +831,9 @@ def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
     the caller saves. Never raises — a figure we can't caption is just deferred.
 
     A GROUNDED vision description (the page render is text-anchored) is auto-applied inline. A
-    figure we cannot caption (AI off / no vision result / budget spent) is **deferred to a
-    per-figure review card**, not silently counted: it emits one proposal into `proposals`
+    figure we cannot caption (AI off / no vision result / budget spent) OR can only GUESS at
+    (an ungrounded description — see _alt_write_anchor) is **deferred to a per-figure review
+    card**, not silently counted: it emits one proposal into `proposals`
     carrying its stable locator (for write-back), the page render as its thumbnail, and any
     best-effort AI draft — mirroring the office undescribed-image flow, so a PDF figure the
     machine can't ground reaches a human with a picture instead of vanishing into a tally.
@@ -905,22 +906,63 @@ def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
         if not res:
             _defer(fig, page_num, img)
             continue
+        # The model call is the spend, so it is what the budget counts — otherwise a document
+        # whose figures all defer would call vision once per figure, unbounded.
+        budget -= 1
+        anchor = _alt_write_anchor(res, img, scan_id=scan_id, file=file)
+        if anchor is None:
+            # Ungrounded guess → the reviewer decides, we do not assert it (see helper).
+            _defer(fig, page_num, img, draft=res.get("alt", ""))
+            continue
         try:
             fig["/Alt"] = pikepdf.String(res["alt"])
         except Exception:
             _defer(fig, page_num, img, draft=res.get("alt", ""))
             continue
-        budget -= 1
         if applied_fixes is not None:
             applied_fixes.append({
                 "rule_id": "SC_1_1_1",
                 "value": res["alt"],
-                "source": f"AI vision model ({res['model']}), from a render of page {page_num}",
+                "source": (f"AI vision model ({res['model']}), {anchor}, "
+                           f"from a render of page {page_num}"),
                 "thumb": _prop.thumb_b64(img, max_edge=_FIX_THUMB_EDGE),
             })
         applied.append(f"Alt text \"{res['alt'][:60]}\" set on figure (page {page_num}) "
-                       "from an AI vision description of the image · 1.1.1")
+                       f"from an AI vision description {anchor} · 1.1.1")
     return applied, deferred
+
+
+def _alt_write_anchor(res: dict, img: bytes, *, scan_id: str | None, file: str) -> str | None:
+    """May this vision description be written into the PDF unattended? Returns the provenance
+    phrase that says WHY it may, or None when it must go to a human instead.
+
+    The same honesty split the office remediator applies (remediate_office._vision_alt): a
+    GROUNDED description is anchored in text OCR'd from the render and is auto-applied; an
+    UNGROUNDED one is a pure vision guess, and a guess written into /Alt becomes the sentence a
+    screen-reader user hears as fact — worse than an unlabelled figure, because the file then
+    looks remediated. Ungrounded goes to a review card instead (WCAG 1.1.1 intent stays human).
+
+    One honest caveat specific to PDF: we caption a render of the whole PAGE, so `grounded`
+    reports that the PAGE carried text, not that the FIGURE did. It is a weaker anchor here
+    than the office path's per-image OCR — it reliably catches the textless page, and the
+    reviewer remains the check on the rest.
+
+    Ungrounded may still be applied when the auto-apply-validated policy is ON (opt-in, default
+    OFF) and an INDEPENDENT second reading calls the draft consistent — a measurement, never
+    the model grading itself (ADR 0016). Any other verdict falls through to the review card."""
+    if res.get("grounded"):
+        return "anchored in text read from the page render"
+    try:
+        import ai as _ai
+        import core as _core
+        if _core.store.get_auto_apply_validated():
+            v = _ai.validate_alt_text(img, res["alt"], filename=file, scan_id=scan_id, file=file)
+            if v and v.get("verdict") == "consistent":
+                return ("confirmed by an independent second reading (consistency cross-check, "
+                        "auto-apply-validated policy)")
+    except Exception:
+        pass                        # validator down / policy unreadable → the human decides
+    return None
 
 
 def _collect_figures(node, figures: list | None = None) -> list:
