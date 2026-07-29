@@ -175,12 +175,14 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     # refused to certify and the file could never reach Publish. The job applies the values to
     # the remediated copy, re-scans it, and only then marks the row applied; it re-runs the
     # certify seam itself once the document actually carries the content.
-    # A PDF form-field name (4.1.2) is approved content awaiting a write exactly as alt text
-    # is, and it lives in its own row — gating only on approved_alt_values left a file whose
-    # only pending value was a field name with no apply job, hence never certified.
+    # The gate asks for ANY approved content an applier can write, per kind — alt text (1.1.1),
+    # link text (2.4.4/2.4.9), a PDF form-field name (4.1.2) — because each lives in its OWN
+    # hitl row. Naming only some of them strands the rest: a file whose only pending value was a
+    # field name, or link text, enqueued no job, so the document never carried the value and
+    # mark_file_compliant_if_reviewed below correctly refused to certify it, forever. The
+    # handler already writes all three; this is the gate that decides whether it ever runs.
     if (body.status == "approved" and item.get("scan_id") and item.get("file")
-            and (core.store.approved_alt_values(item["scan_id"], item["file"])
-                 or core.store.approved_field_values(item["scan_id"], item["file"]))):
+            and core.store.has_approved_values_to_write(item["scan_id"], item["file"])):
         try:
             core.store.enqueue_job("apply_approved_values",
                                    {"scan_id": item["scan_id"], "file": item["file"]},
