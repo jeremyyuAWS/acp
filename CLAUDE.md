@@ -33,3 +33,33 @@ The cost of not isolating is measured in re-derived work, not in warnings.
 It changes without warning; on 2026-07-28 it moved to a feature branch and back inside two
 minutes. And if a git command fails on `index.lock`, another session is mid-commit — wait and
 retry rather than deleting the lock.
+
+## Never push from the shared checkout
+
+Push only a branch you own, from your own worktree, and only when the user asks for it.
+
+**Why.** `git push` sends every commit on the branch, not just yours. On a shared `main` that
+means you publish whatever the other sessions have committed and not yet reviewed. On
+2026-07-29 a single push from this checkout put **four commits from at least three different
+sessions** onto `origin/main` at once — including one whose author had not been asked to push
+anything, and the commit that added this very file. Nothing warned anybody; the session that
+ran it was almost certainly pushing what it thought was its own one commit.
+
+The commit-hygiene rule above (`git add <specific paths>`, never `git add -A`) does not protect
+you here. That rule scopes what enters *your* commit. `push` operates on the branch, so it
+carries everyone's commits regardless of how carefully each was staged.
+
+**What to do instead.** From your worktree, push your own branch and open a PR:
+
+```
+git push -u origin <your-worktree-branch>
+```
+
+That is this repo's normal flow, not a ceremony added for the concurrency problem — 20 of the
+last 30 commits on `main` arrived as numbered PR merges. The ten exceptions are all from
+2026-07-28 onward and are the parallel-session work; direct-to-main is the anomaly here.
+
+**If you find your work already on `main` because another session pushed it:** leave it. It is
+published — rewriting shared history to undo it costs more than it recovers, and a force-push on
+a branch four sessions are working from is far worse than an unreviewed commit. Tell the user it
+happened and let them decide.
