@@ -304,29 +304,50 @@ def stop_scheduler() -> None:
 def _do_scheduled_scan():
     """A scheduled sweep. Re-scans the configured source (Drive via the service-account
     ADC identity — no user token is available in the background), stamps it with the
-    owner who set the schedule so it shows up in their scan list, and finalizes it.
-    Falls back to the local corpus if the Drive/ADC path is unavailable."""
+    owner who set the schedule so it shows up in their scan list, and finalizes it."""
     cfg = get_store().get_schedule()
+
+    # THE SETTING IS AUTHORITATIVE ON EVERY FIRE, not only when reload_scheduler() runs.
+    #
+    # `PUT /schedule` calls reload_scheduler() in the process that served the request. Only
+    # acp-app has ingress, so that is the ONLY process it can ever reach — while worker_main.py
+    # arms its own scheduler with this same job (worker_main:49-50). Turning the schedule off in
+    # the UI therefore left the worker's copy running until the container happened to restart,
+    # with nothing on any surface saying so.
+    #
+    # Checking here fixes that without cross-container messaging, which is why it is done here
+    # rather than by broadcasting a reload: every process that fires this job reads the same row,
+    # so none of them can disagree with the setting for longer than one interval. It also covers
+    # a stale job left by a failed reload, which a broadcast would not.
+    if not cfg.get("enabled"):
+        print("scheduled sweep skipped — the schedule is off (stale job in this process)", flush=True)
+        reload_scheduler()      # self-heal: drops the job here so it stops firing at all
+        return
+
     owner = cfg.get("owner_email")
     source = cfg.get("source") or "drive"
     ai = get_store().get_ai_enabled()
 
-    def _run(src):
-        report = run_scan(src, drive_token=None, ai_enabled=ai, user=owner)  # ADC for drive
-        sid = get_store().save_scan(report)
-        finalize_scan(sid, ai, src)
-        return report["summary"]["files"]
-
     try:
-        n = _run(source)
-        print(f"scheduled {source} sweep complete: {n} files (owner={owner})", flush=True)
+        report = run_scan(source, drive_token=None, ai_enabled=ai, user=owner)  # ADC for drive
+        sid = get_store().save_scan(report)
+        finalize_scan(sid, ai, source)
+        print(f"scheduled {source} sweep complete: {report['summary']['files']} files "
+              f"(owner={owner})", flush=True)
     except Exception as e:
-        # Drive/ADC may be unconfigured in this environment — keep the sweep alive on local.
-        try:
-            n = _run("local")
-            print(f"scheduled sweep fell back to local ({n} files); drive error: {e}", flush=True)
-        except Exception as e2:
-            print(f"scheduled sweep failed: {e2}", flush=True)
+        # DO NOT substitute a different corpus. This used to fall back to `local` and save +
+        # finalize that as a scan, which is how a 258-document Drive estate was displaced every
+        # five minutes by a 1-file scan of the bundled samples — and because every "latest" view
+        # takes scan_runs ordered by completed_at, that fallback became the estate as far as the
+        # dashboard, the report and the scan selector were concerned.
+        #
+        # The fallback was written for "Drive/ADC may be unconfigured in this environment", and
+        # for that case it is still wrong: an unconfigured source should report that it is
+        # unconfigured, not quietly produce numbers about something else. A sweep that cannot
+        # reach its source has nothing to say, so it says nothing and leaves the last real scan
+        # standing.
+        print(f"scheduled {source} sweep FAILED — no scan was saved, the previous scan stands: {e}",
+              flush=True)
 
 
 def _derive_review_memory_tick() -> None:
