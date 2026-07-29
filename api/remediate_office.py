@@ -36,6 +36,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+# part-glob → (tag, pic wrapper or None, captions?). The ONE target table, shared with the
+# 1.1.1 detector (formats/office/images.py) so the detector and this remediator can never
+# disagree about which elements carry alt text.
+from formats.office.images import ALT_TARGETS as _ALT_TARGETS
+
 _CORE = "docProps/core.xml"
 _CUSTOM = "docProps/custom.xml"
 _FMTID = "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}"  # standard OPC custom-properties GUID
@@ -122,28 +127,16 @@ _GENERIC_NAME = re.compile(
 _CAPTION_LEAD = re.compile(r"^\s*((figure|fig\.?|table|chart|diagram|abb\.?)\s*\d*[:.\s—-]\s*)", re.I)
 # descr values that are effectively no alt at all: empty, a bare filename
 # ("image.png"), or a generic auto-name — the .NET AltTextRule flags these too.
-_JUNK_DESCR = re.compile(
-    r"^\s*(?:img|image|picture|photo|graphic|grafik)?[\s_-]*\d*\s*"
-    r"(?:\.(?:png|jpe?g|gif|bmp|svg|tiff?|emf|wmf))?\s*$", re.I)
-# a file path or arbitrary image filename ("icons/user.png", "media\image1.png",
-# "logo.svg") — meaningless to a screen reader. A real description is a phrase
-# (has spaces); these are single whitespace-free tokens, so we only treat a
-# space-free value as filename-ish (keeps "input/output diagram" descriptive).
-_IMG_FILENAME = re.compile(
-    r"^[^\s/\\]+\.(?:png|jpe?g|gif|bmp|svg|tiff?|emf|wmf)$", re.I)
-
-
 def _is_junk_descr(descr: str) -> bool:
-    """True when descr is empty, a generic auto-name, or a file name/path rather
-    than a real description — mirrors the .NET AltTextRule (WCAG 1.1.1)."""
-    if _JUNK_DESCR.match(descr):
-        return True
-    trimmed = descr.strip()
-    if not trimmed or any(c.isspace() for c in trimmed):
-        return False
-    if "/" in trimmed or "\\" in trimmed:
-        return True
-    return bool(_IMG_FILENAME.match(trimmed))
+    """True when descr is empty, a generic auto-name, or a file name/path rather than a real
+    description — mirrors the .NET AltTextRule (WCAG 1.1.1).
+
+    Delegates to formats.office.images so the 1.1.1 DETECTOR and this remediator apply the
+    SAME predicate. They must: the write-back lane credits an approved alt text by re-scanning
+    and finding 1.1.1 gone, so an image one side counts as described and the other does not
+    either blocks certification forever or certifies a document with an undescribed image."""
+    from formats.office import images as _images
+    return _images.is_junk_descr(descr)
 
 
 _ATTR = lambda attrs, name: (re.search(rf'\b{name}="([^"]*)"', attrs) or [None, ""])[1]
@@ -572,18 +565,6 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
     return None
 
 
-# part-glob → (tag, pic wrapper or None, captions?)
-_ALT_TARGETS = [
-    (re.compile(r"^word/(document|header\d*|footer\d*)\.xml$"), "wp:docPr", None, True),
-    (re.compile(r"^ppt/slides/slide\d+\.xml$"), "p:cNvPr", "p:pic", False),
-    # xlsx drawings come in two namespace flavours: Excel authors the prefixed `<xdr:pic>/
-    # <xdr:cNvPr>`, but many generators (openpyxl-family, some export paths) emit the SAME parts
-    # in the default spreadsheetDrawing namespace as `<pic>/<cNvPr>`. Matching only the prefixed
-    # form silently skipped every image in a default-namespace workbook — the alt/decorative/
-    # vision machinery never ran, so those images fell through as bare, un-drafted HITL findings.
-    # An optional `(?:xdr:)?` prefix covers both. (docx/pptx above are single-flavour, left as-is.)
-    (re.compile(r"^xl/drawings/drawing\d+\.xml$"), r"(?:xdr:)?cNvPr", r"(?:xdr:)?pic", False),
-]
 
 
 def _fix_image_alt(entries: dict, *, vision_enabled: bool = False,

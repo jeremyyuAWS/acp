@@ -6,6 +6,7 @@ at, and a document we could not change comes back byte-identical.
 """
 from __future__ import annotations
 import io
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -52,9 +53,24 @@ def test_locator_parsing():
 
 
 def test_tag_for_part_mirrors_the_locator_producer():
-    assert tag_for_part(SLIDE) == "p:cNvPr"
-    assert tag_for_part(DOC) == "wp:docPr"
-    assert tag_for_part("xl/drawings/drawing2.xml") == "xdr:cNvPr"
+    """Asserted against the producer's OWN table, not a hand-copy of it.
+
+    This used to pin the literal "xdr:cNvPr" — which is exactly the stale value the bug lived
+    in. When the producer's xlsx entry gained `(?:xdr:)?` to cover default-namespace drawings,
+    apply_alt kept the prefixed-only spelling and this test kept agreeing with it, so a table
+    that could no longer resolve the locators it minted read as correctly mirrored. Comparing
+    to the source makes the mirror structural instead of aspirational.
+    """
+    from formats.office.images import ALT_TARGETS
+    produced = {tag for _pat, tag, _wrapper, _captions in ALT_TARGETS}
+    assert tag_for_part(SLIDE) in produced and "cNvPr" in tag_for_part(SLIDE)
+    assert tag_for_part(DOC) in produced and "docPr" in tag_for_part(DOC)
+    xlsx_tag = tag_for_part("xl/drawings/drawing2.xml")
+    assert xlsx_tag in produced
+    # both xlsx namespace flavours must match, or a default-namespace workbook's approvals
+    # come back unresolved and are silently never written
+    for spelling in ("xdr:cNvPr", "cNvPr"):
+        assert re.fullmatch(xlsx_tag, spelling), f"{xlsx_tag!r} does not match <{spelling}>"
     assert tag_for_part("ppt/notesSlides/notesSlide1.xml") is None   # carries no images
 
 

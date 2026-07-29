@@ -1173,6 +1173,41 @@ def _collapse_reading_order(issues: list[dict]) -> list[dict]:
     return kept + [adv]
 
 
+# The first-party 1.1.1 image detectors (formats/<fmt>/detectors/non_text_content.py). They
+# exist so the IN-PROCESS re-scan can observe 1.1.1 — proposals.verify_residual_scs runs
+# first-party checks only, and without them the write-back lane credited approved alt text on a
+# criterion nothing could report. They are a floor, not a second opinion.
+_FIRST_PARTY_ALT_RULES = frozenset({
+    "DOCX_IMAGE_NO_ALT", "PPTX_IMAGE_NO_ALT", "XLSX_IMAGE_NO_ALT", "PDF_FIGURE_NO_ALT",
+})
+# The criterion, in its normalised form. Compared through store._extract_sc rather than by
+# string prefix because the wcag field arrives in several spellings — bare, SC_-prefixed with
+# underscores, or with the criterion name appended — and a prefix test would match only one.
+# (Those spellings are named without quoting them: tests/test_rules_index.py scans this module's
+# raw source for rule-id-shaped literals, and a quoted SC_ form reads as one even in a comment.)
+_ALT_SC = "1.1.1"
+
+
+def _collapse_duplicate_alt(issues: list[dict]) -> list[dict]:
+    """Drop the first-party 1.1.1 findings when the partner engine already reported 1.1.1.
+
+    Both detectors answer the same question about the same images, so when both run every
+    undescribed image is counted TWICE — inflating the finding count on every scan and raising
+    two review rows for one picture. The engine is the richer detector, so it wins where it ran;
+    the first-party check is what keeps the criterion observable where it did not.
+
+    Scoped to 1.1.1 and to these rule ids deliberately: this must never suppress a first-party
+    finding the engine did not also make.
+    """
+    from store import _extract_sc          # the one SC normaliser: '1.1.1', 'SC_1_1_1', …
+    engine_alt = any(_extract_sc(str(i.get("wcag", ""))) == _ALT_SC
+                     and i.get("ruleId") not in _FIRST_PARTY_ALT_RULES
+                     for i in issues)
+    if not engine_alt:
+        return issues
+    return [i for i in issues if i.get("ruleId") not in _FIRST_PARTY_ALT_RULES]
+
+
 def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
     """Analyse + rubric-assess ONE already-downloaded file (fan-out path, ADR 0007).
     `tmp` is a directory containing `name`. Returns (assessed_file_dict, pii_info),
@@ -1219,7 +1254,7 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
         raw["issues"] = list(raw.get("issues", [])) + _off_mod.checks_for(tmp / name, ext)
     except Exception:
         pass
-    raw["issues"] = _collapse_reading_order(raw["issues"])
+    raw["issues"] = _collapse_duplicate_alt(_collapse_reading_order(raw["issues"]))
     raw["issues"] = [i for i in raw["issues"] if i["ruleId"] not in rb.disabled]
     raw["errors"] = [e for e in raw["errors"]
                      if (e.get("rule") if isinstance(e, dict) else None) not in rb.disabled]
@@ -1310,7 +1345,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                 r["issues"] = list(r.get("issues", [])) + _off_mod.checks_for(tmp / name, ext)
             except Exception:
                 pass
-            r["issues"] = _collapse_reading_order(r["issues"])
+            r["issues"] = _collapse_duplicate_alt(_collapse_reading_order(r["issues"]))
             try:                                          # ADR 0020 stage 2 — inventory peek
                 import classify as _cls
                 r["classify"] = _cls.classify(tmp / name, ext)
