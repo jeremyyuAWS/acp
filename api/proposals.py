@@ -1198,7 +1198,7 @@ def _describe_chart(xml: str) -> dict | None:
     return {"title": title, "type": ctype, "series": series, "categories": categories}
 
 
-def _describe_chart_via_chart_data(raw: bytes, entries: dict) -> dict | None:
+def _describe_chart_via_chart_data(raw: bytes, entries: dict, part_name: str | None = None) -> dict | None:
     """Same {title, type, series, categories} shape, but parsed by chart_data's namespace-correct
     ElementTree reader instead of the `c:`-prefixed regexes above.
 
@@ -1213,7 +1213,7 @@ def _describe_chart_via_chart_data(raw: bytes, entries: dict) -> dict | None:
         import chart_data
     except Exception:
         return None
-    c = chart_data.parse_chart_part(raw, entries)
+    c = chart_data.parse_chart_part(raw, entries, part_name)
     if not c:
         return None
     series, categories = [], []
@@ -1275,7 +1275,7 @@ def propose_chart_datasheet(path, ext: str) -> list[dict]:
                 if not desc:                               # cell-referenced / default-namespace chart
                     if entries is None:                    # read the package once, only if needed
                         entries = {n: zf.read(n) for n in zf.namelist()}
-                    desc = _describe_chart_via_chart_data(raw, entries)
+                    desc = _describe_chart_via_chart_data(raw, entries, name)
                 if not desc:
                     continue
                 alt, sheet = _chart_alt_and_sheet(desc)

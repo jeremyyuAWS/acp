@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 import chart_data  # noqa: E402
+from chart_fixtures import docx_chart_entries, rezip, strip_caches  # noqa: E402
 
 pptx = pytest.importorskip("pptx")
 
@@ -178,3 +179,74 @@ def test_xlsx_chart_descr_is_idempotent_in_both_flavours(prefixed):
         entries[part] = new_xml
     # A real descr is never overwritten — second pass is a no-op, same as the pptx path.
     assert chart_data.chart_descr_edits(entries, ".xlsx") == {}
+
+
+# ── docx/pptx: values that live in the EMBEDDED workbook, not in the chart's caches ────────────────
+# A docx/pptx chart keeps caches of its numbers and the authoritative copy in an xlsx zipped inside
+# the package. Word and PowerPoint populate the caches, so the caches are normally enough. A
+# generator that leaves them empty puts the values ONLY in that nested workbook — and the cell
+# resolver cannot help, because it looks for `xl/…` parts that a docx/pptx package does not have.
+
+def test_pptx_chart_with_empty_caches_reads_the_embedded_workbook():
+    """The realistic case, on a genuine PowerPoint-shaped package: python-pptx writes both the
+    caches and ppt/embeddings/Microsoft_Excel_Sheet1.xlsx. Strip the caches and the embedded
+    workbook is the only surviving copy of the data."""
+    import zipfile
+    data = _native_chart_pptx(["North", "South", "East", "West"], [120, 70, 150, 50])
+    z = zipfile.ZipFile(io.BytesIO(data))
+    entries = {n: z.read(n) for n in z.namelist()}
+    assert "ppt/embeddings/Microsoft_Excel_Sheet1.xlsx" in entries    # the fixture really embeds one
+    entries["ppt/charts/chart1.xml"] = strip_caches(entries["ppt/charts/chart1.xml"])
+
+    charts = chart_data.charts_in(rezip(entries), ".pptx")
+    assert charts, "a cache-less pptx chart must fall back to its embedded workbook"
+    alt = chart_data.describe_chart(charts[0])
+    assert "East at 150" in alt and "West at 50" in alt              # real labels AND real values
+
+
+def test_pptx_chart_with_empty_caches_and_no_embedding_yields_nothing():
+    """No caches and no embedded workbook: there is nowhere left to read the numbers from, so the
+    chart is skipped. It must not raise, and must not invent an alt over `item N` placeholders."""
+    import zipfile
+    data = _native_chart_pptx(["North", "South"], [1, 2])
+    z = zipfile.ZipFile(io.BytesIO(data))
+    entries = {n: z.read(n) for n in z.namelist() if "embeddings" not in n}
+    entries["ppt/charts/chart1.xml"] = strip_caches(entries["ppt/charts/chart1.xml"])
+    assert chart_data.charts_in(rezip(entries), ".pptx") == []
+
+
+def test_docx_chart_reads_values_from_its_embedded_workbook():
+    entries = docx_chart_entries(["North", "South", "East", "West"], [120, 70, 150, 50])
+    assert b"Cache/>" in entries["word/charts/chart1.xml"]    # the fixture really caches nothing
+
+    charts = chart_data.charts_in(rezip(entries), ".docx")
+    assert charts, "a cache-less docx chart must resolve through word/embeddings/*.xlsx"
+    alt = chart_data.describe_chart(charts[0])
+    assert "Sales by region" in alt
+    # Real labels, not "item 1"/"item 3" — the inlineStr branch, reached via the embedded workbook.
+    assert "East at 150" in alt and "West at 50" in alt
+
+
+def test_docx_chart_descr_lands_on_wp_docPr_with_embedded_values():
+    """The user-facing payoff: the resolved values reach the 1.1.1 alt written onto <wp:docPr>."""
+    entries = docx_chart_entries(["North", "South", "East", "West"], [120, 70, 150, 50])
+    changed = chart_data.chart_descr_edits(entries, ".docx")
+    assert changed, "a docx chart with no alt should get one"
+    new_xml, alts = changed["word/document.xml"]
+    out = new_xml.decode()
+    assert 'descr="Bar chart' in out and "East at 150" in out
+    assert alts and "Sales by region" in alts[0]
+    ET.fromstring(out)
+
+
+def test_docx_chart_without_its_embedding_is_skipped_not_guessed():
+    entries = docx_chart_entries(["North", "South"], [1, 2])
+    del entries["word/embeddings/data.xlsx"]
+    assert chart_data.charts_in(rezip(entries), ".docx") == []
+    assert chart_data.chart_descr_edits(entries, ".docx") == {}
+
+
+def test_corrupt_embedding_is_survived_not_raised():
+    entries = docx_chart_entries(["North", "South"], [1, 2])
+    entries["word/embeddings/data.xlsx"] = b"not a zip at all"
+    assert chart_data.charts_in(rezip(entries), ".docx") == []

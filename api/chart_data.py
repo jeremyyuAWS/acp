@@ -46,7 +46,7 @@ def charts_in(data: bytes, ext: str) -> list[dict]:
         for name in entries:
             if _CHART_PART.match(name):
                 try:
-                    c = _parse_chart(entries[name], entries)
+                    c = _parse_chart(entries[name], entries, name)
                     if c and c.get("series"):
                         out.append(c)
                 except Exception:
@@ -75,7 +75,7 @@ def _cache_points(ref) -> list[str]:
     return [pts.get(i, "") for i in range(max(pts) + 1)] if pts else []
 
 
-def _parse_chart(xml: bytes, entries: dict | None = None) -> dict | None:
+def _parse_chart(xml: bytes, entries: dict | None = None, part_name: str | None = None) -> dict | None:
     root = ET.fromstring(xml)
     chart = root.find(f"{{{_C}}}chart")
     if chart is None:
@@ -84,6 +84,24 @@ def _parse_chart(xml: bytes, entries: dict | None = None) -> dict | None:
     plot = chart.find(f"{{{_C}}}plotArea")
     if plot is None:
         return None
+
+    # Two places a chart's numbers can live, tried in that order. `_emb` is a one-slot lazy cache:
+    # the embedded workbook is opened at most once per chart part, and only if the package itself
+    # could not answer — an xlsx never pays for it.
+    _emb: list = []
+
+    def _resolve(el) -> list[str]:
+        """Cell values behind a <c:cat>/<c:val>, from this package or the chart's embedded workbook."""
+        formula = _ref_formula(el)
+        if not formula or entries is None:
+            return []
+        vals = _resolve_ref(formula, entries)
+        if vals or part_name is None:
+            return vals
+        if not _emb:
+            _emb.append(_embedded_package(entries, part_name) or {})
+        return _resolve_ref(formula, _emb[0]) if _emb[0] else []
+
     ctype, series = None, []
     for child in plot:
         tag = child.tag.split("}")[-1]
@@ -96,9 +114,9 @@ def _parse_chart(xml: bytes, entries: dict | None = None) -> dict | None:
                 # Real xlsx charts leave <c:numCache/> empty — the values are in cells. Resolve the
                 # <c:f> range against the workbook so the alt states the ACTUAL numbers, not nothing.
                 if entries is not None and not any(v != "" for v in vals):
-                    vals = _resolve_ref(_ref_formula(ser.find(f"{{{_C}}}val")), entries) or vals
+                    vals = _resolve(ser.find(f"{{{_C}}}val")) or vals
                 if entries is not None and not any(c for c in cats):
-                    cats = _resolve_ref(_ref_formula(ser.find(f"{{{_C}}}cat")), entries) or cats
+                    cats = _resolve(ser.find(f"{{{_C}}}cat")) or cats
                 pts = [(cats[i] if i < len(cats) and cats[i] else f"item {i + 1}", vals[i])
                        for i in range(len(vals)) if vals[i] != ""]
                 if pts:
@@ -108,15 +126,17 @@ def _parse_chart(xml: bytes, entries: dict | None = None) -> dict | None:
     return {"type": ctype, "title": title, "series": series}
 
 
-def parse_chart_part(xml: bytes, entries: dict | None = None) -> dict | None:
+def parse_chart_part(xml: bytes, entries: dict | None = None,
+                     part_name: str | None = None) -> dict | None:
     """Public single-part parser: one chart part's bytes → {type, title, series:[{name,
     points:[(cat, val)]}]}, or None when it carries nothing plottable. Pass `entries` (the whole
     package, part name → bytes) so an xlsx chart that stores only cell REFERENCES can resolve its
-    real values. Namespace-correct (ElementTree), so it reads both the `c:`-prefixed chartSpace
-    Excel/PowerPoint write and the default-namespace one openpyxl-family generators write. Never
-    raises — an unparseable part is simply None."""
+    real values, and `part_name` (this part's path within it) so a docx/pptx chart can fall back to
+    its embedded data workbook. Namespace-correct (ElementTree), so it reads both the `c:`-prefixed
+    chartSpace Excel/PowerPoint write and the default-namespace one openpyxl-family generators
+    write. Never raises — an unparseable part is simply None."""
     try:
-        return _parse_chart(xml, entries)
+        return _parse_chart(xml, entries, part_name)
     except Exception:
         return None
 
@@ -175,6 +195,49 @@ def _resolve_ref(formula: str, entries: dict) -> list[str]:
         return _read_cells(entries[part], cells, _shared_strings(entries))
     except Exception:
         return []
+
+
+_EMBED_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/package"
+
+
+def _embedded_package(entries: dict, part_name: str) -> dict | None:
+    """A chart's embedded data workbook as its own {part name: bytes} package, or None.
+
+    A docx/pptx chart does not keep its numbers in the document that displays them. The chart part
+    carries CACHES of the values, and the authoritative data lives in a separate xlsx zipped inside
+    the package (`word/embeddings/…xlsx`, `ppt/embeddings/…xlsx`), reached by a `package`
+    relationship from the chart part itself. When the caches are populated — which is what Word and
+    PowerPoint write — nothing needs this. When a generator leaves them empty, that nested workbook
+    is the ONLY place the values exist, and without it the chart yields no alt at all.
+
+    Deliberately keyed off the chart part rather than scanned for: a package can hold several
+    embedded workbooks, and only the relationship says which one belongs to this chart. The Type is
+    the primary test, with an extension check as a fallback for generators that write a nonstandard
+    relationship type but the right target."""
+    d, base = part_name.rsplit("/", 1) if "/" in part_name else ("", part_name)
+    rels_name = f"{d}/_rels/{base}.rels" if d else f"_rels/{base}.rels"
+    raw = entries.get(rels_name)
+    if not raw:
+        return None
+    _RELS = "http://schemas.openxmlformats.org/package/2006/relationships"
+    try:
+        root = ET.fromstring(raw)
+    except Exception:
+        return None
+    for rel in root.findall(f"{{{_RELS}}}Relationship"):
+        tgt = rel.get("Target") or ""
+        if rel.get("Type") != _EMBED_REL and not tgt.lower().endswith((".xlsx", ".xlsm")):
+            continue
+        path = tgt.lstrip("/") if tgt.startswith("/") else posixpath.normpath(posixpath.join(d, tgt))
+        blob = entries.get(path)
+        if not blob:
+            continue
+        try:
+            with zipfile.ZipFile(io.BytesIO(blob)) as z:
+                return {n: z.read(n) for n in z.namelist()}
+        except Exception:
+            return None                                     # a corrupt embedding is not an error
+    return None
 
 
 def _xlsx_sheet_part(entries: dict, sheet_name: str) -> str | None:
@@ -364,7 +427,7 @@ def chart_descr_edits(entries: dict, ext: str) -> dict:
                 if not chart_part or chart_part not in entries:
                     continue
                 try:
-                    chart = _parse_chart(entries[chart_part], entries)
+                    chart = _parse_chart(entries[chart_part], entries, chart_part)
                 except Exception:
                     chart = None
                 if not chart:
