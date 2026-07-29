@@ -311,6 +311,42 @@ export const STATUS_BADGE = {
 // Badge caption per status — 'clean' reads better as "no findings" than the raw key.
 export const STATUS_TAG_LABEL = { clean: 'no findings' }
 
+// ADR 0026 — the ONE answer to "does this document have findings?".
+//
+// The hero card (AccessibilityStatus) derives that on the server from the rule traces. The
+// drawer's badge used to answer it a SECOND time from statusOf(), and on 2026-07-29 the two
+// disagreed on pdf-critical-untagged-no-lang.pdf: the hero read "3 issues need remediation"
+// while the badge directly below it read "no findings".
+//
+// statusOf() is not wrong about an ASSESSED file — it returns 'issues' whenever the payload
+// carries issue rows, which a scan with failing criteria always does (verified: a file saved
+// with 3 blocking findings yields statusOf()==='issues' AND needs_remediation===3). What it
+// cannot distinguish is a file that was never opened: an ADR 0020 Discover-only inventory
+// record also has zero issue rows, and statusOf() calls that 'clean' — which the badge then
+// renders as the affirmative claim "no findings" about a document nobody measured.
+//
+// So: the server model wins whenever it is available, and without it we only claim
+// "no findings" for a file that was actually assessed.
+//   'has-findings' — the server counted criteria needing remediation; never say "no findings"
+//   'not-assessed' — never opened, so nothing is known either way
+//   'no-findings'  — positively assessed and clear
+//   null           — status is not 'clean'; this claim doesn't apply
+export function findingsClaim(st, file, model) {
+  if (st !== 'clean') return null
+  const m = model && model.available !== false ? model : null
+  if (m) return m.needs_remediation > 0 ? 'has-findings' : 'no-findings'
+  // Degraded path only — the server model is the decision above, and reaches it in the normal
+  // case. Here we have nothing but the file record, so we err toward "unknown" rather than
+  // toward the reassuring answer: `status === 'discovered'` is the inventory-fallback marker
+  // for a row synthesised from scan_inventory and never opened (store.get_scan, ADR 0020), and
+  // a null score means nothing was scored for this file either way. The second clause is
+  // conservatism in a fallback, NOT a second definition of "unassessed" — the canonical one is
+  // isUnassessed() in docStatus.js (`status === 'discovered'`), which counts how much of an
+  // estate was analysed and must stay narrow for that. Import it here once #77 lands; this
+  // predicate is deliberately the only place the notion appears in the drawer.
+  return (file?.status === 'discovered' || file?.score == null) ? 'not-assessed' : 'no-findings'
+}
+
 // Retention/lifecycle recommendation (step 3 · Retain / Archive / Delete) — based
 // purely on metadata + risk flags, NOT on accessibility findings (that's Assess).
 export function retentionOf(f) {
@@ -566,6 +602,9 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   const [remediatedRuleIds, setRemediatedRuleIds] = useState(new Set())
   const [certExporting, setCertExporting] = useState(false)
   const [htmlExporting, setHtmlExporting] = useState(false)
+  // The authoritative status model, reported up by the AccessibilityStatus hero below so both
+  // panels answer "does this file have findings" from ONE derivation — see findingsClaim().
+  const [statusModel, setStatusModel] = useState(null)
   useEffect(() => {
     setDl(null)   // clear a stale download error/spinner when switching files or scans
     if (!scanId || !file?.file) { setRemediatedRuleIds(new Set()); return }
@@ -578,7 +617,12 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
 
   if (!file) return null
   const st = statusOf(file)
-  const [sbg, sfg] = STATUS_BADGE[st]
+  // What this drawer may claim about findings — reconciled with the hero card below, so the
+  // badge can never contradict the coverage panel it sits under.
+  const claim = findingsClaim(st, file, statusModel)
+  // Colour the badge for what we can actually assert: a 'clean' record the server says is
+  // failing gets the 'issues' badge, not the reassuring blue one.
+  const [sbg, sfg] = STATUS_BADGE[claim === 'has-findings' ? 'issues' : st]
   // Scope every finding-derived surface in this drawer — the Findings list, Accessibility Status,
   // the auto/review counts, and the "Remediate this file" CTA — to the 20-check document
   // core, the same list the coverage table below certifies against. The engine also reports
@@ -693,7 +737,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
       {/* ADR 0026 — the authoritative Accessibility Status hero replaces the client-side Document
           Health header: one backend-driven status surface (decision-first, coverage vs status,
           segmented bar, Why?, one dynamic CTA) that can never disagree with the coverage matrix. */}
-      <AccessibilityStatus scanId={scanId} file={file.file} onAction={(state) => {
+      <AccessibilityStatus scanId={scanId} file={file.file} onModel={setStatusModel} onAction={(state) => {
         // The one CTA is state-matched. Review is the in-place action the drawer already owns; other
         // states hand off to the parent tabs (remediate / report) — wired as those flows adopt it.
         if (state === 'ready_after_review' && hitlItems.length > 0) {
@@ -702,11 +746,19 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         }
       }} />
       <div className="drawerstats">
-        <span className="badge" style={{ background: sbg, color: sfg }}>{STATUS_TAG_LABEL[st] || st}</span>
+        <span className="badge" style={{ background: sbg, color: sfg }}>
+          {claim === 'has-findings' ? 'needs remediation'
+            : claim === 'not-assessed' ? 'not yet assessed'
+            : (STATUS_TAG_LABEL[st] || st)}
+        </span>
         {st === 'clean' && file.score === null
-          ? <span className="drawerscore">no findings</span>
+          ? <span className="drawerscore">
+              {claim === 'has-findings' ? 'see coverage' : claim === 'not-assessed' ? 'not assessed' : 'no findings'}
+            </span>
           : <span className="drawerscore">{file.score === null ? 'n/a' : `${st === 'uncertain' ? '≤' : ''}${file.score}`}<span className="muted"> / 100</span></span>}
-        {st === 'clean' && <span className="muted">no blocking findings — not yet certified; some criteria still need human validation (see coverage below)</span>}
+        {claim === 'no-findings' && <span className="muted">no blocking findings — not yet certified; some criteria still need human validation (see coverage below)</span>}
+        {claim === 'not-assessed' && <span className="muted">not yet assessed — this document has not been opened, so nothing is known about its findings yet</span>}
+        {claim === 'has-findings' && <span className="muted">{statusModel.needs_remediation} criteri{statusModel.needs_remediation === 1 ? 'on' : 'a'} need{statusModel.needs_remediation === 1 ? 's' : ''} remediation — see coverage above</span>}
         {st === 'uncertain' && <span className="muted">{file.skipped_rules} rule(s) skipped — score is an upper bound</span>}
         {effectiveRemediated && st === 'issues' && <span className="muted">score reflects the original scan — the fixed copy is stored; re-validate to refresh</span>}
         {(remNow?.done || effectiveRemediated) && (
@@ -1156,7 +1208,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           <>
           <details className="covmanifest" open>
             <summary className="covmanifest-sum">
-              WCAG coverage · the 20-check document core
+              {/* Wrapped, not a bare text node: as an anonymous flex item beside nine count
+                  chips it shrank to its minimum content width at drawer widths and rendered
+                  one word per line. */}
+              <span className="covmanifest-title">WCAG coverage · the 20-check document core</span>
               {chip('PASS', 'pass', 'pass')}
               {chip('FAIL', 'fail', 'fail')}
               {chip('FIXED', 'pass', 'fixed · re-validate')}

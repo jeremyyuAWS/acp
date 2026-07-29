@@ -1458,14 +1458,27 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 /* Rule coverage manifest (FileDrawer, context=remediate) */
 .drive-rem-panel { margin-top: 16px; padding: 12px 14px; background: #f5faf7; border: 1px solid #c4ddd0; border-radius: 8px; font-size: 13px; }
 .covmanifest { margin-top: 18px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-.covmanifest summary { cursor: pointer; padding: 10px 14px; font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px; user-select: none; background: var(--bg); }
+.covmanifest summary { cursor: pointer; padding: 10px 14px; font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px; user-select: none; background: var(--bg); flex-wrap: wrap; }
 .covmanifest summary::-webkit-details-marker { display: none; }
 .covmanifest-sum { list-style: none; }
-.covstat { font-size: 11px; font-weight: 500; padding: 1px 8px; border-radius: 999px; margin-left: 4px; }
-.covstat.pass { background: #E7F0DC; color: #3B6D11; }
-.covstat.fail { background: #FAEEDA; color: #854F0B; }
-.covstat.review { background: #fbf3d6; color: #8a6a0e; }   /* 🟡 Review Recommended (ADR 0023) */
-.covstat.skip { background: #f1eff4; color: #716b76; }
+/* The heading holds its own line rather than being squeezed by the count chips beside it:
+   min-width stops the flex shrink that collapsed it to one word per line, and the chips wrap
+   underneath (summary is flex-wrap: wrap) once the drawer is too narrow for both. */
+.covmanifest-title { flex: 1 1 auto; min-width: 14rem; }
+/* Count pills in the manifest summary. SCOPED to .covmanifest-sum on purpose: `.covstat` is
+   already taken, 850 lines above, by the WCAG coverage matrix's stat-card GRID
+   (`display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr))`). The
+   unscoped pill rule below never set `display`, so every pill silently inherited that grid
+   — each one claiming a 160px minimum track, plus a 14px bottom margin from the same rule.
+   Nine of them in a nowrap flex row is what squeezed the panel heading to zero width and
+   stacked it one word per line. The two components genuinely need different boxes, so the
+   pills get their own selector rather than one of them overriding the other. */
+.covmanifest-sum .covstat { display: inline-block; grid-template-columns: none;
+  font-size: 11px; font-weight: 500; padding: 1px 8px; border-radius: 999px; margin: 0 0 0 4px; }
+.covmanifest-sum .covstat.pass { background: #E7F0DC; color: #3B6D11; }
+.covmanifest-sum .covstat.fail { background: #FAEEDA; color: #854F0B; }
+.covmanifest-sum .covstat.review { background: #fbf3d6; color: #8a6a0e; }   /* 🟡 Review Recommended (ADR 0023) */
+.covmanifest-sum .covstat.skip { background: #f1eff4; color: #716b76; }
 /* Count chips that double as row filters — clickable, with a struck-through "off" state. */
 .covstat-btn { border: 1px solid transparent; font-family: inherit; line-height: 1.5; cursor: pointer; }
 .covstat-btn:hover { filter: brightness(0.95); }
@@ -1585,8 +1598,13 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .acstatus-fail { border-left-color: #d61f45; }
 .acstatus-busy { border-left-color: #8494ab; }
 .acstatus-coverage { display: flex; justify-content: space-between; align-items: baseline;
+  flex-wrap: wrap;
   font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
 .acstatus-coverage-val { font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+/* What the denominator counts — its own full-width line under the label/value row, in
+   sentence case so it reads as a caption rather than a second heading. */
+.acstatus-coverage-den { flex-basis: 100%; text-transform: none; letter-spacing: 0;
+  font-size: 11px; opacity: .8; margin-top: 2px; }
 .acstatus-head { display: flex; align-items: center; gap: 11px; }
 .acstatus-glyph { font-size: 22px; line-height: 1; }
 .acstatus-glyph.spin { display: inline-block; animation: acspin 1s linear infinite; }

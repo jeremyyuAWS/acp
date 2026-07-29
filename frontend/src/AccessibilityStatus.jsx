@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getFileStatus, getScanStatus } from './api.js'
 
 // ADR 0026 — the authoritative Accessibility Status hero. The FIRST thing a reviewer reads on a file:
@@ -35,20 +35,26 @@ function headCount(m) {
   return 0
 }
 
+// "criterion" is an irreplaceable-stem plural — criterion/criteria, not criterion + "a".
+// Concatenating the suffix produced "3 criteriona are failing" on screen, which is why this
+// is a named helper rather than an inline ternary: the two call sites below used to each
+// build the word themselves.
+const criteria = (n) => (n === 1 ? 'criterion' : 'criteria')
+
 function trustSentence(m) {
   const gaps = m.not_automatically_assessable
   switch (m.state) {
     case 'ready_for_certification':
     case 'certified':
       return gaps > 0
-        ? `Every criterion ACP could check is accounted for; ${gaps} require manual verification.`
+        ? `Every criterion ACP could check is accounted for; ${gaps} ${gaps === 1 ? 'requires' : 'require'} manual verification.`
         : 'Every applicable WCAG criterion has been accounted for. No unresolved assessment gaps.'
     case 'ready_after_review':
-      return `${m.needs_review} criterion${m.needs_review !== 1 ? 'a' : ''} still require human verification before certification.`
+      return `${m.needs_review} ${criteria(m.needs_review)} still ${m.needs_review === 1 ? 'requires' : 'require'} human verification before certification.`
     case 'apply_approved_fixes':
       return 'Approved fixes haven’t been written to the document yet.'
     case 'needs_remediation':
-      return `${m.needs_remediation} criterion${m.needs_remediation !== 1 ? 'a' : ''} ${m.needs_remediation === 1 ? 'is' : 'are'} failing and need a fix.`
+      return `${m.needs_remediation} ${criteria(m.needs_remediation)} ${m.needs_remediation === 1 ? 'is failing and needs' : 'are failing and need'} a fix.`
     default:
       return 'ACP is still assessing this document.'
   }
@@ -62,15 +68,33 @@ function estimateLabel(secs) {
 
 // One component, every scope (ADR 0026 PR 3): pass `file` for the per-file card, omit it for the
 // scan roll-up (per-file models summed server-side — the levels reconcile by construction).
-export default function AccessibilityStatus({ scanId, file, onAction }) {
+export default function AccessibilityStatus({ scanId, file, onAction, onModel }) {
   const [m, setM] = useState(null)
   const [why, setWhy] = useState(false)
+
+  // `onModel` lets a container reuse THIS model instead of deriving the same facts a second
+  // time — the FileDrawer badge does, so it can never contradict the card (see findingsClaim).
+  // Held in a ref so a caller passing an inline arrow doesn't re-trigger the fetch.
+  const onModelRef = useRef(onModel)
+  useEffect(() => { onModelRef.current = onModel })
 
   useEffect(() => {
     let live = true
     setM(null)
+    onModelRef.current?.(null)   // drop the previous file's model while this one loads
     const fetchStatus = file ? getFileStatus(scanId, file) : getScanStatus(scanId)
-    fetchStatus.then((r) => { if (live) setM(r || { available: false }) })
+    fetchStatus.then((r) => {
+      if (!live) return
+      const model = r || { available: false }
+      setM(model)
+      onModelRef.current?.(model)
+    }).catch(() => {
+      // A failed lookup must degrade to "unavailable", never to a reassuring claim: the card
+      // hides itself and the drawer badge falls back to what the file record can support.
+      if (!live) return
+      setM({ available: false })
+      onModelRef.current?.({ available: false })
+    })
     return () => { live = false }
   }, [scanId, file])
 
@@ -85,11 +109,18 @@ export default function AccessibilityStatus({ scanId, file, onAction }) {
     <div className={`acstatus acstatus-${s.tone}`} role="status"
       aria-label={file ? 'Accessibility status for this document' : 'Accessibility status for this scan'}>
       {/* Coverage — "did ACP look?" — distinct from status ("is it ready?") */}
-      <div className="acstatus-coverage">
+      {/* Say what the denominator counts. Three different totals are visible across the
+          product — this card's in_scope, the drawer table's 20-check document core, and the
+          per-format catalog — and unlabelled they read as disagreeing measurements of one
+          quantity rather than answers to three different questions. */}
+      <div className="acstatus-coverage"
+        title={loading ? undefined
+          : `${m.coverage.evaluable} of the ${m.coverage.total} criteria traced for this document had an automated or review method ACP could apply; the remaining ${m.not_automatically_assessable} need manual verification. The coverage table below scores a different, narrower list — the 20-check document core this document is certified against.`}>
         <span className="acstatus-coverage-lbl">Assessment Coverage</span>
         <span className="acstatus-coverage-val">
           {loading ? '—' : `${m.coverage.evaluable} / ${m.coverage.total}`}
         </span>
+        {!loading && <span className="acstatus-coverage-den">criteria ACP had a method for, of {m.coverage.total} traced</span>}
       </div>
 
       {/* Decision first */}
