@@ -617,6 +617,33 @@ def _registry_for(rule_id: str, fmt: str | None):
     return _registry_mod.get(rule_id, fmt)
 
 
+def _certify(rule_id: str, fmt: str | None) -> str:
+    """The strongest outcome a CLEAN scan may claim for this pair: PASS, or REVIEW if the
+    assessment lane says ACP cannot certify it.
+
+    THE single gate for the token "PASS". Every route through _rule_outcome that would certify
+    must return through here, so the lane can never be bypassed by adding one more route.
+
+    That is not a style preference — it is the defect this function exists to prevent, twice
+    over. The lane check was originally written inline at the one place a clean pass/fail scan
+    could certify. The registry branch (ADR 0024 coverage axis) was then added ABOVE it with its
+    own `return "PASS"`, and a FULL-coverage registration certified without ever consulting the
+    lane. Coverage and lane answer different questions: FULL says "our technique reaches the
+    whole criterion", the lane says "a pass here is a judgement ACP cannot make at all". When
+    they disagree the lane wins, because no amount of detector reach makes a subjective
+    criterion objectively certifiable.
+
+    It did not fire in production only because no FULL-coverage registration happened to sit on
+    a 🟡/🔴 pair — html 3.1.1, the only FULL cell, is 🟢 auto. The two PDF registrations are
+    PARTIAL and HEURISTIC, so PDF was never exposed. A single future migration to FULL would
+    have resurrected pptx 2.1.1's fabricated green on a different format (verified by doing
+    exactly that to pdf 1.1.1, whose lane is 🟡 review: it returned PASS).
+    """
+    if fmt in NO_CERTIFY_ASSESS_FORMATS.get(rule_id, frozenset()):
+        return REVIEW
+    return "PASS"
+
+
 def _rule_outcome(rule_id: str, fmt: str | None, fail_count: int, review_count: int = 0,
                   target: str | None = None) -> str:
     """The per-(criterion, format) outcome from its finding counts.
@@ -670,7 +697,10 @@ def _rule_outcome(rule_id: str, fmt: str | None, fail_count: int, review_count: 
         if review_count > 0:
             return REVIEW
         if reg.coverage in _CAN_CERTIFY_PASS:
-            return "PASS"
+            # Through the gate, never a bare `return "PASS"`: FULL coverage is a claim about the
+            # DETECTOR's reach, and it does not override a lane that says ACP cannot certify at
+            # all. See _certify.
+            return _certify(rule_id, fmt)
         if reg.coverage in _NEEDS_REVIEW_ON_CLEAN:
             return REVIEW
         return NOT_EVALUATED          # DECLARED / UNSUPPORTED — applicable, nothing ran
@@ -681,9 +711,7 @@ def _rule_outcome(rule_id: str, fmt: str | None, fail_count: int, review_count: 
     # Validator ran, no finding. A 🟢 auto-assess criterion → a certified PASS. Any other lane
     # (🟡 review or 🔴 human — ACP can't certify it, see NO_CERTIFY_ASSESS_FORMATS) is NOT a pass:
     # it stays REVIEW, never a fabricated green (ADR 0016 / audit #174).
-    if fmt in NO_CERTIFY_ASSESS_FORMATS.get(rule_id, frozenset()):
-        return REVIEW
-    return "PASS"
+    return _certify(rule_id, fmt)
 
 
 def _split_sc_counts(issues: list[dict]) -> tuple[dict[str, int], dict[str, int]]:

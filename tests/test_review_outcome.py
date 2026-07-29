@@ -199,6 +199,81 @@ def test_pptx_2_1_1_clean_deck_is_review_not_a_certified_pass():
     assert rc.assessment_table()["pptx"]["2.1.1"] == rc.A_HUMAN
 
 
+def test_registry_full_coverage_still_cannot_certify_a_non_auto_lane():
+    """The registry branch must not be a second, ungated route to PASS.
+
+    `_rule_outcome` returned PASS from the registry branch (ADR 0024 coverage axis) BEFORE it
+    reached the assessment-lane check, so a FULL-coverage registration certified without ever
+    consulting the lane — the pptx 2.1.1 defect reachable again through a different branch.
+
+    It never fired in production only by accident of which cells exist: html 3.1.1 is the sole
+    FULL registration and its lane is 🟢 auto, and both PDF registrations are PARTIAL/HEURISTIC.
+    One migration to FULL on a 🟡/🔴 pair was all it would have taken, so this pins the gate
+    rather than the accident. pdf 1.1.1 is the probe: lane 🟡 review (alt adequacy is a
+    judgement), and it returned PASS under a forged FULL registration before _certify existed.
+    """
+    import dataclasses
+
+    import assessment
+    import remediation_capability as rc
+    import rule_registry
+
+    assert rc.assessment_table()["pdf"]["1.1.1"] == rc.A_REVIEW, "probe must sit on a 🟡 lane"
+
+    # Drive store's LAZY registry init through the real path first — it populates
+    # _CAN_CERTIFY_PASS, and reaching into store's globals without it silently disables the
+    # very branch under test (every outcome falls through to NOT_EVALUATED and the test passes
+    # for the wrong reason).
+    store._rule_outcome("4.1.2", "pdf", 0, 0)
+    assert assessment.Coverage.FULL in store._CAN_CERTIFY_PASS
+
+    rule_registry.load()
+    donor = rule_registry._REGISTRY[("4.1.2", "pdf")]
+    forged = dataclasses.replace(donor, rule="1.1.1", fmt="pdf", coverage=assessment.Coverage.FULL)
+    had = ("1.1.1", "pdf") in rule_registry._REGISTRY
+    saved = rule_registry._REGISTRY.get(("1.1.1", "pdf"))
+    rule_registry._REGISTRY[("1.1.1", "pdf")] = forged
+    try:
+        assert store._registry_for("1.1.1", "pdf").coverage in store._CAN_CERTIFY_PASS
+        # FULL coverage says the technique reaches the whole criterion; the lane says a pass is
+        # a judgement ACP cannot make. The lane wins.
+        assert store._rule_outcome("1.1.1", "pdf", 0, 0) == store.REVIEW
+        # A real finding still outranks it, and a 🟢 lane still certifies through the same gate.
+        assert store._rule_outcome("1.1.1", "pdf", 1, 0) == "FAIL"
+        assert store._rule_outcome("3.1.1", "html", 0, 0) == "PASS"
+    finally:
+        if had:
+            rule_registry._REGISTRY[("1.1.1", "pdf")] = saved
+        else:
+            del rule_registry._REGISTRY[("1.1.1", "pdf")]
+
+
+def test_certify_is_the_only_route_to_pass():
+    """Structural: exactly one `return "PASS"` in store, inside _certify.
+
+    The bug arrived by someone adding a second certification site above the lane check. A test
+    over behaviour cannot catch the third one before it ships, because the offending pair may
+    not exist yet — so this pins the shape instead.
+    """
+    import ast
+
+    tree = ast.parse((ACP / "api" / "store.py").read_text())
+    # AST, not a regex: the literal also appears in _certify's own docstring describing this
+    # rule, and prose must not count as a certification site.
+    owners = [
+        fn.name
+        for fn in ast.walk(tree)
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Return)
+        and isinstance(node.value, ast.Constant) and node.value.value == "PASS"
+    ]
+    assert owners == ["_certify"], (
+        f'expected exactly one `return "PASS"`, inside _certify; found it in {owners}. '
+        "Route the new one through _certify so the assessment lane cannot be bypassed."
+    )
+
+
 def test_advisory_review_on_a_pass_fail_criterion_surfaces_as_review():
     # An advisory finding on an in-scope pass/fail criterion (no blocking finding) → REVIEW.
     assert store._rule_outcome("1.1.1", "pdf", 0, 1) == store.REVIEW
