@@ -50,6 +50,28 @@ git fetch -q origin
 PIN="${ACP_PIN:-$(git rev-parse origin/main)}"
 say "pinning ${PIN:0:7}"
 
+# The CI gate, ENFORCED rather than described. This step's own comment has always said "check CI
+# is green on it", and nothing ever checked — a human was expected to remember. Deploying an
+# unbuilt commit is exactly the mistake an automated pipeline makes faster than a person.
+#
+# Skipped, loudly, when gh is unavailable or unauthenticated: a local operator without gh should
+# still be able to ship, and a gate that silently passes is worse than one that says it was not
+# run. ACP_SKIP_CI_GATE=1 is the deliberate override for a commit CI cannot see (a local-only pin).
+if [ "${ACP_SKIP_CI_GATE:-0}" = 1 ]; then
+  echo "  ⚠ CI gate SKIPPED by ACP_SKIP_CI_GATE=1"
+elif ! command -v gh >/dev/null 2>&1; then
+  echo "  ⚠ CI gate NOT CHECKED — gh is not installed on this host"
+elif ! gh auth status >/dev/null 2>&1; then
+  echo "  ⚠ CI gate NOT CHECKED — gh is not authenticated"
+else
+  CI_CONC="$(gh run list --commit "$PIN" --workflow CI --limit 1 --json conclusion -q '.[0].conclusion' 2>/dev/null || true)"
+  case "$CI_CONC" in
+    success) echo "  ✓ CI is green on ${PIN:0:7}" ;;
+    "")      die "no CI run found for ${PIN:0:7} — it may still be queued. Wait for it, or set ACP_SKIP_CI_GATE=1 if this pin is deliberately not on a branch CI builds." ;;
+    *)       die "CI on ${PIN:0:7} concluded '$CI_CONC', not success — refusing to deploy it." ;;
+  esac
+fi
+
 # ── 2. isolated clone ──────────────────────────────────────────────────────────────────────
 # `az acr build` uploads the working directory as build context. This repo is worked by many
 # concurrent sessions; on 2026-07-29 seventeen files were uncommitted and would have been baked
@@ -62,7 +84,13 @@ git checkout -q "$PIN"
 
 # ── 3. compiled engines ────────────────────────────────────────────────────────────────────
 say "building the .NET Office analyser"
-"${ACP_DOTNET_MUXER:-$HOME/.dotnet/dotnet}" build spike/dotnet/AcpScan.Cli -c Release -v quiet --nologo \
+# Resolve dotnet the same way api/scanner.py and tests/engines.py do: explicit override, then
+# PATH, then the dev-machine install location. PATH is what makes this work on a CI runner —
+# actions/setup-dotnet puts the muxer on PATH and never creates ~/.dotnet/dotnet, so the old
+# hard-coded default would have failed on the very host CD runs on.
+DOTNET="${ACP_DOTNET_MUXER:-$(command -v dotnet || echo "$HOME/.dotnet/dotnet")}"
+[ -x "$DOTNET" ] || die "no dotnet muxer: tried ACP_DOTNET_MUXER, PATH, and ~/.dotnet/dotnet"
+"$DOTNET" build spike/dotnet/AcpScan.Cli -c Release -v quiet --nologo \
   || die "dotnet build failed"
 [ -f spike/dotnet/AcpScan.Cli/bin/Release/net10.0/AcpScan.Cli.dll ] \
   || die "AcpScan.Cli.dll missing after a 'successful' build"
