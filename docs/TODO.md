@@ -202,80 +202,83 @@ unsupervised live window.
 
 ---
 
-## P1d — The 31 cells where Deva's FINAL ask exceeds what ACP delivers
+## P1d — Deva's FINAL ask vs what ACP delivers
 
-Source: the WCAG matrix (`jeremyyuAWS/wcag-matrix`, live at wcag-matrix.mova-io.app),
-which as of build `2026.07.29.0010` scores every cell against **Deva's FINAL tab** rather
-than against our own rubric ceiling. 41 of his 94 cells are met, 16 ask for no automated
-work at all, and **37 fall short — 31 of them by more than the rubric says any tool can
-deliver.** Those 31 are what this section is about.
+Source: the WCAG matrix (`jeremyyuAWS/wcag-matrix`), which scores every cell against **Deva's
+FINAL tab** rather than against our own rubric ceiling. As of matrix build `2026.07.29.0031`:
+**78.4% of his ask today**, 42 of 94 cells meeting it, 36 short, 30 of those short by more
+than the rubric says any tool can deliver, and 16 asking for no automated work at all.
 
-They are NOT one backlog. They split cleanly, and the split is the whole point:
+### What the first version of this section got wrong
 
-### P1d-1 — 10 cells with real engineering headroom (buildable now)
+It listed **10 cells with "real engineering headroom"**. Going to build them found that
+**nine already had shipped code behind them** — the matrix was understating ACP, and this
+roadmap inherited the error and turned it into a work plan. Corrected in `wcag-matrix#14`,
+verified by running the real detectors and proposers against built fixtures:
 
-ACP sits BELOW its own ceiling here, so this is ordinary work. It closes part of each gap
-but not all of it — every one of these still lands short of his ask even when finished,
-which is why they are listed here rather than folded into P1.
+| Cell | matrix said | actually | observed |
+|---|---|---|---|
+| 2.4.6 assess XLSX | Human Required | Potential Issue | `XLSX_DEFAULT_LABELS`, 3 default sheet tabs |
+| 2.4.6 assess PDF | Human Required | Potential Issue | `PDF_NO_HEADINGS`, tagged 8-page file |
+| 2.4.6 fix PDF | No Remediation | AI Generated Fix | heading map from the font hierarchy |
+| 2.4.4 assess PDF | Human Required | Potential Issue | `PDF_LINK_RAW_URL` |
+| 2.4.4 fix PDF | No Remediation | AI Generated Fix | proposal with AI **off** |
+| 3.1.2 fix XLSX/PPTX/PDF | No Remediation | Guided Remediation | 2 proposals each |
+| 1.4.3 fix PDF | No Remediation | **Automatically Fixed** | re-scan clean after the fix |
 
-1. **2.4.6 Headings and Labels · assess · XLSX, PDF** — today Human Assessment Required,
-   ceiling Potential Issue, his ask Fully Assessed.
-2. **2.4.6 Headings and Labels · fix · XLSX, PDF** — today No Remediation, ceiling AI
-   Generated Fix, his ask Automatically Fixed. DOCX and PPTX already ship the AI fix, so
-   this is extending existing work to two more formats rather than new ground.
-3. **3.1.2 Language of Parts · fix · XLSX, PPTX, PDF** — today No Remediation, ceiling
-   Guided Remediation, his ask AI Generated Fix. DOCX already ships Guided.
-4. **1.4.3 Contrast (Minimum) · fix · PDF** — today No Remediation, ceiling Guided
-   Remediation, his ask Automatically Fixed.
-5. **2.4.4 Link Purpose · assess · PDF** — today Human Assessment Required, ceiling
-   Potential Issue, his ask Fully Assessed.
-6. **2.4.4 Link Purpose · fix · PDF** — today No Remediation, ceiling AI Generated Fix,
-   his ask Automatically Fixed. The other three formats already ship the AI fix.
+Two things worth keeping from that:
 
-PDF dominates this list, which matches every other coverage figure on the matrix — PDF is
-the weakest format on both axes (46.4% assess / 30.7% fix, against 65–70% elsewhere).
+* **`remediation_capability.py` and `RULE_FORMATS` were right all along** and the matrix was
+  wrong. Ground rule 4 says a catalog entry is not evidence that code runs; the converse also
+  holds, and this is the case that proved it — a matrix cell is not evidence that it doesn't.
+* **1.4.3 on PDF** was recorded as No Remediation while `_fix_pdf_text_contrast`
+  (`api/remediate_pdf.py:97`) had been deterministically rewriting text fill-colour operators
+  in the content stream the whole time. Its rubric CEILING was wrong too, on a rationale
+  ("surgery on the page") that shipping code contradicts.
 
-### P1d-2 — 21 cells already at our ceiling: a decision, not engineering
+### P1d-1 — the one cell still open
 
-ACP is at the rubric ceiling on all 21. No amount of building moves them, so **they must
-not be scheduled as engineering work** — that is the failure mode this section exists to
-prevent.
+1. **2.4.6 Headings and Labels · fix · XLSX** — today No Remediation, ceiling AI Generated
+   Fix, his ask Automatically Fixed. `propose_xlsx_labels` exists and the detector gate
+   matches, but it returned `[]` with `ai_enabled` both off and on, because verification ran
+   with no reachable model. **Unverified, not absent** — the next step is to run it against a
+   live Ollama and record what comes back, NOT to write a second implementation.
 
-Almost all of them are the same disagreement stated 21 times:
+### P1d-2 — 29 cells at our ceiling: a decision, not engineering
 
-* **"AI Generated Fix" where he asked for "Automatically Fixed"** — 1.1.1 fix (all four
-  formats), 2.4.4 fix (DOCX/XLSX/PPTX), 4.1.2 fix (PDF), 1.3.1 fix (PDF).
-* **"Potential Issue" where he asked for "Fully Assessed"** — 3.1.2 assess (all four),
-  2.4.4 assess (DOCX/XLSX/PPTX), 2.4.6 assess (DOCX/PPTX), 1.4.3 assess (PDF).
-* Plus 1.3.2 fix (PDF) and 3.1.2 fix (DOCX), both Guided where he asked for AI.
+Up from 21, because the nine corrections above rose to their ceilings and are now at-ceiling
+*and still short of his ask*. No amount of building moves them.
+
+Almost all are the same disagreement, stated 29 times:
+
+* **AI Generated Fix where he asked for Automatically Fixed** — 1.1.1 fix (all four), 2.4.4
+  fix (all four), 2.4.6 fix (PDF), 4.1.2 fix (PDF), 1.3.1 fix (PDF).
+* **Potential Issue where he asked for Fully Assessed** — 2.4.6, 3.1.2 and 2.4.4 assess (all
+  four formats each), 1.4.3 assess (PDF).
+* **Guided where he asked for AI** — 3.1.2 fix (all four), 1.3.2 fix (PDF).
 
 Stated once: **he is asking for determinism where our rubric puts an LLM in the decision
-path.** That cap is deliberate and is one of this project's standing ground rules — a tier
-with an LLM deciding it is Guided or AI-drafted, never Automatic, because we cannot certify
-a pass on a generated judgement. It is a policy, not a missing feature.
+path.** That cap is a standing ground rule, not a missing feature — we do not certify a pass
+on a generated judgement.
 
-So there are exactly two honest resolutions per cell, and both are decisions:
+Two honest resolutions, both decisions:
 
 1. **The ceiling is right → renegotiate the ask.** "Automatically Fixed" for 1.1.1 means
-   generating alt text and writing it without review. We can do that; we will not claim it
-   passes. If he wants the write-without-review behaviour, that is a product decision about
-   liability, not a detection problem.
-2. **The ceiling is wrong → revisit the rubric.** A tier is a human judgement (ground rules
-   2 and 3), not a derived fact. 2.4.6 assess capping at Potential Issue is OUR call about
-   whether "is this heading label meaningful?" is machine-decidable. It is defensible; it is
-   not physics. If a case can be made per format, the rubric cell should change and the
-   matrix will follow.
+   writing generated alt text without review. We can; we will not call it a pass.
+2. **The ceiling is wrong → revisit the rubric.** A tier is a human judgement (ground rules 2
+   and 3), not physics — and 1.4.3 on PDF is now the proof that a ceiling here can simply be
+   too conservative. If a case can be made per format, the rubric cell should change.
 
-**Owner: not engineering.** Route to the same conversation as P2. The one thing that would
-be wrong is to leave these looking like a backlog nobody is working.
+**Owner: not engineering.** Route to P2.
 
 ### Keeping this section true
 
-The counts above are a snapshot of matrix build `2026.07.29.0010` and will drift the moment
-either side moves — a rubric change, a shipped detector, or a revision of his sheet. They
-are authored, not generated: nothing in this repo currently derives them, because the input
-is a customer's spreadsheet rather than our code. Re-derive from the matrix page's
-`targetProgress()` before quoting them anywhere.
+Counts are a snapshot of matrix build `2026.07.29.0031` and will drift the moment either side
+moves. Authored, not generated — the input is a customer's spreadsheet, not our code. The
+first version of this section was written from the matrix without checking the matrix against
+the code, which is exactly how it came to describe nine pieces of work that did not exist.
+Re-derive from `targetProgress()` on the matrix page, and spot-check against a fixture, before
+quoting any of it.
 
 ---
 
