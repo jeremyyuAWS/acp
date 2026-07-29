@@ -49,6 +49,60 @@ def test_1_3_1_credits_implicit_label_wrapping_and_self_naming_types():
     assert not _fired(r, "1.3.1")
 
 
+_BIG_BOLD = "font-size:24px;font-weight:bold"
+
+
+def _pseudo(result):
+    return [i for i in result["issues"] if i["ruleId"] == "HTML_PSEUDO_HEADING"]
+
+
+def test_1_3_1_flags_text_styled_as_a_heading_but_not_marked_up():
+    """Filed under 1.3.1, NOT 2.4.6.
+
+    frontend/src/rules/wcag-2-4-6.js used to raise this signal under 2.4.6 while docx raised
+    the identical one under 1.3.1 (office_structure.DOCX_PSEUDO_HEADING) — one criterion, two
+    answers, depending only on which format the customer uploaded. 1.3.1 is the correct home:
+    the element is not a heading yet, so 2.4.6's "do headings describe their topic" has
+    nothing to judge. It is also a real coverage gain — this check previously existed only in
+    the frontend module, so a server-side scan never saw it.
+    """
+    r = _scan(f"<html><body><p style='{_BIG_BOLD}'>Quarterly Results</p></body></html>")
+    assert _fired(r, "1.3.1")
+    assert _pseudo(r), "HTML_PSEUDO_HEADING should fire"
+    assert not _fired(r, "2.4.6"), "a pseudo-heading is not a 2.4.6 finding"
+
+
+def test_1_3_1_pseudo_heading_ignores_ordinary_and_real_headings():
+    for html in (
+        "<html><body><p>Just some ordinary body copy that runs on.</p></body></html>",
+        f"<html><body><h2 style='{_BIG_BOLD}'>Already A Heading</h2></body></html>",
+        # big but not bold, and bold but not big — the check needs both
+        "<html><body><p style='font-size:24px'>Big Only</p></body></html>",
+        "<html><body><p style='font-weight:bold'>Bold Only</p></body></html>",
+        # a full sentence is prose, not a heading
+        f"<html><body><p style='{_BIG_BOLD}'>This is a sentence.</p></body></html>",
+    ):
+        assert not _pseudo(_scan(html)), html
+
+
+def test_1_3_1_pseudo_heading_shares_the_office_furniture_filter():
+    """Big and bold also describes a wordmark, a headline figure and a pull quote. docx and the
+    PDF scan already reject those via office_structure.looks_like_heading_furniture; html now
+    uses the same filter rather than promoting "$4.2B" to an <h2>."""
+    # The charset is load-bearing, not decoration: without it lxml guesses the encoding of a
+    # bare byte string and mangles the curly quotes, so the pull-quote case would never reach
+    # the filter it is meant to exercise. Real pages declare one.
+    head = "<head><meta charset='utf-8'></head>"
+    for furniture in ("$4.2B", "“We grew faster than the market.”", "ACME",
+                      "By Jane Doe, Chief Accessibility Officer"):
+        assert not _pseudo(_scan(
+            f"<html>{head}<body><p style='{_BIG_BOLD}'>{furniture}</p></body></html>")), furniture
+    # …and the filter does not mask a real one sitting next to furniture.
+    r = _scan(f"<html><body><p style='{_BIG_BOLD}'>$4.2B</p>"
+              f"<p style='{_BIG_BOLD}'>Outlook</p></body></html>")
+    assert len(_pseudo(r)) == 1
+
+
 def test_1_4_1_flags_link_colored_with_no_underline():
     r = _scan('<html><body><a href="#" style="color:#2E72C9">go</a></body></html>')
     assert _fired(r, "1.4.1")
