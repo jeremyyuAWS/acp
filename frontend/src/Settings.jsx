@@ -86,11 +86,31 @@ function DriveMirror() {
   const [aiUrl, setAiUrl] = useState('')
   const [aiVision, setAiVision] = useState('')
   useEffect(() => { if (settings) { setAiUrl(settings.ai_base_url || ''); setAiVision(settings.ai_vision_model || '') } }, [settings])
+  // Whether this signed-in user may actually write platform settings. PUT /settings is
+  // owner-only (ACP_OWNER_EMAIL); the SPA gates Settings behind Platform Admin, so start
+  // optimistic and let the /ai/providers probe below correct it on a 403.
+  const [canEdit, setCanEdit] = useState(true)
+  // The endpoint save must never leave the form asserting something the server did not store.
+  // A failed PUT used to leave the typed value on screen with the old value still live in
+  // production, and the only notice was a line at the very bottom of the panel — below the
+  // whole providers section, off-screen from the Apply button that caused it.
   const saveEndpoint = () => {
+    const want = { ai_base_url: aiUrl.trim(), ai_vision_model: aiVision.trim() }
     setBusy(true); setMsg('')
-    updateSettings({ ai_base_url: aiUrl.trim(), ai_vision_model: aiVision.trim() })
-      .then((s) => { setSettings(s); setMsg('✓ endpoint switched — takes effect on every replica within ~30s, no restart') })
-      .catch((e) => setMsg(e.message || 'update failed'))
+    updateSettings(want)
+      .then((s) => {
+        setSettings(s)
+        // Trust the response, not the request: report what the server actually kept. A 200
+        // whose body disagrees with what we sent is a silent no-op otherwise.
+        const drift = Object.keys(want).filter((k) => (s?.[k] ?? '') !== want[k])
+        setMsg(drift.length
+          ? `⚠ the server kept ${drift.map((k) => `${k}="${s?.[k] ?? ''}"`).join(', ')} — your value was not applied`
+          : '✓ endpoint switched — takes effect on every replica within ~30s, no restart')
+      })
+      .catch((e) => {
+        setAiUrl(settings.ai_base_url || ''); setAiVision(settings.ai_vision_model || '')
+        setMsg(`⚠ not saved: ${e.message || 'update failed'} — the fields have been restored to the values the server holds`)
+      })
       .finally(() => setBusy(false))
   }
   const [costs, setCosts] = useState(null)
@@ -149,7 +169,7 @@ function DriveMirror() {
         Drive automatically right after, and which folder that mirror lands in.
       </p>
       <label style={{ display: 'flex', gap: 10, alignItems: 'center', cursor: busy ? 'default' : 'pointer', margin: '16px 0' }}>
-        <input type="checkbox" checked={settings.drive_mirror_enabled} onChange={toggle} disabled={busy} />
+        <input type="checkbox" checked={settings.drive_mirror_enabled} onChange={toggle} disabled={busy || !canEdit} />
         <span>
           <b>Auto-mirror to Drive</b><br />
           <span className="muted" style={{ fontSize: 12 }}>
@@ -162,10 +182,10 @@ function DriveMirror() {
       <label style={{ fontSize: 13, display: 'block' }}>Drive folder name
         <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
           <input value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="Remediated"
-                 disabled={busy || !settings.drive_mirror_enabled}
+                 disabled={busy || !canEdit || !settings.drive_mirror_enabled}
                  style={{ padding: '4px 8px', border: '1px solid var(--line)', borderRadius: 6, flex: 1 }} />
           <button className="ghost small" onClick={saveFolder}
-                  disabled={busy || !folder.trim() || !settings.drive_mirror_enabled || folder.trim() === settings.drive_mirror_folder}>
+                  disabled={busy || !canEdit || !folder.trim() || !settings.drive_mirror_enabled || folder.trim() === settings.drive_mirror_folder}>
             Save
           </button>
         </div>
@@ -182,7 +202,7 @@ function DriveMirror() {
         applied fix is still verified by re-scan before anything is certified.
       </p>
       <label style={{ display: 'flex', gap: 10, alignItems: 'center', cursor: busy ? 'default' : 'pointer', margin: '16px 0' }}>
-        <input type="checkbox" checked={!!settings.auto_apply_validated} onChange={toggleAutoApply} disabled={busy} />
+        <input type="checkbox" checked={!!settings.auto_apply_validated} onChange={toggleAutoApply} disabled={busy || !canEdit} />
         <span>
           <b>Auto-apply cross-checked drafts</b><br />
           <span className="muted" style={{ fontSize: 12 }}>
@@ -199,21 +219,26 @@ function DriveMirror() {
         so running scans are never disturbed. Empty = the deploy's default. Every switch is
         audited, and the 🟢 local / 🟡 cloud provenance badge follows the endpoint truthfully.
       </p>
+      {!canEdit && <ReadOnlyNotice />}
       <label style={{ fontSize: 13, display: 'block' }}>Ollama base URL
-        <input value={aiUrl} onChange={(e) => setAiUrl(e.target.value)} disabled={busy}
+        <input value={aiUrl} onChange={(e) => setAiUrl(e.target.value)} disabled={busy || !canEdit}
                placeholder="empty = deploy default"
                style={{ display: 'block', width: '100%', padding: '4px 8px', margin: '6px 0 10px', border: '1px solid var(--line)', borderRadius: 6 }} />
       </label>
       <label style={{ fontSize: 13, display: 'block' }}>Vision model
         <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-          <input value={aiVision} onChange={(e) => setAiVision(e.target.value)} disabled={busy}
-                 placeholder="empty = deploy default (e.g. llava:13b on a GPU)"
+          <input value={aiVision} onChange={(e) => setAiVision(e.target.value)} disabled={busy || !canEdit}
+                 placeholder="empty = deploy default (e.g. moondream on CPU, llava:13b on a GPU)"
                  style={{ padding: '4px 8px', border: '1px solid var(--line)', borderRadius: 6, flex: 1 }} />
-          <button className="ghost small" onClick={saveEndpoint} disabled={busy}>Apply</button>
+          <button className="ghost small" onClick={saveEndpoint} disabled={busy || !canEdit}>Apply</button>
         </div>
       </label>
+      {/* The outcome belongs next to the control that caused it. The copy at the foot of the
+          panel is far below the providers section and was missed entirely. */}
+      {msg && <p role="status" aria-live="polite"
+                 style={{ margin: '10px 0 0', fontSize: 13, color: msg.startsWith('✓') ? '#3B6D11' : '#A32D2D' }}>{msg}</p>}
       <hr style={{ border: 0, borderTop: '1px solid var(--line)', margin: '20px 0' }} />
-      <AIProvidersPanel />
+      <AIProvidersPanel onAccess={setCanEdit} />
       {msg && <p style={{ marginTop: 12, fontSize: 13, color: msg.startsWith('✓') ? '#3B6D11' : '#A32D2D' }}>{msg}</p>}
     </div>
   )
@@ -346,13 +371,28 @@ const ADAPTER_READY = new Set(['azure_openai'])
 // ADR 0019 §6 — the admin's AI provider governance page. The KEY is never entered here: an admin's
 // ops team provisions it as a container/Key-Vault secret, and this stores only the secret's NAME
 // (key_secret_ref). The page shows whether the referenced secret is present, never its value.
-function AIProvidersPanel() {
+function AIProvidersPanel({ onAccess }) {
   const [providers, setProviders] = useState(null)
   const [draft, setDraft] = useState({})     // provider -> edited fields
   const [busy, setBusy] = useState('')
   const [note, setNote] = useState('')
-  useEffect(() => { getAiProviders().then((d) => setProviders(d.providers || [])).catch(() => setProviders([])) }, [])
+  // A 403 here is the one reliable read-only signal the SPA has: /ai/providers and
+  // PUT /settings share the same owner-only gate. Swallowing it (the old
+  // `.catch(() => setProviders([]))`) left every admin field editable and every save
+  // guaranteed to fail, which is how a non-owner spent a session typing into a form
+  // that could not persist anything.
+  const [denied, setDenied] = useState(false)
+  useEffect(() => {
+    getAiProviders()
+      .then((d) => { setProviders(d.providers || []); onAccess?.(true) })
+      .catch((e) => {
+        const forbidden = /\b403\b|forbidden|owner/i.test(e?.message || '')
+        setDenied(forbidden); setProviders([]); onAccess?.(!forbidden)
+      })
+  }, [])
   if (!providers) return null
+  // Nothing to show read-only either — the GET that would have supplied the rows is what 403'd.
+  if (denied) return <ReadOnlyNotice />
   const edit = (p, field, val) => setDraft((d) => ({ ...d, [p]: { ...(d[p] || {}), [field]: val } }))
   const field = (row, f) => (draft[row.provider]?.[f] ?? row[f] ?? '')
   const save = (row) => {
@@ -427,6 +467,16 @@ function AIProvidersPanel() {
     </div>
   )
 }
+// Shown instead of an editable admin form when the API has told us this user cannot write it.
+// Saying so up front is the whole point: the alternative is a form that accepts input and
+// then fails, which is indistinguishable from the platform being broken.
+const ReadOnlyNotice = () => (
+  <p role="status" style={{ fontSize: 13, background: '#FBF1DF', border: '1px solid #EAD9BF',
+                            borderRadius: 8, padding: '10px 12px', color: '#6B4A0B' }}>
+    🔒 <b>Read-only.</b> These settings are owner-only, and you are signed in as another user —
+    the fields are disabled because a save would be rejected. Ask the platform owner to change them.
+  </p>
+)
 const INP = { display: 'block', width: '100%', padding: '4px 8px', marginTop: 4, border: '1px solid var(--line)', borderRadius: 6, boxSizing: 'border-box' }
 const L = ({ label, children }) => (<label style={{ fontSize: 12 }} className="muted">{label}{children}</label>)
 

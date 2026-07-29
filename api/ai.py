@@ -344,20 +344,59 @@ def is_available() -> bool:
     return _tags_cached() is not None
 
 
+def _tags_have(tags: list[dict] | None, model: str) -> bool:
+    """Whether `model` is among the pulled tags, matching 'moondream' to 'moondream:latest'
+    the way Ollama itself resolves a bare name."""
+    if not tags or not model:
+        return False
+    base = model.split(":", 1)[0]
+    for m in tags:
+        name = m.get("name", "")
+        if name == model or name.split(":", 1)[0] == base:
+            return True
+    return False
+
+
+def model_is_available() -> bool:
+    """True only when Ollama is reachable AND the configured TEXT model is pulled.
+
+    is_available() answers a different question — 'is Ollama up' — and on 2026-07-29 that
+    difference cost a day: acp-app reported available=true against an Ollama that did not
+    have OLLAMA_MODEL at all, so every text generate returned 404 'model not found' while
+    the status endpoint looked green. Reachability is not capability.
+    """
+    _maybe_refresh_endpoint()
+    return _tags_have(_tags_cached(), OLLAMA_MODEL)
+
+
 def vision_is_available() -> bool:
     """True only when Ollama is reachable AND the configured vision model is pulled.
     Distinct from is_available(): a text-only Ollama is 'available' but cannot describe
     images, so the alt-text remediator must gate genuine captioning on this, not is_available."""
     _maybe_refresh_endpoint()
-    tags = _tags_cached()
-    if not tags:
-        return False
-    base = OLLAMA_VISION_MODEL.split(":", 1)[0]
-    for m in tags:
-        name = m.get("name", "")
-        if name == OLLAMA_VISION_MODEL or name.split(":", 1)[0] == base:
-            return True
-    return False
+    return _tags_have(_tags_cached(), OLLAMA_VISION_MODEL)
+
+
+def config_sources() -> dict:
+    """Where each effective endpoint value came from: 'override' (admin Settings, stored in
+    the DB) or 'env' (the deploy's env var).
+
+    A stored override outranks the env var indefinitely, and nothing used to say so. On
+    2026-07-29 `ai_vision_model` still held `qwen2.5vl:7b` from a GPU pod that had since been
+    torn down; changing OLLAMA_VISION_MODEL on the container app therefore did nothing, and
+    /ai/status reported only the effective value — which read as "the env var did not apply"
+    rather than "a saved override is winning". Reporting the source makes that visible.
+    """
+    _maybe_refresh_endpoint()
+    try:
+        import core as _core
+        stored = {k: (_core.store.get_setting(f"ai_{k}") or "").strip()
+                  for k in ("base_url", "vision_model", "text_model")}
+    except Exception:
+        stored = {}
+    return {"base_url": "override" if stored.get("base_url") else "env",
+            "vision_model": "override" if stored.get("vision_model") else "env",
+            "model": "override" if stored.get("text_model") else "env"}
 
 
 # ── Vision alt text (llava-class model) ───────────────────────────────────────

@@ -214,7 +214,15 @@ def ai_status():
     return {"available": _ai.is_available(), "base_url": _ai.OLLAMA_BASE_URL,
             "model": _ai.OLLAMA_MODEL, "ai_enabled": core.store.get_ai_enabled(),
             "backend": os.environ.get("ACP_AI_BACKEND", "auto").lower(),
-            "vision_available": vision, "vision_model": _ai.OLLAMA_VISION_MODEL}
+            "vision_available": vision, "vision_model": _ai.OLLAMA_VISION_MODEL,
+            # available=true only means Ollama answered. Whether the configured models are
+            # actually pulled is a separate question, and the one that decides if a generate
+            # call 404s — report it rather than leaving 'available' to imply it.
+            "model_available": _ai.model_is_available(),
+            # 'override' = admin Settings (stored in the DB, outranks the env var);
+            # 'env' = the deploy's env var. Without this, an env change that a stale
+            # override is shadowing looks like an env change that did not apply.
+            "config_source": _ai.config_sources()}
 
 
 # ── Enterprise review memory (ADR 0021) — admin authoring + read ────────────────
