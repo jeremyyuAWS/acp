@@ -485,22 +485,37 @@ REVIEW_FORMATS: dict[str, frozenset[str]] = {
     "1.4.12": frozenset({"docx", "pptx", "pdf"}),   # Text Spacing — exact line spacing (docx/pptx); tight line pitch (pdf, ADR 0025)
 }
 
-# Criteria whose ASSESSMENT lane is 🟡 review (ADR 0023) even though they have a pass/fail
-# detector — ACP detects a fail but can't certify a pass (alt adequacy, colour meaning, link-text
-# quality, reading order, …). Derived from remediation_capability.assessment_table(). Used by
-# _rule_outcome so a review-lane criterion with NO finding resolves to REVIEW ("assessed for
+# Criteria ACP CANNOT CERTIFY A PASS for, even though they have a pass/fail detector — every
+# assessment lane except 🟢 auto (ADR 0023). Derived from remediation_capability.assessment_table().
+# Used by _rule_outcome so such a criterion with NO finding resolves to REVIEW ("assessed for
 # review, not certified"), never a green PASS — keeping the estate rollup honest and consistent
 # with the per-file drawer + the scorecard (audit #174).
+#
+# The test is `lane != auto`, NOT `lane == review`, and that distinction is the whole point. Only
+# 🟢 auto means "ACP certifies a PASS from a deterministic fact"; every other lane means it cannot.
+# Selecting the certifying lane and inverting it is safe by construction — a lane added later is
+# non-certifying until someone proves otherwise, which is the direction that fails safe.
+#
+# Enumerating the NON-certifying lanes instead is what shipped, and it silently omitted 🔴 human.
+# That is not a hypothetical: pptx 2.1.1 Keyboard is the single 🔴 cell in the table, and it has NO
+# 2.1.1 detector on any pptx code path (office_structure.checks_for dispatches ten pptx checks and
+# not one emits 2.1.1). It sits in RULE_FORMATS regardless, so bare membership was read as "the
+# validator ran", and a clean deck resolved to a certified green PASS on a criterion the lane table
+# in the same breath said only a person could judge — keyboard operability being a property of the
+# runtime that presents a deck, never of the file. Third instance of this shape after docx 2.4.6
+# (#29-era) and html 2.4.6 (#26); those two were 🟡 cells fixed one at a time. Widening the
+# selector retires the class rather than the instance, and the guard test in
+# tests/test_review_outcome.py asserts no non-🟢 lane can return PASS on any format.
 try:
     import remediation_capability as _cap_mod
-    _rev_assess: dict[str, set[str]] = {}
+    _no_certify: dict[str, set[str]] = {}
     for _fmt, _scs in _cap_mod.assessment_table().items():
         for _sc, _lane in _scs.items():
-            if _lane == "review":
-                _rev_assess.setdefault(_sc, set()).add(_fmt)
-    REVIEW_ASSESS_FORMATS: dict[str, frozenset[str]] = {k: frozenset(v) for k, v in _rev_assess.items()}
+            if _lane != _cap_mod.A_AUTO:
+                _no_certify.setdefault(_sc, set()).add(_fmt)
+    NO_CERTIFY_ASSESS_FORMATS: dict[str, frozenset[str]] = {k: frozenset(v) for k, v in _no_certify.items()}
 except Exception:
-    REVIEW_ASSESS_FORMATS = {}
+    NO_CERTIFY_ASSESS_FORMATS = {}
 
 
 # ── Conformance target ────────────────────────────────────────────────────────
@@ -663,10 +678,10 @@ def _rule_outcome(rule_id: str, fmt: str | None, fail_count: int, review_count: 
         return NOT_EVALUATED
     if review_count > 0:
         return REVIEW
-    # Validator ran, no finding. A 🟢 auto-assess criterion → a certified PASS. But a 🟡 review-lane
-    # criterion (ACP can't certify it — see REVIEW_ASSESS_FORMATS) is NOT a pass: it stays REVIEW,
-    # never a fabricated green (ADR 0016 / audit #174).
-    if fmt in REVIEW_ASSESS_FORMATS.get(rule_id, frozenset()):
+    # Validator ran, no finding. A 🟢 auto-assess criterion → a certified PASS. Any other lane
+    # (🟡 review or 🔴 human — ACP can't certify it, see NO_CERTIFY_ASSESS_FORMATS) is NOT a pass:
+    # it stays REVIEW, never a fabricated green (ADR 0016 / audit #174).
+    if fmt in NO_CERTIFY_ASSESS_FORMATS.get(rule_id, frozenset()):
         return REVIEW
     return "PASS"
 
