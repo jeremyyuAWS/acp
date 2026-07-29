@@ -17,6 +17,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
 import proposals  # noqa: E402
+from chart_fixtures import docx_chart_entries, rezip  # noqa: E402
 
 pptx = pytest.importorskip("pptx")
 
@@ -89,6 +90,32 @@ def test_openpyxl_xlsx_chart_yields_an_exact_datasheet(tmp_path):
     # Every figure is the chart's own, read from the worksheet cells it points at.
     assert "North 120" in prop["rationale"] and "East 150" in prop["rationale"]
     assert "deterministic" in prop["source"]
+
+
+def test_docx_chart_datasheet_resolves_the_embedded_workbook(tmp_path):
+    """A docx chart with empty caches keeps its numbers in word/embeddings/*.xlsx. The proposer
+    must reach them — otherwise the one image class whose alt can be EXACT yields no proposal at
+    all. Passing the chart part's own name is what makes the embedded workbook findable."""
+    pytest.importorskip("openpyxl")
+    p = tmp_path / "report.docx"
+    p.write_bytes(rezip(docx_chart_entries(["North", "South", "East", "West"], [120, 70, 150, 50])))
+
+    out = proposals.propose_chart_datasheet(p, ".docx")
+    assert len(out) == 1, "a cache-less docx chart must still produce a datasheet proposal"
+    prop = out[0]
+    assert "Sales by region" in prop["proposed_value"]
+    assert "North–West" in prop["proposed_value"]                 # real category span, not item 1–4
+    assert "North 120" in prop["rationale"] and "East 150" in prop["rationale"]
+    assert "deterministic" in prop["source"]
+
+
+def test_docx_chart_datasheet_without_its_embedding_yields_nothing(tmp_path):
+    pytest.importorskip("openpyxl")
+    entries = docx_chart_entries(["North", "South"], [1, 2])
+    del entries["word/embeddings/data.xlsx"]
+    p = tmp_path / "orphan.docx"
+    p.write_bytes(rezip(entries))
+    assert proposals.propose_chart_datasheet(p, ".docx") == []
 
 
 def test_no_native_chart_yields_nothing(tmp_path):
