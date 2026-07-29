@@ -26,11 +26,14 @@ describe('the approve payload carries one value per image', () => {
 
   it('EvidenceCard sends the per-image values, and only on approval', () => {
     const src = read('EvidenceCard.jsx')
-    // Two approvals author no content, and neither may send values:
-    //   !resolution  — a WCAG exception (decorative / essential logo) applied instead of a fix.
-    //   !explainOnly — a confirmed PDF structure/heading map or reading order, which is evidence
-    //                  and a re-authoring instruction, never bytes written into the document.
-    expect(src).toMatch(/status === 'approved' && !resolution && !explainOnly && instances\.length/)
+    // Three approvals author no content, and none of them may send values:
+    //   !resolution    — a WCAG exception (decorative / essential logo) applied instead of a fix.
+    //   !explainOnly   — a confirmed PDF structure/heading map or reading order, which is evidence
+    //                    and a re-authoring instruction, never bytes written into the document.
+    //   !decorativeRow — a confirmed decorative image. The value is routed to the marker writer,
+    //                    which ignores it; sending it would record an instruction as the
+    //                    reviewer's approved TEXT.
+    expect(src).toMatch(/status === 'approved' && !resolution && !explainOnly && !decorativeRow/)
     expect(src).toMatch(/approvedValues/)
   })
 
@@ -39,8 +42,20 @@ describe('the approve payload carries one value per image', () => {
     // promise store._row_approved_values stopped believing, and the UI should not make it either.
     const src = read('EvidenceCard.jsx')
     expect(src).toMatch(/const explainOnly = proposalList\.length > 0 && proposalList\.every\(\(p\) => p\.explain_only\)/)
-    expect(src).toMatch(/const editable = !explainOnly &&/)
-    expect(src).toMatch(/const finalValue = \(resolution \|\| explainOnly\) \? null : t\.finalValue/)
+    expect(src).toMatch(/const editable = !explainOnly && !decorativeRow/)
+    expect(src).toMatch(/const finalValue = \(resolution \|\| explainOnly \|\| decorativeRow\) \? null : t\.finalValue/)
+  })
+
+  it('a decorative row is confirmed against the image, never typed into', () => {
+    // The draft is "Mark as decorative — no alt text needed". An editable box prefilled with it
+    // asks the reviewer to describe an image they are about to declare needs no description, then
+    // throws the text away — #43 routes it to the marker writer, which ignores the value. The
+    // card shows the picture instead, so what it offers matches what approving does.
+    const src = read('EvidenceCard.jsx')
+    expect(src).toMatch(/const decorativeRow = proposalList\.length > 0/)
+    expect(src).toMatch(/proposalList\.every\(\(p\) => p\.kind === 'decorative'\)/)
+    expect(src).toMatch(/decorativeRow \? \(/)          // its own read-only render branch
+    expect(src).toMatch(/evcard-decorative-row/)
   })
 
   it('every instance is rendered beside its own textarea — never a value for unseen evidence', () => {

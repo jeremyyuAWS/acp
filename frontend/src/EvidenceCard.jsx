@@ -280,7 +280,18 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // performs — the same lie the server-side flag stops the certify gate believing (api/store.py
   // _row_approved_values). So the map renders read-only and the card asks for a confirmation.
   const explainOnly = proposalList.length > 0 && proposalList.every((p) => p.explain_only)
-  const editable = !explainOnly && card.track.track !== 'auto' && (isValueFix(card.sc) || !!card.proposal)
+  // A DECORATIVE row is the same shape of mistake in the other direction. Its draft reads "Mark
+  // as decorative — no alt text needed": an instruction to the reviewer, not a description of the
+  // image. Rendered as an editable alt box — which is what happens today — the card invites
+  // someone to write a description for an image they are about to declare needs none, and then
+  // discards whatever they typed. #43 made that safe for the DOCUMENT (the value is routed to the
+  // marker writer and ignored), so nothing corrupt is written any more; what is left is a field
+  // that lies about what approving it does. The decision is a yes/no about the picture, so show
+  // the picture and ask for the yes.
+  const decorativeRow = proposalList.length > 0
+    && proposalList.every((p) => p.kind === 'decorative')
+  const editable = !explainOnly && !decorativeRow
+    && card.track.track !== 'auto' && (isValueFix(card.sc) || !!card.proposal)
   // The primary button reads by workflow (primaryAction, above) — "Approve AI fix" / "Confirm
   // fix" / "Approve description". The honest "writes into the document vs records sign-off"
   // distinction stays in the "What you need to do" prose below, not on the button.
@@ -349,12 +360,17 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
     // for the document, so it sends no values either. The server ignores them for such a row in any
     // case (store._row_approved_values / _row_is_explain_only) — this keeps the record honest at the
     // source rather than relying on the far end to discard a value we should never have claimed.
-    const approvedValues = (status === 'approved' && !resolution && !explainOnly && instances.length)
+    // A decorative confirmation authors no text either — store.approved_decorative_locators
+    // routes it to the marker writer, which ignores the value — so it sends none. The draft is an
+    // instruction to the reviewer; recording it as their approved TEXT misdescribes what they
+    // signed, and it is the string that used to reach the document before #43.
+    const approvedValues = (status === 'approved' && !resolution && !explainOnly && !decorativeRow
+                            && instances.length)
       ? (multi ? values : [value || ''])
       : null
     // A resolution stands in for the authored value: send no finalValue (nothing was written), and
     // if the reviewer left the note blank, self-describe the exception so the audit line is legible.
-    const finalValue = (resolution || explainOnly) ? null : t.finalValue
+    const finalValue = (resolution || explainOnly || decorativeRow) ? null : t.finalValue
     const noteOut = note || (resolution === 'decorative' ? 'Marked decorative — no description needed'
       : resolution === 'essential_exception' ? 'Marked essential logo/brand — exempt' : null)
     try {
@@ -638,6 +654,24 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
               </span>
               {instances.map((p, i) => (
                 <pre key={i} className="evcard-explain-map">{p.proposed_value}</pre>
+              ))}
+            </div>
+          ) : decorativeRow ? (
+            /* A yes/no about the picture, so lead with the picture. No text box: the only text in
+               play is the card's instruction to the reviewer, and approving discards it. Approval
+               marks the image decorative in the document (the OOXML marker apply_alt writes),
+               which is what tells a screen reader to skip it. */
+            <div className="evcard-rec-static evcard-decorative">
+              <span className="muted" style={{ fontSize: 12 }}>
+                Approving marks {instances.length === 1 ? 'this image' : 'these images'} decorative,
+                so assistive technology skips {instances.length === 1 ? 'it' : 'them'}. No
+                description is written. Only confirm if the image conveys nothing a reader needs.
+              </span>
+              {instances.map((p, i) => (
+                <div key={i} className="evcard-decorative-row">
+                  <ProposalThumb thumb={p.thumb} alt="" />
+                  <span className="muted" style={{ fontSize: 12 }}>{p.rationale}</span>
+                </div>
               ))}
             </div>
           ) : card.recommendation ? (

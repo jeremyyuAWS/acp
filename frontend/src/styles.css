@@ -1946,6 +1946,12 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .evcard-scaffold ul { margin: 4px 0 0; padding-left: 18px; color: var(--muted, #555); }
 .evcard-scaffold li { margin: 1px 0; }
 
+/* Decorative confirmation (1.1.1). A yes/no about the picture, so the picture leads and there is
+   no text box — the only text in play is the card's instruction to the reviewer, and approving
+   discards it. */
+.evcard-decorative-row { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+.evcard-decorative-row img { border: 1px solid var(--line); border-radius: 6px; flex: none; }
+
 /* Explain-only map (PDF 1.3.1 structure / 2.4.6 headings / 1.3.2 reading order). The reviewer
    CONFIRMS a derived map rather than authoring content, so it is presented as a read-only block
    rather than a textarea: an editable field here would promise a write-back into the PDF that
