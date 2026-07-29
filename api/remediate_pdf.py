@@ -225,10 +225,10 @@ def _propose_structure_map(pdf, source_path: str, *, proposals) -> None:
     headings = _extract_pdf_headings(source_path)
     if len(headings) < _MIN_OUTLINE_ENTRIES:
         return
-    from proposals import infer_heading_levels, proposal
-    levels = infer_heading_levels(size for _t, _p, size in headings)
-    lines = [f"Heading {levels[float(size)]} · “{title}” (p.{page + 1})"
-             for title, page, size in headings]
+    from proposals import heading_level_sequence, proposal
+    levels = heading_level_sequence(size for _t, _p, size in headings)
+    lines = [f"Heading {lvl} · “{title}” (p.{page + 1})"
+             for (title, page, _size), lvl in zip(headings, levels)]
     proposals.append(proposal(
         locator="document structure",
         before="(untagged PDF — no structure tree for assistive technology)",
@@ -237,7 +237,7 @@ def _propose_structure_map(pdf, source_path: str, *, proposals) -> None:
                    "it matches the intended structure. The approved map is the tagging "
                    "instruction for re-authoring and the compliance evidence of what the "
                    "structure should be."),
-        source="font-size rank (deterministic) — human confirmation required",
+        source="font hierarchy in document order (deterministic) — human confirmation required",
         kind="structure-map"))
 
 
@@ -342,10 +342,10 @@ def _propose_pdf_headings(pdf, source_path: str, *, proposals) -> None:
     headings = _extract_pdf_headings(source_path)
     if len(headings) < _MIN_OUTLINE_ENTRIES:
         return
-    from proposals import infer_heading_levels, proposal
-    levels = infer_heading_levels(size for _t, _p, size in headings)
-    lines = [f"Heading {levels[float(size)]} · “{title}” (p.{page + 1})"
-             for title, page, size in headings]
+    from proposals import heading_level_sequence, proposal
+    levels = heading_level_sequence(size for _t, _p, size in headings)
+    lines = [f"Heading {lvl} · “{title}” (p.{page + 1})"
+             for (title, page, _size), lvl in zip(headings, levels)]
     proposals.append(proposal(
         locator="document headings",
         before="(tagged PDF, but the structure tree contains no headings to navigate by)",
@@ -353,7 +353,7 @@ def _propose_pdf_headings(pdf, source_path: str, *, proposals) -> None:
         rationale=("Derived deterministically from the document's font hierarchy — confirm it "
                    "matches the intended headings. The approved map is the tagging instruction "
                    "for re-authoring and the compliance evidence of what the headings should be."),
-        source="font-size rank (deterministic) — human confirmation required",
+        source="font hierarchy in document order (deterministic) — human confirmation required",
         kind="headings-map"))
 
 
@@ -466,19 +466,20 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
                                "surfaced as a review card · 4.1.2")
         except Exception:
             pass
-        # 1.4.3/1.4.6 — darken light text colours in the content streams (deterministic,
-        # text-scoped only; shapes/backgrounds untouched). Verified by the post-fix re-scan.
+        # 1.4.3/1.4.6 — recolour failing text colours in the content streams (deterministic,
+        # text-scoped only; shapes/backgrounds untouched), each against the background
+        # resolved behind its own glyphs. Verified by the post-fix re-scan.
         try:
-            n_darkened = _fix_pdf_text_contrast(pdf)
-            if n_darkened:
-                applied.append(f"Darkened {n_darkened} low-contrast text colour(s) to meet "
+            n_recoloured = _fix_pdf_text_contrast(pdf)
+            if n_recoloured:
+                applied.append(f"Recoloured {n_recoloured} low-contrast text colour(s) to meet "
                                "the contrast floors · 1.4.3")
-                _rec("1.4.3", "text colour too light against the page (fails 4.5:1)",
-                     "darkened toward black, hue preserved",
-                     f"{n_darkened} fill-colour run(s) rewritten in the content streams")
+                _rec("1.4.3", "text colour fails 4.5:1 against the background behind it",
+                     "moved away from that background, hue preserved",
+                     f"{n_recoloured} fill-colour run(s) rewritten in the content streams")
                 _rec("1.4.6", "text colour below the enhanced (7:1) contrast band",
-                     "cleared by the same darkening pass",
-                     "one darken clears both the AA and AAA contrast checks")
+                     "cleared by the same recolouring pass",
+                     "one recolour clears both the AA and AAA contrast checks")
         except Exception:
             skipped.append("contrast: could not rewrite content streams · 1.4.3")
         # 2.4.1 bypass blocks — deterministically build a bookmark outline from the document's
@@ -1058,13 +1059,85 @@ _HEADING_MAX_CHARS = 100        # a heading is a short label, not a paragraph
 _OUTLINE_SCAN_PAGE_CAP = 120    # bound worst-case parse cost on a huge PDF
 _OUTLINE_ENTRY_CAP = 200        # a sane ceiling on bookmark count
 
+# ── Large text that is NOT a section heading ───────────────────────────────────
+# "bigger than the body text" is the only signal a font-size scan has, and on a real
+# document plenty of non-headings are set big: a cover-page wordmark, a headline financial
+# figure, a pull quote, the running header in every page margin. Left in, they become
+# bookmarks — and because the outline is auto-applied (2.4.1 needs only the text and its
+# order, so nothing fails the re-scan) no reviewer ever sees them to strike them. Each
+# filter below is deliberately narrow: it must be far likelier to catch furniture than a
+# real section, so where a rule could go either way it keeps the line — dropping a genuine
+# heading costs the outline an entry a reader needed (ADR 0016: derive, never fabricate,
+# and don't discard what the document actually says).
+_NUMERIC_HEADING = re.compile(
+    r"""^\W*                                # leading bullet/quote/currency punctuation
+        [+-]?\s*[$€£¥₹]?\s*                 # sign and/or currency symbol
+        \d[\d,.\s]*                         # the figure itself
+        \s*(?:%|billion|million|thousand|bn|mm|pts|pt|usd|eur|gbp|[bmkx])?
+        \W*$""",
+    re.IGNORECASE | re.VERBOSE)
+# A section heading does not open with a quote mark; a pull quote does, and closes with one
+# (trailing sentence punctuation aside). A quote carrying an attribution suffix is a known
+# miss — better than a rule loose enough to eat “Reasonable adjustments” as a heading.
+_QUOTE_OPEN, _QUOTE_CLOSE = "\"'“„«‘‟", "\"'”»’‟"
+# "By Jane Doe, Chief Accessibility Officer" — cover-page furniture. Guarded so a heading
+# that merely starts with "by" survives: the next token must read as a name (capitalised)
+# and not be a word that opens a real heading ("By the Numbers", "By Region").
+_BYLINE = re.compile(
+    r"^(?:by|written\s+by|prepared\s+by|photographs?\s+by|authors?)\s*:?\s+(\S+)",
+    re.IGNORECASE)
+_BYLINE_NOT_A_NAME = {"the", "a", "an", "all", "any", "our", "its", "region", "default",
+                      "design", "numbers", "hand", "email", "phone", "law", "type"}
+_MAX_CAPS_FRAGMENT = 4          # "ACME", "FY26" — a wordmark or label, not a section name
+# A running header/footer is the same line, in the same margin band, on page after page.
+# Both halves are load-bearing: frequency alone would delete every section of a
+# "Step 1 / Step 2 / …" document, and margin position alone would delete a legitimate
+# heading that happens to sit at the very top of its page.
+# 6% of a letter page is ~0.6in — inside a 1in margin, so a header/footer sits in the band
+# while the first content line of a normally-margined page (top ~7.3%) stays out of it.
+_MARGIN_BAND_FRACTION = 0.06
+_RUNNING_MIN_PAGES = 3          # below this, "repeated" is not yet a pattern…
+_RUNNING_PAGE_FRACTION = 0.5    # …and it must also cover half the scanned pages
+
+
+def _looks_like_heading_furniture(text: str) -> bool:
+    """Is this large line page furniture rather than a section heading? Page-independent
+    checks only — the running header/footer rule needs the whole document and so lives in
+    `_extract_pdf_headings`."""
+    if not text:
+        return False
+    if _NUMERIC_HEADING.match(text):                    # "$4.2B", "42", "3.1%", "2026"
+        return True
+    if text[0] in _QUOTE_OPEN and (text.rstrip(" .,;:!?") or " ")[-1] in _QUOTE_CLOSE:
+        return True                                     # “We grew faster than the market.”
+    compact = "".join(c for c in text if c.isalnum())
+    # `text != text.lower()` keeps the rule to scripts that HAVE case: in an uncased script
+    # every string is trivially its own upper-case, and a 2-character CJK section heading is
+    # not a wordmark.
+    if text != text.lower() and text == text.upper() and len(compact) <= _MAX_CAPS_FRAGMENT:
+        return True                                     # cover-page wordmark / stray label
+    byline = _BYLINE.match(text)
+    if byline:
+        first = byline.group(1).strip(",.;:")
+        if first[:1].isupper() and first.lower() not in _BYLINE_NOT_A_NAME:
+            return True
+    return False
+
+
+def _running_key(text: str) -> str:
+    """Normalised identity of a margin line for the repeated-header check. Digit runs are
+    masked, so "Annual Report | 4" and "… | 5" are recognised as the same footer."""
+    return re.sub(r"\d+", "#", " ".join(text.split()).lower())
+
 
 def _extract_pdf_headings(source_path: str) -> list[tuple[str, int, int]]:
     """Heading candidates by font size. The modal rounded char size is body text; a line
-    whose largest char is >= _HEADING_SIZE_RATIO x that, is short, and has letters reads as a
-    heading. Returns [(title, page_index, size)] in document order, deduped by text, capped —
-    size lets a caller rank headings into levels (proposals.infer_heading_levels). Empty
-    on any failure or when nothing stands out (uniform-font / scanned PDF)."""
+    whose largest char is >= _HEADING_SIZE_RATIO x that, is short, and has letters reads as
+    a heading — unless it is page furniture (see _looks_like_heading_furniture and the
+    running header/footer pass below), which size alone cannot tell apart from a section.
+    Returns [(title, page_index, size)] in document order, deduped by text, capped — size
+    lets a caller rank headings into levels (proposals.heading_level_sequence). Empty on
+    any failure or when nothing stands out (uniform-font / scanned PDF)."""
     try:
         import pdfplumber
         from collections import Counter
@@ -1080,9 +1153,9 @@ def _extract_pdf_headings(source_path: str) -> list[tuple[str, int, int]]:
             body = Counter(sizes).most_common(1)[0][0]
             if body <= 0:
                 return []
-            out: list[tuple[str, int, int]] = []
-            seen: set[str] = set()
+            cands: list[tuple[str, int, int, bool]] = []   # + is it in a margin band?
             for i, pg in enumerate(pages):
+                height = float(pg.height or 0)
                 lines: dict[int, dict] = {}
                 for ch in (pg.chars or []):
                     key = round(ch.get("top", 0))       # group chars sharing a baseline into a line
@@ -1095,14 +1168,35 @@ def _extract_pdf_headings(source_path: str) -> list[tuple[str, int, int]]:
                     if (not text or len(text) > _HEADING_MAX_CHARS
                             or not any(c.isalpha() for c in text)):
                         continue
-                    if line["size"] >= body * _HEADING_SIZE_RATIO:
-                        norm = text.lower()
-                        if norm in seen:
-                            continue
-                        seen.add(norm)
-                        out.append((text[:120], i, line["size"]))
-                        if len(out) >= _OUTLINE_ENTRY_CAP:
-                            return out
+                    if line["size"] < body * _HEADING_SIZE_RATIO:
+                        continue
+                    if _looks_like_heading_furniture(text):
+                        continue
+                    in_margin = bool(height) and (
+                        key <= height * _MARGIN_BAND_FRACTION
+                        or key >= height * (1 - _MARGIN_BAND_FRACTION))
+                    cands.append((text[:120], i, line["size"], in_margin))
+            # Running headers/footers. Dedupe-by-text hides the repetition (only the first
+            # occurrence survives) but still leaves that one as a bookmark, so count the
+            # pages each margin line appears on and drop the ones that recur.
+            pages_by_key: dict[str, set[int]] = {}
+            for text, i, _size, in_margin in cands:
+                if in_margin:
+                    pages_by_key.setdefault(_running_key(text), set()).add(i)
+            floor = max(_RUNNING_MIN_PAGES, int(len(pages) * _RUNNING_PAGE_FRACTION))
+            running = {k for k, on_pages in pages_by_key.items() if len(on_pages) >= floor}
+            out: list[tuple[str, int, int]] = []
+            seen: set[str] = set()
+            for text, i, size, in_margin in cands:
+                if in_margin and _running_key(text) in running:
+                    continue
+                norm = text.lower()
+                if norm in seen:
+                    continue
+                seen.add(norm)
+                out.append((text, i, size))
+                if len(out) >= _OUTLINE_ENTRY_CAP:
+                    break
             return out
     except Exception:
         return []

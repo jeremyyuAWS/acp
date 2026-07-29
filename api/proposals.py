@@ -1231,6 +1231,41 @@ def infer_heading_levels(sizes) -> dict:
     largest distinct size is Heading 1, the next Heading 2, … clamped at Heading 6 (deeper
     ranks all collapse to 6, since WCAG only defines h1–h6). Deterministic: same sizes →
     same levels every run, so the inferred level is a High-confidence derivation, not a
-    guess. `sizes` is any iterable of numbers (points/half-points — only the ORDER matters)."""
+    guess. `sizes` is any iterable of numbers (points/half-points — only the ORDER matters).
+
+    Ranks by ABSOLUTE size across the whole document, so it has no defence against one
+    outsized non-heading (a headline figure, a pull quote): that text takes Heading 1 and
+    pushes every real section down a rank, and with >6 distinct sizes the sections collapse
+    into Heading 6. Where the sizes arrive in DOCUMENT ORDER, prefer
+    `heading_level_sequence` — it nests relative to what precedes each heading and cannot
+    emit a skipped level."""
     distinct = sorted({float(s) for s in sizes if s is not None}, reverse=True)
     return {sz: min(i + 1, 6) for i, sz in enumerate(distinct)}
+
+
+def heading_level_sequence(sizes) -> list[int]:
+    """Map font sizes IN DOCUMENT ORDER → one heading level per size, as a sequence that
+    never skips a level. Keeps a stack of the enclosing sizes: a size larger than the
+    current one closes the levels it outranks (so the next sibling returns to its own
+    depth), an equal size repeats the current depth, and a smaller size opens exactly one
+    level deeper. The first heading is therefore always Heading 1 and every step down is
+    +1 — the monotonic sequence WCAG expects — whatever the absolute point sizes are.
+
+    This is what makes the derivation trustworthy where `infer_heading_levels` is not: the
+    level of a heading depends on the headings around it, not on whether some unrelated
+    line in the document happens to be set larger. Deterministic — same sizes in the same
+    order → the same levels every run. Depth is clamped at 6 (WCAG defines h1–h6 only)
+    while the stack keeps its true depth, so closing back out lands on the right level."""
+    stack: list[float] = []
+    out: list[int] = []
+    for s in sizes:
+        if s is None:                       # unknown size — hold the current depth
+            out.append(min(max(len(stack), 1), 6))
+            continue
+        sz = float(s)
+        while stack and stack[-1] < sz:
+            stack.pop()
+        if not stack or stack[-1] != sz:
+            stack.append(sz)
+        out.append(min(len(stack), 6))
+    return out

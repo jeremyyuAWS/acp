@@ -86,6 +86,45 @@ def test_short_pdf_is_left_alone(tmp_path):
     assert not any("2.4.1" in a for a in applied)
 
 
+def test_noisy_report_outline_holds_only_sections(tmp_path):
+    """Whole-remediation view of tests/test_pdf_heading_noise.py: the entries that reach the
+    file are the document's sections, not the cover wordmark, the $4.2B pull figure, the pull
+    quote, or the running header — none of which 2.4.1 would have failed on, which is exactly
+    why nobody would have caught them (the outline is auto-applied)."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+    src = tmp_path / "noisy.pdf"
+    header = "Acme Confidential — Annual Report 2026"
+    sections = ["Executive Summary", "Scope", "Findings", "Recommendations", "Appendix"]
+    c = canvas.Canvas(str(src), pagesize=letter)
+    c.setFont("Helvetica", 13.5), c.drawString(72, 760, header)
+    c.setFont("Helvetica-Bold", 28), c.drawString(72, 700, "ACME")
+    c.setFont("Helvetica-Bold", 30), c.drawString(72, 640, "Annual Accessibility Report")
+    c.setFont("Helvetica", 11), c.drawString(72, 560, "Cover body prose in the modal size.")
+    c.showPage()
+    for n, section in enumerate(sections):
+        c.setFont("Helvetica", 13.5), c.drawString(72, 760, header)
+        c.setFont("Helvetica-Bold", 18), c.drawString(72, 700, section)
+        c.setFont("Helvetica", 11)
+        for i in range(5):
+            c.drawString(72, 660 - i * 16, f"Body paragraph {i} of the {section} section.")
+        if n == 0:
+            c.setFont("Helvetica-Bold", 44), c.drawString(72, 500, "$4.2B")
+        if n == 1:
+            c.setFont("Helvetica-Oblique", 20)
+            c.drawString(72, 500, "“We grew faster than the market.”")
+        c.showPage()
+    c.save()
+
+    assert office_structure.pdf_bypass_blocks_check(src)
+    out, applied, _ = remediate_pdf.remediate_pdf(src, ai_enabled=False)
+    assert out is not None and any("2.4.1" in a for a in applied)
+    titles = _outline_titles(out)
+    assert [t for t in titles if t in sections] == sections
+    assert "$4.2B" not in titles and header not in titles and "ACME" not in titles
+    assert not any(t.startswith("“") for t in titles)
+
+
 def test_extract_headings_finds_larger_text(tmp_path):
     src = tmp_path / "h.pdf"
     _pdf(src, [("Big Heading Here", "small body text"), ("Another Heading", "more body text")])
