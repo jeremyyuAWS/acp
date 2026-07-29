@@ -1,0 +1,47 @@
+# Is production actually alright?
+#
+# CI answers "is the code right". Nothing answered "is PRODUCTION right", and on 2026-07-29 that
+# cost hours: a scheduled sweep quietly replaced a 258-document estate with a 1-file scan of the
+# bundled samples every five minutes, the review inbox could only grow, Drive threw 403 into a log
+# nobody read, and production sat four hours behind main with six merged fixes unshipped. Every one
+# of those was visible in an API response the whole time. Nothing was looking.
+#
+# The logic lives in scripts/monitor.py so it can be run by hand against any environment, and so
+# the checks that matter are unit-tested (tests/test_monitor.py replays the sweep collapse as data
+# and asserts the check goes red). A monitor nobody can test is a monitor nobody should trust.
+name: monitor
+
+on:
+  schedule:
+    # Every 15 minutes. Frequent enough that a five-minute-interval bug is caught within a few
+    # cycles; infrequent enough that a genuine outage does not open a hundred identical failures.
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+# Read-only. This job observes production; it must never be able to change it.
+permissions:
+  contents: read
+
+concurrency:
+  # A slow or hanging probe must not stack up behind itself. Cancelling here is safe precisely
+  # because this job changes nothing — the opposite of the deploy workflow's setting, and for the
+  # opposite reason.
+  group: monitor-production
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # the deploy-drift check counts commits on main since the build
+
+      - name: Probe production
+        env:
+          ACP_FQDN: ${{ vars.ACP_FQDN }}
+          # The app's own smoke-test bypass (api/app.py:_access_gate). Without it the deep checks
+          # — the ones that would have caught the sweep — skip LOUDLY and are counted as skipped,
+          # never folded into a green result.
+          ACP_E2E_KEY: ${{ secrets.ACP_E2E_KEY }}
+        run: python3 scripts/monitor.py --repo .
