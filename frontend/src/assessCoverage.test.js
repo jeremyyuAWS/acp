@@ -62,11 +62,16 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     // The fixer closed level gaps, the re-scan came back clean, and that was read as proof the
     // criterion was met — a closed, self-confirming loop that certified a pass it could not
     // support. Pinned per format so a future edit cannot quietly restore the 🟢.
-    for (const f of ['docx', 'xlsx', 'pptx', 'pdf']) {
+    // html joined them: scanner.HTML_HEADING_SKIP is the same level check under another name,
+    // and _fix_heading_skip the same clamp, so the same closed loop certified the same pass it
+    // could not support. All five formats now agree.
+    for (const f of ['docx', 'xlsx', 'pptx', 'pdf', 'html']) {
       expect(assessmentIn('2.4.6', f)).toBe('review')
       expect(remediationIn('2.4.6', f)).not.toBe('na')   // remediation lane is untouched
     }
-    expect(remediationIn('2.4.6', 'docx')).toBe('auto')  // ⚡ heading-skip closure still proven
+    // ⚡ heading-skip closure still proven on both formats whose fixer is deterministic.
+    expect(remediationIn('2.4.6', 'docx')).toBe('auto')
+    expect(remediationIn('2.4.6', 'html')).toBe('auto')
   })
 
   it('static-deck keyboard (pptx 2.1.1) is 🔴 human-only', () => {
@@ -86,7 +91,10 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     xlsx: { auto: 5, review: 9, human: 0, gap: 0, at: 0, na: 6, certifiable: 5 },
     pptx: { auto: 5, review: 13, human: 1, gap: 0, at: 0, na: 1, certifiable: 5 },
     pdf: { auto: 3, review: 11, human: 0, gap: 0, at: 0, na: 6, certifiable: 3 },  // +1.4.12, +1.4.1, +1.4.11 (ADR 0025)
-    html: { auto: 11, review: 7, human: 0, gap: 0, at: 2, na: 0, certifiable: 11 },
+    // html is 10🟢/8🟡 rather than 11/7 for the same reason docx moved: 2.4.6 went 🟢→🟡 once
+    // HTML_HEADING_SKIP was recognised as a level check, not a descriptiveness one. The
+    // criterion CROSSES buckets rather than leaving, so the estate still sums to 20.
+    html: { auto: 10, review: 8, human: 0, gap: 0, at: 2, na: 0, certifiable: 10 },
   }
   for (const [fmt, want] of Object.entries(EST)) {
     it(`an all-.${fmt} estate: ${want.auto}🟢 ${want.review}🟡 ${want.human}🔴 ${want.na}⚪ (sums to 20)`, () => {
