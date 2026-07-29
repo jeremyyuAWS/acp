@@ -431,17 +431,21 @@ def _remediate_file(payload: dict, job: dict) -> None:
                                    [p for p in _pdf_proposals if p.get("kind") == "reading-order"])
                 _enqueue_proposals(scan_id, filename, "1.3.1", "Info and Relationships",
                                    [p for p in _pdf_proposals if p.get("kind") == "structure-map"])
-                # 2.4.6 heading map (tagged PDF, no headings) + 2.4.4 link purpose (raw-URL
-                # links) — deterministic proposals for one-click confirm, never auto-applied.
+                # 2.4.6 heading map (tagged PDF, no headings) — a deterministic proposal for
+                # one-click confirm, never auto-applied.
                 _enqueue_proposals(scan_id, filename, "2.4.6", "Headings and Labels",
                                    [p for p in _pdf_proposals if p.get("kind") == "headings-map"])
-                _enqueue_proposals(scan_id, filename, "2.4.4", "Link Purpose (In Context)",
-                                   [p for p in _pdf_proposals if p.get("kind") == "link-purpose"])
-                # 1.1.1 per-figure alt + 4.1.2 per-field accessible name. Both carry a
-                # `pdf:fig:`/`pdf:field:` locator, and _apply_approved_values writes the
-                # approved text back through remediate_pdf.apply_pdf_approved. Without these
-                # two lines the cards were built by remediate_pdf and then dropped here — the
-                # reviewer never saw them, so the deferral existed only as a tally.
+                # 2.4.4 link purpose is deliberately NOT enqueued for PDF. There is no PDF
+                # write-back for link text (apply_pdf_approved routes pdf:fig:/pdf:field: only),
+                # so the card could be approved but never honoured — and an approved value
+                # nothing writes also blocks the file from ever certifying. The finding still
+                # reaches a reviewer as a plain 2.4.4 judgement row further down. See the
+                # explain-only note in remediate_pdf.py.
+                # 1.1.1 per-figure alt + 4.1.2 per-field accessible name are the mirror case:
+                # both carry a `pdf:fig:`/`pdf:field:` locator that _apply_approved_values DOES
+                # write back through remediate_pdf.apply_pdf_approved, so they are enqueued.
+                # Without these two lines the cards were built by remediate_pdf and then dropped
+                # here — the reviewer never saw them, so the deferral existed only as a tally.
                 _enqueue_proposals(scan_id, filename, "1.1.1", "Non-text Content",
                                    [p for p in _pdf_proposals if p.get("kind") == "pdf-figure-alt"])
                 _enqueue_proposals(scan_id, filename, "4.1.2", "Name, Role, Value",
