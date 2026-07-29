@@ -247,9 +247,11 @@ export async function exportGovernanceReport(d) {
   p.text(d.summary)
   p.metricGrid([
     { label: 'Documents', value: Number(d.total).toLocaleString() },
-    { label: 'Certifiable', value: d.certifiable, color: GREEN },
+    // '—' for an unmeasured estate: `null + '%'` printed a literal "null%" into a report a
+    // customer hands to an auditor, and `0%` would have been a claim nothing supports.
+    { label: 'Certifiable', value: d.certifiable ?? '—', color: GREEN },
     { label: 'Remediation backlog', value: d.needFix, color: AMBER },
-    { label: 'Audit-ready', value: d.auditReady + '%' },
+    { label: 'Audit-ready', value: d.auditReady == null ? '—' : d.auditReady + '%' },
   ])
 
   p.heading('Compliance posture')

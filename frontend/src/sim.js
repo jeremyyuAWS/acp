@@ -229,6 +229,23 @@ function recommendFor(f) {
     return { action: 'review', mode: 'assisted', etaMin: eta, manualMin, savingsPct: sav(eta), rationale: `${f.skipped_rules} rule(s) couldn’t be auto-evaluated — a reviewer confirms before this can be certified.` }
   }
 
+  // NO FINDINGS ⇒ NOTHING TO REMEDIATE. Every branch below routes a *fix*, and each one
+  // narrates the findings it is fixing — so reaching them with zero findings produced the
+  // tell-tale "All 0 findings are mechanical … No human needed" and, worse, put the document
+  // into REMEDIATION_ACTIONS. That is how the Overview came to report "258 need remediation"
+  // beside "No open findings.": `compliant` is falsy on every document of a scan that never
+  // finalized, so the whole estate fell through here and was counted as a remediation backlog
+  // by elimination. `compliant` false is not evidence of a defect — only a finding is.
+  //
+  // This is the 'clean' verdict statusOf() already gives these files (and FileDrawer already
+  // hides the remediation card for, via `file.rec && issues.length > 0`); `keep` is the
+  // matching non-remediation action, so the count, the card and the verdict finally agree.
+  if (n === 0) {
+    return f.score == null
+      ? { action: 'keep', mode: 'monitor', etaMin: 0, rationale: 'Not assessed yet — this document was discovered but never opened, so no findings exist to remediate. Run Assess to evaluate it.' }
+      : { action: 'keep', mode: 'monitor', etaMin: 0, rationale: `Assessed at ${f.score}/100 with no WCAG findings recorded — nothing to remediate. Keep under continuous monitoring for drift.` }
+  }
+
   // Escalate to a human when the fix needs judgement (contrast / link), the content
   // is legally frozen, a critical finding sits on a public high-traffic page, OR the
   // file's format has findings its deterministic remediator can't touch (e.g. a PDF

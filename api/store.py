@@ -1415,7 +1415,11 @@ class Store:
             self._db.execute(cur,
                 "SELECT id,completed_at,source,rubric_hash,files,certifiable,uncertain,error,avg_score,assessed_at "
                 f"FROM scan_runs WHERE {where} ORDER BY completed_at DESC", params)
-            return self._db.fetchall(cur)
+            rows = self._db.fetchall(cur)
+            # A cancelled/interrupted scan reaches this list (it has completed_at) with its
+            # counters still NULL — see _fill_run_aggregate. The picker renders
+            # "certifiable / files" per row, so fill them here too rather than showing a gap.
+            return [self._fill_run_aggregate(cur, r) for r in rows]
 
     def mark_assessed(self, scan_id: str, when: str) -> None:
         """Stamp the scan as assessed (the user ran Assess). Results views gate on this."""
@@ -1543,6 +1547,48 @@ class Store:
                 "WHERE id=%s AND status='running'", (self._now(), sid))
         return True
 
+    # The counters finalize_scan_run writes, as a single SELECT so a derived-at-read value and
+    # a stored one are computed from one definition and cannot drift apart.
+    _AGG_SELECT = (
+        "SELECT COALESCE(SUM(compliant),0) AS certifiable, "
+        "COUNT(CASE WHEN status='uncertain' THEN 1 END) AS uncertain, "
+        "COUNT(CASE WHEN status='error' THEN 1 END) AS error, "
+        "ROUND(AVG(score)) AS avg_score "
+        "FROM file_records WHERE scan_id=%s"
+    )
+
+    def _fill_run_aggregate(self, cur, run: dict) -> dict:
+        """Never hand out a NULL counter — derive it the way finalize would have.
+
+        init_scan_run creates the scan_runs row with certifiable/uncertain/error/avg_score
+        unset; only finalize_scan_run fills them. Two paths close a scan WITHOUT finalizing —
+        cancel_scan ('cancelled') and the lost-worker sweeper ('interrupted') — and both stamp
+        completed_at, so the scan then passes list_scans' `completed_at IS NOT NULL` filter and
+        loads into the dashboard with those counters still NULL.
+
+        NULL is not zero, but every consumer downstream treats it as zero silently: JSON `null`
+        reaches JavaScript, `null / files` is 0 and `files - null - null - null` is `files`. On
+        2026-07-29 that rendered a 258-document scan as a BLANK certifiable tile, a confident
+        "0% audit-ready", and a status donut reading "issues 258" — beside a severity panel
+        correctly reporting "No open findings." Not one of those numbers came from a finding.
+
+        So compute the counters from the file_records that DO exist. A cancelled scan then
+        reports what actually ran rather than an artefact of arithmetic on null. avg_score is
+        left NULL when nothing was scored: that one is genuinely unknown, and the UI already
+        renders '—' for it instead of inventing a 0.
+        """
+        if all(run.get(k) is not None for k in ("certifiable", "uncertain", "error")):
+            return run
+        self._db.execute(cur, self._AGG_SELECT, (run["id"],))
+        agg = self._db.fetchone(cur) or {}
+        for k in ("certifiable", "uncertain", "error", "avg_score"):
+            if run.get(k) is None:
+                run[k] = agg.get(k)
+        # SUM/COUNT over zero rows still yields 0 here, so these three are always numbers now.
+        for k in ("certifiable", "uncertain", "error"):
+            run[k] = int(run[k] or 0)
+        return run
+
     def get_scan(self, sid: str, owner: str | None = None) -> dict | None:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT * FROM scan_runs WHERE id=%s", (sid,))
@@ -1553,6 +1599,7 @@ class Store:
             # scans are not shown to anyone once isolation is on).
             if owner is not None and run.get("owner_email") != owner:
                 return None
+            run = self._fill_run_aggregate(cur, run)
             self._db.execute(cur,
                 "SELECT file,engine,status,score,compliant,skipped_rules,remediated_at,drive_write_url,acp_stamped,published_at,size_kb,pages,sheets,drive_file_id "
                 "FROM file_records WHERE scan_id=%s ORDER BY file", (sid,))

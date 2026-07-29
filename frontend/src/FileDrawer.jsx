@@ -18,6 +18,7 @@ import PdfImageContrastCheck from './PdfImageContrastCheck.jsx'
 import AccessibilityStatus from './AccessibilityStatus.jsx'
 import EvidenceHeader, { fmtEvidence } from './EvidenceHeader.jsx'
 import { confirmCriterion, getFileStatus, getExamined } from './api.js'
+import { statusOf } from './docStatus.js'
 import { DOCUMENTS_20 } from './documents20.js'
 import { statusIn, remediationIn } from './assessCoverage.js'
 import { fmtEffort, EFFORT_BASIS } from './effort.js'
@@ -299,13 +300,9 @@ const SEV_LEGEND = [
 // findings" put it on the Remediate-in-progress path with nothing to remediate. The rubric
 // gives a genuinely-analysed clean file compliant=true (→ certifiable), so 'clean' only ever
 // catches the not-yet-scored / partial-coverage case.
-export const statusOf = (f) => (
-  f.status === 'error' ? 'unanalysable'
-  : f.status === 'uncertain' ? 'uncertain'
-  : f.compliant ? 'certifiable'
-  : (f.issues && f.issues.length) ? 'issues'
-  : 'clean'
-)
+// Canonical definition now lives in docStatus.js (no-dependency module) so charts.jsx and
+// scanReport.js can share it instead of re-typing it. Re-exported here for existing importers.
+export { statusOf }
 export const STATUS_BADGE = {
   certifiable: ['#E7F0DC', '#3B6D11'], issues: ['#FAEEDA', '#854F0B'],
   uncertain: ['#E6EFFB', '#2A5E9E'], unanalysable: ['#EEEDEA', '#5F5E5A'],

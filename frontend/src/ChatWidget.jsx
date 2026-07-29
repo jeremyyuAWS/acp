@@ -39,7 +39,7 @@ function chartAnswer(q, files, run, trend, trendDates) {
     return { text: 'Open findings by severity:', chart: { type: 'bar', data } }
   }
   if (/status|breakdown|certifiable|pie|donut|distribution|how many.*(certif|pass|fail)/.test(t))
-    return { text: 'Compliance status across the estate:', chart: { type: 'donut', data: statusSegments(run), caption: 'docs' } }
+    return { text: 'Compliance status across the estate:', chart: { type: 'donut', data: statusSegments(run, files), caption: 'docs' } }
   if (/wcag|violation|criteri|guideline|rule|fail/.test(t)) {
     const wm = {}; files.forEach((f) => (f.issues || []).forEach((i) => { wm[i.wcag] = (wm[i.wcag] || 0) + 1 }))
     const data = Object.entries(wm).sort((a, b) => b[1] - a[1]).slice(0, 7).map(([w, n]) => ({ label: critLabel(w).replace(/^WCAG\s*/, ''), value: n, color: n >= 8 ? '#4A8FE0' : '#BF8C00' }))

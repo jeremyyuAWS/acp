@@ -3,6 +3,7 @@ import { Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer, { statusOf, critLabel } from './FileDrawer.jsx'
+import { analysedCount } from './docStatus.js'
 import { IDENTITY, SIM, remediableCount, recommendationSummary } from './sim.js'
 import { openReport } from './api.js'
 import { loadPublished } from './ontology.js'
@@ -48,14 +49,17 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       const topRisk = [...files].filter((f) => (f.issues || []).length).sort((a, b) => riskOf(b) - riskOf(a)).slice(0, 10)
         .map((f) => ({ file: f.file, dept: f.department, owner: f.owner, score: f.score == null ? 'n/a' : f.score, findings: (f.issues || []).length, action: f.rec?.action || '—', eta: f.rec?.etaMin ? `${(f.rec.etaMin / 60).toFixed(1)}h` : '—' }))
       const publicCritical = files.filter((f) => (f.tags || []).some((t) => ['public-facing', 'high-traffic'].includes(t)) && (f.issues || []).some((i) => i.severity === 'CRITICAL')).length
-      const verdict = auditReady >= 80 ? ['ON TRACK TO COMPLIANT', '#3B6D11'] : auditReady >= 45 ? ['DEVELOPING', '#854F0B'] : ['ACTION REQUIRED', '#1F5FA8']
+      // A verdict needs a measurement. With nothing analysed there is no evidence for
+      // "ACTION REQUIRED" either — say so rather than let null fall through the comparisons.
+      const verdict = auditReady == null ? ['NOT YET ASSESSED', '#5F5E5A']
+        : auditReady >= 80 ? ['ON TRACK TO COMPLIANT', '#3B6D11'] : auditReady >= 45 ? ['DEVELOPING', '#854F0B'] : ['ACTION REQUIRED', '#1F5FA8']
       const criteria = Object.entries(wm).sort((a, b) => b[1] - a[1]).map(([w, count]) => ({ sc: w.replace(/^SC_/, '').replace(/_/g, '.'), label: critLabel(w).replace(/^[\d.]+\s*/, ''), count }))
       const { exportGovernanceReport } = await import('./pdfReport.js')
       await exportGovernanceReport({
         org: orgName, quarter, date, scope: 'full document estate',
         total: n, score: run.avg_score, certifiable: run.certifiable, needFix, auditReady,
         uncertain: run.uncertain, error: run.error,
-        summary: `Estate accessibility score ${run.avg_score ?? '—'}/100, with ${auditReady}% of documents audit-ready. ${needFix} documents are in the remediation backlog and ${n.toLocaleString()} are under continuous monitoring across ${(trend && trend.length) || 4} scans.`,
+        summary: `Estate accessibility score ${run.avg_score ?? '—'}/100, with ${auditReadyLabel} of documents audit-ready${analysed < n ? ` (${analysed.toLocaleString()} of ${n.toLocaleString()} documents analysed)` : ''}. ${needFix} documents are in the remediation backlog and ${n.toLocaleString()} are under continuous monitoring across ${(trend && trend.length) || 4} scans.`,
         severity, deptScores, topViolations, byLevel, rec, topRisk, criteria,
         legal: { publicCritical, total: n }, lift: { before, after }, verdict,
         ontology: { ver: ontVer, classified: ontDocs.length, crit: ontCrit, high: ontHigh },
@@ -90,7 +94,16 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   // and "published" only when it has an actual published record (file_records.published_at).
   const verify = run.certifiable || 0
   const publish = files.filter((f) => f.published_at).length
-  const auditReady = n ? Math.round((run.certifiable / n) * 100) : 0
+  // How much of the estate was actually opened. A Discover-only scan (ADR 0020) lists the
+  // inventory without analysing it, and a cancelled/interrupted one stops partway, so `n` is
+  // the documents we KNOW ABOUT while `analysed` is the documents we know ANYTHING about.
+  const analysed = analysedCount(files)
+  // audit-ready is a rate, and a rate needs a denominator that was measured. Over an estate
+  // nobody analysed it is not 0% — it is unknown, and printing "0%" asserts that every one of
+  // 258 documents was checked and none passed. Both this and the certifiable tile render '—'
+  // rather than a number derived from an absent one.
+  const auditReady = (analysed && n && run.certifiable != null) ? Math.round((run.certifiable / n) * 100) : null
+  const auditReadyLabel = auditReady == null ? '—' : `${auditReady}%`
   const maxN = Math.max(1, n)
 
   const stages = [
@@ -135,9 +148,13 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0)
   const sevTotal = severity.reduce((a, s) => a + s.value, 0)
   const sevHigh = severity.filter((s) => s.label === 'critical' || s.label === 'serious').reduce((a, s) => a + s.value, 0)
-  const issuesOnly = Math.max(0, n - run.certifiable - run.uncertain - run.error)
+  // Count the documents that actually have findings. The old `n - certifiable - uncertain -
+  // error` was the same subtraction that broke statusSegments: it swept clean and unanalysed
+  // documents into "open findings", and returned the whole estate when the run counters were
+  // NULL. `statusOf` is the same verdict the donut and its drill-in now use.
+  const issuesOnly = files.filter((f) => statusOf(f) === 'issues').length
   const INS = {
-    status: `${auditReady}% of documents are certifiable${issuesOnly ? `; ${issuesOnly} still ${issuesOnly === 1 ? 'has' : 'have'} open findings, most of them auto-fixable — a first pass lifts this quickly` : ''}.`,
+    status: `${auditReady == null ? 'No document in this scan has been analysed yet, so no share is certifiable' : `${auditReady}% of documents are certifiable`}${issuesOnly ? `; ${issuesOnly} ${issuesOnly === 1 ? 'has' : 'have'} open findings, most of them auto-fixable — a first pass lifts this quickly` : ''}.`,
     severity: sevTotal ? `Critical & serious findings (${sevHigh}) are ${pct(sevHigh, sevTotal)}% of all ${sevTotal} finding${sevTotal !== 1 ? 's' : ''}${wcCloud[0] ? `, mostly ${wcCloud[0].text}` : ''}. Clear these first to cut the most legal risk.` : 'No open findings.',
     source: bySource[0] ? `${bySource[0].label} holds the most documents (${bySource[0].value} of ${n}).` : '',
     type: byType[0] ? `${byType[0].label} is your largest format (${byType[0].value} of ${n} document${n !== 1 ? 's' : ''}).${/pdf/i.test(byType[0].label) ? ' PDFs are typically the hardest to remediate — tagging and reading order.' : ''}` : '',
@@ -179,10 +196,20 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       <div ref={reportRef}>
       <div className="metrics">
         <div className="metric"><span>documents</span><b>{n.toLocaleString()}</b></div>
-        <div className="metric"><span>certifiable</span><b style={{ color: '#3B6D11' }}>{run.certifiable}</b></div>
-        <div className="metric" title="Documents with a remediation action — auto-fix, review, or manual rebuild (matches the Remediate tab)"><span>need remediation</span><b style={{ color: '#854F0B' }}>{needFix}</b></div>
-        <div className="metric" title="Share of documents that are certifiable today (certifiable ÷ total)"><span>audit-ready</span><b>{auditReady}%</b></div>
+        <div className="metric"><span>certifiable</span><b style={{ color: '#3B6D11' }}>{run.certifiable ?? '—'}</b></div>
+        <div className="metric" title="Documents with an open finding and a remediation action — auto-fix, review, or manual rebuild (matches the Remediate tab). A document with no findings is never counted here."><span>need remediation</span><b style={{ color: '#854F0B' }}>{needFix}</b></div>
+        <div className="metric" title={auditReady == null ? 'Not computable yet — no document in this scan has been analysed, so there is no measured share to report' : 'Share of documents that are certifiable today (certifiable ÷ total)'}><span>audit-ready</span><b>{auditReadyLabel}</b></div>
       </div>
+      {/* Say it on screen when the tiles above describe a different set of documents than the
+          estate total does — a partly-analysed scan is the case that made every panel look
+          like it was contradicting the others. */}
+      {analysed < n && (
+        <p className="muted" style={{ margin: '2px 0 10px' }}>
+          Scope: <b>{analysed.toLocaleString()}</b> of {n.toLocaleString()} documents have been analysed
+          {run.status === 'cancelled' || run.status === 'interrupted' ? ` — this scan was ${run.status} before it finished` : ' — the rest were discovered but not yet assessed'}.
+          Findings, certifiable and audit-ready describe the analysed documents only.
+        </p>
+      )}
 
       {ontDocs.length > 0 && (
         <div className="ontovbar">
@@ -229,7 +256,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       <PiiPanel scanId={run.id} />
 
       <div className="chartrow">
-        <section className="panel"><h2>Compliance status <span className="muted" style={{ fontWeight: 400 }}>· click to drill in</span></h2><Donut segments={statusSegments(run)} caption="documents" onPick={pickStatus} /><Insight text={INS.status} /></section>
+        <section className="panel"><h2>Compliance status <span className="muted" style={{ fontWeight: 400 }}>· click to drill in</span></h2><Donut segments={statusSegments(run, files)} caption="documents" onPick={pickStatus} /><Insight text={INS.status} /></section>
         <section className="panel"><h2>Findings by severity</h2>
           {severity.length ? <Bars items={severity} onPick={pickSeverity} /> : <p className="muted">No open findings.</p>}
           <Insight text={INS.severity} />
