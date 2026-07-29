@@ -6,6 +6,7 @@ alt states those exact values (the whole point: no llava confabulation for nativ
 import io
 import sys
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 import pytest
 
@@ -90,12 +91,13 @@ def _native_chart_xlsx(cats, vals, title="Q4 Revenue by Region") -> bytes:
 
 def test_xlsx_chart_reads_the_real_cell_values():
     # A native xlsx chart references cells (empty numCache) — the resolver reads the actual VALUES
-    # from the worksheet. (Category labels also resolve on real Excel files; openpyxl serialises the
-    # category ref differently, so we assert on the values the resolver reliably recovers.)
+    # from the worksheet, and the category LABELS too, whether the sheet stores them as shared
+    # strings (Excel) or inline strings (openpyxl writes `t="inlineStr"` with <is><t>).
     data = _native_chart_xlsx(["North", "South", "East", "West"], [120, 70, 150, 50])
     alts = chart_data.chart_alts(data, ".xlsx")
     assert alts and alts[0].lower().startswith("bar chart")
     assert "150" in alts[0] and "50" in alts[0]                 # real high/low, read from cells
+    assert "East at 150" in alts[0] and "West at 50" in alts[0]  # real labels, not "item 3"/"item 4"
 
 
 def test_slide_chart_descr_is_idempotent_never_overwrites():
@@ -110,3 +112,69 @@ def test_slide_chart_descr_is_idempotent_never_overwrites():
         entries[name] = new_xml
     # Second pass on the now-described chart must be a no-op — a real descr is never overwritten.
     assert chart_data.slide_chart_descr(entries) == {}
+
+
+# ── xlsx drawings: BOTH namespace flavours must get the descr ─────────────────────────────────────
+_SD_NS = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+
+
+def _xlsx_entries(cats, vals, title="Sales by region") -> dict:
+    import zipfile
+    z = zipfile.ZipFile(io.BytesIO(_native_chart_xlsx(cats, vals, title)))
+    return {n: z.read(n) for n in z.namelist()}
+
+
+def _to_xdr_prefixed(xml: str) -> str:
+    """Rewrite a default-namespace spreadsheetDrawing into the `xdr:`-prefixed flavour Excel
+    itself writes — the SAME parts, the other legal namespace spelling. (Every unprefixed tag in
+    that part is spreadsheetDrawing-namespaced; `a:`/`c:` ones already carry their own prefix.)"""
+    import re as _re
+    xml = xml.replace(f'xmlns="{_SD_NS}"', f'xmlns:xdr="{_SD_NS}"')
+    return _re.sub(r"<(/?)([A-Za-z][\w-]*)(?=[\s/>])", r"<\1xdr:\2", xml)
+
+
+def test_xlsx_default_namespace_drawing_gets_a_descr():
+    # openpyxl-family generators emit <graphicFrame>/<cNvPr> in the DEFAULT spreadsheetDrawing
+    # namespace. Matching only the xdr:-prefixed flavour left these charts with NO alt at all.
+    entries = _xlsx_entries(["North", "South", "East", "West"], [120, 70, 150, 50])
+    drawing = entries["xl/drawings/drawing1.xml"].decode()
+    assert "<cNvPr " in drawing and "xdr:" not in drawing        # the fixture really is default-ns
+
+    changed = chart_data.chart_descr_edits(entries, ".xlsx")
+    assert changed, "a default-namespace xlsx chart must still get its deterministic 1.1.1 alt"
+    new_xml, alts = changed["xl/drawings/drawing1.xml"]
+    out = new_xml.decode()
+    assert 'descr="Bar chart' in out and "East at 150" in out and "West at 50" in out
+    assert alts and "Sales by region" in alts[0]
+    # The emitted tag reuses the name that was MATCHED — no invented xdr: prefix, still well-formed.
+    assert "<cNvPr " in out and "xdr:cNvPr" not in out
+    ET.fromstring(out)
+
+
+def test_xlsx_xdr_prefixed_drawing_still_gets_a_descr():
+    entries = _xlsx_entries(["North", "South", "East", "West"], [120, 70, 150, 50])
+    name = "xl/drawings/drawing1.xml"
+    entries[name] = _to_xdr_prefixed(entries[name].decode()).encode()
+    assert b"<xdr:cNvPr " in entries[name]                       # the fixture really is prefixed
+
+    changed = chart_data.chart_descr_edits(entries, ".xlsx")
+    assert changed, "the Excel-authored (xdr:-prefixed) flavour must keep working"
+    out = changed[name][0].decode()
+    assert 'descr="Bar chart' in out and "East at 150" in out
+    # ...and here the prefix is preserved, because the replacement re-emits the matched tag name.
+    assert "<xdr:cNvPr " in out and out.count("<cNvPr ") == 0
+    ET.fromstring(out)
+
+
+@pytest.mark.parametrize("prefixed", [False, True])
+def test_xlsx_chart_descr_is_idempotent_in_both_flavours(prefixed):
+    entries = _xlsx_entries(["A", "B"], [1, 2])
+    name = "xl/drawings/drawing1.xml"
+    if prefixed:
+        entries[name] = _to_xdr_prefixed(entries[name].decode()).encode()
+    first = chart_data.chart_descr_edits(entries, ".xlsx")
+    assert first
+    for part, (new_xml, _) in first.items():
+        entries[part] = new_xml
+    # A real descr is never overwritten — second pass is a no-op, same as the pptx path.
+    assert chart_data.chart_descr_edits(entries, ".xlsx") == {}
