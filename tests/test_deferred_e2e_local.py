@@ -4,14 +4,28 @@ Unlike test_deferred_assess.py (which mocks _list and checks the enqueue), this 
 pipeline against real documents: discover writes inventory only, Assess fans out, the worker jobs
 run the real analysers, and the scan finalizes with scored file_records + assessed_at. This is the
 regression guard for the "Assess 0 files" class of bug — if discover ever scores files, or assess
-ever fails to finalize, this fails. Office/HTML samples only (no external PDF engine dependency).
+ever fails to finalize, this fails. Office/HTML samples only (no external PDF engine dependency),
+but it does need the built .NET Office CLI, so it self-skips when that is absent.
 """
 import json
 import shutil
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
+
+# Two of the three samples are Office formats, and the assertion below is that ALL of them
+# score. Without the built .NET CLI the docx/xlsx come back scored None and this fails with
+# "only 1/3 scored" — a real-looking regression whose actual cause is an unbuilt engine. The
+# rest of the Office-dependent suite already self-skips on this gate; this module hard-failed
+# instead, so a fresh clone read as one broken test rather than as an unbuilt engine.
+# Office only, not PDF: the sample set is deliberately docx/html/xlsx (see the module
+# docstring), so PDF_OK is not required here.
+from engines import NO_OFFICE, OFFICE_OK  # noqa: E402
+
+pytestmark = pytest.mark.skipif(not OFFICE_OK, reason=NO_OFFICE)
 
 _SAMPLES = Path(__file__).resolve().parent.parent / "frontend" / "public" / "samples"
 _WANT = ["benefits-policy.docx", "careers-landing.html", "finance-metrics.xlsx"]
@@ -36,7 +50,6 @@ def _run_queue(core):
 
 
 def test_deferred_discover_then_assess_scores_real_files(isolated_store, monkeypatch, tmp_path):
-    import pytest
     missing = [s for s in _WANT if not (_SAMPLES / s).exists()]
     if missing:
         pytest.skip(f"sample docs not present: {missing}")
