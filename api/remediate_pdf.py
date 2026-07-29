@@ -921,40 +921,20 @@ def _alt_write_anchor(res: dict, img: bytes, *, scan_id: str | None, file: str) 
 
 
 def _collect_figures(node, figures: list | None = None) -> list:
-    """Walk the structure tree collecting /Figure struct elements (mirrors the
-    pdf.missing-alt-text analyser's traversal so we target the exact elements it checks)."""
-    import pikepdf
-    if figures is None:
-        figures = []
-    try:
-        if isinstance(node, pikepdf.Dictionary):
-            if str(node.get("/S", "")) == "/Figure":
-                figures.append(node)
-            for key in ("/K", "/C"):
-                if key in node:
-                    child = node[key]
-                    if isinstance(child, pikepdf.Array):
-                        for item in child:
-                            _collect_figures(item, figures)
-                    else:
-                        _collect_figures(child, figures)
-        elif isinstance(node, pikepdf.Array):
-            for item in node:
-                _collect_figures(item, figures)
-    except Exception:
-        pass
-    return figures
+    """Walk the structure tree collecting /Figure struct elements.
+
+    Delegates to formats.pdf.structure so the 1.1.1 DETECTOR and this remediator judge the
+    same set of figures. They must: the write-back lane credits an approved alt text by
+    re-scanning and finding 1.1.1 gone, so a figure one side sees and the other misses either
+    blocks certification forever or certifies a document with an undescribed image in it."""
+    from formats.pdf import structure
+    return structure.collect_figures(node, figures)
 
 
 def _fig_alt(figure) -> str | None:
-    try:
-        raw = figure.get("/Alt")
-        if raw is None:
-            return None
-        val = str(raw).strip()
-        return val or None
-    except Exception:
-        return None
+    """A figure's /Alt, or None when absent or whitespace-only. Shared with the detector."""
+    from formats.pdf import structure
+    return structure.figure_alt(figure)
 
 
 def _resolve_page_number(figure, pdf) -> int | None:
