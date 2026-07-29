@@ -23,6 +23,7 @@
 | Rule ID | Formats | Source |
 |---------|---------|--------|
 | `DOCX_READING_ORDER_RISK` | docx | `api/office_structure.py:docx_checks` |
+| `HTML_VISUAL_REORDER` | html | `api/scanner.py:_analyse_html` |
 
 ## How to change this rule
 

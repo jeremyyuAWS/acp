@@ -84,6 +84,20 @@ _BROAD_SOURCES = {
     "textchecks.py": _ALL_FORMATS,   # 1.3.3 sensory, 3.1.2 language-of-parts, 3.1.5
     "ocr.py": _ALL_FORMATS,          # 1.4.5 / 1.4.9 images-of-text (OCR)
 }
+
+# api/scanner.py is the HTML engine, and was missing from this generator entirely — so every
+# HTML_* rule it emits was absent from rules/, and a criterion backed by a shipped backend
+# detector read as frontend-module-only. That is the same false-coverage failure the module
+# docstring says this index exists to prevent, one source short.
+#
+# Declared per FUNCTION rather than per module (unlike _BROAD_SOURCES above): scanner.py also
+# orchestrates the office and PDF paths, so a module-level entry would stamp "html" on any rule
+# a future edit adds to those. _analyse_one() dispatches this one on HTML_EXTS (.html/.htm,
+# which are the single capability format "html"). Anything emitting rules outside the declared
+# functions raises rather than being quietly dropped — silent omission is what this fixes.
+_SCANNER_SOURCES = {
+    "_analyse_html": ("html",),
+}
 _WCAG_STR = re.compile(r"^(\d+\.\d+\.\d+)\s+(.+)$")
 
 
@@ -249,6 +263,26 @@ def load_first_party() -> dict[str, list[dict]]:
             continue
         for rid, sc, name in _rules_in(ast.parse(path.read_text())):
             _add(rid, sc, name, formats, f"api/{mod}")
+
+    # The HTML engine (see _SCANNER_SOURCES). Attributed to the function that emits each rule,
+    # then checked for completeness: a rule literal anywhere else in scanner.py means the
+    # declaration is stale, and failing loudly is the whole point — these rules were invisible
+    # for as long as the file was simply not read.
+    scanner_tree = ast.parse((API / "scanner.py").read_text())
+    declared: set[tuple[str, str, str]] = set()
+    for fn in [n for n in ast.walk(scanner_tree)
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and n.name in _SCANNER_SOURCES]:
+        for rid, sc, name in _rules_in(fn):
+            declared.add((rid, sc, name))
+            _add(rid, sc, name, _SCANNER_SOURCES[fn.name], f"api/scanner.py:{fn.name}")
+    stray = sorted(_rules_in(scanner_tree) - declared)
+    if stray:
+        raise SystemExit(
+            "gen_rules_index: api/scanner.py emits rules outside the functions declared in "
+            f"_SCANNER_SOURCES ({', '.join(sorted(_SCANNER_SOURCES))}) — "
+            f"{', '.join(f'{r[0]} ({r[1]})' for r in stray)}. Add the emitting function and the "
+            "formats it actually reaches, so the rule appears in rules/ instead of vanishing.")
 
     # Detectors migrated to the capability registry (api/rule_registry.py) live under
     # api/formats/<fmt>/detectors/. Without this walk they would vanish from the index the

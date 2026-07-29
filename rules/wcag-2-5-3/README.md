@@ -14,9 +14,16 @@
 - Fix mode: `auto`
 - Exports `check(doc)` and `fix(doc)` — see [frontend/src/rules/index.js](../../frontend/src/rules/index.js).
 
+### First-party checks (Python, in-repo)
+
+| Rule ID | Formats | Source |
+|---------|---------|--------|
+| `HTML_LABEL_NOT_IN_NAME` | html | `api/scanner.py:_analyse_html` |
+
 ## How to change this rule
 
 - **HTML:** edit [`frontend/src/rules/wcag-2-5-3.js`](../../frontend/src/rules/wcag-2-5-3.js). Change `check()` to alter detection, `fix()` to alter the deterministic remediation. The orchestrator picks it up automatically — no other file changes needed.
+- **First-party Python:** edit the `source` function above. These run in-process on top of the engine result (`api/scanner.py`), and `office_structure.checks_for()` decides which formats each one reaches — add a check there or it will never be dispatched.
 
 ## Test fixtures
 

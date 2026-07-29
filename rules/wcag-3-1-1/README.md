@@ -27,6 +27,7 @@
 
 | Rule ID | Formats | Source |
 |---------|---------|--------|
+| `HTML_MISSING_LANG` | html | `api/scanner.py:_analyse_html` |
 | `HTML_MISSING_LANG` | html | `api/formats/html/detectors/language_of_page.py` |
 
 ## How to change this rule

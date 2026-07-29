@@ -18,6 +18,7 @@
 
 | Rule ID | Formats | Source |
 |---------|---------|--------|
+| `HTML_NO_VIEWPORT_REFLOW` | html | `api/scanner.py:_analyse_html` |
 | `OFFICE_WIDE_TABLE_REFLOW` | docx, pptx | `api/office_structure.py:office_reflow_checks` |
 
 ## How to change this rule

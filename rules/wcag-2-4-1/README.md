@@ -18,6 +18,7 @@
 
 | Rule ID | Formats | Source |
 |---------|---------|--------|
+| `HTML_NO_SKIP_LINK` | html | `api/scanner.py:_analyse_html` |
 | `PDF_NO_BOOKMARKS` | pdf | `api/office_structure.py:pdf_bypass_blocks_check` |
 
 ## How to change this rule

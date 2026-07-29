@@ -18,6 +18,7 @@
 
 | Rule ID | Formats | Source |
 |---------|---------|--------|
+| `HTML_VIEWPORT_BLOCKS_ZOOM` | html | `api/scanner.py:_analyse_html` |
 | `PPTX_FIXED_TEXT_BOX_RESIZE` | pptx | `api/office_structure.py:pptx_resize_text_checks` |
 
 ## How to change this rule

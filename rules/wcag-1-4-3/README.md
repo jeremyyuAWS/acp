@@ -25,6 +25,7 @@
 
 | Rule ID | Formats | Source |
 |---------|---------|--------|
+| `HTML_LOW_CONTRAST_AA` | html | `api/scanner.py:_analyse_html` |
 | `PDF_LOW_CONTRAST_AA` | pdf | `api/office_structure.py:pdf_contrast_checks` |
 | `PDF_TEXT_OVER_IMAGE` | pdf | `api/office_structure.py:pdf_text_over_image_checks` |
 | `PPTX_LOW_CONTRAST_AA` | pptx | `api/office_structure.py:pptx_contrast_checks` |

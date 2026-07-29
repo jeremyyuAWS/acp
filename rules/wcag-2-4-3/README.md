@@ -18,6 +18,7 @@
 
 | Rule ID | Formats | Source |
 |---------|---------|--------|
+| `HTML_POSITIVE_TABINDEX` | html | `api/scanner.py:_analyse_html` |
 | `PDF_TAB_ORDER_NOT_STRUCTURE` | pdf | `api/formats/pdf/detectors/focus_order.py` |
 | `PPTX_FOCUS_ORDER` | pptx | `api/office_structure.py:pptx_focus_order_checks` |
 

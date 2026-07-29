@@ -19,6 +19,7 @@
 | Rule ID | Formats | Source |
 |---------|---------|--------|
 | `DOCX_FORM_FIELD_NO_TAG` | docx | `api/office_structure.py:docx_checks` |
+| `HTML_INPUT_NO_LABEL` | html | `api/scanner.py:_analyse_html` |
 | `OFFICE_INTERACTIVE_CONTROL_NAME_ROLE` | docx, pptx, xlsx | `api/office_structure.py:office_control_review_checks` |
 | `PDF_FORM_NO_ACCESSIBLE_NAME` | pdf | `api/formats/pdf/detectors/name_role_value.py` |
 | `PDF_FORM_NO_FIELD_TYPE` | pdf | `api/formats/pdf/detectors/name_role_value.py` |
