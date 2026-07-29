@@ -202,6 +202,83 @@ unsupervised live window.
 
 ---
 
+## P1d — The 31 cells where Deva's FINAL ask exceeds what ACP delivers
+
+Source: the WCAG matrix (`jeremyyuAWS/wcag-matrix`, live at wcag-matrix.mova-io.app),
+which as of build `2026.07.29.0010` scores every cell against **Deva's FINAL tab** rather
+than against our own rubric ceiling. 41 of his 94 cells are met, 16 ask for no automated
+work at all, and **37 fall short — 31 of them by more than the rubric says any tool can
+deliver.** Those 31 are what this section is about.
+
+They are NOT one backlog. They split cleanly, and the split is the whole point:
+
+### P1d-1 — 10 cells with real engineering headroom (buildable now)
+
+ACP sits BELOW its own ceiling here, so this is ordinary work. It closes part of each gap
+but not all of it — every one of these still lands short of his ask even when finished,
+which is why they are listed here rather than folded into P1.
+
+1. **2.4.6 Headings and Labels · assess · XLSX, PDF** — today Human Assessment Required,
+   ceiling Potential Issue, his ask Fully Assessed.
+2. **2.4.6 Headings and Labels · fix · XLSX, PDF** — today No Remediation, ceiling AI
+   Generated Fix, his ask Automatically Fixed. DOCX and PPTX already ship the AI fix, so
+   this is extending existing work to two more formats rather than new ground.
+3. **3.1.2 Language of Parts · fix · XLSX, PPTX, PDF** — today No Remediation, ceiling
+   Guided Remediation, his ask AI Generated Fix. DOCX already ships Guided.
+4. **1.4.3 Contrast (Minimum) · fix · PDF** — today No Remediation, ceiling Guided
+   Remediation, his ask Automatically Fixed.
+5. **2.4.4 Link Purpose · assess · PDF** — today Human Assessment Required, ceiling
+   Potential Issue, his ask Fully Assessed.
+6. **2.4.4 Link Purpose · fix · PDF** — today No Remediation, ceiling AI Generated Fix,
+   his ask Automatically Fixed. The other three formats already ship the AI fix.
+
+PDF dominates this list, which matches every other coverage figure on the matrix — PDF is
+the weakest format on both axes (46.4% assess / 30.7% fix, against 65–70% elsewhere).
+
+### P1d-2 — 21 cells already at our ceiling: a decision, not engineering
+
+ACP is at the rubric ceiling on all 21. No amount of building moves them, so **they must
+not be scheduled as engineering work** — that is the failure mode this section exists to
+prevent.
+
+Almost all of them are the same disagreement stated 21 times:
+
+* **"AI Generated Fix" where he asked for "Automatically Fixed"** — 1.1.1 fix (all four
+  formats), 2.4.4 fix (DOCX/XLSX/PPTX), 4.1.2 fix (PDF), 1.3.1 fix (PDF).
+* **"Potential Issue" where he asked for "Fully Assessed"** — 3.1.2 assess (all four),
+  2.4.4 assess (DOCX/XLSX/PPTX), 2.4.6 assess (DOCX/PPTX), 1.4.3 assess (PDF).
+* Plus 1.3.2 fix (PDF) and 3.1.2 fix (DOCX), both Guided where he asked for AI.
+
+Stated once: **he is asking for determinism where our rubric puts an LLM in the decision
+path.** That cap is deliberate and is one of this project's standing ground rules — a tier
+with an LLM deciding it is Guided or AI-drafted, never Automatic, because we cannot certify
+a pass on a generated judgement. It is a policy, not a missing feature.
+
+So there are exactly two honest resolutions per cell, and both are decisions:
+
+1. **The ceiling is right → renegotiate the ask.** "Automatically Fixed" for 1.1.1 means
+   generating alt text and writing it without review. We can do that; we will not claim it
+   passes. If he wants the write-without-review behaviour, that is a product decision about
+   liability, not a detection problem.
+2. **The ceiling is wrong → revisit the rubric.** A tier is a human judgement (ground rules
+   2 and 3), not a derived fact. 2.4.6 assess capping at Potential Issue is OUR call about
+   whether "is this heading label meaningful?" is machine-decidable. It is defensible; it is
+   not physics. If a case can be made per format, the rubric cell should change and the
+   matrix will follow.
+
+**Owner: not engineering.** Route to the same conversation as P2. The one thing that would
+be wrong is to leave these looking like a backlog nobody is working.
+
+### Keeping this section true
+
+The counts above are a snapshot of matrix build `2026.07.29.0010` and will drift the moment
+either side moves — a rubric change, a shipped detector, or a revision of his sheet. They
+are authored, not generated: nothing in this repo currently derives them, because the input
+is a customer's spreadsheet rather than our code. Re-derive from the matrix page's
+`targetProgress()` before quoting them anywhere.
+
+---
+
 ## LOE — remaining work to full functionality
 
 Principle (owner's call): anything not auto-remediable by a deterministic or AI
