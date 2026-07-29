@@ -241,83 +241,32 @@ def _propose_structure_map(pdf, source_path: str, *, proposals) -> None:
         kind="structure-map"))
 
 
-_PDF_LINK_PROPOSAL_CAP = 12       # a review card with 30 links is homework, not assistance
-_PDF_TEXT_SCAN_PAGE_CAP = 20      # bound text extraction on a large PDF (mirrors the detector)
-
-
-def _propose_pdf_link_purpose(pdf, source_path: str, *, ai_enabled: bool, proposals) -> None:
-    """WCAG 2.4.4 Link Purpose (In Context) — a link annotation whose visible text IS the raw
-    URL (the URL string of a /Link's /URI appears verbatim in the page text). A bare URL is not
-    a meaningful label, but rewriting it re-flows the page's text runs, so this is a proposal,
-    never an auto-fix: derive a descriptive label from the link target (deterministic) and hand
-    it to a human to confirm. Mirrors office_structure.pdf_link_purpose_check exactly, so a
-    proposal only appears where the detector flagged. Self-gating — descriptive links yield
-    nothing (ADR 0016: we never fabricate a link we can't derive from its target)."""
-    if proposals is None:
-        return
-    try:
-        import pikepdf  # noqa: F401
-        uris: list[str] = []
-        for page in pdf.pages:
-            for annot in (page.get("/Annots") or []):
-                try:
-                    if str(annot.get("/Subtype")) != "/Link":
-                        continue
-                    action = annot.get("/A")
-                    uri = action.get("/URI") if action is not None else None
-                    if uri:
-                        uris.append(str(uri))
-                except Exception:
-                    continue
-        if not uris:
-            return
-        import pdfplumber
-        text = ""
-        with pdfplumber.open(source_path) as doc:
-            for page in doc.pages[:_PDF_TEXT_SCAN_PAGE_CAP]:
-                text += (page.extract_text() or "") + " "
-                if len(text) > 20000:
-                    break
-    except Exception:
-        return
-    import re as _re2
-    import proposals as _prop
-    seen: set[str] = set()
-    for uri in uris:
-        if uri in seen:
-            continue
-        # The detector's predicate: the URI (or its scheme-stripped form) shows as visible text.
-        bare = _re2.sub(r"^https?://", "", uri)
-        if not (uri and (uri in text or (bare and bare in text))):
-            continue
-        seen.add(uri)
-        der = _prop.derive_link_text(uri, "")
-        if der:
-            proposals.append(_prop.proposal(
-                locator=uri, before=uri,
-                proposed_value=der["text"],
-                rationale=("the visible link text is the raw URL, which conveys nothing about "
-                           f"the destination — {der['rationale']}"),
-                source="derived from the link target (deterministic) — human confirmation required",
-                kind="link-purpose"))
-        elif ai_enabled:
-            try:
-                import ai as _ai
-                res = (_ai.suggest_fix("2.4.4", "Link Purpose", "A", "",
-                                       detail=f'link text "{uri}" → {uri}')
-                       if _ai.is_available() else None)
-            except Exception:
-                res = None
-            if res and res.get("suggestion"):
-                proposals.append(_prop.proposal(
-                    locator=uri, before=uri,
-                    proposed_value=res["suggestion"],
-                    rationale=("the visible link text is the raw URL; the target is opaque, so AI "
-                               "drafted descriptive text — confirm it names the destination"),
-                    source=f"AI text model ({res.get('model', 'llama')}) — human confirmation required",
-                    kind="link-purpose"))
-        if len([p for p in proposals if p.get("kind") == "link-purpose"]) >= _PDF_LINK_PROPOSAL_CAP:
-            break
+# ── WCAG 2.4.4 Link Purpose on PDF: assessed, never proposed ──────────────────────────
+#
+# There WAS a proposer here. It read each /Link annotation's /URI, and where that URL appeared
+# verbatim in the page text (office_structure.pdf_link_purpose_check's predicate) it derived a
+# descriptive label from the target and enqueued it as an approvable review card.
+#
+# The card could not be honoured. Its locator was the raw URI, and the only PDF write-back
+# entry, apply_pdf_approved, routes `pdf:fig:` (→ /Alt) and `pdf:field:` (→ /TU) and nothing
+# else — a URI locator fell through to `unknown`. Approving it returned applied=[],
+# unresolved=[the URI], the bytes unchanged, and a re-scan still reported PDF_LINK_RAW_URL.
+# Worse than a missing card: the finding LOOKED handled, and because
+# store.count_unapplied_approved_values counts any approved row holding a locator + value, the
+# document then carried approved content nothing would ever write — so it could never certify
+# and never reached Publish.
+#
+# Building the write-back is the alternative, and it is the one the original docstring already
+# ruled out: the label is drawn by text-showing operators, so replacing it genuinely re-flows
+# the page's glyph widths. That is a re-authoring edit, not a remediation this tool performs
+# unattended (ADR 0016), and the same reason 1.3.1 re-tagging is not auto-written.
+#
+# So 2.4.4 on PDF is EXPLAIN-ONLY: assessed (the detector still fires and still routes to a
+# human), never proposed. The residual FAIL reaches the reviewer through the normal
+# queue_hitl_review_for_file path as a judgement card carrying no unwritten value, which is
+# both honest about what ACP can do and — unlike the proposal card — resolvable.
+# remediation_capability.REMEDIATION["pdf"]["2.4.4"] records the lane as HUMAN, which is what
+# stops the matrix claiming a fix path that cannot complete.
 
 
 def _propose_pdf_headings(pdf, source_path: str, *, proposals) -> None:
@@ -449,12 +398,9 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
             _propose_pdf_headings(pdf, str(path), proposals=proposals)
         except Exception:
             pass
-        # 2.4.4 link purpose — a link whose visible text is the raw URL gets a derived
-        # descriptive label to confirm (kind='link-purpose'; deterministic, AI fallback).
-        try:
-            _propose_pdf_link_purpose(pdf, str(path), ai_enabled=ai_enabled, proposals=proposals)
-        except Exception:
-            pass
+        # 2.4.4 link purpose — no proposal: a raw-URL link label can only be changed by
+        # rewriting the text-showing operators, so the finding is explain-only and routes to a
+        # human unmodified. See the block above _propose_pdf_headings for why.
         # 4.1.2 form-field accessible names — deterministic /TU from a meaningful field name;
         # a generic auto-name defers to a per-field review card (write-back on approval).
         try:
