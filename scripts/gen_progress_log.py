@@ -48,7 +48,13 @@ Usage:
 
 `--check` exits 1 when a commit touches rule code but carries no `Matrix-Note:`,
 so capability changes cannot land silently. It is a prompt to write one sentence for
-the public log or to state the omission was deliberate (`Matrix-Note: none`).
+the public log or to state the omission was deliberate (`Matrix-Note: none`). It also
+exits 1 on a trailer that IS present but cannot be parsed into an entry.
+
+That second check lives here, at PR time, because it is the last moment a commit message can
+be amended. GENERATION (the push-time path the notify workflow runs) only warns and skips such
+a commit: its message is already published, so failing there fails a push nobody can obey
+without rewriting shared history — and it drops the whole batch, well-formed entries included.
 
 This script only ever produces PROGRESS_LOG entries — a changelog. It deliberately
 does NOT touch the matrix's `ROWS.a`/`ROWS.r` tier cells: those are capability claims,
@@ -102,6 +108,10 @@ _SEP = "\x1e"   # record separator — commit bodies contain blank lines, so \n\
 _WCAG_RE = re.compile(r"^WCAG:\s*(\d+\.\d+\.\d+)\s*(?:\(([^)]*)\))?\s*$", re.M)
 _NOTE_RE = re.compile(r"^Matrix-Note:\s*(.+?)(?=^\S+:|\Z)", re.M | re.S)
 _PR_RE = re.compile(r"\(#(\d+)\)\s*$")
+# "this commit deliberately has no entry" — `none`, `n/a`, a bare dash, each optionally
+# followed by the reason. Applied only where no WCAG: trailer was declared (see parse_commit),
+# so it can never swallow a real entry that happens to start with the word "None".
+_OMISSION_RE = re.compile(r"^\s*(?:none|n/?a|nil|[-—–])(?:\b|$)", re.I)
 
 
 def _git(*args: str) -> str:
@@ -110,8 +120,18 @@ def _git(*args: str) -> str:
 
 
 def _repo_slug() -> str:
-    """owner/name for the commit links the matrix renders."""
-    url = _git("config", "--get", "remote.origin.url").strip()
+    """owner/name for the commit links the matrix renders.
+
+    Falls back on the default for a repo with no `origin` at all, not just for a URL that
+    doesn't parse: `git config --get` exits 1 when the key is absent, which `_git` turns into
+    an exception. Any checkout without that remote — a test fixture, a clone whose remote is
+    named something else — would otherwise crash the whole run on a value used only to build
+    a link.
+    """
+    try:
+        url = _git("config", "--get", "remote.origin.url").strip()
+    except subprocess.CalledProcessError:
+        return "jeremyyuAWS/acp"
     m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", url)
     return m.group(1) if m else "jeremyyuAWS/acp"
 
@@ -188,8 +208,27 @@ def _split_when(authored: str) -> tuple[str, str, str]:
     return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M"), dt.strftime("%Z")
 
 
+class MalformedTrailer(Exception):
+    """A commit opted in with `Matrix-Note:` but its trailers cannot be turned into an entry.
+
+    Raised by parse_commit, and deliberately handled DIFFERENTLY at the two moments this script
+    runs, because only one of them can still act on it:
+
+      --check      PR time. The message is a commit on a branch; the author can amend it. FATAL.
+      generation   Push time. The message is published — correcting it means rewriting shared
+                   history, which this repo forbids. WARN and skip the entry.
+
+    It used to be fatal at both, which put the only enforcement at the one moment nobody could
+    obey it: a malformed trailer failed every push to main until someone rewrote history, and
+    took the whole notification down with it — including the well-formed entries beside it.
+    """
+
+
 def parse_commit(raw: str, repo: str) -> dict | None:
-    """One `git log` record -> a PROGRESS_LOG entry, or None if it didn't opt in."""
+    """One `git log` record -> a PROGRESS_LOG entry, or None if it didn't opt in.
+
+    Raises MalformedTrailer when the commit DID opt in but the trailers are unusable; see that
+    class for why the two callers treat it differently."""
     sha, authored, subject, body = raw.split("\x1f", 3)
     date, time, tz = _split_when(authored)
     note = _NOTE_RE.search(body)
@@ -199,25 +238,36 @@ def parse_commit(raw: str, repo: str) -> dict | None:
     if summary.lower() in ("none", "n/a", "-"):
         return None            # explicit, deliberate omission
     if points and not summary:
-        raise SystemExit(f"{sha[:7]}: Matrix-Note: is all bullets with no lead sentence — the "
+        raise MalformedTrailer(f"{sha[:7]}: Matrix-Note: is all bullets with no lead sentence — the "
                          f"matrix shows the lead when the entry is collapsed, so it needs one.")
 
     scs: list[str] = []
     formats: set[str] = set()
     for sc, fmts in _WCAG_RE.findall(body):
         if sc not in TRACKED_SCS:
-            raise SystemExit(f"{sha[:7]}: WCAG: {sc} is not one of the 20 SCs the "
+            raise MalformedTrailer(f"{sha[:7]}: WCAG: {sc} is not one of the 20 SCs the "
                              f"matrix tracks — fix the trailer or add the row first.")
         if sc not in scs:
             scs.append(sc)
         named = [f.strip().lower() for f in (fmts or "").split(",") if f.strip()]
         for f in named or FORMATS:
             if f not in FORMATS:
-                raise SystemExit(f"{sha[:7]}: unknown format '{f}' — expected one of "
+                raise MalformedTrailer(f"{sha[:7]}: unknown format '{f}' — expected one of "
                                  f"{', '.join(FORMATS)}.")
             formats.add(f)
     if not scs:
-        raise SystemExit(f"{sha[:7]}: has a Matrix-Note: but no WCAG: trailer — the "
+        # `Matrix-Note: none — <reason>` is the deliberate-omission form this script's own usage
+        # note invites, and it is how people actually write it: "none", then why. The check at
+        # the top of this function is an EXACT match, so the reason turned an omission into a
+        # real entry, which then failed for the WCAG: trailer it never needed — six commits on
+        # main between 2026-07-28 and 2026-07-29, each failing the notify workflow's first step.
+        #
+        # Only reachable when NO SC was declared, and that is what makes the loose match safe:
+        # a genuine entry opening with the word "None" carries a WCAG: trailer, so it never
+        # reaches here and cannot be swallowed.
+        if _OMISSION_RE.match(summary):
+            return None
+        raise MalformedTrailer(f"{sha[:7]}: has a Matrix-Note: but no WCAG: trailer — the "
                          f"matrix needs to know which SC the entry belongs to.")
 
     pr = _PR_RE.search(subject)
@@ -250,18 +300,38 @@ def collect(since: str | None) -> list[dict]:
     out = _git("log", *rng, f"--format=%H\x1f%aI\x1f%s\x1f%b{_SEP}")
     entries = []
     for raw in out.split(_SEP):
-        if raw.strip():
+        if not raw.strip():
+            continue
+        try:
             entry = parse_commit(raw.strip("\n"), repo)
-            if entry:
-                entries.append(entry)
+        except MalformedTrailer as exc:
+            # Push time. This message is published: the only way to "fix" it is to rewrite
+            # shared history, which this repo forbids. Failing here therefore fails a push
+            # nobody can obey, and takes down the notification for every WELL-FORMED entry in
+            # the same range — one bad trailer silently costs the matrix the whole batch.
+            # Say it loudly (::warning:: surfaces in the run summary) and keep going.
+            print(f"::warning::{exc} Entry skipped — the commit is published, so this is "
+                  f"reported rather than fatal; --check catches it at PR time.", file=sys.stderr)
+            continue
+        if entry:
+            entries.append(entry)
     return entries   # git log is already newest-first, which is the log's order
 
 
 def check(since: str | None) -> int:
-    """Fail when a commit changed rule code without declaring its matrix impact."""
+    """Fail when a commit changed rule code without declaring its matrix impact, OR declared it
+    with a trailer that cannot be turned into an entry.
+
+    Both are caught HERE because this is the last moment either can be fixed: on a PR the
+    message still belongs to a branch and `git commit --amend` is available. Generation only
+    warns (see MalformedTrailer), so this is the only enforcement — a malformed trailer that
+    slips past here reaches the matrix as a skipped entry and a warning nobody reads.
+    """
     rng = f"{since}..HEAD" if since else "HEAD~1..HEAD"
     shas = _git("log", rng, "--format=%H").split()
+    repo = _repo_slug()
     bad = []
+    malformed: list[str] = []
     for sha in shas:
         # Merge commits are skipped EXPLICITLY, by parent count. They author nothing: every
         # change they carry arrived in a commit this loop already judged on its own trailer,
@@ -274,19 +344,33 @@ def check(since: str | None) -> int:
         # that cannot exist, and the PR could not go green by any action its author could take.
         if len(_git("log", "-1", "--format=%P", sha).split()) > 1:
             continue
-        files = _git("show", "--name-only", "--format=", sha).split()
-        if not any(f.startswith(p) for f in files for p in RULE_PATHS):
-            continue
         body = _git("log", "-1", "--format=%b", sha)
-        if not _NOTE_RE.search(body):
-            bad.append((sha[:7], _git("log", "-1", "--format=%s", sha).strip()))
+        subject = _git("log", "-1", "--format=%s", sha).strip()
+        if _NOTE_RE.search(body):
+            # Opted in — so it must actually parse. Checked for EVERY commit carrying a note,
+            # not just the rule-code ones: a malformed trailer breaks its own entry whatever
+            # the commit touched, and the author can still amend it right now.
+            authored = _git("log", "-1", "--format=%aI", sha).strip()
+            try:
+                parse_commit("\x1f".join([sha, authored, subject, body]), repo)
+            except MalformedTrailer as exc:
+                malformed.append(str(exc))
+            continue
+        files = _git("show", "--name-only", "--format=", sha).split()
+        if any(f.startswith(p) for f in files for p in RULE_PATHS):
+            bad.append((sha[:7], subject))
     for sha, subject in bad:
         print(f"{sha} touches rule code but has no Matrix-Note: trailer\n"
               f"         {subject}", file=sys.stderr)
     if bad:
         print("\nAdd a Matrix-Note: (and WCAG:) trailer, or 'Matrix-Note: none' to "
               "record that the omission is deliberate.", file=sys.stderr)
-    return 1 if bad else 0
+    for msg in malformed:
+        print(msg, file=sys.stderr)
+    if malformed:
+        print("\nAmend the trailer now — once this is pushed the message is published, and "
+              "generation can only warn and drop the entry.", file=sys.stderr)
+    return 1 if (bad or malformed) else 0
 
 
 def main() -> int:
