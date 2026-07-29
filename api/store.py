@@ -2586,6 +2586,13 @@ class Store:
         the drafts never written in.
 
         Proposals with no locator are skipped: unaddressable content cannot be written anywhere.
+        So are EXPLAIN-ONLY proposals (proposals.proposal(explain_only=True)) — a PDF structure
+        map, heading map or page reading order, whose approved value is the tagging instruction
+        and the compliance evidence, never bytes to write into the document. They are addressable
+        and they are approved, but no applier will ever write them, so counting them as content
+        the file "does not yet carry" blocks certification for good on a correct approval. The
+        test is on the proposal, not the reviewer's action, because of the draft fallback right
+        below: a client that suppressed the value would have it handed straight back.
 
         A row carrying a WCAG-exception `resolution` yields NOTHING. Marking an image decorative
         or an image-of-text an essential logotype resolves the finding BY JUDGEMENT — the
@@ -2612,6 +2619,8 @@ class Store:
             return out
         for p in (row.get("proposals") or []):
             if not isinstance(p, dict):
+                continue
+            if p.get("explain_only"):
                 continue
             loc = (p.get("locator") or "").strip()
             val = (p.get("approved_value") or "").strip() or (p.get("proposed_value") or "").strip()
@@ -2662,6 +2671,24 @@ class Store:
                 seen.add(loc)
                 out.append(loc)
         return out
+    @staticmethod
+    def _row_is_explain_only(row: dict) -> bool:
+        """True when EVERY proposal on the row is explain-only (and there is at least one).
+
+        Such a row promises the document nothing, so the counters below must also ignore its
+        legacy single `approved_value` column. That column is normally the honest reason a row
+        counts forever — a human agreed to some text and we don't know where it goes — but here
+        there is nowhere for it to go by design, and the reviewer's headline text is a note about
+        a map, not undelivered content. Without this, a client that sent a final value alongside
+        the confirmation would put the file straight back into the dead end this closes.
+
+        Deliberately ALL rather than any: a row mixing explain-only and writable proposals still
+        owes the document the writable ones, and _row_approved_values keeps that distinction
+        per-proposal. No such row exists today (each map card is enqueued alone under its own
+        criterion), which is exactly why the mixed case should fail safe rather than silently.
+        """
+        props = [p for p in (row.get("proposals") or []) if isinstance(p, dict)]
+        return bool(props) and all(p.get("explain_only") for p in props)
 
     def _approved_unapplied_rows(self, scan_id: str, file: str) -> list[dict]:
         with self._db.cursor() as cur:
@@ -2682,11 +2709,16 @@ class Store:
         proposals to locate it in the document, counts forever: we know a human agreed to some
         text but not where it goes, so we cannot honestly call the file fixed.
 
-        A row resolved by a WCAG exception never counts — see _row_is_resolved.
+        Two kinds of row never count, for the same underlying reason — they promise the
+        document no content, so there is nowhere for a legacy value to go. A row resolved by a
+        WCAG exception (see _row_is_resolved), and an explain-only row: a confirmed structure or
+        heading map, whose value is evidence rather than content awaiting a write (see
+        _row_is_explain_only).
         """
         n = 0
         for row in self._approved_unapplied_rows(scan_id, file):
-            legacy = "" if self._row_is_resolved(row) else (row.get("approved_value") or "").strip()
+            owes_nothing = self._row_is_resolved(row) or self._row_is_explain_only(row)
+            legacy = "" if owes_nothing else (row.get("approved_value") or "").strip()
             if self._row_approved_values(row) or legacy:
                 n += 1
         return n
@@ -2702,7 +2734,8 @@ class Store:
                 "AND (applied IS NULL OR applied=0)", (scan_id,))
             for r in self._db.fetchall(cur):
                 row = self._decode_proposals(r)
-                legacy = "" if self._row_is_resolved(row) else (row.get("approved_value") or "").strip()
+                owes_nothing = self._row_is_resolved(row) or self._row_is_explain_only(row)
+                legacy = "" if owes_nothing else (row.get("approved_value") or "").strip()
                 if self._row_approved_values(row) or legacy:
                     f = str(row.get("file") or "")
                     counts[f] = counts.get(f, 0) + 1

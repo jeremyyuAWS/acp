@@ -200,6 +200,11 @@ def _propose_reading_order(pdf, source_path: str, *, ai_enabled: bool, scan_id, 
         rationale="AI read the page layout and proposed a reading order — confirm it matches the intended flow",
         source=f"AI vision model ({res['model']})",
         kind="reading-order",
+        # The confirmed order is the re-authoring instruction and the evidence of what the
+        # order should be — "page 1" addresses no writable object and apply_pdf_approved
+        # routes only pdf:fig:/pdf:field:. Unflagged, confirming this card would count as
+        # content the file still owes and block certification for good (see proposals.py).
+        explain_only=True,
         # The same render the model looked at. Asking a human to confirm a reading order for a
         # page they cannot see makes the approval meaningless. Rendered larger than an embedded
         # image's thumb: a whole page shrunk to 96px is an unreadable grey rectangle. `kind`
@@ -238,7 +243,11 @@ def _propose_structure_map(pdf, source_path: str, *, proposals) -> None:
                    "instruction for re-authoring and the compliance evidence of what the "
                    "structure should be."),
         source="font hierarchy in document order (deterministic) — human confirmation required",
-        kind="structure-map"))
+        kind="structure-map",
+        # The docstring above already says it: the approved map IS the tagging instruction and
+        # the compliance evidence. Nothing is written into the PDF, so the certify gate must not
+        # wait for a write that will never come (see proposals.py).
+        explain_only=True))
 
 
 # ── WCAG 2.4.4 Link Purpose on PDF: assessed, never proposed ──────────────────────────
@@ -303,7 +312,10 @@ def _propose_pdf_headings(pdf, source_path: str, *, proposals) -> None:
                    "matches the intended headings. The approved map is the tagging instruction "
                    "for re-authoring and the compliance evidence of what the headings should be."),
         source="font hierarchy in document order (deterministic) — human confirmation required",
-        kind="headings-map"))
+        kind="headings-map",
+        # As for the 1.3.1 structure map: re-tagging re-authors the file, so the confirmed map
+        # is the deliverable and never bytes to write back (see proposals.py).
+        explain_only=True))
 
 
 def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
