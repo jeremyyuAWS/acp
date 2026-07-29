@@ -101,6 +101,38 @@ went on to find.
 No CI builds or deploys this. Every image in the registry was built from a laptop
 (`runType: QuickRun`, `sourceTrigger: null`).
 
+**All eight steps are now `deploy/public/redeploy.sh`.** Run that, not the commands below:
+
+```bash
+./deploy/public/redeploy.sh          # ACP_DRY_RUN=1 to stop before touching Azure
+```
+
+It performs exactly the sequence below, with every guard, and adds two things the hand-run
+version could not:
+
+**Dependency bases, so a source change stops paying for LibreOffice.** Measured 2026-07-29:
+six ACR builds, every one 2m46s–3m14s. Almost none of that was the app — it was the apt layer
+(LibreOffice writer/calc/impress plus a *downloaded* .NET 10 runtime), `pip install`, and
+`npm install`, re-running every time. `az acr build` has **no `--cache-from`** (checked on az
+2.86.0), so a QuickRun cannot reuse layers from a previous build.
+
+Those layers now live in `acp-base-api` / `acp-base-web`, tagged with a hash of *only* their
+inputs — `api/requirements.txt`, `frontend/package-lock.json`, and the two `Dockerfile.base-*`
+files. Source is deliberately excluded from the hash: if a source edit moved it, the base would
+rebuild every time and the split would achieve nothing. The bases rebuild only when that hash
+moves, and `redeploy.sh` decides that by asking the registry, so nobody has to remember.
+
+`deploy/public/Dockerfile` still defaults `BASE_WEB`/`BASE_API` to the upstream images, so a
+first deploy — or anyone without the bases — builds from scratch exactly as before.
+
+**Both apps updated concurrently.** `--no-wait` on each, then poll both. Sequential updates left
+a window where `acp-app` and `acp-worker` ran *different images*, which the rule below forbids.
+
+It also refuses to finish unless `/healthz` reports the new CalVer and `version_stamped: true` —
+an image built without the build args runs perfectly well while every surface reports `dev`.
+
+<details><summary>The eight steps it runs</summary>
+
 ```bash
 PIN=$(git rev-parse origin/main)                 # 1. pin, and check CI is green on it
 git clone --local . /tmp/acp-deploy              # 2. isolated tree
@@ -121,6 +153,8 @@ az containerapp update -n acp-worker -g mdk-accessibility --image "$IMG"
 
 curl -s "$APP/healthz"; curl -s "$APP/readyz"    # 8. verify
 ```
+
+</details>
 
 ### Why each guard exists
 
