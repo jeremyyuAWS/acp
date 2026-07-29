@@ -411,6 +411,56 @@ def test_link_purpose_approvals_have_no_applier_and_keep_the_file_out_of_publish
     assert store.count_unapplied_approved_values(SID, FILE) >= 1     # still gates Publish
 
 
+# ── the gate must name every value kind, or a kind is stranded ────────────────
+
+def test_a_link_text_only_approval_still_schedules_the_write(store, monkeypatch):
+    """Each value kind lives in its own hitl row, and the route decides whether the apply job
+    runs at all. A gate that asks only about SOME kinds strands the rest exactly as the missing
+    applier did: the text is approved, never written, and the file can never certify."""
+    import core
+    monkeypatch.setattr(core, "store", store)
+    monkeypatch.setattr(core, "fire_webhook", lambda *a, **k: None)
+    from routes.hitl import hitl_update, HitlUpdate
+
+    item = _seed_link(store)                                  # a docx whose ONLY row is 2.4.4
+    hitl_update(item, HitlUpdate(status="approved", approved_values=[None]), _req())
+
+    assert store.approved_alt_values(SID, DOC_FILE) == {}     # nothing on the alt lane
+    job = store.claim_job("w1")
+    assert job and job["type"] == "apply_approved_values"
+    assert job["payload"] == {"scan_id": SID, "file": DOC_FILE}
+
+
+def test_the_gate_covers_every_kind_the_applier_writes(store):
+    """The union in one place. Each kind alone must open the gate — a new kind added to the
+    handler and forgotten here would never reach a job, and nothing else would notice."""
+    store.init_scan_run(SID, "drive", 1, "t", "r", "h")
+    for sc, locator in (("1.1.1", f"{SLIDE}#Picture 1"), ("2.4.4", "https://example.com/x"),
+                        ("4.1.2", "pdf:field:1:0")):
+        f = f"only-{sc}.pdf"
+        assert store.has_approved_values_to_write(SID, f) is False
+        item = store.enqueue_proposals(SID, f, sc, [
+            {"locator": locator, "before": "(before)", "proposed_value": "approved text",
+             "rationale": "r", "source": "s"}], rule_name=sc)
+        store.update_hitl_item(item, "approved", None, None)
+        store.approve_proposal_values(item, [])
+        assert store.has_approved_values_to_write(SID, f) is True, f"{sc} alone must open the gate"
+
+
+def test_every_applier_returns_the_row_shape_the_write_loop_reads():
+    """_apply_one_value_kind records the remediation diff from a['before']/a['after'], inside a
+    best-effort try. An applier returning a different shape raises there and the whole diff
+    batch is dropped: the value lands in the document with no record of what it replaced, and
+    nothing fails. Pin the contract at the source instead."""
+    import re
+    api = ACP / "api"
+    for mod in ("apply_alt.py", "apply_link_text.py", "remediate_pdf.py"):
+        for row in re.findall(r"applied\.append\(\{[^}]*\}", (api / mod).read_text()):
+            if '"locator"' not in row:
+                continue                              # prose progress messages, not applied rows
+            assert '"before"' in row and '"after"' in row, f"{mod}: {row}"
+
+
 # ── F4: the batched per-scan form agrees with the per-file gate, in one query ──────────────────
 
 def test_batched_unapplied_counts_match_the_per_file_gate(store):
