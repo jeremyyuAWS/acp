@@ -104,7 +104,13 @@ _WCAG_LINE_RE = re.compile(r"^WCAG:\s*(.+)$", re.M)
 # `WCAG: 1.1.1 (pdf), 4.1.2 (pdf)` works as well as one SC per line. It used to anchor on `$`
 # after the formats, which meant a comma-separated pair matched NOTHING — the commit then read
 # as "Matrix-Note with no WCAG:" and hard-exited the generator. 676f081 is exactly that.
-_WCAG_RE = re.compile(r"(\d+\.\d+\.\d+)\s*(?:\(([^)]*)\))?")
+# `\b` so the SC has to start at a token boundary. Without it the digits were matched INSIDE a
+# larger token and `WCAG: SC1.1.1 (pdf)` parsed happily as 1.1.1 — the same class of gap as the
+# `$` anchor above, in the opposite direction: accepting more than the documented format rather
+# than less. No trailer in history relies on the laxity (generation output is byte-identical
+# before and after), and a format the parser silently invents support for is one nobody can
+# document.
+_WCAG_RE = re.compile(r"\b(\d+\.\d+\.\d+)\s*(?:\(([^)]*)\))?")
 _NOTE_RE = re.compile(r"^Matrix-Note:\s*(.+?)(?=^\S+:|\Z)", re.M | re.S)
 _PR_RE = re.compile(r"\(#(\d+)\)\s*$")
 
@@ -269,11 +275,14 @@ def parse_commit(raw: str, repo: str, strict: bool = False) -> dict | None:
         return bad("Matrix-Note: is all bullets with no lead sentence — the matrix shows the "
                    "lead when the entry is collapsed, so it needs one.")
 
+    wcag_lines = _WCAG_LINE_RE.findall(body)
     scs: list[str] = []
     formats: set[str] = set()
-    for sc, fmts in [m for line in _WCAG_LINE_RE.findall(body)
+    untracked: list[str] = []
+    for sc, fmts in [m for line in wcag_lines
                      for m in _WCAG_RE.findall(line)]:
         if sc not in TRACKED_SCS:
+            untracked.append(sc)
             msg = (f"WCAG: {sc} is not one of the 20 SCs the matrix tracks — fix the "
                    f"trailer or add the row first.")
             if strict:
@@ -295,8 +304,30 @@ def parse_commit(raw: str, repo: str, strict: bool = False) -> dict | None:
                 return bad(f"unknown format '{f}' — expected one of {', '.join(FORMATS)}.")
             formats.add(f)
     if not scs:
-        return bad("has a Matrix-Note: but no WCAG: trailer — the matrix needs to know which "
-                   "SC the entry belongs to.")
+        # Three different failures used to share one message, and it named the only cause the code
+        # had NOT established: that the author omitted the trailer. When a `WCAG:` line was sitting
+        # right there and merely failed to parse, "no WCAG: trailer" sent the reader to audit a
+        # commit that was fine. That is not hypothetical — it is how the `$`-anchor bug above went
+        # undiagnosed: 51a673b and 676f081 both carried valid comma-separated trailers, the message
+        # was read at face value, and the wrong cause reached a commit message, a PR body (#49) and
+        # a broadcast to five sessions before anyone reproduced it. See #57.
+        #
+        # The distinguishing information is already in hand at this point, so each case says what
+        # was actually observed, and the unparsed case ECHOES the line: seeing the offending text
+        # quoted back makes the parser (or the typo) the obvious suspect in one read.
+        if not wcag_lines:
+            return bad("has a Matrix-Note: but no WCAG: trailer — the matrix needs to know which "
+                       "SC the entry belongs to.")
+        if not untracked:
+            quoted = "; ".join(f"`WCAG: {line.strip()}`" for line in wcag_lines)
+            return bad(f"has a WCAG: trailer but no criterion parsed out of it: {quoted} — "
+                       f"expected a three-part SC like `WCAG: 1.1.1 (pdf)`.")
+        # Every SC present parsed, and every one of them was untracked. Each already got its own
+        # `skipped SC` warning above, so the old message did not merely mislead here — it
+        # CONTRADICTED the line before it, naming a missing trailer the previous line had just
+        # quoted. Say what is true instead: the trailer parsed and nothing survived the filter.
+        return bad(f"every criterion in its WCAG: trailer is untracked "
+                   f"({', '.join(untracked)}) — nothing is left for the matrix to render.")
 
     pr = _PR_RE.search(subject)
     entry = {

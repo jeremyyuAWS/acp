@@ -141,9 +141,58 @@ def test_an_unknown_format_is_reported_and_skipped(capsys):
     assert "rtf" in capsys.readouterr().err
 
 
+# ── The skip message must name the cause the code actually established (#57) ───────────────────
+#
+# One message used to cover three different failures, and the cause it named — the author omitted
+# the trailer — was the one case it could not distinguish. That is not a wording preference: on
+# 2026-07-29 it was read at face value off 51a673b and 676f081, whose trailers were valid and
+# comma-separated, and the wrong cause reached a commit message, PR #49 and five other sessions.
+
+def test_a_present_but_unparseable_wcag_line_does_not_blame_the_author(capsys):
+    """The regression that matters. A `WCAG:` line is RIGHT THERE, so "no WCAG: trailer" asserts
+    something about the author that the code has not established."""
+    assert _parse("WCAG: none\nMatrix-Note: A real note.") is None
+    err = capsys.readouterr().err
+    assert "no WCAG: trailer" not in err
+    assert "no criterion parsed out of it" in err
+
+
+def test_the_unparseable_message_echoes_the_offending_line(capsys):
+    """Echoing it back is what makes the message self-correcting — the comma, or here the missing
+    third part, becomes the obvious suspect in one read instead of sending you to audit a commit."""
+    assert _parse("WCAG: 1.1 (pdf)\nMatrix-Note: A real note.") is None
+    assert "`WCAG: 1.1 (pdf)`" in capsys.readouterr().err
+
+
+def test_an_all_untracked_entry_is_not_reported_as_a_missing_trailer(capsys):
+    """The clearest case, because the tool got it right and then talked itself out of it: it named
+    1.4.6 as untracked, then announced a missing trailer it had just quoted."""
+    assert _parse("WCAG: 1.4.6 (pdf)\nMatrix-Note: Real note.") is None
+    err = capsys.readouterr().err
+    assert "1.4.6" in err                       # still announced
+    assert "no WCAG: trailer" not in err        # and no longer contradicted
+    assert "untracked" in err
+
+
+def test_a_genuinely_missing_wcag_line_still_says_so(capsys):
+    """The one case the old message was right about, pinned so splitting it did not lose it."""
+    assert _parse("Matrix-Note: A real note that forgot to say which criterion.") is None
+    assert "no WCAG: trailer" in capsys.readouterr().err
+
+
+def test_an_sc_inside_a_larger_token_is_not_harvested(capsys):
+    """`_WCAG_ITEM` matched the digits inside a bigger token, so `SC1.1.1` parsed as 1.1.1 — the
+    same class of gap as the old `$` anchor, in the opposite direction. Now rejected, and the echo
+    shows why."""
+    assert _parse("WCAG: SC1.1.1 (pdf)\nMatrix-Note: A real note.") is None
+    assert "`WCAG: SC1.1.1 (pdf)`" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("body", [
     "Matrix-Note: A real note that forgot to say which criterion.",
     "WCAG: 1.1.1 (rtf)\nMatrix-Note: Real note.",
+    "WCAG: none\nMatrix-Note: A real note.",
+    "WCAG: SC1.1.1 (pdf)\nMatrix-Note: A real note.",
 ])
 def test_check_stays_strict_on_every_malformed_trailer(body):
     with pytest.raises(glog.TrailerProblem):
