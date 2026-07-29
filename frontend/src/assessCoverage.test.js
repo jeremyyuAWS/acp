@@ -68,7 +68,11 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
   // Assessment-axis rollups — the three buckets partition the 20 exactly in every estate.
   const EST = {
     // docx/pptx gain the ADR 0024 Tier-A review lanes: docx +1.4.10/1.4.12, pptx +1.4.4/1.4.10/1.4.12.
-    docx: { auto: 5, review: 12, human: 0, gap: 0, at: 0, na: 3, certifiable: 5 },
+    // docx is 4🟢/13🟡, not 5/12: 2.4.6 was demoted 🟢→🟡 (ADR 0023 Correction 2) because the only
+    // docx detector decides heading LEVEL well-formedness, which is not descriptiveness — it could
+    // never certify the pass it was claiming. Its ⚡ remediation lane is unchanged, so docx now has
+    // 4 auto-assess and 5 auto-remediate: the two axes genuinely diverge here.
+    docx: { auto: 4, review: 13, human: 0, gap: 0, at: 0, na: 3, certifiable: 4 },
     xlsx: { auto: 5, review: 9, human: 0, gap: 0, at: 0, na: 6, certifiable: 5 },
     pptx: { auto: 5, review: 13, human: 1, gap: 0, at: 0, na: 1, certifiable: 5 },
     pdf: { auto: 3, review: 11, human: 0, gap: 0, at: 0, na: 6, certifiable: 3 },  // +1.4.12, +1.4.1, +1.4.11 (ADR 0025)
@@ -87,9 +91,10 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
 
   it('mixed doc estate unions to the best lane per criterion (19 assessable, sum 20)', () => {
     const s = coverageSummary(filesOf('docx', 'xlsx', 'pptx', 'pdf'), { documents: true })
-    expect(s.auto).toBe(6)
+    // 5, not 6: docx was the only format claiming 🟢 on 2.4.6, so its demotion moves the union too.
+    expect(s.auto).toBe(5)
     // Tier A closes the last three union ⚪ (1.4.4 / 1.4.10 / 1.4.12) into the 🟡 review lane.
-    expect(s.review).toBe(13)
+    expect(s.review).toBe(14)
     expect(s.human).toBe(1)
     expect(s.na).toBe(0)
     expect(s.assessable).toBe(19)
@@ -102,10 +107,23 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
   })
 
   it('union prefers the best assessment lane; a distinct remediation resolver is honored', () => {
-    expect(statusAcross('2.4.6', ['docx', 'pdf'], assessmentIn)).toBe('auto')   // 🟢 in docx wins
-    expect(statusAcross('2.4.6', ['pdf'], assessmentIn)).toBe('review')          // pdf 2.4.6 is 🟡
-    expect(statusAcross('2.4.6', ['docx'], remediationIn)).toBe('auto')          // ⚡ in docx
-    expect(statusAcross('2.4.6', ['pdf'], remediationIn)).toBe('ai')             // 🤖 in pdf
+    // 1.3.1, not 2.4.6: since the 2.4.6 demotion both formats are 🟡 there, so it can no longer
+    // show a union PREFERRING one lane over another — it would pass whatever statusAcross did.
+    expect(statusAcross('1.3.1', ['docx', 'pdf'], assessmentIn)).toBe('auto')   // 🟢 in docx wins
+    expect(statusAcross('1.3.1', ['pdf'], assessmentIn)).toBe('review')          // pdf 1.3.1 is 🟡
+    expect(statusAcross('1.3.1', ['docx'], remediationIn)).toBe('auto')          // ⚡ in docx
+    expect(statusAcross('1.3.1', ['pdf'], remediationIn)).toBe('ai')             // 🤖 in pdf
+  })
+
+  it('docx 2.4.6 is 🟡 assess / ⚡ remediate — the axes are independent for the SAME cell', () => {
+    // The sharpest case in the matrix, and the regression that made this file stale: a criterion
+    // whose fix is deterministic and round-trip proven, but whose PASS cannot be certified. The
+    // heading-skip detector decides level well-formedness; 2.4.6 asks whether headings describe
+    // their topic. Deriving 🟢 assessment from ⚡ remediation is what produced the false green.
+    expect(assessmentIn('2.4.6', 'docx')).toBe('review')
+    expect(remediationIn('2.4.6', 'docx')).toBe('auto')
+    // …and it now matches the other three document formats, which were already 🟡.
+    for (const f of ['xlsx', 'pptx', 'pdf']) expect(assessmentIn('2.4.6', f)).toBe('review')
   })
 
   it('isAssessable = 🟢|🟡 (a verdict or a flag); isCertifiable = 🟢 only', () => {
