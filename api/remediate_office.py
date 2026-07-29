@@ -493,8 +493,11 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
         return None
     try:
         import ai as _ai
+        # allow_transcription: this path OCRs the embedded image itself, so prose read from it
+        # really is the image's own text — the alt for an image of text is that text (WCAG 1.1.1).
         res = _ai.describe_image_structured(img, filename=context_file, context=caption or "",
-                                            scan_id=scan_id, file=context_file)
+                                            scan_id=scan_id, file=context_file,
+                                            allow_transcription=True)
     except Exception:
         res = None
     if not res:
@@ -502,14 +505,22 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
     if vision_budget is not None:
         vision_budget[0] -= 1
     if res.get("grounded"):
+        # An image of text is transcribed, not described — no model ran, so the provenance must
+        # not claim one (it used to interpolate res['model'], which is None on that path and
+        # rendered as "AI vision model (None)").
+        transcribed = res.get("source") == "ocr"
         if applied_fixes is not None:
             applied_fixes.append({
                 "rule_id": "SC_1_1_1",
                 "value": res["alt"],
-                "source": f"AI vision model ({res['model']}), anchored in image text",
+                "source": ("the image's own text, read by OCR and transcribed verbatim"
+                           if transcribed
+                           else f"AI vision model ({res['model']}), anchored in image text"),
                 "thumb": _thumb_b64(img),
             })
-        return res["alt"], "an AI vision description anchored in the image's own text"
+        return res["alt"], ("the image's own text, transcribed verbatim (WCAG 1.1.1 — the alt "
+                            "for an image of text is that text)" if transcribed
+                            else "an AI vision description anchored in the image's own text")
     # Auto-apply-validated policy (opt-in, default OFF): an ungrounded draft that an
     # INDEPENDENT second reading confirms ('consistent' consistency cross-check — a
     # measurement, never the model grading itself, ADR 0016) is applied inline like a

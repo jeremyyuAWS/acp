@@ -601,8 +601,46 @@ def _structured_vision_prompt(filename: str, ocr_text: str, context: str) -> str
     )
 
 
+# An IMAGE OF TEXT is the one 1.1.1 case where the correct alt text is not a description at
+# all — it is the text itself (WCAG 1.1.1 / F30: "if the image is text, the alt is that text").
+# Handing such an image to a compact captioner actively destroys information. Measured on
+# 2026-07-29 against moondream and the real demo fixture — a white page reading "Quarterly
+# Revenue Report 2026 / Total revenue increased fourteen percent / across every regional
+# business unit" — the model rewrote the year 2026 as 2006 in 5/5 runs, invented "a chart or
+# graph" that is not present, described the FILENAME as if it were visible content, and in one
+# run leaked the prompt's own "OCR:" marker into the alt. OCR had read the text correctly every
+# time. So when the OCR text already reads as prose, transcribe it and skip the paraphrase.
+_TEXT_IMAGE_MIN_WORDS = 4
+
+
+def _looks_like_an_image_of_text(ocr_txt: str) -> bool:
+    """True when OCR read connected prose (a title card, a pull quote, a text slide) rather than
+    the scattered fragments a chart's axes and legend produce.
+
+    Deliberately conservative: a chart still wants a DESCRIPTION ('bar chart comparing …'),
+    and transcribing its axis labels would be worse than the model's paraphrase. Requires
+    several real words and a low share of number-ish/one-character tokens.
+    """
+    toks = re.findall(r"\S+", re.sub(r"\s+", " ", ocr_txt or "").strip())
+    if len(toks) < _TEXT_IMAGE_MIN_WORDS:
+        return False
+    words = [t for t in toks if re.fullmatch(r"[A-Za-z][A-Za-z'’\-]{1,}[.,;:!?]?", t)]
+    return len(words) >= _TEXT_IMAGE_MIN_WORDS and (len(words) / len(toks)) >= 0.6
+
+
+def _transcribed_alt(ocr_txt: str) -> str:
+    """The image's own text as an alt string: whitespace collapsed, length-bounded, no model in
+    the loop. Not run through _clean_alt — that strips 'image of'-style leads, which is right for
+    a model's reply and wrong for a verbatim transcription."""
+    t = re.sub(r"\s+", " ", (ocr_txt or "").strip())
+    if len(t) > 250:
+        t = t[:250].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+    return t
+
+
 def describe_image_structured(image_bytes: bytes, *, filename: str = "", context: str = "",
-                              scan_id: str | None = None, file: str | None = None) -> dict | None:
+                              scan_id: str | None = None, file: str | None = None,
+                              allow_transcription: bool = False) -> dict | None:
     """Structured, OCR-anchored alt text (WCAG 1.1.1). Returns
     {"alt", "grounded", "evidence", "model"} or None.
 
@@ -611,7 +649,13 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     confidence derivation a remediator may auto-apply. When OCR finds nothing (a textless
     photo) the description is a pure vision guess — `grounded` is False and the caller
     surfaces it as a Medium proposal for human confirmation rather than auto-applying, since
-    a machine cannot judge whether a guessed description conveys the author's intent."""
+    a machine cannot judge whether a guessed description conveys the author's intent.
+
+    `allow_transcription` opts into the image-of-text path: when the OCR text reads as prose,
+    it is returned verbatim as the alt and no model runs. Only set it when `image_bytes` is the
+    image ITSELF. The PDF remediator must not — it OCRs a render of the whole PAGE, so "this
+    render contains prose" means "the page has paragraphs", not "this figure is an image of
+    text", and transcribing would hand a figure the page's body copy as its alt."""
     if not image_bytes:
         return None
     ocr_txt = ""
@@ -621,6 +665,15 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     except Exception:
         ocr_txt = ""
     grounded = len(re.findall(r"[A-Za-z]{2,}", ocr_txt)) >= 2
+    # An image of text: the text IS the alt text, and no model needs to see it. Returning here
+    # is both more accurate and cheaper than a paraphrase — see _looks_like_an_image_of_text.
+    if allow_transcription and grounded and _looks_like_an_image_of_text(ocr_txt):
+        transcribed = _transcribed_alt(ocr_txt)
+        if transcribed:
+            return {"alt": transcribed, "grounded": True,
+                    "evidence": "transcribed verbatim from the text in the image — no model "
+                                "paraphrase, so no figure or label can drift",
+                    "model": None, "source": "ocr"}
     if grounded:
         prompt = _structured_vision_prompt(filename, ocr_txt, context)
     else:
