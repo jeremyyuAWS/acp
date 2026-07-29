@@ -80,8 +80,13 @@ def test_essential_exception_records_the_logo_exemption(st, route):
 
 
 def test_a_resolution_writes_no_value_into_the_document(st, route):
-    """The whole point: an exception is NOT a written fix. No apply job may fire, or the report
-    would claim alt text was authored when the reviewer explicitly said none was needed."""
+    """The whole point: an exception is NOT a written fix. No VALUE may be written, or the report
+    would claim alt text was authored when the reviewer explicitly said none was needed.
+
+    This row is a deferral — no proposals, so nothing addressable — and no job fires at all. A
+    'decorative' resolution on a row that DOES carry proposal locators schedules the job for the
+    OOXML decorative MARKING, which is a marking and not a value; that lane and the reason it
+    exists live in tests/test_wcag_exception_resolution_writeback.py."""
     hitl_update, HitlUpdate, jobs, _dec = route
     row = _row(st, rule="1.1.1")
     hitl_update(row["id"], HitlUpdate(status="approved", resolution="decorative"), _req())
