@@ -259,6 +259,31 @@ old cell was not partial, it was *wrong*, and it shipped damage. The capability 
 proves what the fixer leaves alone as well as what it clears — a clean re-scan alone never
 could.
 
+**Correction, 2026-07-28 — the 2.4.4-fix-PDF row above claimed a fix path that could not
+complete.** "Proposal with AI off" was true and beside the point: the proposal was *emitted*,
+and it could never be *applied*. Its locator was the raw URI, `apply_pdf_approved` routes only
+`pdf:fig:` and `pdf:field:`, and `handlers._apply_approved_values` returns early for any
+extension outside `_OFFICE_ALT_MIME` (docx/pptx/xlsx). Approving the card returned
+`applied=[]`, `unresolved=[the URI]`, the bytes unchanged, and a re-scan still reported
+`PDF_LINK_RAW_URL` — the finding merely looked handled. It was also a trap: an approved row
+holding a locator + value is counted by `store.count_unapplied_approved_values` until something
+writes it, so the document could never certify and never reached Publish.
+
+Building the writer was the alternative and it is the one the proposer's own docstring ruled
+out — the visible label is drawn by text-showing operators, so replacing it re-flows the page's
+glyph widths. That is re-authoring, not remediation (ADR 0016), and the same reason 1.3.1
+re-tagging is not auto-written.
+
+So the cell is **explain-only**: `REMEDIATION["pdf"]["2.4.4"]` is now `human`, the proposer and
+its enqueue are gone, and the residual FAIL reaches the reviewer as a plain 2.4.4 judgement row
+carrying no unwritten value — honest about what ACP can do, and unlike the card, resolvable.
+Note what did NOT move: the derived ceiling was already `M`, because
+`gen_matrix_coverage.load_appliers` had caught the missing write-back and demoted the cell on
+its own. That check worked; the lane table was the thing lying, and `/capability` and the
+frontend fallback read the lane table directly, with no applier check in front of them.
+Assessment is untouched (`Q`) — the detector still fires. Regression:
+`tests/test_pdf_link_purpose_explain_only.py`.
+
 ### P1d-1 — the one cell still open
 
 1. **2.4.6 Headings and Labels · fix · XLSX** — today No Remediation, ceiling AI Generated
@@ -275,7 +300,8 @@ Up from 21, because the nine corrections above rose to their ceilings and are no
 Almost all are the same disagreement, stated 29 times:
 
 * **AI Generated Fix where he asked for Automatically Fixed** — 1.1.1 fix (all four), 2.4.4
-  fix (all four), 2.4.6 fix (PDF), 4.1.2 fix (PDF), 1.3.1 fix (PDF).
+  fix (docx/xlsx/pptx — PDF dropped to Guided Remediation on 2026-07-28, see the correction
+  above), 2.4.6 fix (PDF), 4.1.2 fix (PDF), 1.3.1 fix (PDF).
 * **Potential Issue where he asked for Fully Assessed** — 2.4.6, 3.1.2 and 2.4.4 assess (all
   four formats each), 1.4.3 assess (PDF).
 * **Guided where he asked for AI** — 3.1.2 fix (all four), 1.3.2 fix (PDF).

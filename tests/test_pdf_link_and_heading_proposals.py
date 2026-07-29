@@ -1,16 +1,12 @@
-"""PDF 2.4.4 Link Purpose + 2.4.6 Headings and Labels — the two hard PDF criteria become
-assisted proposal cards instead of a bare human-review dead end.
-
-Neither can be auto-applied (rewriting a link label re-flows text runs; adding heading tags
-re-authors the file), but both are machine-DERIVABLE:
-  * 2.4.4 — a link whose visible text is the raw URL gets a descriptive label derived from
-    the link target (proposals.derive_link_text), deterministically.
-  * 2.4.6 — a TAGGED PDF that carries no heading struct elements gets a heading map derived
-    from its font hierarchy (the complement of the 1.3.1 untagged structure-map proposer).
-
-Both are self-gating and never fabricate (ADR 0016): a descriptive-link / heading-tagged PDF
-yields nothing. The proposers mirror the office_structure detectors exactly, so a proposal
+"""PDF 2.4.6 Headings and Labels — a hard PDF criterion becomes an assisted proposal card
+instead of a bare human-review dead end. A TAGGED PDF that carries no heading struct elements
+gets a heading map derived from its font hierarchy (the complement of the 1.3.1 untagged
+structure-map proposer). Self-gating and never fabricating (ADR 0016): a heading-tagged PDF
+yields nothing, and the proposer mirrors the office_structure detector exactly, so a proposal
 only appears where the finding fired.
+
+2.4.4 Link Purpose used to be proposed here too, and no longer is — see
+tests/test_pdf_link_purpose_explain_only.py for why, and for the regression that keeps it out.
 """
 from __future__ import annotations
 
@@ -26,67 +22,6 @@ import remediate_pdf as rp  # noqa: E402
 reportlab = pytest.importorskip("reportlab")
 pikepdf = pytest.importorskip("pikepdf")
 pytest.importorskip("pdfplumber")
-
-
-# ── 2.4.4 Link Purpose ────────────────────────────────────────────────────────
-def _pdf_with_link(tmp: Path, url: str, *, visible_text: str | None = None) -> Path:
-    """A one-page PDF with a /Link annotation to `url`; the visible text drawn on the page is
-    `visible_text` (defaults to the raw URL, which is the flagged case)."""
-    from reportlab.pdfgen import canvas
-    p = tmp / "link.pdf"
-    c = canvas.Canvas(str(p))
-    text = visible_text if visible_text is not None else url
-    c.setFont("Helvetica", 12)
-    c.drawString(72, 700, text)
-    c.linkURL(url, (72, 695, 400, 715), relative=0)
-    c.drawString(72, 650, "Body prose so the page carries readable text for extraction.")
-    c.save()
-    return p
-
-
-def test_raw_url_link_gets_a_derived_label(tmp_path):
-    src = _pdf_with_link(tmp_path, "https://example.com/annual-report-2026.pdf")
-    props: list = []
-    with pikepdf.open(str(src)) as pdf:
-        rp._propose_pdf_link_purpose(pdf, str(src), ai_enabled=False, proposals=props)
-    assert len(props) == 1
-    p = props[0]
-    assert p["kind"] == "link-purpose"
-    assert p["locator"] == "https://example.com/annual-report-2026.pdf"
-    # Deterministic label derived from the download target, no AI.
-    assert p["proposed_value"] == "Download Annual Report 2026 (PDF)"
-    assert "deterministic" in p["source"]
-
-
-def test_descriptive_link_proposes_nothing(tmp_path):
-    # The visible text is NOT the raw URL → the detector never flags → no proposal.
-    src = _pdf_with_link(tmp_path, "https://example.com/annual-report-2026.pdf",
-                         visible_text="Read the 2026 annual report")
-    props: list = []
-    with pikepdf.open(str(src)) as pdf:
-        rp._propose_pdf_link_purpose(pdf, str(src), ai_enabled=False, proposals=props)
-    assert props == []
-
-
-def test_opaque_url_with_ai_off_yields_nothing(tmp_path):
-    # A bare domain isn't derivable from its target; with AI off we never fabricate a label.
-    src = _pdf_with_link(tmp_path, "https://example.com")
-    props: list = []
-    with pikepdf.open(str(src)) as pdf:
-        rp._propose_pdf_link_purpose(pdf, str(src), ai_enabled=False, proposals=props)
-    assert props == []
-
-
-def test_no_links_yields_nothing(tmp_path):
-    from reportlab.pdfgen import canvas
-    p = tmp_path / "plain.pdf"
-    c = canvas.Canvas(str(p))
-    c.drawString(72, 700, "Just prose, no links at all.")
-    c.save()
-    props: list = []
-    with pikepdf.open(str(p)) as pdf:
-        rp._propose_pdf_link_purpose(pdf, str(p), ai_enabled=False, proposals=props)
-    assert props == []
 
 
 # ── 2.4.6 Headings and Labels ───────────────────────────────────────────────────
@@ -161,14 +96,12 @@ def test_tagged_pdf_with_no_distinct_headings_yields_nothing(tmp_path):
 
 
 # ── wiring ──────────────────────────────────────────────────────────────────────
-def test_handler_routes_both_new_kinds_to_their_rules():
+def test_handler_routes_the_heading_map_to_its_rule():
     src = (Path(__file__).resolve().parent.parent / "api" / "handlers.py").read_text()
-    assert '"headings-map"' in src and '"link-purpose"' in src
+    assert '"headings-map"' in src
     assert '"2.4.6", "Headings and Labels"' in src
-    assert '"2.4.4", "Link Purpose (In Context)"' in src
 
 
 def test_capability_promoted_to_assisted():
     import remediation_capability as cap
-    assert cap.mode_for("pdf", "2.4.4") == cap.ASSISTED
     assert cap.mode_for("pdf", "2.4.6") == cap.ASSISTED
