@@ -738,6 +738,35 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // Reviewer time, MEASURED (hitl_events.review_ms). Replaces "est. savings", which was one
   // invented constant (35 min/finding by hand) minus another (~1 min/finding automated).
   // A saving needs a counterfactual nobody ever timed; an average review time is a fact.
+  // The signed record of what was changed. Built from the same three sources the UI shows —
+  // the diffs (what), applied_fixes (when), and the live review queue (what is still open) —
+  // so the PDF cannot claim anything this page does not.
+  const [reportBusy, setReportBusy] = useState(false)
+  const [reportErr, setReportErr] = useState(null)
+  const APPLIED_FIX_CAP = 200        // the server's LIMIT in list_applied_fixes; disclosed if hit
+  const downloadRemediationReport = async () => {
+    setReportBusy(true); setReportErr(null)
+    try {
+      const sid = run?.id
+      const [diffs, fixes] = await Promise.all([
+        getScanRemediationDiffs(sid).catch(() => []),
+        getAppliedFixes(sid).catch(() => []),
+      ])
+      const diffsByFile = {}
+      ;(diffs || []).forEach((d) => { (diffsByFile[d.file] = diffsByFile[d.file] || []).push(d) })
+      const { exportRemediationReport } = await import('./pdfReport.js')
+      await exportRemediationReport({
+        files, diffsByFile, appliedFixes: fixes || [], reviewByFile,
+        scanId: sid, level: run?.target || 'AA', org: run?.org || '',
+        generatedAt: new Date().toISOString(), cappedAt: APPLIED_FIX_CAP,
+      })
+    } catch (e) {
+      // A report that silently fails to download looks identical to one the user forgot to
+      // click. Say it, and keep it on screen.
+      setReportErr(`Report not generated: ${e?.message || e}`)
+    } finally { setReportBusy(false) }
+  }
+
   // A review decision the server refused. Loud, and sticky until the next attempt.
   const [actError, setActError] = useState(null)
   const [reviewStats, setReviewStats] = useState(null)
@@ -942,6 +971,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       <section className="panel" id="rem-docs">
         <div className="rem-sec-hd">
           <h2 style={{ margin: 0 }}>Documents <span className="muted">· {docList.length}</span></h2>
+          <button className="exportbtn" onClick={downloadRemediationReport} disabled={reportBusy}
+                  title="A signed record of every change applied, with a checkbox per item and how to verify it in Word / PowerPoint / Excel / Acrobat on Mac and Windows">
+            {reportBusy ? 'Generating…' : '⤓ Remediation report (PDF)'}
+          </button>
+          {reportErr && <span style={{ fontSize: 12, color: '#A32D2D' }} role="alert">⚠ {reportErr}</span>}
           <div className="triagesum">
             <span className="trstatchip inscope">{inscopeCount} in scope</span>
             <span className="trstatchip na">{naCount} N/A</span>
