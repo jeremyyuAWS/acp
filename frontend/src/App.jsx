@@ -548,7 +548,17 @@ export default function App() {
   const assessGate = <AssessGate onGo={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
   // Time-travel = viewing any scan other than the latest. Drives the replay banner + the
   // app-wide "replaymode" tint so it's unmistakable you're looking at a past point in time.
-  const isTimeTravel = !!(run && scanList.length > 1 && scanList[0]?.id !== run.id)
+  // Time-travel = viewing a PAST scan. "Not the newest entry in the picker" is not the same
+  // thing, and the difference is visible: listScans() returns only runs with a completed_at,
+  // so a run that is still in flight — or an ADR 0020 Discover-only run, whose status leaves
+  // 'running' the moment discovery ends — is absent from scanList entirely and satisfied the
+  // old `scanList[0]?.id !== run.id` test. The banner then announced a replay of the NEWEST
+  // scan and rendered "viewing the scan from ." with no date, because there was no
+  // completed_at to format. Worse than cosmetic: isTimeTravel also drives readOnly on
+  // Remediate/Publish/Monitor, so a freshly-discovered estate came up locked.
+  // Requiring membership in scanList is what makes this mean "a past scan" — completed_at is
+  // then guaranteed present, since that is exactly what listScans() filters on.
+  const isTimeTravel = !!(run && scanList.some((s) => s.id === run.id) && scanList[0]?.id !== run.id)
 
 
   return (
@@ -667,7 +677,10 @@ export default function App() {
 
       {isTimeTravel && (
         <div className="ttbanner" role="status">
-          <span style={{ fontSize: 13.5 }}>🕐 <b>Time-travel replay</b> — viewing the scan from <b>{fmtStamp(run.completed_at)}</b>{run.avg_score != null ? ` · ${run.avg_score}/100` : ''}. Every tab, the dashboard and your saved decisions reflect this past scan.</span>
+          {/* fmtStamp returns null for a missing stamp; the guard on isTimeTravel means that
+              can no longer happen here, but the fallback stays so a null can never again
+              render as a bold empty span followed by a bare period. */}
+          <span style={{ fontSize: 13.5 }}>🕐 <b>Time-travel replay</b> — viewing the scan from <b>{fmtStamp(run.completed_at) ?? 'an earlier scan'}</b>{run.avg_score != null ? ` · ${run.avg_score}/100` : ''}. Every tab, the dashboard and your saved decisions reflect this past scan.</span>
           <button className="ttexit" onClick={() => switchScan(scanList[0].id)}>↩ Back to latest</button>
         </div>
       )}
