@@ -106,8 +106,16 @@ def _git(*args: str) -> str:
 
 
 def _repo_slug() -> str:
-    """owner/name for the commit links the matrix renders."""
-    url = _git("config", "--get", "remote.origin.url").strip()
+    """owner/name for the commit links the matrix renders.
+
+    Falls back rather than raising when there is no remote at all: `git config --get` exits 1 on a
+    missing key, and a clone or test fixture without an origin is a perfectly ordinary place to
+    generate a log. Only the link text depends on this, so guessing beats crashing.
+    """
+    try:
+        url = _git("config", "--get", "remote.origin.url").strip()
+    except subprocess.CalledProcessError:
+        return "jeremyyuAWS/acp"
     m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", url)
     return m.group(1) if m else "jeremyyuAWS/acp"
 
@@ -333,7 +341,11 @@ def check(since: str | None) -> int:
         # so --check now parses what it previously only detected the presence of.
         raw = _git("log", "-1", f"--format=%H\x1f%aI\x1f%s\x1f%b", sha).strip("\n")
         try:
-            parse_commit(raw, _repo_slug(), strict=True)
+            # The slug only ever reaches the rendered entry, which validation never builds, so
+            # it is deliberately not resolved here: _repo_slug() shells out to `git config --get
+            # remote.origin.url`, which EXITS NONZERO in a repo with no remote — exactly what the
+            # guard's own test fixtures are. Validating a trailer must not depend on having one.
+            parse_commit(raw, "", strict=True)
         except TrailerProblem as e:
             bad.append((sha[:7], subject, str(e).split(": ", 1)[-1]))
     for sha, subject, why in bad:
