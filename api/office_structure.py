@@ -95,6 +95,72 @@ _W_SZ = re.compile(r'<w:sz\s+w:val="(\d+)"')
 _W_BOLD = re.compile(r'<w:b(?:\s*/>|\s+w:val="(?:1|true|on)"\s*/>)')
 _HAS_LETTER = re.compile(r"[^\W\d_]", re.UNICODE)
 
+# ── Large text that is NOT a heading ──────────────────────────────────────────
+# "Bigger and bolder than the body text" is the only signal either heading scan has, and on
+# a real document plenty of non-headings are set that way: a cover-page wordmark, a headline
+# financial figure, a pull quote, a byline. Promoting one is worse than it sounds, because
+# both consumers write WITHOUT review — the docx promoter styles it Heading N
+# (remediate_office._remediate_docx_structure) and the PDF outline builder makes it a
+# bookmark (remediate_pdf._generate_pdf_outline), and since 2.4.1 needs only text and order,
+# nothing downstream ever objects.
+#
+# Shared by the docx detector, its promoter, and the PDF scan so all three agree about what
+# a heading is. That is a correctness requirement, not tidiness: the promoter fixes exactly
+# what the detector flags, so if this predicate rejects a paragraph, DOCX_PSEUDO_HEADING
+# must not fire on it either — otherwise the fix stops clearing the re-scan and stops being
+# credited.
+#
+# Each filter is deliberately narrow: it must be far likelier to catch furniture than a real
+# section, so where a rule could go either way it keeps the line (ADR 0016 — derive, never
+# fabricate, and don't discard what the document actually says).
+_NUMERIC_HEADING = re.compile(
+    r"""^\W*                                # leading bullet/quote/currency punctuation
+        [+-]?\s*[$€£¥₹]?\s*                 # sign and/or currency symbol
+        \d[\d,.\s]*                         # the figure itself
+        \s*(?:%|billion|million|thousand|bn|mm|pts|pt|usd|eur|gbp|[bmkx])?
+        \W*$""",
+    re.IGNORECASE | re.VERBOSE)
+# A heading does not open with a quote mark; a pull quote does, and closes with one (trailing
+# sentence punctuation aside). A quote carrying an attribution suffix is a known miss —
+# better than a rule loose enough to eat “Reasonable adjustments” as a heading.
+_QUOTE_OPEN, _QUOTE_CLOSE = "\"'“„«‘‟", "\"'”»’‟"
+# "By Jane Doe, Chief Accessibility Officer" — cover-page furniture. Guarded so a heading
+# that merely starts with "by" survives: the next token must read as a name (capitalised)
+# and not be a word that opens a real heading ("By the Numbers", "By Region").
+_BYLINE = re.compile(
+    r"^(?:by|written\s+by|prepared\s+by|photographs?\s+by|authors?)\s*:?\s+(\S+)",
+    re.IGNORECASE)
+_BYLINE_NOT_A_NAME = {"the", "a", "an", "all", "any", "our", "its", "region", "default",
+                      "design", "numbers", "hand", "email", "phone", "law", "type"}
+# Known cost, accepted deliberately: this also drops a genuinely short all-caps section
+# name ("FAQ", "Q&A"). Nothing in the text tells those apart from a wordmark — same shape,
+# same size — so the rule trades a rare missing entry for the common junk one.
+_MAX_CAPS_FRAGMENT = 4          # "ACME", "FY26" — a wordmark or label, not a section name
+
+
+def looks_like_heading_furniture(text: str) -> bool:
+    """True when text set like a heading is really page furniture: a bare figure, a pull
+    quote, a short all-caps wordmark, a byline. Text-only, so every caller can use it —
+    running headers/footers need page geometry and stay with the PDF scan that has it."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    if _NUMERIC_HEADING.match(t):                       # "$4.2B", "42", "3.1%", "2026"
+        return True
+    if t[0] in _QUOTE_OPEN and (t.rstrip(" .,;:!?") or " ")[-1] in _QUOTE_CLOSE:
+        return True                                     # “We grew faster than the market.”
+    compact = "".join(c for c in t if c.isalnum())
+    # `t != t.lower()` keeps the rule to scripts that HAVE case: in an uncased script every
+    # string is trivially its own upper-case, and a 2-character CJK heading is no wordmark.
+    if t != t.lower() and t == t.upper() and len(compact) <= _MAX_CAPS_FRAGMENT:
+        return True                                     # cover-page wordmark / stray label
+    byline = _BYLINE.match(t)
+    if byline:
+        first = byline.group(1).strip(",.;:")
+        if first[:1].isupper() and first.lower() not in _BYLINE_NOT_A_NAME:
+            return True
+    return False
+
 
 def looks_like_pseudo_heading(text: str, *, bold: bool, max_half_pt: int,
                               styled_heading: bool) -> bool:
@@ -105,6 +171,8 @@ def looks_like_pseudo_heading(text: str, *, bold: bool, max_half_pt: int,
     t = (text or "").strip()
     if not t or not _HAS_LETTER.search(t) or len(t.split()) > _PSEUDO_HEADING_MAX_WORDS:
         return False
+    if looks_like_heading_furniture(t):
+        return False                       # large, but a figure/quote/wordmark, not a section
     if max_half_pt >= PSEUDO_HEADING_MIN_HALF_PT:
         return True
     # a slightly-smaller but bold-and-short line is still heading-like

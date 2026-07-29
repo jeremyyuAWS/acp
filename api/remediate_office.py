@@ -893,9 +893,11 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None) -> list[s
     # Pseudo-heading promotion (1.3.1 / 2.4.6): a body-styled paragraph that is visually a
     # heading (large/bold) becomes a real Heading N so assistive tech can navigate to it.
     # Uses the SAME predicate the detector flags (office_structure.looks_like_pseudo_heading),
-    # so the fix clears the re-scan; the level comes from font-size rank and the outline
-    # normalisation below then guarantees one H1 and closes any skip. Runs first so promoted
-    # paragraphs are counted by the heading-collection that follows.
+    # so the fix clears the re-scan — and that predicate now also rejects large text that is
+    # really page furniture (a pull figure, a quote, a wordmark, a byline), so neither side
+    # treats it as a heading. The level comes from the font hierarchy in document order and
+    # the outline normalisation below then guarantees one H1 and closes any skip. Runs first
+    # so promoted paragraphs are counted by the heading-collection that follows.
     import office_structure as _osx
     import proposals as _prop
     pseudo: list = []                      # (pPr_or_None, p, max_half_pt)
@@ -921,9 +923,18 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None) -> list[s
         if _osx.looks_like_pseudo_heading(text, bold=bold, max_half_pt=max_hp, styled_heading=styled):
             pseudo.append((pPr, p, max_hp, text))
     if pseudo:
-        _levels = _prop.infer_heading_levels([hp for _, _, hp, _ in pseudo])
-        for pPr, p, hp, text in pseudo:
-            lvl = _levels.get(float(hp), 2)
+        # Levels come from the font hierarchy IN DOCUMENT ORDER, not from absolute size rank
+        # across the whole document. Rank gave Heading 1 to the largest paragraph whatever it
+        # was — a pull quote or a headline figure took the document title's level and pushed
+        # every real section down one — and collapsed the sections onto Heading 6 as soon as
+        # the document used more than six distinct sizes. This path writes w:pStyle
+        # unattended, so nobody sees that happen. Ordered nesting is also what makes the two
+        # normalisation passes below land correctly: the first pseudo-heading is Heading 1, so
+        # a document that already styled its own Heading 1 keeps it (the promoted one comes
+        # later in document order and is the one demoted to Heading 2), and peer sections
+        # share a level instead of arriving as gaps for the skip pass to close.
+        _levels = _prop.heading_level_sequence([hp for _, _, hp, _ in pseudo])
+        for (pPr, p, _hp, text), lvl in zip(pseudo, _levels):
             if pPr is None:
                 pPr = p.makeelement(f"{{{W}}}pPr", {})
                 p.insert(0, pPr)

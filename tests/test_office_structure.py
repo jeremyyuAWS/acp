@@ -103,6 +103,45 @@ def test_docx_sequential_headings_not_flagged(tmp_path):
     assert not any(f["ruleId"] == "DOCX_HEADING_SKIP" for f in findings)
 
 
+# --- docx: 1.3.1 pseudo-heading (and the furniture it must not flag) ----------
+
+def _big_bold(text: str, half_pt: int = 36) -> str:
+    """A body-styled paragraph set large and bold — visually a heading, no Heading style."""
+    return (f'<w:p><w:r><w:rPr><w:b/><w:sz w:val="{half_pt}"/></w:rPr>'
+            f"<w:t>{text}</w:t></w:r></w:p>")
+
+
+def _pseudo_heading_findings(tmp: Path, *paragraphs: str):
+    doc = f"<w:document><w:body>{''.join(paragraphs)}</w:body></w:document>"
+    return [f for f in os_.docx_checks(_docx(tmp, doc))
+            if f["ruleId"] == "DOCX_PSEUDO_HEADING"]
+
+
+def test_docx_pseudo_heading_detected(tmp_path):
+    assert _pseudo_heading_findings(tmp_path, _big_bold("Quarterly Results"))
+
+
+@pytest.mark.parametrize("furniture", [
+    "$4.2B",                                    # a pull figure
+    "“We grew faster than the market.”",        # a pull quote
+    "ACME",                                     # a wordmark
+    "By Jane Doe, Chief Accessibility Officer",  # a byline
+])
+def test_docx_page_furniture_is_not_a_pseudo_heading(tmp_path, furniture):
+    """Large and bold, but not a heading — so there is nothing here for the 1.3.1 fix to
+    promote, and flagging it would only send the remediator off to restyle a figure as a
+    section. The predicate is shared with remediate_office's promoter and with the PDF
+    outline scan (tests/test_pdf_heading_noise.py), which is what keeps detector and fixer in
+    lock-step: if the promoter must skip this paragraph, the detector must not flag it."""
+    assert _pseudo_heading_findings(tmp_path, _big_bold(furniture)) == []
+
+
+def test_docx_furniture_does_not_mask_a_real_pseudo_heading(tmp_path):
+    # The detector reports once per document; a figure earlier in the body must not consume
+    # that one finding and hide the genuine pseudo-heading below it.
+    assert _pseudo_heading_findings(tmp_path, _big_bold("$4.2B"), _big_bold("Outlook"))
+
+
 # --- docx: 2.4.9 duplicate link text -----------------------------------------
 
 def test_docx_duplicate_link_text_different_targets_flagged(tmp_path):

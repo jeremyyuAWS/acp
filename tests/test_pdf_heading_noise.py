@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 pytest.importorskip("pdfplumber")
 pytest.importorskip("reportlab")
 
+import office_structure as osx  # noqa: E402
 import proposals as P  # noqa: E402
 import remediate_pdf as rp  # noqa: E402
 
@@ -138,6 +139,10 @@ def test_auto_applied_outline_carries_no_furniture(noisy_report, tmp_path):
 
 
 # ── The furniture predicate, case by case ─────────────────────────────────────
+# It lives in office_structure because the docx pseudo-heading DETECTOR and its promoter
+# share it with this scan — see test_office_structure.py for the docx-detector side. All
+# three have to agree about what a heading is, so the cases below are the contract for all
+# of them, not just for PDFs.
 
 @pytest.mark.parametrize("text", [
     "$4.2B", "4.2", "$4.2 billion", "12,345", "2026", "3.1%", "-17", "€890M", "42 ",
@@ -146,7 +151,18 @@ def test_auto_applied_outline_carries_no_furniture(noisy_report, tmp_path):
     "By Jane Doe, Chief Accessibility Officer", "Prepared by Deloitte LLP", "Authors: R. Patel",
 ])
 def test_furniture_is_rejected(text):
-    assert rp._looks_like_heading_furniture(text), text
+    assert osx.looks_like_heading_furniture(text), text
+
+
+@pytest.mark.parametrize("text", ["FAQ", "Q&A"])
+def test_short_all_caps_section_names_are_a_known_cost(text):
+    """Documented, deliberate: a 3–4 character all-caps section name is indistinguishable
+    from a cover wordmark by text alone — same shape, same size — so the rule that drops
+    "ACME" drops these too, and the outline loses an entry a reader could have used. Here as
+    a visible cost rather than a surprise; revisit by narrowing _MAX_CAPS_FRAGMENT or by
+    giving the caller a size-relative signal (a wordmark is near the largest text on its
+    page, a section heading is not)."""
+    assert osx.looks_like_heading_furniture(text)
 
 
 @pytest.mark.parametrize("text", [
@@ -160,11 +176,11 @@ def test_furniture_is_rejected(text):
     "概要", "はじめに", "요약",
 ])
 def test_real_headings_are_kept(text):
-    assert not rp._looks_like_heading_furniture(text), text
+    assert not osx.looks_like_heading_furniture(text), text
 
 
 def test_furniture_check_tolerates_empty_text():
-    assert not rp._looks_like_heading_furniture("")
+    assert not osx.looks_like_heading_furniture("")
 
 
 def test_repeated_body_text_is_not_treated_as_a_running_header(tmp_path):

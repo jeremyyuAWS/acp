@@ -1060,68 +1060,20 @@ _OUTLINE_SCAN_PAGE_CAP = 120    # bound worst-case parse cost on a huge PDF
 _OUTLINE_ENTRY_CAP = 200        # a sane ceiling on bookmark count
 
 # ── Large text that is NOT a section heading ───────────────────────────────────
-# "bigger than the body text" is the only signal a font-size scan has, and on a real
-# document plenty of non-headings are set big: a cover-page wordmark, a headline financial
-# figure, a pull quote, the running header in every page margin. Left in, they become
-# bookmarks — and because the outline is auto-applied (2.4.1 needs only the text and its
-# order, so nothing fails the re-scan) no reviewer ever sees them to strike them. Each
-# filter below is deliberately narrow: it must be far likelier to catch furniture than a
-# real section, so where a rule could go either way it keeps the line — dropping a genuine
-# heading costs the outline an entry a reader needed (ADR 0016: derive, never fabricate,
-# and don't discard what the document actually says).
-_NUMERIC_HEADING = re.compile(
-    r"""^\W*                                # leading bullet/quote/currency punctuation
-        [+-]?\s*[$€£¥₹]?\s*                 # sign and/or currency symbol
-        \d[\d,.\s]*                         # the figure itself
-        \s*(?:%|billion|million|thousand|bn|mm|pts|pt|usd|eur|gbp|[bmkx])?
-        \W*$""",
-    re.IGNORECASE | re.VERBOSE)
-# A section heading does not open with a quote mark; a pull quote does, and closes with one
-# (trailing sentence punctuation aside). A quote carrying an attribution suffix is a known
-# miss — better than a rule loose enough to eat “Reasonable adjustments” as a heading.
-_QUOTE_OPEN, _QUOTE_CLOSE = "\"'“„«‘‟", "\"'”»’‟"
-# "By Jane Doe, Chief Accessibility Officer" — cover-page furniture. Guarded so a heading
-# that merely starts with "by" survives: the next token must read as a name (capitalised)
-# and not be a word that opens a real heading ("By the Numbers", "By Region").
-_BYLINE = re.compile(
-    r"^(?:by|written\s+by|prepared\s+by|photographs?\s+by|authors?)\s*:?\s+(\S+)",
-    re.IGNORECASE)
-_BYLINE_NOT_A_NAME = {"the", "a", "an", "all", "any", "our", "its", "region", "default",
-                      "design", "numbers", "hand", "email", "phone", "law", "type"}
-_MAX_CAPS_FRAGMENT = 4          # "ACME", "FY26" — a wordmark or label, not a section name
-# A running header/footer is the same line, in the same margin band, on page after page.
-# Both halves are load-bearing: frequency alone would delete every section of a
-# "Step 1 / Step 2 / …" document, and margin position alone would delete a legitimate
-# heading that happens to sit at the very top of its page.
+# Which large lines are page furniture rather than sections is decided by
+# office_structure.looks_like_heading_furniture — shared with the docx pseudo-heading
+# detector and promoter so all three agree about what a heading is (the reasoning, and why
+# it matters that they agree, is documented there). A running header or footer is the one
+# kind of furniture that predicate cannot judge, because recognising it needs the whole
+# document: the same line, in the same margin band, on page after page. Both halves of that
+# are load-bearing — frequency alone would delete every section of a "Step 1 / Step 2 / …"
+# document, and margin position alone would delete a legitimate heading that happens to sit
+# at the very top of its page.
 # 6% of a letter page is ~0.6in — inside a 1in margin, so a header/footer sits in the band
 # while the first content line of a normally-margined page (top ~7.3%) stays out of it.
 _MARGIN_BAND_FRACTION = 0.06
 _RUNNING_MIN_PAGES = 3          # below this, "repeated" is not yet a pattern…
 _RUNNING_PAGE_FRACTION = 0.5    # …and it must also cover half the scanned pages
-
-
-def _looks_like_heading_furniture(text: str) -> bool:
-    """Is this large line page furniture rather than a section heading? Page-independent
-    checks only — the running header/footer rule needs the whole document and so lives in
-    `_extract_pdf_headings`."""
-    if not text:
-        return False
-    if _NUMERIC_HEADING.match(text):                    # "$4.2B", "42", "3.1%", "2026"
-        return True
-    if text[0] in _QUOTE_OPEN and (text.rstrip(" .,;:!?") or " ")[-1] in _QUOTE_CLOSE:
-        return True                                     # “We grew faster than the market.”
-    compact = "".join(c for c in text if c.isalnum())
-    # `text != text.lower()` keeps the rule to scripts that HAVE case: in an uncased script
-    # every string is trivially its own upper-case, and a 2-character CJK section heading is
-    # not a wordmark.
-    if text != text.lower() and text == text.upper() and len(compact) <= _MAX_CAPS_FRAGMENT:
-        return True                                     # cover-page wordmark / stray label
-    byline = _BYLINE.match(text)
-    if byline:
-        first = byline.group(1).strip(",.;:")
-        if first[:1].isupper() and first.lower() not in _BYLINE_NOT_A_NAME:
-            return True
-    return False
 
 
 def _running_key(text: str) -> str:
@@ -1133,13 +1085,14 @@ def _running_key(text: str) -> str:
 def _extract_pdf_headings(source_path: str) -> list[tuple[str, int, int]]:
     """Heading candidates by font size. The modal rounded char size is body text; a line
     whose largest char is >= _HEADING_SIZE_RATIO x that, is short, and has letters reads as
-    a heading — unless it is page furniture (see _looks_like_heading_furniture and the
-    running header/footer pass below), which size alone cannot tell apart from a section.
+    a heading — unless it is page furniture (office_structure.looks_like_heading_furniture,
+    plus the running header/footer pass below), which size alone cannot tell from a section.
     Returns [(title, page_index, size)] in document order, deduped by text, capped — size
     lets a caller rank headings into levels (proposals.heading_level_sequence). Empty on
     any failure or when nothing stands out (uniform-font / scanned PDF)."""
     try:
         import pdfplumber
+        import office_structure as _osx
         from collections import Counter
     except Exception:
         return []
@@ -1170,7 +1123,7 @@ def _extract_pdf_headings(source_path: str) -> list[tuple[str, int, int]]:
                         continue
                     if line["size"] < body * _HEADING_SIZE_RATIO:
                         continue
-                    if _looks_like_heading_furniture(text):
+                    if _osx.looks_like_heading_furniture(text):
                         continue
                     in_margin = bool(height) and (
                         key <= height * _MARGIN_BAND_FRACTION
