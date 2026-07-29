@@ -60,6 +60,40 @@ def test_infer_heading_levels_by_size_rank():
     assert P.infer_heading_levels([100, 90, 80, 70, 60, 50, 40, 30])[30.0] == 6
 
 
+def test_heading_level_sequence_nests_in_document_order():
+    # Title, section, subsection, back out to the next section: the second section returns
+    # to its own depth rather than inheriting the subsection's.
+    assert P.heading_level_sequence([30, 18, 15, 18]) == [1, 2, 3, 2]
+    # Equal sizes repeat a depth; the first heading is always Heading 1.
+    assert P.heading_level_sequence([18, 18, 18]) == [1, 1, 1]
+
+
+def test_heading_level_sequence_never_skips_a_level():
+    # Absolute rank collapses these nine distinct sizes onto 1..6 with real sections at 6;
+    # in document order each step down is exactly +1, whatever the point sizes are.
+    sizes = [44, 30, 28, 22, 20, 18, 15, 14, 13]
+    seq = P.heading_level_sequence(sizes)
+    assert seq == [1, 2, 3, 4, 5, 6, 6, 6, 6]      # depth beyond 6 clamps, per WCAG h1–h6
+    assert all(b - a <= 1 for a, b in zip(seq, seq[1:]))
+
+
+def test_heading_level_sequence_is_immune_to_one_outsized_line():
+    # The 1.3.1/2.4.6 map's reliability problem in one assertion: a headline figure set at
+    # 44pt used to take Heading 1 and push every real section down a rank. Ranked in
+    # document order, the sections keep the levels they had before it appeared.
+    without = P.heading_level_sequence([30, 18, 18, 18])
+    with_figure = P.heading_level_sequence([30, 18, 44, 18, 18])
+    assert without == [1, 2, 2, 2]
+    assert with_figure[:2] == [1, 2] and with_figure[3:] == [2, 2]
+
+
+def test_heading_level_sequence_clamps_at_six_and_returns_out():
+    # Eight nested sizes then back to the outermost: the levels beyond 6 all report 6, and
+    # the return to the top-level size lands back on 1 (the stack keeps its true depth).
+    seq = P.heading_level_sequence([40, 36, 32, 28, 24, 20, 16, 12, 40])
+    assert seq == [1, 2, 3, 4, 5, 6, 6, 6, 1]
+
+
 def test_propose_language_parts_flags_the_minority_language():
     text = ("Our annual report highlights strong performance across every business unit this year. "
             "The board thanks all employees for their dedication and hard work throughout the period. "

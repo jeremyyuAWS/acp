@@ -295,13 +295,26 @@ def test_pdf_auto_entries_clear(tmp_path):
     name = "report-accessibility-demo.pdf"
     src = tmp_path / name
     c = canvas.Canvas(str(src), pagesize=letter)
+    # A dark COVER page first. The 1.4.3/1.4.6 "auto" lane used to rest entirely on the
+    # white-background pages below, and that fixture could not tell a working fixer from one
+    # that darkens every light colour on sight: white-on-dark passes at 21:1, so any recolour
+    # of it is damage. Leading with a real dark cover means the round-trip below proves both
+    # halves of the claim — what the fixer clears AND what it leaves alone.
+    c.setFillColor(Color(0x10 / 255, 0x1C / 255, 0x3A / 255))
+    c.rect(0, 0, *letter, stroke=0, fill=1)
+    c.setFillColor(Color(1, 1, 1))
+    c.setFont("Helvetica-Bold", 28)
+    c.drawString(72, 500, "Annual Accessibility Report")
+    c.setFont("Helvetica", 14)
+    c.drawString(72, 460, "White cover text on navy — already 19:1, nothing to fix here.")
+    c.showPage()
     for i, h in enumerate(["Introduction", "Background", "Methods", "Results",
                            "Discussion", "Conclusion"]):
         c.setFont("Helvetica-Bold", 20)
         c.drawString(72, 720, h)
         c.setFont("Helvetica", 11)
         c.drawString(72, 690, f"Body paragraph {i} with enough real words to read as prose.")
-        # Light-grey caption: trips 1.4.3/1.4.6 so the round-trip proves the darken clears them.
+        # Light-grey caption: trips 1.4.3/1.4.6 so the round-trip proves the recolour clears them.
         c.setFillColor(Color(0.8, 0.8, 0.8))
         c.drawString(72, 660, "Figure caption set in light grey that fails the contrast floors.")
         c.setFillColor(Color(0, 0, 0))
@@ -321,6 +334,13 @@ def test_pdf_auto_entries_clear(tmp_path):
     after, _ = _rescan(Path(fixed), f"remediated-{name}", tmp_path)
     still_firing = auto & after
     assert not still_firing, f"pdf 'auto' criteria still fail: {sorted(still_firing)}"
+
+    # The other half of the claim: the cover's white text was compliant going in and must be
+    # untouched coming out. A "clean re-scan" alone would not catch a fixer that recoloured it.
+    import pdfplumber
+    with pdfplumber.open(str(fixed)) as _pdf:
+        cover = {ch.get("non_stroking_color") for ch in _pdf.pages[0].chars}
+    assert cover == {(1, 1, 1)}, f"the fixer altered compliant cover text: {cover}"
 
 
 # One minimal HTML fixture per html 'auto' criterion — each must trip the criterion and clear
