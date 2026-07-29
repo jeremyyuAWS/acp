@@ -79,6 +79,15 @@ RULE_PATHS = (
     "api/formats/",             # per-format detectors behind the capability registry
     "api/rule_registry.py",     # a coverage change IS a capability change worth declaring
     "api/capabilities.py",
+    # The lane tables themselves — REMEDIATION, ASSESSMENT_OVERRIDES, CAPABILITY. Editing a cell
+    # here changes what ACP CLAIMS about a (format, criterion): whether a clean scan certifies a
+    # pass or only flags it for review. That is the most consequential kind of capability change
+    # and it was the one path the guard missed. Two 2.4.6 corrections landed through this file on
+    # 2026-07-29 (997b7d0 docx, 0be9e00 html) and neither was asked for a Matrix-Note, because
+    # "api/remediate" does not prefix-match "api/remediation_capability.py" — the two strings
+    # diverge at 'remediate' vs 'remediati'. Spelled out in full rather than by shortening that
+    # prefix, which would silently widen it to anything starting "api/remediat".
+    "api/remediation_capability.py",
     "api/office_structure.py",
     "api/textchecks.py",
     "api/ocr.py",
