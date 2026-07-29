@@ -553,6 +553,69 @@ def clear_scan_tokens(scan_id: str) -> None:
     SCAN_TOKENS.pop(scan_id, None)
 
 
+# ── Threaded-scan progress, readable from any replica ─────────────────────────────────────
+# JOBS (the module-level dict above) is written by the in-process scan thread and read by the
+# UI's poll. Both used to hit the same dict, which is only true when both land on the SAME
+# REPLICA — so acp-app carried ingress session affinity to guarantee it. That affinity is what
+# blocks multi-revision mode, and therefore blue-green: ACA refuses
+# `ContainerAppInvalidIngressStickySessionRevisionMode`.
+#
+# Same shape as SCAN_TOKENS directly above: Redis when REDIS_URL is set (it is, in the deployed
+# environment, already there for cross-replica scan-token durability), the in-memory dict when it
+# is not, so local dev and the test suite are unchanged.
+#
+# WHAT THIS DOES AND DOES NOT FIX. It makes the PROGRESS READABLE from any replica, which is the
+# only thing affinity was buying. The work still runs as a thread on one replica, so it is still
+# lost if that replica restarts — exactly as the code comment beside it has always said, and
+# exactly why the durable queue exists and is the default (`queuedScan` is true; this path is the
+# "This session" opt-out). Removing affinity does not make this path durable and must not be
+# described as if it did.
+_JOB_TTL = 3600                            # a scan poll outlives the scan; nothing needs longer
+
+
+def set_job(job_id: str, state: dict) -> None:
+    r = _get_redis()
+    if r is not None:
+        try:
+            import json as _j
+            r.set(f"job:{job_id}", _j.dumps(state), ex=_JOB_TTL)
+            return
+        except Exception:
+            pass                           # fall through to in-memory
+    JOBS[job_id] = state
+
+
+def update_job(job_id: str, patch: dict) -> None:
+    """Merge into the stored state. Read-modify-write rather than a field-wise update because the
+    progress callback sends partial dicts, and a lost key would show the poller a scan that went
+    backwards."""
+    r = _get_redis()
+    if r is not None:
+        try:
+            import json as _j
+            cur = _j.loads(r.get(f"job:{job_id}") or "{}")
+            cur.update(patch)
+            r.set(f"job:{job_id}", _j.dumps(cur), ex=_JOB_TTL)
+            return
+        except Exception:
+            pass
+    if job_id in JOBS:
+        JOBS[job_id].update(patch)
+
+
+def get_job_state(job_id: str) -> dict | None:
+    r = _get_redis()
+    if r is not None:
+        try:
+            import json as _j
+            v = r.get(f"job:{job_id}")
+            if v:
+                return _j.loads(v)
+        except Exception:
+            pass
+    return JOBS.get(job_id)
+
+
 def finalize_scan(scan_id: str, effective_ai: bool, source: str) -> None:
     """Shared post-scan step: audit the run and, in deterministic mode, auto-route
     ai-assisted findings to the HITL queue. Used by both the threaded and queued

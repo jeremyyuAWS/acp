@@ -85,21 +85,26 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
 
     # Default: in-process background thread (fast, but lost on restart).
     job_id = uuid.uuid4().hex[:12]
-    core.JOBS[job_id] = {"phase": "queued", "files_found": 0, "files_done": 0, "current": None,
-                         "done": False, "scan_id": None, "error": None, "source": source, "ai": effective_ai}
+    # Written through core.set_job/update_job so the poll can be served by ANY replica. Writing
+    # straight into the dict is what made ingress session affinity load-bearing, and affinity is
+    # what blocks multi-revision mode and therefore blue-green.
+    core.set_job(job_id, {"phase": "queued", "files_found": 0, "files_done": 0, "current": None,
+                          "done": False, "scan_id": None, "error": None, "source": source,
+                          "ai": effective_ai})
 
     def work():
         try:
-            report = run_scan(source, progress=lambda d: core.JOBS[job_id].update(d),
+            report = run_scan(source, progress=lambda d: core.update_job(job_id, d),
                               drive_token=token, folder=folder, sp_token=sp_token,
                               ai_enabled=effective_ai, user=user, detect_pii=pii,
                               exclude_remediated=exclude_remediated)
             sid = core.store.save_scan(report)
             core.finalize_scan(sid, effective_ai, source)
-            core.JOBS[job_id].update({"phase": "done", "done": True, "scan_id": sid,
-                                      "files_done": core.JOBS[job_id].get("files_found", 0)})
+            done = core.get_job_state(job_id) or {}
+            core.update_job(job_id, {"phase": "done", "done": True, "scan_id": sid,
+                                     "files_done": done.get("files_found", 0)})
         except Exception as e:
-            core.JOBS[job_id].update({"phase": "error", "done": True, "error": str(e)})
+            core.update_job(job_id, {"phase": "error", "done": True, "error": str(e)})
 
     threading.Thread(target=work, daemon=True).start()
     return {"job_id": job_id}
@@ -176,7 +181,9 @@ def cancel_scan(sid: str, request: Request):
 
 @router.get("/scans/jobs/{job_id}")
 def scan_job(job_id: str):
-    j = core.JOBS.get(job_id)
+    # core.get_job_state, not core.JOBS: the poll must be answerable by whichever replica the
+    # request lands on, which is the whole point of removing session affinity.
+    j = core.get_job_state(job_id)
     if j is None:
         raise HTTPException(404, "job not found")
     return j
