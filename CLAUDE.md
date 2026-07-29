@@ -110,6 +110,14 @@ were already failing" is a claim that stops anybody from looking.
 If you are about to describe something as pre-existing, broken, or unrelated, that is exactly
 the claim to check first — it is the one that ends the investigation.
 
+**Ship the fixture, not just the fix.** A fix without one is a hypothesis that happens to have
+been committed — and the fixture is what finds the case you did not think of. On 2026-07-29 the
+capability grid's cells were re-checked by running the real detectors against built files rather
+than by reading them: nine cells turned out to be understated, and `1.4.3` on PDF turned out to
+be *shipping damage* — its fixer assumed a white page and rewrote compliant dark-theme PDFs from
+21:1 down to 3.66:1, an AA failure it created, unattended. No amount of reading the diff would
+have surfaced that. One fixture surfaced it on the first run.
+
 ## Never merge red, and don't trust `mergeable` alone
 
 Read the checks themselves:
@@ -129,6 +137,11 @@ Two more things that day's merges cost:
   gone — it had to be reopened as a new PR. Retarget dependents to `main` *before* merging their
   base.
 - **A local suite passing is not CI passing.** Wait for the real run.
+- **`git add` + `git rebase --continue` will commit a file that still contains `<<<<<<<`.**
+  Git treats staging as "resolved" and asks no further questions. On 2026-07-29 a conflict
+  resolution silently failed — the script meant to perform it errored — and the markers were
+  committed and pushed; only `node --check` running over the page caught it. Grep for markers
+  before you stage, not after.
 
 ## Retire your worktree after the merge
 
