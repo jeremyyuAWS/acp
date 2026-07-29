@@ -236,6 +236,29 @@ Two things worth keeping from that:
   in the content stream the whole time. Its rubric CEILING was wrong too, on a rationale
   ("surgery on the page") that shipping code contradicts.
 
+**Correction, 2026-07-28 — the 1.4.3-fix-PDF row above was right for the wrong reason.** The
+"re-scan clean after the fix" evidence was a fixture with a **white background**, and both
+sides of that round trip shared one defect: the detector never computed a contrast ratio (it
+thresholded the declared text colour's luma and ignored the background), and the fixer
+inherited the same assumption and darkened anything above the floor. On a white page the two
+errors cancel. Off it they compound — a dark-theme document's white-on-black text measures
+21:1, and the fixer was rewriting it to #666666 at 3.66:1, an **AA failure it created**,
+unattended. The mirror miss was as bad: #4C4C4C on #262626 is 1.76:1 and fired nothing, and
+the whole muted-body-text band (#787878 at 4.42:1 through #9E9E9E at 2.68:1) failed AA
+without the AA rule ever firing.
+
+Both halves now resolve the background structurally — the topmost filled rect containing the
+glyph, else the page default (`office_structure._pdf_char_background`), no render, the same
+class of rect-fill resolution `pdf_nontext_contrast_checks` already did. The claim that
+changed shape is the remediation one: **"Automatically Fixed" is now an honest PARTIAL**. The
+fixer abstains where structure genuinely can't answer — text over an image, or one colour
+painted on backgrounds that pull opposite ways — and what it abstains on stays a finding and
+routes to a human. Ground rule 3's honest-partial rule is what keeps the cell at auto; the
+old cell was not partial, it was *wrong*, and it shipped damage. The capability fixture
+(`tests/test_remediation_capability.py`) now leads with a dark cover page, so the round trip
+proves what the fixer leaves alone as well as what it clears — a clean re-scan alone never
+could.
+
 ### P1d-1 — the one cell still open
 
 1. **2.4.6 Headings and Labels · fix · XLSX** — today No Remediation, ceiling AI Generated
