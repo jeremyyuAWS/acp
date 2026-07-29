@@ -94,6 +94,24 @@ _WCAG_RE = re.compile(r"^WCAG:\s*(\d+\.\d+\.\d+)\s*(?:\(([^)]*)\))?\s*$", re.M)
 _NOTE_RE = re.compile(r"^Matrix-Note:\s*(.+?)(?=^\S+:|\Z)", re.M | re.S)
 _PR_RE = re.compile(r"\(#(\d+)\)\s*$")
 
+# "Matrix-Note: none" declares a deliberate omission. It used to be an EXACT match against
+# "none"/"n/a"/"-", which meant the moment anyone said WHY they were omitting —
+#
+#     Matrix-Note: none — no capability lane changes. HTML_PSEUDO_HEADING moves criterion…
+#
+# — the note stopped counting as an omission, fell through to the trailer checks, and the run
+# died on the missing WCAG: line. That is what 51a673b did, and the damage was not limited to
+# its own push: gen_progress_log.py is also run over FULL history by the matrix's sync, so one
+# commit message permanently broke the pipeline for every later commit. The notify workflow had
+# been red across several merges and the two repos only stayed in step because a human was
+# doing it by hand.
+#
+# Explaining an omission is the good behaviour, not a mistake, so the parser now accepts a
+# reason after the keyword. Anything more than the bare word must be separated from it — a dash,
+# colon, comma or whitespace — so "none" and "none at all" are omissions while a genuine note
+# opening with a word like "nonetheless" is not.
+_OMISSION_RE = re.compile(r"^(?:none|n/a|-)\s*(?:$|[\u2014\u2013\-:,.;(]|\s)", re.I)
+
 
 def _git(*args: str) -> str:
     return subprocess.run(["git", *args], capture_output=True, text=True,
@@ -179,7 +197,28 @@ def _split_when(authored: str) -> tuple[str, str, str]:
     return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M"), dt.strftime("%Z")
 
 
-def parse_commit(raw: str, repo: str) -> dict | None:
+def _malformed(sha: str, strict: bool, why: str):
+    """A commit whose trailer cannot be parsed: fail loudly under --check, skip loudly otherwise.
+
+    These used to raise SystemExit unconditionally, which is right at review time and wrong
+    everywhere else — because history is immutable. Two commits (51a673b, 676f081) landed with
+    a Matrix-Note and no WCAG: trailer, and from then on EVERY run over full history exited 1,
+    including the matrix's own sync. One unfixable commit message had permanently disabled the
+    pipeline, and the notify workflow sat red across several merges while the two repos were
+    kept in step by hand.
+
+    Strictness belongs where someone can still act on it. `--check` runs on the commits in a
+    push and stays strict, so a new mistake is caught while its author is still there. Reading
+    history, by contrast, must degrade: skip the entry, say so on stderr so it is not silent,
+    and let the other commits through.
+    """
+    if strict:
+        raise SystemExit(f"{sha[:7]}: {why}")
+    print(f"skipping {sha[:7]}: {why}", file=sys.stderr)
+    return None
+
+
+def parse_commit(raw: str, repo: str, *, strict: bool = False) -> dict | None:
     """One `git log` record -> a PROGRESS_LOG entry, or None if it didn't opt in."""
     sha, authored, subject, body = raw.split("\x1f", 3)
     date, time, tz = _split_when(authored)
@@ -187,29 +226,29 @@ def parse_commit(raw: str, repo: str) -> dict | None:
     if not note:
         return None
     summary, points = parse_note(note.group(1))
-    if summary.lower() in ("none", "n/a", "-"):
+    if _OMISSION_RE.match(summary):
         return None            # explicit, deliberate omission
     if points and not summary:
-        raise SystemExit(f"{sha[:7]}: Matrix-Note: is all bullets with no lead sentence — the "
-                         f"matrix shows the lead when the entry is collapsed, so it needs one.")
+        return _malformed(sha, strict, "Matrix-Note: is all bullets with no lead sentence — "
+                          "the matrix shows the lead when the entry is collapsed.")
 
     scs: list[str] = []
     formats: set[str] = set()
     for sc, fmts in _WCAG_RE.findall(body):
         if sc not in TRACKED_SCS:
-            raise SystemExit(f"{sha[:7]}: WCAG: {sc} is not one of the 20 SCs the "
-                             f"matrix tracks — fix the trailer or add the row first.")
+            return _malformed(sha, strict, f"WCAG: {sc} is not one of the 20 SCs the matrix "
+                              f"tracks — fix the trailer or add the row first.")
         if sc not in scs:
             scs.append(sc)
         named = [f.strip().lower() for f in (fmts or "").split(",") if f.strip()]
         for f in named or FORMATS:
             if f not in FORMATS:
-                raise SystemExit(f"{sha[:7]}: unknown format '{f}' — expected one of "
-                                 f"{', '.join(FORMATS)}.")
+                return _malformed(sha, strict, f"unknown format '{f}' — expected one of "
+                                  f"{', '.join(FORMATS)}.")
             formats.add(f)
     if not scs:
-        raise SystemExit(f"{sha[:7]}: has a Matrix-Note: but no WCAG: trailer — the "
-                         f"matrix needs to know which SC the entry belongs to.")
+        return _malformed(sha, strict, "has a Matrix-Note: but no WCAG: trailer — the matrix "
+                          "needs to know which SC the entry belongs to.")
 
     pr = _PR_RE.search(subject)
     entry = {
@@ -233,7 +272,7 @@ def parse_commit(raw: str, repo: str) -> dict | None:
     return entry
 
 
-def collect(since: str | None) -> list[dict]:
+def collect(since: str | None, *, strict: bool = False) -> list[dict]:
     repo = _repo_slug()
     rng = [f"{since}..HEAD"] if since else []
     # %aI (strict ISO, author date with offset) rather than --date=short: the date alone
@@ -242,17 +281,22 @@ def collect(since: str | None) -> list[dict]:
     entries = []
     for raw in out.split(_SEP):
         if raw.strip():
-            entry = parse_commit(raw.strip("\n"), repo)
+            entry = parse_commit(raw.strip("\n"), repo, strict=strict)
             if entry:
                 entries.append(entry)
     return entries   # git log is already newest-first, which is the log's order
+
+
+def _commit_record(sha: str) -> str:
+    """One commit in the \x1f-delimited shape parse_commit expects."""
+    return _git("log", "-1", f"--format=%H\x1f%aI\x1f%s\x1f%b", sha).rstrip("\n")
 
 
 def check(since: str | None) -> int:
     """Fail when a commit changed rule code without declaring its matrix impact."""
     rng = f"{since}..HEAD" if since else "HEAD~1..HEAD"
     shas = _git("log", rng, "--format=%H").split()
-    bad = []
+    bad, malformed = [], []
     for sha in shas:
         # Merge commits are skipped EXPLICITLY, by parent count. They author nothing: every
         # change they carry arrived in a commit this loop already judged on its own trailer,
@@ -271,13 +315,33 @@ def check(since: str | None) -> int:
         body = _git("log", "-1", "--format=%b", sha)
         if not _NOTE_RE.search(body):
             bad.append((sha[:7], _git("log", "-1", "--format=%s", sha).strip()))
+            continue
+        # A note that EXISTS is not the same as a note that PARSES. This used to check only
+        # for presence, so a Matrix-Note with a missing or untracked WCAG: trailer sailed
+        # through review and was then skipped by the generator forever — silently, because
+        # reading history degrades rather than failing. 676f081 and 51a673b both landed that
+        # way. Parse it here, strictly, while the author is still in a position to fix it.
+        try:
+            # A placeholder slug, not _repo_slug(): check() discards the repo field, and
+            # resolving it shells out to `git config --get remote.origin.url`, which fails
+            # outright in a fixture repo that has no origin — turning a validation pass into
+            # a crash on exactly the throwaway repos the guard's own tests build.
+            parse_commit(_commit_record(sha), "", strict=True)
+        except SystemExit as exc:
+            malformed.append(str(exc))
     for sha, subject in bad:
         print(f"{sha} touches rule code but has no Matrix-Note: trailer\n"
               f"         {subject}", file=sys.stderr)
+    for msg in malformed:
+        print(f"{msg}", file=sys.stderr)
     if bad:
         print("\nAdd a Matrix-Note: (and WCAG:) trailer, or 'Matrix-Note: none' to "
               "record that the omission is deliberate.", file=sys.stderr)
-    return 1 if bad else 0
+    if malformed:
+        print("\nThe Matrix-Note above cannot be parsed. Left unfixed it is not an error "
+              "later — it is SILENCE: the generator skips it and the entry never reaches the "
+              "matrix.", file=sys.stderr)
+    return 1 if (bad or malformed) else 0
 
 
 def main() -> int:
