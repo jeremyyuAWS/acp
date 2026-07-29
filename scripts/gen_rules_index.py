@@ -141,21 +141,41 @@ def _const_strs(nodes) -> list[str]:
     return [n.value for n in nodes if isinstance(n, ast.Constant) and isinstance(n.value, str)]
 
 
+def _severities() -> frozenset[str]:
+    """The rubric's severity vocabulary. A severity sits beside the rule id in every finding
+    shape and is SHOUTY_CASE too, so without this it reads as a second rule id and the index
+    grows phantom rules called `SERIOUS`/`MODERATE`. Read from the rubric rather than listed
+    here, so a new severity cannot start appearing as a rule the day it is introduced."""
+    try:
+        weights = json.loads((ROOT / "config" / "rubric.default.json").read_text())
+        return frozenset(k for k in weights["severity_weights"] if not k.startswith("_"))
+    except Exception:
+        return frozenset({"CRITICAL", "SERIOUS", "MODERATE", "MINOR", "REVIEW"})
+
+
+_SEVERITIES = _severities()
+
+
 def _rules_in(node: ast.AST) -> set[tuple[str, str, str]]:
     """Every (rule_id, sc, sc_name) literal emitted anywhere under `node`.
 
-    Findings are built in three shapes — `_finding(id, wcag, severity)`,
+    Findings are built in four shapes — `_finding(id, wcag, severity)`,
     `_review_finding(id, wcag, detail)` / `_duplicate_href_findings(links, id, wcag)`,
-    and bare `{"ruleId": ..., "wcag": ...}` dicts. Rather than special-case each
-    callee by name, pair the literals structurally: within one Call's positional
-    args (or one Dict's keys) there is at most one "X.Y.Z Name" string, and the
-    rule id is the SHOUTY_CASE constant beside it.
+    bare `{"ruleId": ..., "wcag": ...}` dicts, and a TABLE of rows a loop turns into findings
+    (`for worst, rule_id, wcag, severity in ((…, "PDF_LOW_CONTRAST_AA", "1.4.3 …", "SERIOUS"),
+    …)`). Rather than special-case each callee by name, pair the literals structurally: within
+    one Call's positional args, one Dict's keys, or ONE ROW of such a table there is at most one
+    "X.Y.Z Name" string, and the rule id is the SHOUTY_CASE constant beside it.
+
+    Table rows pair at the row, never at the sequence that holds them: direct elements only, so
+    a two-row table cannot cross-multiply each rule id with the other row's criterion.
     """
     found: set[tuple[str, str, str]] = set()
 
     def _pair(rule_ids: list[str], wcags: list[str]) -> None:
         scs = [m.groups() for w in wcags if (m := _WCAG_STR.match(w))]
-        ids = [r for r in rule_ids if re.fullmatch(r"[A-Z][A-Z0-9_]{3,}", r)]
+        ids = [r for r in rule_ids
+               if re.fullmatch(r"[A-Z][A-Z0-9_]{3,}", r) and r not in _SEVERITIES]
         for sc, name in scs:
             for rid in ids:
                 found.add((rid, sc, name.strip()))
@@ -164,6 +184,9 @@ def _rules_in(node: ast.AST) -> set[tuple[str, str, str]]:
         if isinstance(sub, ast.Call):
             args = _const_strs(sub.args)
             _pair(args, args)
+        elif isinstance(sub, (ast.Tuple, ast.List, ast.Set)):
+            elems = _const_strs(sub.elts)
+            _pair(elems, elems)
         elif isinstance(sub, ast.Dict):
             pairs = {k.value: v.value for k, v in zip(sub.keys, sub.values)
                      if isinstance(k, ast.Constant) and isinstance(v, ast.Constant)}

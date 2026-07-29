@@ -26,10 +26,6 @@
 | Rule ID | Formats | Source |
 |---------|---------|--------|
 | `DOCX_HEADING_SKIP` | docx | `api/office_structure.py:docx_checks` |
-| `MODERATE` | docx | `api/office_structure.py:docx_checks` |
-| `MODERATE` | xlsx | `api/office_structure.py:xlsx_structure_checks` |
-| `MODERATE` | pptx | `api/office_structure.py:pptx_checks` |
-| `MODERATE` | pdf | `api/office_structure.py:pdf_headings_labels_check` |
 | `PDF_NO_HEADINGS` | pdf | `api/office_structure.py:pdf_headings_labels_check` |
 | `PPTX_TITLE_EMPTY` | pptx | `api/office_structure.py:pptx_checks` |
 | `XLSX_DEFAULT_LABELS` | xlsx | `api/office_structure.py:xlsx_structure_checks` |

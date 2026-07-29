@@ -29,9 +29,6 @@
 | `PDF_TEXT_OVER_IMAGE` | pdf | `api/office_structure.py:pdf_text_over_image_checks` |
 | `PPTX_LOW_CONTRAST_AA` | pptx | `api/office_structure.py:pptx_contrast_checks` |
 | `PPTX_TEXT_OVER_COMPLEX_BG` | pptx | `api/office_structure.py:pptx_complex_bg_contrast_checks` |
-| `SERIOUS` | pptx | `api/office_structure.py:pptx_contrast_checks` |
-| `SERIOUS` | pdf | `api/office_structure.py:pdf_contrast_checks` |
-| `SERIOUS` | xlsx | `api/office_structure.py:xlsx_contrast_checks` |
 | `XLSX_LOW_CONTRAST_AA` | xlsx | `api/office_structure.py:xlsx_contrast_checks` |
 
 ## How to change this rule

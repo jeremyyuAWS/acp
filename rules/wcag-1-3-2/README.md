@@ -23,7 +23,6 @@
 | Rule ID | Formats | Source |
 |---------|---------|--------|
 | `DOCX_READING_ORDER_RISK` | docx | `api/office_structure.py:docx_checks` |
-| `MODERATE` | docx | `api/office_structure.py:docx_checks` |
 
 ## How to change this rule
 

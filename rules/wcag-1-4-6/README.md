@@ -18,9 +18,6 @@
 
 | Rule ID | Formats | Source |
 |---------|---------|--------|
-| `MODERATE` | pptx | `api/office_structure.py:pptx_contrast_checks` |
-| `MODERATE` | pdf | `api/office_structure.py:pdf_contrast_checks` |
-| `MODERATE` | xlsx | `api/office_structure.py:xlsx_contrast_checks` |
 | `PDF_LOW_CONTRAST_AAA` | pdf | `api/office_structure.py:pdf_contrast_checks` |
 | `PPTX_LOW_CONTRAST_AAA` | pptx | `api/office_structure.py:pptx_contrast_checks` |
 | `XLSX_LOW_CONTRAST_AAA` | xlsx | `api/office_structure.py:xlsx_contrast_checks` |

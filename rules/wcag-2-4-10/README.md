@@ -13,7 +13,6 @@
 | Rule ID | Formats | Source |
 |---------|---------|--------|
 | `DOCX_NO_SECTION_HEADINGS` | docx | `api/office_structure.py:docx_checks` |
-| `MODERATE` | docx | `api/office_structure.py:docx_checks` |
 
 ## How to change this rule
 

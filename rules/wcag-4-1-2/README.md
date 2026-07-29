@@ -23,7 +23,6 @@
 | `PDF_FORM_NO_ACCESSIBLE_NAME` | pdf | `api/formats/pdf/detectors/name_role_value.py` |
 | `PDF_FORM_NO_FIELD_TYPE` | pdf | `api/formats/pdf/detectors/name_role_value.py` |
 | `PDF_FORM_REQUIRED_NO_VALUE` | pdf | `api/formats/pdf/detectors/name_role_value.py` |
-| `SERIOUS` | docx | `api/office_structure.py:docx_checks` |
 
 ## How to change this rule
 

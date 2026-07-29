@@ -19,7 +19,6 @@
 | Rule ID | Formats | Source |
 |---------|---------|--------|
 | `DOCX_FORM_FIELD_NO_LABEL` | docx | `api/office_structure.py:docx_checks` |
-| `SERIOUS` | docx | `api/office_structure.py:docx_checks` |
 
 ## How to change this rule
 

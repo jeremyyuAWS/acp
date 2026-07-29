@@ -27,7 +27,6 @@
 | Rule ID | Formats | Source |
 |---------|---------|--------|
 | `DOCX_LINK_PURPOSE_VAGUE` | docx | `api/office_structure.py:docx_checks` |
-| `MODERATE` | pdf | `api/office_structure.py:pdf_link_purpose_check` |
 | `PDF_LINK_RAW_URL` | pdf | `api/office_structure.py:pdf_link_purpose_check` |
 | `PPTX_LINK_PURPOSE_VAGUE` | pptx | `api/office_structure.py:pptx_checks` |
 | `XLSX_LINK_PURPOSE_VAGUE` | xlsx | `api/office_structure.py:xlsx_structure_checks` |

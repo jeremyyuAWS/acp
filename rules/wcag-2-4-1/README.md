@@ -18,7 +18,6 @@
 
 | Rule ID | Formats | Source |
 |---------|---------|--------|
-| `MODERATE` | pdf | `api/office_structure.py:pdf_bypass_blocks_check` |
 | `PDF_NO_BOOKMARKS` | pdf | `api/office_structure.py:pdf_bypass_blocks_check` |
 
 ## How to change this rule

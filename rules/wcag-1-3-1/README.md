@@ -29,7 +29,6 @@
 | Rule ID | Formats | Source |
 |---------|---------|--------|
 | `DOCX_PSEUDO_HEADING` | docx | `api/office_structure.py:docx_checks` |
-| `MODERATE` | docx | `api/office_structure.py:docx_checks` |
 
 ## How to change this rule
 
