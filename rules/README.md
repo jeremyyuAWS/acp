@@ -67,7 +67,7 @@ the reviewer for any change to its detection or remediation, across all engines.
 | [1.2.1 Audio-only & Video-only (Prerecorded)](./wcag-1-2-1/) | A | html | _unassigned_ |
 | [1.2.2 Captions (Prerecorded)](./wcag-1-2-2/) | A | html | _unassigned_ |
 | [1.2.3 Audio Description or Media Alternative](./wcag-1-2-3/) | A | html | _unassigned_ |
-| [1.3.1 Info and Relationships](./wcag-1-3-1/) | A | docx, html, pdf, pptx, xlsx | _unassigned_ |
+| [1.3.1 Info and Relationships](./wcag-1-3-1/) | A | docx, html, pdf, pptx, xlsx | @jeremyyuAWS |
 | [1.3.2 Meaningful Sequence](./wcag-1-3-2/) | A | docx, html, pdf, pptx, xlsx | _unassigned_ |
 | [1.3.3 Sensory Characteristics](./wcag-1-3-3/) | A | docx, pdf, pptx, xlsx | _unassigned_ |
 | [1.3.4 Orientation](./wcag-1-3-4/) | AA | html | _unassigned_ |
@@ -89,7 +89,7 @@ the reviewer for any change to its detection or remediation, across all engines.
 | [2.4.2 Page Titled](./wcag-2-4-2/) | A | docx, html, pdf, pptx, xlsx | _unassigned_ |
 | [2.4.3 Focus Order](./wcag-2-4-3/) | A | html, pdf, pptx | _unassigned_ |
 | [2.4.4 Link Purpose (In Context)](./wcag-2-4-4/) | A | docx, html, pdf, pptx, xlsx | _unassigned_ |
-| [2.4.6 Headings and Labels](./wcag-2-4-6/) | AA | docx, html, pdf, pptx, xlsx | _unassigned_ |
+| [2.4.6 Headings and Labels](./wcag-2-4-6/) | AA | docx, html, pdf, pptx, xlsx | @jeremyyuAWS |
 | [2.4.7 Focus Visible](./wcag-2-4-7/) | AA | html | _unassigned_ |
 | [2.4.9 Link Purpose (Link Only)](./wcag-2-4-9/) | AAA | docx, html, pptx | _unassigned_ |
 | [2.4.10 Section Headings](./wcag-2-4-10/) | AAA | docx | _unassigned_ |

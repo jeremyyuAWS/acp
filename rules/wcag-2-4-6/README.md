@@ -4,7 +4,7 @@
 
 - **Success Criterion:** 2.4.6 Headings and Labels (Level AA)
 - **Understanding doc:** https://www.w3.org/WAI/WCAG21/Understanding/headings-and-labels.html
-- **Owner:** _unassigned_ — claim this SC in [rules/README.md](../README.md)
+- **Owner:** @jeremyyuAWS — see [rules/README.md](../README.md)
 
 ## Where this is checked
 

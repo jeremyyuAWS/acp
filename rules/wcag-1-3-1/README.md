@@ -4,7 +4,7 @@
 
 - **Success Criterion:** 1.3.1 Info and Relationships (Level A)
 - **Understanding doc:** https://www.w3.org/WAI/WCAG21/Understanding/info-and-relationships.html
-- **Owner:** _unassigned_ — claim this SC in [rules/README.md](../README.md)
+- **Owner:** @jeremyyuAWS — see [rules/README.md](../README.md)
 
 ## Where this is checked
 
