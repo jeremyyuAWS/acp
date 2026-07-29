@@ -99,7 +99,12 @@ RULE_PATHS = (
 )
 
 _SEP = "\x1e"   # record separator — commit bodies contain blank lines, so \n\n won't do
-_WCAG_RE = re.compile(r"^WCAG:\s*(\d+\.\d+\.\d+)\s*(?:\(([^)]*)\))?\s*$", re.M)
+_WCAG_LINE_RE = re.compile(r"^WCAG:\s*(.+)$", re.M)
+# One SC and its optional (formats) inside a WCAG: line. Applied repeatedly across the line, so
+# `WCAG: 1.1.1 (pdf), 4.1.2 (pdf)` works as well as one SC per line. It used to anchor on `$`
+# after the formats, which meant a comma-separated pair matched NOTHING — the commit then read
+# as "Matrix-Note with no WCAG:" and hard-exited the generator. 676f081 is exactly that.
+_WCAG_RE = re.compile(r"(\d+\.\d+\.\d+)\s*(?:\(([^)]*)\))?")
 _NOTE_RE = re.compile(r"^Matrix-Note:\s*(.+?)(?=^\S+:|\Z)", re.M | re.S)
 _PR_RE = re.compile(r"\(#(\d+)\)\s*$")
 
@@ -110,8 +115,16 @@ def _git(*args: str) -> str:
 
 
 def _repo_slug() -> str:
-    """owner/name for the commit links the matrix renders."""
-    url = _git("config", "--get", "remote.origin.url").strip()
+    """owner/name for the commit links the matrix renders.
+
+    Falls back rather than raising when there is no remote at all: `git config --get` exits 1 on a
+    missing key, and a clone or test fixture without an origin is a perfectly ordinary place to
+    generate a log. Only the link text depends on this, so guessing beats crashing.
+    """
+    try:
+        url = _git("config", "--get", "remote.origin.url").strip()
+    except subprocess.CalledProcessError:
+        return "jeremyyuAWS/acp"
     m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", url)
     return m.group(1) if m else "jeremyyuAWS/acp"
 
@@ -188,37 +201,86 @@ def _split_when(authored: str) -> tuple[str, str, str]:
     return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M"), dt.strftime("%Z")
 
 
-def parse_commit(raw: str, repo: str) -> dict | None:
-    """One `git log` record -> a PROGRESS_LOG entry, or None if it didn't opt in."""
+# "This commit deliberately has no log entry" — `none`, optionally followed by the reason.
+#
+# The verdict is read from the FIRST LINE of the note only, and an explanation may follow either
+# after punctuation ("none — a test-only guard") or on the next line. It used to require the whole
+# note to be exactly "none", which is a trap rather than a rule: authors naturally say WHY they
+# are opting out, and the moment they do, the note stops being an omission, falls through to the
+# WCAG check, and hard-exits the generator. That happened twice on 2026-07-29 alone — 0c79986
+# (#35) wrote "none — a test-only guard over existing tables", which broke log generation on main.
+#
+# The separator is required so this cannot swallow a real note: "None of the four formats now
+# certify 2.4.6" continues with a word, not punctuation, and is still a genuine entry.
+_OMISSION_RE = re.compile(r"^\s*(?:none|n/a|-)\s*(?:[—–:.,;]|-(?!\S)|$)", re.I)
+
+
+def _is_omission(note_body: str) -> bool:
+    """True when a Matrix-Note declares a deliberate omission, reason or not."""
+    first_line = note_body.strip().splitlines()[0] if note_body.strip() else ""
+    return bool(_OMISSION_RE.match(first_line))
+
+
+class TrailerProblem(Exception):
+    """A malformed matrix trailer. Fatal pre-merge (--check), reported-and-skipped after.
+
+    Which is the whole point of it being an exception rather than a SystemExit. A trailer lives in
+    a COMMIT MESSAGE: before the merge its author can still fix it, and after the merge nobody can
+    without rewriting shared history. Halting the generator on immutable history therefore does not
+    prompt a fix — it just means the log never builds again, and one bad trailer takes the whole
+    public timeline down with it. That is precisely what happened: four commits landed on
+    2026-07-29 with four different malformed trailers, and generation had been dead ever since.
+
+    So severity now follows fixability. --check stays strict and gains trailer validation, so these
+    are caught on the PR where they CAN be corrected; generation reports each problem loudly on
+    stderr and skips that one entry. "Must not silently vanish" is preserved — nothing here is
+    silent — without letting history brick the log.
+    """
+
+
+def parse_commit(raw: str, repo: str, strict: bool = False) -> dict | None:
+    """One `git log` record -> a PROGRESS_LOG entry, or None if it didn't opt in.
+
+    `strict` raises TrailerProblem on a malformed trailer (for --check). Otherwise the problem is
+    reported on stderr and the entry skipped, so one bad commit cannot kill the whole log.
+    """
     sha, authored, subject, body = raw.split("\x1f", 3)
     date, time, tz = _split_when(authored)
     note = _NOTE_RE.search(body)
     if not note:
         return None
     summary, points = parse_note(note.group(1))
-    if summary.lower() in ("none", "n/a", "-"):
+    if _is_omission(note.group(1)):
         return None            # explicit, deliberate omission
+
+    def bad(msg: str):
+        problem = TrailerProblem(f"{sha[:7]}: {msg}")
+        if strict:
+            raise problem
+        print(f"skipped {problem} ", file=sys.stderr)
+        return None
+
     if points and not summary:
-        raise SystemExit(f"{sha[:7]}: Matrix-Note: is all bullets with no lead sentence — the "
-                         f"matrix shows the lead when the entry is collapsed, so it needs one.")
+        return bad("Matrix-Note: is all bullets with no lead sentence — the matrix shows the "
+                   "lead when the entry is collapsed, so it needs one.")
 
     scs: list[str] = []
     formats: set[str] = set()
-    for sc, fmts in _WCAG_RE.findall(body):
+    for sc, fmts in [m for line in _WCAG_LINE_RE.findall(body)
+                     for m in _WCAG_RE.findall(line)]:
         if sc not in TRACKED_SCS:
-            raise SystemExit(f"{sha[:7]}: WCAG: {sc} is not one of the 20 SCs the "
-                             f"matrix tracks — fix the trailer or add the row first.")
+            return bad(f"WCAG: {sc} is not one of the 20 SCs the matrix tracks — fix the "
+                       f"trailer or add the row first.")
         if sc not in scs:
             scs.append(sc)
         named = [f.strip().lower() for f in (fmts or "").split(",") if f.strip()]
         for f in named or FORMATS:
             if f not in FORMATS:
-                raise SystemExit(f"{sha[:7]}: unknown format '{f}' — expected one of "
-                                 f"{', '.join(FORMATS)}.")
+                return bad(f"unknown format '{f}' — expected one of {', '.join(FORMATS)}.")
             formats.add(f)
     if not scs:
-        raise SystemExit(f"{sha[:7]}: has a Matrix-Note: but no WCAG: trailer — the "
-                         f"matrix needs to know which SC the entry belongs to.")
+        return bad("has a Matrix-Note: but no WCAG: trailer — the matrix needs to know which "
+                   "SC the entry belongs to.")
 
     pr = _PR_RE.search(subject)
     entry = {
@@ -278,11 +340,25 @@ def check(since: str | None) -> int:
         if not any(f.startswith(p) for f in files for p in RULE_PATHS):
             continue
         body = _git("log", "-1", "--format=%b", sha)
+        subject = _git("log", "-1", "--format=%s", sha).strip()
         if not _NOTE_RE.search(body):
-            bad.append((sha[:7], _git("log", "-1", "--format=%s", sha).strip()))
-    for sha, subject in bad:
-        print(f"{sha} touches rule code but has no Matrix-Note: trailer\n"
-              f"         {subject}", file=sys.stderr)
+            bad.append((sha[:7], subject, "touches rule code but has no Matrix-Note: trailer"))
+            continue
+        # A trailer that is PRESENT but malformed used to sail through here and only surface
+        # later, in generation — by which time the commit is merged and the message can no
+        # longer be fixed. Validating it on the PR is the only point where the author can act,
+        # so --check now parses what it previously only detected the presence of.
+        raw = _git("log", "-1", f"--format=%H\x1f%aI\x1f%s\x1f%b", sha).strip("\n")
+        try:
+            # The slug only ever reaches the rendered entry, which validation never builds, so
+            # it is deliberately not resolved here: _repo_slug() shells out to `git config --get
+            # remote.origin.url`, which EXITS NONZERO in a repo with no remote — exactly what the
+            # guard's own test fixtures are. Validating a trailer must not depend on having one.
+            parse_commit(raw, "", strict=True)
+        except TrailerProblem as e:
+            bad.append((sha[:7], subject, str(e).split(": ", 1)[-1]))
+    for sha, subject, why in bad:
+        print(f"{sha} {why}\n         {subject}", file=sys.stderr)
     if bad:
         print("\nAdd a Matrix-Note: (and WCAG:) trailer, or 'Matrix-Note: none' to "
               "record that the omission is deliberate.", file=sys.stderr)
