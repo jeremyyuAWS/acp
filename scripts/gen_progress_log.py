@@ -269,8 +269,19 @@ def parse_commit(raw: str, repo: str, strict: bool = False) -> dict | None:
     for sc, fmts in [m for line in _WCAG_LINE_RE.findall(body)
                      for m in _WCAG_RE.findall(line)]:
         if sc not in TRACKED_SCS:
-            return bad(f"WCAG: {sc} is not one of the 20 SCs the matrix tracks — fix the "
-                       f"trailer or add the row first.")
+            msg = (f"WCAG: {sc} is not one of the 20 SCs the matrix tracks — fix the "
+                   f"trailer or add the row first.")
+            if strict:
+                raise TrailerProblem(f"{sha[:7]}: {msg}")   # pre-merge: still fixable, still fatal
+            # After the merge it is not fixable, and the same severity-follows-fixability rule
+            # that stops one bad trailer bricking the log applies WITHIN an entry too: commits
+            # routinely declare a tracked SC alongside one the matrix has no row for — 2caaa6c is
+            # `1.4.3 (pdf)` plus `1.4.6 (pdf)` — and dropping the entry discards the 1.4.3 the
+            # matrix CAN render. Three of this history's eight entries were being lost that way.
+            # The untracked SC is announced and omitted; "must not silently vanish" is preserved,
+            # because stderr is not silence.
+            print(f"skipped SC {sha[:7]}: {msg} ", file=sys.stderr)
+            continue
         if sc not in scs:
             scs.append(sc)
         named = [f.strip().lower() for f in (fmts or "").split(",") if f.strip()]
