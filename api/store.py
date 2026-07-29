@@ -164,6 +164,15 @@ _SCHEMA = [
     # approved row holds content the document does not carry, and the file must not certify —
     # see count_unapplied_approved_values. This is the difference between a promise and a fix.
     "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS applied INT",
+    # The WCAG exception a reviewer applied INSTEAD of authoring a value: 'decorative' (1.1.1 —
+    # the image conveys nothing, so no text alternative is required) or 'essential_exception'
+    # (1.4.5/1.4.9 — a logotype is exempt from images-of-text). NULL for an ordinary decision.
+    #
+    # It has to live on the ROW, not only in the decision log, because the certify gate reads
+    # rows. routes/hitl.py recorded the exception in a log detail and nowhere else, so
+    # _row_approved_values still fell back to the card's `proposed_value` — the UI label "Mark as
+    # decorative" — and the file was left owing the document a value nobody ever meant to write.
+    "ALTER TABLE hitl_queue ADD COLUMN IF NOT EXISTS resolution TEXT",
     # Per-file, per-rule-id (from rule-catalog.json) execution manifest.
     # PASS = rule ran, no findings; FAIL = findings found; ERROR = engine error.
     """CREATE TABLE IF NOT EXISTS scan_file_manifests (
@@ -2578,6 +2587,19 @@ class Store:
 
         Proposals with no locator are skipped: unaddressable content cannot be written anywhere.
 
+        A row carrying a WCAG-exception `resolution` yields NOTHING. Marking an image decorative
+        or an image-of-text an essential logotype resolves the finding BY JUDGEMENT — the
+        reviewer authored no value, and the draft the card was showing was never a candidate for
+        the document. Without this the fallback below handed the applier the card's own UI label:
+        approving "Mark as decorative" wrote descr="Mark as decorative" onto the picture, which
+        is a worse outcome than the missing alt text it replaced. The decorative DECISION still
+        reaches the document — as the OOXML decorative marker, via approved_decorative_locators
+        below — but it is a marking, never prose.
+
+        The test is on the stored row rather than on what the client sent, for the same reason
+        the fallback exists at all: EvidenceCard already suppresses the values for a resolution,
+        and that suppression was handed straight back by the fallback.
+
         Also folds in `evidence` entries the reviewer described. A deferred 1.1.1 row (Office
         images with no faithful alt source, and no vision draft) carries `evidence`
         [{locator, thumb}] and NO proposals, so a reviewer's alt text had nowhere per-image to
@@ -2586,6 +2608,8 @@ class Store:
         an undescribed evidence image contributes nothing.
         """
         out: dict[str, str] = {}
+        if Store._row_is_resolved(row):
+            return out
         for p in (row.get("proposals") or []):
             if not isinstance(p, dict):
                 continue
@@ -2600,6 +2624,43 @@ class Store:
             val = (e.get("approved_value") or "").strip()   # no proposed_value: evidence is undrafted
             if loc and val:
                 out[loc] = val
+        return out
+
+    @staticmethod
+    def _row_is_resolved(row: dict) -> bool:
+        """True when a reviewer closed this row with a WCAG exception rather than a value.
+
+        Such a row promises the document no prose. That governs _row_approved_values above, and
+        it has to govern the legacy single `approved_value` column in the counters below too.
+        That column is normally the honest reason a row counts forever — a human agreed to some
+        text and we don't know where it goes — but here there is nowhere for it to go BY DESIGN:
+        the reviewer's text is a note explaining an exception, not undelivered content. Without
+        this a client that posted a headline value alongside the exception would put the file
+        straight back into the dead end this closes.
+        """
+        return bool((row.get("resolution") or "").strip())
+
+    @staticmethod
+    def _row_proposal_locators(row: dict) -> list[str]:
+        """Every addressable PROPOSAL on a row, in card order.
+
+        Where _row_approved_values answers "what text does this row owe the document", this
+        answers "which pieces of content is this row ABOUT" — the question a WCAG exception
+        asks, since it is applied to the images themselves and carries no text at all.
+
+        Proposals only. A row's `evidence` entries are addressed by relationship id
+        (`part#rId2`, remediate_office), while apply_alt resolves a locator by the element's
+        NAME (`part#Picture 3`) — an evidence locator reaches no element, so handing one to a
+        writer buys an `apply.unresolved` log line and nothing else.
+        """
+        seen, out = set(), []
+        for p in (row.get("proposals") or []):
+            if not isinstance(p, dict):
+                continue
+            loc = (p.get("locator") or "").strip()
+            if loc and loc not in seen:
+                seen.add(loc)
+                out.append(loc)
         return out
 
     def _approved_unapplied_rows(self, scan_id: str, file: str) -> list[dict]:
@@ -2620,10 +2681,12 @@ class Store:
         A row whose only approved content is the legacy single `approved_value` column, with no
         proposals to locate it in the document, counts forever: we know a human agreed to some
         text but not where it goes, so we cannot honestly call the file fixed.
+
+        A row resolved by a WCAG exception never counts — see _row_is_resolved.
         """
         n = 0
         for row in self._approved_unapplied_rows(scan_id, file):
-            legacy = (row.get("approved_value") or "").strip()
+            legacy = "" if self._row_is_resolved(row) else (row.get("approved_value") or "").strip()
             if self._row_approved_values(row) or legacy:
                 n += 1
         return n
@@ -2639,7 +2702,7 @@ class Store:
                 "AND (applied IS NULL OR applied=0)", (scan_id,))
             for r in self._db.fetchall(cur):
                 row = self._decode_proposals(r)
-                legacy = (row.get("approved_value") or "").strip()
+                legacy = "" if self._row_is_resolved(row) else (row.get("approved_value") or "").strip()
                 if self._row_approved_values(row) or legacy:
                     f = str(row.get("file") or "")
                     counts[f] = counts.get(f, 0) + 1
@@ -2654,6 +2717,38 @@ class Store:
         for row in self._approved_unapplied_rows(scan_id, file):
             if str(row.get("rule_id") or "").strip() == "1.1.1":
                 out.update(self._row_approved_values(row))
+        return out
+
+    def approved_decorative_locators(self, scan_id: str, file: str) -> list[str]:
+        """The images a reviewer marked DECORATIVE on `file`'s approved 1.1.1 rows.
+
+        A decorative image is not undescribed — it is deliberately undescribed, and WCAG 1.1.1
+        asks for it to be marked so, not left blank. Left unmarked the decision lives only in our
+        audit log: every future scan re-raises the same finding and the next reviewer decides it
+        again, and any other tool reading the file sees a picture missing its alt text.
+
+        So this is a write, not a suppression: handlers._apply_approved_values feeds these
+        locators to apply_alt as the DECORATIVE marker (empty descr + the OOXML `adec:decorative`
+        marker the analysers already honour — see tests/test_alt_text_decorative_marker.py). The
+        row's own `proposed_value` is the card's UI label ("Mark as decorative — no alt text
+        needed") and must never reach the document, which is why _row_approved_values drops it.
+
+        Kept separate from approved_alt_values rather than folded in as a magic value, so the
+        only lane that can produce a decorative marking is one that asked for it by name — a PDF
+        row cannot pick it up (marking a PDF figure decorative means re-tagging it as an
+        /Artifact, which no writer here does; that resolution stays a recorded judgement).
+
+        May legitimately return NOTHING for a row that was resolved decorative — a
+        `1.1.1/deferred` row, or one whose images are only `evidence` (see
+        _row_proposal_locators). The exception still resolves the finding; only the marking is
+        unavailable. Certification never depends on this list: the reviewer's judgement is what
+        clears the finding, and this write is what stops the next scan asking again.
+        """
+        out: list[str] = []
+        for row in self._approved_unapplied_rows(scan_id, file):
+            if (str(row.get("rule_id") or "").strip() == "1.1.1"
+                    and (row.get("resolution") or "").strip() == "decorative"):
+                out.extend(loc for loc in self._row_proposal_locators(row) if loc not in out)
         return out
 
     def approved_link_values(self, scan_id: str, file: str) -> dict[str, str]:
@@ -2688,8 +2783,13 @@ class Store:
         some of them silently strands the others — the values sit in the database, the document
         never carries them, and the file cannot certify. Add a kind to the handler and it must
         be added here too, or its approvals never reach a job at all.
+
+        "Content" is meant loosely, and deliberately: a decorative marking is a write the
+        document owes even though the reviewer approved no text at all. It is a kind like the
+        others, and leaving it out would strand it like the others.
         """
         return bool(self.approved_alt_values(scan_id, file)
+                    or self.approved_decorative_locators(scan_id, file)
                     or self.approved_link_values(scan_id, file)
                     or self.approved_field_values(scan_id, file))
 
@@ -2873,17 +2973,25 @@ class Store:
         return row
 
     def update_hitl_item(self, item_id: str, status: str, reviewer_note: str | None = None,
-                         approved_value: str | None = None) -> dict | None:
+                         approved_value: str | None = None, *,
+                         resolution: str | None = None) -> dict | None:
         """approved_value: the reviewer's final (AI-drafted or hand-edited) text for a
         semantic finding — e.g. alt text / link text. COALESCE so a reject/skip call
-        (which never passes one) never clobbers a value set by an earlier approve."""
+        (which never passes one) never clobbers a value set by an earlier approve.
+
+        resolution: the WCAG exception applied INSTEAD of a value ('decorative',
+        'essential_exception'), or None for an ordinary decision. ASSIGNED, not COALESCEd, and
+        deliberately so: a reviewer who marked an image decorative and then came back to write
+        real alt text must end up with the alt text written, and a rejection must un-resolve the
+        finding. The one production caller (routes/hitl.py) restates the reviewer's actual choice
+        on every decision, so plain assignment is what the reviewer last said."""
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "UPDATE hitl_queue SET status=%s, reviewed_at=%s, reviewer_note=%s, "
-                "approved_value=COALESCE(%s, approved_value) WHERE id=%s",
-                (status, now, reviewer_note, approved_value, item_id))
+                "approved_value=COALESCE(%s, approved_value), resolution=%s WHERE id=%s",
+                (status, now, reviewer_note, approved_value, resolution, item_id))
         return self.get_hitl_item(item_id)
 
     # ── Admin settings (persisted; survives restarts) ─────────────────────────

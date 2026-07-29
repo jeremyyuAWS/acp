@@ -104,7 +104,13 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
         raise HTTPException(422, f"reject_reason must be one of {sorted(REJECT_REASONS)}")
     if body.resolution is not None and body.resolution not in RESOLUTIONS:
         raise HTTPException(422, f"resolution must be one of {sorted(RESOLUTIONS)}")
-    updated = core.store.update_hitl_item(item_id, body.status, body.reviewer_note, body.approved_value)
+    # The resolution is persisted ON THE ROW, not only in the decision log below. The certify
+    # gate and the appliers read rows: with the exception recorded nowhere they could reach,
+    # store._row_approved_values fell back to the card's own UI label, so "Mark as decorative"
+    # became content the file owed the document — countable forever, and (on docx/pptx/xlsx,
+    # which really are appliable) writable as the image's alt text.
+    updated = core.store.update_hitl_item(item_id, body.status, body.reviewer_note,
+                                          body.approved_value, resolution=body.resolution)
     # Record the reviewer's final text per proposal, so the applier knows which image gets which
     # description. Only on approval: rejecting or skipping approves no content.
     if body.status == "approved" and body.approved_values is not None:
@@ -181,6 +187,9 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     # field name, or link text, enqueued no job, so the document never carried the value and
     # mark_file_compliant_if_reviewed below correctly refused to certify it, forever. The
     # handler already writes all three; this is the gate that decides whether it ever runs.
+    # A 'decorative' resolution is the fourth kind and the odd one out — it approves no TEXT,
+    # only the OOXML marking — and it is folded into the same helper for exactly the reason
+    # above: left out, the reviewer's decision would live only in our audit log.
     if (body.status == "approved" and item.get("scan_id") and item.get("file")
             and core.store.has_approved_values_to_write(item["scan_id"], item["file"])):
         try:
