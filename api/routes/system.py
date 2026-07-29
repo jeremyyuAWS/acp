@@ -258,6 +258,10 @@ def schedule():
     cfg["next_at"] = job.next_run_time.isoformat() if job and job.next_run_time else None
     scans = core.store.list_scans()
     cfg["last_at"] = scans[0]["completed_at"] if scans else None
+    # The last sweep's OUTCOME, not just when a scan last completed. A failing sweep saves
+    # nothing by design, so `last_at` keeps pointing at the last SUCCESSFUL scan and reads as
+    # healthy while the estate quietly goes stale. None until a sweep has run.
+    cfg["last_sweep"] = core.store.get_last_sweep()
     return cfg
 
 

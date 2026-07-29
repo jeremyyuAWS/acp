@@ -32,11 +32,17 @@ def core_mod(monkeypatch):
     calls = {"scans": [], "saved": 0, "finalized": 0, "reloads": 0}
 
     class _Store:
-        def __init__(self): self.schedule = {"enabled": True, "interval_minutes": 5,
-                                             "owner_email": "a@b.c", "source": "drive"}
+        def __init__(self):
+            self.schedule = {"enabled": True, "interval_minutes": 5,
+                             "owner_email": "a@b.c", "source": "drive"}
+            self.sweeps = []
         def get_schedule(self): return dict(self.schedule)
         def get_ai_enabled(self): return False
         def save_scan(self, report): calls["saved"] += 1; return "sid-1"
+        # Mirrors Store.record_sweep_outcome. Kept on the double deliberately: a sweep's OUTCOME
+        # is now part of what _do_scheduled_scan is responsible for (see the third section
+        # below), so a double that omitted it would only prove the method is never called.
+        def record_sweep_outcome(self, **kw): self.sweeps.append(kw)
 
     store = _Store()
     monkeypatch.setattr(core, "get_store", lambda: store)
@@ -108,6 +114,43 @@ def test_a_failed_sweep_does_not_raise(core_mod):
     logs and, with max_instances=1, risks masking the next fire."""
     core, store, calls = core_mod
     core._do_scheduled_scan()   # must not raise
+
+
+# ── 3. and a failed sweep is recorded, not only logged ────────────────────────────────
+#
+# "Leaves the last real scan standing" is only honest if somebody is told. Until this was
+# recorded, the sole trace was the log line above — inside the container — while every UI surface
+# went on presenting an hours-old scan as the live estate. That is how the 403 loop ran unnoticed:
+# `last_at` is the last SUCCESSFUL scan, so a failing sweep never moves it and the schedule reads
+# as healthy. See tests/test_sweep_failure_visible.py for the /schedule + store half.
+
+def test_a_failed_sweep_records_the_outcome_for_the_ui(core_mod):
+    core, store, calls = core_mod
+    core._do_scheduled_scan()
+    assert len(store.sweeps) == 1
+    rec = store.sweeps[0]
+    assert rec["ok"] is False
+    assert rec["source"] == "drive"
+    assert "insufficient authentication scopes" in rec["error"]
+    assert rec["when"]
+
+
+def test_a_successful_sweep_records_ok_so_the_warning_clears(core_mod):
+    core, store, calls = core_mod
+    store.schedule["source"] = "local"
+    core._do_scheduled_scan()
+    assert store.sweeps[-1]["ok"] is True
+    assert store.sweeps[-1]["scan_id"] == "sid-1"
+    assert store.sweeps[-1]["files"] == 1
+
+
+def test_a_disabled_schedule_records_nothing(core_mod):
+    """Off is not a failure. Recording one would raise a stale-estate warning about a sweep the
+    operator deliberately turned off."""
+    core, store, calls = core_mod
+    store.schedule["enabled"] = False
+    core._do_scheduled_scan()
+    assert store.sweeps == []
 
 
 # ── the happy path still works ────────────────────────────────────────────────────────

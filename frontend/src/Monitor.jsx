@@ -181,6 +181,14 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
   const evidenceRef = useRef(null)
   const [exporting, setExporting] = useState(false)
   const [schedNext, setSchedNext] = useState(null)
+  // The last sweep's outcome from /schedule ({ok, at, source, error, files, scan_id}), or null
+  // before any has run. A FAILED sweep saves nothing and leaves the previous scan standing, so
+  // without this the estate on screen silently ages while every date on the page still looks
+  // current. Named for the outcome, not the time, because the time was never the missing part.
+  const [lastSweep, setLastSweep] = useState(null)
+  // When the last scan that DID save completed — what the page is actually showing while a
+  // sweep is failing. `last_at` from /schedule.
+  const [schedLastAt, setSchedLastAt] = useState(null)
   const exportEvidence = async () => {
     if (exporting) return
     setExporting(true)
@@ -248,6 +256,8 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
     if (SIM) return
     getSchedule().then((s) => {
       setSchedNext(s.next_at)
+      setLastSweep(s.last_sweep || null)
+      setSchedLastAt(s.last_at || null)
       const v = !s.enabled ? 'off' : s.interval_minutes <= 5 ? 'live' : s.interval_minutes <= 60 ? 'hourly' : s.interval_minutes <= 1440 ? 'daily' : 'weekly'
       setCad((prev) => Object.fromEntries((Object.keys(prev).length ? Object.keys(prev) : watch.map((w) => w.id)).map((k) => [k, v])))
     }).catch(() => {})
@@ -430,6 +440,21 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
           })}
           {schedErr && <span style={{ fontSize: 12, color: '#A32D2D' }} role="alert">⚠ {schedErr}</span>}
         </div>
+        {lastSweep && lastSweep.ok === false && (
+          <div role="alert" style={{ marginTop: 12, padding: '11px 14px', borderRadius: 8, fontSize: 13.5,
+               background: '#FBE9E7', border: '1px solid #E7B4AC', color: '#8A2A20' }}>
+            ⚠ <b>The last scheduled sweep failed — the estate below has not refreshed.</b>{' '}
+            The {lastSweep.source || 'drive'} sweep at{' '}
+            <b>{lastSweep.at ? new Date(lastSweep.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'an unknown time'}</b>{' '}
+            saved no scan, so every figure on this page still describes the previous scan
+            {schedLastAt ? <> from <b>{new Date(schedLastAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</b></> : null}.
+            {lastSweep.error && (
+              <div style={{ marginTop: 6, fontSize: 12, fontFamily: 'ui-monospace, monospace', opacity: 0.85, wordBreak: 'break-word' }}>
+                {lastSweep.error}
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       <section className="panel" style={{ marginTop: 14 }} ref={evidenceRef}>
