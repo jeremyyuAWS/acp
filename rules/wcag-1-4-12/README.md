@@ -18,6 +18,7 @@
 
 | Rule ID | Formats | Source |
 |---------|---------|--------|
+| `HTML_FIXED_LINE_HEIGHT` | html | `api/scanner.py:_analyse_html` |
 | `OFFICE_EXACT_LINE_SPACING` | docx, pptx | `api/office_structure.py:office_text_spacing_checks` |
 | `PDF_TIGHT_LINE_SPACING` | pdf | `api/office_structure.py:pdf_text_spacing_checks` |
 

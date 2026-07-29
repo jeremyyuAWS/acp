@@ -29,6 +29,8 @@
 | Rule ID | Formats | Source |
 |---------|---------|--------|
 | `DOCX_PSEUDO_HEADING` | docx | `api/office_structure.py:docx_checks` |
+| `HTML_FORM_CONTROL_NO_NAME` | html | `api/scanner.py:_analyse_html` |
+| `HTML_PSEUDO_HEADING` | html | `api/scanner.py:_analyse_html` |
 
 ## How to change this rule
 

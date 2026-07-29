@@ -58,6 +58,7 @@
     "level": "A",
     "engines": [
       "docx",
+      "html",
       "pdf",
       "pptx",
       "xlsx"
@@ -145,6 +146,7 @@
     "level": "AA",
     "engines": [
       "docx",
+      "html",
       "pdf",
       "pptx",
       "xlsx"

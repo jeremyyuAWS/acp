@@ -26,10 +26,15 @@ ACP = Path(__file__).resolve().parent.parent
 # (DOCX_HEADING_SKIP, PDF_LOW_CONTRAST_AA). Excludes bare severities and hex/placeholder
 # literals ("FFFFFF"), which carry no underscore.
 _RULE_ID_LITERAL = re.compile(r'"([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)"')
-# api/ocr.py reads its tuning knobs from the environment by name; ACP_* is a config key, never
-# a rule id, and no rule id starts with the product's own prefix.
-_ENV_PREFIX = "ACP_"
-_CHECK_MODULES = ("office_structure.py", "textchecks.py", "ocr.py")
+# api/ocr.py reads its tuning knobs from the environment by name, and api/scanner.py sets the
+# .NET host's; ACP_*/DOTNET_* are config keys, never rule ids. Every real rule id is prefixed
+# with the format it applies to (DOCX_/PPTX_/XLSX_/PDF_/HTML_), so neither namespace can
+# collide — this excludes environment keys, not rules that failed to reach the index.
+_ENV_PREFIXES = ("ACP_", "DOTNET_")
+# scanner.py is the HTML engine. It was absent from both the generator and this cross-check,
+# so all 32 HTML_* rules were undocumented and nothing noticed — the precise failure this file
+# exists to catch, hidden by the module list rather than by the pairing.
+_CHECK_MODULES = ("office_structure.py", "textchecks.py", "ocr.py", "scanner.py")
 
 
 @pytest.fixture(scope="module")
@@ -51,7 +56,7 @@ def test_every_first_party_rule_id_reaches_the_index(gri):
     for mod in _CHECK_MODULES:
         source = (ACP / "api" / mod).read_text()
         for rid in sorted(set(_RULE_ID_LITERAL.findall(source))):
-            if rid.startswith(_ENV_PREFIX) or rid in gri._SEVERITIES or rid in indexed:
+            if rid.startswith(_ENV_PREFIXES) or rid in gri._SEVERITIES or rid in indexed:
                 continue
             missing.append(f"api/{mod}: {rid}")
     assert not missing, (

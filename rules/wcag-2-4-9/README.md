@@ -19,6 +19,7 @@
 | Rule ID | Formats | Source |
 |---------|---------|--------|
 | `DOCX_LINK_PURPOSE_AMBIGUOUS` | docx | `api/office_structure.py:docx_checks` |
+| `HTML_LINK_PURPOSE_AMBIGUOUS` | html | `api/scanner.py:_analyse_html` |
 | `PPTX_LINK_PURPOSE_AMBIGUOUS` | pptx | `api/office_structure.py:pptx_checks` |
 
 ## How to change this rule

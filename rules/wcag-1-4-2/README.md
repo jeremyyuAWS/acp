@@ -18,6 +18,7 @@
 
 | Rule ID | Formats | Source |
 |---------|---------|--------|
+| `HTML_AUTOPLAY_MEDIA` | html | `api/scanner.py:_analyse_html` |
 | `PPTX_AUDIO_AUTOPLAY` | pptx | `api/office_structure.py:pptx_audio_autoplay_checks` |
 
 ## How to change this rule

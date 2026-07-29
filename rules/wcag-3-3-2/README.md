@@ -19,6 +19,7 @@
 | Rule ID | Formats | Source |
 |---------|---------|--------|
 | `DOCX_FORM_FIELD_NO_LABEL` | docx | `api/office_structure.py:docx_checks` |
+| `HTML_REQUIRED_NO_GUIDANCE` | html | `api/scanner.py:_analyse_html` |
 
 ## How to change this rule
 

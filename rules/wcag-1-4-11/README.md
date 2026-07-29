@@ -19,6 +19,7 @@
 | Rule ID | Formats | Source |
 |---------|---------|--------|
 | `DOCX_NONTEXT_LOW_CONTRAST` | docx | `api/office_structure.py:docx_nontext_contrast_checks` |
+| `HTML_BORDER_LOW_CONTRAST` | html | `api/scanner.py:_analyse_html` |
 | `PDF_NONTEXT_LOW_CONTRAST` | pdf | `api/office_structure.py:pdf_nontext_contrast_checks` |
 | `PPTX_NONTEXT_LOW_CONTRAST` | pptx | `api/office_structure.py:pptx_nontext_contrast_checks` |
 | `XLSX_NONTEXT_LOW_CONTRAST` | xlsx | `api/office_structure.py:xlsx_nontext_contrast_checks` |

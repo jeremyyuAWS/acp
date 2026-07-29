@@ -19,6 +19,7 @@
 | Rule ID | Formats | Source |
 |---------|---------|--------|
 | `DOCX_COLOR_ONLY_LINK` | docx, xlsx | `api/office_structure.py:office_color_only_checks` |
+| `HTML_LINK_COLOR_ONLY` | html | `api/scanner.py:_analyse_html` |
 | `PDF_COLOUR_ONLY_LINK` | pdf | `api/office_structure.py:pdf_use_of_color_checks` |
 | `XLSX_COLOR_ONLY_STATUS` | docx, xlsx | `api/office_structure.py:office_color_only_checks` |
 
