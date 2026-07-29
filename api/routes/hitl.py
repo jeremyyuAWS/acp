@@ -175,8 +175,12 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     # refused to certify and the file could never reach Publish. The job applies the values to
     # the remediated copy, re-scans it, and only then marks the row applied; it re-runs the
     # certify seam itself once the document actually carries the content.
+    # A PDF form-field name (4.1.2) is approved content awaiting a write exactly as alt text
+    # is, and it lives in its own row — gating only on approved_alt_values left a file whose
+    # only pending value was a field name with no apply job, hence never certified.
     if (body.status == "approved" and item.get("scan_id") and item.get("file")
-            and core.store.approved_alt_values(item["scan_id"], item["file"])):
+            and (core.store.approved_alt_values(item["scan_id"], item["file"])
+                 or core.store.approved_field_values(item["scan_id"], item["file"]))):
         try:
             core.store.enqueue_job("apply_approved_values",
                                    {"scan_id": item["scan_id"], "file": item["file"]},

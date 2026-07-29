@@ -233,32 +233,49 @@ def load_appliers(*, keyword: str = "scs_to_clear") -> dict[str, set[str]]:
     consts: dict[str, set[str]] = {}
     # …and the per-format SC maps ({fmt: (sc, ...)}), which are also format constants.
     sc_maps: dict[str, dict[str, set[str]]] = {}
+
+    def _exts(val) -> set[str] | None:
+        """The format set a constant's VALUE denotes, or None when it isn't one.
+
+        Recursive so a gate assembled from the others resolves too
+        (`_APPLY_VALUE_EXTS = tuple(_OFFICE_ALT_MIME) + ("pdf",)`). A gate spelled out by hand
+        instead would be a second list of formats to keep in step with the lanes; resolving the
+        expression means the widest gate stays derived from the narrow ones.
+        """
+        if isinstance(val, ast.Dict):
+            return {k.value for k in val.keys
+                    if isinstance(k, ast.Constant) and isinstance(k.value, str)} or None
+        if isinstance(val, (ast.Tuple, ast.List, ast.Set)):
+            return {e.value for e in val.elts
+                    if isinstance(e, ast.Constant) and isinstance(e.value, str)} or None
+        if isinstance(val, ast.Name):
+            return consts.get(val.id)
+        if (isinstance(val, ast.Call) and getattr(val.func, "id", None) in
+                ("tuple", "list", "set", "frozenset") and len(val.args) == 1):
+            # `_OFFICE_LINK_EXTS = tuple(_LINK_SCS_BY_EXT)` — the gate derived from the map's
+            # own keys, so the two can never disagree. Resolve it rather than dropping the gate.
+            return _exts(val.args[0])
+        if isinstance(val, ast.BinOp) and isinstance(val.op, ast.Add):
+            left, right = _exts(val.left), _exts(val.right)
+            if left is not None and right is not None:
+                return left | right
+        return None
+
     for node in tree.body:
         if not isinstance(node, ast.Assign) or not isinstance(node.targets[0], ast.Name):
             continue
         name, val = node.targets[0].id, node.value
-        if isinstance(val, ast.Dict):
-            keys = {k.value for k in val.keys
-                    if isinstance(k, ast.Constant) and isinstance(k.value, str)}
-            if keys & set(FORMATS):
-                consts[name] = keys
-                per_fmt = {k.value: {e.value for e in v.elts if isinstance(e, ast.Constant)}
-                           for k, v in zip(val.keys, val.values)
-                           if isinstance(k, ast.Constant) and isinstance(v, (ast.Tuple, ast.List, ast.Set))}
-                if per_fmt and all(all(_SC_RE.fullmatch(str(s)) for s in scs)
-                                   for scs in per_fmt.values()):
-                    sc_maps[name] = per_fmt
-        elif isinstance(val, (ast.Tuple, ast.List, ast.Set)):
-            items = {e.value for e in val.elts
-                     if isinstance(e, ast.Constant) and isinstance(e.value, str)}
-            if items & set(FORMATS):
-                consts[name] = items
-        elif (isinstance(val, ast.Call) and getattr(val.func, "id", None) in
-                ("tuple", "list", "set", "frozenset") and len(val.args) == 1
-                and getattr(val.args[0], "id", None) in consts):
-            # `_OFFICE_LINK_EXTS = tuple(_LINK_SCS_BY_EXT)` — the gate derived from the map's
-            # own keys, so the two can never disagree. Resolve it rather than dropping the gate.
-            consts[name] = consts[val.args[0].id]
+        resolved = _exts(val)
+        if resolved and resolved & set(FORMATS):
+            consts[name] = resolved
+        # …and the per-format SC maps ({fmt: (sc, ...)}) among them.
+        if isinstance(val, ast.Dict) and name in consts:
+            per_fmt = {k.value: {e.value for e in v.elts if isinstance(e, ast.Constant)}
+                       for k, v in zip(val.keys, val.values)
+                       if isinstance(k, ast.Constant) and isinstance(v, (ast.Tuple, ast.List, ast.Set))}
+            if per_fmt and all(all(_SC_RE.fullmatch(str(s)) for s in scs)
+                               for scs in per_fmt.values()):
+                sc_maps[name] = per_fmt
 
     fn = next((n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
                and n.name == "_apply_approved_values"), None)
@@ -268,11 +285,19 @@ def load_appliers(*, keyword: str = "scs_to_clear") -> dict[str, set[str]]:
 
     # The function's own guard names the formats that reach ANY applier; a call may narrow
     # further with its own gate (link text is Office-only within that set).
+    #
+    # The outer gate is the WIDEST format constant the function mentions, not the first one
+    # ast.walk happens to reach. A per-lane gate is by construction a subset of the guard that
+    # let the format in at all, so "widest" identifies the guard unambiguously — whereas walk
+    # order is an accident of expression nesting, and reading a narrow lane's gate as the outer
+    # one silently drops every other format's lane from the matrix.
     gate_names = [n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and n.id in consts]
     if not gate_names:
         raise SystemExit("gen_matrix_coverage: no format gate found in "
                          "_apply_approved_values — update this generator.")
-    outer = consts[gate_names[0]]
+    outer_name = max(gate_names, key=lambda n: len(consts[n]))
+    outer = consts[outer_name]
+    inner_names = [n for n in gate_names if n != outer_name]
 
     out: dict[str, set[str]] = {f: set() for f in FORMATS}
     calls = 0
@@ -298,7 +323,7 @@ def load_appliers(*, keyword: str = "scs_to_clear") -> dict[str, set[str]]:
         # Narrow to this call's own gate when it has one, else the function-wide gate.
         exts = outer
         for nm, allowed in consts.items():
-            if nm in gate_names[1:] and _guards(call, fn, nm):
+            if nm in inner_names and _guards(call, fn, nm):
                 exts = outer & allowed
         for f in exts & set(FORMATS):
             out[f] |= scs
