@@ -1084,7 +1084,21 @@ _OFFICE_ALT_MIME = {
 }
 
 
-_OFFICE_LINK_EXTS = ("docx", "pptx", "xlsx")
+# The criteria the link-text write-back may CREDIT, per format — never the union.
+#
+# Credit is granted by re-scanning the written bytes and finding the criterion absent
+# (_apply_one_value_kind). A criterion no detector emits for this format is absent from every
+# re-scan there will ever be, so crediting it on that evidence proves nothing: the gate passes
+# vacuously and the file is certified against a criterion nobody checked. So a criterion
+# appears here only where a detector actually emits it for that format — the pairing
+# tests/test_applier_detector_parity.py asserts, and the reason 2.4.9 (duplicate display text,
+# docx_checks/pptx_checks) is not claimed for xlsx, which has no such check.
+_LINK_SCS_BY_EXT = {
+    "docx": ("2.4.4", "2.4.9"),
+    "pptx": ("2.4.4", "2.4.9"),
+    "xlsx": ("2.4.4",),
+}
+_OFFICE_LINK_EXTS = tuple(_LINK_SCS_BY_EXT)
 
 
 def _apply_one_value_kind(
@@ -1200,10 +1214,13 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     if link_values:
         from apply_link_text import apply_link_text
         link_write_fn = lambda data, values: apply_link_text(data, ext, values)  # noqa: E731
+        # Every approved link value is WRITTEN whichever criterion it came from — the text is
+        # better either way. Only the crediting is narrowed to what this format can re-verify.
+        link_scs = _LINK_SCS_BY_EXT.get(ext, ())
         working, link_uploaded = _apply_one_value_kind(
             scan_id=scan_id, filename=filename, working=working,
-            values=link_values, scs_to_clear={"2.4.4", "2.4.9"}, write_fn=link_write_fn,
-            diff_rule_id="2.4.4", credit_rule_ids=("2.4.4", "2.4.9"), noun="link text", job=job)
+            values=link_values, scs_to_clear=set(link_scs), write_fn=link_write_fn,
+            diff_rule_id="2.4.4", credit_rule_ids=link_scs, noun="link text", job=job)
 
     if not (alt_uploaded or link_uploaded):
         return

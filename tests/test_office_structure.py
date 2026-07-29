@@ -155,6 +155,49 @@ def test_docx_non_hyperlink_xml_returns_no_findings(tmp_path):
     assert findings == []
 
 
+# --- docx: 2.4.4 vague link text ----------------------------------------------
+# Without this check, docx had no 2.4.4 emitter of its own, so the write-back lane's
+# "criterion cleared on re-scan" gate could never see it fail — it credited 2.4.4 on a
+# re-scan that never looked for it (tests/test_applier_detector_parity.py guards the general
+# case). Level-appropriate here: one finding per document, with a real example.
+
+def test_docx_vague_link_text_flagged(tmp_path):
+    doc = """<w:document><w:body>
+    <w:p><w:hyperlink r:id="rId2"><w:r><w:t>click here</w:t></w:r></w:hyperlink></w:p>
+    <w:p><w:hyperlink r:id="rId3"><w:r><w:t>https://example.com/reports/2026</w:t></w:r></w:hyperlink></w:p>
+    </w:body></w:document>"""
+    rels = _RELS_XML.format(rels="\n".join([
+        _REL.format(rid="rId2", target="https://example.com/apple"),
+        _REL.format(rid="rId3", target="https://example.com/reports/2026"),
+    ]))
+    findings = os_.docx_checks(_docx(tmp_path, doc, rels))
+    vague = [f for f in findings if f["ruleId"] == "DOCX_LINK_PURPOSE_VAGUE"]
+    assert len(vague) == 1                                   # one per document, not per link
+    assert vague[0]["wcag"].startswith("2.4.4")
+    assert "2 hyperlink(s)" in vague[0]["detail"]            # filler phrase + bare URL
+    assert "click here" in vague[0]["detail"]                # a real example, not an illustrative one
+
+
+def test_docx_descriptive_link_text_not_flagged(tmp_path):
+    doc = """<w:document><w:body>
+    <w:p><w:hyperlink r:id="rId2"><w:r><w:t>Download the 2026 benefits guide</w:t></w:r></w:hyperlink></w:p>
+    </w:body></w:document>"""
+    rels = _RELS_XML.format(rels=_REL.format(rid="rId2", target="https://example.com/benefits.pdf"))
+    findings = os_.docx_checks(_docx(tmp_path, doc, rels))
+    assert not any(f["ruleId"] == "DOCX_LINK_PURPOSE_VAGUE" for f in findings)
+
+
+def test_docx_link_with_no_text_is_not_a_vague_link(tmp_path):
+    """A hyperlink wrapping a drawing has no text of its own — its purpose comes from the
+    image's alt text (1.1.1), so flagging it here would report one problem as two."""
+    doc = """<w:document><w:body>
+    <w:p><w:hyperlink r:id="rId2"><w:r><w:drawing/></w:r></w:hyperlink></w:p>
+    </w:body></w:document>"""
+    rels = _RELS_XML.format(rels=_REL.format(rid="rId2", target="https://example.com/apple"))
+    findings = os_.docx_checks(_docx(tmp_path, doc, rels))
+    assert not any(f["ruleId"] == "DOCX_LINK_PURPOSE_VAGUE" for f in findings)
+
+
 # --- docx: 3.3.2 form-field content controls with no label -------------------
 
 def test_docx_checkbox_with_no_alias_flagged(tmp_path):
@@ -383,6 +426,57 @@ def test_pptx_same_link_text_same_target_not_flagged(tmp_path):
     ]))
     findings = os_.pptx_checks(_pptx(tmp_path, _LINK_SLIDE, rels_xmls={1: rels}))
     assert not any(f["ruleId"] == "PPTX_LINK_PURPOSE_AMBIGUOUS" for f in findings)
+
+
+# --- pptx: 2.4.4 vague link text ----------------------------------------------
+
+_VAGUE_LINK_SLIDE = """<p:sld><p:cSld><p:spTree>
+<p:sp><p:txBody>
+<a:p><a:r><a:rPr><a:hlinkClick r:id="rId2"/></a:rPr><a:t>click here</a:t></a:r></a:p>
+</p:txBody></p:sp>
+</p:spTree></p:cSld></p:sld>"""
+
+
+def test_pptx_vague_link_text_flagged(tmp_path):
+    rels = _RELS_XML.format(rels=_REL.format(rid="rId2", target="https://example.com/apple"))
+    findings = os_.pptx_checks(_pptx(tmp_path, _VAGUE_LINK_SLIDE, rels_xmls={1: rels}))
+    vague = [f for f in findings if f["ruleId"] == "PPTX_LINK_PURPOSE_VAGUE"]
+    assert len(vague) == 1 and vague[0]["wcag"].startswith("2.4.4")
+    assert "click here" in vague[0]["detail"]
+
+
+def test_pptx_descriptive_link_text_not_flagged(tmp_path):
+    slide = _VAGUE_LINK_SLIDE.replace("click here", "Read the 2026 admissions policy")
+    rels = _RELS_XML.format(rels=_REL.format(rid="rId2", target="https://example.com/apple"))
+    findings = os_.pptx_checks(_pptx(tmp_path, slide, rels_xmls={1: rels}))
+    assert not any(f["ruleId"] == "PPTX_LINK_PURPOSE_VAGUE" for f in findings)
+
+
+# --- xlsx: 2.4.4 vague cell-hyperlink text ------------------------------------
+# Same shared judgement (_vague_link_findings) as docx/pptx — asserted here too so the
+# three formats can't drift apart into three different ideas of "vague".
+
+def _xlsx_links(tmp: Path, hyperlinks_xml: str) -> Path:
+    p = tmp / "links.xlsx"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("xl/workbook.xml", '<workbook><sheets><sheet name="Summary"/></sheets></workbook>')
+        z.writestr("xl/worksheets/sheet1.xml",
+                   f"<worksheet><sheetData/><hyperlinks>{hyperlinks_xml}</hyperlinks></worksheet>")
+    return p
+
+
+def test_xlsx_vague_hyperlink_display_flagged(tmp_path):
+    p = _xlsx_links(tmp_path, '<hyperlink ref="A1" r:id="rId1" display="click here"/>')
+    findings = os_.xlsx_structure_checks(p)
+    vague = [f for f in findings if f["ruleId"] == "XLSX_LINK_PURPOSE_VAGUE"]
+    assert len(vague) == 1 and vague[0]["wcag"].startswith("2.4.4")
+    assert "click here" in vague[0]["detail"]
+
+
+def test_xlsx_descriptive_hyperlink_display_not_flagged(tmp_path):
+    p = _xlsx_links(tmp_path, '<hyperlink ref="A1" r:id="rId1" display="2026 budget workbook"/>')
+    assert not any(f["ruleId"] == "XLSX_LINK_PURPOSE_VAGUE"
+                   for f in os_.xlsx_structure_checks(p))
 
 
 # --- pdf: 1.4.3 / 1.4.6 contrast ---------------------------------------------

@@ -50,7 +50,9 @@ _OFFICE_STRUCT_FORMATS = {
     # its no-section-headings check covers 2.4.10 for docx only. (3.1.5 Reading Level
     # lives in textchecks.py and is derived as all-formats automatically.)
     "1.3.2": {"docx"},    # docx_checks() floating-text reading-order (pdf/pptx/xlsx + html come from elsewhere)
-    "2.4.4": {"xlsx", "pdf"},    # xlsx_structure_checks() vague hyperlink + pdf_link_purpose_check() raw-URL link
+    # vague link text: xlsx_structure_checks() + docx_checks()/pptx_checks() (all three share
+    # _vague_link_findings), plus pdf_link_purpose_check()'s raw-URL link
+    "2.4.4": {"docx", "pptx", "xlsx", "pdf"},
     "2.4.6": {"docx", "pptx", "xlsx", "pdf"},   # + xlsx default labels + pdf_headings_labels_check() tagged-no-heading
     "2.4.9": {"docx", "pptx"},
     "1.4.3": {"pdf", "pptx", "xlsx"},
