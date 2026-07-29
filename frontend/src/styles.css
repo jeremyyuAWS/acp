@@ -1504,7 +1504,11 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .sffacet { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .sflabel { font-size: 11.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-right: 2px; min-width: 74px; }
 .sffacet .fchip { padding: 3px 10px; font-size: 12px; }
-.sfn { opacity: 0.65; font-size: 11px; margin-left: 2px; }
+/* The per-facet result count. `opacity: 0.65` took --muted (#6c6470, 5.68:1 on white) down to
+   a rendered #9f9aa2 — 2.75:1, the worst contrast in the app, on a number the user is meant to
+   read. It accounted for every violation on Discover (19) and Publish (4). Weight and size
+   already de-emphasise it; the transparency only made it unreadable. (WCAG 1.4.3.) */
+.sfn { color: var(--muted); font-size: 11px; margin-left: 2px; }
 
 /* Live count badge inside the Remediate sticky stepper (StickyNav). */
 .snavcount { display: inline-flex; align-items: center; justify-content: center; min-width: 17px; height: 17px;

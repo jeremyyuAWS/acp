@@ -1140,11 +1140,20 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   {autoFiles.length > 0 && (
                     <button className="batchbtn" onClick={batchAutoRemediate}
                             title="Accept ONLY the fully-automatic files — the engine fixes these deterministically when you click Remediate all. No human review involved.">
-                      ⚡ Auto-fix {autoFiles.length} file{autoFiles.length !== 1 ? 's' : ''} <span style={{ opacity: 0.85, fontWeight: 400 }}>· no review needed</span></button>
+                      {/* Weight, not opacity — see the ⚠ note on the sibling button below. This one
+                          still cleared 4.5:1 at 0.85 (5.15 on #1F5FA8), but the mechanism is the
+                          same and a future palette tweak would have taken it under silently. */}
+                      ⚡ Auto-fix {autoFiles.length} file{autoFiles.length !== 1 ? 's' : ''} <span style={{ fontWeight: 400 }}>· no review needed</span></button>
                   )}
                   <button className="acceptfullbtn" disabled={!pending} onClick={acceptAll}
                           title="Accept the WHOLE plan — every remediable file, including the ones below that need assisted or manual work from a person.">
-                    👥 Accept full plan · {pending}{humanCount > 0 && <span style={{ opacity: 0.85, fontWeight: 400 }}> · +{humanCount} need a person</span>}
+                    {/* ⚠ White on this button's #A56814 is 4.58:1 — it clears 4.5:1 with almost no
+                        margin, and `opacity: 0.85` spent that margin: the sub-label rendered at
+                        3.78:1. 13px/600 is not large text, so 4.5:1 applies. Weight de-emphasises
+                        it without touching the ratio. The background is left alone deliberately —
+                        it passes, and re-picking a brand colour is a separate decision — but it
+                        has no headroom, so anything that lightens it fails. */}
+                    👥 Accept full plan · {pending}{humanCount > 0 && <span style={{ fontWeight: 400 }}> · +{humanCount} need a person</span>}
                   </button>
                 </div>
               </div>

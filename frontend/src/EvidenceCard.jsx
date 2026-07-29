@@ -446,8 +446,13 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
         {ladder.map((s, i) => (
           <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             {i > 0 && <span className="muted" aria-hidden="true">→</span>}
+            {/* A not-yet-reached step is dimmed by COLOUR, not opacity. `opacity: 0.55` blended
+                --ink (#2b2330, 14:1 on white) down to #8a868d — 3.57:1, under the 4.5:1 that
+                11px text requires. --muted is 5.68:1 and reads as the same de-emphasis.
+                This is still live, meaningful text — not an inactive control — so 1.4.3's
+                disabled-component exemption does not apply to it. */}
             <span className={s.state === 'done' ? 'conf conf-high' : s.state === 'current' ? 'conf conf-medium' : 'conf'}
-                  style={s.state === 'todo' ? { opacity: 0.55 } : undefined}>
+                  style={s.state === 'todo' ? { color: 'var(--muted)' } : undefined}>
               {s.state === 'done' ? '✓ ' : s.state === 'current' ? '● ' : ''}{s.label}
             </span>
           </span>
