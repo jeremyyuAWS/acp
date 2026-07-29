@@ -2668,6 +2668,18 @@ class Store:
                 out.update(self._row_approved_values(row))
         return out
 
+    def approved_field_values(self, scan_id: str, file: str) -> dict[str, str]:
+        """{locator: accessible name} awaiting a write into `file`, from its approved 4.1.2 rows.
+
+        Scoped to Name, Role, Value because the only writer behind it (remediate_pdf's
+        `pdf:field:…` → /TU lane) writes form-field accessible names and nothing else.
+        """
+        out: dict[str, str] = {}
+        for row in self._approved_unapplied_rows(scan_id, file):
+            if str(row.get("rule_id") or "").strip() == "4.1.2":
+                out.update(self._row_approved_values(row))
+        return out
+
     def approve_proposal_values(self, item_id: str, values: list[str | None]) -> int:
         """Record the reviewer's final text per instance, positionally.
 

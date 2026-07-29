@@ -730,7 +730,8 @@ def _fix_pdf_form_fields(pdf, *, proposals=None, applied_fixes=None) -> tuple[li
 
 def apply_pdf_field_name(data: bytes, values: dict) -> tuple[bytes, list[dict], list[str]]:
     """Write reviewer-approved accessible names into AcroForm fields (/TU) by the
-    `pdf:field:{page}:{seq}` locator. Same contract as apply_pdf_figure_alt; keys that aren't
+    `pdf:field:{page}:{seq}` locator. Same contract as apply_pdf_figure_alt (applied rows carry
+    `{locator, before, after}` for the diff record, plus `rule_id`/`value`); keys that aren't
     field locators pass through unresolved. Never raises."""
     import io
     import pikepdf
@@ -751,8 +752,11 @@ def apply_pdf_field_name(data: bytes, values: dict) -> tuple[bytes, list[dict], 
         if fld is None:
             unresolved.append(locator); continue
         try:
+            prev = str(fld.get("/TU", "") or "").strip()
             fld["/TU"] = pikepdf.String(value)
-            applied.append({"locator": locator, "rule_id": "SC_4_1_2", "value": value})
+            applied.append({"locator": locator, "rule_id": "SC_4_1_2", "value": value,
+                            "before": prev or "(form field had no accessible name)",
+                            "after": value})
         except Exception:
             unresolved.append(locator)
     if not applied:
@@ -783,11 +787,13 @@ def apply_pdf_approved(data: bytes, values: dict) -> tuple[bytes, list[dict], li
 def apply_pdf_figure_alt(data: bytes, values: dict) -> tuple[bytes, list[dict], list[str]]:
     """Write reviewer-approved alt text into PDF /Figure elements by the `pdf:fig:{page}:{seq}`
     locator minted at remediation time. Mirrors office `apply_alt.apply_alt_text` exactly —
-    `(bytes, {locator: value}) -> (fixed_bytes, applied, unresolved)` — so the apply job branches
-    only on file extension. Keys that aren't PDF-figure locators are left unresolved (a mixed or
-    mis-routed call never silently drops them). Re-collects figures and recomputes locators, so an
-    approval written now lands on the same figure the proposal pointed at, even after siblings were
-    auto-captioned at remediation. Never raises; on any failure the input bytes come back unchanged."""
+    `(bytes, {locator: value}) -> (fixed_bytes, applied, unresolved)`, each applied row carrying
+    `{locator, before, after}` so it can go straight to `store.record_remediation_diffs` (plus
+    `rule_id`/`value`) — so the apply job branches only on file extension. Keys that aren't
+    PDF-figure locators are left unresolved (a mixed or mis-routed call never silently drops
+    them). Re-collects figures and recomputes locators, so an approval written now lands on the
+    same figure the proposal pointed at, even after siblings were auto-captioned at remediation.
+    Never raises; on any failure the input bytes come back unchanged."""
     import io
     import pikepdf
     pdf_values = {k: (v or "").strip() for k, v in (values or {}).items()
@@ -813,8 +819,10 @@ def apply_pdf_figure_alt(data: bytes, values: dict) -> tuple[bytes, list[dict], 
             unresolved.append(locator)
             continue
         try:
+            prev = _fig_alt(fig)
             fig["/Alt"] = pikepdf.String(value)
-            applied.append({"locator": locator, "rule_id": "SC_1_1_1", "value": value})
+            applied.append({"locator": locator, "rule_id": "SC_1_1_1", "value": value,
+                            "before": prev or "(figure had no alt text)", "after": value})
         except Exception:
             unresolved.append(locator)
     if not applied:

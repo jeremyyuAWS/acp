@@ -169,10 +169,13 @@ def test_no_remediated_copy_means_nothing_is_written(store, monkeypatch):
 
 
 def test_a_format_with_no_applier_says_so_rather_than_succeeding(store, monkeypatch):
+    """HTML, not PDF: PDF gained an applier (remediate_pdf.apply_pdf_approved — see
+    tests/test_pdf_approved_value_writeback.py), so it is no longer an example of a format
+    that has none. HTML is remediated in place and has no approved-value write-back."""
     import core, handlers
     store.init_scan_run(SID, "drive", 1, "t", "r", "h")
     monkeypatch.setattr(core, "store", store)
-    handlers._apply_approved_values({"scan_id": SID, "file": "report.pdf"}, {})
+    handlers._apply_approved_values({"scan_id": SID, "file": "page.html"}, {})
     actions = [d["action"] for d in store.list_decisions(scan_id=SID)]
     assert "apply.unsupported" in actions
 
