@@ -294,6 +294,32 @@ export default function App() {
   }
   const PRIVILEGED = { 'jeremyyu.movate@gmail.com': PRIV_PROFILE }
 
+  // Everything that belongs to ONE scan, cleared in one place.
+  //
+  // Three call sites used to reset overlapping-but-different subsets of this, and each missed
+  // something the others cleared: sign-in reset all of it, time-travel reset `decisions` and
+  // `certifiedDocs` but not `triage`, and a NEW SCAN reset none of it — it relied entirely on
+  // the hydration effect, which only covers decisions/triage and only once the fetch lands.
+  //
+  // What that cost, concretely: `publishedFiles` gates the Publish and Monitor steps of the
+  // progress rail (`publish: publishedFiles.length > 0`). Publish a document, then re-scan, and
+  // the NEW scan opened with Publish and Monitor already ticked — on the strength of files
+  // published against the previous one.
+  //
+  // `triage` matters more than it used to. Marking a single file in-scope excludes every
+  // unmarked file from remediation, so showing another scan's scope marks — even for the
+  // hydration round-trip — is now materially misleading, not just untidy.
+  //
+  // NOT reset here, deliberately: `assessPhase` and `justAssessed`. Both already self-correct
+  // and clearing them would flash the Overview's gated panels off and back on. AssessRunner is
+  // keyed on `run.id`, so it remounts per scan and re-emits `onPhase` from that run's own saved
+  // state; and `justAssessed` is compared by id (`justAssessed === run?.id`), so a value left
+  // over from another scan can never match. Add to this function only what does NOT self-correct.
+  const resetScanScopedState = () => {
+    setDecisions({}); setTriage({})
+    setCertifiedDocs([]); setPublishedFiles([])
+  }
+
   const signIn = (p) => {
     // Fresh per user: if a DIFFERENT user signs in (or first sign-in), wipe activity caches
     // so nothing — published files, assess/remediation results, scores — carries over.
@@ -318,8 +344,11 @@ export default function App() {
     // old reset missed (triage, the assess-completion phase, the optimistic-assess flag, and
     // the localStorage-backed published/ontology), so no tab shows legacy data on first view.
     setPersona(p); setScan(null); setScanList([]); setLoaded(false)
-    setDecisions({}); setTriage({}); setAssessPhase('idle'); setJustAssessed(null)
-    setOntology(loadPublished()); setCertifiedDocs([]); setPublishedFiles([])
+    resetScanScopedState()
+    // Sign-in additionally resets what a scan change deliberately leaves alone: a new session
+    // has no assessment in flight to report a phase for.
+    setAssessPhase('idle'); setJustAssessed(null)
+    setOntology(loadPublished())
     setSettingsOpen(false); setView((p.allow || ['overview'])[0])
     setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label, allow: p.allow || [] })
   }
@@ -388,8 +417,12 @@ export default function App() {
     setScanLoading(true)
     try {
       setScan(await getScan(id))
-      setDecisions({})
-      setCertifiedDocs([])
+      // Cleared BEFORE the hydration effect refills decisions/triage for the scan being opened,
+      // so the gap between the two never shows the previous scan's marks as if they were this
+      // one's. The prior scan keeps its own copy — decisions and triage are persisted per scan
+      // server-side and re-fetched on every switch, which is what makes time-travel lossless
+      // even for a run nobody finished.
+      resetScanScopedState()
     } catch { /* leave current scan */ } finally { setScanLoading(false) }
   }
 
@@ -449,6 +482,10 @@ export default function App() {
         fresh = await getScan(job.scan_id)
       }
       setScan(fresh)
+      // A re-scan is a new run, so nothing from the last one carries into it. The previous scan
+      // is NOT lost — it stays in scan_runs and stays selectable in Time-travel, with its own
+      // decisions and triage, however far through the workflow it got.
+      resetScanScopedState()
       setScanList(await listScans())
       const newAvg = fresh.run.avg_score
       if (prevAvg != null && newAvg != null && newAvg !== prevAvg) { setDelta(newAvg - prevAvg); setDeltaKey((k) => k + 1) }
@@ -480,7 +517,11 @@ export default function App() {
         setProgress(g ? queuedProgress(g, elapsed) : { phase: 'connecting', elapsed })
         if (g && g.run && g.run.status !== 'running') fresh = g
       }
-      if (fresh) { setScan(fresh); setScanList(await listScans()); setView('overview') }
+      // Same reset as doScan. Usually a no-op — a reconnect follows a page reload, where React
+      // state started empty anyway — but this runs from a startup effect that can land while a
+      // different scan is already on screen, and a fourth path that resets a different subset is
+      // exactly how the three before it drifted apart.
+      if (fresh) { setScan(fresh); resetScanScopedState(); setScanList(await listScans()); setView('overview') }
     } catch { /* best-effort reconnect */ }
     finally { setBusy(false); setProgress(null); setLiveScanId(null) }
   }
