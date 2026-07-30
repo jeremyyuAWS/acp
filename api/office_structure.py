@@ -80,7 +80,12 @@ _MIN_JUSTIFIED_PARAS = 3
 # pure digits (rId4), but any tool producing valid OOXML can use rIdFoo.
 _HYPERLINK = re.compile(r'<w:hyperlink[^>]*r:id="(rId\w+)"[^>]*>(.*?)</w:hyperlink>', re.S)
 _WT = re.compile(r"<w:t[^>]*>([^<]*)</w:t>")
-_RELATIONSHIP = re.compile(r'<Relationship\s+Id="(rId\w+)"[^>]*Target="([^"]+)"')
+# XML attributes are unordered, and .rels writers disagree: Word/PowerPoint emit
+# Id first, openpyxl emits it LAST (Type/Target/TargetMode/Id). Grab the whole
+# <Relationship ...> tag and read its attributes by name — a fixed Id-then-Target
+# pattern silently returned {} for every openpyxl-written workbook.
+_RELATIONSHIP = re.compile(r"<Relationship\s[^>]*>")
+_REL_ATTR = re.compile(r'\s([\w:]+)="([^"]*)"')
 
 # 1.3.1 / 2.4.6 — a paragraph visually styled as a heading (bold and/or a font clearly
 # larger than body text) but left in a body style, so assistive tech can't navigate to it.
@@ -209,10 +214,17 @@ def _read(zf: zipfile.ZipFile, name: str) -> str | None:
 
 
 def _relationships(zf: zipfile.ZipFile, rels_path: str) -> dict[str, str]:
+    """{rId -> Target} for a .rels part, independent of attribute order."""
     xml = _read(zf, rels_path)
     if not xml:
         return {}
-    return dict(_RELATIONSHIP.findall(xml))
+    rels: dict[str, str] = {}
+    for tag in _RELATIONSHIP.findall(xml):
+        attrs = dict(_REL_ATTR.findall(tag))
+        rid, target = attrs.get("Id"), attrs.get("Target")
+        if rid and target:
+            rels[rid] = target
+    return rels
 
 
 def _finding(rule_id: str, wcag: str, severity: str) -> dict:
