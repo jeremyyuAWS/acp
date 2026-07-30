@@ -73,9 +73,13 @@ def _vision_ok() -> bool:
 
 
 def _textmodel_ok() -> bool:
+    # model_is_available(), not is_available(): the latter only asks whether Ollama answers,
+    # and a reachable server without OLLAMA_MODEL pulled 404s every generate — so the gate
+    # opened, propose_sensory_rewrite() returned [], and the test FAILED where it should have
+    # skipped. Mirrors _vision_ok(), which has always checked the tag rather than the port.
     try:
         import ai
-        return ai.is_available()
+        return ai.model_is_available()
     except Exception:
         return False
 
@@ -637,6 +641,27 @@ def test_proposer_sensory_emits():
     out = proposals.propose_sensory_rewrite(
         "Click the round green button on the right to submit the form.", ai_enabled=True)
     assert out, "sensory proposer emitted nothing for a sensory instruction"
+
+
+def test_textmodel_gate_is_closed_by_a_reachable_ollama_without_the_model(monkeypatch):
+    """The gate above must answer 'can this Ollama do text', not 'is something listening'.
+
+    On 2026-07-29 test_proposer_sensory_emits FAILED on any machine running an Ollama that had
+    not pulled OLLAMA_MODEL: the gate saw a 200 from /api/tags and opened, every generate then
+    404'd, and the proposer returned [] — reported as a broken proposer rather than a missing
+    model. Reachable is not capable; this pins the distinction so the gate cannot regress to
+    is_available().
+    """
+    import ai
+    monkeypatch.setattr(ai, "_maybe_refresh_endpoint", lambda: None)
+    monkeypatch.setattr(ai, "_tags_cached", lambda: [{"name": "moondream:latest"}])
+    monkeypatch.setattr(ai, "OLLAMA_MODEL", "llama3.2")
+    assert ai.is_available() is True      # Ollama answered — what the old gate checked
+    assert _textmodel_ok() is False       # ...and it still cannot serve the text model
+
+    # and it opens once that model is actually pulled
+    monkeypatch.setattr(ai, "_tags_cached", lambda: [{"name": "llama3.2:latest"}])
+    assert _textmodel_ok() is True
 
 
 # ══ reconciliation with the earlier sparse version ═════════════════════════════
