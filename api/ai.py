@@ -377,6 +377,41 @@ def vision_is_available() -> bool:
     return _tags_have(_tags_cached(), OLLAMA_VISION_MODEL)
 
 
+def vision_unavailable_reason() -> str | None:
+    """One line saying WHY genuine alt text is off — or None when vision is available.
+
+    The failure this exists for: detaching a burst GPU means clearing TWO fields (base URL and
+    vision model, see deploy/gpu/README.md), and clearing only the first leaves a GPU-only model
+    name pinned in the admin override. The override beats the env default indefinitely, so the
+    endpoint goes back to the CPU box while the platform keeps asking it for a model it has never
+    had. vision_available:false was the only symptom, which reads as "the endpoint is broken" and
+    sends you to check the container — when the wrong thing is the NAME, and it is one field away.
+    On 2026-07-29 that cost an afternoon of diagnosis, and every env-var fix was invisible
+    underneath the override.
+
+    config_sources() answers the neighbouring question — WHERE each value came from — and this
+    defers to it rather than inferring the source by comparing against _ENV_DEFAULTS: an override
+    deliberately set to the same string as the deploy default is still an override, and only the
+    store knows that.
+    """
+    _maybe_refresh_endpoint()
+    tags = _tags_cached()
+    if tags is None:
+        return f"Ollama at {OLLAMA_BASE_URL} is not reachable"
+    if _tags_have(tags, OLLAMA_VISION_MODEL):
+        return None
+    names = sorted(n for n in (m.get("name", "") for m in tags) if n)
+    have = ", ".join(names) if names else "no models at all"
+    why = (f"the configured vision model '{OLLAMA_VISION_MODEL}' is not present at "
+           f"{OLLAMA_BASE_URL} (available: {have})")
+    # Name the source, because the fix differs: an override is cleared in Settings, a deploy
+    # default needs the model pulled or baked into the image.
+    if config_sources().get("vision_model") == "override":
+        why += (f" — this name comes from the admin Settings override, not the deploy default "
+                f"('{_ENV_DEFAULTS['vision']}'); clear the Vision model field to fall back to it")
+    return why
+
+
 def config_sources() -> dict:
     """Where each effective endpoint value came from: 'override' (admin Settings, stored in
     the DB) or 'env' (the deploy's env var).
