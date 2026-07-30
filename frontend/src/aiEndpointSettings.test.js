@@ -141,9 +141,9 @@ describe('the panel explains a dead vision model and can undo the pin in one act
     const s = src()
     expect(s).toMatch(/aiStatus\.vision_unavailable_reason/)
     // gated on the server's own verdict, not inferred in the SPA
-    expect(s).toMatch(/!aiStatus\.vision_available/)
+    expect(s).toMatch(/aiStatus\?\.vision_available === false/)
     // and it sits above the providers section, beside the Vision model input
-    const reason = s.indexOf('vision_unavailable_reason}')
+    const reason = s.indexOf('vision_unavailable_reason')
     expect(reason).toBeGreaterThan(s.indexOf('onClick={saveEndpoint}'))
     expect(reason).toBeLessThan(s.indexOf('<AIProvidersPanel'))
   })
@@ -169,5 +169,51 @@ describe('the panel explains a dead vision model and can undo the pin in one act
     // opt-in by property, not by "did I get an argument at all".
     expect(s).toMatch(/const clearBoth = opts\?\.clearBoth === true/)
     expect(s).toMatch(/onClick=\{saveEndpoint\}/)
+  })
+})
+
+// ── A panel that cannot report bad news (2026-07-30) ──────────────────────────────
+// The warning above was gated on `!aiStatus.vision_available && aiStatus.vision_unavailable_reason`,
+// and the SIM stub for getAiStatus declared neither field. On a Netlify preview the line could
+// therefore never render: the button was clicked there, the panel looked healthy, and production
+// still had 'qwen2.5vl:7b' pinned. Silence read as success.
+describe('an endpoint that does not answer cannot be reported as healthy', () => {
+  it('the warning follows the server verdict, not the truthiness of a missing field', () => {
+    const s = read('Settings.jsx')
+    expect(s).toMatch(/aiStatus\?\.vision_available === false/)
+    // the old falsy test treated `undefined` — a surface that never reported — as "vision is fine"
+    expect(s).not.toMatch(/!aiStatus\.vision_available/)
+  })
+
+  it('a verdict with no explanation still warns', () => {
+    const s = read('Settings.jsx')
+    // the reason refines the warning; it must not gate it, or a server that says false without
+    // explaining itself renders nothing at all
+    const gate = s.slice(s.indexOf('aiStatus?.vision_available === false'),
+                         s.indexOf('Genuine alt text is off'))
+    expect(gate).not.toMatch(/vision_unavailable_reason/)
+    // and the reason is appended conditionally rather than assumed present
+    expect(s).toMatch(/aiStatus\.vision_unavailable_reason \?/)
+  })
+
+  it('the SIM stub declares every field the panel reads', () => {
+    const api = read('api.js')
+    const stub = api.slice(api.indexOf('export const getAiStatus'),
+                           api.indexOf('export const getAiStatus') + 900)
+    for (const field of ['vision_available', 'vision_unavailable_reason', 'model_available', 'config_source']) {
+      expect(stub, `SIM stub is missing ${field}`).toMatch(new RegExp(field))
+    }
+    // and it still must not claim a local backend — the privacy badge reads that field
+    expect(stub).toMatch(/backend: 'netlify-functions'/)
+    expect(stub).not.toMatch(/backend: 'ollama'/)
+  })
+
+  it('the SIM stub does not claim vision it has no model for', () => {
+    const api = read('api.js')
+    const stub = api.slice(api.indexOf('export const getAiStatus'),
+                           api.indexOf('export const getAiStatus') + 900)
+    expect(stub).toMatch(/vision_available: false/)
+    // a demo with no Ollama says so, in the same shape the real endpoint uses
+    expect(stub).toMatch(/vision_unavailable_reason: '[^']+/)
   })
 })
