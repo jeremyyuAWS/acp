@@ -230,6 +230,22 @@ and `git branch -d` refuses to delete a branch whose work is fully merged. On 20
 so confirm the squash by its PR number first, and then `-D` is a considered act rather than the
 thing you reach for when `-d` fails.
 
+**But `-d` has a SECOND failure mode, and it is not the squash.** `git branch -d X` deletes only
+if X is merged into its upstream — or into **HEAD** when it has no upstream. In the shared
+checkout HEAD is your local `main`, which goes stale the moment you stop pulling it. So `-d` also
+refuses branches that merged perfectly normally, no squash involved: on 2026-07-29
+`git branch -d worktree-matrix-sync` refused while `git merge-base --is-ancestor
+worktree-matrix-sync origin/main` returned true — the commits were literally in `origin/main`,
+and local `main` was seven behind.
+
+That matters because the advice above ("`-d` buys you no safety here") is true of a
+squash-landed branch and false in general. On a stale HEAD the refusal is real information, and
+`-D` at that moment discards work nobody has merged. Fetch first, so a refusal means something:
+
+```
+git fetch -q origin && git checkout main && git merge --ff-only origin/main
+```
+
 Grep the subject, not the message: `git log --grep` searches the body too, and later commits
 routinely cite earlier PR numbers. Confirming #43 that way returns #51, whose body mentions it.
 
@@ -249,3 +265,15 @@ a habit that works, not a lost cause. Two things make it safe to do:
   the main checkout); `git worktree remove` on your own cwd leaves the shell in a deleted
   directory. Removing another session's worktree is worse — check `git worktree list` and retire
   only your own.
+- **"The worktree is gone" does not mean the branch is free.** A worktree can be recycled to a
+  NEW path on the same branch, and git refuses to delete a branch any worktree still holds:
+
+  ```
+  error: cannot delete branch 'X' used by worktree at '/…/<name>'
+  ```
+
+  On 2026-07-29 a session was told its worktree had been retired and the branch was safe to
+  delete; it had in fact been recycled to a new directory, still on that branch. Check
+  `git worktree list` for the branch, then `git checkout --detach origin/main` there before
+  deleting. This bites hardest when the two steps are done by different sessions, which is the
+  order this section describes.
