@@ -4,12 +4,13 @@ import { coverageSummary, assessmentIn, remediationIn, GAP_REASON, AT_REASON } f
 // Capability coverage scorecard for the Assess tab (ADR 0023, two axes). Answers the up-front
 // question in CUSTOMER-OUTCOME language — not implementation (deterministic/OCR/vision):
 //
-//   ASSESSMENT — can ACP determine compliance?   🟢 Auto · 🟡 Review · 🔴 Human-only · ⚪ N/A
-//   REMEDIATION — if it fails, how is it fixed?   ⚡ Automatically Fixed · 🤖 AI Generated Fix · 👤 Guided
-//   Wording matches the WCAG matrix (A4/A3/A2/NA · R4/R3/R2) so the two surfaces cannot
-//   disagree. There is no R1 lane here on purpose: the engine never asserts "nothing
-//   remediates this" — R_CEILING maps human->M (Guided), and R1 is a matrix-only
-//   observation about a specific cell.
+//   ASSESSMENT — can ACP determine compliance?   🟢 A4 Fully Assessed · 🟡 A3 Potential Issue · 🔴 A2 Human Assessment Required · ⚪ N/A
+//   REMEDIATION — if it fails, how is it fixed?   ⚡ R4 Automatically Fixed · 🤖 R3 AI Generated Fix · 👤 R2 Guided
+//   Wording matches the WCAG matrix (docs/acp-architecture-deck.md, "A4/A3/A2/NA · R4/R3/R2")
+//   so the two surfaces cannot disagree — coverageScorecard.test.jsx asserts these strings so
+//   a rename here has to be a decision rather than a drift. There is no R1 lane on purpose:
+//   the engine never asserts "nothing remediates this" — R_CEILING maps human->M (Guided), and
+//   R1 is a matrix-only observation about a specific cell.
 //
 // Computed from the capability tables, never from scan data. Companion to RuleBreakdown (what
 // THIS scan found). See assessCoverage.js.
@@ -60,7 +61,7 @@ function RuleFormatMatrix({ rows }) {
                 const a = foldLane(assessmentIn(p.sc, f))
                 const rem = remediationIn(p.sc, f)
                 const remTxt = rem === 'na' ? 'no ACP fix' : `${REM_EMOJI[rem]} ${rem === 'ai' ? 'AI Generated Fix' : rem} remediation`
-                const label = a === 'auto' ? 'Fully Assessed' : a === 'review' ? 'Potential Issue' : a === 'human' ? 'Human-only' : 'N/A for this format'
+                const label = a === 'auto' ? 'Fully Assessed' : a === 'review' ? 'Potential Issue' : a === 'human' ? 'Human Assessment Required' : 'N/A for this format'
                 return (
                   <td key={f} style={{ textAlign: 'center', fontSize: 16 }} title={`${p.sc} · .${f} — ${label} · ${remTxt}`}>
                     {LANE_EMOJI[a] || '⚪'}
@@ -158,9 +159,9 @@ export default function CoverageScorecard({ files = [] }) {
       </div>
 
       <p className="muted" style={{ fontSize: 11.5, margin: '12px 0 0', lineHeight: 1.5 }}>
-        <b style={{ color: 'inherit' }}>🟢 Auto</b> = ACP certifies pass &amp; fail.
-        <b style={{ color: 'inherit' }}> 🟡 Review</b> = ACP flags evidence of a likely issue; a reviewer confirms.
-        <b style={{ color: 'inherit' }}> 🔴 Human-only</b> = ACP can't assess it.
+        <b style={{ color: 'inherit' }}>🟢 Fully Assessed</b> = ACP certifies pass &amp; fail.
+        <b style={{ color: 'inherit' }}> 🟡 Potential Issue</b> = ACP flags evidence of a likely issue; a reviewer confirms.
+        <b style={{ color: 'inherit' }}> 🔴 Human Assessment Required</b> = ACP can't assess it.
         <b style={{ color: 'inherit' }}> ⚪ N/A</b> = the barrier can't exist in these file types.
         Assessment and remediation are independent — e.g. a 🟡 finding can still carry a 🤖 one-click fix. Capability view — independent of any single scan.
       </p>
@@ -178,7 +179,7 @@ export default function CoverageScorecard({ files = [] }) {
       {grid && (
         <>
           <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>
-            🟢 Auto · 🟡 Review · 🔴 Human-only · ⚪ N/A — hover a cell for the remediation lane.
+            🟢 Fully Assessed · 🟡 Potential Issue · 🔴 Human Assessment Required · ⚪ N/A — hover a cell for the remediation lane.
           </div>
           <RuleFormatMatrix rows={s.per} />
         </>
