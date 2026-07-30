@@ -37,7 +37,7 @@ export default function RiskScore({ run, files = [] }) {
   }, [])
 
   const sev = severityItems(files) // [{ label:'critical'|'serious'|..., value, color }]
-  // Document-core (DOCUMENTS_20) failing criteria — the certified lens, matching Assess. `allFailed`
+  // Failing criteria within the agreed scope — the same lens Assess leads with. `allFailed`
   // is the un-scoped count kept only for the "of N across all levels" context line, normalized so
   // the two wcag spellings (SC_1_1_1 / '1.1.1 name') don't double-count.
   const core = coreStats(files, cap)
@@ -97,8 +97,8 @@ export default function RiskScore({ run, files = [] }) {
         </div>
         <div className="risktile">
           <span className="risklabel">WCAG criteria failed</span>
-          <b className="risknum" title={`The ${core.coreCriteria} document-core criteria (of the certified 20) with findings — the same lens the Assess tab leads with. ${allFailed.size} distinct criteria fail across all WCAG levels.`}>{core.coreCriteria}</b>
-          <em className="risksub">document core · {allFailed.size} across all levels</em>
+          <b className="risknum" title={`The ${core.coreCriteria} criteria with findings, of the ${core.scopeTotal} in this engagement's ${core.scopeLabel} — the same lens the Assess tab leads with. ${allFailed.size} distinct criteria fail across all WCAG levels, including ones outside that scope.`}>{core.coreCriteria}</b>
+          <em className="risksub">of {core.scopeTotal} in {core.scopeLabel} · {allFailed.size} across all levels</em>
         </div>
         <div className="risktile">
           <span className="risklabel">Legal exposure</span>
