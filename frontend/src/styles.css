@@ -830,6 +830,12 @@ input:focus-visible, [role="tab"]:focus-visible {
 
 /* --- password-protected / could-not-open --- */
 .lockwarn { color: #854F0B; font-weight: 600; }
+/* --- scan scope: what the document count is a count OF (scanScope.js) --- */
+/* #854F0B on the page background measures 5.8:1 — this carries the "you are not seeing your
+   whole estate" caveat, so it has to clear AA as body text, not just look like a warning. */
+.scopewarn { color: #854F0B; font-weight: 600; line-height: 1.45; }
+.scopechip { font-size: 11px; color: #5F5E5A; background: #efeae6; border: 1px solid #e0d9d2; border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+.scopechip.narrow { color: #854F0B; background: #FAEEDA; border-color: #ecd9b4; font-weight: 600; }
 .lockflag { font-size: 11px; color: #5F5E5A; background: #efeae6; border: 1px solid #e0d9d2; border-radius: 6px; padding: 1px 7px; white-space: nowrap; }
 .scancount { font-weight: 600; color: var(--ink); }
 .lockbanner { background: #f3efea; border: 1px solid #e2dad0; border-radius: 10px; padding: 10px 12px; font-size: 13px; line-height: 1.45; margin: 4px 0 12px; color: var(--ink); }

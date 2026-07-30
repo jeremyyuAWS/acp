@@ -12,6 +12,7 @@ import Insight from './Insight.jsx'
 import { TraceChip } from './Transparency.jsx'
 import PiiPanel from './PiiPanel.jsx'
 import WhatsChanged from './WhatsChanged.jsx'
+import { scopeChip, scopeSentence } from './scanScope.js'
 
 // The estate dashboard — doubles as the exportable compliance report.
 export default function Overview({ run, files, trend, trendDates, onGo, scanList = [], onPickScan, me }) {
@@ -265,7 +266,18 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
                       <span style={{ color: d > 0 ? '#3B6D11' : d < 0 ? '#B43A2A' : '#6B7280', fontWeight: 600, fontSize: 12 }}>
                         {d > 0 ? `▲ +${d}` : d < 0 ? `▼ ${d}` : '±0'}</span>)}</td>
                     <td className="muted">{s.certifiable ?? '—'} / {(s.files ?? 0).toLocaleString()}</td>
-                    <td className="muted">{s.source}</td>
+                    {/* This table is WHERE the 2026-07-30 report was formed: a one-folder scan and
+                        a whole-Drive scan of the same account sat in adjacent rows, both labelled
+                        "drive", their file counts (1 and 8) side by side in the column left of
+                        here. Nothing distinguished them, so the pair read as an estate that lost
+                        seven documents. The scope chip is that distinction. It also warns the
+                        reader off the "change" column, whose delta across two different scopes is
+                        arithmetic on two different populations. */}
+                    <td className="muted">{s.source}{scopeChip(s.scope) && (
+                      <> <span className={`scopechip${scopeChip(s.scope).narrow ? ' narrow' : ''}`}
+                               title={scopeSentence(s.scope, s.files ?? 0) || undefined}>
+                        {scopeChip(s.scope).text}</span></>
+                    )}</td>
                     <td onClick={(e) => e.stopPropagation()}><TraceChip scanId={s.id} kind="session" label="trace" /></td>
                   </tr>
                 )

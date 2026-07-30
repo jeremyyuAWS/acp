@@ -71,6 +71,12 @@ _SCHEMA = [
     # Presentation decouple: set when the user runs Assess — results views gate on it.
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS assessed_at TEXT",
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS finalized_at TEXT",  # ADR 0013 finalize-once guard
+    # WHAT the scan covered, as JSON (scanner._list scope_out). A file count is a fact about a
+    # boundary, not about an estate: without this the UI could only ever state the number, so a
+    # one-folder scan reading "1 document" was indistinguishable from a whole-Drive scan that
+    # found one. NULL on scans predating this column — the UI must treat that as "unknown scope"
+    # and say nothing rather than guessing "whole Drive".
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS scope TEXT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS size_kb INT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS pages INT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS sheets INT",
@@ -1099,12 +1105,13 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO scan_runs(id,started_at,completed_at,source,rubric_name,rubric_hash,"
-                "files,certifiable,uncertain,error,avg_score,status,files_done,owner_email) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'done',%s,%s)",
+                "files,certifiable,uncertain,error,avg_score,status,files_done,owner_email,scope) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'done',%s,%s,%s)",
                 (sid, report["started_at"], report["completed_at"], report["source"],
                  report["rubric"]["name"], report["rubric"]["hash"],
                  s["files"], s["certifiable"], s["uncertain"], s["error"], s["avg_score"], s["files"],
-                 report.get("owner")))
+                 report.get("owner"),
+                 _json.dumps(report["scope"]) if report.get("scope") else None))
             for f in report["files"]:
                 self._db.execute(cur,
                     "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped,checksum,size_kb,pages,sheets) "
@@ -1181,15 +1188,22 @@ class Store:
     # ── Fan-out scan pipeline (ADR 0007) ──────────────────────────────────────
     def init_scan_run(self, scan_id: str, source: str, total: int, started_at: str,
                       rubric_name: str, rubric_hash: str, owner: str | None = None,
-                      status: str = "running") -> None:
+                      status: str = "running", scope: dict | None = None) -> None:
         """Create the scan_runs row at discover time (counter=0). `status` defaults to 'running'
         (analysis in flight); the deferred-analysis Discover phase (ADR 0020) passes 'discovered'
-        — inventory listed, awaiting an explicit Assess before any file is opened."""
+        — inventory listed, awaiting an explicit Assess before any file is opened.
+
+        `scope` is what discovery covered (scanner._list scope_out). Written HERE, at discover,
+        not at finalize: the count is on screen from the moment discovery ends, so its boundary
+        has to be too — and a scan that dies before finalize is exactly when "what did this even
+        look at?" is the question being asked."""
+        import json as _json
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "INSERT INTO scan_runs(id,started_at,source,rubric_name,rubric_hash,files,files_done,status,owner_email) "
-                "VALUES(%s,%s,%s,%s,%s,%s,0,%s,%s) ON CONFLICT(id) DO NOTHING",
-                (scan_id, started_at, source, rubric_name, rubric_hash, total, status, owner))
+                "INSERT INTO scan_runs(id,started_at,source,rubric_name,rubric_hash,files,files_done,status,owner_email,scope) "
+                "VALUES(%s,%s,%s,%s,%s,%s,0,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
+                (scan_id, started_at, source, rubric_name, rubric_hash, total, status, owner,
+                 _json.dumps(scope) if scope else None))
 
     def set_scan_status(self, scan_id: str, status: str) -> None:
         """Move a scan between phases — e.g. 'discovered' → 'running' when Assess begins."""
@@ -1494,7 +1508,7 @@ class Store:
             where += " AND owner_email=%s"; params = (owner,)
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT id,completed_at,source,rubric_hash,files,certifiable,uncertain,error,avg_score,assessed_at "
+                "SELECT id,completed_at,source,rubric_hash,files,certifiable,uncertain,error,avg_score,assessed_at,scope "
                 f"FROM scan_runs WHERE {where} ORDER BY completed_at DESC", params)
             rows = self._db.fetchall(cur)
             # A cancelled/interrupted scan reaches this list (it has completed_at) with its
@@ -1657,7 +1671,19 @@ class Store:
         reports what actually ran rather than an artefact of arithmetic on null. avg_score is
         left NULL when nothing was scored: that one is genuinely unknown, and the UI already
         renders '—' for it instead of inventing a 0.
+
+        Also the one place `scope` is decoded from its stored JSON, so every reader of a scan
+        (get_scan and list_scans both funnel through here) gets an object rather than a string —
+        and so a row written before the column existed reads as None, never as a fabricated
+        default. It runs BEFORE the early return below, which the counters get to skip.
         """
+        raw_scope = run.get("scope")
+        if isinstance(raw_scope, str):
+            import json as _json
+            try:
+                run["scope"] = _json.loads(raw_scope)
+            except Exception:
+                run["scope"] = None      # unreadable is unknown, not "whole Drive"
         if all(run.get(k) is not None for k in ("certifiable", "uncertain", "error")):
             return run
         self._db.execute(cur, self._AGG_SELECT, (run["id"],))
