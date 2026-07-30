@@ -5,7 +5,10 @@
 
 import { statusFor } from './exportDeliverables.js'
 import { WCAG } from './wcagCatalog.js'
-import { buildFileCertificationModel } from './reportModel.js'
+import { buildFileCertificationModel, buildRemediationModel, VERIFY_GUIDE } from './reportModel.js'
+// AcroForm gives the remediation checklist REAL checkboxes — focusable, announced by a screen
+// reader, tickable in any conformant viewer. See checklist() for why a drawn square will not do.
+import { AcroFormCheckBox } from 'jspdf'
 
 const INK = '#2B2330', MUTED = '#6B6670', LINE = '#E4E0E8', PLUM = '#4B3460', GREEN = '#3B6D11', AMBER = '#854F0B', RED = '#A32D2D'
 const rgb = (h) => { h = h.replace('#', ''); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)] }
@@ -49,6 +52,49 @@ async function makeDoc({ title = 'mova.io Accessibility Report', lang = 'en-US',
       })
       st.y += 4
     },
+    // A review checklist. Each row is a REAL AcroForm checkbox, not a drawn square.
+    //
+    // That distinction matters more here than anywhere else in this file: this is an
+    // accessibility product shipping a document a human is asked to work through. A vector
+    // rectangle is invisible to a screen reader and cannot be ticked without printing the page.
+    // An AcroForm field is focusable, announced, and fillable in any conformant reader.
+    //
+    // jsPDF's AcroForm support varies by build, so a failure falls back to a drawn box rather
+    // than losing the checklist — and the LABEL carries the whole item either way, so the text
+    // layer alone still tells a reader what they are confirming.
+    checklist(items, { size = 9.5, lh = 13 } = {}) {
+      const BOX = 11
+      items.forEach((it, i) => {
+        const label = String(it.label)
+        const metaTxt = it.meta ? String(it.meta) : null
+        doc.setFontSize(size)
+        const lines = doc.splitTextToSize(label, CW - BOX - 18)
+        const metaL = metaTxt ? doc.splitTextToSize(metaTxt, CW - BOX - 18) : []
+        const h = Math.max(BOX, lines.length * lh) + metaL.length * 11 + 7
+        ensure(h)
+        const boxY = st.y + 1
+        let placed = false
+        try {
+          // eslint-disable-next-line no-undef
+          const cb = new AcroFormCheckBox()
+          cb.fieldName = `chk_${it.id || i}`
+          cb.Rect = [M, boxY, BOX, BOX]
+          cb.appearanceState = 'Off'
+          cb.caption = 'x'
+          doc.addField(cb)
+          placed = true
+        } catch { /* no AcroForm in this build — fall through to a drawn box */ }
+        if (!placed) { draw(MUTED); doc.setLineWidth(0.9); doc.roundedRect(M, boxY, BOX, BOX, 2, 2, 'S') }
+        ink(INK); doc.setFont('helvetica', 'normal'); doc.setFontSize(size)
+        doc.text(lines, M + BOX + 8, st.y + size)
+        st.y += Math.max(BOX, lines.length * lh)
+        if (metaL.length) {
+          ink(MUTED); doc.setFontSize(8); doc.text(metaL, M + BOX + 8, st.y + 6); st.y += metaL.length * 11
+        }
+        st.y += 7
+      })
+      st.y += 6
+    },
     // Before → After evidence blocks: for each remediated finding, the original
     // text/markup and the remediated version, in a monospace card so markup, hex
     // colours and attributes read literally. Long values truncate + wrap; a finding
@@ -85,15 +131,40 @@ async function makeDoc({ title = 'mova.io Accessibility Report', lang = 'en-US',
       doc.text(t.toUpperCase(), M, st.y + 12); st.y += 18
       draw(LINE); doc.setLineWidth(0.8); doc.line(M, st.y, M + CW, st.y); st.y += 14
     },
+    // A section heading that preserves the string VERBATIM. For filenames: heading() upper-cases
+    // for style, which is fine for prose labels and wrong for an identifier — a reviewer told to
+    // open "CLINICAL-FAQ-39.DOCX" is being given a name that does not exist on a case-sensitive
+    // store. Wraps, because paths get long.
+    docTitle(t) {
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(12.5)
+      const lines = doc.splitTextToSize(String(t), CW)
+      ensure(lines.length * 16 + 18)
+      ink(PLUM); doc.text(lines, M, st.y + 12); st.y += lines.length * 16 + 4
+      draw(LINE); doc.setLineWidth(0.8); doc.line(M, st.y, M + CW, st.y); st.y += 14
+    },
     text(t, { size = 10, color = INK, bold = false, lh = 14, gapAfter = 9 } = {}) {
       doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(size); ink(color)
       const lines = doc.splitTextToSize(t, CW); ensure(lines.length * lh)
       doc.text(lines, M, st.y + size); st.y += lines.length * lh + gapAfter
     },
-    cover({ title, subtitle, meta = [] }) {
-      if (logo) { const lw = 124, lh = lw * 264 / 800; ensure(lh + 12); doc.addImage(logo, 'PNG', M, st.y, lw, lh); st.y += lh + 20 }
+    // logoRight puts the mark in the top-right corner and runs the title alongside it, rather
+    // than stacking it above. `logo` is the real brand asset (public/mova-logo.png, 800x264) —
+    // fetched, never redrawn — so the proportions come from the file, not from a guess.
+    cover({ title, subtitle, meta = [], logoRight = false }) {
+      const lw = 124, lh = lw * 264 / 800
+      let titleW = CW
+      if (logo && logoRight) {
+        ensure(lh + 12)
+        doc.addImage(logo, 'PNG', M + CW - lw, st.y, lw, lh)
+        // The title shares this band with the logo, so it must wrap before reaching it.
+        titleW = CW - lw - 18
+      } else if (logo) {
+        ensure(lh + 12); doc.addImage(logo, 'PNG', M, st.y, lw, lh); st.y += lh + 20
+      }
       ink(INK); doc.setFont('helvetica', 'bold'); doc.setFontSize(21)
-      const tl = doc.splitTextToSize(title, CW); doc.text(tl, M, st.y + 17); st.y += tl.length * 24 + 6
+      const tl = doc.splitTextToSize(title, titleW); doc.text(tl, M, st.y + 17); st.y += tl.length * 24 + 6
+      // Keep the header band tall enough that the logo never collides with the subtitle below.
+      if (logo && logoRight) st.y = Math.max(st.y, lh + M - 6)
       ink(MUTED); doc.setFont('helvetica', 'normal'); doc.setFontSize(11); doc.text(subtitle, M, st.y + 10); st.y += 17
       doc.setFontSize(9.5); meta.forEach((m) => { doc.text(m, M, st.y + 8); st.y += 13 })
       st.y += 10; draw(PLUM); doc.setLineWidth(2); doc.line(M, st.y, M + CW, st.y); st.y += 22
@@ -780,4 +851,121 @@ export async function exportConformanceReport(d = {}) {
   p.text('Part 1 (UI conformance): axe-core across every view (zero Level A/AA violations) plus manual accessibility-tree review, keyboard operation, focus management, and live-region announcements. Part 2 (document coverage): each success criterion is classified by what the platform’s detect-and-remediate engines do today — deterministic auto-fix, AI, partner web scanner, or human-in-the-loop review.', { size: 9.5, gapAfter: 6 })
   p.text('Not yet performed: formal screen-reader user testing (NVDA / JAWS / VoiceOver) — recommended to finalize a signed conformance statement.', { size: 9.5, color: AMBER })
   p.save(d.filename || 'mova-accessibility-conformance-report.pdf')
+}
+
+// Remediation report — the record of WORK DONE, and the checklist a human signs off against.
+//
+// Deliberately not the certification report. That one answers "does this estate conform?"; this
+// one answers "what did you change to my documents, when, and how do I check it myself?" —
+// which is the question asked by the person who has to defend the estate, and the one a
+// screenshot of a dashboard cannot answer.
+export async function exportRemediationReport(d = {}) {
+  const scNames = Object.fromEntries(WCAG.map((w) => [w.sc, w.name]))
+  const m = buildRemediationModel({ ...d, scNames })
+  const p = await makeDoc({
+    title: `Remediation Report${m.org ? ' — ' + m.org : ''}`,
+    footerVersion: d.platformVersion,
+    footerGenerated: m.generatedAt,
+  })
+
+  p.cover({
+    logoRight: true,
+    title: 'Accessibility Remediation Report',
+    subtitle: `${m.org || 'Document estate'} · WCAG 2.1 Level ${m.level}`,
+    meta: [
+      `Generated ${m.generatedAt}`,
+      m.scanId ? `Scan ${m.scanId}` : null,
+      `${m.totals.documents} document${m.totals.documents === 1 ? '' : 's'} remediated · ${m.totals.items} change${m.totals.items === 1 ? '' : 's'} across ${m.totals.criteria} success criteri${m.totals.criteria === 1 ? 'on' : 'a'}`,
+    ].filter(Boolean),
+  })
+
+  p.heading('What this document is')
+  p.callout('Every change listed here has already been written to the document. This report is the record of that work and the checklist for confirming it: tick each item once you have verified it in the application named in the “How to verify” section. Nothing here asks you to make a change — only to confirm one.')
+
+  p.metricGrid([
+    { label: 'Documents', value: m.totals.documents },
+    { label: 'Changes', value: m.totals.items },
+    { label: 'Criteria', value: m.totals.criteria },
+    { label: 'Awaiting review', value: m.totals.awaiting, color: m.totals.awaiting ? AMBER : GREEN },
+  ])
+
+  // Two honesty notes, both of which a report is tempted to omit.
+  if (m.totals.unstamped) {
+    p.text(`${m.totals.unstamped} of ${m.totals.items} changes carry no recorded time. The remediation record stores what changed, and a separate table stores when a value was written; where the two do not join, this report says “time not recorded” rather than substituting the document’s own timestamp.`,
+           { size: 9, color: MUTED })
+  }
+  if (m.partial) {
+    p.callout(`This report is PARTIAL. The server returned the maximum of ${m.partial} fix records, so changes beyond that limit are not listed. Re-run against a narrower scan to see the remainder.`,
+              { color: AMBER, bg: '#FBF1DF' })
+  }
+  if (!m.documents.length) {
+    p.text('No remediation has been applied to this scan yet, so there is nothing to confirm.', { color: MUTED })
+    p.save(d.filename || 'mova-remediation-report.pdf')
+    return
+  }
+
+  for (const doc of m.documents) {
+    p.pageBreak()
+    // NOT p.heading(): it upper-cases, and a filename is a case-sensitive identifier.
+    // "CLINICAL-FAQ-39.DOCX" is not the name of the file this section is about, and on a
+    // case-sensitive store it is a different file entirely — which defeats the one job this
+    // report has, namely telling a reviewer exactly which document to open.
+    p.docTitle(doc.name)
+    const meta = [
+      doc.dir ? `Folder: ${doc.dir}` : 'Folder: (root)',
+      `Format: .${doc.fmt}`,
+      doc.remediatedAt ? `Remediated: ${doc.remediatedAt}` : 'Remediated: time not recorded',
+      doc.awaiting ? `${doc.awaiting} item${doc.awaiting === 1 ? '' : 's'} still awaiting review in the app` : null,
+    ].filter(Boolean)
+    p.text(meta.join('   ·   '), { size: 9, color: MUTED, gapAfter: 12 })
+
+    if (!doc.items.length) {
+      p.text('This document was remediated, but no per-change record was stored for it.', { size: 9.5, color: MUTED })
+      continue
+    }
+
+    p.text('Confirm each change:', { size: 10, bold: true, gapAfter: 8 })
+    p.checklist(doc.items.map((it) => ({
+      id: `${doc.file}_${it.sc}`.replace(/[^A-Za-z0-9_]/g, '_'),
+      label: `${it.sc} ${it.name}${it.note ? ' — ' + it.note : ''}`,
+      meta: it.at ? `Applied ${it.at}` : 'Applied — time not recorded',
+    })))
+
+    const evidence = doc.items.filter((it) => it.before != null || it.after != null)
+    if (evidence.length) {
+      p.text('What changed', { size: 10, bold: true, gapAfter: 6 })
+      p.beforeAfter(evidence.map((it) => ({ label: `${it.sc} ${it.name}`, note: it.note, before: it.before, after: it.after })))
+    }
+  }
+
+  // How to verify, per format actually present — Mac AND Windows, because the reviewer is on one
+  // of them and a report that guesses wrong sends them hunting through the wrong menus.
+  p.pageBreak()
+  p.heading('How to verify these changes yourself')
+  p.text('Open each document in the application below and confirm the items you ticked. The menu paths differ between macOS and Windows, so both are given.', { size: 9.5, color: MUTED })
+  for (const fmt of m.formats) {
+    const g = VERIFY_GUIDE[fmt]
+    if (!g) continue
+    p.text(`.${fmt} — ${g.app}`, { size: 11, bold: true, color: PLUM, gapAfter: 6 })
+    p.text('On macOS', { size: 9.5, bold: true, gapAfter: 4 })
+    p.bullets(g.mac || [], { size: 9.5 })
+    p.text('On Windows', { size: 9.5, bold: true, gapAfter: 4 })
+    p.bullets(g.win || [], { size: 9.5 })
+    if (g.checks?.length) {
+      p.text('What to look for', { size: 9.5, bold: true, gapAfter: 4 })
+      p.bullets(g.checks, { size: 9.5 })
+    }
+    if (g.sr?.length) {
+      p.text('Screen-reader spot check', { size: 9.5, bold: true, gapAfter: 4 })
+      p.bullets(g.sr, { size: 9.5 })
+    }
+  }
+
+  p.pageBreak()
+  p.heading('Reviewer sign-off')
+  p.text('By signing, you confirm that you have opened each document listed above and verified the ticked changes in the application named. Unticked items remain outstanding.', { size: 9.5, color: MUTED })
+  p.table(['', 'Name', 'Role', 'Date'], [['Reviewed by', '', '', ''], ['Approved by', '', '', '']],
+          [90, 165, 130, 110])
+
+  p.save(d.filename || `mova-remediation-report-${(m.scanId || 'scan')}.pdf`)
 }

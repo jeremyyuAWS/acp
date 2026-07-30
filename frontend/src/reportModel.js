@@ -49,7 +49,7 @@ const HUMAN_GUIDE = {
   '4.1.2': { why: 'AI cannot confirm custom controls expose the right name/role/value to assistive tech.', how: ['Navigate custom controls with a screen reader', 'Confirm each announces its name, role and state'], min: 4 },
 }
 const DEFAULT_HUMAN = { why: 'This criterion needs human judgement that automated checks can’t provide.', how: ['Review the flagged content against the WCAG success criterion'], min: 3 }
-const VERIFY_GUIDE = {
+export const VERIFY_GUIDE = {
   pptx: { app: 'PowerPoint', mac: ['PowerPoint → Review → Check Accessibility', 'Resolve every item under “Inspection Results”'], win: ['PowerPoint → Review → Check Accessibility', 'Work through the “Inspection Results” pane'], sr: ['macOS: VoiceOver (⌘F5) — arrow through each slide; confirm image descriptions, heading order and table headers are announced', 'Windows: NVDA — Tab / arrow keys; confirm reading order, headings, links and image alt text'], checks: ['Alt text on every image', 'Reading order per slide', 'Slide titles', 'Table header rows'] },
   docx: { app: 'Word', mac: ['Word → Review → Check Accessibility'], win: ['Word → Review → Check Accessibility'], sr: ['macOS: VoiceOver (⌘F5)', 'Windows: NVDA — verify heading levels, alt text, table headers and link text'], checks: ['Alt text on images', 'Heading hierarchy', 'Table header rows', 'Descriptive link text', 'Document language'] },
   xlsx: { app: 'Excel', mac: ['Excel → Review → Check Accessibility'], win: ['Excel → Review → Check Accessibility'], sr: ['Windows: NVDA — verify table headers and sheet names are announced'], checks: ['Table header rows', 'Named sheets', 'No merged cells that break navigation'] },
@@ -305,5 +305,110 @@ export function buildFileCertificationModel(d) {
       ring: d.score != null ? { score: d.score, color: fullyConformant ? GREEN : AMBER } : null,
     },
     blocks,
+  }
+}
+
+// ── Remediation report ────────────────────────────────────────────────────────────────────
+//
+// The deliverable a reviewer signs: WHAT was changed, WHEN, and a checkbox per item so a human
+// can confirm each one in the real application. Distinct from the certification report, which
+// states conformance — this states WORK DONE and asks someone to verify it.
+//
+// TIMESTAMPS ARE NOT INVENTED. `remediation_diff` carries no time column at all
+// (scan_id, file, rule_id, seq, before, after, note); the clock lives in
+// `applied_fixes.created_at` and `file_records.remediated_at`. So an item is stamped only when
+// applied_fixes holds a row for that (file, criterion). Everything else reads "time not
+// recorded" rather than borrowing the document's timestamp and implying a precision we do not
+// have — a signed remediation record is exactly the wrong place to round up.
+// This module has NO imports on purpose — it is the pure model layer, and pdfReport.js owns the
+// catalog lookups and passes them in. So the SC parse is inlined rather than imported from
+// coreStats, and criterion names arrive as `scNames` from the caller.
+const _sc = (w) => ((String(w || '')).replace(/^SC_/, '').replace(/_/g, '.').match(/\d+\.\d+\.\d+/) || [])[0]
+const _fmtOf = (f) => (String(f || '').split('.').pop() || '').toLowerCase()
+const _base = (p) => String(p || '').split('/').filter(Boolean).pop() || ''
+const _dir = (p) => { const s = String(p || '').split('/').filter(Boolean); return s.length > 1 ? s.slice(0, -1).join('/') : '' }
+const _when = (iso) => {
+  if (!iso) return null
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? null : d.toLocaleString(undefined,
+    { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+// files        the scan's file rows (needs .file and .remediated_at)
+// diffsByFile  { [file]: [{ rule_id, before, after, note }] } — the evidence
+// appliedFixes [{ file, rule_id, created_at }] — the clock. May be empty (SIM, or a scan whose
+//              fixes predate the table); absence degrades to "time not recorded", never a guess.
+// cappedAt     the server's row limit, when the caller hit it, so the report can SAY it is
+//              partial instead of presenting a truncated list as complete.
+// scNames      { [sc]: 'Non-text Content' } — supplied by the caller, which owns the catalog.
+export function buildRemediationModel({ files = [], diffsByFile = {}, appliedFixes = [],
+                                        level = 'AA', org = '', generatedAt = null,
+                                        scanId = null, reviewByFile = {}, cappedAt = null,
+                                        scNames = {} } = {}) {
+  const stamp = {}
+  for (const f of appliedFixes || []) {
+    const k = `${f.file} ${_sc(f.rule_id)}`
+    // Earliest wins. A criterion fixed across nineteen images was DONE when the first write
+    // landed; the API returns newest-first, which would otherwise report the last one.
+    if (!stamp[k] || String(f.created_at) < String(stamp[k])) stamp[k] = f.created_at
+  }
+
+  const documents = []
+  for (const rec of files) {
+    const diffs = diffsByFile[rec.file] || []
+    if (!diffs.length && !rec.remediated_at) continue     // nothing was done to this document
+    const seen = new Set()
+    const items = []
+    for (const d of diffs) {
+      const sc = _sc(d.rule_id)
+      if (!sc || seen.has(sc)) continue                   // one checkbox per criterion, not per image
+      seen.add(sc)
+      const at = stamp[`${rec.file} ${sc}`] || null
+      items.push({
+        sc,
+        category: CAT_OF(sc),
+        name: scNames[sc] || d.rule_id,
+        note: d.note || null,
+        before: d.before,
+        after: d.after,
+        at: _when(at),
+        atIso: at,
+      })
+    }
+    items.sort((a, b) => (CAT_ORDER.indexOf(a.category) - CAT_ORDER.indexOf(b.category)) || a.sc.localeCompare(b.sc))
+    documents.push({
+      file: rec.file,
+      name: _base(rec.file),
+      dir: _dir(rec.file),
+      fmt: _fmtOf(rec.file),
+      remediatedAt: _when(rec.remediated_at),
+      awaiting: reviewByFile[rec.file] || 0,
+      items,
+    })
+  }
+  documents.sort((a, b) => a.name.localeCompare(b.name))
+
+  const totalItems = documents.reduce((n, d) => n + d.items.length, 0)
+  const stamped = documents.reduce((n, d) => n + d.items.filter((i) => i.at).length, 0)
+  // Only the formats actually present get a "how to verify" section. A report on three PDFs has
+  // no business explaining PowerPoint.
+  const formats = [...new Set(documents.map((d) => d.fmt))].filter((f) => VERIFY_GUIDE[f]).sort()
+
+  return {
+    org, level, scanId,
+    generatedAt: _when(generatedAt) || _when(new Date().toISOString()),
+    documents,
+    formats,
+    totals: {
+      documents: documents.length,
+      items: totalItems,
+      stamped,
+      unstamped: totalItems - stamped,
+      awaiting: documents.reduce((n, d) => n + d.awaiting, 0),
+      criteria: new Set(documents.flatMap((d) => d.items.map((i) => i.sc))).size,
+    },
+    // Said out loud in the PDF, never swallowed: a truncated list that looks complete is worse
+    // than one that admits it is truncated.
+    partial: cappedAt != null && (appliedFixes || []).length >= cappedAt ? cappedAt : null,
   }
 }
