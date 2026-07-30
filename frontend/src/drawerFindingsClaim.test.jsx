@@ -226,7 +226,15 @@ describe('the coverage panel heading holds its own line', () => {
   const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'styles.css'), 'utf8')
 
   it('wraps the title so it is not an anonymous flex item beside the count chips', () => {
-    expect(drawerSrc).toMatch(/<span className="covmanifest-title">WCAG coverage · the 20-check document core<\/span>/)
+    // The wrapper is what this pins, not the wording — the title now names the active scope, so
+    // asserting the old copy would fail on a label change that has nothing to do with the layout
+    // bug. What must not come back is a BARE TEXT NODE in the summary: as an anonymous flex item
+    // beside nine chips it shrank to its minimum content width and rendered one word per line.
+    expect(drawerSrc).toMatch(/<span className="covmanifest-title"[^>]*>WCAG coverage · [^<]+<\/span>/)
+    // Scoped to the summary that actually carries the chips. A blanket "no bare text node in any
+    // covmanifest-sum" would also condemn the unanalysable-file variant, which has no chips beside
+    // it and therefore never had the bug.
+    expect(drawerSrc).toMatch(/<summary className="covmanifest-sum">[\s\S]{0,400}?<span className="covmanifest-title"[\s\S]{0,200}?\{chip\('PASS'/)
   })
   it('gives the title column a min-width and lets the chips wrap', () => {
     expect(css).toMatch(/\.covmanifest-title \{[^}]*min-width:/)

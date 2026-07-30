@@ -19,7 +19,7 @@ import AccessibilityStatus from './AccessibilityStatus.jsx'
 import EvidenceHeader, { fmtEvidence } from './EvidenceHeader.jsx'
 import { confirmCriterion, getFileStatus, getExamined } from './api.js'
 import { statusOf, isUnassessed, STATUS_BADGE, STATUS_TAG_LABEL, NOT_ASSESSED } from './docStatus.js'
-import { DOCUMENTS_20 } from './documents20.js'
+import { SCOPE_SCS, SCOPE_SIZE, SCOPE_LABEL, OUT_OF_SCOPE_SCS, CORE_SCS, DENOMINATOR, outOfScopeNote } from './activeScope.js'
 import { statusIn, remediationIn } from './assessCoverage.js'
 import { fmtEffort, EFFORT_BASIS } from './effort.js'
 export { fmtEffort, EFFORT_BASIS }
@@ -205,7 +205,9 @@ function LocationChip({ pages, type }) {
 // UNCHECKED logic the on-screen WCAG coverage table below uses, extracted so the
 // certification-PDF export shares it exactly rather than risk drifting from what's
 // shown on screen.
-function computeCoverageRows(file, { catalogRules, targetLevel, remediatedRuleIds, effectiveRemediated, aiEnabled, cap }) {
+// Exported for test only — it decides the row set of a document's CERTIFICATION RECORD, so its
+// scope is worth asserting directly rather than through a mounted drawer.
+export function computeCoverageRows(file, { catalogRules, targetLevel, remediatedRuleIds, effectiveRemediated, aiEnabled, cap }) {
   const ext = (file.file || '').split('.').pop().toLowerCase()
   const fmt = /^html?$/.test(ext) ? 'html' : ['pdf', 'docx', 'pptx', 'xlsx'].includes(ext) ? ext : null
   const remAutoSet = autoSCs(cap, fmt)
@@ -224,7 +226,19 @@ function computeCoverageRows(file, { catalogRules, targetLevel, remediatedRuleId
   const LEVEL_RANK = { A: 1, AA: 2, AAA: 3 }
   const targetRank = LEVEL_RANK[targetLevel] || 2
   const OUT_RANK = { FAIL: 0, FIXED: 0.5, PASS: 1, HUMAN: 2, UNCHECKED: 3, WEB: 4 }
-  const inScope = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) <= targetRank)
+  // Scoped to the agreed scope, and this is the CERTIFICATION EXPORT — the PDF/HTML record a
+  // customer keeps as ADA/EAA evidence. It was the widest list in the product: every
+  // document-applicable criterion at/below the target, 42 at AA, while the on-screen manifest
+  // this export is supposed to mirror showed 20. reportModel.js then renders `rows.length` as
+  // "N of 42 in-scope criteria", so the certificate and the screen disagreed about what "in
+  // scope" meant — in the direction where the certificate claims the wider assertion.
+  //
+  // Narrowed here rather than in reportModel.js on purpose: that file only ever reports
+  // `rows.length`, so fixing the list fixes every count it prints, and #95 is actively editing
+  // it. Its wording still says "in-scope" without naming WHICH scope — see the note in the
+  // on-screen manifest, which does name it.
+  const inScope = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) <= targetRank
+    && SCOPE_SCS.has(c.sc))
   return inScope.map((c) => {
     const count = issuesBySc[c.sc] || 0
     const wasFixed = count > 0 && (remediatedRuleIds.has(c.sc)
@@ -400,8 +414,9 @@ const STATE_NOTE = {
 
 export default function FileDrawer({ file, onClose, context = 'full', overrideOwner = null, delegatedFrom = null, decision = null, aiEnabled = true, scanId = null, readOnly = false }) {
   const [explanations, setExplanations] = useState({})
-  // The coverage table shows exactly the 20-check document core — the list the customer
-  // certifies against. No "show all" escape hatch: the other in-scope criteria are noise here.
+  // The coverage table shows exactly the criteria in the agreed scope — the list this engagement
+  // certifies against, and the same one the estate panel defaults to. No "show all" escape hatch
+  // in a per-document record; the criteria it drops are named beneath the table instead.
   // Engine rule catalog (docx/pptx/xlsx/pdf groups) — tells the coverage table
   // which WCAG criteria the engine ACTUALLY evaluates for this file type, so a
   // PASS is never claimed for something that was never checked. Fetched once.
@@ -635,11 +650,16 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   // failing gets the 'issues' badge, not the reassuring blue one.
   const [sbg, sfg] = STATUS_BADGE[claim === 'has-findings' ? 'issues' : st]
   // Scope every finding-derived surface in this drawer — the Findings list, Accessibility Status,
-  // the auto/review counts, and the "Remediate this file" CTA — to the 20-check document
-  // core, the same list the coverage table below certifies against. The engine also reports
-  // criteria outside the 20 (e.g. 3.3.2, 2.4.10, 1.4.8, 2.4.9); those are outside the document core's
-  // certification scope, so surfacing them here would contradict the "20-check core" framing.
-  const issues = (file.issues || []).filter((i) => DOCUMENTS_20.has(scOfWcag(i.wcag)))
+  // the auto/review counts, and the "Remediate this file" CTA — to the agreed scope, the same
+  // list the coverage table below certifies against. The engine also reports criteria outside it
+  // (3.3.2, 2.4.10, 1.4.8, 2.4.9 …, and now the six document-core criteria the engagement did not
+  // ask about); those are outside this document's certification scope, so surfacing them here
+  // would contradict the manifest directly beneath them.
+  //
+  // This does mean a finding on an out-of-scope criterion is not offered for remediation from
+  // this drawer. That is the same trade the 20-core filter already made, moved one ring in — and
+  // it is why the manifest names the criteria it dropped instead of just counting them.
+  const issues = (file.issues || []).filter((i) => SCOPE_SCS.has(scOfWcag(i.wcag)))
   // This file's format and the set of criteria the remediator auto-fixes for it — the
   // single format-aware source for every "was this fixed / can this be fixed" decision
   // below (coverage table, finding badges, certification export).
@@ -1142,9 +1162,25 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           const sc = scOfIssue(i.wcag)
           if (sc) { if (!issuesBySc[sc]) issuesBySc[sc] = []; issuesBySc[sc].push(i) }
         })
-        // Scope: exactly the 20-check document core — the list the customer certifies against.
-        // No "show all" toggle; the other in-scope criteria are noise in this per-file drawer.
-        const inScope = WCAG.filter((c) => c.docApplies !== false && DOCUMENTS_20.has(c.sc))
+        // Scope: exactly the criteria in the agreed scope — the list this engagement asked to
+        // have assessed, and the same list the estate's "By WCAG criterion" panel defaults to, so
+        // drilling from that panel into this drawer cannot change the denominator underfoot.
+        // No "show all" toggle here; this is the per-document certification record, and the
+        // engagement scope is what it certifies against.
+        //
+        // Narrowed by CRITERION only, deliberately NOT by (criterion, format). The preset is
+        // per-format and `inScopeFmt` mirrors the backend's gate, but applying it here would
+        // delete rows this table already explains better than a filter can: each row carries its
+        // own format verdict from `statusIn(sc, fmt)` and renders as ⚪ n/a with a stated reason.
+        // It would also blank the table outright for .html, which the preset covers for no
+        // criterion at all — an empty manifest being the one thing worse than a wide one.
+        const inScope = WCAG.filter((c) => c.docApplies !== false && SCOPE_SCS.has(c.sc))
+        // Findings on this file against criteria the engagement left out. Counted from the
+        // UNFILTERED issue list, because `issues` above has already dropped them — that is the
+        // point: without this the narrowing would remove real failures from a per-document
+        // certification record with nothing on screen to say so.
+        const outOfScopeCount = (file.issues || [])
+          .filter((i) => OUT_OF_SCOPE_SCS.has(scOfIssue(i.wcag))).length
         // Coverage Manifest (ADR 0026 Epic 1): pending human-review items per criterion, so each
         // row can state its evidence counts ("2 awaiting your review") from REAL queue data.
         const hitlBySc = {}
@@ -1231,7 +1267,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
               {/* Wrapped, not a bare text node: as an anonymous flex item beside nine count
                   chips it shrank to its minimum content width at drawer widths and rendered
                   one word per line. */}
-              <span className="covmanifest-title">WCAG coverage · the 20-check document core</span>
+              <span className="covmanifest-title" title={DENOMINATOR.scope.question}>WCAG coverage · the {SCOPE_SIZE} criteria in your {SCOPE_LABEL}</span>
               {chip('PASS', 'pass', 'pass')}
               {chip('FAIL', 'fail', 'fail')}
               {chip('FIXED', 'pass', 'fixed · re-validate')}
@@ -1248,9 +1284,16 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
               )}
             </summary>
             <div className="covmanifest-note muted">
-              The <b>20-check document core</b> — 87 WCAG 2.2 criteria → 50 US-regulated (A/AA) → the 20 that apply to documents. Each row shows how this {fmt || 'file'} assessed and how the fix is delivered.
+              Your <b>{SCOPE_LABEL}</b> — 87 WCAG 2.2 criteria → 50 US-regulated (A/AA) → the {CORE_SCS.size} that apply to documents → the <b>{SCOPE_SIZE}</b> this engagement asked us to assess. Each row shows how this {fmt || 'file'} assessed and how the fix is delivered.
               {' '}<b>Outcome</b>: pass / fail (with count) / fixed, or <b>🟡 review</b> (ACP found evidence of a likely issue — a reviewer confirms; advisory, not certified), <b>human</b> (ACP assesses it, a person fixes), <b>gap</b> (no check built yet), <b>⚪ n/a</b> (can’t exist here). <b>Fix</b> is the remediation lane: <b>⚡ auto</b> deterministic · <b>✎ AI</b> 1-click · <b>✋ human</b>. A <b>pass</b> is only claimed where ACP actually assesses the criterion for this format.
               {' '}<span style={{ opacity: 0.8 }}>Tip: click a count tag above to hide those rows.</span>
+            </div>
+            {/* What this document's record leaves out, and why. Renders unconditionally — a
+                criterion absent from a certification record with no account of itself is the
+                trust problem, whether or not it was failing. */}
+            <div className="covmanifest-note muted" style={{ paddingTop: 0 }}>
+              {outOfScopeNote(outOfScopeCount)}
+              {' '}The estate’s “By WCAG criterion” panel can show all {CORE_SCS.size}.
             </div>
             {shown.length === 0 && (
               <div className="covmanifest-note muted" style={{ paddingTop: 0 }}>All rows hidden by your filters — <b>clear filters</b> to show them again.</div>
