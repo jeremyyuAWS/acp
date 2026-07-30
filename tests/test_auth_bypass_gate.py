@@ -18,7 +18,7 @@ import pytest
 ACP = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ACP / "api"))
 
-_KEYS = ("ACP_E2E_KEY", "ACP_ENABLE_TEST_BYPASS", "ACP_DEPLOY_ENV", "ACP_ENV")
+_KEYS = ("ACP_E2E_KEY", "ACP_ENABLE_TEST_BYPASS", "ACP_DEPLOY_ENV", "ACP_ENV", "ACP_MONITOR_KEY")
 
 
 @pytest.fixture(autouse=True)
@@ -98,6 +98,51 @@ def test_opt_in_rejects_everything_else(monkeypatch, val):
 def test_is_prod_reads_canonical_and_legacy_names(monkeypatch, var, val):
     core = _core(monkeypatch, **{var: val})
     assert core.IS_PROD is True
+
+
+# ── the monitoring credential, which is the OPPOSITE case ────────────────────────────
+#
+# Everything above is about a credential that must go dead in production. ACP_MONITOR_KEY is
+# the one that must stay alive there, and the distinction is the whole reason it exists: the
+# production monitor's deep checks authenticated with X-E2E-Key, so they were refused by the
+# very control the tests above assert. The choice was to reopen the backdoor or to give
+# monitoring its own door that grants only counts. These tests pin the second.
+
+def test_the_monitor_key_survives_production(monkeypatch):
+    """The bug this fixes, stated as a test: in production E2E_KEY is None (asserted above) and
+    MONITOR_KEY is not. A deep check that needs the first can never run where it matters."""
+    core = _core(monkeypatch, ACP_E2E_KEY="s3cret", ACP_MONITOR_KEY="m0nitor",
+                 ACP_DEPLOY_ENV="production")
+    assert core.IS_PROD is True
+    assert core.E2E_KEY is None              # the gate bypass stays shut, as it must
+    assert core.MONITOR_KEY == "m0nitor"     # and the read-only door stays open
+
+
+def test_the_monitor_key_does_not_depend_on_the_test_bypass_opt_in(monkeypatch):
+    """It must not be coupled to ACP_ENABLE_TEST_BYPASS — that coupling is exactly what made
+    the old deep checks unrunnable, and it would be an easy 'consistency' cleanup to add."""
+    core = _core(monkeypatch, ACP_MONITOR_KEY="m0nitor")
+    assert core.TEST_BYPASS_ENABLED is False
+    assert core.MONITOR_KEY == "m0nitor"
+
+
+def test_the_monitor_key_has_no_default(monkeypatch):
+    """A monitoring credential with a well-known fallback is a backdoor. Unset must mean the
+    route is closed, not that it is open to a documented default — contrast ALERT_KEY, which
+    does ship one and is the pattern NOT to copy here."""
+    core = _core(monkeypatch)
+    assert core.MONITOR_KEY is None
+
+
+def test_the_monitor_route_is_public_to_the_gate_but_prefixed_for_everything_else(monkeypatch):
+    """/monitor/estate validates its own key, so the gate must let it through; any FUTURE
+    /monitor/* route must be authed by default rather than falling through the default-open
+    hole that shipped /campaigns and /disposition unauthenticated."""
+    core = _core(monkeypatch)
+    assert "/monitor/estate" in core.ALWAYS_PUBLIC
+    assert "/monitor" in core.API_PREFIXES
+    assert core.is_public("/monitor/estate") is True
+    assert core.is_public("/monitor/anything-added-later") is False
 
 
 def test_deploy_script_stamps_the_production_flag():
