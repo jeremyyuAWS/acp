@@ -91,7 +91,7 @@ SOURCES = (
     "api/assessment.py",               # the coverage vocabulary the ceilings map from
     "api/formats/",                    # per-format registrations + detectors
     "api/remediation_capability.py",   # the proven lane table (primary)
-    "api/store.py",                    # REVIEW_FORMATS — the second, review-only scope table
+    "api/assessment_policy.py",        # REVIEW_FORMATS — the second, review-only scope table
     "api/handlers.py",                 # write-back applier surface
     "api/proposals.py",                # model-backed proposers
     "config/rule-catalog.json",        # detector inventory + claimed fix_mode
@@ -194,7 +194,7 @@ def load_review_formats() -> dict[str, set[str]]:
     Parsed rather than imported: store.py pulls in the database driver, and this script must
     run in a bare CI container with only the repo checked out.
     """
-    tree = ast.parse((API / "store.py").read_text())
+    tree = ast.parse((API / "assessment_policy.py").read_text())
     node = next((n for n in tree.body
                  if isinstance(n, (ast.Assign, ast.AnnAssign))
                  and any(getattr(t, "id", None) == "REVIEW_FORMATS"

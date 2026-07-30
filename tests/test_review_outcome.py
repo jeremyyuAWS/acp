@@ -257,7 +257,11 @@ def test_certify_is_the_only_route_to_pass():
     """
     import ast
 
-    tree = ast.parse((ACP / "api" / "store.py").read_text())
+    # _certify and _rule_outcome moved to assessment_policy when store.py was split into
+    # persistence and policy. This guard reads SOURCE, so it has to follow them — a guard
+    # left pointing at the old file finds no `return "PASS"` at all and passes vacuously,
+    # which is the opposite of what it is for.
+    tree = ast.parse((ACP / "api" / "assessment_policy.py").read_text())
     # AST, not a regex: the literal also appears in _certify's own docstring describing this
     # rule, and prose must not count as a certification site.
     owners = [
