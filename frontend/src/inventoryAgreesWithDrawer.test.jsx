@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
 
 // ── The reported screen, rendered ─────────────────────────────────────────────────────────────
 // Observed live 2026-07-30 on production v2026.7.29.8 (commit 9dc2ac4), a build that already
@@ -71,8 +71,7 @@ const RUN = { id: 'scan-live', status: 'discovered', files: 2, certifiable: 0, u
 
 let container, root
 beforeEach(() => {
-  container = document.createElement('div'); document.body.appendChild(container)
-  root = createRoot(container)
+  ;({ container, root } = createTestRoot())
 })
 // Unmount, rather than leaving the tree standing for the environment teardown to race.
 //
@@ -83,10 +82,7 @@ beforeEach(() => {
 // the error count alone. Observed once in a full-suite run under load (right after an
 // `npm install`) and never in six isolated runs or three later full runs, which is exactly the
 // profile of a test that fails a CI job one time in many and gets re-run rather than fixed.
-afterEach(async () => {
-  await act(async () => { root.unmount() })
-  container.remove()
-})
+afterEach(unmountAll)
 const render = async (props) => {
   await act(async () => { root.render(createElement(Dashboard, props)) })
   return container.textContent

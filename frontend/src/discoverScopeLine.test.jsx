@@ -6,16 +6,14 @@
 // were computed correctly all along and only reached stdout.
 import { describe, it, expect, afterEach, beforeEach } from 'vitest'
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
 
 const { default: Discover } = await import('./Discover.jsx')
 
 let container, root
 beforeEach(() => {
-  container = document.createElement('div')
-  document.body.appendChild(container)
-  root = createRoot(container)
+  ;({ container, root } = createTestRoot())
 })
 
 // Unmount, rather than leaving the tree standing for the environment teardown to race — the same
@@ -24,10 +22,7 @@ beforeEach(() => {
 // every test reporting passed, with `ReferenceError: window is not defined` thrown out of
 // getActiveElementDeep after the last assertion. That is a CI job that reddens at random and gets
 // re-run instead of fixed.
-afterEach(async () => {
-  await act(async () => { root.unmount() })
-  container.remove()
-})
+afterEach(unmountAll)
 
 const FOLDER_SCOPE = { kind: 'folder', folder_id: '1W27ULZ', folder_name: 'WCAG Defense Pack',
                        folders_walked: 1, listed: 1, kept: 1, truncated: false }

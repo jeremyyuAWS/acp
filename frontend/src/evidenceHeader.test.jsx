@@ -1,16 +1,18 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
 
 // ADR 0026 Epic 2 — the compact evidence header. Pins: renders only from structured evidence
 // (never prose), the value/threshold formatting, the method label, and the Needs-Review pill.
 
+// Unmount every root this file mounts — see testRoots.js.
+afterEach(unmountAll)
+
 const { default: EvidenceHeader } = await import('./EvidenceHeader.jsx')
 
 const render = async (props) => {
-  const c = document.createElement('div'); document.body.appendChild(c)
-  const root = createRoot(c)
+  const { container: c, root } = createTestRoot()
   await act(async () => { root.render(createElement(EvidenceHeader, props)) })
   return c
 }

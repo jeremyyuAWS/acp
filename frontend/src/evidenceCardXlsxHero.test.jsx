@@ -1,10 +1,10 @@
 // Problem 1 — an xlsx image finding must LEAD with the isolated embedded image, not a whole-sheet
 // render (a grid of cells that buries the flagged picture). The hero becomes the image itself, and
 // the small duplicate thumb beside the text is suppressed. pptx keeps the page-render hero.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
 
 vi.mock('./api.js', () => ({
   suggestFix: vi.fn(),
@@ -16,6 +16,9 @@ vi.mock('./api.js', () => ({
   getScanAiCalls: () => Promise.resolve([]),
   validateAlt: () => Promise.resolve({}),
 }))
+
+// Unmount every root this file mounts — see testRoots.js.
+afterEach(unmountAll)
 
 const { default: EvidenceCard } = await import('./EvidenceCard.jsx')
 
@@ -29,9 +32,7 @@ const imageItem = (file, kind) => ({
 
 let container, root
 const mount = async (item) => {
-  container = document.createElement('div')
-  document.body.appendChild(container)
-  root = createRoot(container)
+  ;({ container, root } = createTestRoot())
   await act(async () => {
     root.render(createElement(EvidenceCard, { item, onAct: vi.fn().mockResolvedValue(undefined) }))
   })

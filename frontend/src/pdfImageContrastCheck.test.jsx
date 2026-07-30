@@ -1,11 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
 
 // ADR 0025 Tier B — the measured-contrast affordance on the PDF text-over-image finding. Pins
 // on-demand fetch, a measured fail as actionable, a measured pass as "confirm" (never a certified
 // pass), and an honest degrade when the image behind the text is too busy to measure.
+
+// Unmount every root this file mounts — see testRoots.js.
+afterEach(unmountAll)
 
 const getFilePdfContrast = vi.fn()
 vi.mock('./api.js', () => ({ getFilePdfContrast: (...a) => getFilePdfContrast(...a) }))
@@ -14,8 +17,7 @@ const { default: PdfImageContrastCheck } = await import('./PdfImageContrastCheck
 
 let container, root
 const mount = async () => {
-  container = document.createElement('div'); document.body.appendChild(container)
-  root = createRoot(container)
+  ;({ container, root } = createTestRoot())
   await act(async () => { root.render(createElement(PdfImageContrastCheck, { scanId: 's1', file: 'doc.pdf' })) })
 }
 const settle = async (n = 4) => { for (let k = 0; k < n; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }

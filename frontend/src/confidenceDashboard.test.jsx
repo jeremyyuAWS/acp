@@ -1,19 +1,21 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
 
 // ADR 0026 Epic 5 — Confidence Dashboard: process confidence, never a model %. Pins: every tile
 // is a real ratio shown WITH its counts, the unresolved line is derived from real buckets, and the
 // component degrades to nothing when the status is unavailable.
+// Unmount every root this file mounts — see testRoots.js.
+afterEach(unmountAll)
+
 const getScanStatus = vi.fn()
 vi.mock('./api.js', () => ({ getScanStatus: (...a) => getScanStatus(...a) }))
 const { default: ConfidenceDashboard } = await import('./ConfidenceDashboard.jsx')
 
-let container
+let container, root
 const mount = async () => {
-  container = document.createElement('div'); document.body.appendChild(container)
-  const root = createRoot(container)
+  ;({ container, root } = createTestRoot())
   await act(async () => { root.render(createElement(ConfidenceDashboard, { scanId: 's1' })) })
   for (let k = 0; k < 4; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
 }

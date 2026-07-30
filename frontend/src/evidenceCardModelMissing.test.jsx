@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
 
 // What the reviewer sees when the text model is not pulled.
 //
@@ -34,11 +34,8 @@ const notPulled = () => Object.assign(new Error(DETAIL), { aiModelNotPulled: tru
 const base = { id: 1, scan_id: 's1', file: 'handbook.docx', rule_id: '2.4.4',
                rule_name: 'Link Purpose', status: 'pending', finding_count: 1 }
 
-let mounted = []
 const mount = async (item) => {
-  const container = document.createElement('div'); document.body.appendChild(container)
-  const root = createRoot(container)
-  mounted.push({ root, container })
+  const { container, root } = createTestRoot()
   await act(async () => { root.render(createElement(EvidenceCard, { item, onAct: () => {} })) })
   return container
 }
@@ -52,21 +49,9 @@ beforeEach(() => {
   resetAutoDraftBreaker()
 })
 
-// Unmount inside act(), rather than leaving trees standing for the environment teardown to race.
-//
-// Same exposure #103 fixed in inventoryAgreesWithDrawer/drawerFindingsClaim: EvidenceCard resolves
-// getFileRemediationDiffs into setDiffs and the auto-draft chain into setDraftMsg, so a root left
-// mounted keeps work in React's concurrent scheduler past the last assertion. If jsdom is torn down
-// first, that work throws an UNHANDLED `window is not defined` — every test still reports passed and
-// vitest exits non-zero on the error count alone, one full-suite run in many. Unmounting in
-// beforeEach is not enough: it never runs after the LAST test, which is the one that races.
-afterEach(async () => {
-  for (const { root, container } of mounted) {
-    await act(async () => { root.unmount() })
-    container.remove()
-  }
-  mounted = []
-})
+// This file mounts more than once per test, which is exactly the case a single-root afterEach
+// gets wrong — see testRoots.js.
+afterEach(unmountAll)
 
 describe('EvidenceCard — the text model is not pulled', () => {
   it('says which model is missing and what to pull, instead of an unexplained empty editor', async () => {

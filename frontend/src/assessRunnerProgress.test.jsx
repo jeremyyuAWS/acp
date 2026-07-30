@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement, act } from 'react'
-import { createRoot } from 'react-dom/client'
+import { createTestRoot, unmountAll } from './testRoots.js'
 
 // The in-flight-file line on the Assess progress panel. `currentFile` state existed from the
 // day the component was written and was never rendered, so when it finally was, three separate
@@ -33,8 +33,7 @@ const { default: AssessRunner } = await import('./AssessRunner.jsx')
 
 let container, root, errSpy
 const mount = async (files) => {
-  container = document.createElement('div'); document.body.appendChild(container)
-  root = createRoot(container)
+  ;({ container, root } = createTestRoot())
   await act(async () => { root.render(createElement(AssessRunner, { files, runId: 's1' })) })
 }
 const settle = async (n = 6) => { for (let k = 0; k < n; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
@@ -57,6 +56,7 @@ beforeEach(() => {
   try { sessionStorage.clear() } catch { /* ignore */ }
 })
 afterEach(() => { errSpy.mockRestore() })
+afterEach(unmountAll)   // the old afterEach restored the spy but left the tree mounted
 
 const SCORED = [
   { file: 'cardiology-handbook.pdf', type: 'pdf', score: 71, issues: [] },
@@ -107,7 +107,7 @@ describe('AssessRunner names the file it is reading', () => {
     // trying to switch under a running assessment. Clear the per-scan sessionStorage too:
     // the component restores the saved phase AND level, so without this the remount comes
     // back up already running at AA and the level click lands on a disabled chip.
-    root.unmount()
+    await unmountAll()
     sessionStorage.clear()
     await mount(SCORED)
     await clickText('minimum')                                     // level A
