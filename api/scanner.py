@@ -19,7 +19,12 @@ _SCAN_WORKERS = min(8, (os.cpu_count() or 2) * 2)
 ACP = Path(__file__).resolve().parent.parent
 # Engine + corpus locations default to the local dev layout but are env-overridable
 # so the same code runs inside the deploy container (paths set in the Dockerfile).
-WP = Path(os.environ.get("ACP_PDF_ENGINE") or os.path.expanduser("~/projects/_review-digital-accessibility/worker-python"))
+# The PDF analyser is VENDORED into this repo (ADR 0029), the way ADR 0012 vendored the Office
+# analysers. The previous default pointed at a checkout outside the tree
+# (~/projects/_review-digital-accessibility/worker-python) which existed on exactly one laptop —
+# so every other host, CI included, fell back to a path that was not there and skipped or errored
+# every PDF. Defaulting into the repo means a fresh clone can assess a PDF.
+WP = Path(os.environ.get("ACP_PDF_ENGINE") or (ACP / "engine" / "pdf-analyser"))
 # Resolve dotnet the same way the test capability gates do (tests/engines.py): explicit
 # override, then PATH, then the dev-machine install location. PATH matters wherever the
 # SDK is installed by a package manager or CI action rather than the dotnet-install

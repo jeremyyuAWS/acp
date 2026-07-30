@@ -31,8 +31,7 @@ ACR="${ACP_ACR:-mdkaccessibilityacr}"
 APP="${ACP_APP:-acp-app}"
 WORKER="${ACP_WORKER:-acp-worker}"
 BUILD_TZ="${BUILD_TZ:-America/Los_Angeles}"
-WP="${ACP_PDF_ENGINE_SRC:-$HOME/projects/_review-digital-accessibility/worker-python}"
-MIN_MODULES=41
+MIN_MODULES=41                  # engine/pdf-analyser is tracked; this guards against truncation
 DRY="${ACP_DRY_RUN:-0}"
 
 say() { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
@@ -68,33 +67,18 @@ say "building the .NET Office analyser"
 [ -f spike/dotnet/AcpScan.Cli/bin/Release/net10.0/AcpScan.Cli.dll ] \
   || die "AcpScan.Cli.dll missing after a 'successful' build"
 
-say "vendoring the Python PDF analyser"
-# Two sources, in order of authority. The engine is NOT in this repo and deploy/public/vendor/
-# is gitignored (0 files tracked), so the isolated clone from step 2 never carries it — it has
-# to be copied in from outside the clone, every time.
-#   1. ACP_PDF_ENGINE_SRC — the real upstream checkout. Authoritative when present.
-#   2. the vendored copy already sitting in the source tree, left by a previous deploy. Not
-#      authoritative (it is a snapshot, and nothing tells us how old), but it is a real engine
-#      and refusing to deploy without the upstream checkout would strand anyone who lacks it.
-VENDOR_FROM=""
-if [ -d "$WP" ]; then
-  VENDOR_FROM="$WP"
-elif [ -d "$SRC_ROOT/deploy/public/vendor/worker-python" ]; then
-  VENDOR_FROM="$SRC_ROOT/deploy/public/vendor/worker-python"
-  echo "  ⚠ ACP_PDF_ENGINE_SRC not found ($WP)"
-  echo "  ⚠ falling back to the previously-vendored copy in the source tree — a SNAPSHOT of"
-  echo "    unknown age. Set ACP_PDF_ENGINE_SRC to build from the real engine checkout."
-else
-  die "no PDF engine source: set ACP_PDF_ENGINE_SRC (tried '$WP', and no vendored copy in the source tree)"
-fi
-mkdir -p deploy/public/vendor
-rm -rf deploy/public/vendor/worker-python
-cp -R "$VENDOR_FROM" deploy/public/vendor/worker-python
-N_MOD="$(find deploy/public/vendor/worker-python -name '*.py' | wc -l | tr -d ' ')"
-# An expired ACR token once made this step a silent no-op. 0 modules still BUILDS, and ships an
-# empty PDF engine that fails only at runtime, on a customer's document.
-[ "$N_MOD" -ge "$MIN_MODULES" ] || die "vendored only $N_MOD modules, expected >= $MIN_MODULES"
-echo "  $N_MOD modules"
+say "checking the vendored Python PDF analyser"
+# There is no vendoring STEP any more. The engine is tracked at engine/pdf-analyser (ADR 0029),
+# so the isolated clone from step 2 already carries it and the build context is complete by
+# construction — which is what makes a CI runner able to build this image at all.
+#
+# The count guard stays, now against the tracked tree. It earned its place: an expired token once
+# made the old copy-from-outside step a silent no-op, and 0 modules still BUILDS, shipping an
+# image that looks fine and cannot assess a single PDF. A guard that can only fire on a deletion
+# is cheap enough to keep.
+N_MOD="$(find engine/pdf-analyser -name '*.py' | wc -l | tr -d ' ')"
+[ "$N_MOD" -ge "$MIN_MODULES" ] || die "engine/pdf-analyser has only $N_MOD modules, expected >= $MIN_MODULES — the vendored engine looks truncated, refusing to build"
+echo "  $N_MOD modules (tracked in-repo)"
 
 # ── 4. CalVer ──────────────────────────────────────────────────────────────────────────────
 # YYYY.M.D.N in Pacific, N = the count of revisions already created today + 1. Baked into the

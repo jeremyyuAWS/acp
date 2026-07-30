@@ -35,7 +35,10 @@ config/rubric.active.json
 test-corpus/last-scan.json
 test-corpus/files/_office.json
 
-# vendored compiled engine for the deploy image (not committed)
+# Staging directory used by the OLD deploy flow, which copied the PDF engine in from a checkout
+# outside this repo. Nothing writes here now — the engine is tracked at engine/pdf-analyser
+# (ADR 0029), the same way the Office analysers are owned under engine/office-analysers
+# (ADR 0012). Kept ignored so a stale local copy from a previous deploy is never committed.
 deploy/public/vendor/
 
 # Partner code (DigitalA11y) full upstream solution — its own repo, not tracked here.
