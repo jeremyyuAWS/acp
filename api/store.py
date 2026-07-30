@@ -1252,6 +1252,14 @@ class Store:
         now derived and complete). Returns False for the ordinary scan with nothing shadowed,
         which is every scan that has never had a fix written back into its own estate.
         """
+        # Cheap gate first. list_scans calls this per row and the SPA polls it, so a 258-file
+        # estate must not pay a full file_records read per scan per poll to be told nothing is
+        # shadowed. Nothing can shadow without a stamp, and most scans have none.
+        self._db.execute(cur,
+            "SELECT 1 FROM file_records WHERE scan_id=%s AND acp_stamped IS NOT NULL LIMIT 1",
+            (run["id"],))
+        if self._db.fetchone(cur) is None:
+            return False
         self._db.execute(cur,
             "SELECT file,status,score,compliant,acp_stamped FROM file_records WHERE scan_id=%s",
             (run["id"],))
