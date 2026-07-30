@@ -40,6 +40,16 @@ export const SCAN_UNAVAILABLE =
 // must not evict their scan. tests/test_scan_not_found_detail.py pins the string server-side so
 // this coupling cannot drift silently.
 const SCAN_NOT_FOUND_DETAIL = /^scan not found$/i
+
+// Backend marker for "Ollama answered, but the model it would need is not pulled". Coupled
+// deliberately and NOT by status alone: /ai/suggest also 503s when the model IS pulled and the
+// call merely failed, and that one must stay retryable per card. api/routes/ai.py owns the
+// string (MODEL_NOT_PULLED) and tests/test_ai_model_not_pulled_detail.py pins it server-side.
+//
+// Flagged rather than rewritten: the server's detail already names the model and the `ollama pull`
+// that fixes it, and the review card renders it verbatim. This only tells autoDraft.js that
+// re-asking is pointless — see the circuit breaker there.
+const AI_MODEL_NOT_PULLED_DETAIL = /\bmodel not pulled\b/i
 // The scan id out of `<base>/scans/<id>[/...]`. Read off the Response, so it works for every
 // wrapper below without threading the id through each one.
 const SCAN_URL_RE = /\/scans\/([^/?#]+)/
@@ -68,7 +78,11 @@ const j = async (r) => {
       e.scanId = scanId
       throw e
     }
-    throw new Error(detail)
+    const e = new Error(detail)
+    // A capability failure, not a transient one: every other card in the inbox would hit the
+    // same missing model, so the auto-draft gate stops rather than asking N more times.
+    if (r.status === 503 && AI_MODEL_NOT_PULLED_DETAIL.test(String(detail))) e.aiModelNotPulled = true
+    throw e
   }
   return r.json()
 }
