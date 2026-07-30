@@ -5,6 +5,8 @@ import { dirname, join } from 'node:path'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { statusSegments, severityItems, Bars } from './charts.jsx'
+import Overview from './Overview.jsx'
+import { findingsByCriterion, findingsByLevel, levelOfFinding } from './wcagFinding.js'
 import { statusOf, statusCounts, analysedCount, avgScore, ALL_STATUSES, NOT_ASSESSED } from './docStatus.js'
 import { recommendFor, remediableCount, REMEDIATION_ACTIONS } from './sim.js'
 
@@ -391,5 +393,136 @@ describe('the estate report omits the score dial it cannot compute', () => {
   it('guards the ring instead of defaulting it to zero', () => {
     expect(pdfSrc).not.toMatch(/p\.ring\(d\.avgScore \?\? 0/)
     expect(pdfSrc).toMatch(/if \(d\.avgScore != null\) p\.ring\(d\.avgScore/)
+  })
+})
+
+// ── 2026-07-30, acp-app:598abe9 (v2026.7.30.3), scan 12f28938cd2f ────────────────────────────
+//
+// A whole-Drive scan: 8 files listed, 4 kept. One of the 4 was a remediated .docx ACP had
+// written back to Drive under the source document's own name, so `get_scan` dropped it from the
+// file list (shadowed_acp_outputs — an artifact is not a document in the estate) while the
+// scan_runs counters still counted it. The Overview then showed, all at once:
+//
+//     documents 4 · certifiable 3 · audit-ready 75%
+//     [donut] 3 documents — 2 certifiable, 1 issues
+//     Scope: 3 of 4 documents have been analysed — the rest were discovered but not yet assessed.
+//     Findings by severity: moderate 6        Findings by WCAG level: "No open findings."
+//     Top WCAG violations: "Info and Relationships" AND "info & relationships"
+//
+// and Discover, reading the same file list, said 3 documents.
+//
+// The rows below are that scan's, verbatim: two passing PDFs, one .docx failing at 68, and the
+// ACP copy of that .docx — stamped, passing at 92 — which is the row the counters could see and
+// the list could not. Findings carry the wcag spellings the three writers actually emit and no
+// `level` field, because real scan findings have none.
+const ROI_SOURCE = 'HIM_ROI_Instructions_06.02.2025 (1).docx'
+const driveDoc = (file, over = {}) => ({
+  file, engine: 'python/pdf', status: 'analysed', score: 92, compliant: 1, skipped_rules: 0,
+  remediated_at: null, drive_write_url: null, acp_stamped: null, published_at: null,
+  sourceName: 'Google Drive', issues: [], ...over,
+})
+const SCAN_12F2_FILES = asApp([
+  driveDoc('authorization-to-disclose-phi-english-2026-04.pdf', { issues: [
+    { rule_id: 'OCR_IMAGE_OF_TEXT_STRICT', wcag: '1.4.9 Images of Text (No Exception)', severity: 'MODERATE' },
+    { rule_id: 'PDF_TIGHT_LINE_SPACING', wcag: '1.4.12 Text Spacing', severity: 'REVIEW' },
+    { rule_id: 'PDF_NONTEXT_LOW_CONTRAST', wcag: '1.4.11 Non-text Contrast', severity: 'REVIEW' },
+  ] }),
+  driveDoc(ROI_SOURCE, { engine: '.net/office', score: 68, compliant: 0, issues: [
+    { rule_id: 'DOCX-HEAD-001', wcag: 'SC_1_3_1', severity: 'MODERATE' },
+    { rule_id: 'DOCX-HEAD-001', wcag: 'SC_1_3_1', severity: 'MODERATE' },
+    { rule_id: 'OCR_IMAGE_OF_TEXT_STRICT', wcag: '1.4.9 Images of Text (No Exception)', severity: 'MODERATE' },
+    { rule_id: 'DOCX_PSEUDO_HEADING', wcag: '1.3.1 Info and Relationships', severity: 'MODERATE' },
+  ] }),
+  driveDoc('HIM_ROI_Instructions_06.02.2025.pdf', { issues: [
+    { rule_id: 'OCR_IMAGE_OF_TEXT_STRICT', wcag: '1.4.9 Images of Text (No Exception)', severity: 'MODERATE' },
+    { rule_id: 'PDF_NONTEXT_LOW_CONTRAST', wcag: '1.4.11 Non-text Contrast', severity: 'REVIEW' },
+  ] }),
+])
+// What api/store.py hands out once the counters are reconciled with the list (its own tests pin
+// the derivation; this pins what the screen does with the result).
+const SCAN_12F2_RUN = {
+  id: '12f28938cd2f', status: 'done', source: 'drive', files: 3, certifiable: 2, uncertain: 0,
+  error: 0, avg_score: 84, assessed_at: '2026-07-30T14:31:00Z',
+  scope: { kind: 'drive', raw: 8, scannable: 4, skipped_acp: 0, kept: 4, truncated: false, cap: 2500 },
+}
+const screen = (run = SCAN_12F2_RUN, files = SCAN_12F2_FILES) =>
+  renderToStaticMarkup(createElement(Overview, {
+    run, files, trend: [], trendDates: [], onGo: () => {}, scanList: [], onPickScan: () => {},
+    me: { email: 'auditor@example.com' },
+  })).replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ')
+
+describe('the Overview totals count the documents the Overview lists', () => {
+  it('does not report more documents than the estate it is describing', () => {
+    // The four tiles, the donut, the funnel and the score bands are six answers to "how many
+    // documents"; they came from two different populations.
+    const html = screen()
+    expect(html).toMatch(/documents 3\b/)
+    expect(html).toMatch(/certifiable 2\b/)
+    expect(html).toMatch(/audit-ready 67%/)
+    expect(statusSegments(SCAN_12F2_RUN, SCAN_12F2_FILES).reduce((a, s) => a + s.value, 0))
+      .toBe(SCAN_12F2_RUN.files)
+  })
+
+  it('shows no partial-analysis banner when nothing is missing', () => {
+    // `analysed < n` printed "the rest were discovered but not yet assessed" over a document
+    // that HAD been assessed (score 92) and was simply not a source document — a true-sounding
+    // sentence covering for a number that was wrong.
+    expect(analysedCount(SCAN_12F2_FILES)).toBe(SCAN_12F2_RUN.files)
+    expect(screen()).not.toMatch(/discovered but not yet assessed/)
+  })
+
+  it('still explains a genuine gap, so the banner is not merely silenced', () => {
+    const partial = [...SCAN_12F2_FILES, asApp([driveDoc('never-opened.pdf',
+      { status: 'discovered', score: null, compliant: 0 })])[0]]
+    expect(screen({ ...SCAN_12F2_RUN, files: 4 }, partial)).toMatch(/3 of 4 documents have been analysed/)
+  })
+})
+
+describe('the Overview says which findings each panel counts', () => {
+  it('reports findings by WCAG level instead of claiming there are none', () => {
+    // Real findings carry no `level`, so `i.level` counted zero and the panel rendered its
+    // empty state — the words "No open findings." — beside a severity panel reporting six.
+    const html = screen()
+    expect(html).toMatch(/Findings by WCAG level[^]*Level A · must-have 3/)
+    expect(html).toMatch(/Level AA · legal target 3/)
+    expect(html).toMatch(/Level AAA · optional 3/)
+    expect(html).not.toMatch(/Findings by WCAG level · [^]{0,80}No open findings/)
+  })
+
+  it('counts one criterion once, however the finding spelled it', () => {
+    // 'SC_1_3_1' (×2, .NET/Office) and '1.3.1 Info and Relationships' (×1, Python) are one
+    // criterion. Keyed raw they were two entries in the violations cloud, both 1.3.1, their
+    // three findings split 2/1 — so "most common failure" was decided by a spelling.
+    const html = screen()
+    expect(html).toMatch(/Info and Relationships/)
+    expect(html).not.toMatch(/info & relationships/)
+    expect(findingsByCriterion(SCAN_12F2_FILES).filter((c) => c.sc === '1.3.1'))
+      .toEqual([expect.objectContaining({ sc: '1.3.1', count: 3 })])
+  })
+
+  it('accounts for the advisory findings the severity panel leaves out', () => {
+    // severityItems buckets the four BLOCKING severities. A review-recommended finding (ADR
+    // 0023) has none of them, so 3 of the estate's 9 findings were in no bucket and the panel's
+    // total silently disagreed with every other finding count on the screen. The panel is not
+    // widened — RiskScore reads the same items as blocking work — so the screen says so.
+    const html = screen()
+    expect(html).toMatch(/Findings by severity · blocking findings/)
+    expect(html).toMatch(/moderate 6/)
+    expect(html).toMatch(/Plus 3 advisory findings/)
+    expect(html).toMatch(/estate holds 9 findings in total/)
+    // The two panels' totals now reconcile through a stated difference rather than by accident.
+    const bySeverity = severityItems(SCAN_12F2_FILES).reduce((a, s) => a + s.value, 0)
+    const byLevel = Object.values(findingsByLevel(SCAN_12F2_FILES)).reduce((a, n) => a + n, 0)
+    expect(bySeverity + 3).toBe(byLevel)
+  })
+
+  it('never files a criterion under a conformance level it does not have', () => {
+    // coreStats.levelOf defaults an unplaceable criterion to 'A'. 1.4.9 is AAA, and the Level A
+    // row is captioned "the legal floor" — a default there is an invented legal obligation.
+    expect(levelOfFinding({ wcag: '1.4.9 Images of Text (No Exception)' })).toBe('AAA')
+    expect(levelOfFinding({ wcag: 'SC_1_3_1' })).toBe('A')
+    expect(levelOfFinding({ wcag: 'NOT_A_CRITERION' })).toBe(null)
+    expect(findingsByLevel([{ issues: [{ wcag: 'NOT_A_CRITERION' }] }]))
+      .toEqual({ A: 0, AA: 0, AAA: 0, unknown: 1 })
   })
 })

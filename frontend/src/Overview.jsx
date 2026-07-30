@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
-import FileDrawer, { statusOf, critLabel } from './FileDrawer.jsx'
+import FileDrawer, { statusOf } from './FileDrawer.jsx'
+import { findingsByCriterion, findingsByLevel, levelOfFinding } from './wcagFinding.js'
 import { analysedCount, avgScore } from './docStatus.js'
 import { IDENTITY, SIM, remediableCount, recommendationSummary } from './sim.js'
 import { openReport } from './api.js'
@@ -54,7 +55,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
       // "ACTION REQUIRED" either — say so rather than let null fall through the comparisons.
       const verdict = auditReady == null ? ['NOT YET ASSESSED', '#5F5E5A']
         : auditReady >= 80 ? ['ON TRACK TO COMPLIANT', '#3B6D11'] : auditReady >= 45 ? ['DEVELOPING', '#854F0B'] : ['ACTION REQUIRED', '#1F5FA8']
-      const criteria = Object.entries(wm).sort((a, b) => b[1] - a[1]).map(([w, count]) => ({ sc: w.replace(/^SC_/, '').replace(/_/g, '.'), label: critLabel(w).replace(/^[\d.]+\s*/, ''), count }))
+      const criteria = wm.map((c) => ({ sc: c.sc, label: c.name, count: c.count }))
       const { exportGovernanceReport } = await import('./pdfReport.js')
       await exportGovernanceReport({
         org: orgName, quarter, date, scope: 'full document estate',
@@ -117,6 +118,17 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
     { label: 'Publish', v: publish, go: 'monitor' },
   ]
   const severity = severityItems(files)
+  // "Findings by severity" buckets CRITICAL/SERIOUS/MODERATE/MINOR — the blocking severities.
+  // An advisory finding (severity REVIEW, ADR 0023: assessed-for-review, never certified) has
+  // none of those, so it is in no bucket and the panel's total silently excludes it. On
+  // 2026-07-30 that panel read 6 while the estate held 9 recorded findings and the WCAG-level
+  // panel beside it counted all 9. Both totals are right; neither said what it was counting.
+  //
+  // The panel is NOT widened to swallow them — severityItems also feeds RiskScore, whose
+  // critical/serious weighting is a leadership risk view of blocking work, and an advisory is
+  // not blocking work. So the screen says which question each panel answers instead.
+  const advisoryFindings = files.reduce((a, f) => a + (f.issues || []).filter((i) => String(i.severity || '').toUpperCase() === 'REVIEW').length, 0)
+  const allFindings = files.reduce((a, f) => a + (f.issues || []).length, 0)
 
   // inventory distributions
   const countBy = (fn) => Object.entries(files.reduce((m, f) => { const k = fn(f); if (k != null) m[k] = (m[k] || 0) + 1; return m }, {})).sort((a, b) => b[1] - a[1])
@@ -125,8 +137,11 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const bySource = countBy((f) => f.sourceName).map(([label, value]) => ({ label, value, color: PLUM }))
   const byType = countBy((f) => (f.type || '').toUpperCase()).map(([label, value]) => ({ label, value, color: PLUM }))
   const byDept = countBy((f) => f.department).map(([label, value]) => ({ label, value, color: PLUM }))
-  const wm = {}; files.forEach((f) => (f.issues || []).forEach((i) => { wm[i.wcag] = (wm[i.wcag] || 0) + 1 }))
-  const wcCloud = Object.entries(wm).sort((a, b) => b[1] - a[1]).map(([w, n]) => ({ text: critLabel(w).replace(/^[\d.]+\s*/, ''), value: n, full: critLabel(w) }))
+  // Collapsed across the three spellings a finding's `wcag` arrives in — see wcagFinding.js.
+  // Keying the raw string listed 1.3.1 twice, as "info & relationships" and "Info and
+  // Relationships", and split its findings across the two.
+  const wm = findingsByCriterion(files)
+  const wcCloud = wm.map((c) => ({ text: c.name, value: c.count, full: c.label }))
 
   // --- analysis by dimension (score / severity / WCAG level) — not just counts ---
   // UNSCORED IS NOT ZERO. `avgScore` (docStatus.js) returns null for a group nobody analysed,
@@ -144,8 +159,14 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const scoreBySeniority = SR_ORDER.filter((s) => senGroups[s]).map((s) => scoreItem([s, senGroups[s]]))
   // Only the groups with a real measurement can carry a claim about scores.
   const deptRanked = scoreByDept.filter((d) => d.value != null)
-  const levelC = { A: 0, AA: 0, AAA: 0 }; files.forEach((f) => (f.issues || []).forEach((i) => { if (levelC[i.level] != null) levelC[i.level] += 1 }))
-  const byLevel = [['A', '#1F5FA8', 'Level A · must-have'], ['AA', '#D85A30', 'Level AA · legal target'], ['AAA', '#9a948f', 'Level AAA · optional']].filter(([k]) => levelC[k]).map(([k, color, label]) => ({ label, value: levelC[k], color, lvl: k }))
+  // Real scan findings carry no `level` — only SIM's corpus does — so reading `i.level` counted
+  // zero on every real scan and this panel rendered "No open findings." beside a severity panel
+  // reporting six. The level comes from the WCAG catalog (wcagFinding.js), and a criterion the
+  // catalog cannot place is shown as its own row rather than defaulted into Level A.
+  const levelC = findingsByLevel(files)
+  const byLevel = [['A', '#1F5FA8', 'Level A · must-have'], ['AA', '#D85A30', 'Level AA · legal target'],
+                   ['AAA', '#9a948f', 'Level AAA · optional'], ['unknown', '#9a948f', 'level not in the catalog']]
+    .filter(([k]) => levelC[k]).map(([k, color, label]) => ({ label, value: levelC[k], color, lvl: k }))
   const band = (lo, hi) => files.filter((f) => f.score != null && f.score >= lo && f.score <= hi).length
   const scoreBands = [
     { label: '90–100 · certifiable', value: band(90, 100), color: '#639922' },
@@ -167,7 +188,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const issuesOnly = files.filter((f) => statusOf(f) === 'issues').length
   const INS = {
     status: `${auditReady == null ? 'No document in this scan has been analysed yet, so no share is certifiable' : `${auditReady}% of documents are certifiable`}${issuesOnly ? `; ${issuesOnly} ${issuesOnly === 1 ? 'has' : 'have'} open findings, most of them auto-fixable — a first pass lifts this quickly` : ''}.`,
-    severity: sevTotal ? `Critical & serious findings (${sevHigh}) are ${pct(sevHigh, sevTotal)}% of all ${sevTotal} finding${sevTotal !== 1 ? 's' : ''}${wcCloud[0] ? `, mostly ${wcCloud[0].text}` : ''}. Clear these first to cut the most legal risk.` : 'No open findings.',
+    severity: sevTotal ? `Critical & serious findings (${sevHigh}) are ${pct(sevHigh, sevTotal)}% of the ${sevTotal} blocking finding${sevTotal !== 1 ? 's' : ''}${wcCloud[0] ? `, mostly ${wcCloud[0].text}` : ''}. Clear these first to cut the most legal risk.` : (advisoryFindings ? `No blocking findings — but ${advisoryFindings} advisory finding${advisoryFindings === 1 ? '' : 's'} ${advisoryFindings === 1 ? 'is' : 'are'} waiting on a human to look at ${advisoryFindings === 1 ? 'it' : 'them'}.` : 'No open findings.'),
     source: bySource[0] ? `${bySource[0].label} holds the most documents (${bySource[0].value} of ${n}).` : '',
     type: byType[0] ? `${byType[0].label} is your largest format (${byType[0].value} of ${n} document${n !== 1 ? 's' : ''}).${/pdf/i.test(byType[0].label) ? ' PDFs are typically the hardest to remediate — tagging and reading order.' : ''}` : '',
     dept: byDept[0] ? `${byDept[0].label} has the most documents (${byDept[0].value} of ${n}).` : '',
@@ -187,7 +208,9 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         ? 'No Executive-owned document has been analysed yet, so there is no score for leadership content. These drive legal exposure — worth putting on the fast track.'
         : `Executive-owned documents score ${exec.value}/100. Leadership content drives legal exposure and sets the tone — keep these on the fast track.`
     })(),
-    wcagLevel: byLevel.length ? `${byLevel[0]?.value || 0} Level A findings are the legal floor and most automatable — address these first. Level AA (${levelC.AA || 0} findings) is the ADA/EAA/508 statutory target; Level AAA is optional.` : 'No findings by WCAG level.',
+    // Name the level each number belongs to. `byLevel[0]` is only Level A when Level A has
+    // findings, so reading the headline count off it captioned an AA total "Level A findings".
+    wcagLevel: byLevel.length ? `${levelC.A || 0} Level A findings are the legal floor and most automatable — address these first. Level AA (${levelC.AA || 0} findings) is the ADA/EAA/508 statutory target; Level AAA is optional.` : 'No findings by WCAG level.',
     scoreBand: `${band(90, 100)} documents are certifiable now (${pct(band(90, 100), n)}% of the estate). The ${band(50, 89)} in the 50–89 band are within striking distance — remediation here produces the fastest estate-level lift.`,
   }
 
@@ -293,8 +316,15 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
 
       <div className="chartrow">
         <section className="panel"><h2>Compliance status <span className="muted" style={{ fontWeight: 400 }}>· click to drill in</span></h2><Donut segments={statusSegments(run, files)} caption="documents" onPick={pickStatus} /><Insight text={INS.status} /></section>
-        <section className="panel"><h2>Findings by severity</h2>
-          {severity.length ? <Bars items={severity} onPick={pickSeverity} /> : <p className="muted">No open findings.</p>}
+        <section className="panel"><h2>Findings by severity <span className="muted" style={{ fontWeight: 400 }}>· blocking findings</span></h2>
+          {severity.length ? <Bars items={severity} onPick={pickSeverity} /> : <p className="muted">No blocking findings.</p>}
+          {advisoryFindings > 0 && (
+            <p className="muted" style={{ fontSize: 11.5, margin: '8px 0 0' }}>
+              Plus <b>{advisoryFindings}</b> advisory finding{advisoryFindings === 1 ? '' : 's'} (review-recommended),
+              not counted above — they are raised for a human to look at and never block certification.
+              The estate holds <b>{allFindings}</b> findings in total.
+            </p>
+          )}
           <Insight text={INS.severity} />
         </section>
       </div>
@@ -310,7 +340,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         <section className="panel"><h2>Average score by owner seniority <span className="muted" style={{ fontWeight: 400 }}>· /100</span></h2><Bars items={scoreBySeniority} max={100} cols="100px 1fr 34px" onPick={(it) => { const fs = files.filter((f) => f.seniority === it.label); setSeg({ title: it.value == null ? `${it.label}-owned · not yet scored` : `${it.label}-owned · avg ${it.value} / 100`, subtitle: `${fs.length} documents`, files: fs }) }} /><Insight text={INS.scoreBySeniority} /></section>
       </div>
       <div className="chartrow">
-        <section className="panel"><h2>Findings by WCAG level</h2>{byLevel.length ? <Bars items={byLevel} cols="150px 1fr 30px" onPick={(it) => { const fs = files.filter((f) => (f.issues || []).some((i) => i.level === it.lvl)); setSeg({ title: `Level ${it.lvl} findings`, subtitle: `${fs.length} document(s)`, files: fs }) }} /> : <p className="muted">No open findings.</p>}<Insight text={INS.wcagLevel} /></section>
+        <section className="panel"><h2>Findings by WCAG level <span className="muted" style={{ fontWeight: 400 }}>· all findings, blocking &amp; advisory</span></h2>{byLevel.length ? <Bars items={byLevel} cols="150px 1fr 30px" onPick={(it) => { const fs = files.filter((f) => (f.issues || []).some((i) => (levelOfFinding(i) || 'unknown') === it.lvl)); setSeg({ title: it.lvl === 'unknown' ? 'Findings whose criterion is not in the catalog' : `Level ${it.lvl} findings`, subtitle: `${fs.length} document(s)`, files: fs }) }} /> : <p className="muted">No open findings.</p>}<Insight text={INS.wcagLevel} /></section>
         <section className="panel"><h2>Documents by score band</h2><Bars items={scoreBands} cols="150px 1fr 30px" onPick={(it) => { const lo = it.label.startsWith('90') ? 90 : it.label.startsWith('50') ? 50 : it.label.startsWith('below') ? 0 : null; const fs = lo != null ? files.filter((f) => f.score != null && f.score >= lo && f.score <= (lo === 90 ? 100 : lo === 50 ? 89 : 49)) : files.filter((f) => f.score == null); setSeg({ title: it.label, subtitle: `${fs.length} document(s)`, files: fs }) }} /><Insight text={INS.scoreBand} /></section>
       </div>
 

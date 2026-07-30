@@ -1221,6 +1221,57 @@ class Store:
         "FROM file_records WHERE scan_id=%s"
     )
 
+    def _reconcile_shadowed(self, cur, run: dict) -> bool:
+        """Re-count the run's summary over the documents get_scan actually hands out.
+
+        get_scan drops ACP's OWN output when it shadows the source document it was made from
+        (shadowed_acp_outputs) — an artifact is not a document in the estate. The scan_runs
+        counters were written by finalize_scan_run straight over file_records, which still holds
+        that artifact, so the summary and the file list described two different populations.
+
+        On 2026-07-30 that put both numbers on the Overview at once. A whole-Drive scan listed 8
+        raw files, kept 4, and one of the 4 was a remediated .docx ACP had written back to Drive
+        under the source's own name. The screen then read:
+
+            documents 4 · certifiable 3 · audit-ready 75%
+            [status donut] 3 documents — 2 certifiable, 1 issues
+            Scope: 3 of 4 documents have been analysed — the rest were discovered but not yet
+                   assessed. Findings, certifiable and audit-ready describe the analysed
+                   documents only.
+
+        Three ways wrong. The tile and the donut disagree about how many documents there are and
+        how many are certifiable; the scope line explains the gap with a reason that is false (the
+        4th was analysed — score 92 — it is simply not a source document); and its promise that
+        certifiable describes the analysed documents only is false too, because 3 counts the
+        artifact and the donut's 2 does not. Discover, reading the same file list, said 3.
+
+        The artifact is compliant=1 and scored 92 — remediated output usually is — so every one of
+        those numbers erred in the flattering direction.
+
+        Returns True when it re-counted (so the NULL-fill below can be skipped: these counters are
+        now derived and complete). Returns False for the ordinary scan with nothing shadowed,
+        which is every scan that has never had a fix written back into its own estate.
+        """
+        self._db.execute(cur,
+            "SELECT file,status,score,compliant,acp_stamped FROM file_records WHERE scan_id=%s",
+            (run["id"],))
+        rows = self._db.fetchall(cur)
+        shadowed = shadowed_acp_outputs(rows)
+        if not shadowed:
+            return False
+        visible = [r for r in rows if r["file"] not in shadowed]
+        scored = [r["score"] for r in visible if r.get("score") is not None]
+        run["files"] = len(visible)
+        run["certifiable"] = sum(1 for r in visible if r.get("compliant"))
+        run["uncertain"] = sum(1 for r in visible if r.get("status") == "uncertain")
+        run["error"] = sum(1 for r in visible if r.get("status") == "error")
+        # Unscored stays NULL rather than 0 — the UI renders '—' for "nobody measured this",
+        # and a 0 here would be a failing grade nobody awarded.
+        run["avg_score"] = round(sum(scored) / len(scored)) if scored else None
+        if run.get("files_done") is not None:
+            run["files_done"] = min(run["files_done"], len(visible))
+        return True
+
     def _fill_run_aggregate(self, cur, run: dict) -> dict:
         """Never hand out a NULL counter — derive it the way finalize would have.
 
@@ -1245,6 +1296,9 @@ class Store:
         (get_scan and list_scans both funnel through here) gets an object rather than a string —
         and so a row written before the column existed reads as None, never as a fabricated
         default. It runs BEFORE the early return below, which the counters get to skip.
+
+        And the one place the counters are reconciled with the file list the SAME scan hands out
+        — see _reconcile_shadowed below.
         """
         raw_scope = run.get("scope")
         if isinstance(raw_scope, str):
@@ -1253,6 +1307,8 @@ class Store:
                 run["scope"] = _json.loads(raw_scope)
             except Exception:
                 run["scope"] = None      # unreadable is unknown, not "whole Drive"
+        if self._reconcile_shadowed(cur, run):
+            return run
         if all(run.get(k) is not None for k in ("certifiable", "uncertain", "error")):
             return run
         self._db.execute(cur, self._AGG_SELECT, (run["id"],))
