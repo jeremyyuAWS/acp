@@ -65,7 +65,19 @@ def _score(alt: str, grounded, label: dict) -> dict:
 
 
 def run_model(model: str, labels: dict, corpus: Path) -> dict:
+    # Pin the model for the whole run. Assigning the global is not enough on its own: every
+    # describe_image_structured call goes through ai._maybe_refresh_endpoint(), which reassigns
+    # OLLAMA_VISION_MODEL from the store override / env default on a 30s TTL — so the first image
+    # silently reverted the bake-off to whatever the environment says and every later `--models`
+    # entry scored the SAME model. That is invisible in the output (it prints the name you asked
+    # for) and it inverted a real comparison on 2026-07-30: moondream, warm, was reported as
+    # qwen2.5vl:7b at 0.14 pass / 520ms, against qwen's actual 0.71 / 9920ms.
+    #
+    # The harness is the thing choosing the model here, so the runtime override has no business
+    # overruling it — stub the refresh out rather than trying to out-race its TTL.
+    ai._maybe_refresh_endpoint = lambda: None
     ai.OLLAMA_VISION_MODEL = model          # module global read at call time by _vision_generate
+    ai.reset_probe_cache()                  # the availability probe must re-check for THIS model
     rows, latencies, missing = [], [], 0
     for label in labels["images"]:
         data = _image_bytes(corpus, label["file"], label["member"])
