@@ -1,11 +1,15 @@
 import { useState, useRef, useEffect } from 'react'
 import { allRules } from './rules'
 import { WCAG } from './wcagCatalog.js'
-import { assessScan, getCapability, getScan, refreshScanDriveToken } from './api.js'
+import { assessScan, getCapability, getScan, getScanTraces, refreshScanDriveToken } from './api.js'
 import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
 import { TraceChip } from './Transparency.jsx'
 import { assessLine } from './phaseNarration.js'
 import { coreStats } from './coreStats.js'
+// Separate line on purpose: coreStats.test.js pins the exact `import { coreStats } from
+// './coreStats.js'` line as its no-drift guard, and widening the braces would have meant
+// loosening someone else's assertion to accommodate this change.
+import { scOfWcag } from './coreStats.js'
 import { SCOPE_SCS, SCOPE_SIZE, SCOPE_LABEL } from './activeScope.js'
 
 // Re-assess the whole estate against a chosen WCAG 2.1 conformance level. A finding blocks
@@ -67,6 +71,16 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   const [progress, setProgress] = useState(0)
   const [currentFile, setCurrentFile] = useState(null)
   const [currentPhase, setCurrentPhase] = useState('')
+  // Per-document progress, shown UNDER the bar. A percentage says how far along the run is; it
+  // cannot say which documents are done, which is the thing a person watching actually wants —
+  // and on a deferred run the header's own count read "0 documents" the whole time because
+  // `docs` filters on a score the files do not have yet.
+  const [liveFiles, setLiveFiles] = useState([])      // [{ file, score, done }]
+  const [liveTotal, setLiveTotal] = useState(0)       // run.files — the REAL total, not docs.length
+  // Failing criteria per finished document, fetched once each and cached. Keyed by filename, so a
+  // file is never re-fetched no matter how many times the poll sees it.
+  const [failedScs, setFailedScs] = useState({})
+  const scsWanted = useRef(new Set())
   const [result, setResult] = useState(saved?.result || null)
   // Track whether the current result came from a previous session (cached) or was
   // computed in this session — so we can label cached results clearly.
@@ -159,6 +173,16 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
       }
       const idx = Math.min(docs.length - 1, Math.floor((elapsed / DURATION) * docs.length))
       setProgress(idx); setCurrentFile(nameOf(docs[idx])); setCurrentPhase(assessLine(idx))
+      // Same per-document list the deferred path builds, so the demo shows the real component
+      // rather than a second implementation that could drift from it. The criteria come from
+      // each file's OWN issues — sim data, but not invented here.
+      setLiveTotal(docs.length)
+      setLiveFiles(docs.map((d, i) => ({ file: nameOf(d), path: d.file || nameOf(d),
+                                         score: d.score, done: i < idx, status: d.status })))
+      setFailedScs(Object.fromEntries(docs.slice(0, idx).map((d) => [
+        d.file || nameOf(d),
+        [...new Set((d.issues || []).map((x) => scOfWcag(x.wcag)).filter(Boolean))].sort(),
+      ])))
     }
     step()
     timer.current = setInterval(step, 200)
@@ -177,6 +201,25 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
         const total = run.files || fs.length || 1
         setProgress(Math.min(scored.length, total))
         setCurrentPhase(`Opening & assessing ${scored.length} of ${total}…`)
+        // Feed the per-document list straight off the poll — no extra request. `status` and
+        // `score` are already in this payload; only the failing criteria need fetching.
+        setLiveTotal(total)
+        setLiveFiles(fs.map((x) => ({ file: nameOf(x), path: x.file, score: x.score,
+                                      done: x.score != null, status: x.status })))
+        // One traces call per document, the first time it finishes. Scan-wide traces would be
+        // file x rule rows on every tick — 5,000+ on a 258-document estate, several times a
+        // second — so this asks per file and never asks twice.
+        for (const f of fs) {
+          if (f.score == null || !f.file || scsWanted.current.has(f.file)) continue
+          scsWanted.current.add(f.file)
+          getScanTraces(runId, f.file)
+            .then((rows) => {
+              const bad = (rows || []).filter((r) => r.outcome === 'FAIL')
+                .map((r) => r.rule_id).filter(Boolean)
+              setFailedScs((m) => ({ ...m, [f.file]: [...new Set(bad)].sort() }))
+            })
+            .catch(() => { /* best-effort detail — never block or fail the assessment on it */ })
+        }
         // The first file with no score yet is the one in flight. `currentFile` state has
         // existed since this component was written but was never populated or rendered, so a
         // long scan showed a moving bar and no indication of what it was moving through.
@@ -332,7 +375,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               <i style={{ width: `${pct}%` }} />
             </div>
             <div className="assessrunmeta">
-              <span className="muted"><b style={{ color: '#1F5FA8' }}>Computing conformance</b> · {docs.length.toLocaleString()} documents at WCAG 2.1 {level}</span>
+              <span className="muted"><b style={{ color: '#1F5FA8' }}>Computing conformance</b> · {(liveTotal || docs.length).toLocaleString()} documents at WCAG 2.1 {level}</span>
               <span className="assesspct">{pct}%</span>
             </div>
             {(currentFile || currentPhase) && (
@@ -341,6 +384,32 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                 {currentFile && <span className="assessengine" title={`The ${ruleCount} criteria in your ${SCOPE_LABEL} that block at level ${level} — the same list the result below is scored over`}>{ruleCount} criteria in scope</span>}
                 {currentPhase && <span className="muted assessphase">{currentPhase}</span>}
               </div>
+            )}
+            {liveFiles.length > 0 && (
+              <ul className="assesslist" aria-label="Per-document assessment progress">
+                {liveFiles.map((f) => {
+                  const scs = failedScs[f.path]
+                  return (
+                    <li key={f.path} className={f.done ? 'done' : 'pending'}>
+                      <span className="alstate" aria-hidden="true">{f.done ? '\u2713' : '\u25CB'}</span>
+                      <span className="alname" title={f.path}>{f.file}</span>
+                      {f.done
+                        ? <>
+                            <span className="alscore">{f.score}/100</span>
+                            {/* The criteria this document FAILED, by number. An empty array is a
+                                real answer — it means nothing failed — so it renders as such
+                                rather than as a spinner that never resolves. */}
+                            {scs === undefined
+                              ? <span className="muted alscs">reading criteria\u2026</span>
+                              : scs.length
+                                ? <span className="alscs">{scs.map((c) => <b key={c}>{c}</b>)}</span>
+                                : <span className="alclean">no failures</span>}
+                          </>
+                        : <span className="muted alscs">{f.status === 'analysed' ? 'scoring\u2026' : 'queued'}</span>}
+                    </li>
+                  )
+                })}
+              </ul>
             )}
           </div>
         )}

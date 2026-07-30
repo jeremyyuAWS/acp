@@ -1176,6 +1176,29 @@ input:focus-visible, [role="tab"]:focus-visible {
 .assessfile { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; background: #F0F5FB; border: 1px solid #D4E2F0; border-radius: 7px; padding: 7px 12px; flex-wrap: wrap; }
 .assessfname { font-size: 12.5px; font-weight: 600; color: var(--ink); font-family: monospace; }
 .assessengine { font-size: 11px; font-weight: 700; color: #3C3489; background: #EEEDFE; border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+
+/* Per-document progress under the bar: which files are done, and which criteria each one failed.
+   Capped and scrollable — a 258-document estate must not push the rest of the page off screen,
+   and the run is the thing being watched, not a list to read end to end. */
+.assesslist { list-style: none; margin: 8px 0 0; padding: 4px; max-height: 190px; overflow-y: auto;
+  border: 1px solid #E4E0E8; border-radius: 7px; background: #FCFBFD; }
+.assesslist li { display: flex; align-items: baseline; gap: 8px; padding: 3px 8px; font-size: 12px;
+  border-radius: 4px; flex-wrap: wrap; }
+.assesslist li.pending { color: var(--muted); }
+.assesslist li.done + li.pending { border-top: 1px solid #EFECF2; }
+.alstate { font-weight: 700; color: #3B6D11; width: 12px; flex: 0 0 12px; }
+.assesslist li.pending .alstate { color: #B9B4C0; }
+.alname { font-family: monospace; font-size: 11.5px; color: var(--ink); flex: 1 1 auto;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.assesslist li.pending .alname { color: var(--muted); }
+.alscore { font-weight: 700; font-size: 11.5px; color: var(--ink); flex: 0 0 auto; }
+/* Criterion numbers, not names: they are the identifier a reviewer looks up, and four of them fit
+   where one plain-English label would not. #8A2A20 on #FBE9E7 measures 7.36:1 in the browser —
+   this product fails its own 1.4.3 audit if a status chip does not clear AA, and 11px/700 is
+   small text, so the bar is 4.5:1 not 3:1. */
+.alscs { display: inline-flex; gap: 4px; flex-wrap: wrap; font-size: 11px; }
+.alscs b { font-weight: 700; color: #8A2A20; background: #FBE9E7; border-radius: 4px; padding: 0 5px; }
+.alclean { font-size: 11px; font-weight: 600; color: #3B6D11; }
 .assessphase { font-size: 11px; flex-basis: 100%; margin-top: 2px; }
 .assessres { margin-top: 16px; }
 .assesstiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
