@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { statusSegments, severityItems, Bars } from './charts.jsx'
-import { statusOf, analysedCount, avgScore } from './docStatus.js'
+import { statusOf, statusCounts, analysedCount, avgScore, ALL_STATUSES, NOT_ASSESSED } from './docStatus.js'
 import { recommendFor, remediableCount, REMEDIATION_ACTIONS } from './sim.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -70,14 +70,17 @@ describe('the Overview panels cannot contradict each other', () => {
     expect(needFix).toBeLessThanOrEqual(withFindings)
   })
 
-  it('puts zero-finding documents in the donut bucket that means zero findings', () => {
+  it('puts unopened documents in the donut bucket that means nobody measured them', () => {
     const { run, files } = CANCELLED_258
     const segs = statusSegments(run, files)
     const by = Object.fromEntries(segs.map((s) => [s.label, s.value]))
 
     // Pre-fix this read `issues: 258` — every document, by subtraction, with no finding behind it.
     expect(by.issues).toBeUndefined()
-    expect(by.clean).toBe(258)
+    // …and the first fix moved them into 'clean', which is the OTHER wrong answer: these 258 were
+    // listed and never opened, so "no findings" asserts a measurement that never happened.
+    expect(by.clean).toBeUndefined()
+    expect(by[NOT_ASSESSED]).toBe(258)
   })
 
   // The donut is clickable: Overview's pickStatus opens `files.filter(f => statusOf(f) === label)`.
@@ -103,11 +106,12 @@ describe('the Overview panels cannot contradict each other', () => {
 describe('statusSegments does not do arithmetic on absent run counters', () => {
   const nullRun = { id: 'x', files: 258, certifiable: null, uncertain: null, error: null, avg_score: null }
 
-  it('reports no issues when a null-countered run holds only zero-finding documents', () => {
+  it('reports no issues when a null-countered run holds only unopened documents', () => {
     const files = asApp(Array.from({ length: 258 }, (_, i) => unopenedDoc(i)))
     const segs = statusSegments(nullRun, files)
     expect(segs.find((s) => s.label === 'issues')).toBeUndefined()
-    expect(segs.find((s) => s.label === 'clean').value).toBe(258)
+    expect(segs.find((s) => s.label === 'clean')).toBeUndefined()
+    expect(segs.find((s) => s.label === NOT_ASSESSED).value).toBe(258)
   })
 
   it('still counts the real buckets from a mixed estate', () => {
@@ -176,9 +180,80 @@ describe('the document verdict has exactly one definition', () => {
   it('is imported from the shared module by every consumer', () => {
     for (const f of SHARED_STATUS_CONSUMERS.filter((x) => x !== 'FileDrawer.jsx')) {
       const src = readFileSync(join(here, f), 'utf8')
-      expect(src, `${f} does not import statusOf from docStatus.js`)
-        .toMatch(/import \{[^}]*\bstatusOf\b[^}]*\} from '\.\/docStatus\.js'/)
+      // `statusOf` OR `statusCounts` — the latter is the shared per-verdict counter, defined in
+      // docStatus.js in terms of statusOf, and is what a consumer that only ever tallies files
+      // (charts.jsx) should import. Requiring the raw predicate by name would have that module
+      // hold a dead import purely to satisfy this test. What must not happen — a consumer
+      // declaring its own verdict — is the assertion above.
+      expect(src, `${f} does not import the shared verdict from docStatus.js`)
+        .toMatch(/import \{[^}]*\b(statusOf|statusCounts)\b[^}]*\} from '\.\/docStatus\.js'/)
     }
+  })
+
+  // Dashboard held a verbatim copy of the badge PALETTE too. That is the same failure a step
+  // later: a verdict added to docStatus.js renders with `BADGE[st]` undefined, and the row throws
+  // on destructuring instead of showing the new state.
+  it('is not re-coloured by any consumer holding its own badge map', () => {
+    for (const f of SHARED_STATUS_CONSUMERS) {
+      const src = readFileSync(join(here, f), 'utf8')
+      expect(src, `${f} declares its own status badge map instead of importing STATUS_BADGE`)
+        .not.toMatch(/^\s*(const|export const)\s+(BADGE|STATUS_BADGE)\s*=\s*\{/m)
+    }
+  })
+})
+
+// The hero counters and the rows beneath them read the same estate, so they cannot disagree about
+// how many documents have findings. Reported live 2026-07-30:
+//
+//     MASTER SCORE  0 certifiable · 2 issues · 0 uncertain · 0 unanalysable · 2 files
+//     rows          both "clean", both "score: n/a", both "findings: clean"
+//
+// "2 issues" came from `run.files - run.certifiable - run.uncertain - run.error` — the same
+// subtraction #77 removed from statusSegments and left in Dashboard's hero. With five verdicts
+// and four tiles, everything unnamed landed in "issues" by elimination.
+describe('the Dashboard hero counters agree with the inventory rows', () => {
+  const dashSrc = readFileSync(join(here, 'Dashboard.jsx'), 'utf8')
+
+  it('counts documents instead of subtracting counters', () => {
+    expect(dashSrc).not.toMatch(/run\.files - run\.certifiable - run\.uncertain - run\.error/)
+    expect(dashSrc).toMatch(/countStatuses\(files\)/)
+  })
+
+  it('never reports issues over an estate whose rows all say otherwise', () => {
+    const { files } = CANCELLED_258
+    const counts = statusCounts(files)
+    const rowsWithFindings = files.filter((f) => (f.issues || []).length).length
+
+    expect(counts.issues).toBe(0)
+    expect(counts.issues).toBeLessThanOrEqual(rowsWithFindings)
+    expect(counts[NOT_ASSESSED]).toBe(258)
+  })
+
+  it('has a tile for every verdict, so no document can be absorbed into a bucket', () => {
+    for (const st of ALL_STATUSES) {
+      expect(Object.keys(statusCounts([])), `no counter bucket for '${st}'`).toContain(st)
+    }
+    // The tiles rendered on screen cover the same partition — a verdict with no tile is a
+    // document whose count is simply not shown, which is how the subtraction hid them before.
+    for (const st of ALL_STATUSES) {
+      expect(dashSrc, `Dashboard has no hero tile for '${st}'`)
+        .toMatch(st === NOT_ASSESSED ? /NOT_ASSESSED, 'not assessed'/ : new RegExp(`'${st}'`))
+    }
+  })
+
+  it('sums the tiles to the file count exactly', () => {
+    const files = asApp([
+      { ...unopenedDoc(1), status: 'analysed', compliant: 1, score: 100 },
+      { ...unopenedDoc(2), status: 'analysed', compliant: 0, score: 61, issues: [{ wcag: 'SC_1_1_1', severity: 'SERIOUS' }] },
+      { ...unopenedDoc(3), status: 'uncertain', compliant: 0, score: 84 },
+      { ...unopenedDoc(4), status: 'error', compliant: 0 },
+      { ...unopenedDoc(5), status: 'analysed', compliant: 0, score: 100 },
+      unopenedDoc(6),
+    ])
+    const counts = statusCounts(files)
+    expect(Object.values(counts).reduce((a, n) => a + n, 0)).toBe(files.length)
+    expect(counts).toEqual({ certifiable: 1, issues: 1, clean: 1, [NOT_ASSESSED]: 1,
+                             uncertain: 1, unanalysable: 1 })
   })
 })
 

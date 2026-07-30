@@ -82,11 +82,15 @@ WCAG_META = {
 # Back-compat alias (older callers/tests referenced CRIT for the name lookup).
 CRIT = {k: v[0] for k, v in WCAG_META.items()}
 
+# Mirrors frontend/src/docStatus.js NOT_ASSESSED — the same token on both sides so a status can
+# never mean one thing in the app and another in the certified PDF.
+NOT_ASSESSED = "not-assessed"
+VIOLET = colors.HexColor("#3C3489")
 STATUS_COLOR = {"certifiable": GREEN, "issues": AMBER, "uncertain": BLUE, "unanalysable": GREY,
-                "clean": BLUE}
+                "clean": BLUE, NOT_ASSESSED: VIOLET}
 STATUS_LABEL = {"certifiable": "certifiable", "issues": "open findings",
                 "uncertain": "uncertain", "unanalysable": "could not analyse",
-                "clean": "no findings"}
+                "clean": "no findings", NOT_ASSESSED: "not assessed"}
 SEV_COLOR = {"CRITICAL": RED, "SERIOUS": AMBER, "MODERATE": BLUE, "MINOR": GREY}
 SEV_ORDER = ["CRITICAL", "SERIOUS", "MODERATE", "MINOR"]
 
@@ -96,7 +100,7 @@ def _crit_name(c):
 
 
 def _status(f):
-    # Mirrors the frontend's statusOf (FileDrawer.jsx) so the report and the app
+    # Mirrors the frontend's statusOf (frontend/src/docStatus.js) so the report and the app
     # always classify a file identically.
     if f["status"] == "error":
         return "unanalysable"
@@ -104,10 +108,14 @@ def _status(f):
         return "uncertain"
     if f["compliant"]:
         return "certifiable"
-    # 'issues' means OPEN FINDINGS. A not-certifiable file with zero findings (an unscored
-    # discover/skip record) is 'clean', not 'issues' — mirrors FileDrawer.statusOf so the app,
-    # the certification PDF and the dashboards classify a file identically.
-    return "issues" if f.get("issues") else "clean"
+    # 'issues' means OPEN FINDINGS; a not-certifiable file with zero findings is not 'issues'.
+    if f.get("issues"):
+        return "issues"
+    # CLEAN IS NEVER INFERRED FROM MISSING DATA. 'clean' asserts this document was opened and
+    # failed no rule. A NULL score means nobody scored it (Rubric.assess only returns score=None
+    # together with Status.ERROR, handled above), so it cannot support that assertion — and this
+    # is a CERTIFICATION document, the worst possible place to print a pass nobody measured.
+    return "clean" if f.get("score") is not None else NOT_ASSESSED
 
 
 def _fmt(f):
@@ -487,7 +495,8 @@ def _donut(counts: dict[str, int]) -> Drawing:
     d = Drawing(250, 130)
     pie = Pie()
     pie.x, pie.y, pie.width, pie.height = 5, 15, 100, 100
-    order = [k for k in ("certifiable", "issues", "clean", "uncertain", "unanalysable") if counts.get(k)]
+    order = [k for k in ("certifiable", "issues", "clean", NOT_ASSESSED, "uncertain",
+                         "unanalysable") if counts.get(k)]
     pie.data = [counts[k] for k in order] or [1]
     pie.labels = None
     pie.slices.strokeColor = colors.white
@@ -680,8 +689,16 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     resolved_total = sum(resolved_crit.values())
 
     # ── Executive summary — plain-language verdict ───────────────────────────
-    if counts.get("issues") or counts.get("uncertain") or counts.get("unanalysable"):
-        verdict = (f"<b>{cert} of {total}</b> analysed document(s) meet {std} with zero "
+    # `total` counts every document in the estate, INCLUDING any nobody scored, so it is not the
+    # denominator for a conformance claim. Both branches below said "analysed document(s)" about
+    # it, and the else-branch went further: with an estate of unscored rows the only non-zero
+    # count was 'clean', so the report read "All 2 analysed document(s) meet WCAG 2.1 AA with
+    # zero open blocking findings and are certifiable" about two spreadsheets nobody had opened.
+    # In a certification document that sentence is the whole liability.
+    unassessed = counts.get(NOT_ASSESSED, 0)
+    assessed = total - unassessed
+    if counts.get("issues") or counts.get("uncertain") or counts.get("unanalysable") or unassessed:
+        verdict = (f"<b>{cert} of {assessed}</b> assessed document(s) meet {std} with zero "
                    f"open blocking findings and are certifiable. "
                    f"<b>{counts.get('issues', 0)}</b> document(s) still carry open findings "
                    f"({open_findings} total)")
@@ -690,8 +707,16 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
         if counts.get("unanalysable"):
             verdict += f", and <b>{counts['unanalysable']}</b> could not be opened"
         verdict += "."
+        # Stated as its own sentence, not folded into the list above: an unassessed document is
+        # not a weaker finding, it is the ABSENCE of a measurement, and this report asserts
+        # nothing whatsoever about it.
+        if unassessed:
+            verdict += (f" <b>{unassessed} of {total}</b> document(s) in scope were never "
+                        f"assessed — they were listed from the source but not opened or scored, "
+                        f"so this report makes no conformance claim about them either way. "
+                        f"Run Assess over them before treating this estate as certified.")
     else:
-        verdict = (f"All <b>{total}</b> analysed document(s) meet {std} with zero open "
+        verdict = (f"All <b>{total}</b> assessed document(s) meet {std} with zero open "
                    "blocking findings and are certifiable.")
     if remediated_docs:
         verdict += (f" {remediated_docs} document(s) were remediated by the platform, "
@@ -880,6 +905,11 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
             find = f"{len(issues)} open finding(s)"
         elif f["status"] == "error":
             find = "could not analyse"
+        elif st == NOT_ASSESSED:
+            # Same fall-through as the app's inventory row: with no findings and no score, this
+            # cell printed "clean" beside a "—" score, in the certified PDF. A document that was
+            # never opened has no findings COUNT; that is not the same as having no findings.
+            find = "not assessed"
         else:
             find = "clean"
         # Counted per document (R6): verifiably-cleared fixes, criteria still failing, and
