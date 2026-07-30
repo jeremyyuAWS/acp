@@ -664,8 +664,18 @@ export const explainFinding = (scanId, file, ruleId) => (SIM
 // renders its "no OpenAI/Anthropic, no external tokens" promise off `backend === 'ollama'`,
 // so a fabricated 'ollama' here printed a false privacy guarantee on the one deployment
 // that actually sends document content to a third party.
+// The stub must carry EVERY field the panel reads, including the negative ones. It omitted
+// vision_available and vision_unavailable_reason, and the Settings warning is gated on both —
+// so on a Netlify preview the "genuine alt text is off" line could not render, and the panel
+// looked healthy no matter what. On 2026-07-30 that read as a fix having worked: the button was
+// clicked here, the warning vanished, and production still had the stale override pinned.
+// A stub that answers fewer questions than the real endpoint reports good news it cannot know.
 export const getAiStatus = () => (SIM
-  ? sim({ available: false, base_url: null, model: null, vision_model: null, ai_enabled: true, backend: 'netlify-functions' })
+  ? sim({ available: false, base_url: null, model: null, vision_model: null, ai_enabled: true,
+          backend: 'netlify-functions', model_available: false, vision_available: false,
+          vision_unavailable_reason: 'this demo has no local Ollama — genuine image alt text needs one, '
+                                    + 'so 1.1.1 findings get a fill-in template for a human to complete',
+          config_source: { base_url: 'env', vision_model: 'env', model: 'env' } })
   : fetch(`${BASE}/ai/status`, { headers: headers() }).then(j))
 
 // ── Disposition policies (ADR 0003 Phase 3) — admin-only lifecycle ────────────

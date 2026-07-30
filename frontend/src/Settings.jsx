@@ -254,11 +254,16 @@ function DriveMirror() {
           <button className="ghost small" onClick={saveEndpoint} disabled={busy || !canEdit}>Apply</button>
         </div>
       </label>
-      {aiStatus && !aiStatus.vision_available && aiStatus.vision_unavailable_reason && (
+      {/* `=== false` on purpose, and the reason is NOT part of the gate. Both halves were wrong:
+          a truthy test treats an endpoint that never reported the field as "vision is fine", and
+          requiring the reason meant a server that said false without explaining itself rendered
+          nothing at all. The warning follows the verdict; the reason only refines it. */}
+      {aiStatus?.vision_available === false && (
         <p role="status" style={{ margin: '10px 0 0', fontSize: 13, color: '#A32D2D' }}>
-          ⚠ <b>Genuine alt text is off</b> — {aiStatus.vision_unavailable_reason}. Until this
-          resolves, WCAG 1.1.1 findings get a fill-in template for a human to complete, not an
-          image-derived description.
+          ⚠ <b>Genuine alt text is off</b>
+          {aiStatus.vision_unavailable_reason ? ` — ${aiStatus.vision_unavailable_reason}` : ''}.
+          Until this resolves, WCAG 1.1.1 findings get a fill-in template for a human to complete,
+          not an image-derived description.
         </p>
       )}
       {canEdit && (aiUrl || aiVision) && (
