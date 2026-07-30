@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
@@ -102,6 +102,14 @@ let container, root
 beforeEach(() => {
   container = document.createElement('div'); document.body.appendChild(container)
   root = createRoot(container)
+})
+// Same reason as inventoryAgreesWithDrawer.test.jsx: AccessibilityStatus resolves getFileStatus
+// and calls setM, so a root left mounted keeps work in React's concurrent scheduler past the last
+// assertion, where an environment teardown turns it into an unhandled `window is not defined`.
+// This file has the same shape and the same latent exposure; it simply has not lost the race yet.
+afterEach(async () => {
+  await act(async () => { root.unmount() })
+  container.remove()
 })
 const render = async (props) => { await act(async () => { root.render(createElement(AccessibilityStatus, props)) }) }
 
