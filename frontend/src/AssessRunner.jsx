@@ -3,6 +3,7 @@ import { allRules } from './rules'
 import { WCAG } from './wcagCatalog.js'
 import { assessScan, getCapability, getScan, refreshScanDriveToken } from './api.js'
 import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
+import { DOCUMENTS_20 } from './assessCoverage.js'
 import { TraceChip } from './Transparency.jsx'
 import { assessLine } from './phaseNarration.js'
 import { coreStats } from './coreStats.js'
@@ -49,6 +50,13 @@ const autoOf = (cap, x, fmt) => isAuto(cap, fmt, scOf(x.wcag))
 // Persist the assessment per-scan in sessionStorage, so leaving the Assess tab (or even
 // reloading) and coming back shows the result instead of resetting to idle. Self-contained
 // — no reliance on parent state surviving an unmount/remount.
+// Both assess paths report the in-flight file, and they disagreed about its shape: the ticker
+// handed over the whole record (which renders as "Objects are not valid as a React child") and
+// the deferred poll read `.name`, a field file_records has never had — store.py selects `file`,
+// so that path resolved to null and showed nothing at all. One extractor, so the two paths
+// cannot drift apart again.
+const nameOf = (f) => (typeof f === 'string' ? f : f?.file || f?.name || null)
+
 const SKEY = (id) => `acp-assess-${id || 'none'}`
 const loadSaved = (id) => { try { return JSON.parse(sessionStorage.getItem(SKEY(id)) || 'null') } catch { return null } }
 
@@ -148,7 +156,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
         return
       }
       const idx = Math.min(docs.length - 1, Math.floor((elapsed / DURATION) * docs.length))
-      setProgress(idx); setCurrentFile(docs[idx]); setCurrentPhase(assessLine(idx))
+      setProgress(idx); setCurrentFile(nameOf(docs[idx])); setCurrentPhase(assessLine(idx))
     }
     step()
     timer.current = setInterval(step, 200)
@@ -167,6 +175,10 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
         const total = run.files || fs.length || 1
         setProgress(Math.min(scored.length, total))
         setCurrentPhase(`Opening & assessing ${scored.length} of ${total}…`)
+        // The first file with no score yet is the one in flight. `currentFile` state has
+        // existed since this component was written but was never populated or rendered, so a
+        // long scan showed a moving bar and no indication of what it was moving through.
+        setCurrentFile(nameOf(fs.find((x) => x.score == null)))
         if (run.assessed_at || run.finalized_at) {
           clearInterval(timer.current)
           const computed = computeResultFrom(scored, level)
@@ -261,6 +273,14 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
 
   const pct = phase === 'running' ? Math.round((progress / Math.max(1, assessN, docs.length)) * 100) : 0
 
+  // How many criteria the in-flight file is actually being weighed against. This is the SAME
+  // document-core set the result tile and the "By WCAG criterion" table reconcile to
+  // (assessCoverage.DOCUMENTS_20), narrowed to the levels that block at the chosen target — so
+  // the progress line cannot claim a wider assessment than the result it leads to. Derived, not
+  // hardcoded to 20: at level A the AA and AAA criteria in that set do not count, and the number
+  // has to move with the level selector or it is just decoration.
+  const ruleCount = DOCUMENTS_20.filter((sc) => RANK[CATALOG_LEVEL[sc]] <= RANK[level]).length
+
   return (
     <section className="panel assesspanel">
       <div className="assesshd">
@@ -310,6 +330,13 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               <span className="muted"><b style={{ color: '#1F5FA8' }}>Computing conformance</b> · {docs.length.toLocaleString()} documents at WCAG 2.1 {level}</span>
               <span className="assesspct">{pct}%</span>
             </div>
+            {(currentFile || currentPhase) && (
+              <div className="assessfile">
+                {currentFile && <span className="assessfname" title={currentFile}>{currentFile}</span>}
+                {currentFile && <span className="assessengine">{ruleCount} document-core criteria</span>}
+                {currentPhase && <span className="muted assessphase">{currentPhase}</span>}
+              </div>
+            )}
           </div>
         )}
         {scanGone && (

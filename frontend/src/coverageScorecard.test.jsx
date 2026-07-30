@@ -20,11 +20,11 @@ describe('CoverageScorecard renders the two-axis capability view (ADR 0023)', ()
     expect(txt).toContain('.xlsx')                       // scoped to the estate's file type
     // Assessment layer, customer-outcome wording (not "deterministic/OCR/vision").
     expect(txt).toContain('Assessment')
-    expect(txt).toContain('Auto assessment')
-    expect(txt).toContain('Review recommended')
+    expect(txt).toContain('Fully Assessed')
+    expect(txt).toContain('Potential Issue')
     // Remediation layer is a distinct row.
     expect(txt).toContain('Remediation')
-    expect(txt).toContain('AI-assisted')
+    expect(txt).toContain('AI Generated Fix')
     // xlsx: 5 🟢 auto-assessable + 9 🟡 review (Use of Color joined the review lane).
     expect(txt).toContain('5')
     expect(txt).toContain('9')
@@ -45,9 +45,27 @@ describe('CoverageScorecard renders the two-axis capability view (ADR 0023)', ()
     await render([{ file: 'a.docx', type: 'docx' }])
     await click(btnByText('Show all'))
     const txt = container.textContent
-    expect(txt).toContain('Review recommended')
+    expect(txt).toContain('Potential Issue')
     expect(txt).toContain('2.1.2')
     expect(txt).toContain('4.1.2')
+  })
+
+  // The scorecard and the WCAG capability matrix are two renderings of one judgement, so they
+  // have to use one vocabulary — docs/acp-architecture-deck.md fixes it as A4/A3/A2/NA and
+  // R4/R3/R2. Pinning the strings is the point: a rename that only lands on one surface is the
+  // failure this guards, and it is invisible in a diff of either file alone. The old wording is
+  // asserted absent too, because a half-finished rename leaves both spellings on the page.
+  it('every lane label on the page is the matrix vocabulary, on both axes', async () => {
+    await render([{ file: 'a.docx', type: 'docx' }])
+    await click(btnByText('Rule × format grid'))
+    const txt = container.textContent
+    for (const label of ['Fully Assessed', 'Potential Issue', 'Human Assessment Required',
+                         'Automatically Fixed', 'AI Generated Fix', 'Guided']) {
+      expect(txt).toContain(label)
+    }
+    for (const stale of ['Auto assessment', 'Review recommended', 'Human-only', 'AI-assisted']) {
+      expect(txt).not.toContain(stale)
+    }
   })
 
   it('the Rule × format grid shows every criterion across the four document types', async () => {

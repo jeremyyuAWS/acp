@@ -1,0 +1,115 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { createElement, act } from 'react'
+import { createRoot } from 'react-dom/client'
+
+// The in-flight-file line on the Assess progress panel. `currentFile` state existed from the
+// day the component was written and was never rendered, so when it finally was, three separate
+// things were wrong at once and none of them were visible in a diff:
+//
+//   1. the line referenced `ruleCount`, which was never defined — a ReferenceError that fired
+//      only once a file was in flight, i.e. exactly when the feature does its job;
+//   2. the immediate path (runTicker) set it to the whole file RECORD, which React refuses to
+//      render as a child;
+//   3. the deferred path (pollDeferred) read `.name`, a field file_records has never had —
+//      store.py selects `file` — so it resolved to null and rendered nothing.
+//
+// Each path is exercised separately below, because they set the same state from different
+// shapes and only one of them is taken per run.
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true
+
+const assessScan = vi.fn()
+const getScan = vi.fn()
+const getCapability = vi.fn()
+const refreshScanDriveToken = vi.fn()
+vi.mock('./api.js', () => ({
+  assessScan: (...a) => assessScan(...a),
+  getScan: (...a) => getScan(...a),
+  getCapability: (...a) => getCapability(...a),
+  refreshScanDriveToken: (...a) => refreshScanDriveToken(...a),
+}))
+
+const { default: AssessRunner } = await import('./AssessRunner.jsx')
+
+let container, root, errSpy
+const mount = async (files) => {
+  container = document.createElement('div'); document.body.appendChild(container)
+  root = createRoot(container)
+  await act(async () => { root.render(createElement(AssessRunner, { files, runId: 's1' })) })
+}
+const settle = async (n = 6) => { for (let k = 0; k < n; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
+const clickText = async (t) => {
+  const el = [...container.querySelectorAll('button')].find((b) => b.textContent.includes(t))
+  await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+}
+const text = () => container.textContent
+// Only real failures count. React's own act-environment notice is harness noise, and swallowing
+// it wholesale would swallow the ReferenceError this file exists to catch.
+const realErrors = () => errSpy.mock.calls.filter(([m]) => !String(m).includes('act(...)'))
+
+beforeEach(() => {
+  assessScan.mockReset(); getScan.mockReset(); refreshScanDriveToken.mockReset()
+  getCapability.mockReset().mockResolvedValue(null)
+  refreshScanDriveToken.mockResolvedValue(null)
+  // A render-time throw inside act() is reported through console.error rather than rejecting,
+  // so assert on it directly — otherwise a ReferenceError passes as a green test.
+  errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try { sessionStorage.clear() } catch { /* ignore */ }
+})
+afterEach(() => { errSpy.mockRestore() })
+
+const SCORED = [
+  { file: 'cardiology-handbook.pdf', type: 'pdf', score: 71, issues: [] },
+  { file: 'q3-board-deck.pptx', type: 'pptx', score: 88, issues: [] },
+]
+
+describe('AssessRunner names the file it is reading', () => {
+  it('deferred path: renders the first unscored file by its `file` field', async () => {
+    assessScan.mockResolvedValue({ deferred: true })
+    getScan.mockResolvedValue({
+      run: { files: 2 },
+      files: [{ file: 'done.pdf', score: 90 }, { file: 'benefits-guide.docx', score: null }],
+    })
+    await mount([{ file: 'benefits-guide.docx', type: 'docx', status: 'discovered' }])
+    await clickText('Assess')
+    await settle()
+
+    expect(text()).toContain('benefits-guide.docx')
+    expect(realErrors()).toEqual([])
+  })
+
+  it('immediate path: renders a filename, not a stringified record', async () => {
+    assessScan.mockResolvedValue({ deferred: false })
+    await mount(SCORED)
+    await clickText('Assess')
+    await settle()
+
+    expect(text()).toContain('cardiology-handbook.pdf')
+    expect(text()).not.toContain('[object Object]')
+    expect(realErrors()).toEqual([])
+  })
+
+  // The count has to be derived from the level, not hardcoded: it is the document-core set
+  // (assessCoverage.DOCUMENTS_20) narrowed to the levels that block at the target, which is the
+  // same lens the result tile reconciles to. At A the AA/AAA members drop out — 12, not 20 — so
+  // a constant here would overstate what the assessment weighs on the strictest reading.
+  it('counts the criteria that actually block at the chosen level', async () => {
+    assessScan.mockResolvedValue({ deferred: false })
+    await mount(SCORED)
+    await clickText('Assess')
+    await settle()
+    expect(text()).toContain('20 document-core criteria')          // AA: the whole core set
+
+    // The level chips are disabled mid-run, so pick the level on a fresh mount rather than
+    // trying to switch under a running assessment. Clear the per-scan sessionStorage too:
+    // the component restores the saved phase AND level, so without this the remount comes
+    // back up already running at AA and the level click lands on a disabled chip.
+    root.unmount()
+    sessionStorage.clear()
+    await mount(SCORED)
+    await clickText('minimum')                                     // level A
+    await clickText('Assess')
+    await settle()
+    expect(text()).toContain('12 document-core criteria')          // A: the AA/AAA members drop
+  })
+})
