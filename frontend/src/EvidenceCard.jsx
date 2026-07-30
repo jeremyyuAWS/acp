@@ -7,7 +7,7 @@ import { authoringScaffold, buildEvidenceCard, describedImageType, evidenceOf, e
 import ProposalThumb, { isSafeThumb } from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import { speakAsScreenReader, srSupported } from './srPreview.js'
-import { runAutoDraft } from './autoDraft.js'
+import { runAutoDraft, resetAutoDraftBreaker } from './autoDraft.js'
 import HowToConfirm from './HowToConfirm.jsx'
 
 // Evidence Card (PRD v2) — a PR-style review of ONE accessibility issue. The human APPROVES
@@ -125,6 +125,10 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   // the reviewer had no way to ask for one. This is that ask.
   const draftWithAi = async () => {
     if (!item?.scan_id || !item?.file || !item?.rule_id) return
+    // Re-arm the missing-model breaker. Reaching here is either a reviewer's own ↻ Try again —
+    // usually the click right after `ollama pull`, and the only thing that can prove the model is
+    // back — or the automatic path, where the breaker was already closed and this is a no-op.
+    resetAutoDraftBreaker()
     setDrafting(true); setDraftMsg(null)
     try {
       // This box is only shown for a single value-fix finding with no proposals and no evidence
@@ -152,6 +156,10 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
       }
     } catch (e) {
       setDraftMsg({ kind: 'error', text: e?.message || 'AI draft unavailable — write the value yourself.' })
+      // The message is on the card either way; rethrowing a MISSING-MODEL failure is how the
+      // shared gate learns of it, so the other cards in the inbox stop asking. Every other
+      // failure stays swallowed — it is this card's problem and the next card may well succeed.
+      if (e?.aiModelNotPulled) throw e
     } finally {
       setDrafting(false)
     }
@@ -167,24 +175,36 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   const [draftingAll, setDraftingAll] = useState(false)
   const draftAll = async () => {
     if (draftingAll || draftingIdx != null) return
+    resetAutoDraftBreaker()   // deliberate click — see draftWithAi
     setDraftingAll(true); setDraftMsg(null)
     let n = 0
+    let missing = null
     for (let i = 0; i < instances.length; i++) {
       if ((values[i] || '').trim()) continue        // don't overwrite a value already there
       try {
         const r = await suggestFix(item.scan_id, item.file, item.rule_id, instances[i]?.locator)
         const s = (r?.suggestion || '').trim()
         if (s && !r.is_template) { setValueAt(i, s); n += 1 }
-      } catch { /* one image failing must not stop the batch */ }
+      } catch (e) {
+        // One image failing must not stop the batch — but a model that is not pulled fails every
+        // image identically, so asking 18 more times tells the reviewer nothing new and delays the
+        // answer. Stop, and hand back the server's own line (it names the model and the pull).
+        if (e?.aiModelNotPulled) { missing = e; break }
+      }
     }
     setDraftingAll(false)
+    if (missing) {
+      setDraftMsg({ kind: 'error', text: missing.message })
+      throw missing        // tell the shared gate, so the rest of the inbox stops asking
+    }
     setDraftMsg({ kind: n ? 'ai' : 'template', text: n
       ? `Drafted ${n} image${n === 1 ? '' : 's'} with AI — review and edit before approving.`
-      : 'No AI drafts available (is the vision model running?) — describe the images yourself.' })
+      : 'No AI drafts available — describe the images yourself.' })
   }
 
   const draftInstance = async (i, style = '') => {
     if (draftingIdx != null || !item?.scan_id || !item?.file || !item?.rule_id) return
+    resetAutoDraftBreaker()   // deliberate click — see draftWithAi
     setDraftingIdx(i); setDraftMsg(null)
     try {
       const r = await suggestFix(item.scan_id, item.file, item.rule_id, instances[i]?.locator, style || null)
@@ -329,14 +349,19 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   useEffect(() => {
     if (!seen || autoDraftedRef.current) return
     if (!editable || !item?.scan_id || !item?.file || !item?.rule_id) return
+    // A card the breaker SHORT-CIRCUITED never ran its draft function, so nothing set a message —
+    // and an empty card with no explanation is the very thing this is meant to end. Render the
+    // reason here (the server's own line, naming the model and the pull) with no request made.
+    // Every other failure is already on the card from the draft function's own catch.
+    const onFail = (e) => { if (e?.aiModelNotPulled) setDraftMsg({ kind: 'error', text: e.message }) }
     if (multi) {
       if (usingEvidence && instances.length && values.some((v) => !(v || '').trim())) {
         autoDraftedRef.current = true
-        runAutoDraft(draftAll)
+        runAutoDraft(draftAll).catch(onFail)
       }
     } else if (!aiDraft.current && !(value || '').trim()) {
       autoDraftedRef.current = true
-      runAutoDraft(draftWithAi)
+      runAutoDraft(draftWithAi).catch(onFail)
     }
   }, [seen]) // eslint-disable-line react-hooks/exhaustive-deps
 

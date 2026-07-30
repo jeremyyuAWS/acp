@@ -9,6 +9,27 @@ import core
 
 router = APIRouter()
 
+# Machine-readable marker in the 503 detail for "Ollama answered, but the model it would need is
+# not pulled". The SPA reads it: `frontend/src/api.js` flags the error, and the auto-draft gate
+# then stops firing a doomed request for every remaining card in the inbox instead of discovering
+# the same missing model 40 times.
+#
+# Coupled deliberately, and NOT by status alone — a 503 from `explain_finding`/`suggest_fix`
+# returning None is a different condition (the model IS pulled and the call failed), and must stay
+# retryable. tests/test_ai_model_not_pulled_detail.py pins this string server-side so the coupling
+# cannot drift silently. Same pattern as `scan not found` (tests/test_scan_not_found_detail.py).
+MODEL_NOT_PULLED = "model not pulled"
+
+
+def _not_pulled_detail(kind: str, missing: str, pull: str) -> str:
+    """The 503 detail for a reachable-but-modelless Ollama: the marker, then what a human does.
+
+    `kind` names the operation ('explanation' / 'suggestion'), `missing` names what is absent in
+    words the reviewer can act on, `pull` is the model id to pull.
+    """
+    return (f"AI {kind} unavailable — {MODEL_NOT_PULLED}: Ollama is running but {missing}. "
+            f"Run: ollama pull {pull}")
+
 
 def _image_for_locator(request: Request, scan_id: str, file: str, locator: str) -> bytes | None:
     """The embedded image a 1.1.1 review item is asking about, fetched at REVIEW time.
@@ -53,10 +74,10 @@ def ai_explain(scan_id: str = Query(...), file: str = Query(...), rule_id: str =
         # Two different causes, two different remedies — and "is Ollama running?" is the wrong
         # question when Ollama IS running and simply never pulled the model. api.js surfaces
         # this detail as the error text on the card, so name the one the operator must act on.
-        raise HTTPException(503, "AI explanation unavailable — is Ollama running?"
-                            if not _ai.is_available() else
-                            f"AI explanation unavailable — Ollama is running but the text model "
-                            f"'{_ai.OLLAMA_MODEL}' is not pulled (run: ollama pull {_ai.OLLAMA_MODEL})")
+        if not _ai.is_available():
+            raise HTTPException(503, "AI explanation unavailable — is Ollama running?")
+        raise HTTPException(503, _not_pulled_detail(
+            "explanation", f"the text model '{_ai.OLLAMA_MODEL}' is not present", _ai.OLLAMA_MODEL))
     trace = core.store.get_trace_row(scan_id, file, rule_id)
     if trace is None:
         raise HTTPException(404, "trace not found")
@@ -139,11 +160,10 @@ def ai_suggest(request: Request, scan_id: str = Query(...), file: str = Query(..
         if not can_draft:
             if not _ai.is_available():
                 raise HTTPException(503, "AI suggestion unavailable — is Ollama running?")
-            wanted = (f"the text model '{_ai.OLLAMA_MODEL}' is not pulled" if rule_id != "1.1.1"
-                      else f"neither the text model '{_ai.OLLAMA_MODEL}' nor the vision model "
-                           f"'{_ai.OLLAMA_VISION_MODEL}' is pulled")
-            raise HTTPException(503, f"AI suggestion unavailable — Ollama is running but "
-                                     f"{wanted} (run: ollama pull {_ai.OLLAMA_MODEL})")
+            missing = (f"the text model '{_ai.OLLAMA_MODEL}' is not present" if rule_id != "1.1.1"
+                       else f"neither the text model '{_ai.OLLAMA_MODEL}' nor the vision model "
+                            f"'{_ai.OLLAMA_VISION_MODEL}' is present")
+            raise HTTPException(503, _not_pulled_detail("suggestion", missing, _ai.OLLAMA_MODEL))
     trace = core.store.get_trace_row(scan_id, file, rule_id)
     if trace is None:
         raise HTTPException(404, "trace not found")
