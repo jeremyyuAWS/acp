@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
@@ -73,6 +73,19 @@ let container, root
 beforeEach(() => {
   container = document.createElement('div'); document.body.appendChild(container)
   root = createRoot(container)
+})
+// Unmount, rather than leaving the tree standing for the environment teardown to race.
+//
+// Dashboard's scan-diff useEffect resolves a promise and calls setDiff, so a root left mounted
+// keeps work in React's concurrent scheduler after the last assertion. When jsdom is torn down
+// first, that work reaches `getActiveElementDeep` and throws `ReferenceError: window is not
+// defined` as an UNHANDLED error — every test still reports passed, and vitest exits non-zero on
+// the error count alone. Observed once in a full-suite run under load (right after an
+// `npm install`) and never in six isolated runs or three later full runs, which is exactly the
+// profile of a test that fails a CI job one time in many and gets re-run rather than fixed.
+afterEach(async () => {
+  await act(async () => { root.unmount() })
+  container.remove()
 })
 const render = async (props) => {
   await act(async () => { root.render(createElement(Dashboard, props)) })
