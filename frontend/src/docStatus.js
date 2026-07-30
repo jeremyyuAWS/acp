@@ -46,10 +46,11 @@ export const statusOf = (f) => (
   : 'clean'
 )
 
-// The five verdicts a document can carry, in reporting order. Every aggregate over files must
-// cover ALL of them: the counter that only knew four is how "2 issues" came to sit above two
-// rows that both said clean (Dashboard's hero derived its amber bucket by subtracting the other
-// three from the total, so anything it had no bucket for landed in "issues").
+// Every verdict a document can carry, in reporting order — statusOf returns exactly these and
+// nothing else, which is what lets statusCounts below seed all its buckets. Any aggregate over
+// files must cover ALL of them: the counter that only knew four is how "2 issues" came to sit
+// above two rows that both said clean (Dashboard's hero derived its amber bucket by subtracting
+// the other three from the total, so anything it had no bucket for landed in "issues").
 export const ALL_STATUSES = ['certifiable', 'issues', 'clean', NOT_ASSESSED, 'uncertain', 'unanalysable']
 
 // Badge palette + caption for a verdict. Canonical here, beside statusOf, because a fourth

@@ -86,7 +86,8 @@ export function Bars({ items, cols = '108px 1fr 30px', onPick, max, suffix }) {
 // list it opens can no longer disagree, and a bucket is only shown if a document is really in it.
 // `label` is the statusOf() value verbatim, NOT a display string: Overview's pickStatus opens
 // `files.filter((f) => statusOf(f) === seg.label)`, so a prettified label would drill into an
-// empty list. The display name comes from STATUS_TAG_LABEL at render time.
+// empty list. Where the two differ, the segment carries a separate `display` for the legend —
+// which is why 'not-assessed' can read "not assessed" on screen without breaking the click.
 export function statusSegments(run, files) {
   const c = statusCounts(files)
   return [
