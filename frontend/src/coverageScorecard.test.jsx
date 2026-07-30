@@ -85,8 +85,24 @@ describe('CoverageScorecard renders the two-axis capability view (ADR 0023)', ()
 
   it('toggling to all-document criteria grows the total beyond 20', async () => {
     await render([{ file: 'a.docx', type: 'docx' }])
-    expect(container.textContent).toContain('20-core')
-    await click(btnByText('20-core'))                    // switch off documents → all document criteria
+    expect(container.textContent).toContain('20-check document core')
+    await click(btnByText('20-check document core'))      // switch off documents → all document criteria
     expect(/\/(2[1-9]|[3-9]\d)/.test(container.textContent)).toBe(true)
+  })
+
+  // Three totals for "how many criteria apply" are visible across the product — the criteria
+  // traced per format (~38), the 20-check document core, and the 14 in the engagement's agreed
+  // scope. They answer three different questions, so they are not reconciled by making them
+  // equal; they are reconciled by each surface SAYING which one it is counting. This panel's is
+  // the widest of the three, and it sits directly above the panel that uses the narrowest, which
+  // is the adjacency that made an unlabelled 20 beside a 14 read as a contradiction.
+  it('names its own denominator and the narrower one the panel below uses', async () => {
+    await render([{ file: 'a.docx', type: 'docx' }])
+    const txt = container.textContent
+    expect(txt).toContain('20-check document core')
+    expect(txt).toContain('what ACP can assess for these file types')
+    expect(txt).toContain('14 criteria in your agreed scope')
+    expect(txt).toContain('not meant to match')
+    expect(txt).not.toMatch(/Deva/)                       // customer name never reaches the UI
   })
 })

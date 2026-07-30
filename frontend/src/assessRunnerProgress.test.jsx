@@ -89,16 +89,19 @@ describe('AssessRunner names the file it is reading', () => {
     expect(realErrors()).toEqual([])
   })
 
-  // The count has to be derived from the level, not hardcoded: it is the document-core set
-  // (assessCoverage.DOCUMENTS_20) narrowed to the levels that block at the target, which is the
-  // same lens the result tile reconciles to. At A the AA/AAA members drop out — 12, not 20 — so
-  // a constant here would overstate what the assessment weighs on the strictest reading.
+  // The count has to be derived from the level, not hardcoded: it is the agreed scope
+  // (activeScope.SCOPE_SCS — the 14 criteria this engagement asked to have assessed) narrowed to
+  // the levels that block at the target, which is the same lens the result tile reconciles to. At
+  // A the AA members drop out — 10, not 14 — so a constant here would overstate what the
+  // assessment weighs on the strictest reading. It follows the scope rather than the 20-check
+  // document core because the result the progress line leads to is scored over the scope; a line
+  // promising 20 ahead of a result over 14 is the mismatch this assertion exists to prevent.
   it('counts the criteria that actually block at the chosen level', async () => {
     assessScan.mockResolvedValue({ deferred: false })
     await mount(SCORED)
     await clickText('Assess')
     await settle()
-    expect(text()).toContain('20 document-core criteria')          // AA: the whole core set
+    expect(text()).toContain('14 criteria in scope')                // AA: the whole agreed scope
 
     // The level chips are disabled mid-run, so pick the level on a fresh mount rather than
     // trying to switch under a running assessment. Clear the per-scan sessionStorage too:
@@ -110,6 +113,6 @@ describe('AssessRunner names the file it is reading', () => {
     await clickText('minimum')                                     // level A
     await clickText('Assess')
     await settle()
-    expect(text()).toContain('12 document-core criteria')          // A: the AA/AAA members drop
+    expect(text()).toContain('10 criteria in scope')                // A: the four AA members drop
   })
 })

@@ -3,10 +3,10 @@ import { allRules } from './rules'
 import { WCAG } from './wcagCatalog.js'
 import { assessScan, getCapability, getScan, refreshScanDriveToken } from './api.js'
 import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
-import { DOCUMENTS_20 } from './assessCoverage.js'
 import { TraceChip } from './Transparency.jsx'
 import { assessLine } from './phaseNarration.js'
 import { coreStats } from './coreStats.js'
+import { SCOPE_SCS, SCOPE_SIZE, SCOPE_LABEL } from './activeScope.js'
 
 // Re-assess the whole estate against a chosen WCAG 2.1 conformance level. A finding blocks
 // conformance when its level is at or below the target (A ⊆ AA ⊆ AAA), so the numbers
@@ -122,10 +122,11 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
       autoFix += blocking.filter((x) => autoOf(cap, x, fmt)).length
       if (!blocking.length) conformant++
     })
-    // The tile leads with the DOCUMENT-CORE numbers so it reconciles exactly with the "By WCAG
-    // criterion" table below (also the document-core lens) — no more "6 in the tile vs 4 in the
-    // table". coreStats() is the shared source of that lens; RiskScore reads the SAME function
-    // so the leadership panel can't disagree with this tile.
+    // The tile leads with the ACTIVE-SCOPE numbers so it reconciles exactly with the "By WCAG
+    // criterion" table below (scoped the same way) — no more "6 in the tile vs 4 in the table".
+    // coreStats() is the shared source of that lens and defaults to the agreed scope, which is
+    // what the table defaults to; RiskScore reads the SAME function so the leadership panel
+    // can't disagree with this tile.
     const core = coreStats(scored, cap, lvl)
     const total = Math.max(1, scored.length)
     // Three aggregation levels, kept distinct so the UI can reconcile them: findings (individual
@@ -133,6 +134,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     // ALL-criteria totals (used elsewhere); the core* fields are the document-core subset the tile leads with.
     return { level: lvl, total, conformant, failing: total - conformant, applicable, autoFix,
              coreFindings: core.coreFindings, coreCriteria: core.coreCriteria, coreAutoFix: core.coreAutoFix,
+             scopeTotal: core.scopeTotal, scopeLabel: core.scopeLabel,
              pct: Math.round((conformant / total) * 100) }
   }
   const computeResult = (lvl) => computeResultFrom(docs, lvl)
@@ -274,12 +276,15 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   const pct = phase === 'running' ? Math.round((progress / Math.max(1, assessN, docs.length)) * 100) : 0
 
   // How many criteria the in-flight file is actually being weighed against. This is the SAME
-  // document-core set the result tile and the "By WCAG criterion" table reconcile to
-  // (assessCoverage.DOCUMENTS_20), narrowed to the levels that block at the chosen target — so
-  // the progress line cannot claim a wider assessment than the result it leads to. Derived, not
-  // hardcoded to 20: at level A the AA and AAA criteria in that set do not count, and the number
+  // list the result tile and the "By WCAG criterion" table reconcile to — the agreed scope
+  // (activeScope.SCOPE_SCS) — narrowed to the levels that block at the chosen target, so the
+  // progress line cannot claim a wider assessment than the result it leads to. That constraint
+  // is why it follows the scope rather than the 20-check document core: the engine still runs
+  // every detector it has, but the assessment this run REPORTS is the scoped one, and a progress
+  // line promising 20 followed by a result over 14 is the mismatch this was derived to avoid.
+  // Derived, not hardcoded: at level A the AA criteria in that set do not count, and the number
   // has to move with the level selector or it is just decoration.
-  const ruleCount = DOCUMENTS_20.filter((sc) => RANK[CATALOG_LEVEL[sc]] <= RANK[level]).length
+  const ruleCount = [...SCOPE_SCS].filter((sc) => RANK[CATALOG_LEVEL[sc]] <= RANK[level]).length
 
   return (
     <section className="panel assesspanel">
@@ -333,7 +338,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
             {(currentFile || currentPhase) && (
               <div className="assessfile">
                 {currentFile && <span className="assessfname" title={currentFile}>{currentFile}</span>}
-                {currentFile && <span className="assessengine">{ruleCount} document-core criteria</span>}
+                {currentFile && <span className="assessengine" title={`The ${ruleCount} criteria in your ${SCOPE_LABEL} that block at level ${level} — the same list the result below is scored over`}>{ruleCount} criteria in scope</span>}
                 {currentPhase && <span className="muted assessphase">{currentPhase}</span>}
               </div>
             )}
@@ -368,13 +373,13 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
             )}
             {/* Actionability-first verdict (Scan → Understand → Fix): answer "what do I need to
                 fix, and can ACP fix it?" in plain language BEFORE the WCAG taxonomy below. All
-                counts are the document-core numbers, so they reconcile with the tiles + the
+                counts are the agreed-scope numbers, so they reconcile with the tiles + the
                 "By WCAG criterion" table. */}
             {result.failing > 0 ? (
               <div style={{ margin: '0 0 12px', padding: '12px 14px', borderRadius: 8, background: '#FBF1E3', border: '1px solid #E8C98A' }}>
                 <div style={{ fontSize: 14.5, fontWeight: 700, color: '#7A4A0B' }}>⚠ Needs attention — what to fix</div>
                 <div style={{ fontSize: 13.5, margin: '5px 0 0', color: '#3D3A34', lineHeight: 1.5 }}>
-                  <b>{result.coreFindings.toLocaleString()}</b> issue{result.coreFindings !== 1 ? 's' : ''} across <b>{result.coreCriteria.toLocaleString()}</b> WCAG criteria in <b>{result.failing.toLocaleString()}</b> of <b>{result.total.toLocaleString()}</b> document{result.total !== 1 ? 's' : ''}.
+                  <b>{result.coreFindings.toLocaleString()}</b> issue{result.coreFindings !== 1 ? 's' : ''} across <b>{result.coreCriteria.toLocaleString()}</b> of the <b>{result.scopeTotal ?? SCOPE_SIZE}</b> WCAG criteria in your {result.scopeLabel || SCOPE_LABEL}, in <b>{result.failing.toLocaleString()}</b> of <b>{result.total.toLocaleString()}</b> document{result.total !== 1 ? 's' : ''}.
                   {' '}<b style={{ color: '#3B6D11' }}>{result.coreAutoFix.toLocaleString()}</b> ACP can fix automatically · <b style={{ color: '#854F0B' }}>{(result.coreFindings - result.coreAutoFix).toLocaleString()}</b> need a person.
                 </div>
               </div>
@@ -382,7 +387,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
               <div style={{ margin: '0 0 12px', padding: '12px 14px', borderRadius: 8, background: '#EDF6E4', border: '1px solid #B7D89B' }}>
                 <div style={{ fontSize: 14.5, fontWeight: 700, color: '#3B6D11' }}>✓ Ready to certify</div>
                 <div style={{ fontSize: 13.5, margin: '5px 0 0', color: '#3D3A34' }}>
-                  No blocking findings at WCAG 2.1 {result.level} — all {result.total.toLocaleString()} document{result.total !== 1 ? 's' : ''} pass the document core.
+                  No blocking findings at WCAG 2.1 {result.level} — all {result.total.toLocaleString()} document{result.total !== 1 ? 's' : ''} pass the {result.scopeTotal ?? SCOPE_SIZE} criteria in your {result.scopeLabel || SCOPE_LABEL}.
                 </div>
               </div>
             )}
@@ -399,7 +404,11 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                 <b style={{ color: '#1F5FA8' }}>{result.pct}%</b>
                 <span>pass rate at {result.level}</span>
               </div>
-              <div className="atile" title={`${result.coreFindings.toLocaleString()} findings across ${result.coreCriteria.toLocaleString()} document-core WCAG criteria (the 20 shown in the table below) at ${result.level}. ${result.coreAutoFix.toLocaleString()} can be fixed automatically from the Remediate tab; the rest need a person. Reconciles with the "By WCAG criterion" table below.`}>
+              {/* Name the denominator. A scan stored before the scope narrowing landed has no
+                  scopeTotal/scopeLabel, so fall back to the active scope rather than to the
+                  older "the 20 shown in the table below" — that sentence is what the table
+                  below stopped being true of. */}
+              <div className="atile" title={`${result.coreFindings.toLocaleString()} findings across ${result.coreCriteria.toLocaleString()} of the ${result.scopeTotal ?? SCOPE_SIZE} WCAG criteria in this engagement's ${result.scopeLabel || SCOPE_LABEL} at ${result.level}. ${result.coreAutoFix.toLocaleString()} can be fixed automatically from the Remediate tab; the rest need a person. Counted over the same list the "By WCAG criterion" table below defaults to, so the two reconcile.`}>
                 <b>{result.coreFindings.toLocaleString()}</b>
                 <span>issues found <span className="muted">· across {result.coreCriteria.toLocaleString()} criteria · {result.coreAutoFix.toLocaleString()} auto-fixable, {(result.coreFindings - result.coreAutoFix).toLocaleString()} need review</span></span>
               </div>

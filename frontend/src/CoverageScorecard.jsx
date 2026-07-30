@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { coverageSummary, assessmentIn, remediationIn, GAP_REASON, AT_REASON } from './assessCoverage.js'
+import { CORE_SCS, DENOMINATOR, SCOPE_SIZE, SCOPE_LABEL } from './activeScope.js'
 
 // Capability coverage scorecard for the Assess tab (ADR 0023, two axes). Answers the up-front
 // question in CUSTOMER-OUTCOME language — not implementation (deterministic/OCR/vision):
@@ -133,10 +134,16 @@ export default function CoverageScorecard({ files = [] }) {
         <h2 style={{ margin: 0 }}>Coverage — what we can assess
           <span className="muted" style={{ fontWeight: 400 }}> · for your file types: {fmts}</span>
         </h2>
+        {/* This panel's denominator is deliberately the 20-check document core, NOT the agreed
+            scope the "By WCAG criterion" panel below defaults to — it answers a different
+            question (what ACP can assess for these file types, independent of any scan or
+            engagement), and narrowing a capability claim to a customer's checklist would make it
+            unreadable as a capability claim. That is exactly why it now says which denominator it
+            is: two totals on one screen that do not say what they count read as a contradiction. */}
         <button className={`ghost small${documents ? ' on' : ''}`} style={{ fontSize: 11 }}
                 onClick={() => setDocuments((v) => !v)}
-                title="Toggle between the 20-check document core and all document-applicable criteria">
-          {documents ? '✓ 20-core' : 'All document criteria'}
+                title={`Toggle between the ${DENOMINATOR.core.noun} and all document-applicable criteria. This is a capability view — ${DENOMINATOR.core.question}. The "By WCAG criterion" panel below answers a narrower question: ${DENOMINATOR.scope.question}.`}>
+          {documents ? `✓ ${CORE_SCS.size}-check document core` : 'All document criteria'}
         </button>
       </div>
 
@@ -165,6 +172,14 @@ export default function CoverageScorecard({ files = [] }) {
         <b style={{ color: 'inherit' }}> ⚪ N/A</b> = the barrier can't exist in these file types.
         Assessment and remediation are independent — e.g. a 🟡 finding can still carry a 🤖 one-click fix. Capability view — independent of any single scan.
       </p>
+      {/* Say out loud why this total and the panel below differ. An unexplained 20 here beside a
+          14 there reads as one of them being wrong. */}
+      {documents && (
+        <p className="muted" style={{ fontSize: 11, margin: '6px 0 0', lineHeight: 1.5 }}>
+          Counted over the <b style={{ color: 'inherit' }}>{CORE_SCS.size}-check document core</b> — what ACP can assess for these file types.
+          The “By WCAG criterion” panel below counts over a narrower list: the <b style={{ color: 'inherit' }}>{SCOPE_SIZE} criteria in your {SCOPE_LABEL}</b> for this engagement. Different questions, so the two totals are not meant to match.
+        </p>
+      )}
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
         <button className="ghost small" onClick={() => setOpen((v) => !v)}>

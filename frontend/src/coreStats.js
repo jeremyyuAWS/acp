@@ -1,6 +1,6 @@
 import { allRules } from './rules'
-import { DOCUMENTS_20 } from './documents20.js'
 import { fmtOf, isAuto } from './capability.js'
+import { SCOPE_SCS, SCOPE_LABEL } from './activeScope.js'
 
 // Document-core (DOCUMENTS_20) remediation stats over an estate, grounded in the remediation-
 // capability table — the SAME lens the Assess tile leads with. Any surface that shows "criteria
@@ -23,10 +23,20 @@ const levelOf = (x) => x.level || SC_LEVEL[scOfWcag(x.wcag)] || 'A'
 
 // `cap` is the {fmt:{sc:mode}} capability map (fetched or CAPABILITY_FALLBACK). `level` is the
 // conformance target — findings above it don't block and don't count, exactly like AssessRunner.
-// Every DOCUMENTS_20 criterion is Level A/AA, so at the AA legal target the filter is a no-op and
+// Every scoped criterion is Level A/AA, so at the AA legal target the filter is a no-op and
 // the counts are level-stable (which is why RiskScore, a fixed-AA leadership view, can call this
 // with the default and still match an AA assessment).
-export function coreStats(files, cap, level = 'AA') {
+//
+// `criteria` is the criteria list the counts are taken over, and it DEFAULTS TO THE AGREED SCOPE
+// (activeScope.js), not the 20-check document core. That default is load-bearing rather than a
+// preference: the "By WCAG criterion" panel below the Assess tile is scoped the same way, and its
+// tooltip claims the two reconcile. Counting findings over 20 while the table lists 14 would make
+// that claim false in the direction that flatters nobody — the tile would report failures against
+// criteria the reader cannot find a row for. Pass CORE_SCS to widen it back.
+//
+// Note that narrowing DOES lower the finding count, so `scopeLabel` travels with the numbers:
+// every surface rendering them has to be able to say which list they were counted over.
+export function coreStats(files, cap, level = 'AA', { criteria = SCOPE_SCS } = {}) {
   const target = RANK[level] || RANK.AA
   let coreFindings = 0, coreAutoFix = 0
   const coreCriteria = new Set()
@@ -35,7 +45,7 @@ export function coreStats(files, cap, level = 'AA') {
     ;(f.issues || []).forEach((x) => {
       if (RANK[levelOf(x)] > target) return
       const sc = scOfWcag(x.wcag)
-      if (!sc || !DOCUMENTS_20.has(sc)) return
+      if (!sc || !criteria.has(sc)) return
       coreFindings++
       coreCriteria.add(sc)
       if (isAuto(cap, fmt, sc)) coreAutoFix++
@@ -46,6 +56,9 @@ export function coreStats(files, cap, level = 'AA') {
     coreCriteria: coreCriteria.size,
     coreAutoFix,
     coreHuman: coreFindings - coreAutoFix,
+    // The denominator these were counted over, so a caller labels it instead of guessing.
+    scopeTotal: criteria.size,
+    scopeLabel: criteria === SCOPE_SCS ? SCOPE_LABEL : 'document core',
     // Share of core findings ACP can fix deterministically — the honest replacement for the
     // SIM-only rec.autoPct (which was a per-document routing ratio, 0 on real data).
     autoPct: coreFindings ? Math.round((coreAutoFix / coreFindings) * 100) : 0,

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { getFileStatus, getScanStatus } from './api.js'
+import { DENOMINATOR } from './activeScope.js'
 
 // ADR 0026 — the authoritative Accessibility Status hero. The FIRST thing a reviewer reads on a file:
 // the decision (not the numbers), the coverage behind it, an honest account of what needs a human, a
@@ -110,12 +111,13 @@ export default function AccessibilityStatus({ scanId, file, onAction, onModel })
       aria-label={file ? 'Accessibility status for this document' : 'Accessibility status for this scan'}>
       {/* Coverage — "did ACP look?" — distinct from status ("is it ready?") */}
       {/* Say what the denominator counts. Three different totals are visible across the
-          product — this card's in_scope, the drawer table's 20-check document core, and the
-          per-format catalog — and unlabelled they read as disagreeing measurements of one
-          quantity rather than answers to three different questions. */}
+          product — this card's in_scope (criteria TRACED for this file's format), the drawer
+          table's 20-check document core, and the agreed scope the estate panels default to —
+          and unlabelled they read as disagreeing measurements of one quantity rather than
+          answers to three different questions. Each is named here, widest first. */}
       <div className="acstatus-coverage"
         title={loading ? undefined
-          : `${m.coverage.evaluable} of the ${m.coverage.total} criteria traced for this document had an automated or review method ACP could apply; the remaining ${m.not_automatically_assessable} need manual verification. The coverage table below scores a different, narrower list — the 20-check document core this document is certified against.`}>
+          : `${m.coverage.evaluable} of the ${m.coverage.total} criteria traced for this document had an automated or review method ACP could apply; the remaining ${m.not_automatically_assessable} need manual verification. Two narrower lists are scored elsewhere on purpose: the coverage table below scores the ${DENOMINATOR.core.noun} this document is certified against, and the estate's "By WCAG criterion" panel scores the ${DENOMINATOR.scope.noun} agreed for this engagement.`}>
         <span className="acstatus-coverage-lbl">Assessment Coverage</span>
         <span className="acstatus-coverage-val">
           {loading ? '—' : `${m.coverage.evaluable} / ${m.coverage.total}`}

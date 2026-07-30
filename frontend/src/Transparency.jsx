@@ -5,6 +5,7 @@ import FileDrawer from './FileDrawer.jsx'
 import { WCAG } from './wcagCatalog.js'
 import { allRules } from './rules/index.js'
 import { DOCUMENTS_20 } from './documents20.js'
+import { SCOPE_SIZE, SCOPE_LABEL, OUT_OF_SCOPE_SCS, DENOMINATOR, outOfScopeNote, criteriaFor } from './activeScope.js'
 
 // SCs a rule module exists for — distinguishes "check built, no data in this scan"
 // from "no automated check exists yet".
@@ -126,10 +127,16 @@ function FailureHeatmap({ rows, files, topRules, onCellClick }) {
 
 export function RuleBreakdown({ scanId, files }) {
   const [rows, setRows] = useState(null)
-  const [open, setOpen] = useState(false)
+  // Default view = the criteria this engagement agreed to assess (14), not everything ACP
+  // certifies against (the 20-check document core). `showAllCore` widens it back to the 20 and
+  // is the panel's ONE expansion control: it also reveals the footnote saying what the assessed
+  // conformance level and the document filter are leaving out, because those are the same
+  // question ("what is not on this list, and why") asked about a wider ring.
+  const [showAllCore, setShowAllCore] = useState(false)
   const [seg, setSeg] = useState(null)
   const [sel, setSel] = useState(null)
-  const documentsOnly = true                    // always scoped to the 20-check document core
+  const criteria = criteriaFor(showAllCore)     // the 14 in the agreed scope, or all 20 core
+  const den = showAllCore ? DENOMINATOR.core : DENOMINATOR.scope
   const [hideNA, setHideNA] = useState(true)   // default to hiding the N/A rows; the toggle reveals them
   const [exporting, setExporting] = useState(false)
   const doScanExport = async () => {
@@ -164,10 +171,19 @@ export function RuleBreakdown({ scanId, files }) {
   const targetLevel = assessLevel(scanId)
   const targetRank = LEVEL_RANK[targetLevel] || 2
   // Show only rules at/below the assessed level (no AAA above an AA target — e.g. 1.4.9), and,
-  // by default, only the 20-check document core. A rule with no known level is kept.
+  // by default, only the criteria in the agreed scope. A rule with no known level is kept.
   const rules = rulesAll.filter((r) =>
-    (LEVEL_RANK[r.level] || 1) <= targetRank && DOCUMENTS_20.has(r.id))
+    (LEVEL_RANK[r.level] || 1) <= targetRank && criteria.has(r.id))
   if (!rules.length) return null
+  // What the default narrowing costs, counted BEFORE it is applied. The backend gates on the
+  // same scope inside `_rule_outcome`, so on a scan the operator actually ran scoped these are
+  // all NOT_EVALUATED and this is 0. On an unscoped scan they are real recorded findings, and
+  // narrowing the view would otherwise make them disappear with no account of themselves — the
+  // same trust problem as a total that cannot be reconciled on screen (#77, #84). Reported in
+  // the note below whether or not it flatters the score.
+  const outOfScopeFindings = rulesAll
+    .filter((r) => (LEVEL_RANK[r.level] || 1) <= targetRank && OUT_OF_SCOPE_SCS.has(r.id))
+    .reduce((n, r) => n + (r.findings || r.fail), 0)
   // A row is "N/A" when the criterion doesn't apply to this file type — the engine ran it but it
   // can't fire (no pass, no fail, only skip). The Hide-N/A toggle collapses those to the ones that
   // actually produced a result.
@@ -177,9 +193,9 @@ export function RuleBreakdown({ scanId, files }) {
   const failingRules = rules.filter((r) => r.fail > 0).slice(0, 8)
 
   // Checklist parity: every in-scope success criterion appears, not just the ones
-  // the scanner automates. Scope = the assessed conformance level + document-applicable
-  // (same rules as the per-file coverage table in FileDrawer).
-  const inScope = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) <= targetRank && (!documentsOnly || DOCUMENTS_20.has(c.sc)))
+  // the scanner automates. Scope = the assessed conformance level + the active criteria list
+  // (the agreed scope by default, the whole document core when expanded).
+  const inScope = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) <= targetRank && criteria.has(c.sc))
   const hiddenAboveLevel = WCAG.filter((c) => c.docApplies !== false && (LEVEL_RANK[c.level] || 3) > targetRank).length
   const hiddenWebOnly = WCAG.filter((c) => c.docApplies === false).length
   const evaluatedIds = new Set(rules.map((r) => r.id))
@@ -198,11 +214,25 @@ export function RuleBreakdown({ scanId, files }) {
   const humanCount = unevaluated.filter((c) => c.isHuman).length
   const builtNoData = unevaluated.filter((c) => !c.isHuman && c.isBuilt).length
 
+  // The header count is the number of rows actually rendered, and every criterion in the active
+  // denominator that is NOT rendered is accounted for by a visible control or section:
+  //
+  //     rows shown  +  N/A hidden (the chip)  +  not evaluated (the section below)  =  inScope
+  //
+  // Stated as an identity because the failure it prevents is specific: the header used to read
+  // "20 of 20 … automated" while as few as six rows were on screen, which is the same defect as
+  // a dashboard total nobody can reconcile against the rows beneath it (#77, #84). The tooltip
+  // spells the arithmetic out; the three visible numbers let a reader do it themselves.
+  const naHidden = hideNA ? naCount : 0
+  const reconciliation = `${shown.length} shown + ${naHidden} hidden as N/A + ${unevaluated.length} `
+    + `not evaluated = ${inScope.length} ${den.noun} · ${evaluatedInScope} automated in this scan`
+    + ` · denominator: ${den.question}`
+
   return (
     <section className="panel rulebreak">
       <div className="rubrichdr">
         <h2 style={{ margin: 0 }}>By WCAG criterion <span className="muted">· what each check found across {fileCount.toLocaleString()} documents</span></h2>
-        <span className="muted" style={{ fontSize: 12 }}>{evaluatedInScope} of {inScope.length} document-core criteria automated · target {targetLevel}
+        <span className="muted" style={{ fontSize: 12 }} title={reconciliation}>Showing {shown.length} of {inScope.length} {den.noun} · target {targetLevel}
           <button className={`ghost small${hideNA ? " on" : ""}`} style={{ marginLeft: 8, fontSize: 11 }}
                   onClick={() => setHideNA((v) => !v)}
                   title="Hide the criteria that don't apply to this file type (N/A) \u2014 show only the ones with a pass or fail result">
@@ -240,7 +270,7 @@ export function RuleBreakdown({ scanId, files }) {
           )
         })}
       </div>
-      {(open || documentsOnly) && unevaluated.length > 0 && (
+      {unevaluated.length > 0 && (
         <>
           <h3 className="rulesubhdr">Not evaluated in this scan <span className="muted">· {humanCount} need human / AT validation{unevaluated.length - humanCount - builtNoData > 0 ? ` · ${unevaluated.length - humanCount - builtNoData} automatable, not yet built` : ''}{builtNoData > 0 ? ` · ${builtNoData} built, no data this scan` : ''}</span></h3>
           <div className="rulerows">
@@ -257,15 +287,33 @@ export function RuleBreakdown({ scanId, files }) {
           </div>
         </>
       )}
-      {(rules.length > 6 || unevaluated.length > 0) && <button className="ghost small" style={{ marginTop: 10 }} onClick={() => setOpen(!open)}>{open ? 'Show less' : `Show all ${inScope.length} in-scope criteria`}</button>}
-      {open && (hiddenAboveLevel > 0 || hiddenWebOnly > 0) && (
+      {/* The scope expansion. Says how many criteria the default view leaves out, which ones, and
+          why — a criterion that vanishes with no explanation is the same trust problem as an
+          unreconcilable total, so the note renders whether or not the hidden criteria are
+          carrying findings. `outOfScopeFindings` is 0 on a scan the operator ran scoped (the
+          backend already reads those pairs as NOT_EVALUATED) and non-zero on an unscoped one,
+          where the narrowing really is holding back recorded failures. */}
+      {!showAllCore && (
+        <p className="muted" style={{ fontSize: 11.5, margin: '10px 0 0' }}>
+          {outOfScopeNote(outOfScopeFindings)}
+        </p>
+      )}
+      <button className="ghost small" style={{ marginTop: 8 }} onClick={() => setShowAllCore((v) => !v)}
+              title={showAllCore
+                ? `Narrow back to the ${SCOPE_SIZE} criteria in this engagement's ${SCOPE_LABEL}`
+                : `Widen to all ${DOCUMENTS_20.size} document-core criteria — the list ACP certifies against, ${OUT_OF_SCOPE_SCS.size} of which are outside the ${SCOPE_LABEL}`}>
+        {showAllCore
+          ? `Show only the ${SCOPE_SIZE} in the ${SCOPE_LABEL}`
+          : `Show all ${DOCUMENTS_20.size} in-scope criteria (+${OUT_OF_SCOPE_SCS.size} outside the ${SCOPE_LABEL})`}
+      </button>
+      {showAllCore && (hiddenAboveLevel > 0 || hiddenWebOnly > 0) && (
         <p className="muted" style={{ fontSize: 11.5, margin: '8px 0 0' }}>
           Scoped to your assessment: {hiddenAboveLevel > 0 ? `${hiddenAboveLevel} criteria above Level ${targetLevel}` : ''}{hiddenAboveLevel > 0 && hiddenWebOnly > 0 ? ' and ' : ''}{hiddenWebOnly > 0 ? `${hiddenWebOnly} web-app-only criteria (not applicable to documents)` : ''} are not shown.
         </p>
       )}
       {failingRules.length > 0 && (
         <>
-          <h3 className="heatmaptitle">Where failures concentrate <span className="muted">· top {failingRules.length} failing criteria by department</span></h3>
+          <h3 className="heatmaptitle">Where failures concentrate <span className="muted">· top {failingRules.length} failing criteria by department, within the {inScope.length} {den.noun}</span></h3>
           <FailureHeatmap rows={rows || []} files={files} topRules={failingRules}
                            onCellClick={(rule, dept, cellFiles) => setSeg({
                              title: `${rule.id} · ${dept}`,
