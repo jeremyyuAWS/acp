@@ -40,8 +40,10 @@ jobs:
       - name: Probe production
         env:
           ACP_FQDN: ${{ vars.ACP_FQDN }}
-          # The app's own smoke-test bypass (api/app.py:_access_gate). Without it the deep checks
-          # — the ones that would have caught the sweep — skip LOUDLY and are counted as skipped,
-          # never folded into a green result.
-          ACP_E2E_KEY: ${{ secrets.ACP_E2E_KEY }}
+          # Unlocks /monitor/estate, and nothing else. This deliberately is NOT ACP_E2E_KEY: that
+          # is a whole-gate bypass which the app disables in production by design, so the deep
+          # checks could never have run against the deployment that matters. See the header of
+          # scripts/monitor.py. Without this key the deep checks — the ones that would have caught
+          # the sweep — skip LOUDLY and are counted as skipped, never folded into a green result.
+          ACP_MONITOR_KEY: ${{ secrets.ACP_MONITOR_KEY }}
         run: python3 scripts/monitor.py --repo .

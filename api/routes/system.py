@@ -1,6 +1,7 @@
 """System & meta endpoints: liveness, SPA auth config, schedule, hub landing page."""
 from __future__ import annotations
 
+import hmac
 import re
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -224,6 +225,60 @@ def readyz():
         "workers": {**workers, "local_pool": local_pool, "can_run_scans": can_run_scans},
         "engines": {"pdf": pdf},
         "service": "acp",
+    }
+
+
+# How many recent scans the estate summary reports. The monitor decides what counts as a
+# collapse (scripts/monitor.py:COLLAPSE_RATIO/COLLAPSE_WINDOW); this only has to return enough
+# history for that policy to be evaluated, and to stay a bounded response on a busy estate.
+MONITOR_SCAN_WINDOW = 20
+
+
+@router.get("/monitor/estate")
+def monitor_estate(request: Request):
+    """Aggregate counts for the production monitor. COUNTS ONLY — never records.
+
+    WHY THIS EXISTS AS A SEPARATE ROUTE. The monitor's deep checks previously read /scans and
+    /hitl/queue through the X-E2E-Key gate bypass, and that could never work in production:
+    core.E2E_KEY is None whenever IS_PROD, so the header was rejected on the only deployment
+    anyone needs monitored. The two ways to "fix" that were to set ACP_ENABLE_TEST_BYPASS in
+    production — reopening a whole-gate backdoor on a public deployment to power a health
+    check — or to give monitoring its own door. This is the door.
+
+    It is deliberately the NARROWEST thing that answers the two questions the monitor asks:
+
+      - did the newest scan collapse?  → recent per-scan file COUNTS, newest first
+      - how big is the review backlog? → one pending COUNT
+
+    No filenames, no owner emails, no findings, no document content. If ACP_MONITOR_KEY ever
+    leaks, what leaks with it is a handful of integers, which is the entire point of not
+    reaching for the bypass that would have handed over the estate.
+
+    Owner-agnostic ON PURPOSE (owner=None → every tenant). The old check was subtly broken in a
+    second way: /scans is scoped to _owner(request), and on the keyed path no user_email is ever
+    set, so it read the 'demo' user's scans — near-certainly empty — and would have reported
+    "no completed scans at all" against a perfectly healthy estate. A monitor asks about the
+    deployment, not about a user.
+    """
+    # Fail CLOSED and LOUD. 503 (not 404) so an unconfigured deployment is distinguishable from
+    # a route that moved — the monitor reports the two differently and neither reads as healthy.
+    if not core.MONITOR_KEY:
+        raise HTTPException(503, "monitoring is not configured on this deployment (ACP_MONITOR_KEY unset)")
+    presented = request.headers.get("x-monitor-key", "")
+    # compare_digest, not ==, so a wrong key cannot be recovered a byte at a time.
+    if not hmac.compare_digest(presented, core.MONITOR_KEY):
+        raise HTTPException(401, "bad monitor key")
+
+    scans = core.store.list_scans() or []
+    pending = core.store.list_hitl_queue(status="pending") or []
+    return {
+        "service": "acp",
+        "scans": {
+            "total": len(scans),
+            # Newest first, exactly as list_scans orders them (completed_at DESC).
+            "recent_files": [int(s.get("files") or 0) for s in scans[:MONITOR_SCAN_WINDOW]],
+        },
+        "inbox": {"pending": len(pending)},
     }
 
 

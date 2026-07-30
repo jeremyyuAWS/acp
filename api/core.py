@@ -191,15 +191,29 @@ def verify_gis_token(token: str) -> str | None:
 
 # ── Access-gate path policy ───────────────────────────────────────────────────
 # Paths that bypass all auth (needed before the user has a token).
-ALWAYS_PUBLIC = {"/healthz", "/config", "/hub", "/ai/status", "/alerts/webhook", "/capability"}
+ALWAYS_PUBLIC = {"/healthz", "/config", "/hub", "/ai/status", "/alerts/webhook", "/capability",
+                 "/monitor/estate"}
 # Shared secret for the Grafana alert webhook (public path, key-validated).
 ALERT_KEY = os.environ.get("ACP_ALERT_KEY", "acp-alert-demo-key")
+# Shared secret for the production monitor's aggregate endpoint (public path, key-validated —
+# the same posture as ALERT_KEY above, and deliberately NOT the X-E2E-Key gate bypass).
+#
+# The monitor's deep checks used to authenticate with X-E2E-Key, which cannot work in
+# production BY DESIGN: E2E_KEY is None whenever IS_PROD, so the header the monitor sent was
+# never going to be honoured on the one deployment worth monitoring. Setting ACP_E2E_KEY would
+# not have fixed it; enabling ACP_ENABLE_TEST_BYPASS would have "fixed" it by reopening the
+# whole-gate backdoor that fail-closed default exists to keep shut.
+#
+# So this key unlocks exactly one read-only route that returns COUNTS — no filenames, no
+# owners, no document content. NO DEFAULT VALUE: a monitoring credential that ships with a
+# well-known fallback is a backdoor, so an unset key disables the route rather than opening it.
+MONITOR_KEY = os.environ.get("ACP_MONITOR_KEY") or None
 # API routes require auth; everything else is the SPA (static file or client route).
 API_PREFIXES = (
     "/scans", "/rubric", "/rules", "/inventory", "/schedule",
     "/me", "/sources", "/folders", "/drive", "/hitl", "/ai",
     "/settings", "/decisions", "/jobs", "/workers", "/admin",
-    "/campaigns", "/disposition",
+    "/campaigns", "/disposition", "/monitor",
 )
 # ^ Default-open gate: any route group NOT listed here is served without auth
 # (that's how the SPA's client routes fall through). Every new APIRouter MUST be

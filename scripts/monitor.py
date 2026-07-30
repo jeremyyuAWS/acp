@@ -18,14 +18,28 @@ Two tiers, because most of the surface needs a credential and liveness alone wou
 none of the above:
 
   PUBLIC  /healthz, /readyz — always run, no secret needed.
-  DEEP    /scans, /hitl/queue via the X-E2E-Key bypass the app already implements for smoke tests
-          (api/app.py:_access_gate). Skipped LOUDLY when ACP_E2E_KEY is absent, never silently:
-          a monitor that quietly stops checking is worse than no monitor, because it still
-          reports green.
+  DEEP    /monitor/estate, a read-only aggregate route that exists for this script. Skipped
+          LOUDLY when ACP_MONITOR_KEY is absent, never silently: a monitor that quietly stops
+          checking is worse than no monitor, because it still reports green.
+
+THE DEEP TIER USED TO BE UNRUNNABLE, and it is worth saying why so nobody reinstates it. It
+read /scans and /hitl/queue through the X-E2E-Key gate bypass, and that bypass is disabled in
+production BY DESIGN — core.E2E_KEY is None whenever IS_PROD, so the header was refused on the
+one deployment worth monitoring. Setting ACP_E2E_KEY would not have helped. The only way to
+make it work was ACP_ENABLE_TEST_BYPASS=1, i.e. reopening a whole-gate backdoor on a public
+deployment so that a health check could log in — trading the thing being protected for the
+ability to check on it.
+
+It was broken a second way too: /scans is scoped to the request's owner, and the keyed path
+never sets one, so it read the 'demo' user's scans (empty) and would have reported "no
+completed scans at all" against a perfectly healthy 258-document estate.
+
+So the deep tier now asks a purpose-built endpoint that returns COUNTS across all owners, and
+carries a credential (ACP_MONITOR_KEY) that unlocks nothing else.
 
 Usage:
     ACP_FQDN=acp-app...azurecontainerapps.io python3 scripts/monitor.py
-    ACP_E2E_KEY=... python3 scripts/monitor.py --repo .    # add the deep + drift checks
+    ACP_MONITOR_KEY=... python3 scripts/monitor.py --repo .   # add the deep + drift checks
 
 Exit 0 = healthy, 1 = at least one check failed.
 """
@@ -85,7 +99,7 @@ class Report:
 
 
 def get(url: str, key: str | None = None, timeout: int = 20) -> tuple[int, str, float]:
-    req = urllib.request.Request(url, headers={"X-E2E-Key": key} if key else {})
+    req = urllib.request.Request(url, headers={"X-Monitor-Key": key} if key else {})
     t0 = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -160,52 +174,55 @@ def check_ready(base: str, rep: Report) -> None:
         rep.fail("pdf engine loaded", f"{pdf.get('reason')} — every PDF would error, one at a time")
 
 
-def check_scan_scale(base: str, key: str, rep: Report) -> None:
-    """The newest scan must not be a fraction of the estate it replaced.
+def check_estate(base: str, key: str, rep: Report) -> None:
+    """The deep tier: one call to /monitor/estate, two questions.
 
-    This is the sweep bug's exact fingerprint, and it is checkable without any stored history:
-    the collapsed scan and the real estate sit side by side in the same list.
+    1. THE NEWEST SCAN MUST NOT BE A FRACTION OF THE ESTATE IT REPLACED. This is the sweep bug's
+       exact fingerprint, and it needs no stored history: the collapsed scan and the real estate
+       sit side by side in the same list of recent counts.
+    2. THE REVIEW BACKLOG. Not an assertion — a number worth watching.
     """
-    code, body, _ = get(f"{base}/scans", key=key)
+    code, body, _ = get(f"{base}/monitor/estate", key=key)
+    if code == 503:
+        # The deployment has no ACP_MONITOR_KEY set. Distinct from a rejected key, and a FAIL
+        # rather than a skip: the operator asked for the deep checks by setting the key locally,
+        # so a deployment that cannot answer is a misconfiguration, not an absence.
+        rep.fail("estate readable", "HTTP 503 — ACP_MONITOR_KEY is not set ON THE DEPLOYMENT")
+        return
+    if code == 401:
+        rep.fail("estate readable", "HTTP 401 — the key here and the key on the deployment differ")
+        return
     if code != 200:
-        rep.fail("scan list readable", f"HTTP {code} — X-E2E-Key rejected or route moved")
+        rep.fail("estate readable", f"HTTP {code} — {body[:120]}")
         return
     try:
-        scans = json.loads(body)
+        est = json.loads(body)
     except json.JSONDecodeError:
-        rep.fail("scan list is JSON", body[:120])
+        rep.fail("estate is JSON", body[:120])
         return
-    if not isinstance(scans, list) or not scans:
+
+    files = [(n or 0) for n in ((est.get("scans") or {}).get("recent_files") or [])]
+    total = (est.get("scans") or {}).get("total", len(files))
+    if not files:
         rep.fail("scan list non-empty", "no completed scans at all")
-        return
-
-    recent = scans[:COLLAPSE_WINDOW]
-    files = [(s.get("files") or 0) for s in recent]
-    newest, biggest = files[0], max(files)
-    rep.ok("scan list readable", f"{len(scans)} scans, newest has {newest} documents")
-
-    if biggest and newest < biggest * COLLAPSE_RATIO:
-        rep.fail(
-            "newest scan is full-size",
-            f"newest has {newest} documents but a recent scan had {biggest} — "
-            f"a collapsed 'latest' scan is what every dashboard, report and selector will show",
-        )
     else:
-        rep.ok("newest scan is full-size", f"{newest} vs {biggest} biggest of last {len(recent)}")
+        recent = files[:COLLAPSE_WINDOW]
+        newest, biggest = recent[0], max(recent)
+        rep.ok("estate readable", f"{total} scans, newest has {newest} documents")
+        if biggest and newest < biggest * COLLAPSE_RATIO:
+            rep.fail(
+                "newest scan is full-size",
+                f"newest has {newest} documents but a recent scan had {biggest} — "
+                f"a collapsed 'latest' scan is what every dashboard, report and selector will show",
+            )
+        else:
+            rep.ok("newest scan is full-size", f"{newest} vs {biggest} biggest of last {len(recent)}")
 
-
-def check_inbox(base: str, key: str, rep: Report) -> None:
-    """Report the review backlog. Not an assertion — a number worth watching."""
-    code, body, _ = get(f"{base}/hitl/queue?status=pending", key=key)
-    if code != 200:
-        rep.fail("inbox readable", f"HTTP {code}")
-        return
-    try:
-        items = json.loads(body)
-    except json.JSONDecodeError:
-        rep.fail("inbox is JSON", body[:120])
-        return
-    rep.ok("inbox readable", f"{len(items)} pending review items")
+    pending = (est.get("inbox") or {}).get("pending")
+    if pending is None:
+        rep.fail("inbox readable", "response carried no inbox.pending count")
+    else:
+        rep.ok("inbox readable", f"{pending} pending review items")
 
 
 def check_deploy_drift(base_health: dict, repo: str, rep: Report) -> None:
@@ -255,7 +272,7 @@ def main() -> int:
     if not args.fqdn:
         sys.exit("monitor: set ACP_FQDN (or pass --fqdn) to the app hostname, without a scheme")
     base = f"https://{args.fqdn.rstrip('/')}"
-    key = os.environ.get("ACP_E2E_KEY") or None
+    key = os.environ.get("ACP_MONITOR_KEY") or None
 
     print(f"monitoring {base}\n")
     rep = Report()
@@ -263,12 +280,11 @@ def main() -> int:
     check_ready(base, rep)
 
     if key:
-        check_scan_scale(base, key, rep)
-        check_inbox(base, key, rep)
+        check_estate(base, key, rep)
     else:
         # Loud, and counted. The deep checks are the ones that would have caught the sweep.
-        rep.skip("newest scan is full-size", "ACP_E2E_KEY not set — the deep checks did NOT run")
-        rep.skip("inbox readable", "ACP_E2E_KEY not set")
+        rep.skip("newest scan is full-size", "ACP_MONITOR_KEY not set — the deep checks did NOT run")
+        rep.skip("inbox readable", "ACP_MONITOR_KEY not set")
 
     if args.repo:
         check_deploy_drift(health, args.repo, rep)
