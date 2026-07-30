@@ -24,10 +24,11 @@ def _stub(monkeypatch, payload, code=200):
     monkeypatch.setattr(M, "get", lambda url, key=None, timeout=20: (code, json.dumps(payload), 5.0))
 
 
-def scans(*counts):
-    """Newest first, exactly as list_scans orders them."""
-    return [{"id": f"s{i}", "files": n, "completed_at": f"2026-07-29T{10+i:02d}:00:00Z"}
-            for i, n in enumerate(counts)]
+def estate(*counts, pending=0):
+    """A /monitor/estate payload. Counts are newest first, as list_scans orders them."""
+    return {"service": "acp",
+            "scans": {"total": len(counts), "recent_files": list(counts)},
+            "inbox": {"pending": pending}}
 
 
 # ── the sweep collapse ────────────────────────────────────────────────────────────────
@@ -35,44 +36,87 @@ def scans(*counts):
 def test_a_one_file_scan_landing_on_a_258_file_estate_fires(monkeypatch, rep):
     """The exact shape of the bug: a fallback sweep of the bundled corpus saved and finalized on
     top of the real estate, so every 'latest' view showed 1 document instead of 258."""
-    _stub(monkeypatch, scans(1, 258, 258, 257))
-    M.check_scan_scale("https://x", "k", rep)
+    _stub(monkeypatch, estate(1, 258, 258, 257))
+    M.check_estate("https://x", "k", rep)
     assert rep.failed == 1
-    assert "newest has 1 documents but a recent scan had 258" in rep.rows[-1][2]
+    assert any("newest has 1 documents but a recent scan had 258" in r[2] for r in rep.rows)
 
 
 def test_a_full_size_newest_scan_passes(monkeypatch, rep):
-    _stub(monkeypatch, scans(258, 258, 257))
-    M.check_scan_scale("https://x", "k", rep)
+    _stub(monkeypatch, estate(258, 258, 257))
+    M.check_estate("https://x", "k", rep)
     assert rep.failed == 0
 
 
 def test_ordinary_estate_growth_and_shrinkage_does_not_fire(monkeypatch, rep):
     """Documents get added and removed. Only a COLLAPSE is a signal — a monitor that cries on
     normal variation gets muted, and a muted monitor is the same as no monitor."""
-    _stub(monkeypatch, scans(240, 258, 251, 262))
-    M.check_scan_scale("https://x", "k", rep)
+    _stub(monkeypatch, estate(240, 258, 251, 262))
+    M.check_estate("https://x", "k", rep)
     assert rep.failed == 0
 
 
 def test_a_first_ever_scan_does_not_fire(monkeypatch, rep):
-    _stub(monkeypatch, scans(12))
-    M.check_scan_scale("https://x", "k", rep)
+    _stub(monkeypatch, estate(12))
+    M.check_estate("https://x", "k", rep)
     assert rep.failed == 0
 
 
 def test_no_completed_scans_is_a_failure_not_a_pass(monkeypatch, rep):
-    _stub(monkeypatch, [])
-    M.check_scan_scale("https://x", "k", rep)
+    _stub(monkeypatch, estate())
+    M.check_estate("https://x", "k", rep)
     assert rep.failed == 1
 
+
+def test_the_backlog_is_reported(monkeypatch, rep):
+    _stub(monkeypatch, estate(258, 258, pending=17))
+    M.check_estate("https://x", "k", rep)
+    assert rep.failed == 0
+    assert any("17 pending review items" in r[2] for r in rep.rows)
+
+
+# ── the deep tier's own auth, which is the part that was broken ───────────────────────
 
 def test_a_rejected_key_fails_rather_than_silently_skipping(monkeypatch, rep):
     """401 must not read as 'nothing to report'. This is the failure mode that makes a monitor
     lie: the deep checks stop running and the summary still says green."""
-    monkeypatch.setattr(M, "get", lambda *a, **k: (401, "unauthorized", 5.0))
-    M.check_scan_scale("https://x", "k", rep)
+    monkeypatch.setattr(M, "get", lambda *a, **k: (401, "bad monitor key", 5.0))
+    M.check_estate("https://x", "k", rep)
     assert rep.failed == 1
+    assert "key here and the key on the deployment differ" in rep.rows[-1][2]
+
+
+def test_an_unconfigured_deployment_fails_and_says_which_side_is_missing(monkeypatch, rep):
+    """503 means the DEPLOYMENT has no ACP_MONITOR_KEY, which is a different fix from a wrong
+    key (401) and from a moved route (404). This is the case the old design could never even
+    report: with the X-E2E-Key bypass disabled in production it got a flat 401 and no way to
+    tell 'refused' from 'not configured'."""
+    monkeypatch.setattr(M, "get", lambda *a, **k: (503, "monitoring is not configured", 5.0))
+    M.check_estate("https://x", "k", rep)
+    assert rep.failed == 1
+    assert "not set ON THE DEPLOYMENT" in rep.rows[-1][2]
+
+
+def test_the_deep_tier_sends_its_own_header_not_the_gate_bypass(monkeypatch):
+    """The credential must be X-Monitor-Key. Sending X-E2E-Key is what made the deep checks
+    unrunnable in production, and it is an easy thing to reintroduce by copy-paste."""
+    seen = {}
+
+    class _Resp:
+        status = 200
+        def read(self): return b"{}"
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(req, timeout=20):
+        seen.update(req.headers)
+        return _Resp()
+
+    monkeypatch.setattr(M.urllib.request, "urlopen", fake_urlopen)
+    M.get("https://x/monitor/estate", key="sekrit")
+    # urllib title-cases header names.
+    assert seen.get("X-monitor-key") == "sekrit"
+    assert not any(k.lower() == "x-e2e-key" for k in seen)
 
 
 # ── health / readiness ────────────────────────────────────────────────────────────────
