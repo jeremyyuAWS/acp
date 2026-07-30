@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
 import { SCOPE_SCS, OUT_OF_SCOPE_SCS, CORE_SCS } from './activeScope.js'
 
 // The "By WCAG criterion" panel defaults to the criteria this engagement AGREED to assess (14,
@@ -41,8 +41,7 @@ const allCoreTraced = (outcome = 'PASS') => [...CORE_SCS].map((sc) => trace(sc, 
 
 let container, root
 const mount = async () => {
-  container = document.createElement('div'); document.body.appendChild(container)
-  root = createRoot(container)
+  ;({ container, root } = createTestRoot())
   await act(async () => { root.render(createElement(RuleBreakdown, { scanId: 's1', files: [] })) })
   await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
 }
@@ -57,7 +56,7 @@ const notEvaluatedIds = () => [...container.querySelectorAll('.rulerow--manual .
 const header = () => container.querySelector('.rubrichdr > span.muted').textContent
 
 beforeEach(() => { getScanTraces.mockReset(); sessionStorage.clear() })
-afterEach(() => { root?.unmount(); container?.remove() })
+afterEach(unmountAll)   // both mount sites, inside act() — see testRoots.js
 
 describe('RuleBreakdown defaults to the agreed scope', () => {
   it('renders exactly the 14 scoped criteria, and none of the 6 outside the scope', async () => {
@@ -151,7 +150,7 @@ describe('the header count is the number of rows actually shown', () => {
       trace('1.4.11', 'FAIL', 'a.docx', 9),
     ])
     await act(async () => {
-      root = createRoot(container = document.body.appendChild(document.createElement('div')))
+      ;({ container, root } = createTestRoot())
       root.render(createElement(RuleBreakdown, { scanId: 's1', files: [{ file: 'a.docx', department: 'Legal' }] }))
     })
     await act(async () => { await new Promise((r) => setTimeout(r, 0)) })

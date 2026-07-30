@@ -3,10 +3,13 @@
 // This is the case PR 62 left on the picker: the reviewer described one image and approved all
 // nineteen. The card now renders one editor per evidence image and sends a positional
 // approved_values list — index i is evidence image i — which the server writes onto evidence[i].
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
+
+// Unmount every root this file mounts — see testRoots.js.
+afterEach(unmountAll)
 
 const suggestFix = vi.fn()
 vi.mock('./api.js', () => ({
@@ -36,9 +39,7 @@ const deferred = {
 let container, root, onAct
 const mount = async (item = deferred) => {
   onAct = vi.fn().mockResolvedValue(undefined)
-  container = document.createElement('div')
-  document.body.appendChild(container)
-  root = createRoot(container)
+  ;({ container, root } = createTestRoot())
   await act(async () => { root.render(createElement(EvidenceCard, { item, onAct, editable: true })) })
 }
 const inputs = () => [...container.querySelectorAll('.evcard-rec-input')]

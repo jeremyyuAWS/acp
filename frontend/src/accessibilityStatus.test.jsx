@@ -1,11 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
 
 // ADR 0026 — the Accessibility Status hero. Pins: decision-first headline + coverage/status split,
 // the six-bucket segmented bar, the labeled estimate, the Why? affordance, the one dynamic CTA, and
 // the honesty rules (no fabricated %, "Automatically Verified" not "Certified", degrade on unavailable).
+
+// Unmount every root this file mounts — see testRoots.js.
+afterEach(unmountAll)
 
 const getFileStatus = vi.fn()
 const getScanStatus = vi.fn()
@@ -18,8 +21,7 @@ const { default: AccessibilityStatus } = await import('./AccessibilityStatus.jsx
 
 let container, root
 const mount = async (onAction) => {
-  container = document.createElement('div'); document.body.appendChild(container)
-  root = createRoot(container)
+  ;({ container, root } = createTestRoot())
   await act(async () => { root.render(createElement(AccessibilityStatus, { scanId: 's1', file: 'f.pdf', onAction })) })
 }
 const settle = async (n = 5) => { for (let k = 0; k < n; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
@@ -106,8 +108,7 @@ describe('scan scope (one component, every scope)', () => {
   }
 
   const mountScan = async () => {
-    container = document.createElement('div'); document.body.appendChild(container)
-    root = createRoot(container)
+    ;({ container, root } = createTestRoot())
     await act(async () => { root.render(createElement(AccessibilityStatus, { scanId: 's1' })) })
   }
 

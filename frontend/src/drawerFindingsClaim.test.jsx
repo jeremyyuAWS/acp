@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -100,17 +100,13 @@ describe('the drawer badge and the coverage panel cannot disagree about findings
 
 let container, root
 beforeEach(() => {
-  container = document.createElement('div'); document.body.appendChild(container)
-  root = createRoot(container)
+  ;({ container, root } = createTestRoot())
 })
 // Same reason as inventoryAgreesWithDrawer.test.jsx: AccessibilityStatus resolves getFileStatus
 // and calls setM, so a root left mounted keeps work in React's concurrent scheduler past the last
 // assertion, where an environment teardown turns it into an unhandled `window is not defined`.
 // This file has the same shape and the same latent exposure; it simply has not lost the race yet.
-afterEach(async () => {
-  await act(async () => { root.unmount() })
-  container.remove()
-})
+afterEach(unmountAll)
 const render = async (props) => { await act(async () => { root.render(createElement(AccessibilityStatus, props)) }) }
 
 // The invariant only holds if the drawer actually receives the card's model, so pin the wiring.

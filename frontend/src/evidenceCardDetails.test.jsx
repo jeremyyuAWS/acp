@@ -1,7 +1,7 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
 
 // Progressive disclosure (AI Work Inbox): the card must LEAD with the decision (intent + the
 // editor/recommendation) and COLLAPSE the audit jargon — the trust-state enums, provenance, and the
@@ -19,6 +19,9 @@ vi.mock('./api.js', () => ({
   validateAlt: () => Promise.resolve({}),
 }))
 
+// Unmount every root this file mounts — see testRoots.js.
+afterEach(unmountAll)
+
 const { default: EvidenceCard } = await import('./EvidenceCard.jsx')
 
 // 2.4.6 (heading) is an irreducibly-human criterion → whyReview renders; with a proposal the trust
@@ -32,8 +35,9 @@ const item = {
 
 let container
 const mount = async (it = item) => {
-  container = document.createElement('div'); document.body.appendChild(container)
-  await act(async () => { createRoot(container).render(createElement(EvidenceCard, { item: it, onAct: () => {} })) })
+  const { container: c, root } = createTestRoot()
+  container = c
+  await act(async () => { root.render(createElement(EvidenceCard, { item: it, onAct: () => {} })) })
 }
 
 describe('EvidenceCard — Details ▾ progressive disclosure', () => {

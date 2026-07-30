@@ -2,10 +2,10 @@
 // decide by applying the standard's own exception: a decorative image needs no description (1.1.1),
 // an essential logo/brand mark is exempt from images-of-text (1.4.5/1.4.9). One tap → an approval
 // carrying a `resolution`, and NO written value (nothing is misrepresented as an authored fix).
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
 
 vi.mock('./api.js', () => ({
   suggestFix: vi.fn(),
@@ -17,6 +17,9 @@ vi.mock('./api.js', () => ({
   getScanAiCalls: () => Promise.resolve([]),
   validateAlt: () => Promise.resolve({}),
 }))
+
+// Unmount every root this file mounts — see testRoots.js.
+afterEach(unmountAll)
 
 const { default: EvidenceCard } = await import('./EvidenceCard.jsx')
 
@@ -37,9 +40,7 @@ const describedItem = (rule_id, desc) => ({
 let container, root, onAct
 const mount = async (item) => {
   onAct = vi.fn().mockResolvedValue(undefined)
-  container = document.createElement('div')
-  document.body.appendChild(container)
-  root = createRoot(container)
+  ;({ container, root } = createTestRoot())
   await act(async () => { root.render(createElement(EvidenceCard, { item, onAct, editable: true })) })
 }
 const btnWith = (text) => [...container.querySelectorAll('button')].find((b) => b.textContent.includes(text))

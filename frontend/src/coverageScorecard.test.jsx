@@ -1,12 +1,15 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
+
+// Unmount every root this file mounts — see testRoots.js.
+afterEach(unmountAll)
 
 const { default: CoverageScorecard } = await import('./CoverageScorecard.jsx')
 
 let container, root
-beforeEach(() => { container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container) })
+beforeEach(() => { ;({ container, root } = createTestRoot()) })
 
 const render = async (files) => { await act(async () => { root.render(createElement(CoverageScorecard, { files })) }) }
 const click = async (el) => { await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }

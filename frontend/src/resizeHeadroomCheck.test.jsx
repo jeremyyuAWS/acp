@@ -1,11 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
 
 // ADR 0024 Tier B.2 — the measured-fit affordance on the 1.4.4 Resize Text finding. Pins on-demand
 // fetch, a measured overflow as actionable, measured headroom as "verify" (never a certified pass),
 // and honest degrade.
+
+// Unmount every root this file mounts — see testRoots.js.
+afterEach(unmountAll)
 
 const getFileResize = vi.fn()
 vi.mock('./api.js', () => ({ getFileResize: (...a) => getFileResize(...a) }))
@@ -14,8 +17,7 @@ const { default: ResizeHeadroomCheck } = await import('./ResizeHeadroomCheck.jsx
 
 let container, root
 const mount = async () => {
-  container = document.createElement('div'); document.body.appendChild(container)
-  root = createRoot(container)
+  ;({ container, root } = createTestRoot())
   await act(async () => { root.render(createElement(ResizeHeadroomCheck, { scanId: 's1', file: 'deck.pptx' })) })
 }
 const settle = async (n = 4) => { for (let k = 0; k < n; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }

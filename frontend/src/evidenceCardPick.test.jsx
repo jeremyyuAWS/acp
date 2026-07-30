@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
 
 // The whole point of the per-image rows: a draft must describe the image on ITS OWN row. A vision
 // model sees one image; drafting the first of nineteen for all of them would caption the wrong
@@ -9,6 +9,9 @@ import { act } from 'react-dom/test-utils'
 // generate AUTOMATICALLY when the card is in view (auto-draft), fanning out one call per image's
 // own locator — so this invariant is exercised by the auto-draft itself, and again by the per-image
 // retry button.
+
+// Unmount every root this file mounts — see testRoots.js.
+afterEach(unmountAll)
 
 const suggestFix = vi.fn()
 vi.mock('./api.js', () => ({
@@ -37,9 +40,7 @@ const item = {
 
 let container, root
 const mount = async (props = {}) => {
-  container = document.createElement('div')
-  document.body.appendChild(container)
-  root = createRoot(container)
+  ;({ container, root } = createTestRoot())
   await act(async () => { root.render(createElement(EvidenceCard, { item, onAct: () => {}, ...props })) })
 }
 // jsdom has no IntersectionObserver, so the card counts as in-view immediately and auto-draft fires

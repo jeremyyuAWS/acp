@@ -1,12 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
 
 // Auto-generate the preview (AI Work Inbox): a value-fix that reaches the inbox with no draft must
 // generate its AI suggestion on its own — the reviewer never clicks "Draft with AI". These pin the
 // automatic firing, the once-only guard, and the do-no-harm rules (never overwrite the reviewer's
 // text; never fire when a proposal is already present).
+
+// Unmount every root this file mounts — see testRoots.js.
+afterEach(unmountAll)
 
 const suggestFix = vi.fn()
 vi.mock('./api.js', () => ({
@@ -27,8 +30,7 @@ const base = { id: 1, scan_id: 's1', file: 'handbook.pdf', rule_id: '1.1.1',
 
 let container, root
 const mount = async (item) => {
-  container = document.createElement('div'); document.body.appendChild(container)
-  root = createRoot(container)
+  ;({ container, root } = createTestRoot())
   await act(async () => { root.render(createElement(EvidenceCard, { item, onAct: () => {} })) })
 }
 const settle = async (n = 6) => { for (let k = 0; k < n; k++) await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
