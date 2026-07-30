@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { resetDemoData, getAllowlist, setAllowlist, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider } from './api.js'
+import { resetDemoData, getAllowlist, setAllowlist, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, getAiStatus } from './api.js'
 
 // Danger zone — wipe scan results (Grafana + in-app charts) and/or Langfuse
 // traces so the dashboards start fresh. Settings are preserved. Typed-confirm.
@@ -90,12 +90,28 @@ function DriveMirror() {
   // owner-only (ACP_OWNER_EMAIL); the SPA gates Settings behind Platform Admin, so start
   // optimistic and let the /ai/providers probe below correct it on a 403.
   const [canEdit, setCanEdit] = useState(true)
+  // Why vision is off, straight from the server. A pinned model name the endpoint has never had
+  // is otherwise invisible in this panel, and this is the field that fixes it. Re-read after every
+  // apply, since clearing the override is exactly what changes the answer.
+  const [aiStatus, setAiStatus] = useState(null)
+  const loadAiStatus = () => getAiStatus().then(setAiStatus).catch(() => {})
+  useEffect(() => { loadAiStatus() }, [])
   // The endpoint save must never leave the form asserting something the server did not store.
   // A failed PUT used to leave the typed value on screen with the old value still live in
   // production, and the only notice was a line at the very bottom of the panel — below the
   // whole providers section, off-screen from the Apply button that caused it.
-  const saveEndpoint = () => {
-    const want = { ai_base_url: aiUrl.trim(), ai_vision_model: aiVision.trim() }
+  //
+  // `{ clearBoth: true }` is the detach path below. Tested as an option object rather than
+  // positional args because this is also the onClick handler, and a React MouseEvent arriving
+  // as the first parameter must not read as "clear the fields".
+  const saveEndpoint = (opts) => {
+    const clearBoth = opts?.clearBoth === true
+    const want = clearBoth
+      ? { ai_base_url: '', ai_vision_model: '' }
+      : { ai_base_url: aiUrl.trim(), ai_vision_model: aiVision.trim() }
+    const ok = clearBoth
+      ? '✓ back to the deploy default endpoint and vision model'
+      : '✓ endpoint switched — takes effect on every replica within ~30s, no restart'
     setBusy(true); setMsg('')
     updateSettings(want)
       .then((s) => {
@@ -105,7 +121,8 @@ function DriveMirror() {
         const drift = Object.keys(want).filter((k) => (s?.[k] ?? '') !== want[k])
         setMsg(drift.length
           ? `⚠ the server kept ${drift.map((k) => `${k}="${s?.[k] ?? ''}"`).join(', ')} — your value was not applied`
-          : '✓ endpoint switched — takes effect on every replica within ~30s, no restart')
+          : ok)
+        return loadAiStatus()
       })
       .catch((e) => {
         setAiUrl(settings.ai_base_url || ''); setAiVision(settings.ai_vision_model || '')
@@ -113,6 +130,10 @@ function DriveMirror() {
       })
       .finally(() => setBusy(false))
   }
+  // Detaching a burst GPU means clearing BOTH fields (deploy/gpu/README.md). Doing it by hand is
+  // where this came from on 2026-07-29: the URL was cleared, the model name was not, and the
+  // orphaned name shadowed the deploy default until someone read the precedence code.
+  const useDeployDefault = () => saveEndpoint({ clearBoth: true })
   const [costs, setCosts] = useState(null)
   useEffect(() => { getAiCosts().then(setCosts).catch(() => {}) }, [])
   const toggleAutoApply = () => {
@@ -233,6 +254,18 @@ function DriveMirror() {
           <button className="ghost small" onClick={saveEndpoint} disabled={busy || !canEdit}>Apply</button>
         </div>
       </label>
+      {aiStatus && !aiStatus.vision_available && aiStatus.vision_unavailable_reason && (
+        <p role="status" style={{ margin: '10px 0 0', fontSize: 13, color: '#A32D2D' }}>
+          ⚠ <b>Genuine alt text is off</b> — {aiStatus.vision_unavailable_reason}. Until this
+          resolves, WCAG 1.1.1 findings get a fill-in template for a human to complete, not an
+          image-derived description.
+        </p>
+      )}
+      {canEdit && (aiUrl || aiVision) && (
+        <button className="ghost small" style={{ marginTop: 10 }} onClick={useDeployDefault} disabled={busy}>
+          Use deploy default (clears both)
+        </button>
+      )}
       {/* The outcome belongs next to the control that caused it. The copy at the foot of the
           panel is far below the providers section and was missed entirely. */}
       {msg && <p role="status" aria-live="polite"

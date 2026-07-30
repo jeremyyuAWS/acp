@@ -129,3 +129,45 @@ describe('a user who cannot save is not offered an editable form', () => {
     expect(s).toMatch(/onClick=\{saveFolder\}[\s\S]{0,120}!canEdit/)
   })
 })
+
+// ── Detaching a burst GPU (2026-07-29) ────────────────────────────────────────────
+// Clearing the base URL but not the vision model left a GPU-only model name pinned in the
+// override, and the panel showed nothing but vision_available:false. Both halves are asserted
+// here: the panel must SAY why, and clearing must be one action instead of two fields.
+describe('the panel explains a dead vision model and can undo the pin in one action', () => {
+  const src = () => read('Settings.jsx')
+
+  it('surfaces WHY vision is unavailable, next to the field that fixes it', () => {
+    const s = src()
+    expect(s).toMatch(/aiStatus\.vision_unavailable_reason/)
+    // gated on the server's own verdict, not inferred in the SPA
+    expect(s).toMatch(/!aiStatus\.vision_available/)
+    // and it sits above the providers section, beside the Vision model input
+    const reason = s.indexOf('vision_unavailable_reason}')
+    expect(reason).toBeGreaterThan(s.indexOf('onClick={saveEndpoint}'))
+    expect(reason).toBeLessThan(s.indexOf('<AIProvidersPanel'))
+  })
+
+  it('re-reads /ai/status after an apply, since clearing the override changes the answer', () => {
+    const s = src()
+    const body = s.slice(s.indexOf('const saveEndpoint'), s.indexOf('const useDeployDefault'))
+    expect(body).toMatch(/return loadAiStatus\(\)/)
+  })
+
+  it('detaching a burst GPU clears BOTH fields in one action', () => {
+    const s = src()
+    expect(s).toMatch(/const useDeployDefault = \(\) => saveEndpoint\(\{ clearBoth: true \}\)/)
+    const clear = s.slice(s.indexOf('const saveEndpoint'), s.indexOf('const useDeployDefault'))
+    // both keys blanked together — clearing only one is the bug this exists for
+    expect(clear).toMatch(/ai_base_url: '',\s*ai_vision_model: ''/)
+    expect(s).toMatch(/Use deploy default \(clears both\)/)
+  })
+
+  it('a click event cannot be mistaken for a request to clear the fields', () => {
+    const s = src()
+    // onClick={saveEndpoint} passes a MouseEvent as the first argument; the clear path must be
+    // opt-in by property, not by "did I get an argument at all".
+    expect(s).toMatch(/const clearBoth = opts\?\.clearBoth === true/)
+    expect(s).toMatch(/onClick=\{saveEndpoint\}/)
+  })
+})

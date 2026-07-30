@@ -284,6 +284,24 @@ def hub():
     return Response(hub_file.read_bytes(), media_type="text/html")
 
 
+def _ai_base_url_error(val: str) -> str | None:
+    """None when the value is acceptable. Empty is always allowed — it means "use the deploy
+    default", which is how a burst-GPU detach gets back to the CPU endpoint."""
+    if val and not val.startswith(("http://", "https://")):
+        return "ai_base_url must be an http(s) URL (or empty to use the deploy default)"
+    return None
+
+
+# Per-field validators for the runtime AI endpoint settings, declared here rather than inlined in
+# the write loop so update_settings can run EVERY one before it writes ANY field. Only ai_base_url
+# has a rule today, and it is listed first, which is the only reason the previous
+# validate-and-write-in-one-pass loop was safe: add a rule to a later field, or reorder the tuple,
+# and a rejected PUT would have written the fields ahead of the bad one and then 422'd. The SPA
+# sends the base URL and the vision model in a single Apply, so a partial write there is
+# indistinguishable to the admin from "the setting will not save".
+_AI_VALIDATORS = {"ai_base_url": _ai_base_url_error}
+
+
 class SettingsUpdate(BaseModel):
     ai_enabled: bool | None = None
     drive_mirror_enabled: bool | None = None
@@ -324,19 +342,27 @@ def update_settings(body: SettingsUpdate, request: Request):
         core.store.log_decision(
             "admin", "settings.drive_mirror_folder",
             detail=f"drive_mirror_folder set to {folder}")
-    for key, val in (("ai_base_url", body.ai_base_url),
-                     ("ai_vision_model", body.ai_vision_model),
-                     ("ai_text_model", body.ai_text_model)):
-        if val is None:
-            continue
-        val = val.strip()
-        if key == "ai_base_url" and val and not val.startswith(("http://", "https://")):
-            raise HTTPException(422, "ai_base_url must be an http(s) URL (or empty to use the deploy default)")
+    ai_updates = [(key, val.strip())
+                  for key, val in (("ai_base_url", body.ai_base_url),
+                                   ("ai_vision_model", body.ai_vision_model),
+                                   ("ai_text_model", body.ai_text_model))
+                  if val is not None]
+    # Validate EVERY field before writing ANY of them — see _AI_VALIDATORS. All-or-nothing is
+    # order-independent; the old single-pass loop was correct only by the accident of which field
+    # carried the only rule.
+    for key, val in ai_updates:
+        validator = _AI_VALIDATORS.get(key)
+        problem = validator(val) if validator else None
+        if problem:
+            raise HTTPException(422, problem)
+    for key, val in ai_updates:
         core.store.set_setting(key, val)
         core.store.log_decision("admin", f"settings.{key}",
                                 detail=f"{key} set to {val or '(deploy default)'} — takes effect "
                                        "on every replica within ~30s, no restart")
-        # This replica switches immediately; the others follow via the TTL refresh.
+    if ai_updates:
+        # This replica switches immediately; the others follow via the TTL refresh. Once for the
+        # batch, not once per field — the refresh re-reads all three settings anyway.
         try:
             import ai as _ai
             _ai._override_checked["at"] = 0.0

@@ -208,13 +208,20 @@ def ai_status():
     """Check whether the local Ollama instance is reachable, and report whether
     AI is enabled platform-wide (admin deterministic-only toggle). Also reports
     whether a vision model is pulled — genuine image alt text (WCAG 1.1.1) needs it,
-    and it degrades to human review when absent."""
+    and it degrades to human review when absent.
+
+    vision_unavailable_reason says WHY, in one line, when vision is off. A bare
+    vision_available:false does not distinguish "the endpoint is down" from "the model name
+    configured here has never existed on that endpoint", and those have different fixes —
+    the second is a stale admin override and is one cleared field away. config_source below
+    says where the name came from; this says what it broke."""
     import ai as _ai
     vision = _ai.vision_is_available()
     return {"available": _ai.is_available(), "base_url": _ai.OLLAMA_BASE_URL,
             "model": _ai.OLLAMA_MODEL, "ai_enabled": core.store.get_ai_enabled(),
             "backend": os.environ.get("ACP_AI_BACKEND", "auto").lower(),
             "vision_available": vision, "vision_model": _ai.OLLAMA_VISION_MODEL,
+            "vision_unavailable_reason": None if vision else _ai.vision_unavailable_reason(),
             # available=true only means Ollama answered. Whether the configured models are
             # actually pulled is a separate question, and the one that decides if a generate
             # call 404s — report it rather than leaving 'available' to imply it.
