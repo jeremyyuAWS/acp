@@ -187,27 +187,6 @@ function ProgressRail({ steps }) {
   )
 }
 
-// The current→remediated comparison, so a reviewer approves against evidence rather than a
-// promise. `applied` distinguishes a fix already written into the document (remediation_diff,
-// verified-cleared) from an AI draft that this very approval would accept — the reviewer must
-// never confuse "this is what the file says now" with "this is what the model would like it
-// to say". Both halves are real values; there is no template branch.
-export function ReviewComparison({ comparison }) {
-  const { before, after, applied } = comparison
-  return (
-    <div className="whyreview-ba" aria-label={applied ? 'Before and after the applied fix' : 'Current value and the AI draft'}>
-      <div className="diffbox before">
-        <span className="difftag">{applied ? 'before' : 'current'}</span>
-        <code>{before || '— nothing (the value is absent)'}</code>
-      </div>
-      <div className="diffbox after">
-        <span className="difftag">{applied ? 'after · applied to the document' : 'AI draft · not applied until you approve'}</span>
-        <code>{after}</code>
-      </div>
-    </div>
-  )
-}
-
 // Recent AI fixes — a GROUPED summary (§6), not a repetitive per-row list. One chip per
 // rule ("Added 14 image descriptions"), an "Accessibility improvements" impact row (§7),
 // and "View details" expands to the real applied values + thumbnails (applied_fixes).

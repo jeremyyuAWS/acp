@@ -3,7 +3,6 @@
 import { describe, it, expect } from 'vitest'
 import { simProposalsFor, simRemediationDiffs, SIM_THUMB } from './sim.js'
 import { isSafeThumb } from './ProposalThumb.jsx'
-import { comparisonFor } from './reviewCard.js'
 
 describe('simProposalsFor — drafts awaiting approval', () => {
   it('drafts a value only for the criteria a model can write one for', () => {
@@ -77,14 +76,16 @@ describe('simRemediationDiffs — fixes already written into the document', () =
     expect(simRemediationDiffs(FILES).filter((r) => r.file === 'handbook.pdf').length).toBe(1)
   })
 
-  it('feeds comparisonFor as an APPLIED fix, matched on file and criterion', () => {
+  // Asserted on the rows themselves. These used to read them through comparisonFor, which was
+  // deleted with Remediate's unreachable WhyReview — but the claim was never about that helper:
+  // a diff row carries real before/after values and is keyed to ONE document, so a fix cannot
+  // surface on another document's card. That is a property of this generator, so pin it here.
+  it('emits a real before/after for the criterion it fixed, keyed to that one document', () => {
     const rows = simRemediationDiffs(FILES)
-    expect(comparisonFor({ ruleId: '1.3.1', file: 'handbook.pdf' }, rows).applied).toBe(true)
-    // and does not leak onto another document's card
-    expect(comparisonFor({ ruleId: '1.3.1', file: 'contrast.html' }, rows)).toBeNull()
-  })
-
-  it('a judgement finding gets no comparison at all — the card must say so', () => {
-    expect(comparisonFor({ ruleId: '1.4.3', file: 'contrast.html' }, simRemediationDiffs(FILES))).toBeNull()
+    const row = rows.find((r) => r.rule_id === '1.3.1' && r.file === 'handbook.pdf')
+    expect(row).toBeTruthy()
+    expect(row.before || row.after).toBeTruthy()      // never an empty comparison
+    // and does not leak onto another document
+    expect(rows.some((r) => r.rule_id === '1.3.1' && r.file === 'contrast.html')).toBe(false)
   })
 })

@@ -1796,16 +1796,10 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 .rem-review-panel { border-color: #E6C461; box-shadow: 0 0 0 1px #F3E2B4 inset; }
 
 /* The review list — the container the AI Work Inbox renders its EvidenceCards into. The
-   .reviewcard / .autobadge / .whyreview-* rules that used to follow styled Remediate's
-   ReviewItemCard + WhyReview, which were deleted as unreachable; only the classes still emitted
-   by live code remain. .whyreview-ba is one of them (ReviewComparison). */
+   .reviewcard / .autobadge / .whyreview-* rules that used to follow here styled Remediate's
+   ReviewItemCard, WhyReview and ReviewComparison, all deleted as unreachable. `.diffbox` and
+   `.difftag` are NOT part of that: six components still emit them. */
 .reviewlist { display: flex; flex-direction: column; gap: 10px; }
-
-/* Current → remediated, stacked rather than side-by-side: an alt-text sentence or a
-   marked-up language span is long, and two narrow columns wrap it into unreadable ribbons. */
-.whyreview-ba { margin-top: 7px; }
-.whyreview-ba .diffbox { margin: 0 0 5px; }
-.whyreview-ba .diffbox:last-child { margin-bottom: 0; }
 
 /* Verification (§8) */
 .verify-run { display: flex; align-items: center; gap: 12px; font-size: 13.5px; flex-wrap: wrap; }
