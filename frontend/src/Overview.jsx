@@ -13,7 +13,7 @@ import Insight from './Insight.jsx'
 import { TraceChip } from './Transparency.jsx'
 import PiiPanel from './PiiPanel.jsx'
 import WhatsChanged from './WhatsChanged.jsx'
-import { scopeChip, scopeSentence } from './scanScope.js'
+import { scopeChip, scopeSentence, isNarrowScope } from './scanScope.js'
 
 // The estate dashboard — doubles as the exportable compliance report.
 export default function Overview({ run, files, trend, trendDates, onGo, scanList = [], onPickScan, me }) {
@@ -157,6 +157,19 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   const SR_ORDER = ['Executive', 'Director', 'Manager', 'Staff']
   const senGroups = groupBy((f) => f.seniority)
   const scoreBySeniority = SR_ORDER.filter((s) => senGroups[s]).map((s) => scoreItem([s, senGroups[s]]))
+  // `seniority` is SIM-only: a real scan's file records carry no owner, and ontology.annotate
+  // gap-fills type/department/tags but never this. So on EVERY real scan the list is empty and
+  // <Bars items={[]}/> renders nothing at all — the card came out as a heading over blank space,
+  // reported from the live demo build on 2026-07-30 beside three panels that did have numbers.
+  // A blank card is the worst of the three options: an empty state says "nothing to show and
+  // here is why", a hidden card says nothing, and a blank one looks like a number that failed
+  // to load. It is also how the estate-wide contradiction announced itself the first time —
+  // the blank `certifiable` tile in #77.
+  const noSeniorityData = !scoreBySeniority.length
+  // Same shape, one step milder: a real scan has no department either, so classifyByName's
+  // keyword heuristic files everything it cannot place under "Unassigned". One bar labelled
+  // "Unassigned" is not a departmental breakdown, and must not be read as one.
+  const deptAllUnassigned = scoreByDept.length === 1 && scoreByDept[0].label === 'Unassigned'
   // Only the groups with a real measurement can carry a claim about scores.
   const deptRanked = scoreByDept.filter((d) => d.value != null)
   // Real scan findings carry no `level` — only SIM's corpus does — so reading `i.level` counted
@@ -248,6 +261,19 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         <div className="metric" title="Documents with an open finding and a remediation action — auto-fix, review, or manual rebuild (matches the Remediate tab). A document with no findings is never counted here."><span>need remediation</span><b style={{ color: '#854F0B' }}>{needFix}</b></div>
         <div className="metric" title={auditReady == null ? 'Not computable yet — no document in this scan has been analysed, so there is no measured share to report' : 'Share of documents that are certifiable today (certifiable ÷ total)'}><span>audit-ready</span><b>{auditReadyLabel}</b></div>
       </div>
+      {/* WHAT THE COUNT COUNTS. Discover has said this since scanScope.js; the Overview did not,
+          and it is the screen where two scans get compared. On 2026-07-30 a folder scan of "UTSW
+          DEMO V2" (4 listed, 4 kept) was read against a whole-Drive scan of the same account
+          (8 raw, 3 kept) and the pair was reported as one screen disagreeing with itself. Both
+          counts were right; neither said what it was a count OF. The chip in the scan-history
+          table below already carries this, but only for a reader who finds the row marked
+          "viewing" — the headline number needs it too. */}
+      {scopeSentence(run.scope, n) && (
+        <p className={isNarrowScope(run.scope) ? 'scopewarn' : 'muted'} style={{ margin: '2px 0 10px', fontSize: 12.5 }}
+           role={isNarrowScope(run.scope) ? 'status' : undefined}>
+          {isNarrowScope(run.scope) ? '⚠ ' : ''}{scopeSentence(run.scope, n)}
+        </p>
+      )}
       {/* Say it on screen when the tiles above describe a different set of documents than the
           estate total does — a partly-analysed scan is the case that made every panel look
           like it was contradicting the others. */}
@@ -336,8 +362,14 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
 
       <div className="muted" style={{ margin: '20px 0 2px' }}>Compliance by dimension · scores, severity &amp; WCAG level <span style={{ fontWeight: 400 }}>· click a bar to drill in</span></div>
       <div className="chartrow">
-        <section className="panel"><h2>Average score by department <span className="muted" style={{ fontWeight: 400 }}>· /100</span></h2><Bars items={scoreByDept} max={100} cols="150px 1fr 34px" onPick={(it) => { const fs = files.filter((f) => f.department === it.label); setSeg({ title: it.value == null ? `${it.label} · not yet scored` : `${it.label} · avg ${it.value} / 100`, subtitle: `${fs.length} documents`, files: fs }) }} /><Insight text={INS.scoreByDept} /></section>
-        <section className="panel"><h2>Average score by owner seniority <span className="muted" style={{ fontWeight: 400 }}>· /100</span></h2><Bars items={scoreBySeniority} max={100} cols="100px 1fr 34px" onPick={(it) => { const fs = files.filter((f) => f.seniority === it.label); setSeg({ title: it.value == null ? `${it.label}-owned · not yet scored` : `${it.label}-owned · avg ${it.value} / 100`, subtitle: `${fs.length} documents`, files: fs }) }} /><Insight text={INS.scoreBySeniority} /></section>
+        <section className="panel"><h2>Average score by department <span className="muted" style={{ fontWeight: 400 }}>· /100</span></h2><Bars items={scoreByDept} max={100} cols="150px 1fr 34px" onPick={(it) => { const fs = files.filter((f) => f.department === it.label); setSeg({ title: it.value == null ? `${it.label} · not yet scored` : `${it.label} · avg ${it.value} / 100`, subtitle: `${fs.length} documents`, files: fs }) }} />
+          {deptAllUnassigned && <p className="muted" style={{ fontSize: 11.5, margin: '8px 0 0' }}>Every document is “Unassigned”: the source system reports no department, and the filename heuristic placed none of them. This is one estate-wide average, not a departmental comparison.</p>}
+          <Insight text={INS.scoreByDept} /></section>
+        <section className="panel"><h2>Average score by owner seniority <span className="muted" style={{ fontWeight: 400 }}>· /100</span></h2>
+          {noSeniorityData
+            ? <p className="muted">No owner seniority recorded for these documents — the source system did not report an owner, so there is nothing to break the scores down by. This is a gap in the metadata, not a score of zero.</p>
+            : <><Bars items={scoreBySeniority} max={100} cols="100px 1fr 34px" onPick={(it) => { const fs = files.filter((f) => f.seniority === it.label); setSeg({ title: it.value == null ? `${it.label}-owned · not yet scored` : `${it.label}-owned · avg ${it.value} / 100`, subtitle: `${fs.length} documents`, files: fs }) }} /><Insight text={INS.scoreBySeniority} /></>}
+        </section>
       </div>
       <div className="chartrow">
         <section className="panel"><h2>Findings by WCAG level <span className="muted" style={{ fontWeight: 400 }}>· all findings, blocking &amp; advisory</span></h2>{byLevel.length ? <Bars items={byLevel} cols="150px 1fr 30px" onPick={(it) => { const fs = files.filter((f) => (f.issues || []).some((i) => (levelOfFinding(i) || 'unknown') === it.lvl)); setSeg({ title: it.lvl === 'unknown' ? 'Findings whose criterion is not in the catalog' : `Level ${it.lvl} findings`, subtitle: `${fs.length} document(s)`, files: fs }) }} /> : <p className="muted">No open findings.</p>}<Insight text={INS.wcagLevel} /></section>

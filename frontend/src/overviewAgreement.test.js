@@ -526,3 +526,135 @@ describe('the Overview says which findings each panel counts', () => {
       .toEqual({ A: 0, AA: 0, AAA: 0, unknown: 1 })
   })
 })
+
+// ── The same build, the demo estate: scan b5911952d892, folder "UTSW DEMO V2" ────────────────
+//
+// Reported from the live build 2026-07-30, Overview → "Compliance by dimension", four cards in
+// one viewport:
+//
+//     Average score by department · /100        Clinical 6 · Unassigned 12
+//     Average score by owner seniority · /100   (BLANK — no rows, no zero, no empty state)
+//     Findings by WCAG level                    "No open findings."
+//     Documents by score band                   below 50 · at risk  4
+//
+// with "Findings by severity: critical 6 · serious 15 · moderate 15" immediately above it.
+//
+// Which figure is TRUE was settled against the scan itself, not by making the panels agree: the
+// four documents score 0, 0, 6 and 37 and carry 38 issue_records between them. The scores and
+// the score band are right; "No open findings." was the lie. Its cause is not an open/closed
+// filter — there is none — it is that every one of those 38 findings has `level: null`, because
+// only SIM's corpus sets that field, so `if (levelC[i.level] != null)` counted nothing.
+//
+// This estate also spells three criteria two ways at once, which the 12f2 fixture only shows for
+// one: SC_1_3_1 ×3 + '1.3.1 Info and Relationships' ×1, SC_2_4_4 ×2 + '2.4.4 Link Purpose (In
+// Context)' ×2, SC_1_4_3 ×1 + '1.4.3 Contrast (Minimum)' ×1.
+const utswDoc = (file, score, issues) => ({
+  file, engine: 'engine', status: 'analysed', score, compliant: 0, skipped_rules: 0,
+  remediated_at: null, drive_write_url: null, acp_stamped: null, published_at: null,
+  sourceName: 'Google Drive', issues: issues.map(([wcag, severity]) => ({ wcag, severity })),
+})
+const UTSW_FILES = asApp([
+  utswDoc('Sample_NonCompliant_ApptTracker.xlsx', 37, [
+    ['SC_2_4_2', 'SERIOUS'], ['SC_1_1_1', 'SERIOUS'], ['SC_2_4_6', 'MODERATE'], ['SC_1_3_1', 'MODERATE']]),
+  utswDoc('Sample_NonCompliant_PatientDischarge.docx', 0, [
+    ['SC_2_4_2', 'SERIOUS'], ['SC_1_1_1', 'CRITICAL'], ['SC_3_1_1', 'SERIOUS'], ['SC_1_3_1', 'MODERATE'],
+    ['SC_1_4_3', 'SERIOUS'], ['SC_2_4_4', 'MODERATE'], ['1.4.3 Contrast (Minimum)', 'SERIOUS'],
+    ['1.3.3 Sensory Characteristics', 'MODERATE'], ['1.4.9 Images of Text (No Exception)', 'MODERATE'],
+    ['1.3.1 Info and Relationships', 'MODERATE'], ['2.4.4 Link Purpose (In Context)', 'MODERATE'],
+    ['SC_1_3_2', 'MODERATE'], ['1.4.1 Use of Color', 'MODERATE']]),
+  utswDoc('Sample_NonCompliant_PatientPortalOverview.pptx', 0, [
+    ['SC_2_4_2', 'SERIOUS'], ['SC_1_1_1', 'CRITICAL'], ['SC_3_1_1', 'SERIOUS'], ['SC_1_3_1', 'MODERATE'],
+    ['SC_2_4_4', 'MODERATE'], ['1.3.3 Sensory Characteristics', 'MODERATE'],
+    ['1.4.9 Images of Text (No Exception)', 'MODERATE'], ['2.4.9 Link Purpose (Link Only)', 'MODERATE'],
+    ['2.4.4 Link Purpose (In Context)', 'MODERATE'], ['1.4.11 Non-text Contrast', 'REVIEW'],
+    ['1.4.6 Contrast (Enhanced)', 'MODERATE'], ['SC_2_4_2', 'SERIOUS'], ['SC_1_1_1', 'CRITICAL']]),
+  utswDoc('Sample_Patient Intake Form.pdf', 6, [
+    ['SC_2_4_2', 'SERIOUS'], ['SC_1_1_1', 'CRITICAL'], ['SC_3_1_1', 'SERIOUS'], ['SC_2_4_2', 'SERIOUS'],
+    ['1.3.3 Sensory Characteristics', 'MODERATE'], ['1.4.9 Images of Text (No Exception)', 'MODERATE'],
+    ['2.4.9 Link Purpose (Link Only)', 'MODERATE'], ['SC_1_1_1', 'CRITICAL']]),
+])
+const UTSW_RUN = {
+  id: 'b5911952d892', status: 'done', source: 'drive', files: 4, certifiable: 0, uncertain: 0,
+  error: 0, avg_score: 11, assessed_at: '2026-07-30T14:35:47Z',
+  scope: { kind: 'folder', folder_name: 'UTSW DEMO V2', listed: 4, skipped_acp: 0, kept: 4, truncated: false },
+}
+
+describe('the Compliance-by-dimension cards agree with the estate beside them', () => {
+  it('does not say "No open findings" over an estate scoring 11/100', () => {
+    // The exact pairing on screen: four documents below 50, and a panel claiming nothing failed.
+    const html = screen(UTSW_RUN, UTSW_FILES)
+    expect(html).toMatch(/below 50 · at risk 4/)
+    expect(html).not.toMatch(/Findings by WCAG level · [^]{0,90}No open findings/)
+    const lv = findingsByLevel(UTSW_FILES)
+    expect(lv.A + lv.AA + lv.AAA).toBe(UTSW_FILES.reduce((a, f) => a + f.issues.length, 0))
+    expect(lv.unknown).toBe(0)
+  })
+
+  it('reconciles the level panel with the severity panel through a stated difference', () => {
+    const blocking = severityItems(UTSW_FILES).reduce((a, s) => a + s.value, 0)
+    const all = Object.values(findingsByLevel(UTSW_FILES)).reduce((a, n) => a + n, 0)
+    const advisory = UTSW_FILES.reduce((a, f) => a + f.issues.filter((i) => i.severity === 'REVIEW').length, 0)
+    expect(blocking + advisory).toBe(all)
+    expect(screen(UTSW_RUN, UTSW_FILES)).toMatch(new RegExp(`estate holds ${all} findings in total`))
+  })
+
+  it('counts a criterion once when two engines spelled it differently in the same scan', () => {
+    const by = Object.fromEntries(findingsByCriterion(UTSW_FILES).map((c) => [c.sc, c.count]))
+    expect(by['1.3.1']).toBe(4)   // SC_1_3_1 ×3 + '1.3.1 Info and Relationships' ×1
+    expect(by['2.4.4']).toBe(4)   // SC_2_4_4 ×2 + '2.4.4 Link Purpose (In Context)' ×2
+    expect(by['1.4.3']).toBe(2)   // SC_1_4_3 ×1 + '1.4.3 Contrast (Minimum)' ×1
+    // One entry per criterion in the cloud, so "most common failure" is not decided by spelling.
+    const cloud = findingsByCriterion(UTSW_FILES).map((c) => c.sc)
+    expect(new Set(cloud).size).toBe(cloud.length)
+  })
+
+  it('never renders a dimension card as a heading over blank space', () => {
+    // `seniority` is SIM-only — annotate() gap-fills type/department/tags and never this — so
+    // scoreBySeniority is empty on EVERY real scan and <Bars items={[]}/> drew nothing at all.
+    // A blank card reads as a number that failed to load, which is how #77 announced itself.
+    const html = screen(UTSW_RUN, UTSW_FILES)
+    expect(UTSW_FILES.every((f) => f.seniority == null)).toBe(true)
+    expect(html).toMatch(/Average score by owner seniority[^]{0,60}No owner seniority recorded/)
+    expect(html).toMatch(/a gap in the metadata, not a score of zero/)
+  })
+
+  it('still draws the seniority bars when the data is actually there', () => {
+    const withSeniority = UTSW_FILES.map((f, i) => ({ ...f, seniority: i ? 'Manager' : 'Executive' }))
+    const html = screen(UTSW_RUN, withSeniority)
+    expect(html).toMatch(/Executive/)
+    expect(html).not.toMatch(/No owner seniority recorded/)
+  })
+
+  it('says so when "by department" is one bar called Unassigned', () => {
+    // classifyByName files anything its keyword list cannot place under "Unassigned". A single
+    // such bar is an estate average wearing a breakdown's title.
+    const unplaceable = UTSW_FILES.map((f) => ({ ...f, department: 'Unassigned' }))
+    expect(screen(UTSW_RUN, unplaceable)).toMatch(/Every document is .Unassigned./)
+    // Two real departments — the note must not fire and imply a gap that isn't there.
+    expect(screen(UTSW_RUN, UTSW_FILES)).not.toMatch(/Every document is .Unassigned./)
+  })
+})
+
+// The Overview is where two scans get compared, so the headline count must carry its boundary.
+// On 2026-07-30 a folder scan of "UTSW DEMO V2" (4 listed, 4 kept) was read against a whole-Drive
+// scan of the same account (8 raw, 3 kept) and the pair was reported as one screen disagreeing
+// with itself. Both counts were right. This is the sentence Discover has carried since
+// scanScope.js and the Overview did not.
+describe('the Overview headline says what its count counts', () => {
+  it('names the folder, and says the rest of the Drive was not scanned', () => {
+    const html = screen(UTSW_RUN, UTSW_FILES)
+    expect(html).toMatch(/4 documents in the Drive folder “UTSW DEMO V2”/)
+    expect(html).toMatch(/Documents elsewhere in your Drive were not scanned/)
+  })
+
+  it('labels a whole-Drive scan too, so the narrow one is spottable by contrast', () => {
+    // A label that appears only on narrow scans is invisible exactly when a reader is comparing.
+    expect(screen()).toMatch(/3 documents across your whole Google Drive/)
+  })
+
+  it('says nothing at all when the scope was never recorded', () => {
+    // "No scope recorded" is not evidence of a whole-Drive scan (scanScope.js).
+    const html = screen({ ...UTSW_RUN, scope: null }, UTSW_FILES)
+    expect(html).not.toMatch(/whole Google Drive|Drive folder/)
+  })
+})
