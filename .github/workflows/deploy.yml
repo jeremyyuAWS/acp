@@ -1,0 +1,94 @@
+# Chain B, automated. See docs/pipeline.md.
+#
+# Until now every image in the registry was built from a laptop — `runType: QuickRun`,
+# `sourceTrigger: null`, no exceptions. docs/pipeline.md said so plainly: "Chain B is a person at
+# a laptop. There is no pipeline." That was not a preference; it was a consequence. The Dockerfile
+# copied the PDF engine from a gitignored staging directory that a script filled from a checkout
+# OUTSIDE the repo, so a CI checkout could never assemble a complete build context. ADR 0029
+# vendored the engine, which is what makes this file possible at all.
+#
+# This job runs deploy/public/redeploy.sh rather than reimplementing it. That matters: the script's
+# guards are scar tissue, each added because it failed on 2026-07-29 — the pin, the isolated clone,
+# the >=41 module check, health-before, and the refusal to finish on an unstamped image. Copying
+# eight steps into YAML would have forked them, and the copy would have rotted first.
+name: deploy
+
+on:
+  # MANUAL BY DEFAULT. Deploying every merge is the eventual goal, but the honest starting point is
+  # a human pressing the button on a pipeline nobody has watched run yet. Flip to `push: branches:
+  # [main]` once this has shipped a few times uneventfully — the environment gate below is what
+  # makes that safe, not the trigger.
+  workflow_dispatch:
+    inputs:
+      pin:
+        description: "Commit to deploy (default: current main)"
+        required: false
+        type: string
+      blue_green:
+        description: "Blue-green: provision at 0% traffic, smoke-test, then promote"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  # Two deploys at once would race on the CalVer ordinal and could leave acp-app and acp-worker on
+  # different images — the split the script exists to prevent. Never cancel a running one: it may
+  # already have shifted traffic, and a half-finished deploy is worse than a queued one.
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  id-token: write      # OIDC federation to Azure — no stored client secret
+  contents: read
+  actions: read        # the script's CI gate reads this commit's CI conclusion
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # A GitHub Environment with required reviewers is the approval gate. Configure it at
+    # Settings -> Environments -> production. Without that, this workflow deploys on dispatch
+    # alone, which is fine for a manual trigger and NOT fine once the push trigger is enabled.
+    environment:
+      name: production
+      url: https://${{ vars.ACP_FQDN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # redeploy.sh pins a sha and clones locally from this checkout
+
+      # The Office analyser is built from source on every deploy; the image copies the DLLs.
+      # setup-dotnet puts the muxer on PATH, which is why redeploy.sh resolves dotnet via PATH
+      # rather than the ~/.dotnet path a dev machine has.
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy
+        env:
+          # gh is preinstalled on GitHub runners; this is what lets the script's CI gate actually
+          # check rather than skip.
+          GH_TOKEN: ${{ github.token }}
+          ACP_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ACP_PIN: ${{ inputs.pin }}
+          ACP_BLUE_GREEN: ${{ inputs.blue_green && '1' || '0' }}
+        run: bash deploy/public/redeploy.sh
+
+      # Independent of the script's own verification, and deliberately so: the script asserts the
+      # deploy it just performed, which is the party with an interest in it having worked.
+      - name: Confirm the live app reports the new build
+        run: |
+          set -euo pipefail
+          FQDN="${{ vars.ACP_FQDN }}"
+          H="$(curl -fsS --max-time 20 "https://$FQDN/healthz")"
+          R="$(curl -fsS --max-time 20 "https://$FQDN/readyz")"
+          echo "healthz: $H"
+          echo "readyz:  $R"
+          case "$H" in *'"version_stamped":true'*) ;; *) echo "::error::live app is not version-stamped"; exit 1 ;; esac
+          case "$R" in *'"ready":true'*)           ;; *) echo "::error::live app is not ready";          exit 1 ;; esac

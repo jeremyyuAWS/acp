@@ -5,10 +5,13 @@ Two chains start from one event — a PR merged to `acp/main` — and then never
 **Chain A** keeps the public WCAG matrix in step with the code. It is automatic and finishes in
 minutes.
 
-**Chain B** puts the code in production. It is a person at a laptop. There is no pipeline.
+**Chain B** puts the code in production. It is now `deploy.yml`, but it runs on **manual
+dispatch** — someone still decides when.
 
 That asymmetry is the single most important thing on this page: **the matrix can be perfectly
-accurate about code that is not deployed.** For most of 2026-07-29 it was.
+accurate about code that is not deployed.** For most of 2026-07-29 it was, and automating the
+build did not change it — a pipeline nobody triggers ships exactly as much as no pipeline. The
+gap closes when the trigger becomes `push: [main]`, not when the workflow file lands.
 
 ```
                         ┌──────────────────────────┐
@@ -18,7 +21,7 @@ accurate about code that is not deployed.** For most of 2026-07-29 it was.
               ┌──────────────────────┴──────────────────────┐
               │                                             │
    ═══════ CHAIN A: matrix sync ═══════        ═══════ CHAIN B: app deploy ═══════
-              │  (automatic)                                │  (MANUAL — no pipeline)
+              │  (automatic)                                │  (deploy.yml — dispatch)
               ▼                                             ▼
    matrix-progress-log.yml                        1. pin  PIN=$(git rev-parse origin/main)
    scans the pushed commits:                         └─ gate: CI on PIN must be green
@@ -98,10 +101,44 @@ went on to find.
 
 ## Chain B — app deploy
 
-No CI builds or deploys this. Every image in the registry was built from a laptop
-(`runType: QuickRun`, `sourceTrigger: null`).
+**There is a pipeline now: `.github/workflows/deploy.yml`.** It runs `redeploy.sh` on a runner
+rather than reimplementing it, so the guards below are the same guards — Actions → deploy → Run
+workflow, optionally with a pin and a blue-green toggle.
 
-**All eight steps are now `deploy/public/redeploy.sh`.** Run that, not the commands below:
+Two things had to be true first, and only one of them was obvious. The build context had to be
+complete from a checkout: the Dockerfile used to copy the PDF engine from a gitignored staging
+directory a script filled from *outside* the repo, so a runner could never assemble it. ADR 0029
+vendored the engine, which is what unblocked this. And `redeploy.sh` had to resolve `dotnet` from
+PATH — `actions/setup-dotnet` never creates `~/.dotnet/dotnet`, so the old hard-coded default
+would have failed on the one host CD runs on.
+
+It is **manual-dispatch by default**. Deploying every merge is the goal, but the honest starting
+point is a person pressing the button on a pipeline nobody has watched run; flip the trigger to
+`push: [main]` once it has shipped uneventfully a few times. The `production` GitHub Environment
+is what makes that safe — configure required reviewers there, not in the trigger.
+
+**One-time setup, all of it outside this repo:**
+
+| what | where |
+|---|---|
+| Azure OIDC federated credential for this repo | an App Registration → Federated credentials |
+| `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` | repo → Settings → Secrets |
+| `ACP_FQDN` (the app hostname, no scheme) | repo → Settings → Variables |
+| `production` environment + required reviewers | repo → Settings → Environments |
+
+The service principal needs Contributor on the `mdk-accessibility` resource group and AcrPush on
+the registry — no more. OIDC federation is used deliberately over a stored client secret: a
+long-lived deploy credential in a repo secret is the thing you least want to rotate under pressure.
+
+Until those exist the workflow fails at `azure/login`, which is the correct failure — it is the
+only step that cannot be verified from here.
+
+### Deploying locally
+
+Every image in the registry before this was built from a laptop (`runType: QuickRun`,
+`sourceTrigger: null`), and the script is still the way to do it by hand. It behaves identically
+to the workflow, and its CI gate degrades to a loud "NOT CHECKED" rather than a silent pass when
+`gh` is unavailable:
 
 ```bash
 ./deploy/public/redeploy.sh          # ACP_DRY_RUN=1 to stop before touching Azure
