@@ -344,20 +344,59 @@ def is_available() -> bool:
     return _tags_cached() is not None
 
 
+def _tags_have(tags: list[dict] | None, model: str) -> bool:
+    """Whether `model` is among the pulled tags, matching 'moondream' to 'moondream:latest'
+    the way Ollama itself resolves a bare name."""
+    if not tags or not model:
+        return False
+    base = model.split(":", 1)[0]
+    for m in tags:
+        name = m.get("name", "")
+        if name == model or name.split(":", 1)[0] == base:
+            return True
+    return False
+
+
+def model_is_available() -> bool:
+    """True only when Ollama is reachable AND the configured TEXT model is pulled.
+
+    is_available() answers a different question — 'is Ollama up' — and on 2026-07-29 that
+    difference cost a day: acp-app reported available=true against an Ollama that did not
+    have OLLAMA_MODEL at all, so every text generate returned 404 'model not found' while
+    the status endpoint looked green. Reachability is not capability.
+    """
+    _maybe_refresh_endpoint()
+    return _tags_have(_tags_cached(), OLLAMA_MODEL)
+
+
 def vision_is_available() -> bool:
     """True only when Ollama is reachable AND the configured vision model is pulled.
     Distinct from is_available(): a text-only Ollama is 'available' but cannot describe
     images, so the alt-text remediator must gate genuine captioning on this, not is_available."""
     _maybe_refresh_endpoint()
-    tags = _tags_cached()
-    if not tags:
-        return False
-    base = OLLAMA_VISION_MODEL.split(":", 1)[0]
-    for m in tags:
-        name = m.get("name", "")
-        if name == OLLAMA_VISION_MODEL or name.split(":", 1)[0] == base:
-            return True
-    return False
+    return _tags_have(_tags_cached(), OLLAMA_VISION_MODEL)
+
+
+def config_sources() -> dict:
+    """Where each effective endpoint value came from: 'override' (admin Settings, stored in
+    the DB) or 'env' (the deploy's env var).
+
+    A stored override outranks the env var indefinitely, and nothing used to say so. On
+    2026-07-29 `ai_vision_model` still held `qwen2.5vl:7b` from a GPU pod that had since been
+    torn down; changing OLLAMA_VISION_MODEL on the container app therefore did nothing, and
+    /ai/status reported only the effective value — which read as "the env var did not apply"
+    rather than "a saved override is winning". Reporting the source makes that visible.
+    """
+    _maybe_refresh_endpoint()
+    try:
+        import core as _core
+        stored = {k: (_core.store.get_setting(f"ai_{k}") or "").strip()
+                  for k in ("base_url", "vision_model", "text_model")}
+    except Exception:
+        stored = {}
+    return {"base_url": "override" if stored.get("base_url") else "env",
+            "vision_model": "override" if stored.get("vision_model") else "env",
+            "model": "override" if stored.get("text_model") else "env"}
 
 
 # ── Vision alt text (llava-class model) ───────────────────────────────────────
@@ -562,8 +601,46 @@ def _structured_vision_prompt(filename: str, ocr_text: str, context: str) -> str
     )
 
 
+# An IMAGE OF TEXT is the one 1.1.1 case where the correct alt text is not a description at
+# all — it is the text itself (WCAG 1.1.1 / F30: "if the image is text, the alt is that text").
+# Handing such an image to a compact captioner actively destroys information. Measured on
+# 2026-07-29 against moondream and the real demo fixture — a white page reading "Quarterly
+# Revenue Report 2026 / Total revenue increased fourteen percent / across every regional
+# business unit" — the model rewrote the year 2026 as 2006 in 5/5 runs, invented "a chart or
+# graph" that is not present, described the FILENAME as if it were visible content, and in one
+# run leaked the prompt's own "OCR:" marker into the alt. OCR had read the text correctly every
+# time. So when the OCR text already reads as prose, transcribe it and skip the paraphrase.
+_TEXT_IMAGE_MIN_WORDS = 4
+
+
+def _looks_like_an_image_of_text(ocr_txt: str) -> bool:
+    """True when OCR read connected prose (a title card, a pull quote, a text slide) rather than
+    the scattered fragments a chart's axes and legend produce.
+
+    Deliberately conservative: a chart still wants a DESCRIPTION ('bar chart comparing …'),
+    and transcribing its axis labels would be worse than the model's paraphrase. Requires
+    several real words and a low share of number-ish/one-character tokens.
+    """
+    toks = re.findall(r"\S+", re.sub(r"\s+", " ", ocr_txt or "").strip())
+    if len(toks) < _TEXT_IMAGE_MIN_WORDS:
+        return False
+    words = [t for t in toks if re.fullmatch(r"[A-Za-z][A-Za-z'’\-]{1,}[.,;:!?]?", t)]
+    return len(words) >= _TEXT_IMAGE_MIN_WORDS and (len(words) / len(toks)) >= 0.6
+
+
+def _transcribed_alt(ocr_txt: str) -> str:
+    """The image's own text as an alt string: whitespace collapsed, length-bounded, no model in
+    the loop. Not run through _clean_alt — that strips 'image of'-style leads, which is right for
+    a model's reply and wrong for a verbatim transcription."""
+    t = re.sub(r"\s+", " ", (ocr_txt or "").strip())
+    if len(t) > 250:
+        t = t[:250].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+    return t
+
+
 def describe_image_structured(image_bytes: bytes, *, filename: str = "", context: str = "",
-                              scan_id: str | None = None, file: str | None = None) -> dict | None:
+                              scan_id: str | None = None, file: str | None = None,
+                              allow_transcription: bool = False) -> dict | None:
     """Structured, OCR-anchored alt text (WCAG 1.1.1). Returns
     {"alt", "grounded", "evidence", "model"} or None.
 
@@ -572,7 +649,13 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     confidence derivation a remediator may auto-apply. When OCR finds nothing (a textless
     photo) the description is a pure vision guess — `grounded` is False and the caller
     surfaces it as a Medium proposal for human confirmation rather than auto-applying, since
-    a machine cannot judge whether a guessed description conveys the author's intent."""
+    a machine cannot judge whether a guessed description conveys the author's intent.
+
+    `allow_transcription` opts into the image-of-text path: when the OCR text reads as prose,
+    it is returned verbatim as the alt and no model runs. Only set it when `image_bytes` is the
+    image ITSELF. The PDF remediator must not — it OCRs a render of the whole PAGE, so "this
+    render contains prose" means "the page has paragraphs", not "this figure is an image of
+    text", and transcribing would hand a figure the page's body copy as its alt."""
     if not image_bytes:
         return None
     ocr_txt = ""
@@ -582,6 +665,15 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     except Exception:
         ocr_txt = ""
     grounded = len(re.findall(r"[A-Za-z]{2,}", ocr_txt)) >= 2
+    # An image of text: the text IS the alt text, and no model needs to see it. Returning here
+    # is both more accurate and cheaper than a paraphrase — see _looks_like_an_image_of_text.
+    if allow_transcription and grounded and _looks_like_an_image_of_text(ocr_txt):
+        transcribed = _transcribed_alt(ocr_txt)
+        if transcribed:
+            return {"alt": transcribed, "grounded": True,
+                    "evidence": "transcribed verbatim from the text in the image — no model "
+                                "paraphrase, so no figure or label can drift",
+                    "model": None, "source": "ocr"}
     if grounded:
         prompt = _structured_vision_prompt(filename, ocr_txt, context)
     else:

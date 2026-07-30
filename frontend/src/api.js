@@ -320,9 +320,12 @@ export const getAiCosts = () => (SIM
 // AI provider gateway config (ADR 0019 §6). The API returns only SAFE views — never a key value,
 // just whether the referenced secret is present. putAiProvider sends the secret's reference NAME,
 // never a key (the backend rejects a pasted key).
+// The error is NOT swallowed here: a 403 means this signed-in user is not the owner, so the
+// admin forms must be disabled rather than presented as editable fields whose save can only
+// fail. Callers that just want a list can still .catch() themselves.
 export const getAiProviders = () => (SIM
   ? sim({ providers: [] })
-  : fetch(`${BASE}/ai/providers`, { headers: headers() }).then(j).catch(() => ({ providers: [] })))
+  : fetch(`${BASE}/ai/providers`, { headers: headers() }).then(j))
 export const putAiProvider = (patch) => (SIM
   ? sim({ providers: [] })
   : fetch(`${BASE}/ai/providers`, {
