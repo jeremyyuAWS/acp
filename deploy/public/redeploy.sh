@@ -33,6 +33,7 @@ WORKER="${ACP_WORKER:-acp-worker}"
 BUILD_TZ="${BUILD_TZ:-America/Los_Angeles}"
 MIN_MODULES=41                  # engine/pdf-analyser is tracked; this guards against truncation
 DRY="${ACP_DRY_RUN:-0}"
+BG="${ACP_BLUE_GREEN:-0}"       # 1 => green provisions at 0% traffic, is tested, then promoted
 
 say() { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
 die() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
@@ -182,7 +183,144 @@ for a in "$APP" "$WORKER"; do
   [ "$st" = "Running" ] || die "$a is '$st' before we started — fix that first, do not deploy onto it"
 done
 
-[ "$DRY" = 1 ] && { say "DRY RUN — stopping before the update"; exit 0; }
+if [ "$DRY" = 1 ]; then
+  # A dry run that skipped the blue-green block would leave the riskiest path — the one that
+  # moves production traffic — as the only part nobody ever rehearses. So walk it here using
+  # READS ONLY, and print the revisions it would actually touch, resolved live.
+  if [ "$BG" = 1 ]; then
+    ENV_DOMAIN="$(az containerapp env list "${AZ[@]}" -g "$RG" --query '[0].properties.defaultDomain' -o tsv)"
+    MODE="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" --query properties.configuration.activeRevisionsMode -o tsv)"
+    BLUE="$(az containerapp ingress traffic show "${AZ[@]}" -g "$RG" -n "$APP" \
+              --query "[?weight>\`0\`] | [0].revisionName" -o tsv 2>/dev/null || true)"
+    [ -n "$BLUE" ] || BLUE="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" --query properties.latestRevisionName -o tsv)"
+    SUFFIX="g$(printf '%s' "$BUILD_VERSION" | tr -cd '0-9')"
+    say "DRY RUN — blue-green plan"
+    echo "  revision mode  : $MODE$([ "$MODE" != Multiple ] && echo '  -> would switch to Multiple')"
+    echo "  blue (keeps traffic until promotion): $BLUE"
+    echo "  green (would provision at 0%)      : $APP--$SUFFIX"
+    echo "  green smoke-test url               : https://$APP--$SUFFIX.$ENV_DOMAIN/healthz"
+    echo "  worker cutover                     : $WORKER -> $IMG  (NOT blue-green)"
+  fi
+  say "DRY RUN — stopping before anything is changed"
+  exit 0
+fi
+
+# ── 8-BG. blue-green (ACP_BLUE_GREEN=1) ────────────────────────────────────────────────────
+#
+# WHAT IS AND IS NOT PROTECTED — read this before trusting the word "blue-green".
+#
+# ACA splits traffic by INGRESS WEIGHT. acp-app has external ingress, so it gets the real thing:
+# green provisions at 0%, is smoke-tested on its own FQDN while production still serves blue, and
+# takes traffic in one weight change that reverses just as fast.
+#
+# acp-worker has NO INGRESS (properties.configuration.ingress is null). It takes work by pulling
+# from a shared job queue, so a second worker on a different image would pull from that SAME
+# queue — blue and green racing over live production jobs, picked at random. There is no weight
+# to set and nothing to split. The worker therefore CUTS OVER at promotion, and that step is not
+# protected. Saying so is the point; a deploy script that implied otherwise would be worse than
+# one that never claimed blue-green at all.
+#
+# Consequence while green sits at 0%: the system is MIXED — green app on the new image, worker
+# still on the old one. Read-only checks are fine. Anything that enqueues a job whose contract
+# changed is NOT: green would enqueue work the old worker cannot correctly process. That is why
+# the smoke tests below are read-only, and it is a rule rather than an oversight.
+#
+# Making the worker genuinely blue-green needs queue partitioning — green consumes its own queue,
+# promotion swaps which queue the app enqueues to. That is an application change (worker_main.py
+# plus the job table), not a deploy-script change, and it is deliberately out of scope here.
+if [ "$BG" = 1 ]; then
+  ENV_DOMAIN="$(az containerapp env list "${AZ[@]}" -g "$RG" --query '[0].properties.defaultDomain' -o tsv)"
+
+  # Multiple-revision mode, idempotently. Switching Single -> Multiple leaves the running revision
+  # on 100%, so it is safe against a live app, and it is a no-op once set.
+  MODE="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" --query properties.configuration.activeRevisionsMode -o tsv)"
+  if [ "$MODE" != "Multiple" ]; then
+    say "switching $APP to multiple-revision mode (currently $MODE)"
+    az containerapp revision set-mode "${AZ[@]}" -g "$RG" -n "$APP" --mode multiple >/dev/null
+  fi
+
+  # BLUE = whatever holds traffic RIGHT NOW, captured before anything changes. After the update
+  # the "latest" revision is green, so blue is no longer reachable by that route.
+  BLUE="$(az containerapp ingress traffic show "${AZ[@]}" -g "$RG" -n "$APP" \
+            --query "[?weight>\`0\`] | [0].revisionName" -o tsv 2>/dev/null || true)"
+  [ -n "$BLUE" ] || BLUE="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" --query properties.latestRevisionName -o tsv)"
+  BLUE_IMG="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" --query properties.template.containers[0].image -o tsv)"
+  say "blue = $BLUE"
+
+  # Green at 0%. In Multiple mode weights are explicit, so a new revision takes no traffic until
+  # told to — there is no "hold it back" flag to forget.
+  SUFFIX="g$(printf '%s' "$BUILD_VERSION" | tr -cd '0-9')"
+  GREEN="$APP--$SUFFIX"
+  say "deploying green ($GREEN) at 0% traffic"
+  az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$IMG" --revision-suffix "$SUFFIX" >/dev/null
+
+  GREEN_FQDN="$GREEN.$ENV_DOMAIN"
+  printf '  waiting for green '
+  for _ in $(seq 1 60); do
+    case "$(curl -s --max-time 10 "https://$GREEN_FQDN/healthz" || true)" in
+      *'"ok":true'*) printf ' ✓\n'; break ;;
+    esac
+    printf '.'; sleep 5
+  done
+
+  # Smoke-test green on its OWN url while production still serves blue. Read-only (see header).
+  # Every failure below leaves blue on 100% and exits — a green that cannot prove itself must not
+  # take traffic, and the message says so rather than leaving the operator to infer it.
+  say "smoke-testing green at $GREEN_FQDN"
+  GHZ="$(curl -s --max-time 20 "https://$GREEN_FQDN/healthz" || echo '{}')"
+  echo "  healthz: $GHZ"
+  case "$GHZ" in
+    *'"version_stamped":true'*) ;;
+    *) die "green is not stamped — it would serve version 'dev'. NOT promoting; blue still has all traffic." ;;
+  esac
+  case "$GHZ" in
+    *"\"version\":\"$BUILD_VERSION\""*) ;;
+    *) die "green reports the wrong version (wanted $BUILD_VERSION). NOT promoting; blue still has all traffic." ;;
+  esac
+  curl -sf --max-time 20 "https://$GREEN_FQDN/readyz" >/dev/null \
+    || die "green /readyz failed. NOT promoting; blue still has all traffic."
+  echo "  readyz:  ok"
+
+  say "promoting green to 100%"
+  az containerapp ingress traffic set "${AZ[@]}" -g "$RG" -n "$APP" \
+    --revision-weight "$GREEN=100" "$BLUE=0" >/dev/null
+
+  say "cutting $WORKER over to the same image (NOT blue-green — see header)"
+  az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER" --image "$IMG" --no-wait >/dev/null
+  printf '  %s ' "$WORKER"
+  for _ in $(seq 1 60); do
+    img="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$WORKER" --query properties.template.containers[0].image -o tsv 2>/dev/null || true)"
+    [ "$img" = "$IMG" ] && { printf ' ✓\n'; break; }
+    printf '.'; sleep 5
+  done
+
+  # Verified through the PUBLIC url, not green's. Green being healthy proves green is healthy;
+  # only the public url proves traffic actually moved.
+  say "verifying on the public url"
+  for _ in $(seq 1 40); do
+    AFTER="$(curl -s --max-time 20 "https://$FQDN/healthz" || echo '{}')"
+    case "$AFTER" in *"\"version\":\"$BUILD_VERSION\""*) break ;; esac
+    sleep 5
+  done
+  echo "  after: $AFTER"
+  case "$AFTER" in
+    *"\"version\":\"$BUILD_VERSION\""*) printf '\n\033[32m✓ %s is live on %s (blue %s kept at 0%% for rollback)\033[0m\n' "$BUILD_VERSION" "$APP" "$BLUE" ;;
+    *) die "traffic did not move to green. Roll back with the commands below." ;;
+  esac
+
+  # Blue stays at 0% rather than being deactivated, so rollback needs no rebuild. Printed with the
+  # real names filled in: recovery should be a paste, not a reconstruction under pressure.
+  cat <<ROLLBACK
+
+  Rollback — app is instant (a weight change, nothing provisions); the worker needs ~20s:
+
+    az containerapp ingress traffic set -g $RG -n $APP --revision-weight $BLUE=100 $GREEN=0
+    az containerapp update -g $RG -n $WORKER --image $BLUE_IMG
+
+  Run BOTH. A new worker under an old app is the mixed-version state promotion exists to close.
+ROLLBACK
+  exit 0
+fi
 
 # ── 8. update BOTH, concurrently ───────────────────────────────────────────────────────────
 # Same image, different entrypoint. Scanning happens in the worker, so updating only the app
