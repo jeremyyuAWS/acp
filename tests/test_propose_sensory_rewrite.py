@@ -48,7 +48,7 @@ def _model_stub(monkeypatch):
         calls.append(detail)
         return {"suggestion": "Click the Approve button.", "model": "stub"}
 
-    monkeypatch.setattr(ai, "is_available", lambda: True)
+    monkeypatch.setattr(ai, "model_is_available", lambda: True)
     monkeypatch.setattr(ai, "suggest_fix", _suggest)
     return calls
 

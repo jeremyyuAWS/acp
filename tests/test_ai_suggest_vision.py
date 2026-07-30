@@ -84,7 +84,10 @@ def _stub_core(monkeypatch, trace):
 def test_route_hands_the_located_image_to_suggest_fix(monkeypatch):
     import routes.ai as rai
     _stub_core(monkeypatch, {"rule_name": "Non-text Content", "level": "A", "detail": ""})
-    monkeypatch.setattr(_ai, "is_available", lambda: True)
+    # 1.1.1 with an image is the one criterion the VISION model can serve on its own, so that
+    # is the gate the route consults for it — a text-only miss must not close this path.
+    monkeypatch.setattr(_ai, "model_is_available", lambda: False)
+    monkeypatch.setattr(_ai, "vision_is_available", lambda: True)
     monkeypatch.setattr(rai, "_image_for_locator", lambda *a, **k: b"THE-IMAGE")
 
     got = {}
@@ -103,7 +106,7 @@ def test_route_never_fetches_an_image_for_a_non_image_criterion(monkeypatch):
     """2.4.4 link purpose has no picture; don't re-download the document to find one."""
     import routes.ai as rai
     _stub_core(monkeypatch, {"rule_name": "Link Purpose", "level": "A", "detail": ""})
-    monkeypatch.setattr(_ai, "is_available", lambda: True)
+    monkeypatch.setattr(_ai, "model_is_available", lambda: True)
     monkeypatch.setattr(rai, "_image_for_locator",
                         lambda *a, **k: pytest.fail("must not fetch an image for 2.4.4"))
 
