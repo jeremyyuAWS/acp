@@ -231,8 +231,22 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
           // Opened nothing → almost always an expired Drive sign-in in the deferred model.
           setAccessFailed(scored.length === 0 && total > 0)
           setResult(computed); setPhase('done')
-          onAssessed?.()
+          // Persist BEFORE announcing. The announcement makes App refetch the scan, which changes
+          // `files` → `docs.length` → the resume effect below re-reads sessionStorage; if that
+          // still said 'running' the effect would start a SECOND poller over a finished run.
           save({ phase: 'done', level, result: computed })
+          onAssessed?.()
+          // The worker has only just written file_records. Every OTHER surface holding this scan
+          // is still rendering the payload fetched before Assess — under ADR 0020 that is the
+          // inventory fallback (status 'discovered', score null, issues []), which the inventory
+          // renders as "not assessed". Nothing refetches on its own, so those rows stay wrong
+          // indefinitely even though the findings now exist and the drawer shows them. Announce
+          // completion the way remediate-now does (#86) and let App re-read the scan once.
+          //
+          // Fired HERE, at finalize, not when POST /assess returns: the deferred response is
+          // {phase: 'assessing', deferred: true} and stamps no assessed_at, so a refetch then
+          // would re-read the same pre-Assess inventory and change nothing.
+          window.dispatchEvent(new CustomEvent('acp:scan-assessed', { detail: { scanId: runId } }))
         }
       }).catch((e) => {
         // An unloadable scan is NOT transient — it will 404 for as long as this tab holds the
