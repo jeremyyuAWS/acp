@@ -69,8 +69,15 @@ describe('the review screens render the proposal, not a template', () => {
     expect(src).toMatch(/thumb: firstThumb\(it\)/)
   })
 
-  it('Remediate labels a template as a next step, never as an AI suggestion', () => {
-    expect(read('Remediate.jsx')).toMatch(/suggested && hasProposal \? 'AI suggested value' : 'Next step'/)
+  it('a template is never recorded as an AI suggestion', () => {
+    // Was a grep of Remediate's WhyReview ('AI suggested value' : 'Next step'), which never
+    // rendered. EvidenceCard enforces the same thing where it counts: a template sets the
+    // message and deliberately does NOT set aiDraft, so approving it verbatim counts as
+    // human-authored and reviewTelemetry cannot log it as an accepted AI value.
+    const card = read('EvidenceCard.jsx')
+    expect(card).toMatch(/if \(r\.is_template\) \{[\s\S]{0,900}?setDraftMsg\(\{ kind: 'template'/)
+    // aiDraft is assigned only on the genuine-value branch, after the template branch closes.
+    expect(card).toMatch(/\} else \{\s*\n\s*aiDraft\.current = s/)
   })
 
   it('no canned "a fix was applied" string survives in either queue builder', () => {

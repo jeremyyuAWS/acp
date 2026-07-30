@@ -79,27 +79,29 @@ describe('Thumbnail fetches the page it claims to show', () => {
   })
 })
 
-describe('the Remediate review card shows the reviewer the page and the passage', () => {
+// These used to grep Remediate.jsx's WhyReview/ReviewItemCard, which were never rendered — the
+// inbox has shipped EvidenceCard for a long time. The claims are still worth guarding, so they
+// now point at the card that actually renders, plus the queue mapping that feeds it. One claim
+// moved out entirely: "a deck has no page 3" is pageNoun via locationLabel, and
+// evidenceMount.test.js asserts 'Slide 3' vs 'Page 7' on the function itself — a behavioural
+// check, which beats grepping markup for it.
+describe('the review card shows the reviewer the page and the passage', () => {
+  const card = read('EvidenceCard.jsx')
   const src = read('Remediate.jsx')
 
   it('falls back to the rendered page when the proposal carried no image of its own', () => {
     // A 3.1.2 / 2.4.4 finding has no picture; without this the reviewer approved blind.
-    expect(src).toMatch(/\? <ProposalThumb[\s\S]{0,200}: \(scanId && file && <Thumbnail/)
+    expect(card).toMatch(/<ProposalThumb[\s\S]{0,400}\) : \([\s\S]{0,80}<Thumbnail/)
   })
 
   it('passes the finding page — not the cover — down to the render', () => {
-    expect(src).toMatch(/<WhyReview[\s\S]{0,400}page=\{item\.page\}/)
+    expect(card).toMatch(/<Thumbnail[^>]*page=\{card\.page \|\| 1\}/)
     expect(src).toMatch(/page: pageOf\(it\)/)
-  })
-
-  it('calls a slide a slide — a deck has no page 3', () => {
-    expect(src).toMatch(/Found on<\/span><span>\{pageNoun\(file\)\} \{page\}/)
   })
 
   it('shows the current text only when the proposal supplied a literal one', () => {
     // `ba.before()` is a description of the defect ("image / chart — no alt text"). Labelling
     // that "Current text" would put a sentence the document does not contain on the card.
-    expect(src).toMatch(/beforeLiteral && before && \(/)
     expect(src).toMatch(/beforeLiteral: !!firstBefore\(it\)/)
     expect(src).toMatch(/before: firstBefore\(it\) \|\| ba\.before/)
   })

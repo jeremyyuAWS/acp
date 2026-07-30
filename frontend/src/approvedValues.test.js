@@ -96,18 +96,12 @@ describe('the approve payload carries one value per image', () => {
   })
 })
 
-describe('the inline card never blanket-approves images it did not show', () => {
-  it('a multi-image row routes to the drawer instead of approving', () => {
-    const src = read('Remediate.jsx')
-    expect(src).toMatch(/const multiImage = \(item\.proposals\?\.length \|\| 0\) > 1/)
-    expect(src).toMatch(/multiImage\s*\n?\s*\? <button className="qbtn approve"[^]*?onClick=\{onOpen\}/)
-    expect(src).toMatch(/Review \{item\.proposals\.length\} images/)
-  })
-
-  it('a single-image row still approves inline', () => {
-    expect(read('Remediate.jsx')).toMatch(/: <button className="qbtn approve" disabled=\{disabled\} onClick=\{onApprove\}>/)
-  })
-})
+// The "route a multi-image row to the drawer" pair that used to sit here greppd ReviewItemCard's
+// markup, and ReviewItemCard was never rendered. The safety property it described — never approve
+// a value for evidence the reviewer was not shown — is enforced in the card that does render, by
+// a better mechanism: EvidenceCard gives every instance its own editor rather than sending the
+// reviewer elsewhere. That is asserted directly, on mounted output, above:
+// "every instance is rendered beside its own textarea — never a value for unseen evidence".
 
 describe('proposalsOf — the list the editors are built from', () => {
   it('is empty for a judgement finding, so no editor and no write-back', () => {

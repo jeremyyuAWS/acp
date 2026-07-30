@@ -11,12 +11,9 @@ import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
 import QueuePanel from './QueuePanel.jsx'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
-import { confidenceForFinding, confClass } from './confidence.js'
-import { metaFor } from './hitlMeta.js'
 import { firstProposed, firstBefore, firstThumb, firstKind, firstRationale, firstSource, pageOf,
-         pageNoun, thumbAlt, thumbSize, appliedFixAlt, comparisonFor, noDraftHint } from './reviewCard.js'
+         appliedFixAlt } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
-import Thumbnail from './Thumbnail.jsx'
 import { remediableFiles, emptyScopeReason, scopeSummary, ineligibleReason } from './remediableScope.js'
 import { measuredReviewTime, REVIEW_TIME_BASIS } from './reviewerTime.js'
 
@@ -144,7 +141,7 @@ function buildHumanQueue(files, triage = {}) {
     // The demo's stand-in for hitl_queue.proposals. Present only for the criteria the model
     // drafts a value for; the rest either carry an applied remediation_diff (simRemediationDiffs,
     // once the demo has run remediation) or are a judgement call with nothing to show. No card
-    // gets a canned "AI fix applied" string — see WhyReview.
+    // gets a canned "AI fix applied" string — EvidenceCard shows a value only when one exists.
     const proposals = simProposalsFor(sc, f.file)
     const p = proposals?.[0]
     return {
@@ -170,18 +167,6 @@ function buildHumanQueue(files, triage = {}) {
       hasProposal: !!p,
     }
   }).filter(Boolean)
-}
-
-// Per-card automation badge (§4) — we retired the permanent 🟢🟡🔴 legend; the badge now
-// lives ON each card so its meaning is local, never a floating key you have to remember.
-const AUTO_BADGE = {
-  auto:   { cls: 'ab-auto',   label: '🟢 Auto Applied' },
-  review: { cls: 'ab-review', label: '🟡 Review Suggested' },
-  human:  { cls: 'ab-human',  label: '🔴 Human Required' },
-}
-function AutoBadge({ kind }) {
-  const b = AUTO_BADGE[kind] || AUTO_BADGE.review
-  return <span className={`autobadge ${b.cls}`}>{b.label}</span>
 }
 
 // GitHub-style progress rail (§2) — where am I in Scan → Assess → Remediate → AI Work Inbox
@@ -218,123 +203,6 @@ export function ReviewComparison({ comparison }) {
       <div className="diffbox after">
         <span className="difftag">{applied ? 'after · applied to the document' : 'AI draft · not applied until you approve'}</span>
         <code>{after}</code>
-      </div>
-    </div>
-  )
-}
-
-// "Why am I reviewing this?" (§3) — the honest evidence a compliance officer needs to act:
-// the confidence.js level + its concrete basis (never a fabricated %), the plain-language
-// escalation reason, the page the finding sits on, and — the point of the panel — what the
-// document says now versus what it would say once remediated.
-function WhyReview({ sc, suggested, before, beforeLiteral, comparison, thumb, thumbKind,
-                    rationale, proposalSource, hasProposal, file, scanId, page }) {
-  const conf = confidenceForFinding({ sc })
-  const reason = metaFor({ rule_id: sc }).reason
-  return (
-    <div className="whyreview">
-      <div className="whyreview-hd">Why am I reviewing this?</div>
-      <div className="whyreview-body" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-        {/* What the reviewer must judge. Two sources, in order of specificity:
-            1. the proposal's own image — the embedded picture, or a reading-order page render;
-            2. failing that, the rendered PAGE the finding sits on.
-            (2) is what the AI Work Inbox has always shown and this card never did: a text
-            finding (3.1.2 language, 2.4.4 link text) carries no image, so ProposalThumb drew
-            nothing and the reviewer was asked to approve a change to a passage they could not
-            see. `page` comes from hitl_queue.page — the analysers' own attribution, absent
-            when they could not attribute one, never defaulted to the cover.
-            A PPTX renders neither: api/render.py is PDF-only, so a deck shows nothing here
-            rather than a picture of the wrong document. */}
-        {thumb
-          ? <ProposalThumb thumb={thumb} alt={thumbAlt(thumbKind, file)} size={thumbSize(thumbKind)} />
-          : (scanId && file && <Thumbnail scanId={scanId} file={file} page={page || 1}
-                                          className="whyreview-thumb" maxHeight={150} />)}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="whyreview-row">
-            <span className="muted">Trust signal</span>
-            <span className={confClass(conf.level)} title={`tier: ${conf.level.label}`}>{conf.basis}</span>
-          </div>
-          <div className="whyreview-row"><span className="muted">Reason</span><span>{reason}</span></div>
-          {/* Where to look. Only stated when the analysers attributed a page — a reviewer sent to
-              "page 1" for a finding on page 7 checks the wrong thing and approves blind. */}
-          {/* A deck has slides, not pages — pageNoun keeps the card honest about the format. */}
-          {page && <div className="whyreview-row"><span className="muted">Found on</span><span>{pageNoun(file)} {page}</span></div>}
-          {/* What the document says now versus what it would say once remediated. Both halves are
-              real values — a remediation_diff row, or the proposal's own literal `before` and
-              drafted value — so this renders only when such a pair exists. */}
-          {comparison ? <ReviewComparison comparison={comparison} /> : (
-            <>
-              {/* No comparison. Show the offending passage ONLY when the proposal carried a
-                  literal one: `ba.before()` is a description of the defect ("image / chart — no
-                  alt text"), not a value, and labelling that "current text" would put a sentence
-                  the document does not contain in front of a reviewer. When it is absent the
-                  page render above, not a sentence, is what they judge. */}
-              {beforeLiteral && before && (
-                <div className="whyreview-row">
-                  <span className="muted">Current text</span>
-                  <span className="whyreview-before">{before}</span>
-                </div>
-              )}
-              {/* Nothing was applied and no model drafted a value. Say so. This line used to
-                  print a canned "AI-generated alt text added" on every card, claiming a fix
-                  whether or not one had happened. */}
-              <div className="whyreview-row">
-                <span className="muted">{suggested && hasProposal ? 'AI suggested value' : 'Next step'}</span>
-                <span className="whyreview-sugg">{suggested || noDraftHint(sc)}</span>
-              </div>
-            </>
-          )}
-          {rationale && (
-            <div className="whyreview-row">
-              <span className="muted">Why this draft</span>
-              <span>{rationale}{proposalSource ? ` · ${proposalSource}` : ''}</span>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// One human-review card. Dominant surface (§3): the card leads with WHAT and WHY, carries
-// its own badge (§4), and exposes the review actions inline — no competing top-level buttons.
-function ReviewItemCard({ item, scanDiffs = [], onOpen, onApprove, onSelf, onReject, disabled }) {
-  const sc = scOf(item.ruleId || item.rule || item.title)
-  const conf = confidenceForFinding({ sc })
-  const badgeKind = conf.level.rank <= 1 ? 'human' : 'review'   // Low → human required, else review suggested
-  // Derived here, not at fetch time: the remediation_diff rows load in parallel with the queue,
-  // so an item mapped before they land would hold an empty comparison forever.
-  const comparison = comparisonFor(item, scanDiffs)
-  // More images than this card can show. Its Approve must not stand in for all of them.
-  const multiImage = (item.proposals?.length || 0) > 1
-  return (
-    <div className="reviewcard">
-      <div className="reviewcard-top">
-        <span className="qico" aria-hidden="true">{item.icon}</span>
-        <div className="reviewcard-title">
-          <button className="remname" onClick={onOpen}>{item.title}</button>
-          <div className="qmeta">{item.file} · {item.rule}</div>
-        </div>
-        <AutoBadge kind={badgeKind} />
-      </div>
-      <WhyReview sc={sc} suggested={item.after} before={item.before} beforeLiteral={item.beforeLiteral}
-                 comparison={comparison}
-                 thumb={item.thumb} thumbKind={item.thumbKind} rationale={item.rationale}
-                 proposalSource={item.proposalSource} hasProposal={item.hasProposal} file={item.file}
-                 scanId={item.scanId} page={item.page} />
-      <div className="reviewcard-actions">
-        {/* This card shows ONE image. Approving from here would accept a description for every
-            other image in the file that the reviewer never saw — and the server now writes
-            those descriptions into the document. Send them to the drawer, which shows each
-            image beside its own text. */}
-        {multiImage
-          ? <button className="qbtn approve" disabled={disabled} onClick={onOpen}
-                    title="Each image needs its own description — review them side by side">
-              Review {item.proposals.length} images →
-            </button>
-          : <button className="qbtn approve" disabled={disabled} onClick={onApprove}>✓ Approve</button>}
-        <button className="qbtn self" disabled={disabled} onClick={onSelf} title="Take ownership — fix it yourself, then re-scan to confirm">✋ I’ll fix it</button>
-        <button className="qbtn reject" disabled={disabled} onClick={onReject}>✕ Reject</button>
       </div>
     </div>
   )

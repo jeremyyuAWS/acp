@@ -1795,31 +1795,12 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
   padding: 0 7px; border-radius: 999px; background: #854F0B; color: #fff; font-size: 13px; font-weight: 700; vertical-align: middle; }
 .rem-review-panel { border-color: #E6C461; box-shadow: 0 0 0 1px #F3E2B4 inset; }
 
-/* Human-review cards (§3) with per-card badge (§4) */
+/* The review list — the container the AI Work Inbox renders its EvidenceCards into. The
+   .reviewcard / .autobadge / .whyreview-* rules that used to follow styled Remediate's
+   ReviewItemCard + WhyReview, which were deleted as unreachable; only the classes still emitted
+   by live code remain. .whyreview-ba is one of them (ReviewComparison). */
 .reviewlist { display: flex; flex-direction: column; gap: 10px; }
-.reviewcard { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--card); }
-.reviewcard-top { display: flex; align-items: flex-start; gap: 10px; }
-.reviewcard-title { flex: 1 1 auto; min-width: 0; }
-.reviewcard-title .qmeta { margin-top: 2px; }
-.reviewcard-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-.autobadge { flex: 0 0 auto; font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
-.ab-auto { background: #E7F0DC; color: #2F5310; }
-.ab-review { background: #FBEECB; color: #7A4E06; }
-.ab-human { background: #FBE7E2; color: #8A2A1B; }
 
-/* "Why am I reviewing this?" panel (§3) */
-.whyreview { margin-top: 10px; padding: 10px 12px; border-radius: 9px; background: var(--bg, #faf8fb); border: 1px solid var(--line); }
-.whyreview-hd { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
-.whyreview-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 13px; line-height: 1.5; padding: 1px 0; }
-.whyreview-row > .muted:first-child { min-width: 96px; font-size: 12px; }
-.whyreview-sugg { font-style: italic; color: var(--ink, #2b2130); }
-/* The passage the fix would replace. Not struck through: for most rules (alt text, language)
-   nothing is deleted — the text stays and an attribute is added. */
-.whyreview-before { color: var(--ink, #2b2130); font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 12.5px; background: var(--card, #fff); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
-/* The page render, when the proposal carried no image of its own. Narrower than the standalone
-   preview so the reasoning beside it stays on one column. */
-.whyreview-thumb { margin: 0; flex: 0 0 auto; max-width: 130px; }
 /* Current → remediated, stacked rather than side-by-side: an alt-text sentence or a
    marked-up language span is long, and two narrow columns wrap it into unreadable ribbons. */
 .whyreview-ba { margin-top: 7px; }
