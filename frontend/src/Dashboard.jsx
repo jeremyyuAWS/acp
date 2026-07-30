@@ -4,27 +4,33 @@ import { ScoreRing } from './ScoreRing.jsx'
 import FileDrawer from './FileDrawer.jsx'
 import Tag from './Tag.jsx'
 import { baseName, groupDuplicates, duplicateFiles } from './dedupe.js'
-import { statusOf } from './docStatus.js'
+import { statusOf, statusCounts as countStatuses, ALL_STATUSES, STATUS_BADGE, STATUS_TAG_LABEL, NOT_ASSESSED } from './docStatus.js'
 
 const scoreColor = (s) => (s >= 90 ? '#639922' : s >= 50 ? '#BF8C00' : '#2E72C9')
-// The third verbatim copy of this verdict, now folded into the shared module with the other
-// two. "Mirrors FileDrawer's statusOf" was the comment on all of them, and the mirror is
-// exactly what fails silently — nothing makes a copy follow the original when it changes.
-const BADGE = {
-  certifiable: ['#E7F0DC', '#3B6D11'], issues: ['#FAEEDA', '#854F0B'],
-  uncertain: ['#E6EFFB', '#2A5E9E'], unanalysable: ['#EEEDEA', '#5F5E5A'],
-  clean: ['#E8F0FB', '#2A5E9E'],
-}
+// The verdict AND its palette now come from docStatus.js. This module kept a verbatim copy of
+// the badge map, which is a slower version of the same failure the copied statusOf caused: a
+// verdict added to the shared derivation renders here with `BADGE[st]` undefined, so the row
+// throws instead of showing the new state. One map, one place to add a colour.
 
 export default function Dashboard({ run, files, trend, delta, deltaKey, scanList = [], onPickScan }) {
   const [sel, setSel] = useState(null)
   const [groupDupes, setGroupDupes] = useState(true)
   const rows = groupDupes ? groupDuplicates(files) : files
   const dupeCount = files.length - groupDuplicates(files).length
-  // run.certifiable/uncertain/error are server-side aggregates over this scan's RAW (un-
-  // grouped) file_records; derive "issues" the same way (subtraction, not a re-count) so
-  // the four herostat numbers are guaranteed to sum to run.files exactly, by construction.
-  const issuesCount = run.files - run.certifiable - run.uncertain - run.error
+  // COUNT THE DOCUMENTS, DON'T SUBTRACT THEM — the same fix #77 made to charts.jsx's donut,
+  // which this hero did not get. "issues" was `run.files - run.certifiable - run.uncertain -
+  // run.error`, and the claim that made it look safe ("the four numbers sum to run.files by
+  // construction") is what made it wrong: statusOf() has FIVE verdicts, so every 'clean' and
+  // every unscored document landed in "issues" by elimination. Seen live on 2026-07-30 —
+  // "0 certifiable · 2 issues · 0 uncertain · 0 unanalysable · 2 files" above two rows that
+  // both read "clean", on a scan where nothing had been scored at all. Not one of those 2
+  // issues came from a finding.
+  //
+  // Counting over `files` (the RAW, un-grouped prop — `rows` above is the de-duplicated view)
+  // keeps the sum-to-total property the subtraction was there for, and now it is an identity
+  // that holds because every bucket is counted rather than one being a remainder.
+  const heroCounts = countStatuses(files)
+  const heroTotal = files.length
 
   // ── Net-new / changed only ── reuses the ADR 0009 scan-diff (already computed for
   // Regression Radar) so re-scanning a stable estate doesn't dump the FULL inventory
@@ -119,19 +125,22 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
           </div>
         </div>
         <div className="heroright">
-          {/* These 4 categories are a STRICT partition of every file (statusOf() in the File
-              Inventory below classifies every doc into exactly one of them) — "issues" was
-              previously missing here entirely, which is why the visible numbers never summed
-              to "files". Colors now match the File Inventory's own status badges (BADGE
-              above) instead of an inconsistent ad-hoc palette, and "= files" is marked
-              visually as the SUM, not a 5th independent count. */}
+          {/* Every verdict statusOf() can return gets a tile — the whole partition, so no
+              document can be absorbed into a bucket it doesn't belong in. A tile with a zero
+              stays visible: "0 not assessed" is a fact a reviewer wants confirmed, and hiding
+              the bucket is what let the estate look fully measured. Colours are the File
+              Inventory's own status badges (STATUS_BADGE), and "= files" is marked visually as
+              the SUM, not an independent count. */}
           <div className="herostats">
-            <div className="herostat"><b style={{ color: '#3B6D11' }}>{run.certifiable}</b><span>certifiable</span></div>
-            <div className="herostat"><b style={{ color: '#854F0B' }}>{issuesCount}</b><span>issues</span></div>
-            <div className="herostat"><b style={{ color: '#2A5E9E' }}>{run.uncertain}</b><span>uncertain</span></div>
-            <div className="herostat"><b style={{ color: '#5F5E5A' }}>{run.error}</b><span>unanalysable</span></div>
-            <div className="herostat" style={{ borderLeft: '1px dashed var(--line)', paddingLeft: 14, marginLeft: 4 }} title="The sum of the four categories to the left">
-              <b>= {run.files}</b><span>files</span>
+            {[['certifiable', 'certifiable'], ['issues', 'issues'], ['clean', 'no findings'],
+              [NOT_ASSESSED, 'not assessed'], ['uncertain', 'uncertain'], ['unanalysable', 'unanalysable']]
+              .map(([key, label]) => (
+                <div className="herostat" key={key}>
+                  <b style={{ color: STATUS_BADGE[key][1] }}>{heroCounts[key]}</b><span>{label}</span>
+                </div>
+              ))}
+            <div className="herostat" style={{ borderLeft: '1px dashed var(--line)', paddingLeft: 14, marginLeft: 4 }} title="The sum of the six categories to the left">
+              <b>= {heroTotal}</b><span>files</span>
             </div>
           </div>
         </div>
@@ -177,10 +186,14 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
           <input value={query} onChange={(e) => { setQuery(e.target.value); reset() }} placeholder="🔍 Search files…"
             aria-label="Search files by name"
             style={{ flex: '1 1 200px', minWidth: 180, padding: '7px 11px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'inherit', fontSize: 13 }} />
-          {['all', 'certifiable', 'issues', 'uncertain', 'unanalysable'].filter((s) => s === 'all' || statusCounts[s]).map((s) => (
+          {/* Driven by ALL_STATUSES, not a hand-written subset: 'clean' had no chip and the
+              unscored documents had no chip either, so the two verdicts a reviewer most needs
+              to isolate were the two you could not filter to. A chip still only appears when
+              some document is actually in that bucket. */}
+          {['all', ...ALL_STATUSES].filter((s) => s === 'all' || statusCounts[s]).map((s) => (
             <button key={s} type="button" onClick={() => { setStatusFilter(s); reset() }}
               className={statusFilter === s ? 'fchip on' : 'fchip'} style={{ fontSize: 12, textTransform: 'capitalize' }}>
-              {s === 'all' ? 'All' : s}{s !== 'all' && <span style={{ marginLeft: 5 }}>{statusCounts[s]}</span>}
+              {s === 'all' ? 'All' : (STATUS_TAG_LABEL[s] || s)}{s !== 'all' && <span style={{ marginLeft: 5 }}>{statusCounts[s]}</span>}
             </button>
           ))}
           {typeList.length > 1 && (
@@ -207,7 +220,7 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
               </td></tr>
             )}
             {shown.map((f) => {
-              const st = statusOf(f); const [bg, fg] = BADGE[st]
+              const st = statusOf(f); const [bg, fg] = STATUS_BADGE[st]
               return (
                 <tr key={f.file} className="filerow" role="button" tabIndex={0}
                   onClick={() => setSel(f)}
@@ -225,12 +238,21 @@ export default function Dashboard({ run, files, trend, delta, deltaKey, scanList
                       {(f.tags || []).slice(0, 4).map((t) => <Tag key={t} t={t} />)}
                     </div>
                   </td>
-                  <td><span className="badge" style={{ background: bg, color: fg }}>{st}</span></td>
-                  <td>{f.score === null ? <span className="muted">n/a</span> : (
+                  <td><span className="badge" style={{ background: bg, color: fg }}
+                    title={st === NOT_ASSESSED ? 'Listed from the source, but never opened or scored — nothing is known about this document’s findings yet' : undefined}>
+                    {STATUS_TAG_LABEL[st] || st}</span></td>
+                  {/* `== null`, not `=== null`: a record with score absent rather than
+                      explicitly null is just as unscored, and rendered `undefined%` here. */}
+                  <td>{f.score == null ? <span className="muted">n/a</span> : (
                     <span className="scorecell"><span>{st === 'uncertain' ? '≤' : ''}{f.score}</span>
                       <span className="track sm"><i style={{ width: `${f.score}%`, background: scoreColor(f.score) }} /></span></span>)}</td>
+                  {/* "clean" was the fall-through for this cell too, so a document nobody
+                      opened reported "clean" findings beside its "n/a" score. An unmeasured
+                      document has no findings COUNT — that is not the same as having none. */}
                   <td className="muted">{st === 'uncertain' ? `${f.skipped_rules} rule(s) skipped`
-                    : f.issues.length ? `${f.issues.length} issue(s)` : (f.status === 'error' ? 'could not analyse' : 'clean')}</td>
+                    : (f.issues || []).length ? `${f.issues.length} issue(s)`
+                    : st === 'unanalysable' ? 'could not analyse'
+                    : st === NOT_ASSESSED ? 'not assessed' : 'clean'}</td>
                 </tr>
               )
             })}

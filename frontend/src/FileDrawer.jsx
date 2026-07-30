@@ -18,7 +18,7 @@ import PdfImageContrastCheck from './PdfImageContrastCheck.jsx'
 import AccessibilityStatus from './AccessibilityStatus.jsx'
 import EvidenceHeader, { fmtEvidence } from './EvidenceHeader.jsx'
 import { confirmCriterion, getFileStatus, getExamined } from './api.js'
-import { statusOf } from './docStatus.js'
+import { statusOf, isUnassessed, STATUS_BADGE, STATUS_TAG_LABEL, NOT_ASSESSED } from './docStatus.js'
 import { DOCUMENTS_20 } from './documents20.js'
 import { statusIn, remediationIn } from './assessCoverage.js'
 import { fmtEffort, EFFORT_BASIS } from './effort.js'
@@ -302,14 +302,7 @@ const SEV_LEGEND = [
 // catches the not-yet-scored / partial-coverage case.
 // Canonical definition now lives in docStatus.js (no-dependency module) so charts.jsx and
 // scanReport.js can share it instead of re-typing it. Re-exported here for existing importers.
-export { statusOf }
-export const STATUS_BADGE = {
-  certifiable: ['#E7F0DC', '#3B6D11'], issues: ['#FAEEDA', '#854F0B'],
-  uncertain: ['#E6EFFB', '#2A5E9E'], unanalysable: ['#EEEDEA', '#5F5E5A'],
-  clean: ['#E8F0FB', '#2A5E9E'],
-}
-// Badge caption per status — 'clean' reads better as "no findings" than the raw key.
-export const STATUS_TAG_LABEL = { clean: 'no findings' }
+export { statusOf, STATUS_BADGE, STATUS_TAG_LABEL }
 
 // ADR 0026 — the ONE answer to "does this document have findings?".
 //
@@ -330,21 +323,35 @@ export const STATUS_TAG_LABEL = { clean: 'no findings' }
 //   'has-findings' — the server counted criteria needing remediation; never say "no findings"
 //   'not-assessed' — never opened, so nothing is known either way
 //   'no-findings'  — positively assessed and clear
-//   null           — status is not 'clean'; this claim doesn't apply
+//   null           — the verdict is not a findings claim ('issues'/'uncertain'/'unanalysable')
+//
+// Applies to BOTH verdicts that can reach a "does it have findings" question: 'clean' and
+// 'not-assessed'. statusOf now separates the two (an unscored file is no longer called clean),
+// but the reconciliation still has to run for an unscored file — that is exactly the file the
+// server model has something to say about, and the case this function exists for. Gating on
+// 'clean' alone would have skipped it and left the drawer with no claim at all.
 export function findingsClaim(st, file, model) {
-  if (st !== 'clean') return null
+  if (st !== 'clean' && st !== NOT_ASSESSED) return null
   const m = model && model.available !== false ? model : null
-  if (m) return m.needs_remediation > 0 ? 'has-findings' : 'no-findings'
+  if (m) {
+    if (m.needs_remediation > 0) return 'has-findings'
+    // needs_remediation === 0 IS NOT "assessed and clear". derive_file_status computes it as
+    // `failing - remediated`, and a document whose in-scope criteria were all
+    // not-automatically-assessable has zero failing too — nothing ran, so nothing failed. Taking
+    // that as "no findings" is the same false-clean inference one layer down, and the live report
+    // is what it looks like: 26 of 38 criteria not auto assessable on a file with no score.
+    //
+    // So an affirmative "no findings" needs one piece of POSITIVE evidence: a criterion actually
+    // verified, or a score on the file record. With neither, the honest answer is "not assessed".
+    const verified = (m.automatically_verified || 0) + (m.human_verified || 0)
+    return (verified > 0 || !isUnassessed(file || {})) ? 'no-findings' : 'not-assessed'
+  }
   // Degraded path only — the server model is the decision above, and reaches it in the normal
   // case. Here we have nothing but the file record, so we err toward "unknown" rather than
-  // toward the reassuring answer: `status === 'discovered'` is the inventory-fallback marker
-  // for a row synthesised from scan_inventory and never opened (store.get_scan, ADR 0020), and
-  // a null score means nothing was scored for this file either way. The second clause is
-  // conservatism in a fallback, NOT a second definition of "unassessed" — the canonical one is
-  // isUnassessed() in docStatus.js (`status === 'discovered'`), which counts how much of an
-  // estate was analysed and must stay narrow for that. Import it here once #77 lands; this
-  // predicate is deliberately the only place the notion appears in the drawer.
-  return (file?.status === 'discovered' || file?.score == null) ? 'not-assessed' : 'no-findings'
+  // toward the reassuring answer. isUnassessed() (docStatus.js) is now the one definition of
+  // that notion, widened to "no score" and shared with every counter, so the drawer no longer
+  // keeps a second, private predicate for it.
+  return isUnassessed(file || {}) ? 'not-assessed' : 'no-findings'
 }
 
 // Retention/lifecycle recommendation (step 3 · Retain / Archive / Delete) — based
@@ -360,6 +367,10 @@ export function retentionOf(f) {
 const STEPS = ['Discover', 'Classify', 'Retain', 'Assess', 'Risk score', 'Remediate', 'Human review', 'Re-validate', 'Publish', 'Monitor']
 function journeyStates(st, remNow) {
   if (st === 'unanalysable') return ['done', 'done', 'done', 'blocked', 'blocked', 'blocked', 'blocked', 'blocked', 'blocked', 'blocked']
+  // Nobody scored this document, so Assess has NOT happened — Discover/Classify/Retain are the
+  // only steps done, and everything from Assess on is projected. `base` below marks Assess and
+  // Risk score 'done' unconditionally, which for an unscored file drew a completed assessment.
+  if (st === NOT_ASSESSED) return ['done', 'done', 'done', 'proj', 'proj', 'proj', 'proj', 'proj', 'proj', 'proj']
   const base = ['done', 'done', 'done', 'done', 'done']
   if (st === 'certifiable') return [...base, 'remediated', 'reviewed', 'done', 'proj', 'proj']
   // Clean = no findings, so there is nothing to remediate: Remediate is 'not needed', not
@@ -751,11 +762,20 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
             : claim === 'not-assessed' ? 'not yet assessed'
             : (STATUS_TAG_LABEL[st] || st)}
         </span>
-        {st === 'clean' && file.score === null
+        {/* Gated on "is there a score", not on the verdict. This used to require the verdict to
+            be 'clean' AND the score to be absent — a combination statusOf no longer produces, a
+            'clean' file being by definition a scored one — so an unscored file fell through to
+            the else branch and rendered the literal "n/a / 100": a denominator on a measurement
+            that does not exist. `== null` so an absent score counts as no score, while a real 0
+            still renders "0 / 100". */}
+        {file.score == null
           ? <span className="drawerscore">
-              {claim === 'has-findings' ? 'see coverage' : claim === 'not-assessed' ? 'not assessed' : 'no findings'}
+              {claim === 'has-findings' ? 'see coverage'
+                : claim === 'not-assessed' ? 'not assessed'
+                : claim === 'no-findings' ? 'no findings'
+                : st === 'unanalysable' ? 'could not analyse' : 'n/a'}
             </span>
-          : <span className="drawerscore">{file.score === null ? 'n/a' : `${st === 'uncertain' ? '≤' : ''}${file.score}`}<span className="muted"> / 100</span></span>}
+          : <span className="drawerscore">{st === 'uncertain' ? '≤' : ''}{file.score}<span className="muted"> / 100</span></span>}
         {claim === 'no-findings' && <span className="muted">no blocking findings — not yet certified; some criteria still need human validation (see coverage below)</span>}
         {claim === 'not-assessed' && <span className="muted">not yet assessed — this document has not been opened, so nothing is known about its findings yet</span>}
         {claim === 'has-findings' && <span className="muted">{statusModel.needs_remediation} criteri{statusModel.needs_remediation === 1 ? 'on' : 'a'} need{statusModel.needs_remediation === 1 ? 's' : ''} remediation — see coverage above</span>}

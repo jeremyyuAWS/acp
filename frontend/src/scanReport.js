@@ -7,7 +7,7 @@
 // Truthful metrics only: "conformant" is a real count of certifiable documents,
 // never an estimated confidence %. Sections with no data are simply omitted.
 import { getScanTraces, listHitlQueue, getConfig } from './api.js'
-import { statusOf, avgScore as avgOf } from './docStatus.js'
+import { statusOf, statusCounts as countStatuses, avgScore as avgOf } from './docStatus.js'
 import { WCAG } from './wcagCatalog.js'
 import { recommendationSummary } from './sim.js'
 import { fixSteps, hasGuidance, appName } from './remediationGuide.js'
@@ -109,8 +109,10 @@ export async function generateScanReport({ scanId, files = [], org = 'your organ
   const conformantN = files.filter((f) => statusOf(f) === 'certifiable').length
   const conformantPct = totalFiles ? Math.round((conformantN / totalFiles) * 100) : 0
   const avgScore = avgOf(files)
-  const statusCounts = { certifiable: 0, issues: 0, uncertain: 0, unanalysable: 0, clean: 0 }
-  files.forEach((f) => { statusCounts[statusOf(f)]++ })
+  // The shared counter, not a hand-listed set of keys: this object was missing the unscored
+  // bucket, and `statusCounts[statusOf(f)]++` on an absent key is NaN — so one unassessed
+  // document turned a real count in the exported report into "NaN documents".
+  const statusCounts = countStatuses(files)
 
   const groupBy = (fn) => files.reduce((m, f) => { const k = fn(f); if (k != null) (m[k] = m[k] || []).push(f); return m }, {})
   const rollup = (groups) => Object.entries(groups).map(([label, fs]) => ({

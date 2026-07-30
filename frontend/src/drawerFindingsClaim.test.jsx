@@ -40,9 +40,14 @@ describe('the drawer badge and the coverage panel cannot disagree about findings
   // The exact live contradiction: statusOf() says 'clean', the server says 3 failing.
   it('never claims "no findings" while the status model reports criteria needing remediation', () => {
     const file = { file: 'pdf-critical-untagged-no-lang.pdf', status: 'analysed', compliant: 0, issues: [], score: null }
-    expect(statusOf(file)).toBe('clean')                    // the input that produced the bug
-    expect(findingsClaim('clean', file, FAILING)).toBe('has-findings')
-    expect(findingsClaim('clean', file, FAILING)).not.toBe('no-findings')
+    // This unscored input used to produce 'clean' — the affirmative badge that started all of
+    // this. It is now its own verdict (see statusClean.test.js), and findingsClaim reconciles
+    // both: whichever verdict the row carries, the server's failing count still wins.
+    expect(statusOf(file)).toBe('not-assessed')
+    for (const st of ['clean', 'not-assessed']) {
+      expect(findingsClaim(st, file, FAILING)).toBe('has-findings')
+      expect(findingsClaim(st, file, FAILING)).not.toBe('no-findings')
+    }
   })
 
   it('agrees with the model across every needs_remediation value', () => {
@@ -58,12 +63,27 @@ describe('the drawer badge and the coverage panel cannot disagree about findings
     expect(findingsClaim('clean', file, CLEAR)).toBe('no-findings')
   })
 
-  // 'clean' is statusOf's not-yet-scored bucket as much as its genuinely-clear one, and the
-  // badge rendered both as the affirmative "no findings".
+  // 'clean' WAS statusOf's not-yet-scored bucket as much as its genuinely-clear one, and the
+  // badge rendered both as the affirmative "no findings". statusOf now separates them, and the
+  // claim still resolves to "not assessed" from either side.
   it('says "not yet assessed" for a never-opened Discover record, not "no findings"', () => {
     const discovered = { file: 'f.pdf', status: 'discovered', compliant: 0, issues: [], score: null }
-    expect(statusOf(discovered)).toBe('clean')
+    expect(statusOf(discovered)).toBe('not-assessed')
+    expect(findingsClaim('not-assessed', discovered, null)).toBe('not-assessed')
     expect(findingsClaim('clean', discovered, null)).toBe('not-assessed')
+  })
+
+  // A file where NOTHING was auto-assessable has needs_remediation === 0 without a single
+  // criterion having been verified. Reading that as "no findings" is the false-clean inference
+  // again, one layer down in the model rather than in the verdict.
+  it('does not read "zero failing" as "no findings" when nothing was verified', () => {
+    const unscored = { file: 'f.pdf', status: 'discovered', compliant: 0, issues: [], score: null }
+    const nothingRan = { available: true, in_scope: 38, needs_remediation: 0,
+                         automatically_verified: 0, human_verified: 0,
+                         not_automatically_assessable: 38 }
+    expect(findingsClaim('not-assessed', unscored, nothingRan)).toBe('not-assessed')
+    // A scored file with the same model DID get measured, so "no findings" is supportable.
+    expect(findingsClaim('clean', { ...unscored, score: 100 }, nothingRan)).toBe('no-findings')
   })
 
   it('does not fall back to a reassuring claim when the status lookup is unavailable', () => {

@@ -79,7 +79,9 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
     const u = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = u; a.download = 'mova-findings-export.csv'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 1000)
   }
 
-  const pickStatus = (s) => { const fs = files.filter((f) => statusOf(f) === s.label); setSeg({ title: `${s.label} documents`, subtitle: `${fs.length} of ${files.length}`, files: fs }) }
+  // Filter by `label` (the statusOf value), title with `display` (the human one) — the drill-in
+  // must key on the machine value or it opens an empty drawer.
+  const pickStatus = (s) => { const fs = files.filter((f) => statusOf(f) === s.label); setSeg({ title: `${s.display || s.label} documents`, subtitle: `${fs.length} of ${files.length}`, files: fs }) }
   const pickSeverity = (it) => { const sev = it.label.toUpperCase(); const fs = files.filter((f) => (f.issues || []).some((i) => i.severity === sev)); setSeg({ title: `${it.label} findings`, subtitle: `${fs.length} document(s) affected`, files: fs }) }
 
   const n = run.files || 0

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { statusOf } from './docStatus.js'
+import { statusCounts, NOT_ASSESSED } from './docStatus.js'
 
 // arcs grow from 0 on mount → reads as "live"
 export function Donut({ segments, size = 138, thickness = 18, caption, onPick }) {
@@ -11,7 +11,9 @@ export function Donut({ segments, size = 138, thickness = 18, caption, onPick })
   let acc = 0
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flex: '0 0 auto' }} role="img" aria-label={`${caption || 'breakdown'}: ${segments.map((s) => `${s.value} ${s.label}`).join(', ')}`}>
+      {/* `display` is the human label, `label` the machine key a drill-in filters by (see
+          statusSegments) — so a segment can read "not assessed" without breaking the click. */}
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flex: '0 0 auto' }} role="img" aria-label={`${caption || 'breakdown'}: ${segments.map((s) => `${s.value} ${s.display || s.label}`).join(', ')}`}>
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#f0edf2" strokeWidth={thickness} />
         {segments.map((s, i) => {
           const len = on ? (s.value / total) * C : 0
@@ -30,7 +32,7 @@ export function Donut({ segments, size = 138, thickness = 18, caption, onPick })
           const sx = { display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0', fontSize: 13, width: '100%' }
           const inner = (<>
             <span style={{ width: 10, height: 10, borderRadius: 3, background: s.color, display: 'inline-block', flex: '0 0 auto' }} />
-            <span style={{ flex: 1, color: 'var(--ink)', textAlign: 'left' }}>{s.label}</span>
+            <span style={{ flex: 1, color: 'var(--ink)', textAlign: 'left' }}>{s.display || s.label}</span>
             <b style={{ fontVariantNumeric: 'tabular-nums' }}>{s.value}</b>
           </>)
           return onPick
@@ -82,15 +84,21 @@ export function Bars({ items, cols = '108px 1fr 30px', onPick, max, suffix }) {
 //
 // So classify each file with the SAME statusOf() the drill-in filters by — the donut and the
 // list it opens can no longer disagree, and a bucket is only shown if a document is really in it.
+// `label` is the statusOf() value verbatim, NOT a display string: Overview's pickStatus opens
+// `files.filter((f) => statusOf(f) === seg.label)`, so a prettified label would drill into an
+// empty list. The display name comes from STATUS_TAG_LABEL at render time.
 export function statusSegments(run, files) {
-  const c = {}
-  ;(files || []).forEach((f) => { const s = statusOf(f); c[s] = (c[s] || 0) + 1 })
+  const c = statusCounts(files)
   return [
-    { label: 'certifiable', value: c.certifiable || 0, color: '#639922' },
-    { label: 'issues', value: c.issues || 0, color: '#BF8C00' },
-    { label: 'clean', value: c.clean || 0, color: '#2A5E9E' },
-    { label: 'uncertain', value: c.uncertain || 0, color: '#D85A30' },
-    { label: 'unanalysable', value: c.unanalysable || 0, color: '#9a948f' },
+    { label: 'certifiable', value: c.certifiable, color: '#639922' },
+    { label: 'issues', value: c.issues, color: '#BF8C00' },
+    { label: 'clean', value: c.clean, color: '#2A5E9E' },
+    // Nobody scored these. Distinct from 'clean' and never folded into it — the donut is the
+    // estate-level view, and an unmeasured document showing up as blue "clean" made a scan that
+    // assessed nothing look like a scan that found nothing.
+    { label: NOT_ASSESSED, display: 'not assessed', value: c[NOT_ASSESSED], color: '#6E62C4' },
+    { label: 'uncertain', value: c.uncertain, color: '#D85A30' },
+    { label: 'unanalysable', value: c.unanalysable, color: '#9a948f' },
   ].filter((s) => s.value > 0)
 }
 
