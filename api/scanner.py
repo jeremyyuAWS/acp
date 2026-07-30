@@ -1300,6 +1300,32 @@ def _collapse_duplicate_alt(issues: list[dict]) -> list[dict]:
     return [i for i in issues if i.get("ruleId") not in _FIRST_PARTY_ALT_RULES]
 
 
+def _scoped_for_scoring(issues: list[dict], filename: str) -> list[dict]:
+    """The findings a SCORE may be computed from, for one file — the operator scope applied.
+
+    Both `rb.assess` call sites go through here so the single-file path and the batch path cannot
+    diverge on what a score counts (they already diverged once on which of them filtered disabled
+    rules). Returns `issues` unchanged when no scope is set, so an unscoped deployment scores
+    exactly as it did before this existed.
+
+    The Store is consulted for the scope rather than `in_scope`'s storeless fallback, which cannot
+    see the `scan_scope` setting.
+
+    NOT wrapped in a bare try/except. The obvious defensive shape here — swallow everything and
+    return the unfiltered list — is how this feature was broken in the first place: a gate that
+    fails open and says nothing is indistinguishable from a gate that was never wired up, and the
+    only symptom is numbers that look plausible. `core` and `store` are imported inside the
+    function (the module-level idiom here, to avoid a circular import at load), so a resolution
+    failure is a real defect and should surface as one.
+    """
+    import core
+    from store import active_scope, filter_issues_to_scope, _file_format
+    scope = active_scope(core.store)
+    if not scope:
+        return issues
+    return filter_issues_to_scope(issues, _file_format(filename), scope)
+
+
 def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
     """Analyse + rubric-assess ONE already-downloaded file (fan-out path, ADR 0007).
     `tmp` is a directory containing `name`. Returns (assessed_file_dict, pii_info),
@@ -1350,7 +1376,14 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
     raw["issues"] = [i for i in raw["issues"] if i["ruleId"] not in rb.disabled]
     raw["errors"] = [e for e in raw["errors"]
                      if (e.get("rule") if isinstance(e, dict) else None) not in rb.disabled]
-    assessed = rb.assess(raw["succeeded"], raw["issues"], raw["errors"])
+    # Score over the IN-SCOPE findings, but keep every finding on the record. `Rubric.assess`
+    # computes `100 - sum(penalty(severity))` over whatever it is handed and knows nothing about
+    # scope, so scoring the full list gave a scoped scan unscoped scores — a document with no
+    # in-scope findings beside a penalised score, which is the contradiction the scope gate exists
+    # to prevent. `raw["issues"]` is passed on untouched, so re-scoping needs no re-scan.
+    # A no-op when no scope is set.
+    assessed = rb.assess(raw["succeeded"], _scoped_for_scoring(raw["issues"], name),
+                         raw["errors"])
     fdict = {"file": name, "engine": raw["engine"], **assessed, "issues": raw["issues"],
              "acp_stamped": detect_acp_stamp(tmp / name, ext),
              **_file_extent(tmp / name, ext)}
@@ -1489,7 +1522,10 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         for r in raw.values():
             r["issues"] = [i for i in r["issues"] if i["ruleId"] not in rb.disabled]
             r["errors"] = [e for e in r["errors"] if (e.get("rule") if isinstance(e, dict) else None) not in rb.disabled]
-        assessed = {k: rb.assess(r["succeeded"], r["issues"], r["errors"]) for k, r in raw.items()}
+        # Scored over the in-scope findings; `r["issues"]` stays whole on the record. Same helper
+        # as the single-file path above, so the two cannot disagree about what a score counts.
+        assessed = {k: rb.assess(r["succeeded"], _scoped_for_scoring(r["issues"], k), r["errors"])
+                    for k, r in raw.items()}
         summary = rb.aggregate(assessed)
         _lf_mod.flush()
 

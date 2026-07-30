@@ -370,7 +370,7 @@ from assessment_policy import (  # noqa: F401,E402  (re-export)
     LEVEL_RANK, TARGET_LEVELS, DEFAULT_TARGET, NOT_EVALUATED, REVIEW,
     _LEGACY_NOT_EVALUATED, _SUPERSEDING_OUTCOMES, _SC_LEVEL, _ALL_FORMATS,
     active_scope, in_scope, in_target, parse_target, config_target,
-    filter_issues_to_target, _rule_outcome, _certify, _registry_for,
+    filter_issues_to_target, filter_issues_to_scope, _rule_outcome, _certify, _registry_for,
     _split_sc_counts, _file_format, _extract_sc, _pages_csv,
 )
 
@@ -662,6 +662,10 @@ class Store:
         s = report["summary"]
         # The level this scan was run for. A criterion above it is not assessed (see in_target).
         target = parse_target((report.get("rubric") or {}).get("target") or config_target())
+        # The operator scope in force, resolved ONCE per save from this Store. Must be threaded
+        # into `_rule_outcome` explicitly: `in_scope`'s storeless fallback cannot see the
+        # `scan_scope` setting, so relying on it made writing the setting gate nothing at all.
+        scope = active_scope(self)
         import json as _json
         catalog = _json.loads(
             (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text()
@@ -699,7 +703,7 @@ class Store:
                 for rule in RULE_CATALOG:
                     rid = rule["id"]
                     fc, rc = fail_counts.get(rid, 0), review_counts.get(rid, 0)
-                    outcome = _rule_outcome(rid, fmt, fc, rc, target)
+                    outcome = _rule_outcome(rid, fmt, fc, rc, target, scope)
                     count = fc if fc else rc   # findings that drove the outcome
                     self._db.execute(cur,
                         "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "
@@ -806,6 +810,7 @@ class Store:
         """Persist one assessed file (same shape save_scan writes). Idempotent so a
         retried scan_file job doesn't double-insert."""
         target = config_target()
+        scope = active_scope(self)     # see save_scan — resolved here, threaded in explicitly
         import json as _json
         catalog = _json.loads(
             (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text())
@@ -833,7 +838,7 @@ class Store:
             for rule in RULE_CATALOG:
                 rid = rule["id"]
                 fc, rc = fail_counts.get(rid, 0), review_counts.get(rid, 0)
-                outcome = _rule_outcome(rid, fmt, fc, rc, target)
+                outcome = _rule_outcome(rid, fmt, fc, rc, target, scope)
                 count = fc if fc else rc
                 self._db.execute(cur,
                     "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,fix_mode,outcome,finding_count) "

@@ -379,6 +379,12 @@ def in_scope(rule_id: str, fmt: str | None, scope: dict | None = None) -> bool:
 
     An unknown format is never excluded: the gate's job is to honour a deliberate choice, not
     to invent one from a filename it could not parse.
+
+    PASS `scope` EXPLICITLY from a caller that has a Store. The `scope=None` fallback resolves
+    through `active_scope()` with no store, which can only see `_scope_override` — so it cannot
+    observe the `scan_scope` SETTING, and answers True for everything. That is why every caller
+    below threads a resolved scope: writing the setting used to gate nothing at all, silently,
+    which is the worst way for a feature flag to be off.
     """
     if scope is None:
         scope = active_scope()
@@ -390,8 +396,35 @@ def in_scope(rule_id: str, fmt: str | None, scope: dict | None = None) -> bool:
     return bool(fmts) and fmt in fmts
 
 
+def filter_issues_to_scope(issues: list[dict], fmt: str | None,
+                           scope: dict | None = None) -> list[dict]:
+    """Drop findings whose (criterion, format) pair the operator left out of scope.
+
+    The exact parallel of `filter_issues_to_target`, and applied the same way: at the point where
+    a score is COMPUTED, never where findings are stored. Every finding stays on the record, so
+    re-reporting the same scan under a different scope needs no re-scan — what changes is what
+    gets assessed and scored, which is what a scope means.
+
+    Why scoring needs this at all. `_rule_outcome` already gates the per-criterion TRACES, so an
+    out-of-scope pair reads NOT_EVALUATED there. `Rubric.assess` computes
+    `score = 100 - sum(penalty(severity))` over every finding it is handed and knows nothing about
+    scope, so without this filter a scoped scan produced scoped traces and UNSCOPED scores: a
+    document could show no in-scope findings beside a score penalised for findings the UI had
+    correctly stopped displaying. That is the contradiction the scope gate exists to prevent,
+    reintroduced one layer down.
+
+    A no-op when no scope is set — `in_scope` answers True for everything — so an unscoped
+    deployment scores exactly as it did before this existed.
+    """
+    if not scope:
+        return list(issues)
+    return [i for i in issues
+            if not _extract_sc(i.get("wcag", ""))
+            or in_scope(_extract_sc(i.get("wcag", "")), fmt, scope)]
+
+
 def _rule_outcome(rule_id: str, fmt: str | None, fail_count: int, review_count: int = 0,
-                  target: str | None = None) -> str:
+                  target: str | None = None, scope: dict | None = None) -> str:
     """The per-(criterion, format) outcome from its finding counts.
 
     `fail_count` = blocking findings, `review_count` = advisory (severity REVIEW) findings.
@@ -421,7 +454,11 @@ def _rule_outcome(rule_id: str, fmt: str | None, fail_count: int, review_count: 
     # Operator scope gate, on the same footing as the target gate above and for the same
     # reason: a pair nobody put in scope was never evaluated, so it reports neither pass nor
     # fail. Placed after the target gate because level is the coarser filter.
-    if not in_scope(rule_id, fmt):
+    #
+    # `scope` is threaded in by the caller (store.save_scan / save_file_result resolve it once
+    # per save from the Store). Falling back to `in_scope`'s storeless lookup would silently
+    # ignore the `scan_scope` setting — see in_scope's docstring.
+    if not in_scope(rule_id, fmt, scope):
         return NOT_EVALUATED
     if fmt is not None and fmt in REVIEW_FORMATS.get(rule_id, frozenset()):
         if fail_count > 0:
