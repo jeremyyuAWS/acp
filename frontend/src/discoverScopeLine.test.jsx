@@ -4,7 +4,7 @@
 // the estate bar puts it on screen. A correct sentence nobody renders is the same defect with a
 // unit test in front of it, which is exactly the shape the 2026-07-30 report took: the counts
 // were computed correctly all along and only reached stdout.
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach } from 'vitest'
 import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
@@ -16,6 +16,17 @@ beforeEach(() => {
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
+})
+
+// Unmount, rather than leaving the tree standing for the environment teardown to race — the same
+// exposure #103 fixed in inventoryAgreesWithDrawer/drawerFindingsClaim, which this file has too.
+// It is no longer only latent: on a clean checkout this suite exited non-zero on 1 of 4 full runs,
+// every test reporting passed, with `ReferenceError: window is not defined` thrown out of
+// getActiveElementDeep after the last assertion. That is a CI job that reddens at random and gets
+// re-run instead of fixed.
+afterEach(async () => {
+  await act(async () => { root.unmount() })
+  container.remove()
 })
 
 const FOLDER_SCOPE = { kind: 'folder', folder_id: '1W27ULZ', folder_name: 'WCAG Defense Pack',
