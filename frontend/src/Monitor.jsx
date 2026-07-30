@@ -109,7 +109,7 @@ function useProgramBatches(files, decisions) {
   }
 }
 
-export default function Monitor({ run, scanList = [], sources = [], files = [], ratified, decisions = {}, publishedFiles = [], aiEnabled = true, onAiToggle, busy = false, progress = null, scanPct = 0, scanStatus = '', readOnly = false, me }) {
+export default function Monitor({ run, scanList = [], sources = [], files = [], ratified, decisions = {}, publishedFiles = [], aiEnabled = true, onAiToggle, busy = false, progress = null, scanPct = 0, readOnly = false, me }) {
   const m = monitoringState(files)
   // Real signed-in org for the evidence report — demo org only in SIM.
   const orgName = SIM ? IDENTITY.org : (me?.email?.split('@')[1]?.replace(/\.[^.]+$/, '') || me?.name || 'your organisation')

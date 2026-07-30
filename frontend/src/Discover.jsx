@@ -72,7 +72,7 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 // makes decide()/undoDec() below actually survive a reload instead of resetting on every
 // visit to this tab, and is also what feeds the campaign "resolved" counts (ADR 0003
 // Phase 4) real data instead of always reading 0.
-export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, fileTypeConfig = {}, onAdvance, progress = null, scanPct = 0, scanStatus = '', scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp }) {
+export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, fileTypeConfig = {}, onAdvance, progress = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp }) {
   const [sel, setSel] = useState(null)
   const [showPicker, setShowPicker] = useState(false)   // Drive folder picker modal (Choose folder to scan)
   const [open, setOpen] = useState(() => new Set())
