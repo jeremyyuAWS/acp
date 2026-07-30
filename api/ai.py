@@ -357,6 +357,9 @@ def _tags_have(tags: list[dict] | None, model: str) -> bool:
     return False
 
 
+_MISSING_TEXT_MODEL_WARNED: set[tuple[str, str]] = set()
+
+
 def model_is_available() -> bool:
     """True only when Ollama is reachable AND the configured TEXT model is pulled.
 
@@ -364,9 +367,23 @@ def model_is_available() -> bool:
     difference cost a day: acp-app reported available=true against an Ollama that did not
     have OLLAMA_MODEL at all, so every text generate returned 404 'model not found' while
     the status endpoint looked green. Reachability is not capability.
+
+    Says so in the log the first time it sees a reachable Ollama missing the model, keyed on
+    (endpoint, model) so a burst-GPU switch re-reports. Every text caller degrades to [] or a
+    503, which is indistinguishable from a document that needed no fix — the operator needs one
+    line naming the real cause, and `ollama pull` is the whole remedy.
     """
     _maybe_refresh_endpoint()
-    return _tags_have(_tags_cached(), OLLAMA_MODEL)
+    tags = _tags_cached()
+    ok = _tags_have(tags, OLLAMA_MODEL)
+    if not ok and tags is not None:
+        key = (OLLAMA_BASE_URL, OLLAMA_MODEL)
+        if key not in _MISSING_TEXT_MODEL_WARNED:
+            _MISSING_TEXT_MODEL_WARNED.add(key)
+            print(f"[ai] text model {OLLAMA_MODEL!r} is NOT pulled on {OLLAMA_BASE_URL} "
+                  f"(reachable, {len(tags)} model(s) present) — every text draft will be "
+                  f"skipped until `ollama pull {OLLAMA_MODEL}`", flush=True)
+    return ok
 
 
 def vision_is_available() -> bool:
@@ -914,7 +931,10 @@ def simplify_text(text: str, *, scan_id: str | None = None, file: str | None = N
     and could invent/omit facts — ADR 0016). Returns the simpler text or None. HITL by design: the
     reviewer approves the rewrite; nothing is auto-applied to the document."""
     src = (text or "").strip()
-    if not src or not is_available():
+    # model_is_available(), not is_available(): the POST below names OLLAMA_MODEL, so a reachable
+    # Ollama that never pulled it 404s on every call and this returns None either way — one probe
+    # earlier is the difference between a logged cause and a silent empty proposal list.
+    if not src or not model_is_available():
         return None
     prompt = (
         "Rewrite the text below in plain, clear language a general reader can follow (about an "

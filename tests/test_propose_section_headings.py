@@ -37,7 +37,7 @@ def _headingless(tmp, sections=3, paras_per=6):
 
 def test_sections_come_from_the_documents_own_boundaries(tmp_path, monkeypatch):
     import ai
-    monkeypatch.setattr(ai, "is_available", lambda: True)
+    monkeypatch.setattr(ai, "model_is_available", lambda: True)
     titles = iter(["Enrollment Overview", "Coverage Details", "How To File A Claim"])
     monkeypatch.setattr(ai, "suggest_fix",
                         lambda *a, **k: {"suggestion": next(titles), "model": "llama3.2"})
@@ -51,7 +51,7 @@ def test_sections_come_from_the_documents_own_boundaries(tmp_path, monkeypatch):
 
 def test_gates_mirror_the_detector(tmp_path, monkeypatch):
     import ai
-    monkeypatch.setattr(ai, "is_available", lambda: True)
+    monkeypatch.setattr(ai, "model_is_available", lambda: True)
     monkeypatch.setattr(ai, "suggest_fix", lambda *a, **k: {"suggestion": "X", "model": "m"})
     # Has heading styles → not this finding.
     styled = _docx(tmp_path, '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>'

@@ -40,7 +40,7 @@ def _xlsx(tmp: Path, *, sheets, shared=None, tables=None) -> Path:
 
 def _mock_ai(monkeypatch, suggestion="Regional Revenue"):
     import ai
-    monkeypatch.setattr(ai, "is_available", lambda: True)
+    monkeypatch.setattr(ai, "model_is_available", lambda: True)
     monkeypatch.setattr(ai, "suggest_fix", lambda *a, **k: {"suggestion": suggestion, "model": "llama3.2"})
 
 

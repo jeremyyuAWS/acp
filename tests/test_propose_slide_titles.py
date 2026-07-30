@@ -36,7 +36,7 @@ def _pptx(tmp: Path, slides: list[str]) -> Path:
 
 def test_empty_title_gets_a_draft_from_the_slides_own_text(tmp_path, monkeypatch):
     import ai
-    monkeypatch.setattr(ai, "is_available", lambda: True)
+    monkeypatch.setattr(ai, "model_is_available", lambda: True)
     monkeypatch.setattr(ai, "suggest_fix",
                         lambda *a, **k: {"suggestion": "Q2 Revenue by Region", "model": "llama3.2"})
     src = _pptx(tmp_path, [_slide("", "Revenue grew across all regions in the second quarter")])
@@ -49,7 +49,7 @@ def test_empty_title_gets_a_draft_from_the_slides_own_text(tmp_path, monkeypatch
 
 def test_filled_title_and_no_placeholder_yield_nothing(tmp_path, monkeypatch):
     import ai
-    monkeypatch.setattr(ai, "is_available", lambda: True)
+    monkeypatch.setattr(ai, "model_is_available", lambda: True)
     monkeypatch.setattr(ai, "suggest_fix", lambda *a, **k: {"suggestion": "X", "model": "m"})
     filled = _pptx(tmp_path, [_slide("Already titled", "Body text here")])
     assert proposals.propose_slide_titles(filled, ".pptx") == []

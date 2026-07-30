@@ -19,7 +19,7 @@ _PROSE = ("The organization must fundamentally reconsider its longstanding opera
 
 def _gate_on(monkeypatch):
     monkeypatch.setattr(textchecks, "detect_reading_level", lambda t: [{"wcag": "3.1.5"}])
-    monkeypatch.setattr(ai, "is_available", lambda: True)
+    monkeypatch.setattr(ai, "model_is_available", lambda: True)
     monkeypatch.setattr(ai, "simplify_text", lambda s, **k: "A short, clear rewrite that keeps the facts.")
 
 
@@ -40,7 +40,7 @@ def test_skips_flattened_list_and_heading_blobs(monkeypatch):
 
 
 def test_gated_off_when_not_flagged_or_ai_disabled(monkeypatch):
-    monkeypatch.setattr(ai, "is_available", lambda: True)
+    monkeypatch.setattr(ai, "model_is_available", lambda: True)
     monkeypatch.setattr(textchecks, "detect_reading_level", lambda t: [])   # doc not above the bar
     assert proposals.propose_reading_level(_PROSE, filename="f.docx", ai_enabled=True) == []
     _gate_on(monkeypatch)

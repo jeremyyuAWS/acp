@@ -574,8 +574,12 @@ def _propose_links(tree, proposals, *, ai_enabled: bool, diffs=None) -> None:
         elif ai_enabled and drafted < 20:
             try:
                 import ai as _ai
-                res = _ai.suggest_fix("2.4.4", "Link Purpose (In Context)", "A", "",
-                                      detail=f'link text "{text}" → {href}') if _ai.is_available() else None
+                # model_is_available(), not is_available(): suggest_fix drafts with the TEXT
+                # model, and a reachable Ollama missing OLLAMA_MODEL 404s on every call —
+                # see the _TEXT_GATE note in api/proposals.py.
+                res = (_ai.suggest_fix("2.4.4", "Link Purpose (In Context)", "A", "",
+                                       detail=f'link text "{text}" → {href}')
+                       if _ai.model_is_available() else None)
             except Exception:
                 res = None
             if res and res.get("suggestion"):

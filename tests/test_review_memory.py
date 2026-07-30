@@ -103,7 +103,7 @@ def test_stage2_guidance_reaches_prose_proposers(monkeypatch):
     import ai
     import proposals
     seen = {}
-    monkeypatch.setattr(ai, "is_available", lambda: True)
+    monkeypatch.setattr(ai, "model_is_available", lambda: True)
 
     def fake_suggest(*a, **kw):
         seen["guidance"] = kw.get("guidance", "MISSING")

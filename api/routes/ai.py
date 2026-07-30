@@ -49,8 +49,14 @@ def ai_explain(scan_id: str = Query(...), file: str = Query(...), rule_id: str =
     # is Ollama, and probing it costs 3s — far better than letting the request (and
     # the UI's "thinking…" spinner) hang on a wedged/scaled-to-zero instance.
     ollama_only = os.environ.get("ACP_AI_BACKEND", "auto").lower() == "ollama" or not os.environ.get("ANTHROPIC_API_KEY")
-    if ollama_only and not _ai.is_available():
-        raise HTTPException(503, "AI explanation unavailable — is Ollama running?")
+    if ollama_only and not _ai.model_is_available():
+        # Two different causes, two different remedies — and "is Ollama running?" is the wrong
+        # question when Ollama IS running and simply never pulled the model. api.js surfaces
+        # this detail as the error text on the card, so name the one the operator must act on.
+        raise HTTPException(503, "AI explanation unavailable — is Ollama running?"
+                            if not _ai.is_available() else
+                            f"AI explanation unavailable — Ollama is running but the text model "
+                            f"'{_ai.OLLAMA_MODEL}' is not pulled (run: ollama pull {_ai.OLLAMA_MODEL})")
     trace = core.store.get_trace_row(scan_id, file, rule_id)
     if trace is None:
         raise HTTPException(404, "trace not found")
@@ -124,8 +130,20 @@ def ai_suggest(request: Request, scan_id: str = Query(...), file: str = Query(..
                 "reason": ("No confident automatic detection for this passage — identify its "
                            "language and give the ISO code (fr, es, de, …).")}
     ollama_only = os.environ.get("ACP_AI_BACKEND", "auto").lower() == "ollama" or not os.environ.get("ANTHROPIC_API_KEY")
-    if ollama_only and not _ai.is_available():
-        raise HTTPException(503, "AI suggestion unavailable — is Ollama running?")
+    if ollama_only:
+        # Which model has to be pulled depends on the criterion: suggest_fix drafts with the TEXT
+        # model, EXCEPT 1.1.1 with the image in hand, which the vision model can serve on its own
+        # (a vision-only Ollama must keep drafting alt text — it did before this gate tightened).
+        # is_available() alone let both cases through to a 404 on every /api/generate.
+        can_draft = _ai.model_is_available() or (rule_id == "1.1.1" and _ai.vision_is_available())
+        if not can_draft:
+            if not _ai.is_available():
+                raise HTTPException(503, "AI suggestion unavailable — is Ollama running?")
+            wanted = (f"the text model '{_ai.OLLAMA_MODEL}' is not pulled" if rule_id != "1.1.1"
+                      else f"neither the text model '{_ai.OLLAMA_MODEL}' nor the vision model "
+                           f"'{_ai.OLLAMA_VISION_MODEL}' is pulled")
+            raise HTTPException(503, f"AI suggestion unavailable — Ollama is running but "
+                                     f"{wanted} (run: ollama pull {_ai.OLLAMA_MODEL})")
     trace = core.store.get_trace_row(scan_id, file, rule_id)
     if trace is None:
         raise HTTPException(404, "trace not found")

@@ -17,6 +17,21 @@ instead of drafting from a blank — through the same honest gate:
 No third-party AI: model-backed proposers call api/ai.py (local Ollama) only, so the
 "no commercial LLM" claim holds. Nothing here raises on the remediation path — a proposer
 that fails just yields no proposal and the finding falls back to human review.
+
+_TEXT_GATE — which availability probe a model-backed proposer may gate on
+------------------------------------------------------------------------
+Every proposer here that drafts a value (`ai.suggest_fix`, `ai.simplify_text`) needs the
+configured TEXT model, so it gates on `ai.model_is_available()`. It must NOT gate on
+`ai.is_available()`, which only answers "did Ollama's /api/tags respond".
+
+The two came apart on 2026-07-29: an Ollama was reachable but had never pulled OLLAMA_MODEL,
+so `is_available()` was true, every `/api/generate` returned 404 "model not found", and each
+proposer returned []. An empty proposal list is exactly what a clean document produces — so
+the pipeline reported "no proposals for this finding" and the missing model never surfaced.
+Gating on capability instead of reachability makes the difference visible (ai.py logs the
+missing model once) and stops one wasted 404 per finding.
+
+`ocr.is_available()` in propose_images_of_text is unrelated — that is tesseract, no model.
 """
 from __future__ import annotations
 
@@ -458,7 +473,9 @@ def propose_sensory_rewrite(text: str, *, filename: str = "", ai_enabled: bool =
         return []
     try:
         import ai as _ai
-        if not _ai.is_available():
+        # ai.suggest_fix below drafts with the TEXT model, so the gate must be
+        # model_is_available() — see the note on _TEXT_GATE at the top of this module.
+        if not _ai.model_is_available():
             return []
     except Exception:
         return []
@@ -516,7 +533,8 @@ def propose_reading_level(text: str, *, filename: str = "", ai_enabled: bool = T
         import ai as _ai
     except Exception:
         return []
-    if not _tc.detect_reading_level(text) or not _ai.is_available():
+    # model_is_available(): the rewrite below is ai.simplify_text, a TEXT-model call (_TEXT_GATE).
+    if not _tc.detect_reading_level(text) or not _ai.model_is_available():
         return []
 
     def _density(s: str) -> float:
@@ -755,9 +773,11 @@ def propose_link_texts(path, ext: str, *, ai_enabled: bool = True, guidance: str
         elif ai_enabled:
             try:
                 import ai as _ai
+                # model_is_available(), not is_available() — suggest_fix drafts the replacement
+                # link text with the TEXT model (_TEXT_GATE).
                 res = (_ai.suggest_fix(sc, "Link Purpose", "A", "",
                                        detail=f'link text "{text}" → {href}', guidance=guidance)
-                       if _ai.is_available() else None)
+                       if _ai.model_is_available() else None)
             except Exception:
                 res = None
             if res and res.get("suggestion"):
@@ -821,7 +841,8 @@ def propose_section_headings(path, ext: str, *, ai_enabled: bool = True, guidanc
         return []                                  # one blob — no section structure to name
     try:
         import ai as _ai
-        if not _ai.is_available():
+        # TEXT model — suggest_fix names each section below (_TEXT_GATE).
+        if not _ai.model_is_available():
             return []
     except Exception:
         return []
@@ -882,7 +903,8 @@ def propose_slide_titles(path, ext: str, *, ai_enabled: bool = True, guidance: s
         return []
     try:
         import ai as _ai
-        if not _ai.is_available():
+        # TEXT model — suggest_fix names each untitled slide below (_TEXT_GATE).
+        if not _ai.model_is_available():
             return []
     except Exception:
         return []
@@ -995,7 +1017,8 @@ def propose_xlsx_labels(path, ext: str, *, ai_enabled: bool = True, guidance: st
         return []
     try:
         import ai as _ai
-        if not _ai.is_available():
+        # TEXT model — suggest_fix names each default tab / column below (_TEXT_GATE).
+        if not _ai.model_is_available():
             return []
     except Exception:
         return []
