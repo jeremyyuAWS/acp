@@ -6,7 +6,7 @@ scan finishes (the "documents never retained" guarantee).
 """
 from __future__ import annotations
 import concurrent.futures as _cf
-import io, json, os, re, shutil, subprocess, sys, tempfile, time, uuid, zipfile
+import io, json, os, re, shutil, signal, subprocess, sys, tempfile, time, uuid, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 import lf as _lf_mod
@@ -732,6 +732,17 @@ def _office_err(e: dict) -> dict:
     return {"message": msg, "rule": rule}
 
 
+def _cli_exit_reason(returncode: int) -> str:
+    """Readable cause for a non-zero CLI exit. A NEGATIVE code is a signal, not a status."""
+    if returncode < 0:
+        try:
+            name = signal.Signals(-returncode).name
+        except ValueError:
+            name = f"signal {-returncode}"
+        return f"was killed by {name}"
+    return f"exited with status {returncode}"
+
+
 def _analyse_office(dest: Path) -> dict:
     out = dest / "_o.json"
     # DOTNET_ROOT only when that install actually exists, and never clobbering one the
@@ -744,21 +755,51 @@ def _analyse_office(dest: Path) -> dict:
         env["DOTNET_ROOT"] = _root
     # Bounded: a hung dotnet process would otherwise stall the worker thread forever —
     # and since the fan-out scan finalizes only when every file reports in, one hang
-    # froze the whole scan. On timeout/failure res stays {} and the affected files
-    # bucket as engine-error (unanalysable), never as a silent pass.
+    # froze the whole scan.
+    #
+    # An abnormal exit does NOT mean res stays {}. This comment used to claim it did, and
+    # that assumption is what let a crash certify a document: AcpScan.Cli writes its JSON
+    # in ONE File.WriteAllText after the whole loop (Program.cs), so a CLI that finishes
+    # the sweep, writes complete output and THEN aborts during runtime shutdown leaves a
+    # perfectly parseable file behind. Production hit exactly that on 2026-07-30 — both
+    # .xlsx files logged `office CLI exited -6` (SIGABRT) with EMPTY stderr, and still
+    # scored 90-odd and certified, because the only trace of the abort was this print.
+    #
+    # So the exit status is now part of the result. Three outcomes, all honest:
+    #   * abnormal exit + parseable output -> every file the CLI reported gains a
+    #     process-level error, which the rubric turns into `uncertain`: findings kept,
+    #     score marked an upper bound, `compliant` forced False (scripts/rubric.py).
+    #   * output missing or unparseable    -> res stays {} and the files bucket as
+    #     engine-error (unanalysable) via the caller's "no engine result" substitution.
+    #   * clean exit                       -> unchanged.
     timeout_s = int(os.environ.get("ACP_OFFICE_CLI_TIMEOUT", "180"))
+    aborted: str | None = None
     try:
         proc = subprocess.run([DOTNET, str(CLI_DLL), str(dest), str(out)],
                               capture_output=True, text=True, env=env, timeout=timeout_s)
         if proc.returncode != 0:
-            print(f"[scan] office CLI exited {proc.returncode}: {(proc.stderr or '')[-400:]}",
-                  flush=True)
+            aborted = _cli_exit_reason(proc.returncode)
+            print(f"[scan] office CLI {aborted} ({proc.returncode}) on {dest}: "
+                  f"{(proc.stderr or '').strip()[-400:] or '<no stderr>'}", flush=True)
     except subprocess.TimeoutExpired:
-        print(f"[scan] office CLI timed out after {timeout_s}s on {dest} — "
-              f"files will be recorded as engine-error", flush=True)
+        # A timeout is not automatically engine-error either, for the same reason: the CLI may
+        # have written its output and then hung on the way out. Whichever it did, the outcome is
+        # logged below once we know, rather than guessed at here.
+        aborted = f"timed out after {timeout_s}s"
+        print(f"[scan] office CLI timed out after {timeout_s}s on {dest}", flush=True)
     res = {}
     if out.exists():
-        for item in json.loads(out.read_text()):
+        # A truncated write is the other half of the same crash, and json.loads raises on it.
+        # That exception used to escape _analyse_office uncaught: run_scan wraps its body in a
+        # bare `finally`, so one aborted CLI failed the ENTIRE scan rather than the files it
+        # analysed. Unparseable output is missing output — bucket it as engine-error.
+        try:
+            items = json.loads(out.read_text())
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+            print(f"[scan] office CLI output at {out} is unreadable ({type(e).__name__}: {e}) — "
+                  f"files will be recorded as engine-error", flush=True)
+            return {}
+        for item in items:
             res[item["file"]] = {
                 "succeeded": item["succeeded"],
                 # Keep the engine's human-readable per-finding title as `detail` — it's
@@ -772,6 +813,24 @@ def _analyse_office(dest: Path) -> dict:
                            for i in item.get("issues", [])],
                 "errors": [_office_err(e) for e in item.get("errors", [])],
             }
+    if aborted:
+        # `rule: None` deliberately — a process-level abort is not attributable to one rule, and
+        # store.py's per-rule attribution already skips errors without a rule id. It still counts
+        # toward skipped_rules, which is what makes the score read as an upper bound in the UI.
+        #
+        # succeeded is left as the CLI reported it: flipping it to False would score these files
+        # `error` / "n/a (could not analyse)", throwing away findings that ARE real (production's
+        # two files carried 2 and 5) and describing a run that produced findings as one that
+        # produced nothing. `uncertain` is the truthful reading — we have findings, we cannot
+        # claim they are the complete set — and it blocks certification just as firmly.
+        for entry in res.values():
+            entry["errors"] = [*entry["errors"],
+                               {"message": f"office analyser {aborted} before exiting cleanly; "
+                                           f"findings may be an incomplete set", "rule": None}]
+        # Say what the abort actually cost, rather than predicting it before parsing: files the
+        # CLI reported go uncertain, everything else in this batch falls to engine-error.
+        print(f"[scan] office CLI {aborted} — {len(res)} reported file(s) recorded as uncertain "
+              f"(score is an upper bound, not certifiable)", flush=True)
     return res
 
 
