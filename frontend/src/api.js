@@ -150,14 +150,18 @@ export const getScanDiff = (scanId, vs = null) => {
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/diff${vs ? `?vs=${encodeURIComponent(vs)}` : ''}`, { headers: headers() }).then(j)
 }
 // Per-WCAG-rule outcomes for a scan (PASS/FAIL/SKIP + finding counts), one row per file×rule.
-export const getScanTraces = (scanId) => {
+// `file` narrows to one document — the route has always supported it (scans.py: get_scan_traces
+// takes file=), the client just never passed it. Assess uses it to name the criteria a document
+// failed the moment it finishes, without pulling every file's rows on every poll.
+export const getScanTraces = (scanId, file = null) => {
   if (SIM) {
     const SCS = [['1.1.1', 'Images have alt text', 'A'], ['1.3.1', 'Info & relationships', 'A'], ['1.4.3', 'Contrast (minimum)', 'AA'], ['2.4.4', 'Link purpose', 'A'], ['2.4.6', 'Headings & labels', 'AA'], ['3.1.1', 'Language of page', 'A'], ['1.2.2', 'Captions', 'A'], ['4.1.2', 'Name, role, value', 'A'], ['2.4.7', 'Focus visible', 'AA'], ['1.4.11', 'Non-text contrast', 'AA'], ['3.3.2', 'Labels or instructions', 'A'], ['2.1.1', 'Keyboard', 'A']]
     const rows = []
     SCS.forEach(([id, name, level], k) => { for (let f = 0; f < 25; f++) { const r = (f * 7 + k * 3) % 10; const outcome = r < 2 ? 'SKIP' : (r < 5 ? 'FAIL' : 'PASS'); rows.push({ file: `doc-${f}.html`, rule_id: id, plain_name: name, level, outcome, finding_count: outcome === 'FAIL' ? r : 0 }) } })
     return sim(rows, 150)
   }
-  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/traces`, { headers: headers() }).then(j)
+  const q = file ? `?file=${encodeURIComponent(file)}` : ''
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/traces${q}`, { headers: headers() }).then(j)
 }
 // The concrete values AI fixes wrote this scan (real vision alt text + a small image
 // thumbnail), for the "Recent AI fixes" panel. Best-effort — [] on any error/SIM.
