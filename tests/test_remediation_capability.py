@@ -64,24 +64,46 @@ def _langdetect_ok() -> bool:
         return False
 
 
+# Both gates drop the memoised probe first. ai._TAGS_CACHE holds its answer for
+# OLLAMA_PROBE_TTL (300s), which is right for a scan of 50 documents and wrong for a gate: it
+# lets an Ollama that answered once, four minutes ago, decide that a live-model assertion runs
+# now. That is how these two tests fired on a box with no usable model on 2026-07-29 — the
+# suite went red for the daemon's state, not for a code change.
 def _vision_ok() -> bool:
     try:
         import ai
+        ai.reset_probe_cache()
         return ai.vision_is_available()
     except Exception:
         return False
 
 
 def _textmodel_ok() -> bool:
-    # model_is_available(), not is_available(): the latter only asks whether Ollama answers,
-    # and a reachable server without OLLAMA_MODEL pulled 404s every generate — so the gate
-    # opened, propose_sensory_rewrite() returned [], and the test FAILED where it should have
-    # skipped. Mirrors _vision_ok(), which has always checked the tag rather than the port.
+    # model_is_available(), NOT is_available(). The latter answers "is Ollama up", which is not
+    # what this gates: an Ollama without OLLAMA_MODEL pulled is reachable and cannot generate a
+    # word, so the assertion below ran against a 404 and FAILED where it should have skipped.
+    # ai.py already draws this distinction and says why — "Reachability is not capability".
     try:
         import ai
+        ai.reset_probe_cache()
         return ai.model_is_available()
     except Exception:
         return False
+
+
+def _still_there_or_skip(gate, what: str) -> None:
+    """Call after a live-model assertion produced nothing, BEFORE failing it.
+
+    The gate and the generate call are not atomic: a daemon that was up when the test started
+    can be gone by the time the model is asked, and an empty result then says nothing about the
+    proposer. Re-probe, and skip only when the capability has demonstrably gone away.
+
+    This does not fabricate a pass, which this module's contract forbids. If the model is still
+    there and the proposer emitted nothing, the assertion that follows still fails — that is a
+    real regression and stays red.
+    """
+    if not gate():
+        pytest.skip(f"{what} went away mid-test — not evidence about the proposer")
 
 
 def _sc(wcag: str) -> str:
@@ -645,6 +667,8 @@ def test_proposer_sensory_emits():
     import proposals
     out = proposals.propose_sensory_rewrite(
         "Click the round green button on the right to submit the form.", ai_enabled=True)
+    if not out:
+        _still_there_or_skip(_textmodel_ok, "the local text model (Ollama)")
     assert out, "sensory proposer emitted nothing for a sensory instruction"
 
 
@@ -756,5 +780,16 @@ def test_proposer_vision_alt_emits():
     gen.build_docx(td / "w.docx")
     applied_fixes: list = []
     remediate_office.remediate_office(td / "w.docx", ai_enabled=True, applied_fixes=applied_fixes)
-    # With vision on, at least one image gets a grounded alt proposal/fix.
-    assert applied_fixes, "vision alt lane produced no alt proposal with a vision model available"
+    # With vision on, at least one image gets a GROUNDED alt — one the vision model produced.
+    # Asserting on applied_fixes alone passed without the vision lane doing anything: the same
+    # fixture also trips the image-of-text rule, whose alt is transcribed by OCR and needs no
+    # vision model. remediate_office labels the two apart, so match on the label (api/
+    # remediate_office.py:540,571 — "AI vision model (<name>)") rather than on the list length.
+    grounded = [f for f in applied_fixes
+                if "AI vision model" in str((f or {}).get("source", "") if isinstance(f, dict)
+                                            else getattr(f, "source", ""))]
+    if not grounded:
+        _still_there_or_skip(_vision_ok, "the vision model (Ollama)")
+    assert grounded, (
+        "vision alt lane produced no vision-grounded alt with a vision model available "
+        f"(got {len(applied_fixes)} fix(es), none from the vision model)")
