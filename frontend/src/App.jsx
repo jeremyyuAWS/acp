@@ -780,7 +780,7 @@ export default function App() {
           excludeRemediated={excludeRemediated} setExcludeRemediated={setExcludeRemediated}
           incremental={incremental} setIncremental={setIncremental} scanId={run?.id} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} hasDriveToken={hasDriveToken} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? (scanPhaseLine(progress.phase, { deepScan }) || '') : ''} scanId={run?.id} decisions={decisions} setDecisions={setDecisions} />}
+        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} hasDriveToken={hasDriveToken} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? (scanPhaseLine(progress.phase, { deepScan }) || '') : ''} scanId={run?.id} scope={run?.scope || null} decisions={decisions} setDecisions={setDecisions} />}
 
         {view === 'assess' && (run ? (
           <>

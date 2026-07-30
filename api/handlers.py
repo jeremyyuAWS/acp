@@ -691,9 +691,11 @@ def _scan_discover(payload: dict, job: dict) -> None:
     rb = Rubric.load_active(ACP / "config")
     svc = None if source in ("local", "sharepoint") else _drive_service(toks.get("drive"))
     effective_folder = folder if folder else ("root" if toks.get("drive") else None)
+    scope: dict = {}
     items = _list(source, svc, folder=effective_folder, sp_token=toks.get("sp"),
                   max_files=FANOUT_MAX_FILES,
-                  exclude_remediated=bool(payload.get("exclude_remediated", False)))
+                  exclude_remediated=bool(payload.get("exclude_remediated", False)),
+                  scope_out=scope)
     # shadow_candidate (a file sharing a logical name with another — possibly ACP's own output
     # shadowing its source) is computed inside _enqueue_analysis from the item list, so the same
     # rule applies whether the fan-out runs now or later at Assess.
@@ -703,7 +705,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
     defer = _defer_analysis_to_assess()
     incremental = bool(payload.get("incremental", True))
     core.store.init_scan_run(scan_id, source, len(items), started, rb.name, rb.hash, owner=user,
-                             status="discovered" if defer else "running")
+                             status="discovered" if defer else "running", scope=scope)
     if not items:
         core.store.enqueue_job("scan_finalize",
                                {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)

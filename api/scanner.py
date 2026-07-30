@@ -256,8 +256,13 @@ def _is_scannable_mime(f: dict) -> bool:
     return f.get("mimeType") in _SCANNABLE_MIME
 
 
-def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False) -> list[dict]:
+def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
+                  scope_out: dict | None = None) -> list[dict]:
     """Whole-Drive discovery — returns all scannable files regardless of folder.
+
+    `scope_out`, when given, is filled in with WHAT THIS LISTING COVERED — see `_list`. The
+    counts already printed below went only to stdout, so the file count was the one number that
+    escaped to the UI and it arrived with no statement of its boundary.
 
     The type filter is applied HERE, in Python, not in the Drive query — and that is the whole
     point. A `mimeType='…'` clause is served by Drive's SEARCH INDEX, which lags badly behind a
@@ -319,6 +324,11 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False) -
         print(f"[scan] whole-Drive listing hit the {raw_cap}-item raw cap — not all files were "
               f"listed; raise ACP_FANOUT_MAX_FILES to cover the full estate", flush=True)
     result = _normalize(files[:max_files])
+    if scope_out is not None:
+        scope_out.update({"kind": "drive", "raw": raw_seen, "scannable": listed,
+                          "skipped_acp": skipped_acp, "kept": len(result),
+                          "truncated": bool(hit_cap or len(files) > max_files),
+                          "cap": raw_cap})
     # An audit trail of what this scan chose to ingest, and what it refused. Without it the
     # only place a file count exists is the UI, and "why 2 files?" can't be answered offline.
     print(f"[scan] discovery (whole-Drive): {raw_seen} raw · {listed} scannable · "
@@ -328,7 +338,8 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False) -
     return result
 
 
-def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediated: bool = False) -> list[dict]:
+def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediated: bool = False,
+                   scope_out: dict | None = None) -> list[dict]:
     """BFS over a folder subtree — returns all scannable files in the folder AND
     every nested subfolder. Bounded by max_files (newest folders may be skipped
     once the cap is hit) and a cycle guard, so a huge tree can't run unbounded.
@@ -336,7 +347,12 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
     exclude_remediated: don't recurse into the configured Drive mirror folder
     (default 'Remediated', admin-configurable) — cheaper than tracking each file's
     parent-folder lineage, and sufficient since ACP only ever writes remediated
-    output to that one well-known folder (handlers.ensure_remediated_folder)."""
+    output to that one well-known folder (handlers.ensure_remediated_folder).
+
+    `scope_out`, when given, is filled in with WHAT THIS LISTING COVERED — see `_list`. This is
+    the path that reported "1 document" on 2026-07-30 while the estate the user had in mind held
+    eight: the folder held exactly one file, the listing was right, and NOTHING said the other
+    seven were in a part of the Drive this scan never looked at."""
     remediated_folder_name = None
     if exclude_remediated:
         import core
@@ -387,10 +403,16 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
             page_token = resp.get("nextPageToken")
             if not page_token or len(raw) >= max_files:
                 break
-    if len(raw) >= max_files and (queue or page_token):
+    truncated = bool(len(raw) >= max_files and (queue or page_token))
+    if truncated:
         print(f"[scan] folder listing hit the {max_files}-file cap — not all files were "
               f"scanned; raise ACP_FANOUT_MAX_FILES to cover the full subtree", flush=True)
     result = _normalize(raw[:max_files])
+    if scope_out is not None:
+        scope_out.update({"kind": "folder", "folder_id": folder_id,
+                          "folders_walked": len(seen_folders), "listed": listed,
+                          "skipped_acp": skipped_acp, "skipped_mirror": skipped_mirror,
+                          "kept": len(result), "truncated": truncated, "cap": max_files})
     print(f"[scan] discovery (folder subtree): {len(seen_folders)} folder(s) walked · "
           f"{listed} listed · {skipped_acp} skipped as ACP-generated output · "
           f"{skipped_mirror} mirror folder(s) skipped · {len(result)} scannable", flush=True)
@@ -474,7 +496,27 @@ def _dedupe_names(items: list[dict]) -> list[dict]:
 
 
 def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None = None,
-          max_files: int | None = None, exclude_remediated: bool = False) -> list[dict]:
+          max_files: int | None = None, exclude_remediated: bool = False,
+          scope_out: dict | None = None) -> list[dict]:
+    """List the source. `scope_out`, when given, is filled in with WHAT WAS COVERED.
+
+    A file count on its own is not a fact about an estate — it is a fact about a boundary the
+    caller chose, and the two are only the same number when the boundary is "everything". On
+    2026-07-30 a folder-scoped scan of a one-file folder reported "1 document" six seconds after
+    a whole-Drive scan of the SAME account reported 8, and the product presented both as the
+    size of the estate. Neither listing was wrong; the screen was, because it printed the
+    number and dropped the boundary.
+
+    So discovery now hands its boundary out with the count, `scope_out` is persisted on the scan
+    (store.init_scan_run / save_scan), and the UI renders one from the other. Shape:
+
+      {"kind": "folder"|"drive"|"local"|"sharepoint", "kept": int, "truncated": bool, ...}
+
+    `truncated` is the strictly different claim "we hit a cap and there are files we did not
+    list" — a folder scan that covered its folder completely is NOT truncated, however small the
+    answer. `folder_name` is resolved here (one metadata read) so the UI can say which folder
+    rather than showing a Drive id nobody recognises.
+    """
     # The monolithic scan keeps conservative caps (one box's disk holds every file);
     # the fan-out path (ADR 0007) passes a high cap since each file is its own job.
     if source == "local":
@@ -484,14 +526,24 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         corpus = Path(os.environ.get("ACP_LOCAL_CORPUS") or (ACP / "test-corpus/files"))
         result = [{"name": p.name, "path": str(p)} for p in sorted(corpus.glob("*"))
                    if p.suffix.lower() in OFFICE + (".pdf",) + HTML_EXTS]
+        if scope_out is not None:
+            scope_out.update({"kind": "local", "path": str(corpus), "kept": len(result),
+                              "truncated": False})
     elif source == "sharepoint":
         result = _sp_list(sp_token, max_files or 200)
+        if scope_out is not None:
+            scope_out.update({"kind": "sharepoint", "kept": len(result),
+                              "truncated": len(result) >= (max_files or 200)})
     elif folder and folder != "root":
         # Specific folder: recursive BFS
-        result = _search_folder(svc, folder, max_files or 1000, exclude_remediated=exclude_remediated)
+        result = _search_folder(svc, folder, max_files or 1000,
+                                exclude_remediated=exclude_remediated, scope_out=scope_out)
+        if scope_out is not None:
+            scope_out["folder_name"] = _folder_name(svc, folder)
     elif folder == "root" or folder is None:
         # No specific folder chosen: search the whole Drive
-        result = _search_drive(svc, max_files or 500, exclude_remediated=exclude_remediated)
+        result = _search_drive(svc, max_files or 500, exclude_remediated=exclude_remediated,
+                               scope_out=scope_out)
     else:
         # ADC/demo mode with a pinned folder. Requests provenance.DRIVE_FIELDS and honours
         # exclude_remediated like the two GIS paths above: this branch asked for a narrower
@@ -505,7 +557,30 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         if exclude_remediated:
             batch = [f for f in batch if not provenance.is_acp_generated(f)]
         result = _normalize(batch)
+        if scope_out is not None:
+            scope_out.update({"kind": "folder", "folder_id": _DEMO_FOLDER,
+                              "folder_name": _folder_name(svc, _DEMO_FOLDER),
+                              "folders_walked": 1, "listed": len(batch), "kept": len(result),
+                              "truncated": False})
+    # `kept` is set by each branch above, BEFORE this pass, and stays correct because
+    # _dedupe_names renames colliding names without ever dropping an item — so the count the UI
+    # states beside the scope is the number of rows the UI will show. That is an invariant of
+    # _dedupe_names rather than an obvious truth, so it is pinned by test
+    # (test_discovery_scope_reported.py::test_kept_counts_rows_the_ui_will_show_…) instead of
+    # re-derived here.
     return _dedupe_names(result)
+
+
+def _folder_name(svc, folder_id: str) -> str | None:
+    """The folder's display name, or None. Best-effort and deliberately non-fatal: this exists
+    only so the UI can name the boundary, and a scan must never fail because a label lookup
+    did."""
+    try:
+        meta = svc.files().get(fileId=folder_id, fields="name",
+                               supportsAllDrives=True).execute(num_retries=3)
+        return meta.get("name") or None
+    except Exception:
+        return None
 
 
 def cache_source_bytes(tmp: Path, name: str, scan_id: str, user: str | None) -> None:
@@ -1310,8 +1385,9 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
     try:
         progress({"phase": "connecting", "files_found": 0, "files_done": 0, "current": None})
         svc = None if source in ("local", "sharepoint") else _drive_service(drive_token)
+        scope: dict = {}
         items = _list(source, svc, folder=effective_folder, sp_token=sp_token,
-                     exclude_remediated=exclude_remediated)
+                     exclude_remediated=exclude_remediated, scope_out=scope)
         n = len(items)
         progress({"phase": "discovering", "files_found": n, "files_done": 0, "current": None})
 
@@ -1427,6 +1503,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             "started_at": started,
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "source": source,
+            "scope": scope,           # WHAT this scan covered — never just the count (see _list)
             "owner": user,            # per-user isolation: who ran this scan
 
             "files": [{"file": k, "engine": raw[k]["engine"], **assessed[k], "issues": raw[k]["issues"],
