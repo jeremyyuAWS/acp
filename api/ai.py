@@ -507,6 +507,36 @@ def _vision_prompt(filename: str, context: str, style: str = "", guidance: str =
     )
 
 
+# A compact vision model can answer the full _vision_prompt with a COMPLETELY EMPTY reply —
+# HTTP 200, {"response": "", "done_reason": "stop"}, no error anywhere. Measured 2026-07-31
+# against the real endpoint (moondream, the CPU deploy default), one image, one variable at a time:
+#
+#   "Describe this image in one concise sentence under 30 words."  → a real description
+#   …the same, plus a trailing "\nAlt text:" label                 → EMPTY
+#   …the same, plus "Do not begin with image of."                  → EMPTY
+#   a longer multi-clause instruction, no label and no negation    → EMPTY
+#
+# Three independent triggers, each sufficient on its own. That is why simply shortening the prompt
+# does NOT fix this, and why the trailing label alone was ruled out earlier and the case wrongly
+# closed. A capable model (qwen2.5vl, a cloud adapter) handles all three happily and writes better
+# alt text for the fuller instruction, so the real prompt is left exactly as it is and this bare
+# form is only ever a RETRY. The two things it drops — the negation and the "Alt text:" label —
+# cost nothing: _clean_alt already strips an "Alt text:" prefix (_ALT_LABEL) and an "image of" /
+# "this image shows" lead (_ALT_LEAD) from whatever comes back.
+_MINIMAL_VISION_STEER = {
+    "shorter": "in under 10 words",
+    "detailed": "in one sentence of up to 40 words",
+}
+
+
+def _minimal_vision_prompt(style: str = "") -> str:
+    """The bare retry prompt for a model that returned nothing to the full one. Keep it a single
+    short imperative with no negation and no trailing label — each of those alone is enough to
+    make a compact model reply with nothing. Re-check `test_minimal_vision_prompt_stays_bare`."""
+    steer = _MINIMAL_VISION_STEER.get(style, "in one concise sentence under 30 words")
+    return f"Describe this image {steer}."
+
+
 def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = None,
                      file: str | None = None, model: str | None = None, clean: bool = True) -> str | None:
     """One bounded, Langfuse-traced vision call → a cleaned single-line alt string, or None.
@@ -563,6 +593,12 @@ def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
         return None
     alt = _vision_generate(_vision_prompt(filename, context, style, guidance), image_bytes,
                            scan_id=scan_id, file=file)
+    if not alt:
+        # The model may have replied with nothing at all rather than failed — see
+        # _minimal_vision_prompt. One bare retry, which is the difference between a working
+        # reviewer re-draft (#131) and a button that silently does nothing on a compact model.
+        alt = _vision_generate(_minimal_vision_prompt(style), image_bytes,
+                               scan_id=scan_id, file=file)
     return {"alt": alt, "model": OLLAMA_VISION_MODEL} if alt else None
 
 
