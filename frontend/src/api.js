@@ -327,8 +327,12 @@ export const getFileRemediationState = (scanId, file) => (SIM
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/remediation-state`,
           { headers: headers() }).then(j))
 // Platform settings (admin) — includes ADR 0010's Drive-mirror on/off + folder name.
+// SIM has no backend, so this is a browser-local store rather than a fresh literal each read,
+// and every answer it gives carries `simulated: true`. That flag is not decoration: see
+// updateSettings below for what it exists to stop.
+const _simSettings = { ai_enabled: true, drive_mirror_enabled: true, drive_mirror_folder: 'Remediated' }
 export const getSettings = () => (SIM
-  ? sim({ ai_enabled: true, drive_mirror_enabled: true, drive_mirror_folder: 'Remediated' })
+  ? sim({ ..._simSettings, simulated: true })
   : fetch(`${BASE}/settings`, { headers: headers() }).then(j))
 // AI usage + cost governance rollup (ADR 0019 Phase 1) — today / month / all-time.
 const _emptyRoll = { calls: 0, ok: 0, failed: 0, cost_usd: 0, avg_latency_ms: 0, scans: 0, by_provider: [], by_zone: [], by_surface: [] }
@@ -345,14 +349,27 @@ export const getAiProviders = () => (SIM
   ? sim({ providers: [] })
   : fetch(`${BASE}/ai/providers`, { headers: headers() }).then(j))
 export const putAiProvider = (patch) => (SIM
-  ? sim({ providers: [] })
+  ? sim({ providers: [], simulated: true })
   : fetch(`${BASE}/ai/providers`, {
       method: 'PUT',
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(patch),
     }).then(j))
+// A SIM write is not a write, and this stub used to be unable to say so. It returned
+// `{ ...defaults, ...patch }` — the caller's own request handed back as the server's answer.
+// Settings.jsx guards against a silent no-op by comparing the RESPONSE to the REQUEST, so a
+// response BUILT FROM the request cleared that guard every time: `drift` was necessarily empty,
+// and the panel printed "✓ endpoint switched" for a PUT that never left the browser. SIM is the
+// one build where a fake success is possible and it was the one build the guard could not see.
+//
+// That cost two debugging cycles (2026-07-30, 2026-07-31) on a demo-blocking vision model. SIM is
+// ON by default (sim.js: `VITE_SIM !== 'false'`), and only deploy/public/Dockerfile sets it false —
+// so the Netlify site and `npm run dev` are both SIM, and both were clicked for a production fix.
+//
+// The local store still takes the patch, so the demo's toggles still move on screen. `simulated`
+// is what stops a caller calling that a save: every caller MUST read it before reporting success.
 export const updateSettings = (patch) => (SIM
-  ? sim({ ai_enabled: true, drive_mirror_enabled: true, drive_mirror_folder: 'Remediated', ...patch })
+  ? sim((() => { Object.assign(_simSettings, patch); return { ..._simSettings, simulated: true } })())
   : fetch(`${BASE}/settings`, {
       method: 'PUT',
       headers: headers({ 'Content-Type': 'application/json' }),

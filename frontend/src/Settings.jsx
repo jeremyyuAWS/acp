@@ -1,5 +1,18 @@
 import { useState, useRef, useEffect } from 'react'
 import { resetDemoData, getAllowlist, setAllowlist, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, getAiStatus } from './api.js'
+import { SIM } from './sim.js'
+
+// What a write is allowed to claim when the API layer marked its own answer `simulated`.
+// A simulated response never reached a server, so it is neither a success nor a failure — the
+// request was never made — and it must not borrow the vocabulary of either.
+const SIM_NOT_WRITTEN =
+  'SIM — nothing was written. This demo build has no backend, so the change is local to this browser '
+  + 'tab and the platform still holds its previous value. Use a build served by the real API to change it.'
+// One place that decides what a settings write may report, so a new caller cannot forget the flag.
+const wrote = (s, ok) => (s?.simulated ? SIM_NOT_WRITTEN : ok)
+// Three tones, not two. `msg.startsWith('✓') ? green : red` had no room for "the request was never
+// made": amber says it plainly without dressing a demo build up as a platform error.
+const msgColor = (m) => (m.startsWith('✓') ? '#3B6D11' : m.startsWith('SIM') ? '#6B4A0B' : '#A32D2D')
 
 // Danger zone — wipe scan results (Grafana + in-app charts) and/or Langfuse
 // traces so the dashboards start fresh. Settings are preserved. Typed-confirm.
@@ -78,8 +91,11 @@ function DriveMirror() {
   const toggle = () => {
     if (!settings || busy) return
     setBusy(true); setMsg('')
+    // The checkbox moving is not evidence of a write — under SIM it moves either way, because the
+    // store it reflects is this browser tab. `wrote(s, '')` keeps the real build silent as before
+    // and makes the demo build say which one just happened.
     updateSettings({ drive_mirror_enabled: !settings.drive_mirror_enabled })
-      .then(setSettings)
+      .then((s) => { setSettings(s); setMsg(wrote(s, '')) })
       .catch((e) => setMsg(e.message || 'update failed'))
       .finally(() => setBusy(false))
   }
@@ -118,8 +134,14 @@ function DriveMirror() {
         setSettings(s)
         // Trust the response, not the request: report what the server actually kept. A 200
         // whose body disagrees with what we sent is a silent no-op otherwise.
+        //
+        // `simulated` is checked FIRST because the drift test structurally cannot catch it: SIM
+        // builds its response out of the request, so the two always agree and `drift` is always
+        // empty. Comparing a response to a request only detects a no-op when something other than
+        // this client authored the response.
         const drift = Object.keys(want).filter((k) => (s?.[k] ?? '') !== want[k])
-        setMsg(drift.length
+        setMsg(s?.simulated ? SIM_NOT_WRITTEN
+          : drift.length
           ? `⚠ the server kept ${drift.map((k) => `${k}="${s?.[k] ?? ''}"`).join(', ')} — your value was not applied`
           : ok)
         return loadAiStatus()
@@ -139,14 +161,14 @@ function DriveMirror() {
   const toggleAutoApply = () => {
     setBusy(true); setMsg('')
     updateSettings({ auto_apply_validated: !settings.auto_apply_validated })
-      .then(setSettings)
+      .then((s) => { setSettings(s); setMsg(wrote(s, '')) })
       .catch((e) => setMsg(e.message || 'update failed'))
       .finally(() => setBusy(false))
   }
   const saveFolder = () => {
     setBusy(true); setMsg('')
     updateSettings({ drive_mirror_folder: folder })
-      .then((s) => { setSettings(s); setMsg('✓ saved') })
+      .then((s) => { setSettings(s); setMsg(wrote(s, '✓ saved')) })
       .catch((e) => setMsg(e.message || 'update failed'))
       .finally(() => setBusy(false))
   }
@@ -274,10 +296,10 @@ function DriveMirror() {
       {/* The outcome belongs next to the control that caused it. The copy at the foot of the
           panel is far below the providers section and was missed entirely. */}
       {msg && <p role="status" aria-live="polite"
-                 style={{ margin: '10px 0 0', fontSize: 13, color: msg.startsWith('✓') ? '#3B6D11' : '#A32D2D' }}>{msg}</p>}
+                 style={{ margin: '10px 0 0', fontSize: 13, color: msgColor(msg) }}>{msg}</p>}
       <hr style={{ border: 0, borderTop: '1px solid var(--line)', margin: '20px 0' }} />
       <AIProvidersPanel onAccess={setCanEdit} />
-      {msg && <p style={{ marginTop: 12, fontSize: 13, color: msg.startsWith('✓') ? '#3B6D11' : '#A32D2D' }}>{msg}</p>}
+      {msg && <p style={{ marginTop: 12, fontSize: 13, color: msgColor(msg) }}>{msg}</p>}
     </div>
   )
 }
@@ -445,7 +467,7 @@ function AIProvidersPanel({ onAccess }) {
       key_secret_ref: field(row, 'key_secret_ref'),
     })
       .then((res) => { setProviders(res.providers); setDraft((x) => ({ ...x, [row.provider]: {} }))
-                       setNote(`✓ ${PROVIDER_LABELS[row.provider] || row.provider} saved`) })
+                       setNote(wrote(res, `✓ ${PROVIDER_LABELS[row.provider] || row.provider} saved`)) })
       .catch((e) => setNote(e.message || 'save failed'))
       .finally(() => setBusy(''))
   }
@@ -501,7 +523,7 @@ function AIProvidersPanel({ onAccess }) {
           </div>
         )
       })}
-      {note && <p style={{ fontSize: 13, color: note.startsWith('✓') ? '#3B6D11' : '#A32D2D' }}>{note}</p>}
+      {note && <p style={{ fontSize: 13, color: msgColor(note) }}>{note}</p>}
     </div>
   )
 }
@@ -513,6 +535,20 @@ const ReadOnlyNotice = () => (
                             borderRadius: 8, padding: '10px 12px', color: '#6B4A0B' }}>
     🔒 <b>Read-only.</b> These settings are owner-only, and you are signed in as another user —
     the fields are disabled because a save would be rejected. Ask the platform owner to change them.
+  </p>
+)
+// Badges the whole admin panel on a build whose writes cannot reach a platform. Gated on the
+// BUILD flag, not on a response, so it is on screen before the first save rather than after: the
+// fake "✓ endpoint switched" was believed on the Netlify site precisely because nothing on the
+// panel said otherwise until the outcome line — and the outcome line was the thing that lied.
+// Same shape as ReadOnlyNotice above; both answer "why won't my change stick?" before it is asked.
+const SimNotice = () => (
+  <p role="status" style={{ margin: '10px 16px 0', fontSize: 13, background: '#FBF1DF',
+                            border: '1px solid #EAD9BF', borderRadius: 8, padding: '10px 12px', color: '#6B4A0B' }}>
+    🎭 <b>Demo build — every setting here is simulated.</b> Nothing on this screen reaches a
+    platform: changes live in this browser tab until you reload, and no production endpoint, vision
+    model, storage setting or user list is affected. Use a build served by the real API to change
+    them for real.
   </p>
 )
 const INP = { display: 'block', width: '100%', padding: '4px 8px', marginTop: 4, border: '1px solid var(--line)', borderRadius: 6, boxSizing: 'border-box' }
@@ -531,6 +567,9 @@ export default function Settings({ onClose, onRubricSaved, files = [], onOntolog
           <div><b>⚙ Platform settings</b><span className="muted"> · admin · rules &amp; validation</span></div>
           <button className="ghost small" aria-label="Close settings" onClick={onClose}>✕</button>
         </div>
+        {/* Above the subtabs on purpose — it is true of every tab in this panel, not just the
+            settings write paths. Rubric, Test users, Disposition and Reset data are SIM stubs too. */}
+        {SIM && <SimNotice />}
         <div className="setexports">
           <span className="setexporthint">Updated deliverables — original format, with a live <b>Status</b> column reflecting what the platform ships today:</span>
           <div className="setexportbtns">
