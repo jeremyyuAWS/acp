@@ -34,7 +34,7 @@ import Upload from './Upload.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
 import A11ySelfCheck from './A11ySelfCheck.jsx'
-import { scanPhaseLine } from './phaseNarration.js'
+import { scanPhaseLine, NARRATION_STEPS } from './phaseNarration.js'
 import { useScanRefetch } from './scanRefetch.js'
 
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
@@ -580,6 +580,10 @@ export default function App() {
     return acc
   }, { auto: 0, assisted: 0, review: 0, archive: 0, keep: 0, manual: 0, total: 0 })
   const placeholder = loaded ? <EmptyState onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} /> : <Loading />
+  // The scan panel renders inside whichever view is open, so scope its narration to that view
+  // when the view is a pipeline step that owns scan phases. The view ids ARE the step names in
+  // PHASE_STEP ('discover', 'assess'); anything else is a non-step view and narrates the job.
+  const narrationStep = NARRATION_STEPS.has(view) ? view : null
   // Presentation decouple: results views stay blank until the user runs Assess. The flag
   // is persisted on the scan (assessed_at); justAssessed gives an immediate optimistic flip.
   const assessed = !!run?.assessed_at || justAssessed === run?.id
@@ -754,10 +758,19 @@ export default function App() {
           <div className="track"><i style={{ width: `${progressPct(progress)}%`, background: '#BF8C00', transition: 'width .3s' }} /></div>
           {/* Narrate the phase the scanner reports, or say nothing. The old line came from a
               timer, so it could never be absent — and it was wrong whenever the timer and the
-              phase disagreed. Silence beats a plausible sentence. */}
-          {scanPhaseLine(progress.phase, { deepScan }) && (
+              phase disagreed. Silence beats a plausible sentence.
+
+              This panel sits ABOVE <main>, so it renders inside whichever step the user is
+              looking at — which is how `analysing`'s line ("Extracting text, images and document
+              structure…") came to sit under the Discover tab, whose own subtitle is
+              "inventory · classify". Pass the step so the narration is scoped to the screen it
+              is actually on: on a step that does not own the phase, phaseNarration.js says that
+              the work is running and where its output lands, instead of describing work that
+              step is not doing. On a non-step view (Overview, Integrations) there is no step to
+              scope to, so the line narrates the job — which is what it is. */}
+          {scanPhaseLine(progress.phase, { deepScan, step: narrationStep }) && (
             <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
-              {scanPhaseLine(progress.phase, { deepScan })}
+              {scanPhaseLine(progress.phase, { deepScan, step: narrationStep })}
             </div>
           )}
         </div>
@@ -772,7 +785,7 @@ export default function App() {
           excludeRemediated={excludeRemediated} setExcludeRemediated={setExcludeRemediated}
           incremental={incremental} setIncremental={setIncremental} scanId={run?.id} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} hasDriveToken={hasDriveToken} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? (scanPhaseLine(progress.phase, { deepScan }) || '') : ''} scanId={run?.id} scope={run?.scope || null} decisions={decisions} setDecisions={setDecisions} />}
+        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} hasDriveToken={hasDriveToken} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} scope={run?.scope || null} decisions={decisions} setDecisions={setDecisions} />}
 
         {view === 'assess' && (run ? (
           <>
@@ -792,7 +805,7 @@ export default function App() {
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
 
-        {view === 'monitor' && (run ? (assessed ? <Monitor me={me} run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanStatus={busy && progress ? (scanPhaseLine(progress.phase, { deepScan }) || '') : ''} /> : assessGate) : placeholder)}
+        {view === 'monitor' && (run ? (assessed ? <Monitor me={me} run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} /> : assessGate) : placeholder)}
 
         {view === 'upload' && <Upload me={me} onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
 
