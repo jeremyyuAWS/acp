@@ -1,7 +1,7 @@
 # acp public-demo image: FastAPI control plane serving the React SPA same-origin,
 # with both analysis engines bundled as COMPILED artifacts (no diligence source):
 #   - .NET 10 Office CLI  (spike/dotnet/.../Release: AcpScan.Cli + DigitalA11y.*.dll)
-#   - Python PDF analyser (worker-python: analysers/ + models/, vendored by deploy.sh)
+#   - Python PDF analyser (engine/pdf-analyser: analysers/ + models/, straight from the tree)
 # Build context is the acp/ repo root.  Base images via mirror.gcr.io to dodge
 # the docker.io 429s the Temporal standup hit.
 
@@ -62,6 +62,13 @@ COPY scripts/ /app/scripts/
 COPY config/ /app/config/
 COPY hub/ /app/hub/
 COPY test-corpus/files/ /app/test-corpus/files/
+# The demo fixtures land in the SAME directory because that is the one a local scan reads
+# (api/scanner.py: ACP_LOCAL_CORPUS or test-corpus/files). Without them the bundled corpus is a
+# single .html file, so a local scan exercises the HTML analyser and nothing else — the .NET
+# Office CLI and the PDF analyser ship in this image and are never once executed by it. An
+# engine that is bundled but unreachable passes every local check by not running. The
+# non-document files here (README.md) are ignored: the scanner filters on OFFICE + .pdf + HTML.
+COPY demo-fixtures/ /app/test-corpus/files/
 
 # compiled engines (no source)
 COPY spike/dotnet/AcpScan.Cli/bin/Release/net10.0/ /app/engine/office/
