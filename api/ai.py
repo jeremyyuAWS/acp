@@ -191,12 +191,17 @@ def _parse(text: str) -> dict[str, str]:
 
 def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, ok: bool,
               model: str | None = None, scan_id: str | None = None, file: str | None = None,
-              provider: str = "ollama", zone: str | None = None, cost_usd: float = 0.0) -> None:
+              provider: str = "ollama", zone: str | None = None, cost_usd: float = 0.0,
+              reason: str | None = None) -> None:
     """Emit a Langfuse span + persist an ai_calls provenance row for one model call — model,
     latency, prompt size, completion, ok, and (ADR 0019 §1) which provider/zone/cost it ran on.
     model defaults to the text model; vision calls pass the vision model. `provider`/`zone`/`cost_usd`
     default to the keyless local Ollama ($0, zone derived from the endpoint) so every existing text
-    caller is unchanged; a cloud vision adapter passes its own provider, zone, and real cost."""
+    caller is unchanged; a cloud vision adapter passes its own provider, zone, and real cost.
+
+    `reason` is WHY the call ended as it did (providers.REASON_*), because `ok=0` alone does not
+    tell an operator whether the endpoint was unreachable, answered an error, or answered 200
+    with nothing — three different fixes that were one indistinguishable row until 2026-07-31."""
     import time as _t
     latency_ms = int((_t.monotonic() - t0) * 1000)
     mdl = model or OLLAMA_MODEL
@@ -214,7 +219,7 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
         import core
         core.store.record_ai_call(surface=surface, provider=provider, model=mdl,
                                   zone=zn, latency_ms=latency_ms, ok=ok, cost_usd=cost_usd,
-                                  scan_id=scan_id, file=file)
+                                  scan_id=scan_id, file=file, reason=reason)
     except Exception:
         pass
 
@@ -569,14 +574,25 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
                zone=res.get("zone"), cost_usd=res.get("cost_usd", 0.0))
     raw = (res.get("text") or "").strip() if res.get("ok") else ""
     if not res.get("ok") or not raw:
-        _trace_ai("vision", prompt, None, _t0, ok=False, **_tr)
+        # The adapter already logged the distinguishing detail and named the mode; carry its
+        # reason through so the ai_calls row says which one rather than only that it failed.
+        _trace_ai("vision", prompt, None, _t0, ok=False,
+                  reason=res.get("reason") or _providers.REASON_TRANSPORT, **_tr)
         return None
     if not clean:
-        _trace_ai("vision", prompt, raw, _t0, ok=True, **_tr)
+        _trace_ai("vision", prompt, raw, _t0, ok=True, reason=_providers.REASON_OK, **_tr)
         return raw or None
     alt = _clean_alt(raw)
     ok = bool(alt) and len(alt) >= 8 and " " in alt
-    _trace_ai("vision", prompt, alt, _t0, ok=ok, **_tr)
+    # A fourth way to end at None, and the transport had nothing to do with it: the model DID
+    # answer, and the honesty guard rejected the answer as too thin to clear WCAG 1.1.1. Left
+    # unnamed it reads on the row exactly like a dead endpoint, which sends the next operator
+    # to look at Ollama for a problem that is in the reply.
+    if not ok:
+        print(f"[vision] {_tr['provider']} · model={mdl} — reply rejected by the alt-text guard: "
+              f"{alt!r} (needs ≥8 chars and more than one word)", flush=True)
+    _trace_ai("vision", prompt, alt, _t0, ok=ok,
+              reason=_providers.REASON_OK if ok else _providers.REASON_UNUSABLE, **_tr)
     return alt if ok else None
 
 
@@ -815,7 +831,8 @@ def _escalate_vision(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     # a cloud vendor. 'cloud' is only a defensive fallback if an adapter omitted its own name.
     _trace_ai("vision", prompt, res.get("text"), _t0, ok=bool(res.get("ok")), model=mdl,
               provider=res.get("provider") or "cloud", zone=res.get("zone"),
-              cost_usd=res.get("cost_usd", 0.0), scan_id=scan_id, file=file)
+              cost_usd=res.get("cost_usd", 0.0), scan_id=scan_id, file=file,
+              reason=res.get("reason"))
     if not res.get("ok"):
         return None
     alt = _clean_alt(res.get("text") or "")

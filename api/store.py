@@ -202,6 +202,12 @@ _SCHEMA = [
       id TEXT PRIMARY KEY, ts TEXT, scan_id TEXT, file TEXT, surface TEXT,
       provider TEXT, model TEXT, zone TEXT, latency_ms INT, ok INT, cost_usd REAL
     )""",
+    # WHY the call ended as it did (providers.REASON_*: ok / transport_error / http_<status> /
+    # empty_response / reply_unusable). ok=0 alone is not actionable — an unreachable endpoint, a
+    # 502, and a model that answered 200 with an empty string are three different fixes, and this
+    # column is what tells them apart without shelling into the container. A stable short token
+    # only: the response body stays in the log, never in a row a governance view renders.
+    "ALTER TABLE ai_calls ADD COLUMN IF NOT EXISTS reason TEXT",
     # Admin-controlled platform settings (key/value). e.g. ai_enabled='false'
     # forces deterministic-only mode for the whole platform (overrides per-scan ?ai=).
     """CREATE TABLE IF NOT EXISTS app_settings (
@@ -1516,19 +1522,21 @@ class Store:
 
     def record_ai_call(self, *, surface: str, provider: str, model: str, zone: str,
                        latency_ms: int, ok: bool, scan_id: str | None = None,
-                       file: str | None = None, cost_usd: float = 0.0) -> None:
+                       file: str | None = None, cost_usd: float = 0.0,
+                       reason: str | None = None) -> None:
         """Append one AI-call provenance row (ADR 0019): which provider/model ran, WHERE
-        (local/cloud zone), how long, at what cost. Best-effort — a telemetry write must
-        never fail the AI work it records."""
+        (local/cloud zone), how long, at what cost, and — for a call that did not succeed —
+        `reason`, WHICH way it failed (providers.REASON_*). Best-effort — a telemetry write
+        must never fail the AI work it records."""
         import uuid
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "INSERT INTO ai_calls(id,ts,scan_id,file,surface,provider,model,zone,latency_ms,ok,cost_usd) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "INSERT INTO ai_calls(id,ts,scan_id,file,surface,provider,model,zone,latency_ms,ok,cost_usd,reason) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (uuid.uuid4().hex, now, scan_id, file, surface, provider, model, zone,
-                 int(latency_ms), 1 if ok else 0, float(cost_usd)))
+                 int(latency_ms), 1 if ok else 0, float(cost_usd), reason))
 
     def list_ai_calls(self, scan_id: str | None = None, limit: int = 500) -> list[dict]:
         """Provenance rows for governance/cost views — newest first, optionally per scan."""
@@ -1574,6 +1582,16 @@ class Store:
                 return [{"key": r["k"], "calls": r["calls"], "cost_usd": round(r["cost"] or 0, 4)}
                         for r in self._db.fetchall(cur)]
 
+            # `failed` is a count with no diagnosis attached — the number that says something is
+            # wrong and nothing about what. Break it down by the recorded reason so the rollup
+            # distinguishes an unreachable endpoint from a model answering 200 with nothing.
+            # Rows written before the column existed report `unrecorded` rather than a guess.
+            self._db.execute(cur,
+                "SELECT COALESCE(reason,'unrecorded') AS k, COUNT(*) AS calls "
+                f"FROM ai_calls{where}{' AND' if where else ' WHERE'} ok=0 "
+                "GROUP BY COALESCE(reason,'unrecorded') ORDER BY calls DESC", params)
+            failure_reasons = [{"key": r["k"], "calls": r["calls"]} for r in self._db.fetchall(cur)]
+
             calls = tot.get("calls", 0) or 0
             return {
                 "window_days": since_days,
@@ -1586,6 +1604,7 @@ class Store:
                 "by_provider": _group("provider"),
                 "by_zone": _group("zone"),
                 "by_surface": _group("surface"),
+                "failure_reasons": failure_reasons,
             }
 
     def list_applied_fixes(self, scan_id: str, limit: int = 200) -> list[dict]:
