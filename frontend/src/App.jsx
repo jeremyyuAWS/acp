@@ -35,6 +35,7 @@ import EmptyState, { Loading } from './EmptyState.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
 import A11ySelfCheck from './A11ySelfCheck.jsx'
 import { scanPhaseLine } from './phaseNarration.js'
+import { useScanRefetch } from './scanRefetch.js'
 
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
 const SHOW_A11Y = import.meta.env.DEV || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('a11y'))
@@ -243,18 +244,9 @@ export default function App() {
     return () => window.removeEventListener('acp:session-expired', onExpired)
   }, [])
 
-  useEffect(() => {
-    // Any FileDrawer's remediate-now announces completion via this event — one
-    // refetch updates `files` for EVERY tab, so the triage worklist, write-back
-    // banner, Publish queue and Discover counts all reflect a manual remediation
-    // immediately instead of waiting for a reload.
-    const onFileRemediated = (e) => {
-      const sid = e?.detail?.scanId || scan?.run?.id
-      if (sid) getScan(sid).then(setScan).catch(() => {})
-    }
-    window.addEventListener('acp:file-remediated', onFileRemediated)
-    return () => window.removeEventListener('acp:file-remediated', onFileRemediated)
-  }, [scan?.run?.id])
+  // Refetch the scan when a remediation or a deferred assessment announces that the server's
+  // file_records changed — see scanRefetch.js for which events and why.
+  useScanRefetch(scan?.run?.id, setScan)
 
   // Publish writes back per file; refetching once per click would fire dozens of
   // times on "Publish all", so debounce — one getScan after the burst settles
