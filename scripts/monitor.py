@@ -225,11 +225,76 @@ def check_estate(base: str, key: str, rep: Report) -> None:
         rep.ok("inbox readable", f"{pending} pending review items")
 
 
+# Paths that provably CANNOT reach the container image, checked against every `COPY` in
+# deploy/public/Dockerfile. A commit touching only these changes nothing that production runs, so
+# it is not deploy drift and must not turn the monitor red.
+#
+# This is a DENYLIST, and that direction is the whole design. An allowlist of image paths would
+# read more naturally — but the day someone adds a `COPY` for a new directory and forgets to
+# update the list, the monitor reports "production is current" about a change that genuinely is
+# not deployed. That is a false GREEN, and a monitor that goes green through the thing it exists
+# to catch is worse than no monitor (this file's own header). A denylist fails the other way: a
+# new directory counts as image-affecting until someone deliberately exempts it, so the worst
+# case is the noise we already have.
+#
+# Kept deliberately short for the same reason. `tests/` and `docs/` are here because they are
+# provably absent from every COPY; `deploy/` is NOT here, because two files under it DO ship
+# (deploy/public/Dockerfile is the recipe, worker-entry.sh is the worker's entrypoint) — see
+# _touches_image, which exempts the deploy scripts by name rather than the directory.
+_NON_IMAGE_PREFIXES = (
+    "docs/",          # prose
+    "tests/",         # python suite — the image copies api/ and scripts/, never tests/
+    ".github/",       # CI config runs on runners, not in the container
+    "adr/",           # decision records
+    "deploy/compose/",  # the LOCAL docker-compose stack; no COPY references it, verified
+)
+# Files under an otherwise-shipping directory that are themselves never copied in. Deploy scripts
+# run from a laptop or a runner; only the Dockerfile and the worker entrypoint are baked.
+_NON_IMAGE_FILES = (
+    "deploy/public/redeploy.sh",
+    "deploy/public/deploy.sh",
+)
+# Root-level files that ship nothing.
+_NON_IMAGE_SUFFIXES = (".md",)
+
+
+def _touches_image(paths: list[str]) -> bool:
+    """Could this set of changed paths alter what production runs?
+
+    True when ANY path is not provably exempt — including an empty list, which means git told us
+    nothing and the honest answer is "assume it matters".
+    """
+    if not paths:
+        return True
+    for p in paths:
+        if p in _NON_IMAGE_FILES:
+            continue
+        if p.startswith(_NON_IMAGE_PREFIXES):
+            continue
+        # A root-level .md only. `api/foo.md` would not exist, but scoping this to the root keeps
+        # the rule from quietly exempting a markdown file that some shipped directory reads.
+        if p.endswith(_NON_IMAGE_SUFFIXES) and "/" not in p:
+            continue
+        return True
+    return False
+
+
 def check_deploy_drift(base_health: dict, repo: str, rep: Report) -> None:
-    """How far production is behind main.
+    """How far production is behind main, counting only commits that could change the image.
 
     Production ran four hours behind main on 2026-07-29 with six merged fixes unshipped, and
     nothing said so. Merged is not deployed; this is the only check that knows the difference.
+
+    But "merged" was measured as ANY commit newer than the build, by timestamp, so a docs-only or
+    tests-only PR turned the monitor red about a production that was perfectly current. In a repo
+    landing ~20 PRs a day that is red almost always, and a check that is usually red is one people
+    learn to skip — which is how the four-hour drift went unnoticed in the first place. Alarm
+    fatigue is not a smaller failure than silence, it is the same failure with more output.
+
+    So the count is now commits whose changed paths could actually reach the image
+    (`_touches_image`). Commits that cannot are reported as a suffix, never as a reason to fail —
+    they are still worth SEEING, because "nothing shipped" and "nothing merged" are different
+    facts and the reader should not have to guess which one they are looking at.
     """
     built = base_health.get("built_at")
     if not built:
@@ -242,23 +307,41 @@ def check_deploy_drift(base_health: dict, repo: str, rep: Report) -> None:
         return
     try:
         subprocess.run(["git", "-C", repo, "fetch", "-q", "origin"], check=True, timeout=60)
+        # --name-only with a record separator, so one call yields both each commit's subject and
+        # the paths it touched. `-m` matters: without it a MERGE commit lists no files at all,
+        # which _touches_image would have to treat as "assume it matters" on every merge — true
+        # to the fail-safe rule, and useless here, since this repo squash-merges and a real merge
+        # commit would defeat the whole check.
         out = subprocess.run(
-            ["git", "-C", repo, "log", "--oneline", f"--since={when.isoformat()}", "origin/main"],
+            ["git", "-C", repo, "log", "-m", "--first-parent", "--name-only",
+             "--format=%x00%h %s", f"--since={when.isoformat()}", "origin/main"],
             capture_output=True, text=True, check=True, timeout=60,
         )
     except Exception as e:  # noqa: BLE001
         rep.skip("deploy drift", f"git unavailable: {e}")
         return
-    behind = [l for l in out.stdout.splitlines() if l.strip()]
+
+    shipping, cosmetic = [], []
+    for block in out.stdout.split("\x00"):
+        lines = [l for l in block.splitlines() if l.strip()]
+        if not lines:
+            continue
+        subject, paths = lines[0], lines[1:]
+        (shipping if _touches_image(paths) else cosmetic).append(subject)
+
     age_h = (datetime.now(timezone.utc) - when).total_seconds() / 3600
-    if behind:
+    # Said in both branches: a reader comparing a red run to a green one needs the same facts in
+    # both, not a number that only appears when something is wrong.
+    also = (f"; {len(cosmetic)} docs/test-only commit(s) ignored" if cosmetic else "")
+    if shipping:
         rep.fail(
             "production is current",
-            f"{len(behind)} commit(s) on main since the running build ({age_h:.1f}h old) — "
-            f"newest: {behind[0][:70]}",
+            f"{len(shipping)} commit(s) on main since the running build ({age_h:.1f}h old) "
+            f"change what production runs — newest: {shipping[0][:70]}{also}",
         )
     else:
-        rep.ok("production is current", f"build is {age_h:.1f}h old, nothing merged since")
+        rep.ok("production is current",
+               f"build is {age_h:.1f}h old, nothing that ships has merged since{also}")
 
 
 def main() -> int:
