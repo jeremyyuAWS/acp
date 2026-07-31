@@ -16,28 +16,28 @@ docker compose up --build
 | `langfuse` | http://localhost:3001 | LLM tracing; self-register on first visit |
 | `db` | localhost:5432 | Postgres 16 — `acpdb` + `langfusedb` |
 
-## Two build prerequisites
+## One build prerequisite
 
 The `acp-app` image bundles **both analysis engines as compiled artifacts** (it does
-not build them). Before `docker compose up --build`, make sure they're present in the
-build context — same requirement as the Azure deploy:
+not build them). The Python PDF engine now comes straight from the tracked tree
+(`engine/pdf-analyser/`, ADR 0029) and needs nothing from you. Only the .NET CLI is a
+compiled output, so before `docker compose up --build`:
 
 1. **.NET Office CLI** — `spike/dotnet/AcpScan.Cli/bin/Release/net10.0/AcpScan.Cli.dll`
    must exist. Build it once:
    ```bash
    dotnet build -c Release spike/dotnet/AcpScan.Cli
    ```
-2. **Python PDF engine** — `deploy/public/vendor/worker-python/` must contain the
-   `analysers/` and `models/` packages. The Azure `deploy.sh` vendors these from an
-   out-of-repo checkout; for compose, copy them in once:
-   ```bash
-   mkdir -p deploy/public/vendor/worker-python
-   cp -R "$PDF_ENGINE_SRC"/{analysers,models} deploy/public/vendor/worker-python/
-   ```
-   (`PDF_ENGINE_SRC` = your local DigitalA11y `worker-python` checkout.)
 
-If neither engine is present the app still boots and HTML scans work; Office/PDF
-scans will report an engine-missing error per file.
+If the CLI is missing the app still boots and HTML/PDF scans work; Office scans report
+an engine-missing error per file.
+
+Verify both engines actually loaded, rather than assuming — `/readyz` reports the PDF
+engine directly, and a scan of the bundled corpus exercises all three analysers:
+
+```bash
+curl -s localhost:8077/readyz | jq .engines
+```
 
 ## First-run Langfuse wiring (one time)
 
