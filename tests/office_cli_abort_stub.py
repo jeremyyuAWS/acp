@@ -33,7 +33,38 @@ MODES = (
     "abort_after_truncated_write",  # SIGABRT interrupting the write — output is unparseable
     "abort_before_write",           # SIGABRT mid-sweep — no output at all
     "write_then_hang",              # output written, then hangs — the timeout's version of the same
+    "abort_with_dotnet_trace",      # as above, but with the trace .NET really prints — see below
+    "abort_with_stdout_only",       # the same words, on stdout instead, and stderr left empty
 )
+
+# What the runtime actually writes when a managed exception goes unhandled. Reproduced at full
+# length on purpose: the point of the head+tail clip is that this does not FIT in one window, and
+# a test built on a three-line trace would pass under the old tail-only clip too and prove nothing.
+#
+# Shape and frame order are taken from a real production trace (2026-07-30, acp-worker): the
+# exception header first, innermost frames next, `AnalyseAsync` and the two `Program.<Main>`
+# frames last. That order is the bug — a tail window lands in the frames every time, and the
+# header, which is the only part naming the defect, is always the first thing to fall off.
+DOTNET_TRACE = (
+    "Unhandled exception. System.ArgumentException: 'windows-1252' is not a supported encoding "
+    "name. For information on defining a custom encoding, see the documentation for the "
+    "Encoding.RegisterProvider method. (Parameter 'name')\n"
+    + "".join(
+        f"   at DocumentFormat.OpenXml.Packaging.OpenXmlPart.LoadPartRelationships{i}"
+        f"(OpenXmlPackage openXmlPackage, String relationshipId, Boolean loadDependencies)\n"
+        for i in range(24)
+    )
+    + "   at DigitalA11y.Analysers.DotNet.Docx.DocxAnalyser.AnalyseAsync(String filePath, "
+      "String jobId, String fileId, String fileName, IEnumerable`1 disabledRuleIds)\n"
+      "   at Program.<Main>$(String[] args) in /build/acp/spike/dotnet/AcpScan.Cli/Program.cs:line 25\n"
+      "   at Program.<Main>(String[] args)\n"
+)
+
+# The identifying half, which `[-400:]` discarded on all 8 production crashes.
+TRACE_HEAD_MARKER = "System.ArgumentException"
+TRACE_MESSAGE_MARKER = "not a supported encoding name"
+# The last frame, which `[-400:]` did keep — the head must not be bought by losing this.
+TRACE_TAIL_MARKER = "Program.<Main>(String[] args)"
 
 OFFICE_EXTS = (".docx", ".pptx", ".xlsx")
 
@@ -62,7 +93,8 @@ def main() -> None:
     ]
     text = json.dumps(results)
 
-    if mode in ("clean", "abort_after_complete_write", "write_then_hang"):
+    if mode in ("clean", "abort_after_complete_write", "write_then_hang",
+                "abort_with_dotnet_trace", "abort_with_stdout_only"):
         with open(out_path, "w") as fh:
             fh.write(text)
     elif mode == "abort_after_truncated_write":
@@ -71,6 +103,15 @@ def main() -> None:
 
     if mode == "clean":
         return
+    if mode == "abort_with_dotnet_trace":
+        sys.stderr.write(DOTNET_TRACE)
+        sys.stderr.flush()
+    elif mode == "abort_with_stdout_only":
+        # Not a hypothetical: #109 recorded EMPTY stderr for this crash. Whether that was the old
+        # clip or a genuinely silent stderr, a diagnostic that only ever reads one stream cannot
+        # tell those apart — so the scanner reads both, and this mode is what proves it.
+        sys.stdout.write(DOTNET_TRACE)
+        sys.stdout.flush()
     if mode == "write_then_hang":
         # subprocess.run's timeout kills us; sleep well past any timeout a test would set.
         time.sleep(3600)

@@ -743,6 +743,38 @@ def _cli_exit_reason(returncode: int) -> str:
     return f"exited with status {returncode}"
 
 
+def _clip_diag(text: str, head: int = 800, tail: int = 400) -> str:
+    """Keep BOTH ends of a diagnostic, because the two ends say different things.
+
+    This used to be `stderr[-400:]`, and that single decision is why this crash went two
+    flaggings without a diagnosis. A .NET failure writes the part you need FIRST —
+
+        Unhandled exception. System.ArgumentException: <the actual cause> (Parameter 'name')
+           at DocumentFormat.OpenXml.<...>
+           at AcpScan.Analysers.XlsxAnalyser.AnalyseAsync(...)
+           ... 30+ more frames
+
+    — so a tail-only window is guaranteed to hold nothing but stack frames once the trace is
+    longer than the window, which it always is. Production's log line read
+
+        [scan] office CLI exited -6: ne)
+
+    where `ne)` is the last three characters of something like `(Parameter 'name')`: the
+    exception TYPE and MESSAGE, the only fields that identify the bug, fell off the front.
+    Eight such lines were captured over 12h across both analysers and both container apps,
+    and every one of them was unactionable for the same reason.
+
+    The head is the larger window because that is where the answer is; the tail is kept
+    because for a SIGABRT the runtime's own last words (a glibc `free(): invalid pointer`,
+    an `Aborted`) arrive after the managed trace, and those identify a native fault that no
+    managed exception header would mention.
+    """
+    text = (text or "").strip()
+    if len(text) <= head + tail:
+        return text
+    return f"{text[:head]}\n  … {len(text) - head - tail} chars elided …\n{text[-tail:]}"
+
+
 def _analyse_office(dest: Path) -> dict:
     out = dest / "_o.json"
     # DOTNET_ROOT only when that install actually exists, and never clobbering one the
@@ -762,8 +794,14 @@ def _analyse_office(dest: Path) -> dict:
     # in ONE File.WriteAllText after the whole loop (Program.cs), so a CLI that finishes
     # the sweep, writes complete output and THEN aborts during runtime shutdown leaves a
     # perfectly parseable file behind. Production hit exactly that on 2026-07-30 — both
-    # .xlsx files logged `office CLI exited -6` (SIGABRT) with EMPTY stderr, and still
-    # scored 90-odd and certified, because the only trace of the abort was this print.
+    # .xlsx files logged `office CLI exited -6` (SIGABRT) and still scored 90-odd and
+    # certified, because the only trace of the abort was this print.
+    #
+    # The "EMPTY stderr" this comment used to report was wrong, and wrong in a way worth
+    # keeping a note about: stderr was NOT empty. A later sweep of ContainerAppConsoleLogs_CL
+    # found 8 stack traces in 12h, on BOTH analysers (XlsxAnalyser 5, DocxAnalyser 3) and BOTH
+    # container apps — so this is neither xlsx-specific nor one bad file. What made stderr
+    # look empty was the old `[-400:]` tail clip eating the whole line; see _clip_diag.
     #
     # So the exit status is now part of the result. Three outcomes, all honest:
     #   * abnormal exit + parseable output -> every file the CLI reported gains a
@@ -779,8 +817,19 @@ def _analyse_office(dest: Path) -> dict:
                               capture_output=True, text=True, env=env, timeout=timeout_s)
         if proc.returncode != 0:
             aborted = _cli_exit_reason(proc.returncode)
-            print(f"[scan] office CLI {aborted} ({proc.returncode}) on {dest}: "
-                  f"{(proc.stderr or '').strip()[-400:] or '<no stderr>'}", flush=True)
+            # stdout as well as stderr, and both clipped from BOTH ends. A signal death is not
+            # a managed exception exit, so there is no promise about which stream carries the
+            # cause: .NET writes an unhandled exception to stderr, but the runtime's own
+            # shutdown-time aborts and `Fatal error.` lines have been seen on stdout, and a
+            # glibc abort writes straight to fd 2 underneath both. #109 recorded EMPTY stderr
+            # for this same crash — if that was accurate rather than an artefact of the old
+            # tail-only clip, whatever the process did say went to stdout and was never read.
+            # Printing an empty stream would just be noise, so each is included only if present.
+            streams = [(n, _clip_diag(s)) for n, s in (("stderr", proc.stderr),
+                                                       ("stdout", proc.stdout)) if (s or "").strip()]
+            detail = "\n".join(f"  {n}: {s}" for n, s in streams) or "  <both streams empty>"
+            print(f"[scan] office CLI {aborted} ({proc.returncode}) on {dest}:\n{detail}",
+                  flush=True)
     except subprocess.TimeoutExpired:
         # A timeout is not automatically engine-error either, for the same reason: the CLI may
         # have written its output and then hung on the way out. Whichever it did, the outcome is
