@@ -127,14 +127,16 @@ def test_suggest_fix_falls_back_to_template_when_vision_fails(monkeypatch):
 
     def _post(*a, **k):
         calls["n"] += 1
-        # 1st call = vision (junk); 2nd = text template.
-        return _Resp("image" if calls["n"] == 1 else "Describe: [what the image shows]")
+        # 1st + 2nd calls = vision: the full prompt, then the bare retry a compact model needs
+        # (ai._minimal_vision_prompt). Both junk here — vision only really fails once BOTH have
+        # been tried. 3rd = the text template.
+        return _Resp("image" if calls["n"] <= 2 else "Describe: [what the image shows]")
 
     monkeypatch.setattr(httpx, "post", _post)
     out = ai.suggest_fix("1.1.1", "Non-text Content", "A", "map.docx", image_bytes=b"bytes")
     assert out is not None
     assert out["is_template"] is True                               # fell back to template
-    assert calls["n"] == 2
+    assert calls["n"] == 3
 
 
 def test_vision_prompt_is_ocr_and_chart_aware():
