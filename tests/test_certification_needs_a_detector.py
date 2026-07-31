@@ -24,8 +24,8 @@ capability cells and the 1.4.3 PDF shipping damage.
 Three evidence tiers, because not every engine is vendored (ADR 0012):
   FIRST_PARTY — pure-Python detector; always exercised here.
   ENGINE      — vendored .NET analyser; exercised when built, skipped when not.
-  PDF_ENGINE  — the PDF analyser, loaded at runtime from ACP_PDF_ENGINE and NOT vendored, so it
-                cannot be exercised locally at all. Named, never assumed.
+  PDF_ENGINE  — the Python PDF analyser, vendored at engine/pdf-analyser/ by ADR 0029 and the
+                default for scanner.WP, so it runs with no env var set and IS exercised here.
 """
 from __future__ import annotations
 
@@ -272,28 +272,44 @@ def test_engine_backed_detectors_fire_when_the_engine_is_built(tmp_path):
         assert not missing, f"{fmt} ENGINE cells did not fire: {missing}"
 
 
-def test_pdf_engine_cells_are_named_not_assumed():
-    """The two cells no local run can reach must at least name a real rule in the scan path.
+def test_pdf_engine_cells_fire(tmp_path):
+    """pdf 2.4.2 and 3.1.1 exercised for real, against the vendored PDF analyser.
 
-    ADR 0012 does not vendor the PDF analyser, so pdf 2.4.2 / 3.1.1 cannot be fired here. Two
-    things ARE checkable, and they are the honest substitute:
+    This test used to assert only that the two rules were NAMED somewhere, on the stated grounds
+    that "ADR 0012 does not vendor the PDF analyser, so they cannot be fired here". That premise
+    was wrong and the weaker assertion was the cost of it. **ADR 0029** vendored the analyser into
+    `engine/pdf-analyser/`, and `scanner.WP` defaults to that path — so `_analyse_pdf` runs with no
+    environment variable set and returns real findings. Nothing had to be stubbed or skipped; the
+    engine was there the whole time.
 
-      * each rule is named in code that runs against the real engine — `pdf.document-title` in
-        scanner._pdf_correct_title, `pdf.document-language` in tests/test_scan.py, which asserts
-        it stays silent on a PDF that declares a language (an engine-backed assertion that only
-        means anything because the rule exists);
-      * a missing engine reports an ERROR, so absence never reads as a clean pass. That is the
-        property that stops "no engine" from becoming "no findings, therefore PASS".
+    A PDF with no /Lang, no /Title and no tag tree fires pdf.document-language (3.1.1) and
+    pdf.display-doc-title (2.4.2), which is what makes the 🟢 lane on those two cells legitimate.
     """
-    haystack = "\n".join(p.read_text(errors="ignore")
-                         for p in [ACP / "api" / "scanner.py", ACP / "tests" / "test_scan.py"])
-    for rule in ("pdf.document-title", "pdf.document-language"):
-        assert rule in haystack, (
-            f"{rule} is no longer referenced anywhere that runs against the engine — pdf "
-            "certification for its criterion has lost the only evidence there was"
-        )
-    # Matched loosely on purpose: pinning the exact literal would break on a reformat and read as
-    # a lost safety property when nothing had changed.
+    from reportlab.pdfgen import canvas
+
+    p = tmp_path / "bare.pdf"
+    c = canvas.Canvas(str(p))
+    for i in range(3):
+        c.setFont("Helvetica", 12); c.drawString(72, 720, f"Page {i + 1} body text"); c.showPage()
+    c.save()
+
+    res = scanner._analyse_pdf(p)
+    assert res.get("succeeded"), f"the vendored PDF analyser did not run: {res.get('errors')}"
+    emitted = _scs(res.get("issues", []))
+    want = {sc for (fmt, sc), tier in EVIDENCE.items() if fmt == "pdf" and tier == PDF_ENGINE}
+    missing = sorted(want - emitted, key=lambda s: [int(x) for x in s.split(".")])
+    assert not missing, (
+        f"pdf cells declared PDF_ENGINE certify a PASS but nothing emitted them: {missing}"
+    )
+
+
+def test_an_unavailable_pdf_engine_reports_an_error_not_a_clean_scan():
+    """The property that stops "no engine" from becoming "no findings, therefore PASS".
+
+    Kept as a source assertion because forcing the import to fail would mean breaking the vendored
+    package. Matched loosely on purpose: pinning the exact literal would break on a reformat and
+    read as a lost safety property when nothing had changed.
+    """
     pdf_src = (ACP / "api" / "scanner.py").read_text()
     body = pdf_src[pdf_src.index("def _analyse_pdf"):]
     body = body[:body.index("\ndef ", 1)]
