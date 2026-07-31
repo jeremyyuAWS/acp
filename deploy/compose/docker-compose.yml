@@ -44,6 +44,11 @@ services:
         condition: service_healthy
     environment:
       PORT: 8077
+      # In-process worker pool. Azure splits the tiers (#113) and runs this at 0 on the API
+      # container, but a single-node stack has no worker container to drain the jobs table —
+      # left at the code default of 0 the app boots healthy, serves the SPA, and every scan
+      # sits in the queue forever (/readyz: worker_tier_never_started).
+      ACP_WORKERS: ${ACP_WORKERS:-4}
       # App data → acpdb. No GIS/ADC locally → runs in demo mode (scans bundled corpus).
       DATABASE_URL: postgresql://${POSTGRES_USER:-acpadmin}:${POSTGRES_PASSWORD:-acp_local_dev}@db:5432/acpdb?sslmode=disable
       # Tracing → the langfuse service. Keys come from .env (see README to mint them).
