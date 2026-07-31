@@ -48,7 +48,17 @@ AZ=(--subscription "$SUB")
 SRC_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$SRC_ROOT"
 git fetch -q origin
-PIN="${ACP_PIN:-$(git rev-parse origin/main)}"
+# RESOLVE whatever was asked for into a full 40-char sha. ACP_PIN used to be taken verbatim, and
+# every consumer below assumes a full one: `gh run list --commit` matches ONLY the full sha, so a
+# short pin sailed past this line and died at the CI gate with "no CI run found for 1af3be9 — it
+# may still be queued". That names the wrong cause. The commit was real, CI was green on it, and
+# the suggested remedy (ACP_SKIP_CI_GATE=1) fixes the symptom by disabling the check — which is
+# how a normalisation bug turns into a habit of deploying ungated. Observed twice on 2026-07-30.
+#
+# Also accepts a branch or tag now, since resolving is resolving; `^{commit}` peels an annotated
+# tag rather than pinning the tag object, which is not a thing you can check out into a build.
+PIN="$(git rev-parse --verify --quiet "${ACP_PIN:-origin/main}^{commit}")" \
+  || die "cannot resolve ${ACP_PIN:+ACP_PIN=}${ACP_PIN:-origin/main} to a commit — check the ref exists locally (a fetch may be needed) and is unambiguous"
 say "pinning ${PIN:0:7}"
 
 # The CI gate, ENFORCED rather than described. This step's own comment has always said "check CI
