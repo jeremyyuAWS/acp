@@ -44,10 +44,93 @@ def zone_for_url(base_url: str) -> str:
     return "local" if local else "cloud"
 
 
+# ── Why a vision call ended the way it did ─────────────────────────────────────
+# A vision call has three distinct failure modes and they need three different fixes:
+#
+#   1. the transport threw          → connection refused / DNS / TLS / timeout — the endpoint
+#                                     is wrong, down, or slower than the timeout
+#   2. the endpoint answered non-2xx → the endpoint is up; the request or the deployment is
+#                                     wrong (model not pulled, bad key, wrong route)
+#   3. HTTP 200 with an EMPTY body   → transport and model are both healthy; the model simply
+#                                     answered with nothing to THIS prompt
+#
+# Until 2026-07-31 all three collapsed into one silent `text=None, ok=False` with the exception
+# swallowed by a bare `except Exception: pass`-shaped handler. Case 3 was live in production
+# that day — moondream returned `{"response": "", "done_reason": "stop"}` for the full
+# _vision_prompt, describe_image returned None, and the reviewer re-draft (#131) did nothing.
+# Diagnosing it needed a hand-rolled httpx.post inside the container, because the app recorded
+# nothing about which of the three had happened. (The prompt half of that bug is #128; this is
+# the half that made it expensive to find.)
+#
+# So: every adapter logs the distinguishing detail and returns a `reason` on the result, which
+# ai._trace_ai carries onto the ai_calls row — triage without shelling into a container.
+REASON_OK = "ok"
+REASON_TRANSPORT = "transport_error"       # case 1 — no HTTP response exists
+REASON_EMPTY = "empty_response"            # case 3 — 200, and the model said nothing
+# case 2 is `http_<status>` (e.g. 'http_502'), so `reason LIKE 'http_%'` groups them.
+
+# Not a transport outcome at all, and set by ai.py rather than by an adapter: the model answered
+# and the alt-text honesty guard rejected the answer as too thin for WCAG 1.1.1. It belongs in
+# this vocabulary because it shares the ai_calls column with the three above — and because on
+# that row, unnamed, it is indistinguishable from a dead endpoint.
+REASON_UNUSABLE = "reply_unusable"
+
+
+def _http_reason(status: int) -> str:
+    return f"http_{status}"
+
+
+# An error body can be an entire HTML page; a log line that long is unreadable and the useful
+# part is always at the front. 400 chars covers an Ollama/Azure JSON error envelope whole.
+_BODY_SLICE_CHARS = 400
+
+
+def _body_slice(resp, limit: int = _BODY_SLICE_CHARS) -> str:
+    """A bounded, single-line excerpt of an error response body for the log line.
+
+    Single-line on purpose: Container Apps stores one log ROW per line, so a multi-line message
+    is only findable by whichever line you happened to search for. Never raises — this runs on
+    the failure path, where a second failure would hide the first."""
+    try:
+        raw = resp.text or ""
+    except Exception:
+        return "<unreadable>"
+    raw = " ".join(raw.split())
+    return raw[:limit] + ("…" if len(raw) > limit else "")
+
+
+def _classify(exc: Exception) -> tuple[str, str]:
+    """(reason, log detail) for an exception raised by a vision call — case 2 vs case 1.
+
+    An HTTP error carries the response it came from, so we can name the status and quote a
+    bounded slice of the body. A transport throw carries no response at all, so its own type
+    and text ARE the diagnosis ('ConnectError: [Errno 61] Connection refused')."""
+    resp = getattr(exc, "response", None)
+    status = getattr(resp, "status_code", None)
+    if isinstance(status, int):
+        return _http_reason(status), f"HTTP {status} · body={_body_slice(resp)!r}"
+    return REASON_TRANSPORT, f"{type(exc).__name__}: {exc}"
+
+
+def _log_failure(provider: str, model: str, endpoint: str, detail: str) -> None:
+    """One single-line diagnostic per failed vision call, in this repo's print-to-stdout style
+    (see scanner.py / ai.py). Names the provider, model and endpoint because the selector can
+    pick any of three adapters and 'vision failed' does not say which one was asked.
+
+    Collapsed to ONE line here rather than at each call site, because the newlines arrive from
+    outside: an exception's own `str()` is routinely multi-line (httpx renders a URL hint on a
+    second line) and so is an error body. Container Apps stores one row per line, so half of a
+    split message is invisible to any search that matched the other half."""
+    line = " ".join(f"[vision] {provider} · model={model} · endpoint={endpoint} — {detail}".split())
+    print(line, flush=True)
+
+
 @runtime_checkable
 class VisionProvider(Protocol):
     """A vision-capable model behind one uniform call. Implementations MUST NOT raise from
-    `generate` — a transport failure returns `ok=False` so the gateway can fall back or escalate."""
+    `generate` — a failure returns `ok=False` so the gateway can fall back or escalate. Not
+    raising is not the same as not saying why: an implementation MUST also log the
+    distinguishing detail and set `reason` to which of the three modes it hit."""
     name: str
     zone: str
 
@@ -57,12 +140,14 @@ class VisionProvider(Protocol):
 
 
 def _result(*, text: str | None, model: str, provider: str, zone: str,
-            latency_ms: int, ok: bool, cost_usd: float = 0.0) -> dict:
+            latency_ms: int, ok: bool, cost_usd: float = 0.0,
+            reason: str = REASON_OK) -> dict:
     """The normalized vision result every adapter returns. `cost_usd` is a real measured cost
     (0 for local Ollama; a cloud adapter fills its per-call token cost) — never a fabricated
-    number (ADR 0016)."""
+    number (ADR 0016). `reason` says WHICH way a call ended, because `ok=False` on its own is
+    not actionable — see the reason constants above."""
     return {"text": text, "model": model, "provider": provider, "zone": zone,
-            "latency_ms": latency_ms, "ok": ok, "cost_usd": cost_usd}
+            "latency_ms": latency_ms, "ok": ok, "cost_usd": cost_usd, "reason": reason}
 
 
 class OllamaVisionProvider:
@@ -81,6 +166,11 @@ class OllamaVisionProvider:
         import base64
         mdl = model or self.model
         t0 = time.monotonic()
+
+        def _fail(reason: str) -> dict:
+            return _result(text=None, model=mdl, provider=self.name, zone=self.zone,
+                           latency_ms=int((time.monotonic() - t0) * 1000), ok=False, reason=reason)
+
         try:
             import httpx
             b64 = base64.b64encode(image_bytes).decode("ascii")
@@ -91,12 +181,24 @@ class OllamaVisionProvider:
                 timeout=timeout,
             )
             r.raise_for_status()
-            raw = (r.json().get("response", "") or "").strip()
-            return _result(text=raw or None, model=mdl, provider=self.name, zone=self.zone,
-                           latency_ms=int((time.monotonic() - t0) * 1000), ok=bool(raw))
-        except Exception:
-            return _result(text=None, model=mdl, provider=self.name, zone=self.zone,
-                           latency_ms=int((time.monotonic() - t0) * 1000), ok=False)
+            data = r.json() or {}
+            raw = (data.get("response", "") or "").strip()
+        except Exception as e:                       # cases 1 and 2 — see the reason constants
+            reason, detail = _classify(e)
+            _log_failure(self.name, mdl, self.base_url, detail)
+            return _fail(reason)
+        if not raw:
+            # Case 3. Nothing raised and nothing is wrong with the deployment: Ollama answered
+            # 200 with `{"response": "", "done_reason": "stop"}`. done_reason/eval_count are the
+            # two fields that tell it apart from a truncation, so they belong in the line.
+            _log_failure(self.name, mdl, self.base_url,
+                         "model returned empty — HTTP 200 with response='' "
+                         f"(done_reason={data.get('done_reason')!r}, "
+                         f"eval_count={data.get('eval_count')!r}). The model is healthy; it "
+                         "declined to answer THIS prompt.")
+            return _fail(REASON_EMPTY)
+        return _result(text=raw, model=mdl, provider=self.name, zone=self.zone,
+                       latency_ms=int((time.monotonic() - t0) * 1000), ok=True)
 
 
 # ── Provider configuration (ADR 0019 §6, secret-ref design) ────────────────────
@@ -188,11 +290,16 @@ class AzureOpenAIVisionProvider:
                  timeout: float = 120.0) -> dict:
         import base64
         t0 = time.monotonic()
+        url = (f"{self.endpoint}/openai/deployments/{self.deployment}"
+               f"/chat/completions?api-version={self.api_version}")
+
+        def _fail(reason: str) -> dict:
+            return _result(text=None, model=self.model, provider=self.name, zone=self.zone,
+                           latency_ms=int((time.monotonic() - t0) * 1000), ok=False, reason=reason)
+
         try:
             import httpx
             b64 = base64.b64encode(image_bytes).decode("ascii")
-            url = (f"{self.endpoint}/openai/deployments/{self.deployment}"
-                   f"/chat/completions?api-version={self.api_version}")
             body = {
                 "messages": [{"role": "user", "content": [
                     {"type": "text", "text": prompt},
@@ -204,20 +311,33 @@ class AzureOpenAIVisionProvider:
             # never persisted, logged, or returned; _resolve_key handed it in from the env secret.
             r = httpx.post(url, json=body, headers={"api-key": self._key}, timeout=timeout)
             r.raise_for_status()
-            data = r.json()
-            text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "") or ""
-            usage = data.get("usage") or {}
-            price = _price_for(self.model)
-            cost = 0.0
-            if price:
-                cost = round(usage.get("prompt_tokens", 0) / 1e6 * price[0]
-                             + usage.get("completion_tokens", 0) / 1e6 * price[1], 6)
-            return _result(text=text.strip() or None, model=self.model, provider=self.name,
-                           zone=self.zone, latency_ms=int((time.monotonic() - t0) * 1000),
-                           ok=bool(text.strip()), cost_usd=cost)
-        except Exception:
-            return _result(text=None, model=self.model, provider=self.name, zone=self.zone,
-                           latency_ms=int((time.monotonic() - t0) * 1000), ok=False)
+            data = r.json() or {}
+            choice = (data.get("choices") or [{}])[0]
+            text = ((choice.get("message") or {}).get("content", "") or "").strip()
+        except Exception as e:                       # cases 1 and 2 — see the reason constants
+            reason, detail = _classify(e)
+            # The URL carries no secret (the key rides in the api-key header, which is never
+            # logged), so naming the deployment endpoint is safe and is what identifies a 404
+            # on a wrong deployment name from a 401 on a stale key.
+            _log_failure(self.name, self.model, url, detail)
+            return _fail(reason)
+        if not text:
+            # Case 3 — a 200 whose content is empty. On this API that is usually a content
+            # filter or a length stop, and finish_reason is the field that says which.
+            _log_failure(self.name, self.model, url,
+                         "model returned empty — HTTP 200 with empty content "
+                         f"(finish_reason={choice.get('finish_reason')!r}, "
+                         f"usage={data.get('usage') or {}}).")
+            return _fail(REASON_EMPTY)
+        usage = data.get("usage") or {}
+        price = _price_for(self.model)
+        cost = 0.0
+        if price:
+            cost = round(usage.get("prompt_tokens", 0) / 1e6 * price[0]
+                         + usage.get("completion_tokens", 0) / 1e6 * price[1], 6)
+        return _result(text=text, model=self.model, provider=self.name,
+                       zone=self.zone, latency_ms=int((time.monotonic() - t0) * 1000),
+                       ok=True, cost_usd=cost)
 
 
 class RunPodServerlessVisionProvider:
@@ -244,6 +364,11 @@ class RunPodServerlessVisionProvider:
         import base64
         t0 = time.monotonic()
         mdl = model or self.model
+
+        def _fail(reason: str) -> dict:
+            return _result(text=None, model=mdl, provider=self.name, zone=self.zone,
+                           latency_ms=int((time.monotonic() - t0) * 1000), ok=False, reason=reason)
+
         try:
             import httpx
             b64 = base64.b64encode(image_bytes).decode("ascii")
@@ -260,17 +385,27 @@ class RunPodServerlessVisionProvider:
                            headers={"Authorization": f"Bearer {self._key}", "content-type": "application/json"},
                            timeout=timeout)
             r.raise_for_status()
-            data = r.json()
-            text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "") or ""
-            # GPU-seconds → cost. RunPod surfaces execution time on the envelope; 0 if absent/no rate.
-            exec_ms = data.get("executionTime") or (data.get("usage") or {}).get("execution_time_ms") or 0
-            cost = round((exec_ms / 1000.0) * self.cost_per_sec, 6) if (exec_ms and self.cost_per_sec) else 0.0
-            return _result(text=text.strip() or None, model=mdl, provider=self.name, zone=self.zone,
-                           latency_ms=int((time.monotonic() - t0) * 1000), ok=bool(text.strip()),
-                           cost_usd=cost)
-        except Exception:
-            return _result(text=None, model=mdl, provider=self.name, zone=self.zone,
-                           latency_ms=int((time.monotonic() - t0) * 1000), ok=False)
+            data = r.json() or {}
+            choice = (data.get("choices") or [{}])[0]
+            text = ((choice.get("message") or {}).get("content", "") or "").strip()
+        except Exception as e:                       # cases 1 and 2 — see the reason constants
+            reason, detail = _classify(e)
+            # A serverless cold start over the timeout and a scaled-to-zero endpoint both end
+            # here, and they read identically as ok=False — the exception text is what separates
+            # a ReadTimeout from a ConnectError, and it decides whether to raise the timeout.
+            _log_failure(self.name, mdl, self.url, detail)
+            return _fail(reason)
+        if not text:
+            _log_failure(self.name, mdl, self.url,
+                         "model returned empty — HTTP 200 with empty content "
+                         f"(finish_reason={choice.get('finish_reason')!r}).")
+            return _fail(REASON_EMPTY)
+        # GPU-seconds → cost. RunPod surfaces execution time on the envelope; 0 if absent/no rate.
+        exec_ms = data.get("executionTime") or (data.get("usage") or {}).get("execution_time_ms") or 0
+        cost = round((exec_ms / 1000.0) * self.cost_per_sec, 6) if (exec_ms and self.cost_per_sec) else 0.0
+        return _result(text=text, model=mdl, provider=self.name, zone=self.zone,
+                       latency_ms=int((time.monotonic() - t0) * 1000), ok=True,
+                       cost_usd=cost)
 
 
 def serverless_vision_provider() -> VisionProvider | None:
