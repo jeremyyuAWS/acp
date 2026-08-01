@@ -39,6 +39,11 @@ def _enqueue_analysis(scan_id: str, source: str, items: list[dict], *, ai: bool,
     Assess path so both enqueue identical work; the last completing job finalizes (ADR 0013)."""
     from store import logical_name as _logical_name
     from scanner import SCAN_BATCH_SIZE, SCAN_BATCH_THRESHOLD
+    # A previous run of THIS scan may have halted on an unusable credential. Both the immediate
+    # path and the deferred Assess path come through here, so this is the one place that has to
+    # forget it — otherwise fixing the credential and pressing Assess again would short-circuit
+    # every file against a stale marker and look like the fix had not worked.
+    clear_drive_stop(scan_id)
     if not items:
         core.store.enqueue_job("scan_finalize",
                                {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)
@@ -798,6 +803,17 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                                         detail=f"from scan {reused_from_scan}: {pinfo['total']} item(s)")
         else:
             try:
+                # An earlier file in this scan already proved the credential cannot read Drive.
+                # Downloading anyway costs six HTTP round-trips (MediaIoBaseDownload retries
+                # five times) to re-learn it, per file. Raise the known reason instead and let
+                # the handler below record the row exactly as it would have.
+                # Drive only, and never a local file: `source` is what decides which credential
+                # the download will use, so it is what decides whether a Drive credential
+                # failure is relevant. A SharePoint or local-corpus scan is unaffected.
+                halted = (drive_download_halted(scan_id)
+                          if source == "drive" and not item.get("path") else None)
+                if halted:
+                    raise RuntimeError(halted)
                 it = {"name": name, "id": item.get("drive_file_id")}
                 if item.get("mime"):
                     it["mime"] = item["mime"]
@@ -833,14 +849,13 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                 if fdict is None:
                     fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii)
             except Exception as e:
-                # Classify Drive auth expiry distinctly: GIS access tokens live ~1h and
-                # cannot be refreshed server-side, so on a long scan every remaining file
-                # fails with 401. A clear reason (instead of a generic error) tells the
-                # user exactly what happened and that a re-scan after signing in fixes it.
-                _msg = f"{type(e).__name__}: {e}"
-                if "401" in _msg or "Invalid Credentials" in _msg or "authError" in _msg:
-                    _msg = ("Drive authorization expired mid-scan — sign in again and "
-                            "re-run the scan to cover this file")
+                # A credential failure is true of the whole scan, so it is named once, acted on
+                # once, and every remaining file skips its doomed download (drive_auth_failure).
+                # Anything else is this file's own problem and is recorded verbatim.
+                _reason = drive_auth_failure(e)
+                if _reason:
+                    _stop_scan_downloads(scan_id, _reason)
+                _msg = _reason or f"{type(e).__name__}: {e}"
                 core.store.log_decision("system", "scan.file_error", scan_id=scan_id, file=name,
                                         detail=_msg[:200])
         # Both branches converge here. The pre-analysis skip above only runs on a FRESH
@@ -902,6 +917,95 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                           **({"reused_from_scan": reused_from_scan} if reused_from_scan else {})})
     finally:
         _shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ── Drive credential failures that are true of the SCAN, not of one file ──────────────────
+#
+# Every download in a scan uses the same credential, so when the credential is the problem the
+# first file's failure has already decided the other N-1. The fan-out did not know that: each
+# file ran its own download, MediaIoBaseDownload retried it five times, and each one landed as
+# its own 'error' record. A 77-file estate spent ~460 HTTP requests establishing one fact, and
+# then reported it as 77 unreadable documents rather than as one unusable credential.
+#
+# Observed live 2026-07-31 on scan f529ed607a26 (77 files, awaiting Assess). The deployed ADC
+# credential is a stock `gcloud auth application-default login` grant — openid, email,
+# cloud-platform, sqlservice.login — with no Drive scope at all, so every Drive call returns
+# 403 "Request had insufficient authentication scopes". Nothing in the product said so: 403 was
+# not classified, and the operator-facing outcome would have been an estate of 77 documents ACP
+# claimed it could not read.
+#
+# 401 was already classified here, and its comment already says the condition is scan-wide
+# ("on a long scan every remaining file fails with 401") — it just never acted on that.
+_DRIVE_STOP_KEY = "drive_auth_stop:%s"
+
+
+def drive_auth_failure(exc: Exception) -> str | None:
+    """The operator-facing reason this Drive call failed, when no other file will fare better.
+
+    Returns None for an ordinary per-file failure (a corrupt document, a file over the download
+    cap, a transient 5xx) — those are genuinely about that one file and must not stop a scan.
+
+    The two that ARE scan-wide:
+      * 401 / Invalid Credentials — a GIS access token expired mid-scan (they live ~1h and
+        cannot be refreshed server-side).
+      * 403 insufficient scopes — the credential is valid and simply was not granted Drive.
+        Distinct from a 403 on ONE file (`insufficientFilePermissions`), which is that file's
+        own sharing and leaves the rest of the scan perfectly readable.
+    """
+    msg = f"{type(exc).__name__}: {exc}"
+    low = msg.lower()
+    if "401" in msg or "Invalid Credentials" in msg or "authError" in msg:
+        return ("Drive authorization expired mid-scan — sign in again and re-run the scan "
+                "to cover this file")
+    scope_403 = ("insufficient authentication scopes" in low
+                 or "access_token_scope_insufficient" in low
+                 or "insufficientpermissions" in low)
+    if scope_403 and "insufficientfilepermissions" not in low:
+        return ("The server's Google credential is not authorized for Drive — it needs the "
+                "drive.readonly scope. Re-authorize ADC and restart the worker; no file in "
+                "this scan can be read until then")
+    return None
+
+
+def _stop_scan_downloads(scan_id: str, reason: str) -> None:
+    """Record that this scan's credential is unusable, so the remaining files skip the download.
+
+    A marker rather than an exception: count_files_done() counts file_records against
+    scan_runs.files, so a file that never persists a row leaves the scan permanently
+    unfinalized — the UI sits at N/M with no error, which is the "stuck scan" false alarm this
+    codebase has already produced three times in one day. Every file still gets its row; what
+    it no longer gets is a doomed download.
+    """
+    try:
+        if not core.store.get_setting(_DRIVE_STOP_KEY % scan_id):
+            core.store.set_setting(_DRIVE_STOP_KEY % scan_id, reason)
+            print(f"[scan] {scan_id}: halting downloads — {reason}", flush=True)
+            core.store.log_decision("system", "scan.drive_unusable", scan_id=scan_id,
+                                    detail=reason[:200])
+    except Exception:
+        pass    # a marker that cannot be written must not take the scan down with it
+
+
+def drive_download_halted(scan_id: str) -> str | None:
+    """The reason downloads were halted for this scan, or None to proceed."""
+    try:
+        return core.store.get_setting(_DRIVE_STOP_KEY % scan_id) or None
+    except Exception:
+        return None
+
+
+def clear_drive_stop(scan_id: str) -> None:
+    """Forget a previous credential failure so a re-run actually retries.
+
+    Called from _enqueue_analysis, the ONE choke point both the immediate scan path and the
+    deferred Assess path go through. Without this, fixing the credential and pressing Assess
+    again on the same scan id would short-circuit every file against a stale marker — the fix
+    would look like it had not worked.
+    """
+    try:
+        core.store.set_setting(_DRIVE_STOP_KEY % scan_id, "")
+    except Exception:
+        pass
 
 
 def _make_svc(source, toks):
