@@ -142,11 +142,17 @@ def _build_info() -> dict:
     deploy.sh. Such an image must not pass for a release: /healthz reports ok=false, so
     an operator sees it immediately instead of the app quietly serving "dev". ACA runs no
     health probe on this route, so this signal is advisory, not a rollout gate.
+
+    `commit` is the sha the image was built from, and it is what lets scripts/monitor.py ask
+    "is production behind main?" exactly rather than by timestamp. It is None on images built
+    before the arg existed, which the drift check treats as "fall back to built_at", never as
+    "up to date".
     """
     import os
     v = (os.environ.get("ACP_BUILD_VERSION") or "").strip()
     return {"version": v or "dev",
             "built_at": os.environ.get("ACP_BUILD_TIME") or None,
+            "commit": (os.environ.get("ACP_BUILD_SHA") or "").strip() or None,
             "version_stamped": v.lower() not in ("", "dev")}
 
 

@@ -83,10 +83,18 @@ ENV ACP_DOTNET=/usr/local/bin/dotnet \
     PORT=8077
 EXPOSE 8077
 # Build provenance — passed by deploy.sh / az acr build; surfaced in /healthz and the UI.
+# BUILD_SHA is the commit the image was built from. It is the only field that makes "is
+# production behind main?" an exact question: BUILD_TIME cannot answer it, because a commit can
+# merge BEFORE the build clock and still be absent from the image when the deploy pinned an
+# earlier sha. That is not hypothetical — d08cd95 merged at 13:41:35Z on 2026-07-30, the running
+# image was built at 13:43:34Z from 598abe9, and every time-based check called it "nothing
+# merged since".
 ARG BUILD_VERSION=dev
 ARG BUILD_TIME=
+ARG BUILD_SHA=
 ENV ACP_BUILD_VERSION=$BUILD_VERSION \
-    ACP_BUILD_TIME=$BUILD_TIME
+    ACP_BUILD_TIME=$BUILD_TIME \
+    ACP_BUILD_SHA=$BUILD_SHA
 WORKDIR /app/api
 # Worker-tier launcher (#113): a SINGLE dash-free command token for `az containerapp --command
 # acp-worker` — az's --command can't carry "-c" or a JSON array (see worker-entry.sh header).

@@ -169,7 +169,8 @@ if [ "$DRY" = 1 ]; then
 else
   az acr build "${AZ[@]}" -r "$ACR" -t "${IMG#*/}" -f deploy/public/Dockerfile \
     --build-arg "BASE_WEB=$BASE_WEB" --build-arg "BASE_API=$BASE_API" \
-    --build-arg "BUILD_VERSION=$BUILD_VERSION" --build-arg "BUILD_TIME=$BUILD_TIME" . >/dev/null
+    --build-arg "BUILD_VERSION=$BUILD_VERSION" --build-arg "BUILD_TIME=$BUILD_TIME" \
+    --build-arg "BUILD_SHA=$PIN" . >/dev/null
 fi
 
 # ── 7. health BEFORE ───────────────────────────────────────────────────────────────────────

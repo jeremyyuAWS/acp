@@ -181,3 +181,114 @@ def test_skips_do_not_turn_the_run_green_by_accident(rep, capsys):
     assert rep.render() == 0
     out = capsys.readouterr().out
     assert "skip" in out and "1 skipped" in out
+
+
+# ── deploy drift: is the code everyone is reading the code that is running? ────────────
+
+def _repo(tmp_path):
+    """A real git repo with a real `origin`, because this check's whole job is to read git.
+
+    Stubbing git here would test the stub. The failures this check exists to catch — a sha that
+    is not in history, a commit that merged before the build clock — only exist as git state.
+    """
+    import subprocess as sp
+
+    def run(cwd, *args, when=None):
+        env = None
+        if when:
+            env = {**os.environ, "GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when}
+        return sp.run(["git", "-C", str(cwd), *args], check=True, capture_output=True,
+                      text=True, env=env).stdout.strip()
+
+    bare, work = tmp_path / "origin.git", tmp_path / "work"
+    sp.run(["git", "init", "--bare", "-b", "main", str(bare)], check=True, capture_output=True)
+    sp.run(["git", "clone", str(bare), str(work)], check=True, capture_output=True)
+    run(work, "config", "user.email", "t@t"); run(work, "config", "user.name", "t")
+
+    def commit(msg, when):
+        (work / "f").write_text(msg)
+        run(work, "add", "f")
+        run(work, "commit", "-m", msg, when=when)
+        return run(work, "rev-parse", "HEAD")
+
+    return work, commit, (lambda: run(work, "push", "-q", "origin", "main"))
+
+
+import os  # noqa: E402  — used by _repo's date injection
+
+
+def test_the_timestamp_check_undercounts_and_the_sha_check_does_not(tmp_path, rep):
+    """The 2026-07-30 shape, replayed as data.
+
+    A commit merged at 13:41:35Z. The running image was built two minutes LATER, at 13:43:34Z,
+    but from an earlier pin — so that commit is on main and not in the image. `--since=built_at`
+    cannot see it. This is the whole reason /healthz carries a commit sha.
+    """
+    work, commit, push = _repo(tmp_path)
+    deployed = commit("the pinned commit", "2026-07-30T13:30:00+0000")
+    commit("merged BEFORE the build clock, absent from the image", "2026-07-30T13:41:35+0000")
+    commit("merged after", "2026-07-30T14:10:00+0000")
+    push()
+    health = {"commit": deployed, "built_at": "2026-07-30T13:43:34Z"}
+
+    M.check_deploy_drift(health, str(work), rep)
+    row = next(r for r in rep.rows if r[1] == "production is current")
+    assert row[0] == "FAIL"
+    assert "2 commit(s)" in row[2]          # the sha knows about both
+
+    # The same estate read by timestamp alone sees only one of them.
+    rep2 = M.Report()
+    M.check_deploy_drift({"built_at": "2026-07-30T13:43:34Z"}, str(work), rep2)
+    assert any("at least 1 commit(s)" in r[2] for r in rep2.rows)
+
+
+def test_a_deployed_sha_level_with_main_passes(tmp_path, rep):
+    work, commit, push = _repo(tmp_path)
+    sha = commit("only commit", "2026-07-30T13:30:00+0000")
+    push()
+    M.check_deploy_drift({"commit": sha, "built_at": "2026-07-30T13:43:34Z"}, str(work), rep)
+    assert rep.failed == 0
+    assert any("level with main" in r[2] for r in rep.rows)
+
+
+def test_an_image_built_from_a_sha_not_in_history_fails(tmp_path, rep):
+    """docs/pipeline.md, guard 1: 2553e6d was in production and absent from git history. The
+    dangerous answer here is '0 commits behind' — it is technically true and completely wrong."""
+    work, commit, push = _repo(tmp_path)
+    commit("real", "2026-07-30T13:30:00+0000")
+    push()
+    M.check_deploy_drift({"commit": "2553e6d" + "a" * 33, "built_at": "2026-07-30T13:43:34Z"},
+                         str(work), rep)
+    row = next(r for r in rep.rows if r[1] == "production is current")
+    assert row[0] == "FAIL"
+    assert "does not exist" in row[2]
+
+
+def test_production_running_unmerged_code_fails(tmp_path, rep):
+    """Ahead of main is not 'current'. It means an image was built from something nobody
+    reviewed — the inverse of drift and just as worth knowing."""
+    work, commit, push = _repo(tmp_path)
+    commit("on main", "2026-07-30T13:30:00+0000")
+    push()
+    unmerged = commit("never merged", "2026-07-30T15:00:00+0000")
+    M.check_deploy_drift({"commit": unmerged, "built_at": "2026-07-30T15:01:00Z"}, str(work), rep)
+    row = next(r for r in rep.rows if r[1] == "production is current")
+    assert row[0] == "FAIL"
+    assert "AHEAD of main" in row[2]
+
+
+def test_an_unstamped_image_with_no_drift_skips_rather_than_failing(tmp_path, rep):
+    """THE ALERT-FATIGUE GUARD, and it is load-bearing.
+
+    Every image built before BUILD_SHA existed lacks a commit. If that alone went red, this
+    workflow would be red on every run until the next deploy — which is exactly the state it was
+    found in (43 consecutive failures, none of them read by anyone). An unverifiable answer is a
+    loud skip; only a POSITIVE finding of drift is a failure.
+    """
+    work, commit, push = _repo(tmp_path)
+    commit("only commit", "2026-07-30T13:30:00+0000")
+    push()
+    M.check_deploy_drift({"built_at": "2026-07-30T14:00:00Z"}, str(work), rep)
+    assert rep.failed == 0
+    assert rep.skipped == 1
+    assert any("UNVERIFIED" in r[2] for r in rep.rows)

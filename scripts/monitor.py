@@ -225,15 +225,92 @@ def check_estate(base: str, key: str, rep: Report) -> None:
         rep.ok("inbox readable", f"{pending} pending review items")
 
 
+def _git(repo: str, *args: str) -> str:
+    """Run git and return stdout, or raise. Kept tiny so the checks below read as questions."""
+    return subprocess.run(["git", "-C", repo, *args],
+                          capture_output=True, text=True, check=True, timeout=60).stdout
+
+
 def check_deploy_drift(base_health: dict, repo: str, rep: Report) -> None:
     """How far production is behind main.
 
     Production ran four hours behind main on 2026-07-29 with six merged fixes unshipped, and
     nothing said so. Merged is not deployed; this is the only check that knows the difference.
+
+    IT ASKS BY COMMIT, NOT BY CLOCK. The timestamp version of this check undercounts, and the
+    gap is not a rounding error — it silently omits whole commits. On 2026-07-30 d08cd95 merged
+    at 13:41:35Z and the running image was built two minutes later at 13:43:34Z, but from an
+    earlier pin (598abe9). `--since=built_at` therefore reported 4 commits behind when the true
+    answer was 5, and it would have reported 0 for a deploy that pinned a stale sha and ran a
+    minute afterwards. Comparing shas cannot make that mistake.
+
+    The timestamp path remains as a FALLBACK for images built before BUILD_SHA existed, and it
+    says so in its own message — an operator reading "4 behind (by timestamp)" needs to know the
+    number is a floor, not a count.
     """
+    sha = (base_health.get("commit") or "").strip()
     built = base_health.get("built_at")
+
+    # Age is reported either way; it is the number that tells you whether to care.
+    age = ""
+    if built:
+        try:
+            when = datetime.strptime(built, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            age = f", build is {(datetime.now(timezone.utc) - when).total_seconds() / 3600:.1f}h old"
+        except ValueError:
+            pass
+
+    try:
+        subprocess.run(["git", "-C", repo, "fetch", "-q", "origin"], check=True, timeout=60)
+    except Exception as e:  # noqa: BLE001
+        rep.skip("deploy drift", f"git unavailable: {e}")
+        return
+
+    if sha:
+        # Does the deployed sha exist here at all? An image built from a commit that is not in
+        # origin/main is its own incident, not a drift measurement: 2553e6d reached production
+        # from a sha absent from git history (see docs/pipeline.md, guard 1). Reporting that as
+        # "0 commits behind" would be the most dangerous possible green.
+        try:
+            _git(repo, "cat-file", "-e", f"{sha}^{{commit}}")
+        except Exception:  # noqa: BLE001
+            rep.fail("production is current",
+                     f"the running image was built from {sha[:12]} — a commit that does not exist "
+                     f"in this repository{age}")
+            return
+        try:
+            behind = [l for l in _git(repo, "log", "--oneline", f"{sha}..origin/main").splitlines()
+                      if l.strip()]
+            ahead = [l for l in _git(repo, "log", "--oneline", f"origin/main..{sha}").splitlines()
+                     if l.strip()]
+        except Exception as e:  # noqa: BLE001
+            rep.skip("deploy drift", f"git unavailable: {e}")
+            return
+        if behind:
+            rep.fail("production is current",
+                     f"{len(behind)} commit(s) on main since {sha[:7]}{age} — "
+                     f"newest: {behind[0][:70]}")
+        elif ahead:
+            # Deployed something that never landed on main — a hand-built image, or a branch.
+            rep.fail("production is current",
+                     f"{sha[:7]} is {len(ahead)} commit(s) AHEAD of main — production is running "
+                     f"code that was never merged{age}")
+        else:
+            rep.ok("production is current", f"running {sha[:7]}, level with main{age}")
+        return
+
+    # ── fallback: no sha in this image ──────────────────────────────────────────────────────
+    # Everything below reports a FLOOR. It may only ever say "at least N behind" or "unverifiable",
+    # never "current" — because the timestamp cannot prove currency, only disprove it.
+    #
+    # And it must not go red merely for being an old image. Every currently-running image predates
+    # BUILD_SHA, and a check that fails on all of them would put this workflow back where it was
+    # found: red on all 43 of its scheduled runs, which is indistinguishable from red for a real
+    # outage and gets read the same way — not at all.
     if not built:
-        rep.skip("deploy drift", "healthz reported no built_at")
+        rep.skip("deploy drift",
+                 "healthz reported neither commit nor built_at — this image cannot be located in "
+                 "history (the 'build is stamped' check above is the one that fails on this)")
         return
     try:
         when = datetime.strptime(built, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
@@ -241,24 +318,20 @@ def check_deploy_drift(base_health: dict, repo: str, rep: Report) -> None:
         rep.skip("deploy drift", f"unparseable built_at {built!r}")
         return
     try:
-        subprocess.run(["git", "-C", repo, "fetch", "-q", "origin"], check=True, timeout=60)
-        out = subprocess.run(
-            ["git", "-C", repo, "log", "--oneline", f"--since={when.isoformat()}", "origin/main"],
-            capture_output=True, text=True, check=True, timeout=60,
-        )
+        out = _git(repo, "log", "--oneline", f"--since={when.isoformat()}", "origin/main")
     except Exception as e:  # noqa: BLE001
         rep.skip("deploy drift", f"git unavailable: {e}")
         return
-    behind = [l for l in out.stdout.splitlines() if l.strip()]
-    age_h = (datetime.now(timezone.utc) - when).total_seconds() / 3600
+    behind = [l for l in out.splitlines() if l.strip()]
+    note = "by timestamp — this image predates BUILD_SHA, so the count is a FLOOR, not a total"
     if behind:
-        rep.fail(
-            "production is current",
-            f"{len(behind)} commit(s) on main since the running build ({age_h:.1f}h old) — "
-            f"newest: {behind[0][:70]}",
-        )
+        rep.fail("production is current",
+                 f"at least {len(behind)} commit(s) on main since the running build{age} "
+                 f"({note}) — newest: {behind[0][:70]}")
     else:
-        rep.ok("production is current", f"build is {age_h:.1f}h old, nothing merged since")
+        rep.skip("deploy drift",
+                 f"nothing merged since the build clock{age}, but this image carries no commit "
+                 f"sha, so currency is UNVERIFIED ({note}). The next deploy stamps it.")
 
 
 def main() -> int:
