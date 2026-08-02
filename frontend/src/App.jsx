@@ -72,6 +72,34 @@ function fmtStamp(iso) {
   return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })
 }
 
+// How long the file counter may sit still before the banner stops claiming progress. Long
+// enough that a genuinely slow document (a 300-page scanned PDF through OCR) doesn't trip
+// it; short enough that nobody watches a frozen bar for a quarter of an hour deciding the
+// product is broken.
+export const STALL_AFTER_MS = 180000
+
+// When the counter last MOVED, tracked across polls. Pure, so the stall rule is testable
+// without a clock or a React tree — `prev` is the previous return value.
+export function trackStall(prev, done, total, now) {
+  if (!prev || prev.done !== done || prev.total !== total) return { done, total, since: now }
+  return prev
+}
+
+// The banner's honest sentence when the counter has stopped, else null.
+//
+// Says what is OBSERVED (nothing has moved since HH:MM) before what is likely (a worker
+// restart), and never claims to know which. The recovery clause is a promise the backend
+// now keeps: a restart is detected by the replacement worker and the scan is requeued
+// within seconds, so a stall this long is either something slower or something else — in
+// both cases "it will pick itself back up" is the truthful thing to say, and the user's
+// scan is not lost either way.
+export function stallNote(stall, now) {
+  if (!stall || stall.since == null) return null
+  if (now - stall.since < STALL_AFTER_MS) return null
+  const at = new Date(stall.since).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  return `no progress since ${at} — the worker may have restarted; the scan is requeued automatically and should resume on its own`
+}
+
 function progressText(p) {
   if (!p) return ''
   const m = {
@@ -85,6 +113,13 @@ function progressText(p) {
   }
   let s = m[p.phase] ?? p.phase
   if (p.current && (p.phase === 'reading' || p.phase === 'analysing')) s += ` · ${p.current}`
+  // A stalled scan must SAY so. "still working (620s)" beside a counter that has not moved
+  // since second 40 is not reassurance, it is the bar asserting something it cannot know —
+  // the same defect shape as a null score rendering as "clean" (#101), an error path
+  // rendering 0/100 as complete (#86), and a Drive sweep failing silently (#99). Elapsed
+  // time measures how long we have been waiting, never that anything is happening, so once
+  // the counter stops the stall replaces it rather than sitting next to it.
+  if (p.stalled) return `${s} · ${p.stalled}`
   // Queued scans don't stream per-file progress, so reassure the user it's alive
   // by showing elapsed time on the long worker-pool phase.
   if (p.elapsed != null) s += ` · still working (${p.elapsed}s)`
@@ -114,14 +149,17 @@ function progressPct(p) {
 // the finalize pass (per-document score + estate aggregate) runs. `current` is deliberately left
 // unset: the fan-out analyses files in parallel across workers, so no single "file N is in flight
 // right now" is knowable — the truthful signal is the count, not a made-up filename.
-function queuedProgress(g, elapsed) {
+function queuedProgress(g, elapsed, stalled) {
   const run = g && g.run
   const total = (run && run.files) || 0
   const done = (run && run.files_done) || 0
-  if (!total) return { phase: 'discovering', elapsed }        // estate not listed yet
+  // A scan stuck at "0 documents discovered" never reaches the branch below, so the stall
+  // note has to ride on this one too — it is the exact state the three false alarms were
+  // reported from.
+  if (!total) return { phase: 'discovering', elapsed, stalled }   // estate not listed yet
   const phase = done < total ? 'analysing' : 'scoring'
   const pct = Math.round(12 + Math.min(1, done / total) * (95 - 12))
-  return { phase, files_found: total, files_done: done, current: null, elapsed, pct }
+  return { phase, files_found: total, files_done: done, current: null, elapsed, pct, stalled }
 }
 
 // Shown on results views (Overview / Dashboard / Monitor) until the user runs Assess —
@@ -488,6 +526,7 @@ export default function App() {
         setLiveScanId(scan_id)
         const t0 = Date.now()
         let misses = 0
+        let stall = null
         for (let i = 0; i < 600 && !fresh; i++) {        // up to ~10 min for large estates
           await new Promise((r) => setTimeout(r, 1000))
           // Fan-out scans create the row early with status 'running' and bump files_done as each
@@ -504,7 +543,9 @@ export default function App() {
               'The app was updated and this tab’s session ended. Sign in again — your scan kept running server-side and will be here when you return.' } }))
             return
           }
-          setProgress(g ? queuedProgress(g, elapsed) : { phase: 'connecting', elapsed })
+          stall = trackStall(stall, g?.run?.files_done || 0, g?.run?.files || 0, Date.now())
+          setProgress(g ? queuedProgress(g, elapsed, stallNote(stall, Date.now()))
+                        : { phase: 'connecting', elapsed })
           if (g && g.run && g.run.status !== 'running') fresh = g
         }
         if (!fresh) throw new Error('scan still processing — watch it finish in the Monitor queue')
@@ -540,6 +581,7 @@ export default function App() {
     let fresh
     try {
       let misses = 0
+      let stall = null
       for (let i = 0; i < 600 && !fresh; i++) {
         await new Promise((r) => setTimeout(r, 1500))
         const elapsed = Math.round((Date.now() - t0) / 1000)
@@ -552,7 +594,9 @@ export default function App() {
             'The app was updated and this tab’s session ended. Sign in again — your scan kept running server-side and will be here when you return.' } }))
           return
         }
-        setProgress(g ? queuedProgress(g, elapsed) : { phase: 'connecting', elapsed })
+        stall = trackStall(stall, g?.run?.files_done || 0, g?.run?.files || 0, Date.now())
+        setProgress(g ? queuedProgress(g, elapsed, stallNote(stall, Date.now()))
+                      : { phase: 'connecting', elapsed })
         if (g && g.run && g.run.status !== 'running') fresh = g
       }
       // Same reset as doScan. Usually a no-op — a reconnect follows a page reload, where React
@@ -738,8 +782,12 @@ export default function App() {
       )}
       {busy && progress && (
         <div className="scanprog" role="status" aria-live="polite">
-          <div className="scanprogline"><span className="spinner" />
-            <span style={{ fontWeight: 700, color: '#BF8C00', marginRight: 6 }}>Scan</span>{progressText(progress)}
+          {/* A spinner asserts motion. While the counter is frozen it is the most visible
+              thing on screen still claiming the scan is progressing, so a stall swaps it for
+              a warning glyph and recolours the bar — the sentence alone loses to the
+              animation beside it. aria-live carries the change to screen readers. */}
+          <div className="scanprogline">{progress.stalled ? <span aria-hidden="true" style={{ marginRight: 6 }}>⚠</span> : <span className="spinner" />}
+            <span style={{ fontWeight: 700, color: progress.stalled ? '#B4432B' : '#BF8C00', marginRight: 6 }}>Scan</span>{progressText(progress)}
             {progress.files_found ? <span className="scancount"> · {progress.files_found.toLocaleString()} files</span> : null}
             {progress.blocked ? <span className="lockwarn"> · 🔒 {progress.blocked} password-protected / couldn’t open</span> : null}
             {/* Stop (found live 2026-07-11: there was no way out of a wedged scan). Cancelling
@@ -751,7 +799,7 @@ export default function App() {
                       onClick={() => cancelScan(liveScanId).catch(() => {})}>■ Stop scan</button>
             )}
           </div>
-          <div className="track"><i style={{ width: `${progressPct(progress)}%`, background: '#BF8C00', transition: 'width .3s' }} /></div>
+          <div className="track"><i style={{ width: `${progressPct(progress)}%`, background: progress.stalled ? '#B4432B' : '#BF8C00', transition: 'width .3s' }} /></div>
           {/* Narrate the phase the scanner reports, or say nothing. The old line came from a
               timer, so it could never be absent — and it was wrong whenever the timer and the
               phase disagreed. Silence beats a plausible sentence. */}

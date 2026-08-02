@@ -230,6 +230,18 @@ _SCHEMA = [
     # used to render a hardcoded list of WCAG criteria cycled by a timer, which had nothing
     # to do with the running job. Nullable: a handler that reports nothing shows nothing.
     "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS phase TEXT",
+    # Live worker PROCESSES, so a job's lock can be attributed to a process that is either
+    # alive or gone. jobs.locked_by is 'w0'..'wN' — a thread ordinal that repeats on every
+    # replica, so it can never answer "is the holder of this lock still running?". Ids here
+    # are '<instance>:w<n>' (see core.INSTANCE_ID); `instance_of` splits them back out.
+    #
+    # stopped_at is set by the drain on SIGTERM: a redeploy therefore says "I am gone" in
+    # the shared store BEFORE its replacement boots, which is what lets the replacement
+    # reclaim in seconds instead of waiting out a lease. last_seen is the fallback for the
+    # deaths that get no chance to say anything (SIGKILL, OOM, node loss).
+    """CREATE TABLE IF NOT EXISTS worker_instances (
+      id TEXT PRIMARY KEY, started_at TEXT, last_seen TEXT, stopped_at TEXT
+    )""",
     # Column order matches the claim ORDER BY (priority, run_after) so Postgres reads the
     # top queued job index-only instead of sorting all queued rows every poll (audit P2).
     # New name + drop-old so this migrates once, not a rebuild every boot.
@@ -3491,7 +3503,14 @@ class Store:
         return "queued"
 
     def reclaim_stuck_jobs(self, lease_seconds: int = 600) -> int:
-        """Requeue jobs stuck in 'running' past the lease (worker died mid-job)."""
+        """Requeue jobs stuck in 'running' past the lease (worker died mid-job).
+
+        The floor, not the fast path. It cannot tell a dead worker from a slow one, so the
+        lease has to be long enough for the slowest legitimate job — which is why a scan
+        killed by a deploy used to hang for the whole lease. reclaim_orphaned_jobs answers
+        the question this one can't ("is the process holding this lock still alive?") and
+        runs first; this stays as the catch-all for locks it cannot attribute.
+        """
         from datetime import datetime, timezone, timedelta
         cutoff = (datetime.now(timezone.utc) - timedelta(seconds=lease_seconds)).isoformat()
         with self._db.cursor() as cur:
@@ -3500,6 +3519,126 @@ class Store:
                 "WHERE status='running' AND locked_at<%s",
                 (self._now(), cutoff))
             return getattr(cur, "rowcount", 0) or 0
+
+    # ── Worker-instance registry (dead-owner reclaim) ─────────────────────────
+    # A lease expiring means "nobody has spoken for this job in N minutes". It does NOT
+    # mean the owner is dead, so N must be sized for the slowest honest job and every
+    # deploy-killed scan then hangs for N. These four methods let the queue ask the
+    # question that actually matters — is the process that holds this lock still running?
+    # — for which the answer is usually known immediately.
+
+    @staticmethod
+    def instance_of(locked_by: str | None) -> str | None:
+        """The worker-process id inside a jobs.locked_by, or None if it carries none.
+
+        Ids are '<instance>:w<n>'. None means a lock written before this scheme existed
+        (bare 'w0'), and it must stay unattributable rather than defaulting to dead or to
+        alive: guessing dead steals a live job mid-rollout, guessing alive re-introduces
+        the hang. Unattributable locks fall through to the lease, which is what they
+        already relied on.
+        """
+        if not locked_by or ":" not in locked_by:
+            return None
+        return locked_by.rsplit(":", 1)[0]
+
+    def register_instance(self, instance_id: str) -> None:
+        """Record this worker process as live. Clears stopped_at so a recycled id (same
+        replica name, new process) is not read as the corpse of its predecessor."""
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO worker_instances(id,started_at,last_seen,stopped_at) "
+                "VALUES(%s,%s,%s,NULL) ON CONFLICT(id) DO UPDATE SET "
+                "started_at=EXCLUDED.started_at, last_seen=EXCLUDED.last_seen, stopped_at=NULL",
+                (instance_id, now, now))
+
+    def touch_instance(self, instance_id: str) -> None:
+        """Liveness beat for this worker process. Cheap (one row, one column) so it can run
+        far more often than the per-job lease heartbeat, which is what makes an ungraceful
+        death detectable in ~a minute rather than ~half an hour."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "UPDATE worker_instances SET last_seen=%s WHERE id=%s",
+                             (self._now(), instance_id))
+
+    def deregister_instance(self, instance_id: str) -> None:
+        """Mark this worker process gone. Called from the SIGTERM drain, so a redeploy
+        publishes its own death before the replacement boots — the replacement's startup
+        reclaim then has a definite answer and doesn't have to infer one from a clock."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "UPDATE worker_instances SET stopped_at=%s WHERE id=%s",
+                             (self._now(), instance_id))
+
+    def live_instances(self, stale_seconds: int = 90) -> set[str]:
+        """Worker processes currently believed alive: registered, not deregistered, and
+        beating within stale_seconds."""
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=stale_seconds)).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id FROM worker_instances WHERE stopped_at IS NULL AND last_seen>=%s",
+                (cutoff,))
+            return {r["id"] for r in self._db.fetchall(cur)}
+
+    def reclaim_orphaned_jobs(self, stale_seconds: int = 90,
+                              exclude: str | None = None) -> list[dict]:
+        """Requeue every running job whose owning worker PROCESS is gone, without waiting
+        for its lease. Returns the reclaimed rows (id/type/scan_id/locked_by) so the caller
+        can say what it rescued rather than just how many.
+
+        Three ways a lock is orphaned, and only the first two are decidable here:
+          * the owner deregistered (a clean SIGTERM drain) — a definite death;
+          * the owner stopped beating — an ungraceful one;
+          * the owner is unattributable (a pre-registry 'w0' lock) — deliberately left
+            alone, see instance_of. The lease sweeper still covers those.
+
+        `exclude` keeps the caller's own instance out of it, so a worker rebooting into
+        this cannot requeue a job one of its own freshly-started threads just claimed.
+
+        Safe by construction, but the safety belongs to the handlers rather than to this
+        method: requeueing a job that is somehow still running gets it executed twice, and
+        every scan handler is idempotent about that (save_file_result upserts per file,
+        count_files_done counts rows instead of incrementing, mark_finalized claims the
+        finalize exactly once, and remediation re-derives from the source bytes and upserts
+        its output). Both re-runs converge on the same rows.
+        """
+        live = self.live_instances(stale_seconds)
+        if exclude:
+            live.add(exclude)
+        now = self._now()
+        reclaimed: list[dict] = []
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id, type, scan_id, locked_by FROM jobs WHERE status='running'")
+            for row in self._db.fetchall(cur):
+                inst = self.instance_of(row.get("locked_by"))
+                if inst is None or inst in live:
+                    continue
+                reclaimed.append(dict(row))
+            for row in reclaimed:
+                self._db.execute(cur,
+                    "UPDATE jobs SET status='queued', locked_at=NULL, locked_by=NULL, "
+                    "run_after=%s, updated_at=%s WHERE id=%s AND status='running'",
+                    (now, now, row["id"]))
+        return reclaimed
+
+    def prune_worker_instances(self, older_than_hours: int = 24) -> int:
+        """Drop long-dead instance rows so the registry doesn't accumulate one row per
+        deploy forever. Only rows with no running job still pointing at them."""
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id FROM worker_instances WHERE last_seen<%s AND "
+                "(stopped_at IS NOT NULL OR last_seen<%s)", (cutoff, cutoff))
+            candidates = {r["id"] for r in self._db.fetchall(cur)}
+            if not candidates:
+                return 0
+            self._db.execute(cur, "SELECT locked_by FROM jobs WHERE status='running'")
+            held = {self.instance_of(r.get("locked_by")) for r in self._db.fetchall(cur)}
+            doomed = [i for i in candidates if i not in held]
+            for i in doomed:
+                self._db.execute(cur, "DELETE FROM worker_instances WHERE id=%s", (i,))
+        return len(doomed)
 
     def job_stats(self, owner: str | None = None) -> dict:
         # owner → only this user's jobs (scoped via their scans), so the queue view

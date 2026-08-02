@@ -418,11 +418,39 @@ _worker_seq = 0          # monotonic id source so scaled-in workers get fresh id
 _MAX_WORKERS = 16        # safety cap on live scaling
 
 
+def _make_instance_id() -> str:
+    """A id for THIS worker process, unique across replicas and across restarts.
+
+    Both halves earn their place. The hostname (ACA sets it to the replica name) makes the
+    id readable in a log — 'which replica held that job' is the first question asked. The
+    random suffix makes it unique in time: a replica name is reused by the container that
+    replaces it, so hostname alone would have a new process inherit its predecessor's
+    identity and conclude the jobs it left behind were its own, which is precisely the
+    corpse we are trying to notice.
+    """
+    import uuid
+    host = (os.environ.get("HOSTNAME") or os.environ.get("CONTAINER_APP_REPLICA_NAME")
+            or "local")
+    return f"{host}-{uuid.uuid4().hex[:8]}"
+
+
+# Fixed for the life of the process, and deliberately not lazy: it has to be identical for
+# every thread that claims a job, and it is what a restart is recognised by.
+INSTANCE_ID = _make_instance_id()
+
+# How long a worker process may go without beating before it is presumed dead. The beat is
+# every ~20s (see start_workers), so this is four missed beats — comfortably past a GC pause
+# or a slow database round-trip, and still ~20× tighter than the lease it replaces.
+INSTANCE_STALE_SECONDS = int(os.environ.get("ACP_INSTANCE_STALE_SECONDS", "90") or "90")
+
+
 def _spawn_worker() -> None:
     import threading
     from worker import JobWorker
     global _worker_seq
-    w = JobWorker(get_store(), worker_id=f"w{_worker_seq}")
+    # '<instance>:w<n>' — the thread ordinal alone repeats on every replica, so a lock
+    # written with it cannot be traced back to a process (store.instance_of).
+    w = JobWorker(get_store(), worker_id=f"{INSTANCE_ID}:w{_worker_seq}")
     t = threading.Thread(target=w.run_forever, daemon=True, name=f"jobworker-{_worker_seq}")
     _worker_seq += 1
     t.start()
@@ -452,11 +480,20 @@ def set_worker_count(n: int) -> int:
 def stop_workers() -> None:
     """Graceful drain for shutdown/redeploy. Signals every worker to stop after its
     current job (the loop checks between jobs), briefly joins so idle/near-done workers
-    exit cleanly instead of being SIGKILLed and left 'running' until the 30-min lease
-    sweeper reclaims them on the next container. A long in-flight job still can't be
-    interrupted — it falls back to lease reclaim — but the common idle/between-jobs
-    deploy now drains cleanly. Best-effort and time-bounded so shutdown can't hang.
-    Flushes Langfuse last so a redeploy doesn't drop the last job's spans."""
+    exit cleanly instead of being SIGKILLed and left 'running'. Best-effort and
+    time-bounded so shutdown can't hang. Flushes Langfuse last so a redeploy doesn't drop
+    the last job's spans.
+
+    A job too long to finish inside the drain window is still abandoned mid-flight — that
+    part cannot be fixed here, because the container is going away either way. What CAN be
+    fixed is how long the abandonment goes unnoticed, so the last thing this does is
+    publish its own death: the replacement container reads that and requeues whatever this
+    process still held, in seconds, instead of waiting out a lease.
+
+    Deregistration is deliberately LAST. An instance marked stopped while its threads are
+    still finishing their current job would invite the next container to requeue work that
+    is about to complete normally — correct, since the handlers are idempotent, but wasted.
+    """
     global WORKERS
     import time as _t
     for w, _t2 in _worker_handles:
@@ -474,6 +511,15 @@ def stop_workers() -> None:
                 pass
     _worker_handles.clear()
     WORKERS = 0
+    try:
+        # Best-effort by necessity: we are inside a SIGTERM handler with a countdown to
+        # SIGKILL. If this write doesn't land, the instance simply stops beating and the
+        # staleness path notices ~90s later instead of instantly.
+        get_store().deregister_instance(INSTANCE_ID)
+        print(f"[worker] instance {INSTANCE_ID} deregistered — any job it still holds is "
+              f"reclaimable immediately", flush=True)
+    except Exception as e:
+        print(f"[worker] could not deregister instance {INSTANCE_ID}: {e}", flush=True)
     try:
         import lf as _lf
         _lf.flush()
@@ -677,8 +723,48 @@ def start_workers() -> int:
     import threading
     import handlers  # noqa: F401 — registers job handlers with the worker
     WORKERS = max(0, min(WORKERS, _MAX_WORKERS))
+
+    # Register BEFORE the first worker thread can claim anything, or a job claimed in the
+    # gap carries an instance id that isn't in the registry yet and reads as orphaned.
+    try:
+        get_store().register_instance(INSTANCE_ID)
+    except Exception as e:
+        print(f"[worker] could not register instance {INSTANCE_ID}: {e}", flush=True)
+
+    # Startup reclaim — the whole point of the registry. A container that has just booted
+    # is standing in for one that is gone, and the jobs that one held are sitting in
+    # 'running' with nobody executing them. Waiting out their lease was the entire hang:
+    # three false "the scan is broken" reports on 2026-07-30, every one of them minutes
+    # after a deploy. Do it before the pool starts so the rescued work is in the queue by
+    # the time there are threads to take it.
+    try:
+        rescued = get_store().reclaim_orphaned_jobs(
+            stale_seconds=INSTANCE_STALE_SECONDS, exclude=INSTANCE_ID)
+        if rescued:
+            scans = sorted({r["scan_id"] for r in rescued if r.get("scan_id")})
+            print(f"[worker] startup reclaim: requeued {len(rescued)} job(s) orphaned by a "
+                  f"departed worker" + (f" (scans: {', '.join(scans)})" if scans else ""),
+                  flush=True)
+        else:
+            print("[worker] startup reclaim: no orphaned jobs", flush=True)
+    except Exception as e:
+        print(f"[worker] startup reclaim failed: {e}", flush=True)
+
     for _ in range(WORKERS):
         _spawn_worker()
+
+    # Liveness beat for THIS process, separate from (and much faster than) the per-job
+    # lease heartbeat. One row, one column — cheap enough to run at 20s, which is what
+    # makes an ungraceful death visible in ~90s instead of a lease.
+    def _beat():
+        import time as _t
+        while True:
+            try:
+                get_store().touch_instance(INSTANCE_ID)
+            except Exception:
+                pass                      # a DB blip must never kill the beat loop
+            _t.sleep(20)
+    threading.Thread(target=_beat, daemon=True, name="worker-instance-beat").start()
 
     # Always start the sweeper (even at 0 workers) so a later live scale-up is covered.
     def _sweep():
@@ -686,12 +772,24 @@ def start_workers() -> int:
         ticks = 0
         while True:
             try:
-                # 30-min lease: scans of large estates legitimately run ~10-15min,
-                # so reclaim only clearly-dead jobs. The worker heartbeat (best-effort)
-                # extends this further; this is the reliable floor if it can't.
-                n = get_store().reclaim_stuck_jobs(lease_seconds=1800)
+                # Orphan reclaim first, and every tick — startup covers the redeploy, this
+                # covers the deaths that get no replacement: a scale-in, an OOM kill, a lost
+                # node. Attribution is by owning process, so a live sibling replica's jobs
+                # are never touched no matter how long they have legitimately been running.
+                orphans = get_store().reclaim_orphaned_jobs(
+                    stale_seconds=INSTANCE_STALE_SECONDS, exclude=INSTANCE_ID)
+                if orphans:
+                    print(f"[sweeper] requeued {len(orphans)} job(s) whose worker is gone: "
+                          + ", ".join(f"{r['type']}({r['id']})" for r in orphans[:5]), flush=True)
+                # Lease reclaim stays as the floor beneath that, for locks orphan reclaim
+                # cannot attribute to a process — pre-registry 'w0' locks, and anything that
+                # registered but left no trace. 30 minutes was sized for the slowest honest
+                # scan because it was the ONLY mechanism; now that a dead owner is detected
+                # directly, this only has to outlast the 2-min job heartbeat, so 10 minutes
+                # is still generous. It shortens the worst case; it no longer defines it.
+                n = get_store().reclaim_stuck_jobs(lease_seconds=600)
                 if n:
-                    print(f"[sweeper] reclaimed {n} stuck job(s)", flush=True)
+                    print(f"[sweeper] reclaimed {n} stuck job(s) by lease", flush=True)
                 # Deploy-safety net (found live 2026-07-11): a scan whose files ALL
                 # persisted but whose finalize was lost to a restart gets its idempotent
                 # finalize re-enqueued — finished, not abandoned.
@@ -703,6 +801,11 @@ def start_workers() -> int:
                     d = get_store().purge_done_jobs(older_than_hours=24)   # table + claim index don't bloat (audit P2)
                     if d:
                         print(f"[sweeper] purged {d} old done job(s)", flush=True)
+                    # Same reasoning one table over: every deploy adds an instance row, so
+                    # without this the registry grows forever and live_instances scans it.
+                    w = get_store().prune_worker_instances(older_than_hours=24)
+                    if w:
+                        print(f"[sweeper] pruned {w} retired worker instance(s)", flush=True)
             except Exception as e:
                 print(f"[sweeper] error: {e}", flush=True)
             _t.sleep(60)
