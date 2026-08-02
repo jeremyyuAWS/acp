@@ -71,6 +71,41 @@ published — rewriting shared history to undo it costs more than it recovers, a
 a branch four sessions are working from is far worse than an unreviewed commit. Tell the user it
 happened and let them decide.
 
+## Don't read the shared checkout — it is stale, and it answers anyway
+
+Its local `main` is only as current as the last session that pulled it, which may be never. It
+does not error when it is behind; it just hands you last week's file. Ask the remote instead:
+
+```
+git -C <repo> show origin/main:<path>          # the file as it actually is
+git -C <repo> grep -l "<symbol>" origin/main -- 'frontend/src/*.js*'
+```
+
+**Why.** On 2026-07-30 a session checked whether `noDraftHint` was still referenced before
+deleting it, grepped the shared checkout, and found it live in `Remediate.jsx` — imported, called,
+line and all. The checkout was four behind, and the code it printed had been deleted by a PR that
+same session had written and merged. Later that day it found the checkout nine behind, then six.
+The reading was confident, specific, and wrong in the one direction that matters: it says *keep
+this* about something already gone.
+
+Nothing about a stale checkout looks stale. `git status` is clean, the file opens, the symbol is
+there. This is the "is this still used?" question specifically — the one whose wrong answer is
+invisible, because deleting something still in use fails loudly and keeping something dead does
+not.
+
+**The preview server has the same root, and this one cannot be worked around.** `preview_start`
+runs vite with the SHARED CHECKOUT as its root, whatever worktree you are in — so a browser check
+of worktree changes exercises code that does not contain them, and passes.
+
+Established by experiment on 2026-07-30, from a worktree, with a dev server running: a module
+created only in the worktree was NOT served (vite answered `200` with the SPA fallback HTML, not
+the file), while one created only in the shared checkout WAS served, with its contents. Do not
+read this off the `/@fs` 403 instead — its allow-list names your worktree *and* the shared
+checkout, so it looks like the worktree is in play when the root is not.
+
+So: verify worktree changes at the DOM level in vitest, not in the browser pane, and say which you
+did. A screenshot from that server is evidence about `main`, not about your branch.
+
 ## Claim the files before you start
 
 Before your first edit, look for someone already doing the work:
