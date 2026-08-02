@@ -219,8 +219,12 @@ export function proposalMeta(item) {
 
 // Split a stored file reference for display. hitl_queue.file is sometimes a bare name and
 // sometimes a path; both must render, and neither may invent the other half.
-const baseOf = (p) => String(p || '').split('/').filter(Boolean).pop() || ''
-const dirOf = (p) => {
+//
+// Exported because reviewGrouping.docIdentity needs exactly this split for the inbox cards and
+// the by-document headings. Two implementations of "which part of this is the folder" is how
+// one screen shows a document at a path and another shows it at the root.
+export const baseOf = (p) => String(p || '').split('/').filter(Boolean).pop() || ''
+export const dirOf = (p) => {
   const parts = String(p || '').split('/').filter(Boolean)
   return parts.length > 1 ? parts.slice(0, -1).join('/') : ''
 }

@@ -24,7 +24,11 @@ const trustPill = (tone) => ({ padding: '2px 9px', borderRadius: 6, fontSize: 12
   background: _TRUST_BG[tone] || _TRUST_BG.todo, color: _TRUST_FG[tone] || _TRUST_FG.todo })
 const trustIcon = (tone) => (tone === 'ok' ? '✓' : tone === 'warn' ? '◐' : '○')
 
-export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null }) {
+// `meta` is what the CALLER already knows about this document from the scan it loaded —
+// { sourceName, department, owner, path }. The hitl_queue row carries none of it (the table
+// holds file/rule/proposals and nothing about where the document lives), so a card that wants
+// to say "Google Drive · Clinical" has to be handed it. Absent, the header simply says less.
+export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null, meta = null }) {
   const [diffs, setDiffs] = useState([])
   // One editor per proposal: the row carries one proposal per image, and a single text box
   // could never describe ten different pictures. Seeded from each image's own draft, so
@@ -425,9 +429,12 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
         {/* WHICH DOCUMENT. First thing after the format chip, because a reviewer approving a
             change to a file needs to know the file before anything else about the finding. */}
         {card.fileName && (
-          <span className="evcard-file" title={card.file}>
+          <span className="evcard-file" title={[card.file, meta?.owner ? `owner: ${meta.owner}` : null].filter(Boolean).join(' · ')}>
             <b className="evcard-filename">{card.fileName}</b>
             {card.fileDir && <span className="evcard-filedir muted"> · {card.fileDir}</span>}
+            {/* Source / department / owner — the rest of "which document is this", from the
+                scan the caller already holds. Each segment renders only when it exists. */}
+            {docTrail.length > 0 && <span className="evcard-filesrc muted"> · {docTrail.join(' › ')}</span>}
           </span>
         )}
         <b className="evcard-wcag">{card.wcag}</b>
