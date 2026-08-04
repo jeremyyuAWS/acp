@@ -62,6 +62,11 @@ GREENBG = colors.HexColor("#eef5e4")
 
 LOGO = Path(__file__).resolve().parent / "assets" / "mova-logo.png"
 
+# The language of the REPORT's own prose, which is authored in English here — not the language
+# of the documents it reports on. A scan of a Spanish estate still produces an English report,
+# so this is a property of this module's strings and moves only when they are translated.
+REPORT_LANG = "en-US"
+
 # SC id → (display name, WCAG level, one-line plain-language description). Drives the
 # criteria table and keeps the report self-explanatory for a non-specialist reader.
 WCAG_META = {
@@ -135,6 +140,13 @@ def _extent(f):
 
 
 def _footer(canvas, doc):
+    # WCAG 2.4.2 Page Titled is two halves, and the report only ever shipped one of them. The
+    # docinfo /Title has always been set (build_report's `title=`), but a viewer with
+    # DisplayDocTitle unset shows the FILENAME in its window/tab regardless — so the title an
+    # assistive technology announces for the certification document was "acp-report-<uuid>.pdf".
+    # This is a catalog write, not graphics state, so it is unaffected by the save/restore pair
+    # below and idempotent across the pages _footer runs on.
+    canvas.setViewerPreference("DisplayDocTitle", "true")
     canvas.saveState()
     canvas.setStrokeColor(LINE)
     canvas.line(0.7 * inch, 0.45 * inch, LETTER[0] - 0.7 * inch, 0.45 * inch)
@@ -614,7 +626,11 @@ def _ai_governance_section(run, h2, body, cell, muted) -> list:
 def build_report(run: dict, files: list, meta: dict, decisions: dict | None = None,
                  evidence: list | None = None, facts: dict | None = None) -> bytes:
     buf = io.BytesIO()
+    # `lang` reaches the PDF catalog as /Lang (WCAG 3.1.1) — without it a screen reader guesses
+    # the language of the certification document from the user's locale. `title` is already the
+    # docinfo /Title (2.4.2); _footer sets the ViewerPreferences half of that criterion.
     doc = SimpleDocTemplate(buf, pagesize=LETTER, title=f"mova.io conformance report {run['id']}",
+                            lang=REPORT_LANG,
                             topMargin=0.6 * inch, bottomMargin=0.75 * inch,
                             leftMargin=0.7 * inch, rightMargin=0.7 * inch)
     ss = getSampleStyleSheet()
