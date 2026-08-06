@@ -30,6 +30,18 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Run it on demand, against any ref. Without this the gate is only ever reachable through an
+  # event GitHub has to deliver, and on 2026-08-06 it stopped delivering them: a branch sat at
+  # zero runs for half an hour across two pushes and a close/reopen, while a scheduled cron in
+  # the same repo queued normally. There was no way to ask for the answer.
+  #
+  # It also fixes a gap the `concurrency` block below creates. `cancel-in-progress: true` is
+  # right for a PR — a new push should supersede the old run — but the group is keyed on the ref,
+  # so several merges to main in quick succession cancel each other's runs. Three merges landed
+  # that way today (75d04de, 0e8f55d, 5e38f10) and NONE of them has a completed CI run on main;
+  # each was cancelled by the next. A dispatch is how you get that answer back afterwards,
+  # instead of waiting for an unrelated push to happen to validate the accumulated state.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -157,3 +169,45 @@ jobs:
       - name: Frontend build
         run: npx vite build
         working-directory: frontend
+
+  # frontend-v2/ — the redesign fork (#139). It shipped with NO gate at all: the job above
+  # hard-codes `working-directory: frontend`, so the fork's 108 test files / 1222 tests ran
+  # nowhere and it could rot for weeks while every PR stayed green.
+  #
+  # A SEPARATE JOB, not a matrix over [frontend, frontend-v2], and the reason is blast radius
+  # rather than taste. A matrix is DRYer and cannot drift, but it rewrites the job that guards
+  # the LIVE UI — so a mistake in it takes the shipping frontend's coverage down with it, which
+  # is the opposite of what a change called "add CI" should be able to do. Duplicating six steps
+  # leaves the job above byte-identical and makes this one incapable of breaking it.
+  #
+  # The cost is real and worth naming: these two can drift. If they ever disagree about node
+  # version, npm version or step order, the fork is being tested differently from the product
+  # and the difference will not announce itself. When frontend-v2/ replaces frontend/, delete
+  # this job rather than keeping both — two gates for one UI is the thing to avoid.
+  frontend-v2:
+    name: Frontend v2 tests + build (redesign fork)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'          # pdfjs-dist requires >=22.13
+          cache: npm
+          cache-dependency-path: frontend-v2/package-lock.json
+
+      - name: npm 11
+        run: npm install -g npm@11 --no-audit --no-fund
+        # The lockfile is npm-11 authored; npm 10 rejects its nested entries.
+
+      - name: Install frontend-v2 dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: frontend-v2
+
+      - name: Frontend v2 unit tests
+        run: npx vitest run
+        working-directory: frontend-v2
+
+      - name: Frontend v2 build
+        run: npx vite build
+        working-directory: frontend-v2
