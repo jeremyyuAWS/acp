@@ -592,7 +592,7 @@ def _propose_links(tree, proposals, *, ai_enabled: bool, diffs=None) -> None:
 
 
 def remediate_html(html_text: str, *, ai_enabled: bool = True, diffs=None,
-                   proposals=None) -> tuple[str, list, list]:
+                   proposals=None, in_scope=None) -> tuple[str, list, list]:
     """Apply server-side HTML remediation.
 
     Returns (fixed_html, applied_changes, deferred_rule_ids):
@@ -601,11 +601,21 @@ def remediate_html(html_text: str, *, ai_enabled: bool = True, diffs=None,
         'human-only' (not auto-fixed) — route these to HITL.
     `proposals` (optional out-list) collects AI-proposed one-click values (e.g. 2.4.4 link
     text) for the worker to enqueue onto the HITL queue.
+
+    `in_scope` (optional `(sc) -> bool`) is the operator scope gate. None — the default — means
+    no restriction, so every existing caller and test behaves exactly as before. A predicate is
+    passed a WCAG SC and decides whether ACP may touch it at all: an excluded criterion is
+    neither auto-fixed NOR deferred to HITL, because deferring it would put a review card in
+    front of a human for a criterion the customer removed from the engagement. Taking a
+    predicate rather than the scope dict keeps this module free of any Store import and makes
+    the gate trivial to exercise in tests.
     """
     tree = _lh.fromstring(html_text)
     applied: list[str] = []
     deferred: list[str] = []
     for sc, (mode, fn) in FIXERS.items():
+        if in_scope is not None and not in_scope(sc):
+            continue
         if mode == "auto":
             try:
                 applied.extend(fn(tree, diffs))

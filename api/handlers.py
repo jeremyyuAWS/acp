@@ -158,6 +158,33 @@ def _phase(job: dict, msg: str) -> None:
         core.store.set_job_phase(jid, msg)
 
 
+def _remediation_scope(filename: str):
+    """The operator scope in force for THIS file, as a `(sc) -> bool` predicate.
+
+    The remediation-side twin of scanner._scoped_for_scoring (#107). That change made the
+    `scan_scope` setting gate what gets ASSESSED and SCORED; nothing gated what gets FIXED, so
+    a scoped scan still wrote changes into a customer's document for criteria they had
+    explicitly excluded — and did it silently, since the resulting diffs were then filtered out
+    of the score. Excluding a criterion has to mean ACP leaves it alone, not that ACP edits it
+    and declines to mention it.
+
+    Returns None when no scope is set, so an unscoped deployment behaves exactly as before and
+    pays nothing for this. The Store is consulted explicitly rather than through `in_scope`'s
+    storeless fallback, which cannot see the setting and answers True for everything — the
+    failure `in_scope`'s own docstring calls "the worst way for a feature flag to be off".
+    """
+    try:
+        from store import active_scope, in_scope, _file_format
+        scope = active_scope(core.store)
+        if not scope:
+            return None
+        fmt = _file_format(filename)
+        return lambda sc: in_scope(sc, fmt, scope)
+    except Exception:
+        # A scope we cannot resolve must not silently become a scope that blocks everything.
+        return None
+
+
 def _verify_residual_scs(fixed_bytes: bytes, filename: str):
     """Re-scan the remediated bytes; return the set of WCAG SCs STILL failing, so a reported
     fix that did not actually clear is never credited. Delegates to the single shared
@@ -333,6 +360,24 @@ def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
     confirms), so confidence.js surfaces them as Medium/Low, never a trusted 'fixed'."""
     if not proposals:
         return
+    # OPERATOR SCOPE. One gate here covers every proposer — 19 call sites across 12 criteria —
+    # because this is the single boundary where a proposal is still labelled with its SC. Gating
+    # at each proposer instead would be 19 chances to forget one, and the one forgotten is the
+    # one that writes into an excluded criterion.
+    #
+    # Suppression is RECORDED, never silent: an operator who narrowed the scope should be able to
+    # see that the narrowing is what stopped a fix, rather than wonder why a known finding never
+    # produced a review card.
+    allows = _remediation_scope(filename)
+    if allows is not None and not allows(sc):
+        try:
+            core.store.log_decision("system", "remediate.out_of_scope", scan_id=scan_id,
+                                    file=filename,
+                                    detail=f"{sc} is outside the operator scope — "
+                                           f"{len(proposals)} proposal(s) not enqueued")
+        except Exception:
+            pass
+        return
     try:
         core.store.enqueue_proposals(scan_id, filename, sc, proposals,
                                      validated=validated, rule_name=rule_name)
@@ -404,11 +449,27 @@ def _remediate_file(payload: dict, job: dict) -> None:
     inline_proposals: list[dict] = []
 
     _phase(job, f"applying fixes to {filename}")
+    _scope_allows = _remediation_scope(filename)
+    # KNOWN GAP, recorded rather than left silent. The office/pdf deterministic remediators
+    # apply their fixes inline inside per-format functions (_remediate_pptx_slides,
+    # _remediate_docx_structure, remediate_pdf …) with no per-rule boundary to gate on, so this
+    # change governs the PROPOSAL lane (every _enqueue_proposals call — 12 criteria) and the
+    # HTML fixer loop, but NOT those. A partial gate that looks total is worse than none: an
+    # operator would set a scope, see remediation "respecting" it, and still get docx edits for
+    # excluded criteria. So the gap announces itself in the audit trail on every affected file.
+    if _scope_allows is not None and ext not in ("html", "htm"):
+        try:
+            core.store.log_decision("system", "remediate.scope_partial", scan_id=scan_id,
+                                    file=filename,
+                                    detail=f".{ext} deterministic fixers are not scope-gated yet "
+                                           "— scope governs proposals only for this file")
+        except Exception:
+            pass
     if ext in ("html", "htm"):
         fixed_html, applied, _deferred = remediate_html(
             data.decode("utf-8", errors="replace"),
             ai_enabled=core.store.get_ai_enabled(), diffs=rem_diffs,
-            proposals=inline_proposals)
+            proposals=inline_proposals, in_scope=_scope_allows)
         fixed_bytes = fixed_html.encode("utf-8")
         mimetype = "text/html"
     else:  # pdf / office — file-based deterministic remediators (ADR 0005 step 4)
