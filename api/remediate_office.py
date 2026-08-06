@@ -64,6 +64,21 @@ def _rec(diffs, rule_id: str, before: str, after: str, note: str = "") -> None:
         diffs.append({"rule_id": rule_id, "before": before, "after": after, "note": note})
 
 
+def _sc_ok(in_scope, sc: str) -> bool:
+    """Is this criterion inside the operator's scope? True when no scope is set.
+
+    The office/pdf twin of remediate.remediate_html's `in_scope` gate (#137). That change gated
+    the PROPOSAL lane and the HTML fixer; these deterministic fixers apply inline inside
+    per-format functions with no per-rule boundary, so it left them ungated and said so in the
+    audit trail (`remediate.scope_partial`). This closes that: every fix below is guarded by the
+    SC it actually writes, so an excluded criterion means ACP leaves the bytes alone.
+
+    `None` means no scope is configured, which must behave EXACTLY as before — an unscoped
+    deployment pays nothing for this and cannot be broken by it.
+    """
+    return in_scope is None or bool(in_scope(sc))
+
+
 def _stamp_provenance(entries: dict, applied: list[str]) -> None:
     """Write a remediation provenance stamp into docProps/custom.xml — shows in the
     'Custom' tab of the file's Properties: who/what fixed it, the standard, the date,
@@ -699,7 +714,7 @@ def _pptx_mark_table_headers(xml: str, diffs=None) -> tuple[str, int]:
     return _A_TBL.sub(fix, xml), n[0]
 
 
-def _remediate_pptx_slides(entries: dict, diffs=None) -> list[str]:
+def _remediate_pptx_slides(entries: dict, diffs=None, in_scope=None) -> list[str]:
     """Mutate ppt/slides/*.xml in place; return the list of applied-fix messages."""
     import office_structure as _osx           # contrast helpers + narrow-scope regexes
     from xml.etree import ElementTree as ET
@@ -781,7 +796,7 @@ def _remediate_pptx_slides(entries: dict, diffs=None) -> list[str]:
 
     for sn in slides:
         xml = entries[sn].decode("utf-8")
-        if not _pptx_has_title(xml):
+        if not _pptx_has_title(xml) and _sc_ok(in_scope, "2.4.2"):
             texts = [t.strip() for t in _A_T.findall(xml) if t.strip()]
             # The slide's title is the FIRST text on it (the title placeholder is authored first and
             # sits at the top), NOT the longest run. `max(…, key=len)` picked the longest text, which
@@ -792,10 +807,13 @@ def _remediate_pptx_slides(entries: dict, diffs=None) -> list[str]:
             n_title += 1
             _rec(diffs, "2.4.2", "(no title — assistive tech announced the slide as “Untitled”)",
                  title_text, f"programmatic title added to {sn.rsplit('/', 1)[-1]}")
-        xml, n_th = _pptx_mark_table_headers(xml, diffs)
-        n_tblhdr += n_th
-        xml = _P_SP.sub(recolor_run_in_sp, xml)
-        entries[sn] = reorder(xml.encode("utf-8"))
+        if _sc_ok(in_scope, "1.3.1"):
+            xml, n_th = _pptx_mark_table_headers(xml, diffs)
+            n_tblhdr += n_th
+        if _sc_ok(in_scope, "1.4.3"):
+            xml = _P_SP.sub(recolor_run_in_sp, xml)
+        entries[sn] = (reorder(xml.encode("utf-8")) if _sc_ok(in_scope, "1.3.2")
+                       else xml.encode("utf-8"))
 
     applied: list[str] = []
     if n_title:
@@ -863,7 +881,7 @@ def _remediate_xlsx_contrast(entries: dict, diffs=None) -> list[str]:
     return [f"Recoloured {changed} low-contrast cell style(s) to reach AA/AAA · 1.4.3 / 1.4.6"]
 
 
-def _remediate_docx_structure(entries: dict, diffs=None, skipped=None) -> list[str]:
+def _remediate_docx_structure(entries: dict, diffs=None, skipped=None, in_scope=None) -> list[str]:
     """Deterministic docx structural fixes that clear the analyser (WCAG 1.3.1):
     mark the first row of every multi-row table as a header row (w:tblHeader), and ensure
     the heading outline has exactly one Heading 1. Uses lxml so every OOXML namespace in
@@ -914,7 +932,7 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None) -> list[s
                     pass
         if _osx.looks_like_pseudo_heading(text, bold=bold, max_half_pt=max_hp, styled_heading=styled):
             pseudo.append((pPr, p, max_hp, text))
-    if pseudo:
+    if pseudo and _sc_ok(in_scope, "1.3.1"):
         # Levels come from the font hierarchy IN DOCUMENT ORDER, not from absolute size rank
         # across the whole document. Rank gave Heading 1 to the largest paragraph whatever it
         # was — a pull quote or a headline figure took the document title's level and pushed
@@ -943,7 +961,7 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None) -> list[s
     # Table headers (1.3.1): the first row of every multi-row table gets w:tblHeader,
     # which is exactly what the analyser's HasHeaderRow() checks for.
     tbl_fixed = 0
-    for tbl in root.iter(f"{{{W}}}tbl"):
+    for tbl in (root.iter(f"{{{W}}}tbl") if _sc_ok(in_scope, "1.3.1") else ()):
         rows = tbl.findall(f"{{{W}}}tr")
         if len(rows) <= 1:
             continue
@@ -978,13 +996,13 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None) -> list[s
         h1s = [h for h in headings if levels[h[1]] == 1]
         spaced = " " in headings[0][1]
         h1_id, h2_id = ("Heading 1", "Heading 2") if spaced else ("Heading1", "Heading2")
-        if not h1s:
+        if not h1s and _sc_ok(in_scope, "1.3.1"):
             headings[0][0].set(f"{{{W}}}val", h1_id)
             applied.append("Promoted the top heading to Heading 1 · 1.3.1")
             _rec(diffs, "1.3.1", f"top heading styled “{headings[0][1]}” — document had no Heading 1",
                  f"top heading promoted to “{h1_id}”",
                  "so the outline has a single, unambiguous document title level")
-        elif len(h1s) > 1:
+        elif len(h1s) > 1 and _sc_ok(in_scope, "1.3.1"):
             for st, _ in h1s[1:]:
                 st.set(f"{{{W}}}val", h2_id)
             applied.append(f"Demoted {len(h1s) - 1} extra Heading 1(s) to Heading 2 · 1.3.1")
@@ -999,7 +1017,7 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None) -> list[s
         # and keeps the doc's own spelling (same uniform-spelling assumption the
         # 1.3.1 fix above already makes).
         skip_fixed, prev_lvl = 0, 0
-        for st, _old in headings:
+        for st, _old in (headings if _sc_ok(in_scope, "2.4.6") else ()):
             cur = st.get(f"{{{W}}}val")
             lvl = levels.get(cur)
             if lvl is None:
@@ -1019,7 +1037,7 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None) -> list[s
     import office_structure as _osx
     val_attr = f"{{{W}}}val"
     contrast_fixed = 0
-    for p in root.iter(f"{{{W}}}p"):
+    for p in (root.iter(f"{{{W}}}p") if _sc_ok(in_scope, "1.4.3") else ()):
         pPr = p.find(f"{{{W}}}pPr")
         bg = "FFFFFF"
         if pPr is not None:
@@ -1058,7 +1076,7 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None) -> list[s
     # announces it; a genuinely BARE field (no adjacent text) is never labelled here — it
     # stays a finding and routes to review.
     import form_labels as _fl
-    labelled, bare = _fl.plan_labels(root)
+    labelled, bare = _fl.plan_labels(root) if _sc_ok(in_scope, "3.3.2") else ([], [])
     for sdt, label in labelled:
         _fl.set_alias(sdt, label)
         _rec(diffs, "3.3.2",
@@ -1076,7 +1094,7 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None) -> list[s
     return applied
 
 
-def _remediate_xlsx_structure(entries: dict, diffs=None) -> list[str]:
+def _remediate_xlsx_structure(entries: dict, diffs=None, in_scope=None) -> list[str]:
     """Deterministic xlsx structural fixes: give every defined table a header row
     (headerRowCount>=1, WCAG 1.3.1) and unhide any row/column that is hidden but holds
     data (WCAG 1.3.2) — matching the analyser's TableHeaderRule and HiddenContentRule."""
@@ -1087,7 +1105,7 @@ def _remediate_xlsx_structure(entries: dict, diffs=None) -> list[str]:
 
     # Table headers: headerRowCount="0" -> "1" on every table-definition part.
     tbl_fixed = 0
-    for name in list(entries):
+    for name in (list(entries) if _sc_ok(in_scope, "1.3.1") else ()):
         if name.startswith("xl/tables/") and name.endswith(".xml"):
             root = etree.fromstring(entries[name])
             if root.get("headerRowCount") == "0":
@@ -1102,7 +1120,7 @@ def _remediate_xlsx_structure(entries: dict, diffs=None) -> list[str]:
 
     # Hidden content: unhide rows/columns that are hidden AND contain data.
     hid_fixed = 0
-    for name in list(entries):
+    for name in (list(entries) if _sc_ok(in_scope, "1.3.2") else ()):
         if not (name.startswith("xl/worksheets/") and name.endswith(".xml")):
             continue
         root = etree.fromstring(entries[name])
@@ -1203,7 +1221,8 @@ def alt_proposals_for_office(doc_bytes: bytes, ext: str, *, ai_enabled: bool = T
 
 def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True,
                      scan_id: str | None = None, applied_fixes: list | None = None,
-                     proposals: list | None = None, evidence: list | None = None, diffs=None):
+                     proposals: list | None = None, evidence: list | None = None, diffs=None,
+                     in_scope=None):
     """Apply deterministic Office accessibility fixes to a copy of the file.
 
     ai_enabled — when True and a vision (llava-class) Ollama model is reachable,
@@ -1236,6 +1255,10 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
         root = ET.fromstring(entries[_CORE].decode("utf-8"))
 
         def _ensure(tag_uri: str, tag: str, value: str, label: str, sc: str, before: str):
+            # Gated INSIDE the helper, not at its two call sites: a future third caller then
+            # inherits the scope check instead of needing to remember it.
+            if not _sc_ok(in_scope, sc):
+                return
             el = root.find(f"{{{tag_uri}}}{tag}")
             if el is None or not (el.text or "").strip():
                 if el is None:
@@ -1271,7 +1294,9 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
     # real alt; runs for pptx/xlsx/docx.
     try:
         import chart_data as _chart
-        for name, (new_xml, alts) in _chart.chart_descr_edits(entries, path.suffix.lower()).items():
+        _chart_edits = (_chart.chart_descr_edits(entries, path.suffix.lower())
+                        if _sc_ok(in_scope, "1.1.1") else {})
+        for name, (new_xml, alts) in _chart_edits.items():
             entries[name] = new_xml
             for a in alts:
                 applied.append(f"Alt text \"{a[:60]}\" set from the chart's own data · 1.1.1")
@@ -1280,9 +1305,12 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
     except Exception:
         skipped.append("native-chart alt text could not be applied")
 
-    alt_applied, alt_deferred = _fix_image_alt(
-        entries, vision_enabled=vision_enabled, context_file=path.name, scan_id=scan_id,
-        applied_fixes=applied_fixes, proposals=proposals, evidence=evidence, diffs=diffs)
+    if _sc_ok(in_scope, "1.1.1"):
+        alt_applied, alt_deferred = _fix_image_alt(
+            entries, vision_enabled=vision_enabled, context_file=path.name, scan_id=scan_id,
+            applied_fixes=applied_fixes, proposals=proposals, evidence=evidence, diffs=diffs)
+    else:
+        alt_applied, alt_deferred = [], 0
     applied.extend(alt_applied)
     if alt_deferred:
         skipped.append(f"{alt_deferred} image(s) lack a faithful alt source — "
@@ -1291,14 +1319,14 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
     # docx structural fixes (table header rows + heading outline) — WCAG 1.3.1.
     if path.suffix.lower() == ".docx":
         try:
-            applied.extend(_remediate_docx_structure(entries, diffs, skipped))
+            applied.extend(_remediate_docx_structure(entries, diffs, skipped, in_scope))
         except Exception:
             skipped.append("docx structural fixes (table headers / heading outline) could not be applied")
 
     # pptx-only structural fixes that need the slide XML (title / contrast / reading order).
     if path.suffix.lower() == ".pptx":
         try:
-            applied.extend(_remediate_pptx_slides(entries, diffs))
+            applied.extend(_remediate_pptx_slides(entries, diffs, in_scope))
         except Exception:
             skipped.append("slide-level pptx fixes (title/contrast/reading order) could not be applied")
 
@@ -1306,11 +1334,12 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
     # luma-diff the detector requires (mirrors the pptx contrast fix).
     if path.suffix.lower() == ".xlsx":
         try:
-            applied.extend(_remediate_xlsx_contrast(entries, diffs))
+            if _sc_ok(in_scope, "1.4.3"):
+                applied.extend(_remediate_xlsx_contrast(entries, diffs))
         except Exception:
             skipped.append("xlsx contrast recolour could not be applied")
         try:
-            applied.extend(_remediate_xlsx_structure(entries, diffs))
+            applied.extend(_remediate_xlsx_structure(entries, diffs, in_scope))
         except Exception:
             skipped.append("xlsx structural fixes (table headers / hidden content) could not be applied")
 

@@ -450,21 +450,18 @@ def _remediate_file(payload: dict, job: dict) -> None:
 
     _phase(job, f"applying fixes to {filename}")
     _scope_allows = _remediation_scope(filename)
-    # KNOWN GAP, recorded rather than left silent. The office/pdf deterministic remediators
-    # apply their fixes inline inside per-format functions (_remediate_pptx_slides,
-    # _remediate_docx_structure, remediate_pdf …) with no per-rule boundary to gate on, so this
-    # change governs the PROPOSAL lane (every _enqueue_proposals call — 12 criteria) and the
-    # HTML fixer loop, but NOT those. A partial gate that looks total is worse than none: an
-    # operator would set a scope, see remediation "respecting" it, and still get docx edits for
-    # excluded criteria. So the gap announces itself in the audit trail on every affected file.
-    if _scope_allows is not None and ext not in ("html", "htm"):
-        try:
-            core.store.log_decision("system", "remediate.scope_partial", scan_id=scan_id,
-                                    file=filename,
-                                    detail=f".{ext} deterministic fixers are not scope-gated yet "
-                                           "— scope governs proposals only for this file")
-        except Exception:
-            pass
+    # The gap #137 recorded here as `remediate.scope_partial` is CLOSED. The office/pdf
+    # deterministic fixers now take the same `in_scope` predicate the HTML fixer does, gated at
+    # each individual fix by the SC it actually writes (remediate_office._sc_ok /
+    # remediate_pdf._sc_ok) rather than at the format boundary — because several of those
+    # functions write four different criteria in one pass, so a per-function gate would have been
+    # the same "partial gate that looks total" in a new place.
+    #
+    # The `scope_partial` decision is deliberately NOT emitted any more: leaving it would tell an
+    # operator their scope is being half-honoured when it is now honoured in full, which is a
+    # worse lie than the one it was introduced to prevent. tests/test_remediation_scope_office_pdf.py
+    # pins the closure per format, including an empty-scope case that catches an ungated fix
+    # generically rather than relying on this list staying complete.
     if ext in ("html", "htm"):
         fixed_html, applied, _deferred = remediate_html(
             data.decode("utf-8", errors="replace"),
@@ -484,7 +481,8 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 _applied_fixes: list = []
                 out_path, applied, _skipped = remediate_pdf(
                     src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
-                    diffs=rem_diffs, proposals=_pdf_proposals, applied_fixes=_applied_fixes)
+                    diffs=rem_diffs, proposals=_pdf_proposals, applied_fixes=_applied_fixes,
+                    in_scope=_scope_allows)
                 mimetype = "application/pdf"
                 # A PDF's AI-written alt text is evidence exactly like an Office document's.
                 # It used to be dropped: remediate_pdf returned only prose, so no row reached
@@ -524,7 +522,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 out_path, applied, _skipped = remediate_office(
                     src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
                     applied_fixes=_applied_fixes, proposals=_proposals,
-                    evidence=_evidence, diffs=rem_diffs)
+                    evidence=_evidence, diffs=rem_diffs, in_scope=_scope_allows)
                 mimetype = _OFFICE_MIME[ext]
                 _record_applied_fixes(scan_id, filename, _applied_fixes)
                 # AI-proposed (but not auto-applied) alt: an ungrounded vision guess is
