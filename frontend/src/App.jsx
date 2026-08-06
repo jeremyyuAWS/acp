@@ -33,6 +33,7 @@ import Remediate from './Remediate.jsx'
 import Upload from './Upload.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
+import { applyScopeConfig } from './activeScope.js'
 import A11ySelfCheck from './A11ySelfCheck.jsx'
 import { scanPhaseLine, NARRATION_STEPS } from './phaseNarration.js'
 import { useScanRefetch } from './scanRefetch.js'
@@ -211,6 +212,10 @@ export default function App() {
   const [liveScanId, setLiveScanId] = useState(null)
   const [tick, setTick] = useState(0)                  // bumped every minute to keep timeAgo labels fresh
   const [platformVersion, setPlatformVersion] = useState(null)  // full git-derived CalVer from /config (with the daily .N)
+  // Bumped once if /config reports a scope different from activeScope.js's fallback. React cannot
+  // observe a module-level binding, so this is what makes the server-driven scope actually reach
+  // the rendered denominators instead of sitting in a variable nothing re-reads.
+  const [, setScopeTick] = useState(0)
   // Set when the scan this tab is holding cannot be loaded for this account (per-scan 404 —
   // see api.SCAN_UNAVAILABLE). Shape: { scanId, reason, recoveredTo|null, recovered:boolean }.
   // Rendered as an alert, because the alternative — which is what shipped — is an empty score.
@@ -225,7 +230,16 @@ export default function App() {
   // Pull the authoritative CalVer once (works pre-auth — /config is public) so the build
   // stamp + header show the full version with the daily counter, not the date-only bundle tag.
   useEffect(() => {
-    getConfig().then((c) => c?.version && setPlatformVersion(c.version)).catch(() => { /* keep the build-time fallback */ })
+    getConfig().then((c) => {
+      if (c?.version) setPlatformVersion(c.version)
+      // Adopt the scope the SERVER is gating on. activeScope.js ships a fallback preset so the
+      // first paint is never blank, but the bundle's copy is a guess until this lands — the
+      // backend's `scan_scope` setting is the only authority. `scopeTick` exists solely to
+      // re-render after the module's live bindings change: React cannot observe a module
+      // variable, so without it the UI would keep rendering the fallback's arithmetic and the
+      // fetch would be pointless. Bumped only when something actually changed.
+      if (applyScopeConfig(c)) setScopeTick((n) => n + 1)
+    }).catch(() => { /* keep the build-time fallback */ })
   }, [])
 
   useEffect(() => {

@@ -298,7 +298,39 @@ def config():
             "auth": "gis" if core.GOOGLE_CLIENT_ID else "demo",
             **_build_info(),
             "ai": _ai.provenance(),
+            "scope": _active_scope_info(),
             "langfuse_trace_base": (f"{lf_host}/project/{lf_project}/traces" if lf_host else None)}
+
+
+def _active_scope_info() -> dict:
+    """The operator scope the SERVER is actually gating on, for the SPA to render.
+
+    Until this existed the SPA hard-coded `ACTIVE_SCOPE_PRESET = 'deva-final'` in
+    activeScope.js, so changing the `scan_scope` setting moved the server's gate while every
+    denominator, "N of 20 in scope" line and out-of-scope note in the UI kept describing the
+    preset compiled into the bundle. Two sources of truth for one question, and the wrong one
+    was the one the customer could see.
+
+    Shipped on /config rather than /settings because /config is ALWAYS_PUBLIC and the SPA
+    already fetches it at boot — the scope is not a secret (it is a list of WCAG criteria the
+    customer agreed to) and gating it behind sign-in would leave the pre-auth shell describing
+    a scope nobody had confirmed.
+
+    Returns the NAME and the resolved criteria map, deliberately both. The name is what an
+    operator recognises; the map is what the UI must arithmetic over, and deriving it here
+    means the SPA never has to keep its own copy of a preset's contents in step with ours.
+    `{"name": "", "criteria": null}` means no restriction — every criterion in scope.
+    """
+    try:
+        from store import active_scope, SCOPE_SETTING
+        name = core.store.get_setting(SCOPE_SETTING, "") or ""
+        scope = active_scope(core.store)
+        if not scope:
+            return {"name": "", "criteria": None}
+        return {"name": name, "criteria": {sc: sorted(f) for sc, f in scope.items()}}
+    except Exception:
+        # A scope we cannot read must not be reported as a scope that excludes everything.
+        return {"name": "", "criteria": None}
 
 
 class ScheduleUpdate(BaseModel):
