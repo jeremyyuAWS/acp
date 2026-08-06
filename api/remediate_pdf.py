@@ -318,9 +318,19 @@ def _propose_pdf_headings(pdf, source_path: str, *, proposals) -> None:
         explain_only=True))
 
 
+def _sc_ok(in_scope, sc: str) -> bool:
+    """Is this criterion inside the operator's scope? True when no scope is set.
+
+    Mirror of remediate_office._sc_ok — deliberately a local copy rather than a shared import,
+    because remediate_pdf is imported on its own in several places and a cross-module import for
+    a three-line predicate would couple the PDF lane to the Office one for no benefit.
+    """
+    return in_scope is None or bool(in_scope(sc))
+
+
 def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
                   scan_id: str | None = None, diffs=None, proposals=None,
-                  applied_fixes=None):
+                  applied_fixes=None, in_scope=None):
     """Apply deterministic PDF accessibility fixes to a copy of the file.
 
     ai_enabled — when True and a vision (llava-class) Ollama model is reachable, tagged
@@ -367,13 +377,14 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
 
     # ── Stage 1: pikepdf — Root-level structural fixes + figure alt text ──
     try:
-        for fixer, meta, _diff in (
+        for fixer, meta, _diff in [t for t in (
                 (PdfLanguageFixer(), {"language": lang},
                  ("3.1.1", "(no /Lang entry — screen readers guessed the language)",
                   lang, "catalog /Lang set")),
                 (PdfDisplayTitleFixer(), {},
                  ("2.4.2", "ViewerPreferences did not request the title bar show the doc title",
-                  "DisplayDocTitle = true", "viewer shows the document title, not the file name"))):
+                  "DisplayDocTitle = true", "viewer shows the document title, not the file name")))
+                if _sc_ok(in_scope, t[2][0])]:
             # The deterministic fixers read only issue.issue_id, so a light stub
             # avoids constructing a full A11yIssue (and its enum imports).
             issue = SimpleNamespace(issue_id=uuid.uuid4())
@@ -385,9 +396,12 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
                 skipped.append(res.description)
         # Genuine alt text for tagged figures (WCAG 1.1.1) — vision when AI is on and a
         # vision model is reachable; unfixed figures defer to review via the re-scan.
-        alt_applied, alt_deferred = _fix_pdf_figure_alt(
-            pdf, str(path), ai_enabled=ai_enabled, scan_id=scan_id, file=path.name,
-            applied_fixes=applied_fixes, proposals=proposals)
+        if _sc_ok(in_scope, "1.1.1"):
+            alt_applied, alt_deferred = _fix_pdf_figure_alt(
+                pdf, str(path), ai_enabled=ai_enabled, scan_id=scan_id, file=path.name,
+                applied_fixes=applied_fixes, proposals=proposals)
+        else:
+            alt_applied, alt_deferred = [], 0
         applied.extend(alt_applied)
         if alt_deferred:
             skipped.append(f"{alt_deferred} figure(s) need human alt text — each surfaced as a "
@@ -416,8 +430,11 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
         # 4.1.2 form-field accessible names — deterministic /TU from a meaningful field name;
         # a generic auto-name defers to a per-field review card (write-back on approval).
         try:
-            fld_applied, fld_deferred = _fix_pdf_form_fields(
-                pdf, proposals=proposals, applied_fixes=applied_fixes)
+            if _sc_ok(in_scope, "4.1.2"):
+                fld_applied, fld_deferred = _fix_pdf_form_fields(
+                    pdf, proposals=proposals, applied_fixes=applied_fixes)
+            else:
+                fld_applied, fld_deferred = [], 0
             applied.extend(fld_applied)
             if fld_deferred:
                 skipped.append(f"{fld_deferred} form field(s) need an accessible name — each "
@@ -428,22 +445,33 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
         # text-scoped only; shapes/backgrounds untouched), each against the background
         # resolved behind its own glyphs. Verified by the post-fix re-scan.
         try:
-            n_recoloured = _fix_pdf_text_contrast(pdf)
+            # One recolour pass satisfies both contrast criteria, so it runs when EITHER is in
+            # scope — excluding only the AAA band must not switch off the AA fix.
+            n_recoloured = (_fix_pdf_text_contrast(pdf)
+                            if (_sc_ok(in_scope, "1.4.3") or _sc_ok(in_scope, "1.4.6")) else 0)
             if n_recoloured:
                 applied.append(f"Recoloured {n_recoloured} low-contrast text colour(s) to meet "
                                "the contrast floors · 1.4.3")
-                _rec("1.4.3", "text colour fails 4.5:1 against the background behind it",
-                     "moved away from that background, hue preserved",
-                     f"{n_recoloured} fill-colour run(s) rewritten in the content streams")
-                _rec("1.4.6", "text colour below the enhanced (7:1) contrast band",
-                     "cleared by the same recolouring pass",
-                     "one recolour clears both the AA and AAA contrast checks")
+                # RECORD only the criteria actually in scope. The recolour itself is a single
+                # pass targeting the 7:1 band, so it inevitably clears both AA and AAA together —
+                # that coupling is in the fixer, not something scoping can undo. What scoping CAN
+                # do is refuse to claim credit for a criterion the operator excluded, which is
+                # what the certification report reads these records for.
+                if _sc_ok(in_scope, "1.4.3"):
+                    _rec("1.4.3", "text colour fails 4.5:1 against the background behind it",
+                         "moved away from that background, hue preserved",
+                         f"{n_recoloured} fill-colour run(s) rewritten in the content streams")
+                if _sc_ok(in_scope, "1.4.6"):
+                    _rec("1.4.6", "text colour below the enhanced (7:1) contrast band",
+                         "cleared by the same recolouring pass",
+                         "one recolour clears both the AA and AAA contrast checks")
         except Exception:
             skipped.append("contrast: could not rewrite content streams · 1.4.3")
         # 2.4.1 bypass blocks — deterministically build a bookmark outline from the document's
         # headings when a long PDF has none (no AI; only when confident).
         try:
-            _outline_msg = _generate_pdf_outline(pdf, str(path))
+            _outline_msg = (_generate_pdf_outline(pdf, str(path))
+                            if _sc_ok(in_scope, "2.4.1") else None)
             if _outline_msg:
                 applied.append(_outline_msg)
                 _rec("2.4.1", "(no bookmark outline — no way to skip past repeated content)",
@@ -459,7 +487,8 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
         try:
             from office_structure import _pdf_page_has_widget
             n_tabs = 0
-            if "/AcroForm" in pdf.Root and "/Fields" in pdf.Root["/AcroForm"]:
+            if (_sc_ok(in_scope, "2.4.3")
+                    and "/AcroForm" in pdf.Root and "/Fields" in pdf.Root["/AcroForm"]):
                 for page in pdf.pages:
                     if not _pdf_page_has_widget(page, pikepdf):
                         continue
@@ -480,7 +509,7 @@ def remediate_pdf(path: Path, *, lang: str = "en", ai_enabled: bool = True,
 
     # Deterministic document title (WCAG 2.4.2) — filename-derived when none is set.
     new_title = None
-    if not existing_title:
+    if not existing_title and _sc_ok(in_scope, "2.4.2"):
         new_title = path.stem.replace("-", " ").replace("_", " ").strip() or "Document"
         applied.append(f"Set document title to '{new_title}' · 2.4.2")
         _rec("2.4.2", "(no document title in metadata)", new_title,
