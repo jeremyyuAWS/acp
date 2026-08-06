@@ -1,0 +1,183 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title></title>
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, maximum-scale=1">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, "Segoe UI", Helvetica Neue, sans-serif; color: #2a2e3d; background: #f4f6fb; font-size: 14px; line-height: 1.6; }
+.topbar { background: #1a4c7c; padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; }
+.topbar-brand { color: #fff; font-size: 17px; font-weight: 700; letter-spacing: -0.3px; }
+.topbar-nav { display: flex; gap: 20px; }
+.topbar-nav a { color: rgba(255,255,255,0.75); font-size: 13px; text-decoration: none; }
+.alert-strip { background: #fff3cd; padding: 9px 24px; font-size: 13px; border-bottom: 1px solid #f0d97a; }
+.main { max-width: 760px; margin: 0 auto; padding: 22px 20px 48px; }
+.card { background: #fff; border-radius: 10px; padding: 18px 20px; margin-bottom: 16px; border: 1px solid #e5e8ef; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+td { padding: 9px 10px; border-bottom: 1px solid #f2f2f2; vertical-align: top; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; }
+.badge-ok { background: #e7f0dc; color: #3B6D11; }
+.badge-warn { background: #FAEEDA; color: #854F0B; }
+.badge-err { background: #fce8e8; color: #a33333; }
+a { color: #1a4c7c; }
+a:focus, button:focus, input:focus, select:focus { outline: none; }
+.submit-btn { background: #1a4c7c; color: #fff; border: 0; border-radius: 8px; padding: 11px 22px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 4px; display: inline-block; }
+footer { padding: 18px 24px; text-align: center; border-top: 1px solid #e5e8ef; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-brand">MyHealth · Patient Portal</div>
+  <div class="topbar-nav">
+    <a href="#">My Records</a>
+    <a href="#">Appointments</a>
+    <a href="#">Messages</a>
+    <a href="#">My Plan</a>
+  </div>
+</div>
+
+<div class="alert-strip">
+  ⚠ Your open enrollment window closes <strong>July 15, 2026</strong> — review your plan before the deadline.
+  <a href="#">click here</a> to update your coverage.
+</div>
+
+<div class="main">
+
+  <!-- Patient header -->
+  <div class="card" style="display:flex; gap:16px; align-items:flex-start">
+    <img src="sample-image.png" width="72" height="72" style="border-radius:50%; flex-shrink:0; background:#e0e6f0; object-fit:cover">
+    <div>
+      <p style="font-size:22px; font-weight:700; color:#c0c0c0">Jordan Rivera</p>
+      <p style="color:#c2c2c2; font-size:13px; margin-top:3px">MRN: 4827-3910 &nbsp;·&nbsp; DOB: Mar 14, 1989 &nbsp;·&nbsp; Blood type: O+</p>
+      <p style="color:#c2c2c2; font-size:13px; margin-top:2px">Primary care: <a href="#">Dr. Sarah Chen</a> &nbsp;·&nbsp; UT Southwestern Medical Center</p>
+    </div>
+  </div>
+
+  <!-- Vitals -->
+  <p style="font-size:18px; font-weight:700; color:#b8b8b8">Most recent vitals</p>
+  <div class="card">
+    <table>
+      <tr>
+        <td style="color:#c0c0c0; font-weight:600">Blood pressure</td>
+        <td style="color:#c6c6c6">128 / 82 mmHg</td>
+        <td><span class="badge badge-warn">borderline</span></td>
+        <td style="color:#cacaca; font-size:12px">Jun 10, 2026</td>
+      </tr>
+      <tr>
+        <td style="color:#c0c0c0; font-weight:600">Heart rate</td>
+        <td style="color:#c6c6c6">74 bpm</td>
+        <td><span class="badge badge-ok">normal</span></td>
+        <td style="color:#cacaca; font-size:12px">Jun 10, 2026</td>
+      </tr>
+      <tr>
+        <td style="color:#c0c0c0; font-weight:600">Weight</td>
+        <td style="color:#c6c6c6">163 lbs</td>
+        <td></td>
+        <td style="color:#cacaca; font-size:12px">Jun 10, 2026</td>
+      </tr>
+      <tr>
+        <td style="color:#c0c0c0; font-weight:600">HbA1c</td>
+        <td style="color:#c6c6c6">5.4%</td>
+        <td><span class="badge badge-ok">normal</span></td>
+        <td style="color:#cacaca; font-size:12px">May 28, 2026</td>
+      </tr>
+    </table>
+    <p style="color:#cbcbcb; font-size:12px; margin-top:10px; line-height:13px">Results reviewed by Dr. Chen on Jun 12. Your blood pressure remains borderline high — continue current medication and follow up in 6 weeks.</p>
+  </div>
+
+  <!-- Medications -->
+  <p style="font-size:18px; font-weight:700; color:#b8b8b8">Active medications</p>
+  <div class="card">
+    <table>
+      <tr>
+        <td><strong>Lisinopril 10 mg</strong><br><span style="color:#c2c2c2; font-size:12px">ACE inhibitor · blood pressure management</span></td>
+        <td style="color:#c4c4c4; font-size:13px">Once daily, morning</td>
+        <td style="color:#c4c4c4; font-size:12px">Refills: 4 remaining</td>
+        <td><a href="#" style="font-size:13px">click here</a></td>
+      </tr>
+      <tr>
+        <td><strong>Atorvastatin 20 mg</strong><br><span style="color:#c2c2c2; font-size:12px">Statin · cholesterol management</span></td>
+        <td style="color:#c4c4c4; font-size:13px">Once nightly</td>
+        <td style="color:#c4c4c4; font-size:12px">Refills: 2 remaining</td>
+        <td><a href="#" style="font-size:13px">read more</a></td>
+      </tr>
+      <tr>
+        <td><strong>Vitamin D 2000 IU</strong><br><span style="color:#c2c2c2; font-size:12px">Supplement</span></td>
+        <td style="color:#c4c4c4; font-size:13px">Once daily</td>
+        <td style="color:#c4c4c4; font-size:12px">OTC — no refill needed</td>
+        <td><a href="#" style="font-size:13px">click here</a></td>
+      </tr>
+    </table>
+    <p style="color:#c6c6c6; font-size:12.5px; margin-top:10px">Contact your care team before stopping or changing any medication. <a href="#">read more</a> about drug interactions and side effects.</p>
+  </div>
+
+  <!-- Upcoming appointments -->
+  <p style="font-size:18px; font-weight:700; color:#b8b8b8">Upcoming appointments</p>
+  <div class="card">
+    <table>
+      <tr>
+        <td style="color:#c0c0c0; font-size:12.5px; white-space:nowrap">Jun 30, 2026<br>10:00 AM</td>
+        <td><strong>Annual wellness visit</strong><br><span style="color:#c4c4c4; font-size:12px">Building A · Room 312</span></td>
+        <td>Dr. Sarah Chen</td>
+        <td><a href="#" style="font-size:13px">click here</a></td>
+      </tr>
+      <tr>
+        <td style="color:#c0c0c0; font-size:12.5px; white-space:nowrap">Aug 14, 2026<br>2:30 PM</td>
+        <td><strong>Cardiology follow-up</strong><br><span style="color:#c4c4c4; font-size:12px">Heart Center · Floor 5</span></td>
+        <td>Dr. James Patel</td>
+        <td><a href="#" style="font-size:13px">read more</a></td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- Benefits reminder -->
+  <p style="font-size:18px; font-weight:700; color:#b8b8b8">Your coverage &amp; benefits</p>
+  <div class="grid2">
+    <div class="card">
+      <p style="font-size:15px; font-weight:600; color:#c0c0c0">Medical Plan</p>
+      <p style="color:#c4c4c4; font-size:13px; margin-top:6px">PPO Select · in-network</p>
+      <p style="color:#c6c6c6; font-size:13px">Deductible: $500 met / $1,500</p>
+      <p style="color:#c6c6c6; font-size:13px">Out-of-pocket max: $3,000</p>
+      <p style="margin-top:10px"><a href="#">click here</a> to view your FSA balance.</p>
+    </div>
+    <div class="card">
+      <p style="font-size:15px; font-weight:600; color:#c0c0c0">Dental &amp; Vision</p>
+      <p style="color:#c4c4c4; font-size:13px; margin-top:6px">Delta Dental PPO</p>
+      <p style="color:#c6c6c6; font-size:13px">Preventive: 100% covered</p>
+      <p style="color:#c6c6c6; font-size:13px">Next cleaning due: August 2026</p>
+      <p style="margin-top:10px"><a href="#">read more</a> about your vision benefit.</p>
+    </div>
+  </div>
+
+  <!-- Schedule appointment -->
+  <p style="font-size:18px; font-weight:700; color:#b8b8b8">Request a new appointment</p>
+  <div class="card">
+    <input type="text" placeholder="Full name" style="border: 1px solid #dedede; border-radius:7px; padding:9px 12px; font:inherit; font-size:14px; width:100%; display:block; margin-bottom:10px">
+    <input type="date" style="border: 1px solid #dedede; border-radius:7px; padding:9px 12px; font:inherit; font-size:14px; width:100%; display:block; margin-bottom:10px">
+    <select style="border: 1px solid #dedede; border-radius:7px; padding:9px 12px; font:inherit; font-size:14px; width:100%; display:block; margin-bottom:10px">
+      <option value="">Select department</option>
+      <option>Primary Care</option>
+      <option>Cardiology</option>
+      <option>Endocrinology</option>
+      <option>Neurology</option>
+    </select>
+    <input type="tel" placeholder="Phone number" tabindex="5" style="border: 1px solid #dedede; border-radius:7px; padding:9px 12px; font:inherit; font-size:14px; width:100%; display:block; margin-bottom:10px">
+    <input type="email" placeholder="Email address" style="border: 1px solid #dedede; border-radius:7px; padding:9px 12px; font:inherit; font-size:14px; width:100%; display:block; margin-bottom:10px">
+    <div onclick="void(0)" class="submit-btn">Request appointment &rarr;</div>
+    <p style="color:#c6c6c6; font-size:12px; margin-top:10px">A care coordinator will confirm within one business day. Questions? Contact the HR Benefits Office at <a href="#">benefits@utsouthwestern.edu</a>.</p>
+  </div>
+
+</div>
+
+<footer style="color:#c4c4c4">
+  &copy; 2026 UT Southwestern Medical Center &nbsp;&middot;&nbsp;
+  <a href="#" style="color:#c4c4c4">Privacy Policy</a> &nbsp;&middot;&nbsp;
+  <a href="#" style="color:#c4c4c4">ADA Accessibility Statement</a> &nbsp;&middot;&nbsp;
+  <a href="#" style="color:#c4c4c4">Terms of Service</a>
+</footer>
+
+</body>
+</html>
