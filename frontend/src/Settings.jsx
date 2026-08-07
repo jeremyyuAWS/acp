@@ -304,6 +304,7 @@ function DriveMirror() {
   )
 }
 import Rubric from './Rubric.jsx'
+import ScanScope from './ScanScope.jsx'
 import Disposition from './Disposition.jsx'
 import WcagCoverage from './WcagCoverage.jsx'
 import Ontology from './Ontology.jsx'
@@ -580,6 +581,7 @@ export default function Settings({ onClose, onRubricSaved, files = [], onOntolog
         <div className="subtabs" role="tablist" aria-label="Settings sections">
           <button role="tab" aria-selected={tab === 'rules'} className={tab === 'rules' ? 'fchip on' : 'fchip'} onClick={() => setTab('rules')}>Scoring rules</button>
           <button role="tab" aria-selected={tab === 'validation'} className={tab === 'validation' ? 'fchip on' : 'fchip'} onClick={() => setTab('validation')}>Validation coverage</button>
+          <button role="tab" aria-selected={tab === 'scope'} className={tab === 'scope' ? 'fchip on' : 'fchip'} onClick={() => setTab('scope')}>Scan scope</button>
           <button role="tab" aria-selected={tab === 'ontology'} className={tab === 'ontology' ? 'fchip on' : 'fchip'} onClick={() => setTab('ontology')}>Business ontology</button>
           <button role="tab" aria-selected={tab === 'filetypes'} className={tab === 'filetypes' ? 'fchip on' : 'fchip'} onClick={() => setTab('filetypes')}>File types</button>
           <button role="tab" aria-selected={tab === 'owners'} className={tab === 'owners' ? 'fchip on' : 'fchip'} onClick={() => setTab('owners')}>Owners</button>
@@ -593,6 +595,7 @@ export default function Settings({ onClose, onRubricSaved, files = [], onOntolog
         <div className="setbody">
           {tab === 'rules' && <Rubric onSaved={onRubricSaved} />}
           {tab === 'validation' && <WcagCoverage />}
+          {tab === 'scope' && <ScanScope />}
           {tab === 'ontology' && <Ontology files={files} onPublished={onOntologyChange} />}
           {tab === 'filetypes' && <FileTypeConfig onChanged={(cfg, custom) => onFileTypeChange?.(cfg, custom)} />}
           {tab === 'owners' && <OwnerDelegate files={files} onChanged={onDelegationChange} />}

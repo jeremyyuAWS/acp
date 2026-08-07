@@ -67,6 +67,39 @@ def _presets() -> dict[str, dict[str, list[str]]]:
     }
 
 
+# The document formats an operator can scope. `html` is deliberately excluded: the scope grid
+# configures a DOCUMENT engagement, and offering a column nobody's customer sends would be four
+# hundred pointless checkboxes.
+_DOC_FORMATS = ("docx", "xlsx", "pptx", "pdf")
+
+
+def _universe() -> list[dict]:
+    """Every (criterion, format) pair an operator may put in scope, with display labels.
+
+    A pair is selectable when the backend can reach a verdict on it AT ALL — either a pass/fail
+    validator (RULE_FORMATS) or a review lane (REVIEW_FORMATS, which resolves to REVIEW and never
+    to PASS). Both count: scoping IN a review-lane pair is a legitimate choice, and omitting them
+    would hide criteria the product genuinely reports on.
+
+    Selecting a pair the backend cannot evaluate would be a checkbox that changes nothing, so the
+    grid never offers one. That is the whole reason this is derived rather than typed: the admin
+    UI cannot drift into offering capability that does not exist.
+    """
+    import store  # noqa: PLC0415
+
+    names = {r["id"]: (r["name"], r["level"]) for r in store.RULE_CATALOG}
+    out = []
+    for sc in sorted(set(store.RULE_FORMATS) | set(store.REVIEW_FORMATS),
+                     key=lambda x: [int(n) for n in x.split(".")]):
+        fmts = sorted((set(store.RULE_FORMATS.get(sc, ()))
+                       | set(store.REVIEW_FORMATS.get(sc, ()))) & set(_DOC_FORMATS))
+        if not fmts:
+            continue                      # html-only criteria are not a document engagement
+        name, level = names.get(sc, (sc, ""))
+        out.append({"sc": sc, "name": name, "level": level, "formats": fmts})
+    return out
+
+
 def render() -> str:
     presets = _presets()
     lines = [HEADER, "export const SCOPE_PRESETS = {"]
@@ -98,6 +131,27 @@ def render() -> str:
     lines.append("  const fmts = scope[sc]")
     lines.append("  return Boolean(fmts && fmts.includes(fmt))")
     lines.append("}")
+    lines.append("")
+    lines.append(
+        "// Every (criterion, format) pair an operator may put in scope, with display labels —\n"
+        "// the universe the admin scope grid renders. A pair appears here only when the backend\n"
+        "// can reach a verdict on it (a pass/fail validator OR a review lane), so the grid can\n"
+        "// never offer a checkbox that would change nothing. Derived, so it cannot drift into\n"
+        "// claiming capability the engine does not have. `html` is excluded: this configures a\n"
+        "// DOCUMENT engagement."
+    )
+    lines.append("export const SCOPE_UNIVERSE = [")
+    for row in _universe():
+        fmt_list = ", ".join(json.dumps(f) for f in row["formats"])
+        lines.append(
+            f'  {{ sc: {json.dumps(row["sc"])}, name: {json.dumps(row["name"])}, '
+            f'level: {json.dumps(row["level"])}, formats: [{fmt_list}] }},'
+        )
+    lines.append("]")
+    lines.append("")
+    lines.append("// The format columns the grid draws, in a fixed order so the header and every")
+    lines.append("// row line up regardless of which criteria happen to be selectable.")
+    lines.append("export const SCOPE_FORMATS = " + json.dumps(list(_DOC_FORMATS)))
     lines.append("")
     return "\n".join(lines)
 
