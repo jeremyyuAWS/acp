@@ -59,6 +59,10 @@ _OFFICE_STRUCT_FORMATS = {
     "1.4.6": {"pdf", "pptx", "xlsx"},
     "2.4.1": {"pdf"},
     "3.3.2": {"docx"},
+    # docx_checks()'s form-field check covers BOTH 3.3.2 (missing visible label) and 4.1.2
+    # (missing accessible name) — a content control's w:alias Title is simultaneously both,
+    # so one absent attribute fails both criteria. The html coverage for 4.1.2 is scanner.py's.
+    "4.1.2": {"docx"},
     "2.4.10": {"docx"},
     "1.4.8": {"docx"},    # docx_checks() justified-body-text check
     "1.4.2": {"pptx"},    # pptx_audio_autoplay_checks() — auto-starting embedded audio

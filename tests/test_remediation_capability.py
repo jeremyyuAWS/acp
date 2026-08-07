@@ -613,6 +613,9 @@ def _proposer_key(sc: str) -> str:
         "2.4.6": "slide_titles",           # pptx only — AI names the slide from its own content
         "1.4.8": "one_click_left_align",   # docx only — deterministic, human elects
         "1.4.2": "one_click_play_on_click",  # pptx only — deterministic, human elects
+        "4.1.2": "form_field_name",        # docx only — propose_forms drafts the w:alias title
+                                           # (adjacent prompt text, else a local model), and
+                                           # apply_field_name writes it on approval
     }.get(sc, "")
 
 

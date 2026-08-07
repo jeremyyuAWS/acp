@@ -198,7 +198,17 @@ def proposals_from_document_xml(doc: str, *, filename: str = "",
         if not label:
             continue
 
-        locator = f"unlabeled {noun}" + (f" (id {sid})" if sid else f" #{ordinal}")
+        # A STRUCTURAL locator, not the prose one this proposer first shipped with
+        # ("unlabeled date picker #2"). An applier has to resolve a locator back to the exact
+        # field a human approved, and an ordinal silently addresses a DIFFERENT field once any
+        # earlier control is added, removed or labelled between proposal and approval — the
+        # precise "approved a value for content the document no longer has" case every other
+        # applier refuses. w:id is Word's own per-control identifier and survives edits
+        # elsewhere in the document, so it is preferred; the ordinal remains only as a
+        # last-resort fallback for controls that carry no w:id, and apply_docx_field_name
+        # reports it unresolved rather than guessing when it cannot match.
+        # Shape mirrors remediate_pdf's `pdf:field:…`.
+        locator = f"docx:sdt:{sid}" if sid else f"docx:sdt:#{ordinal}"
         out.append(proposal(
             locator=locator,
             before=_content_text(inner) or "(no accessible name)",

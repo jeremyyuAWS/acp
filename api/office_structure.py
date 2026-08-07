@@ -372,10 +372,20 @@ def docx_checks(path: Path) -> list[dict]:
 
             # 3.3.2 — interactive content-control form fields (checkbox, date
             # picker, dropdown, combo box, picture) with no alias/title set.
-            # 4.1.2 — same fields with no w:tag set. Distinct from 3.3.2: alias is
-            # the human-visible label, tag is the stable programmatic identifier
-            # assistive tech uses to expose the field's Name — a field can have
-            # one without the other.
+            #
+            # 4.1.2 — the SAME condition, deliberately. A content control's Title
+            # (w:alias) is simultaneously the visible label 3.3.2 asks for AND the
+            # accessible NAME Word exposes to assistive tech, so a field without one
+            # fails both: a sighted user gets no prompt, a screen-reader user gets no
+            # announced name.
+            #
+            # This replaces a w:tag check that shipped in 062642f (PR #6). That check
+            # asserted tag was "the stable programmatic identifier assistive tech uses
+            # to expose the field's Name" — it is not. w:tag is a developer-facing
+            # identifier for data binding and is never announced; w:alias is what
+            # reaches the accessibility tree. So the old check could fail a document
+            # whose fields were perfectly announceable, and pass one whose fields were
+            # anonymous to AT — wrong in both directions on the criterion it claimed.
             for sdt_inner in _SDT.findall(doc):
                 pr_m = _SDT_PR.search(sdt_inner)
                 if not pr_m or not _SDT_INPUT_TYPE.search(pr_m.group(1)):
@@ -383,9 +393,7 @@ def docx_checks(path: Path) -> list[dict]:
                 alias_m = _SDT_ALIAS.search(pr_m.group(1))
                 if not alias_m or not alias_m.group(1).strip():
                     findings.append(_finding("DOCX_FORM_FIELD_NO_LABEL", "3.3.2 Labels or Instructions", "SERIOUS"))
-                tag_m = _SDT_TAG.search(pr_m.group(1))
-                if not tag_m or not tag_m.group(1).strip():
-                    findings.append(_finding("DOCX_FORM_FIELD_NO_TAG", "4.1.2 Name, Role, Value", "SERIOUS"))
+                    findings.append(_finding("DOCX_FORM_FIELD_NO_NAME", "4.1.2 Name, Role, Value", "SERIOUS"))
 
             # 2.4.10 — a document long enough to need section structure that uses
             # no heading styles at all. A short letter/memo legitimately has none,
@@ -1783,6 +1791,13 @@ def _controls_phrase(controls: list[dict]) -> str:
     return ", ".join(parts)
 
 
+# Control kinds a PRECISE first-party check already judges for 4.1.2, per format. The advisory
+# below must not also claim uncertainty about these, or the criterion could never resolve:
+# docx_checks reads w:alias on every input content control and knows exactly whether each is
+# named, so a document whose only controls are content controls has a real 4.1.2 verdict.
+_NAME_ROLE_PROVEN = {".docx": {"interactive content control"}}
+
+
 def office_control_review_checks(path: Path, ext: str) -> list[dict]:
     """REVIEW findings for 2.1.2 + 4.1.2 when a document embeds interactive controls
     (ADR 0023). Advisory only — carries the concrete control evidence, never a pass,
@@ -1791,16 +1806,28 @@ def office_control_review_checks(path: Path, ext: str) -> list[dict]:
     if not controls:
         return []
     phrase = _controls_phrase(controls)
-    return [
-        _review_finding(
-            "OFFICE_INTERACTIVE_CONTROL_KEYBOARD", "2.1.2 No Keyboard Trap",
-            f"document embeds {phrase} — verify keyboard focus can move away from every "
-            "control (no keyboard trap); ACP can't confirm this statically"),
-        _review_finding(
+    out = [_review_finding(
+        "OFFICE_INTERACTIVE_CONTROL_KEYBOARD", "2.1.2 No Keyboard Trap",
+        f"document embeds {phrase} — verify keyboard focus can move away from every "
+        "control (no keyboard trap); ACP can't confirm this statically")]
+
+    # 4.1.2 is claimed only for control kinds nothing can judge statically — an arbitrary
+    # ActiveX or OLE control, whose name and role live in code we never see. Content controls
+    # are NOT such a kind any more: their accessible name is w:alias, right there in the XML.
+    #
+    # Emitting it for them anyway is not merely noisy, it is self-defeating. A REVIEW finding
+    # still names its SC, so the residual re-scan that grants remediation credit would see
+    # 4.1.2 unresolved no matter how many field names a reviewer approved, and a correctly
+    # named document could never certify a pass. The advisory would permanently outvote the
+    # precise check that replaced it.
+    proven = _NAME_ROLE_PROVEN.get((ext or "").lower(), set())
+    unproven = [c for c in controls if c["type"] not in proven]
+    if unproven:
+        out.append(_review_finding(
             "OFFICE_INTERACTIVE_CONTROL_NAME_ROLE", "4.1.2 Name, Role, Value",
-            f"document embeds {phrase} — verify each control exposes an accessible name "
-            "and role to assistive technology; ACP can't confirm this statically"),
-    ]
+            f"document embeds {_controls_phrase(unproven)} — verify each control exposes an "
+            "accessible name and role to assistive technology; ACP can't confirm this statically"))
+    return out
 
 
 # ── 1.4.1 Use of Color (Review, ADR 0023 Phase 1b) ─────────────────────────────

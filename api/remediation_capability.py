@@ -134,6 +134,10 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "3.1.2": ASSISTED,   # language-of-parts (langdetect proposal)
         "3.1.5": ASSISTED,      # reading level — re-writing prose
         "3.3.2": AUTO,       # form-field labels from adjacent text
+        "4.1.2": ASSISTED,   # content-control accessible name — propose_forms drafts w:alias
+                             # (derived from adjacent prompt text, or a local model where there
+                             # is none), a human approves, apply_field_name writes it. Same
+                             # w:alias that clears 3.3.2, so one approval settles both.
     },
     # Excel — fully actioned bar reading level; no human lane for any structural/visual finding.
     "xlsx": {

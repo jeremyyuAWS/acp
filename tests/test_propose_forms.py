@@ -47,7 +47,12 @@ def test_inline_label_before_checkbox():
     p = props[0]
     assert p["proposed_value"] == "Full name"          # trailing colon stripped
     assert p["source"] == "derived from adjacent label text (deterministic)"
-    assert "checkbox" in p["locator"] and "id 1" in p["locator"]
+    # The locator is STRUCTURAL (w:id), so an applier can resolve it back to this exact
+    # control; the reader-facing noun moved to the rationale, which is where a reviewer
+    # actually reads it. An ordinal-or-prose locator addressed the wrong field once any
+    # earlier control changed.
+    assert p["locator"] == "docx:sdt:1"
+    assert "checkbox" in p["rationale"]
     assert p["before"] == "[ ]"
 
 
@@ -56,7 +61,8 @@ def test_stacked_label_in_previous_paragraph():
     props = PF.proposals_from_document_xml(_DOC.format(body=body))
     assert len(props) == 1
     assert props[0]["proposed_value"] == "Date of birth"
-    assert "date picker" in props[0]["locator"]
+    assert props[0]["locator"] == "docx:sdt:7"
+    assert "date picker" in props[0]["rationale"]
 
 
 def test_table_left_cell_label():
@@ -68,7 +74,8 @@ def test_table_left_cell_label():
     props = PF.proposals_from_document_xml(_DOC.format(body=body))
     assert len(props) == 1
     assert props[0]["proposed_value"] == "Email address"
-    assert "combo box" in props[0]["locator"]
+    assert props[0]["locator"] == "docx:sdt:1"
+    assert "combo box" in props[0]["rationale"]
 
 
 def test_required_asterisk_and_enumerator_stripped():

@@ -108,7 +108,10 @@ RULE_FORMATS: dict[str, frozenset[str]] = {
     "2.4.10": frozenset({"docx"}),
     "2.5.3": frozenset({"html"}), "2.5.8": frozenset({"html"}), "3.1.1": _ALL_FORMATS,
     "3.1.2": _ALL_FORMATS, "3.1.4": frozenset({"html"}), "3.1.5": _ALL_FORMATS, "3.3.2": frozenset({"docx", "html"}),
-    "4.1.2": frozenset({"html"}),
+    # docx: a content control's Title (w:alias) is both its visible label (3.3.2) and the
+    # accessible name Word exposes to AT, so docx_checks' form-field check certifies 4.1.2 for
+    # docx the same way it certifies 3.3.2 — a clean file can now PASS, not merely avoid a flag.
+    "4.1.2": frozenset({"html", "docx"}),
 }
 
 

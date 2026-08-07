@@ -1306,6 +1306,13 @@ _OFFICE_LINK_EXTS = tuple(_LINK_SCS_BY_EXT)
 # names (`pdf:field:…` → /TU), both written by remediate_pdf.apply_pdf_approved.
 _PDF_APPLY_EXTS = ("pdf",)
 
+# 4.1.2 accessible names, per format. PDF writes /TU on an AcroForm field
+# (remediate_pdf.apply_pdf_field_name); Word writes w:alias on a content control
+# (apply_field_name.apply_docx_field_name) — different writers, one store getter, because
+# both answer the same approved-value shape. pptx/xlsx have no content-control equivalent,
+# so their 4.1.2 signal stays the ActiveX/OLE advisory no static write can resolve.
+_FIELD_NAME_EXTS = ("pdf", "docx")
+
 # Every format an approved value can actually be WRITTEN into — the format scope
 # _apply_approved_values gates on, derived from the per-lane constants rather than restated, so
 # the two can never disagree. scripts/gen_matrix_coverage.py reads it to derive the matrix's
@@ -1413,7 +1420,7 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
                      if ext in _OFFICE_ALT_MIME else [])
     link_values = core.store.approved_link_values(scan_id, filename) if ext in _OFFICE_LINK_EXTS else {}
     field_values = (core.store.approved_field_values(scan_id, filename)
-                    if ext in _PDF_APPLY_EXTS else {})
+                    if ext in _FIELD_NAME_EXTS else {})
     if not alt_values and not deco_locators and not link_values and not field_values:
         return                                   # nothing approved awaiting a write
 
@@ -1448,15 +1455,21 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         scs_to_clear={"1.1.1"}, write_fn=alt_write_fn,
         diff_rule_id="1.1.1", credit_rule_ids=("1.1.1",), noun="description", job=job)
 
-    # 4.1.2 form-field accessible names (PDF only) — same writer, keyed by `pdf:field:…`.
+    # 4.1.2 form-field accessible names. PDF keys on `pdf:field:…` and writes /TU; Word keys
+    # on `docx:sdt:…` and writes w:alias. One lane, one criterion, the writer chosen by format.
     # Run as its own lane because it verifies and credits a DIFFERENT criterion: folding it
     # into the alt lane would credit 1.1.1 for a field name, and clear 4.1.2 on no evidence.
     field_uploaded = False
-    if ext in _PDF_APPLY_EXTS and field_values:
-        from remediate_pdf import apply_pdf_approved
+    if ext in _FIELD_NAME_EXTS and field_values:
+        if ext in _PDF_APPLY_EXTS:
+            from remediate_pdf import apply_pdf_approved
+            field_write_fn = apply_pdf_approved
+        else:
+            from apply_field_name import apply_docx_field_name
+            field_write_fn = apply_docx_field_name
         working, field_uploaded = _apply_one_value_kind(
             scan_id=scan_id, filename=filename, working=working,
-            values=field_values, scs_to_clear={"4.1.2"}, write_fn=apply_pdf_approved,
+            values=field_values, scs_to_clear={"4.1.2"}, write_fn=field_write_fn,
             diff_rule_id="4.1.2", credit_rule_ids=("4.1.2",), noun="field name", job=job)
 
     link_uploaded = False

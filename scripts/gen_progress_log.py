@@ -88,6 +88,10 @@ RULE_PATHS = (
     # diverge at 'remediate' vs 'remediati'. Spelled out in full rather than by shortening that
     # prefix, which would silently widen it to anything starting "api/remediat".
     "api/remediation_capability.py",
+    # RULE_FORMATS / REVIEW_FORMATS live here since de0f273 moved them out of store.py. Same
+    # class of claim as the lane tables above — which formats a criterion is judged on decides
+    # whether a clean scan can certify a pass — and the move had left the guard blind to it.
+    "api/assessment_policy.py",
     "api/office_structure.py",
     "api/textchecks.py",
     "api/ocr.py",
