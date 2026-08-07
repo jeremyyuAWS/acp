@@ -40,9 +40,12 @@ Deliberate limitations, each an honest-partial (ADR 0016) rather than a guess
 * **Whitespace is matched flexibly** (any run of spaces matches any other), because the
   proposer collapsed whitespace before truncating and the document did not. Everything else
   is matched literally.
-* **Word only.** The primitive is `w:r`/`w:t` shaped. pptx (`a:r`/`a:t`) is the same idea
-  against different tag names and is the natural next port; `ext` is already threaded through
-  so that lands without a signature change.
+* **Word and PowerPoint; xlsx cannot be done at all for 3.1.2.** The two Office dialects
+  differ only in tag names, in where the language lives (Word a CHILD ELEMENT of `w:rPr`,
+  PowerPoint an ATTRIBUTE on `a:rPr`), and in how many parts must be searched — so `_Dialect`
+  parameterises those three and everything else is shared. SpreadsheetML has no per-run
+  language element whatsoever, so no write can ever satisfy 3.1.2 there; that is a schema
+  fact, not a backlog item.
 """
 from __future__ import annotations
 import io
@@ -55,9 +58,87 @@ _W_TEXT = re.compile(r"(<w:t\b[^>]*>)([^<]*)(</w:t>)", re.S)
 _W_RPR = re.compile(r"<w:rPr\b[^>]*/>|<w:rPr\b[^>]*>.*?</w:rPr>", re.S)
 _W_LANG = re.compile(r"<w:lang\b[^>]*/>|<w:lang\b[^>]*>.*?</w:lang>", re.S)
 
+_A_PARA = re.compile(r"<a:p\b[^>]*>.*?</a:p>", re.S)
+_A_RUN = re.compile(r"<a:r\b[^>]*>.*?</a:r>", re.S)
+_A_TEXT = re.compile(r"(<a:t\b[^>]*>)([^<]*)(</a:t>)", re.S)
+_A_RPR = re.compile(r"<a:rPr\b[^>]*/>|<a:rPr\b[^>]*>.*?</a:rPr>", re.S)
+_A_LANG_ATTR = re.compile(r'\blang="[^"]*"')
+
 _LANG_CODE = re.compile(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$")
 
-SUPPORTED_EXTS = ("docx",)
+
+class _Dialect:
+    """The per-format shape of "a paragraph of runs of text, one of which carries a language".
+
+    The two formats differ in three ways and nothing else that matters here: the tag names,
+    where the language lives (Word a CHILD ELEMENT `<w:lang w:val>` of w:rPr, PowerPoint an
+    ATTRIBUTE `lang` ON a:rPr), and how many parts have to be searched (one document vs every
+    slide). Everything above — locating a prose prefix, widening it to its sentence, splitting
+    a partly-covered run — is identical, so it is written once and parameterised rather than
+    forked per format.
+    """
+
+    def __init__(self, *, para, run, text, rpr, text_tag, parts, set_lang):
+        self.para, self.run, self.text, self.rpr = para, run, text, rpr
+        self.text_tag, self.parts, self.set_lang = text_tag, parts, set_lang
+
+
+def _docx_set_lang(run_xml: str, tag_lang: str) -> str:
+    """Word: `<w:lang w:val="fr"/>` as a child of w:rPr, which must be the run's first child."""
+    tag = f'<w:lang w:val="{_xesc_attr(tag_lang)}"/>'
+    rm = _W_RPR.search(run_xml)
+    if not rm:
+        return re.sub(r"(<w:r\b[^>]*>)", r"\1" + f"<w:rPr>{tag}</w:rPr>", run_xml, count=1)
+    rpr = rm.group(0)
+    if rpr.endswith("/>"):                       # <w:rPr/> -- empty, expand it
+        new_rpr = f"<w:rPr>{tag}</w:rPr>"
+    elif _W_LANG.search(rpr):                    # already marked -- retag, never duplicate
+        new_rpr = _W_LANG.sub(tag, rpr, count=1)
+    else:
+        # w:lang sits near the end of the rPr child order (ECMA-376 17.3.2.28), so appending
+        # is schema-correct for everything the proposers can produce.
+        new_rpr = rpr[: -len("</w:rPr>")] + tag + "</w:rPr>"
+    return run_xml[: rm.start()] + new_rpr + run_xml[rm.end():]
+
+
+def _pptx_set_lang(run_xml: str, tag_lang: str) -> str:
+    """PowerPoint: `lang` is an ATTRIBUTE on a:rPr, and a:rPr is usually already there.
+
+    PowerPoint writes `<a:rPr lang="en-US" dirty="0"/>` on essentially every run, so the
+    common path is REPLACING an existing default rather than adding a mark — which is exactly
+    why office_structure.language_marked_spans keys marks by language instead of treating any
+    mark as sufficient.
+    """
+    attr = f'lang="{_xesc_attr(tag_lang)}"'
+    rm = _A_RPR.search(run_xml)
+    if not rm:
+        return re.sub(r"(<a:r\b[^>]*>)", r"\1" + f"<a:rPr {attr}/>", run_xml, count=1)
+    rpr = rm.group(0)
+    if _A_LANG_ATTR.search(rpr):
+        new_rpr = _A_LANG_ATTR.sub(attr, rpr, count=1)
+    else:                                        # insert straight after the tag name
+        new_rpr = re.sub(r"^<a:rPr\b", f"<a:rPr {attr}", rpr, count=1)
+    return run_xml[: rm.start()] + new_rpr + run_xml[rm.end():]
+
+
+def _docx_parts(names: list[str]) -> list[str]:
+    return [n for n in names if n == "word/document.xml"]
+
+
+def _pptx_parts(names: list[str]) -> list[str]:
+    return sorted(n for n in names if re.fullmatch(r"ppt/slides/slide\d+\.xml", n))
+
+
+_DIALECTS = {
+    "docx": _Dialect(para=_W_PARA, run=_W_RUN, text=_W_TEXT, rpr=_W_RPR,
+                     text_tag='<w:t xml:space="preserve">{}</w:t>',
+                     parts=_docx_parts, set_lang=_docx_set_lang),
+    "pptx": _Dialect(para=_A_PARA, run=_A_RUN, text=_A_TEXT, rpr=_A_RPR,
+                     text_tag="<a:t>{}</a:t>",
+                     parts=_pptx_parts, set_lang=_pptx_set_lang),
+}
+
+SUPPORTED_EXTS = tuple(_DIALECTS)
 
 
 def _xesc(s: str) -> str:
@@ -69,13 +150,13 @@ def _xesc_attr(s: str) -> str:
     return _xesc(s).replace('"', "&quot;")
 
 
-def _runs_with_text(para: str) -> list[dict]:
+def _runs_with_text(para: str, d: "_Dialect") -> list[dict]:
     """Every run in `para` that carries visible text, with its offset in the paragraph's
     concatenated text. [{xml, start, end, at, to, text}] where at/to index into `para`."""
     out: list[dict] = []
     cursor = 0
-    for rm in _W_RUN.finditer(para):
-        tm = _W_TEXT.search(rm.group(0))
+    for rm in d.run.finditer(para):
+        tm = d.text.search(rm.group(0))
         if not tm:
             continue
         text = tm.group(2)
@@ -97,8 +178,8 @@ def _flexible(needle: str) -> re.Pattern:
     return re.compile(r"\s+".join(re.escape(p) for p in needle.split()))
 
 
-def _locate(xml: str, locator: str) -> tuple[str, list[dict], int, int] | None:
-    """Find `locator` in the document's paragraph text.
+def _locate(xml: str, locator: str, d: "_Dialect") -> tuple[str, list[dict], int, int] | None:
+    """Find `locator` in this part's paragraph text.
 
     Returns (paragraph_xml, runs, span_start, span_end) with the span expressed as offsets
     into the paragraph's CONCATENATED run text, or None when no paragraph contains it.
@@ -107,9 +188,9 @@ def _locate(xml: str, locator: str) -> tuple[str, list[dict], int, int] | None:
     if not needle:
         return None
     pat = _flexible(needle)
-    for pm in _W_PARA.finditer(xml):
+    for pm in d.para.finditer(xml):
         para = pm.group(0)
-        runs = _runs_with_text(para)
+        runs = _runs_with_text(para, d)
         if not runs:
             continue
         joined = "".join(r["text"] for r in runs)
@@ -119,36 +200,20 @@ def _locate(xml: str, locator: str) -> tuple[str, list[dict], int, int] | None:
     return None
 
 
-def _rebuild_run(run_xml: str, text: str, *, lang: str | None = None) -> str:
-    """`run_xml` with its w:t replaced by `text`, optionally carrying a `w:lang`.
+def _rebuild_run(run_xml: str, text: str, d: "_Dialect", *, lang: str | None = None) -> str:
+    """`run_xml` with its text element replaced by `text`, optionally carrying a language.
 
-    Formatting is preserved by keeping the run's own w:rPr untouched apart from the language
-    mark, so a split run's halves stay visually identical to the original.
+    Formatting is preserved by keeping the run's own run-properties untouched apart from the
+    language mark, so a split run's halves stay visually identical to the original.
     """
-    tm = _W_TEXT.search(run_xml)
+    tm = d.text.search(run_xml)
     if not tm:
         return run_xml
-    out = run_xml[:tm.start()] + f'<w:t xml:space="preserve">{_xesc(text)}</w:t>' + run_xml[tm.end():]
-    if lang is None:
-        return out
-    tag = f'<w:lang w:val="{_xesc_attr(lang)}"/>'
-    rm = _W_RPR.search(out)
-    if not rm:
-        # No run properties at all -- w:rPr must be the run's FIRST child.
-        return re.sub(r"(<w:r\b[^>]*>)", r"\1" + f"<w:rPr>{tag}</w:rPr>", out, count=1)
-    rpr = rm.group(0)
-    if rpr.endswith("/>"):                       # <w:rPr/> -- empty, expand it
-        new_rpr = f"<w:rPr>{tag}</w:rPr>"
-    elif _W_LANG.search(rpr):                    # already marked -- retag, never duplicate
-        new_rpr = _W_LANG.sub(tag, rpr, count=1)
-    else:
-        # w:lang sits near the end of the rPr child order (ECMA-376 17.3.2.28), so appending
-        # is schema-correct for everything the proposers can produce.
-        new_rpr = rpr[: -len("</w:rPr>")] + tag + "</w:rPr>"
-    return out[: rm.start()] + new_rpr + out[rm.end():]
+    out = run_xml[:tm.start()] + d.text_tag.format(_xesc(text)) + run_xml[tm.end():]
+    return out if lang is None else d.set_lang(out, lang)
 
 
-def _splice(para: str, runs: list[dict], start: int, end: int,
+def _splice(para: str, runs: list[dict], start: int, end: int, d: "_Dialect",
             *, replacement: str | None, lang: str | None) -> str:
     """Rewrite the runs covering [start, end) of the paragraph's text.
 
@@ -168,7 +233,7 @@ def _splice(para: str, runs: list[dict], start: int, end: int,
         text = r["text"]
         rebuilt: list[str] = []
         if lo > 0:                               # keep the part before the span, as it was
-            rebuilt.append(_rebuild_run(r["xml"], text[:lo]))
+            rebuilt.append(_rebuild_run(r["xml"], text[:lo], d))
         covered = text[lo:hi]
         if replacement is not None:
             # All of the approved prose goes in the first covered run; the remaining covered
@@ -176,11 +241,11 @@ def _splice(para: str, runs: list[dict], start: int, end: int,
             body = replacement if not placed else ""
             placed = True
             if body:
-                rebuilt.append(_rebuild_run(r["xml"], body))
+                rebuilt.append(_rebuild_run(r["xml"], body, d))
         else:
-            rebuilt.append(_rebuild_run(r["xml"], covered, lang=lang))
+            rebuilt.append(_rebuild_run(r["xml"], covered, d, lang=lang))
         if hi < len(text):                       # keep the part after the span, as it was
-            rebuilt.append(_rebuild_run(r["xml"], text[hi:]))
+            rebuilt.append(_rebuild_run(r["xml"], text[hi:], d))
         pieces.append(para[tail:r["at"]])
         pieces.append("".join(rebuilt))
         tail = r["to"]
@@ -208,15 +273,18 @@ def _write(data: bytes, ext: str, values: dict[str, str], *, mode: str) -> tuple
     if not values or ext not in SUPPORTED_EXTS:
         return data, [], list(values.keys())
 
-    part = "word/document.xml"
+    d = _DIALECTS[ext]
     with zipfile.ZipFile(io.BytesIO(data)) as zin:
         names = zin.namelist()
         entries = {n: zin.read(n) for n in names}
-    if part not in entries:
-        return data, [], list(values.keys())
-    try:
-        xml = entries[part].decode("utf-8")
-    except UnicodeDecodeError:
+
+    parts: dict[str, str] = {}
+    for n in d.parts(names):
+        try:
+            parts[n] = entries[n].decode("utf-8")
+        except (KeyError, UnicodeDecodeError):
+            continue
+    if not parts:
         return data, [], list(values.keys())
 
     applied: list[dict] = []
@@ -224,33 +292,39 @@ def _write(data: bytes, ext: str, values: dict[str, str], *, mode: str) -> tuple
         value = str(value).strip()
         if mode == "lang" and not _LANG_CODE.match(value):
             # A language mark is an ISO code, not prose. Anything else is a bad row, and
-            # writing it would put junk in w:val where assistive tech reads a language.
+            # writing it would put junk where assistive tech reads a language.
             continue
-        found = _locate(xml, locator)
-        if not found:
-            continue
-        para, runs, start, end = found
-        joined = "".join(r["text"] for r in runs)
-        # BOTH modes act on the whole passage, not on the 60-char locator. The locator is a
-        # truncated lookup key, not the unit of work: marking only its span left a French
-        # sentence tagged for 60 characters and untagged (mid-word) for the rest, which is
-        # wrong on its own terms and left 3.1.2 still firing, so the write never earned credit.
-        end = _sentence_end(joined, start, end)
-        before = joined[start:end]
-        new_para = _splice(para, runs, start, end,
-                           replacement=value if mode == "sensory" else None,
-                           lang=value if mode == "lang" else None)
-        if new_para == para:
-            continue
-        xml = xml.replace(para, new_para, 1)
-        applied.append({"locator": locator, "before": before,
-                        "after": value if mode == "sensory" else f'{before} (lang="{value}")'})
+        # A pptx passage lives on ONE slide but we do not know which, so every part is
+        # searched in order and the first match wins — the same "first match wins" rule the
+        # single-part docx case already had, just across more parts.
+        for name in parts:
+            found = _locate(parts[name], locator, d)
+            if not found:
+                continue
+            para, runs, start, end = found
+            joined = "".join(r["text"] for r in runs)
+            # BOTH modes act on the whole passage, not on the 60-char locator. The locator is
+            # a truncated lookup key, not the unit of work: marking only its span left a
+            # French sentence tagged for 60 characters and untagged (mid-word) for the rest,
+            # which is wrong on its own terms and left 3.1.2 firing, so it never earned credit.
+            end = _sentence_end(joined, start, end)
+            before = joined[start:end]
+            new_para = _splice(para, runs, start, end, d,
+                               replacement=value if mode == "sensory" else None,
+                               lang=value if mode == "lang" else None)
+            if new_para == para:
+                continue
+            parts[name] = parts[name].replace(para, new_para, 1)
+            applied.append({"locator": locator, "before": before,
+                            "after": value if mode == "sensory" else f'{before} (lang="{value}")'})
+            break
 
     unresolved = [k for k in values if k not in {a["locator"] for a in applied}]
     if not applied:
         return data, [], unresolved
 
-    entries[part] = xml.encode("utf-8")
+    for name, xml in parts.items():
+        entries[name] = xml.encode("utf-8")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
         for n in names:
@@ -269,10 +343,14 @@ def apply_sensory_rewrite(data: bytes, ext: str, values: dict[str, str]) -> tupl
 
 
 def apply_language_parts(data: bytes, ext: str, values: dict[str, str]) -> tuple[bytes, list[dict], list[str]]:
-    """Mark approved foreign-language passages with `w:lang` (WCAG 3.1.2).
+    """Mark approved foreign-language passages with the format's language mark (WCAG 3.1.2).
 
     values: {segment-prefix locator: ISO language code}. The passage's text is untouched --
-    only the runs carrying it gain the language mark. A value that is not a language code is
-    skipped and reported unresolved rather than written into w:val.
+    only the runs carrying it gain the mark (`w:lang` in Word, the `lang` attribute on a:rPr
+    in PowerPoint). A value that is not a language code is skipped and reported unresolved
+    rather than written where assistive tech reads a language.
+
+    xlsx is unsupported by construction, not omission: SpreadsheetML's rich-text run
+    properties have no language element at all, so there is nowhere to put the answer.
     """
     return _write(data, ext, values, mode="lang")

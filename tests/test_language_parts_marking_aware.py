@@ -128,6 +128,39 @@ def test_marking_the_wrong_language_does_not_clear_it(tmp_path):
 
 # ── the format that structurally cannot carry the answer ─────────────────────
 
+def test_pptx_writing_the_approved_mark_clears_the_criterion(tmp_path):
+    """The same round trip on PowerPoint, whose language is an attribute on a:rPr.
+
+    Worth running end to end rather than trusting the docx result: the mark lives somewhere
+    different, the passage lives on one slide out of many, and language_marked_spans has to
+    read it back out of that slide for the criterion to clear.
+    """
+    pptx = pytest.importorskip("pptx")
+    from pptx.util import Inches
+    pres = pptx.Presentation()
+    for text in (EN, FR, EN, FR):
+        s = pres.slides.add_slide(pres.slide_layouts[6])
+        tb = s.shapes.add_textbox(Inches(1), Inches(1), Inches(8), Inches(1))
+        tb.text_frame.paragraphs[0].add_run().text = text
+    buf = io.BytesIO()
+    pres.save(buf)
+    data = buf.getvalue()
+
+    def scs(b):
+        p = tmp_path / "f.pptx"
+        p.write_bytes(b)
+        text = "\n".join(sh.text_frame.text
+                         for sl in pptx.Presentation(io.BytesIO(b)).slides
+                         for sh in sl.shapes if sh.has_text_frame)
+        return sorted({f["wcag"].split()[0]
+                       for f in tc.content_findings(text, osx.language_marked_spans(p, ".pptx"))})
+
+    assert "3.1.2" in scs(data)
+    out, applied, unresolved = apply_language_parts(data, "pptx", {FR[:60]: "fr"})
+    assert applied and not unresolved
+    assert "3.1.2" not in scs(out)
+
+
 def test_xlsx_has_no_language_marks_to_read(tmp_path):
     """SpreadsheetML's rich-text run properties (CT_RPrElt) have no language element, so
     there is nowhere to record this and no write can ever clear 3.1.2 there. Absent by

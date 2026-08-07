@@ -199,10 +199,90 @@ def test_partial_resolution_reports_only_the_missing_locator():
 
 
 def test_unsupported_format_resolves_nothing():
+    """xlsx, specifically: SpreadsheetML has no per-run language element, so a language lane
+    there could never clear its criterion. Unsupported by construction, not by omission."""
     pkg = _pkg(_para(_run("Bonjour le monde")))
-    out, applied, unresolved = apply_language_parts(pkg, "pptx", {"Bonjour le monde": "fr"})
+    out, applied, unresolved = apply_language_parts(pkg, "xlsx", {"Bonjour le monde": "fr"})
     assert not applied and unresolved == ["Bonjour le monde"]
     assert out == pkg
+
+
+# ── pptx: same primitive, different dialect ───────────────────────────────────
+
+_SLIDE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+ xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<p:cSld><p:spTree>{body}</p:spTree></p:cSld></p:sld>"""
+
+
+def _apara(*runs: str) -> str:
+    return "<a:p>" + "".join(runs) + "</a:p>"
+
+
+def _arun(text: str, rpr: str = "") -> str:
+    return f"<a:r>{rpr}<a:t>{text}</a:t></a:r>"
+
+
+def _ppkg(*slides: str) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        for i, body in enumerate(slides, start=1):
+            z.writestr(f"ppt/slides/slide{i}.xml", _SLIDE.format(body=body))
+    return buf.getvalue()
+
+
+def _slide(data: bytes, n: int = 1) -> str:
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        return z.read(f"ppt/slides/slide{n}.xml").decode("utf-8")
+
+
+def test_pptx_language_is_written_as_an_attribute_on_arpr():
+    """PowerPoint's language is an ATTRIBUTE on a:rPr, not a child element like Word's."""
+    pkg = _ppkg(_apara(_arun("Bonjour le monde.")))
+    out, applied, unresolved = apply_language_parts(pkg, "pptx", {"Bonjour le monde.": "fr"})
+    assert applied and not unresolved
+    assert '<a:rPr lang="fr"/>' in _slide(out)
+
+
+def test_pptx_replaces_the_default_language_rather_than_adding_a_second():
+    """PowerPoint stamps lang="en-US" on nearly every run; the mark must retag, not duplicate."""
+    pkg = _ppkg(_apara(_arun("Bonjour le monde.", '<a:rPr lang="en-US" dirty="0"/>')))
+    out, _, _ = apply_language_parts(pkg, "pptx", {"Bonjour le monde.": "fr"})
+    slide = _slide(out)
+    assert slide.count("lang=") == 1
+    assert 'lang="fr"' in slide and "en-US" not in slide
+    assert 'dirty="0"' in slide                       # other run properties survive
+
+
+def test_pptx_sensory_rewrite_replaces_the_sentence():
+    pkg = _ppkg(_apara(_arun("Press the round green button to submit. Then close.")))
+    out, applied, _ = apply_sensory_rewrite(
+        pkg, "pptx", {"Press the round green button to submit.": "Press Submit."})
+    assert len(applied) == 1
+    slide = _slide(out)
+    assert "Press Submit." in slide and "round green button" not in slide
+    assert "Then close." in slide
+
+
+def test_pptx_finds_the_passage_on_a_later_slide():
+    """A pptx passage lives on one slide and the writer does not know which."""
+    pkg = _ppkg(_apara(_arun("Nothing relevant here.")),
+                _apara(_arun("Bonjour le monde.")))
+    out, applied, unresolved = apply_language_parts(pkg, "pptx", {"Bonjour le monde.": "fr"})
+    assert applied and not unresolved
+    assert 'lang="fr"' in _slide(out, 2)
+    assert "lang=" not in _slide(out, 1)               # slide 1 untouched
+
+
+def test_pptx_splits_a_run_that_only_partly_covers_the_passage():
+    pkg = _ppkg(_apara(_arun("English lead in. Bonjour le monde. English tail.")))
+    out, _, _ = apply_language_parts(pkg, "pptx", {"Bonjour le monde.": "fr"})
+    slide = _slide(out)
+    assert slide.count('lang="fr"') == 1
+    import re
+    assert "".join(re.findall(r"<a:t>([^<]*)</a:t>", slide)) == \
+        "English lead in. Bonjour le monde. English tail."
 
 
 def test_empty_values_are_a_no_op():

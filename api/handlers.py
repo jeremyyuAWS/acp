@@ -1303,13 +1303,17 @@ _LINK_SCS_BY_EXT = {
 _OFFICE_LINK_EXTS = tuple(_LINK_SCS_BY_EXT)
 
 # The text-span lanes: a sentence rewrite (1.3.3) and a language mark (3.1.2), both keyed by a
-# prose prefix rather than a part#rId or an href, both written by apply_text_values. Word only
-# for now — the writer's primitive is w:r/w:t shaped and the pptx port is a:r/a:t against the
-# same code (see apply_text_values' module docstring). Same rule as _LINK_SCS_BY_EXT above: a
-# format appears here only where a detector actually emits the criterion, so the re-scan credit
-# means something.
-_SENSORY_EXTS = ("docx",)
-_LANGUAGE_EXTS = ("docx",)
+# prose prefix rather than a part#rId or an href, both written by apply_text_values. Same rule
+# as _LINK_SCS_BY_EXT above: a format appears here only where a detector actually emits the
+# criterion, so the re-scan credit means something.
+#
+# The two lists differ, and the difference is structural rather than a gap in the roadmap.
+# 1.3.3 is a text rewrite, which every Office format can carry. 3.1.2 needs somewhere to
+# record a language, and SpreadsheetML's rich-text run properties have no language element at
+# all — so an xlsx language lane could never clear its criterion and would strand every
+# approval it accepted. xlsx is therefore absent from _LANGUAGE_EXTS on purpose.
+_SENSORY_EXTS = ("docx", "pptx")
+_LANGUAGE_EXTS = ("docx", "pptx")
 
 # The lanes that exist only for PDF: figure alt (`pdf:fig:…` → /Alt) and form-field accessible
 # names (`pdf:field:…` → /TU), both written by remediate_pdf.apply_pdf_approved.
