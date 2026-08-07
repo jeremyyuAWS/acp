@@ -1302,6 +1302,15 @@ _LINK_SCS_BY_EXT = {
 }
 _OFFICE_LINK_EXTS = tuple(_LINK_SCS_BY_EXT)
 
+# The text-span lanes: a sentence rewrite (1.3.3) and a language mark (3.1.2), both keyed by a
+# prose prefix rather than a part#rId or an href, both written by apply_text_values. Word only
+# for now — the writer's primitive is w:r/w:t shaped and the pptx port is a:r/a:t against the
+# same code (see apply_text_values' module docstring). Same rule as _LINK_SCS_BY_EXT above: a
+# format appears here only where a detector actually emits the criterion, so the re-scan credit
+# means something.
+_SENSORY_EXTS = ("docx",)
+_LANGUAGE_EXTS = ("docx",)
+
 # The lanes that exist only for PDF: figure alt (`pdf:fig:…` → /Alt) and form-field accessible
 # names (`pdf:field:…` → /TU), both written by remediate_pdf.apply_pdf_approved.
 _PDF_APPLY_EXTS = ("pdf",)
@@ -1421,7 +1430,12 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     link_values = core.store.approved_link_values(scan_id, filename) if ext in _OFFICE_LINK_EXTS else {}
     field_values = (core.store.approved_field_values(scan_id, filename)
                     if ext in _FIELD_NAME_EXTS else {})
-    if not alt_values and not deco_locators and not link_values and not field_values:
+    sensory_values = (core.store.approved_sensory_values(scan_id, filename)
+                      if ext in _SENSORY_EXTS else {})
+    language_values = (core.store.approved_language_values(scan_id, filename)
+                       if ext in _LANGUAGE_EXTS else {})
+    if not (alt_values or deco_locators or link_values or field_values
+            or sensory_values or language_values):
         return                                   # nothing approved awaiting a write
 
     import blob as _blob
@@ -1484,7 +1498,29 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             values=link_values, scs_to_clear=set(link_scs), write_fn=link_write_fn,
             diff_rule_id="2.4.4", credit_rule_ids=link_scs, noun="link text", job=job)
 
-    if not (alt_uploaded or link_uploaded or field_uploaded):
+    # 1.3.3 sensory rewrites and 3.1.2 language marks (Word). Two lanes, not one, even though a
+    # single module writes both: each lane may only credit the criterion its OWN re-scan saw
+    # clear, and folding them together would credit 1.3.3 for a language mark.
+    sensory_uploaded = False
+    if sensory_values:
+        from apply_text_values import apply_sensory_rewrite
+        sensory_write_fn = lambda d, v: apply_sensory_rewrite(d, ext, v)  # noqa: E731
+        working, sensory_uploaded = _apply_one_value_kind(
+            scan_id=scan_id, filename=filename, working=working,
+            values=sensory_values, scs_to_clear={"1.3.3"}, write_fn=sensory_write_fn,
+            diff_rule_id="1.3.3", credit_rule_ids=("1.3.3",), noun="rewrite", job=job)
+
+    language_uploaded = False
+    if language_values:
+        from apply_text_values import apply_language_parts
+        language_write_fn = lambda d, v: apply_language_parts(d, ext, v)  # noqa: E731
+        working, language_uploaded = _apply_one_value_kind(
+            scan_id=scan_id, filename=filename, working=working,
+            values=language_values, scs_to_clear={"3.1.2"}, write_fn=language_write_fn,
+            diff_rule_id="3.1.2", credit_rule_ids=("3.1.2",), noun="language mark", job=job)
+
+    if not (alt_uploaded or link_uploaded or field_uploaded
+            or sensory_uploaded or language_uploaded):
         return
 
     _phase(job, "storing the corrected copy")

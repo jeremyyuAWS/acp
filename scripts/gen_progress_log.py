@@ -97,8 +97,20 @@ RULE_PATHS = (
     "api/ocr.py",
     "api/remediate",
     "api/proposals.py",
-    "api/apply_alt.py",
-    "api/apply_link_text.py",
+    # The write-back appliers. A PREFIX, not the two filenames this list used to name, because
+    # naming them individually made the guard blind to any applier added later — and an applier
+    # is the most capability-shaped file there is: it moves a criterion from "we can propose a
+    # fix" to "the fix reaches the document", which is exactly what the log exists to record.
+    # api/apply_text_values.py (1.3.3 sensory rewrite + 3.1.2 language marks) landed with no
+    # trailer and no PROGRESS_LOG entry, and --check passed, because it was not apply_alt.py or
+    # apply_link_text.py.
+    #
+    # Widening a prefix is what the api/remediation_capability.py comment above warns against, so
+    # to be explicit about why this one is safe: the failure modes are not symmetric. Over-matching
+    # costs one `Matrix-Note: none` line on a commit that did not need it. Under-matching loses a
+    # capability change from the public log permanently, because the trailer is a per-commit fact
+    # no later commit can supply. Every module under api/apply_ is an applier by construction.
+    "api/apply_",
     "config/rule-catalog.json",
 )
 
