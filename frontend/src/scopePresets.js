@@ -45,11 +45,12 @@ export const inScope = (name, sc, fmt) => {
 }
 
 // Every (criterion, format) pair an operator may put in scope, with display labels —
-// the universe the admin scope grid renders. A pair appears here only when the backend
-// can reach a verdict on it (a pass/fail validator OR a review lane), so the grid can
-// never offer a checkbox that would change nothing. Derived, so it cannot drift into
-// claiming capability the engine does not have. `html` is excluded: this configures a
-// DOCUMENT engagement.
+// the universe the admin scope grid renders. A pair appears here when the backend can
+// reach a verdict on it by ANY of the three routes _rule_outcome consults: a pass/fail
+// validator (RULE_FORMATS), a review lane (REVIEW_FORMATS), or the capability registry.
+// Derived from all three, so the grid can neither offer a checkbox that changes nothing
+// nor hide a capability the operator is entitled to control. `html` is excluded: this
+// configures a DOCUMENT engagement.
 export const SCOPE_UNIVERSE = [
   { sc: "1.1.1", name: "Non-text Content", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
   { sc: "1.3.1", name: "Info and Relationships", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
@@ -64,13 +65,13 @@ export const SCOPE_UNIVERSE = [
   { sc: "1.4.8", name: "Visual Presentation", level: "AAA", formats: ["docx"] },
   { sc: "1.4.9", name: "Images of Text (No Exception)", level: "AAA", formats: ["docx", "pdf", "pptx", "xlsx"] },
   { sc: "1.4.10", name: "Reflow", level: "AA", formats: ["docx", "pptx"] },
-  { sc: "1.4.11", name: "Non-text Contrast", level: "AA", formats: ["docx", "pdf", "pptx"] },
+  { sc: "1.4.11", name: "Non-text Contrast", level: "AA", formats: ["docx", "pdf", "pptx", "xlsx"] },
   { sc: "1.4.12", name: "Text Spacing", level: "AA", formats: ["docx", "pdf", "pptx"] },
   { sc: "2.1.1", name: "Keyboard", level: "A", formats: ["pptx"] },
   { sc: "2.1.2", name: "No Keyboard Trap", level: "A", formats: ["docx", "pptx", "xlsx"] },
   { sc: "2.4.1", name: "Bypass Blocks", level: "A", formats: ["pdf"] },
   { sc: "2.4.2", name: "Page Titled", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
-  { sc: "2.4.3", name: "Focus Order", level: "A", formats: ["pptx"] },
+  { sc: "2.4.3", name: "Focus Order", level: "A", formats: ["pdf", "pptx"] },
   { sc: "2.4.4", name: "Link Purpose (In Context)", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
   { sc: "2.4.6", name: "Headings and Labels", level: "AA", formats: ["docx", "pdf", "pptx", "xlsx"] },
   { sc: "2.4.9", name: "Link Purpose (Link Only)", level: "AAA", formats: ["docx", "pptx"] },
@@ -79,7 +80,7 @@ export const SCOPE_UNIVERSE = [
   { sc: "3.1.2", name: "Language of Parts", level: "AA", formats: ["docx", "pdf", "pptx", "xlsx"] },
   { sc: "3.1.5", name: "Reading Level", level: "AAA", formats: ["docx", "pdf", "pptx", "xlsx"] },
   { sc: "3.3.2", name: "Labels or Instructions", level: "A", formats: ["docx"] },
-  { sc: "4.1.2", name: "Name, Role, Value", level: "A", formats: ["pptx", "xlsx"] },
+  { sc: "4.1.2", name: "Name, Role, Value", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
 ]
 
 // The format columns the grid draws, in a fixed order so the header and every

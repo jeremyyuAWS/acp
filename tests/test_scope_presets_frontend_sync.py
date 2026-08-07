@@ -32,7 +32,7 @@ OUT = ROOT / "frontend" / "src" / "scopePresets.js"
 # generator rather than retyped: a second hand-maintained list of where the generated files go
 # is the identical failure mode this whole module exists to prevent, one level up.
 sys.path.insert(0, str(ROOT / "scripts"))
-from gen_scope_presets import OUTS  # noqa: E402
+from gen_scope_presets import OUTS, _DOC_FORMATS as DOC_FORMATS  # noqa: E402
 
 sys.path.insert(0, str(ROOT / "api"))
 
@@ -125,6 +125,63 @@ def test_every_preset_reaches_the_frontend_intact():
     emitted = set(re.findall(r'^    "(\d+\.\d+\.\d+)":', js, flags=re.M))
     defined = {sc for scope in store.SCOPE_PRESETS.values() for sc in scope}
     assert emitted == defined
+
+
+def test_universe_covers_every_registry_pair():
+    """A pair the CAPABILITY REGISTRY evaluates must be selectable in the scope grid.
+
+    `_rule_outcome` reaches a verdict by three routes -- RULE_FORMATS, REVIEW_FORMATS, and the
+    registry -- and `in_scope` gates all three identically, because it is a plain lookup in the
+    operator's own dict applied before any lane branching. So all three belong in the universe.
+
+    The registry was missed when SCOPE_UNIVERSE was first derived, and it cost four real pairs:
+    1.4.11 x xlsx, 2.4.3 x pdf, 4.1.2 x docx and 4.1.2 x pdf. Two of those are the exact pairs
+    _rule_outcome's registry branch was written for, and 4.1.2 x docx vanished the moment #149
+    moved docx off the legacy tables onto its own detector -- a capability the operator could
+    not switch off, with nothing on screen to say so.
+
+    Derived on both sides rather than pinned to a list of four: naming them here would go stale
+    the next time a pair migrates to the registry, which is the direction this codebase is
+    travelling.
+    """
+    import rule_registry as reg
+    reg.load()
+
+    js = OUT.read_text()
+    emitted = {}
+    for sc, fmts in re.findall(r'\{ sc: "(\d+\.\d+\.\d+)".*?formats: \[([^\]]*)\] \}', js):
+        emitted[sc] = set(re.findall(r'"(\w+)"', fmts))
+
+    missing = sorted(
+        (r.rule, r.fmt) for r in reg.all_registrations()
+        if r.fmt in DOC_FORMATS and r.fmt not in emitted.get(r.rule, set()))
+    assert not missing, (
+        "SCOPE_UNIVERSE omits (criterion, format) pairs the registry evaluates and in_scope "
+        f"gates -- the operator cannot control them: {missing}")
+
+
+def test_universe_offers_nothing_the_engine_cannot_judge():
+    """The other direction, which is the one the derivation was originally designed against.
+
+    A checkbox for a pair no route can reach a verdict on would change nothing when ticked, and
+    on an accessibility product that is the expensive kind of wrong. Both halves are asserted
+    here so a future fix for one cannot quietly trade away the other.
+    """
+    import rule_registry as reg
+    import store
+    reg.load()
+
+    reachable = set()
+    for sc, fmts in list(store.RULE_FORMATS.items()) + list(store.REVIEW_FORMATS.items()):
+        reachable |= {(sc, f) for f in fmts}
+    reachable |= {(r.rule, r.fmt) for r in reg.all_registrations()}
+
+    js = OUT.read_text()
+    for sc, fmts in re.findall(r'\{ sc: "(\d+\.\d+\.\d+)".*?formats: \[([^\]]*)\] \}', js):
+        for f in re.findall(r'"(\w+)"', fmts):
+            assert (sc, f) in reachable, (
+                f"SCOPE_UNIVERSE offers {sc} x {f}, which no validator, review lane or registry "
+                "entry can reach a verdict on -- ticking it would change nothing")
 
 
 def test_deva_final_is_the_fourteen_the_panel_claims():
