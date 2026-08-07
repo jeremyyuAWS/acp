@@ -25,6 +25,9 @@ Every lane below was DERIVED by running that round-trip, not copied from a catal
   * docx/xlsx clear their whole auto set on the gen_demo_fixtures corpus (the "100% actioned"
     proof). Only reading level (3.1.5) and, for docx, justified text (1.4.8), link purpose
     (2.4.4/2.4.9) and section headings (2.4.10) stay human — none has a deterministic fix.
+    xlsx 3.1.2 joined them for a DIFFERENT reason worth distinguishing: not "no fix was built"
+    but "the format has no element to write into". A human lane can mean either, and only the
+    first is a backlog item.
   * html clears several criteria *incidentally*: darkening low-contrast text (1.4.3) also clears
     the AAA contrast finding (1.4.6); labelling a bare control (1.3.1) also clears 3.3.2 and 4.1.2.
     Those are marked "auto" because the re-scan proves they clear, not because a fixer is named
@@ -139,7 +142,11 @@ REMEDIATION: dict[str, dict[str, str]] = {
                              # is none), a human approves, apply_field_name writes it. Same
                              # w:alias that clears 3.3.2, so one approval settles both.
     },
-    # Excel — fully actioned bar reading level; no human lane for any structural/visual finding.
+    # Excel — every structural/visual finding is actioned. Two human lanes, both because the
+    # FORMAT cannot carry the answer rather than because nothing was built: reading level
+    # (3.1.5, prose a person must rewrite) and language-of-parts (3.1.2, which SpreadsheetML
+    # has no element to record). This comment used to read "fully actioned bar reading level",
+    # which was true of the build and false of the format.
     "xlsx": {
         "1.1.1": ASSISTED,
         "1.3.1": AUTO,       # defined-table headerRowCount → 1
@@ -153,7 +160,17 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "2.4.4": ASSISTED,   # vague cell-hyperlink text → descriptive link-text proposal (propose_link_texts, xlsx)
         "2.4.6": ASSISTED,   # default sheet tabs / table columns → AI-named label proposal (propose_xlsx_labels)
         "3.1.1": AUTO,
-        "3.1.2": ASSISTED,
+        "3.1.2": HUMAN,      # language-of-parts — EXPLAIN-ONLY, and permanently so. The
+                             # langdetect proposer is format-agnostic and does emit here, which
+                             # is why this read ASSISTED; but SpreadsheetML has NOWHERE to put
+                             # the answer. CT_RPrElt, the rich-text run properties element, has
+                             # no language child — verified against the schema, not inferred —
+                             # and neither does CT_Font at the cell level. So an approval could
+                             # never be honoured, `apply_text_values` refuses xlsx for this mode
+                             # outright, and a proposal nobody can write is not an assisted lane.
+                             # Exactly the pdf 2.4.4 shape above: assessed, explained, and
+                             # re-authored by a person. Document-level language (3.1.1) is
+                             # unaffected — docProps/core.xml holds that one and stays AUTO.
         "3.1.5": ASSISTED,
     },
     # PowerPoint — slide-level deterministic fixes (title, contrast, reading order, language);
