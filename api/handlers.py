@@ -1312,7 +1312,7 @@ _OFFICE_LINK_EXTS = tuple(_LINK_SCS_BY_EXT)
 # record a language, and SpreadsheetML's rich-text run properties have no language element at
 # all — so an xlsx language lane could never clear its criterion and would strand every
 # approval it accepted. xlsx is therefore absent from _LANGUAGE_EXTS on purpose.
-_SENSORY_EXTS = ("docx", "pptx")
+_SENSORY_EXTS = ("docx", "pptx", "xlsx")
 _LANGUAGE_EXTS = ("docx", "pptx")
 
 # The lanes that exist only for PDF: figure alt (`pdf:fig:…` → /Alt) and form-field accessible

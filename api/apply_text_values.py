@@ -40,12 +40,20 @@ Deliberate limitations, each an honest-partial (ADR 0016) rather than a guess
 * **Whitespace is matched flexibly** (any run of spaces matches any other), because the
   proposer collapsed whitespace before truncating and the document did not. Everything else
   is matched literally.
-* **Word and PowerPoint; xlsx cannot be done at all for 3.1.2.** The two Office dialects
-  differ only in tag names, in where the language lives (Word a CHILD ELEMENT of `w:rPr`,
+* **All three Office formats for 1.3.3; Word and PowerPoint only for 3.1.2.** The dialects
+  differ in tag names, in where the language lives (Word a CHILD ELEMENT of `w:rPr`,
   PowerPoint an ATTRIBUTE on `a:rPr`), and in how many parts must be searched — so `_Dialect`
-  parameterises those three and everything else is shared. SpreadsheetML has no per-run
-  language element whatsoever, so no write can ever satisfy 3.1.2 there; that is a schema
-  fact, not a backlog item.
+  parameterises those and everything else is shared. SpreadsheetML has no per-run language
+  element whatsoever, so no write can ever satisfy 3.1.2 there; that is a schema fact, not a
+  backlog item, and the lang mode refuses xlsx outright rather than failing to find a match
+  (which would read as a missing passage instead of a missing mechanism).
+* **An xlsx rewrite is shared-string scoped, and that is deliberate.** Excel pools cell text
+  in `xl/sharedStrings.xml` and references it by index, so rewriting an item changes EVERY
+  cell using that exact string. That is the right outcome — the same sensory instruction in
+  two cells is the same finding and wants the same fix — but it is a wider blast radius than
+  the docx/pptx case, and it is the same granularity `apply_link_text` already inherits from
+  its href-keyed store. Inline `<is>` strings are per-cell and carry no such coupling; both
+  are searched.
 """
 from __future__ import annotations
 import io
@@ -63,6 +71,16 @@ _A_RUN = re.compile(r"<a:r\b[^>]*>.*?</a:r>", re.S)
 _A_TEXT = re.compile(r"(<a:t\b[^>]*>)([^<]*)(</a:t>)", re.S)
 _A_RPR = re.compile(r"<a:rPr\b[^>]*/>|<a:rPr\b[^>]*>.*?</a:rPr>", re.S)
 _A_LANG_ATTR = re.compile(r'\blang="[^"]*"')
+
+# SpreadsheetML. Unprefixed (default namespace), and structurally unlike the other two:
+#   * the "paragraph" is a string ITEM -- <si> in the shared table, <is> inline in a sheet;
+#   * an item may have NO runs at all (<si><t>plain</t></si>), so a bare <t> under the item
+#     has to count as a run of its own or plain cells would silently never match;
+#   * <r> is matched BEFORE bare <t> so a rich run's own <t> is consumed with it, not twice.
+_X_ITEM = re.compile(r"<si\b[^>]*>.*?</si>|<is\b[^>]*>.*?</is>", re.S)
+_X_RUN = re.compile(r"<r\b[^>]*>.*?</r>|<t\b[^>]*>[^<]*</t>", re.S)
+_X_TEXT = re.compile(r"(<t\b[^>]*>)([^<]*)(</t>)", re.S)
+_X_RPR = re.compile(r"<rPr\b[^>]*/>|<rPr\b[^>]*>.*?</rPr>", re.S)
 
 _LANG_CODE = re.compile(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$")
 
@@ -121,12 +139,32 @@ def _pptx_set_lang(run_xml: str, tag_lang: str) -> str:
     return run_xml[: rm.start()] + new_rpr + run_xml[rm.end():]
 
 
+def _xlsx_set_lang(run_xml: str, tag_lang: str) -> str:
+    """Never called. SpreadsheetML's rich-text run properties (CT_RPrElt) have no language
+    element, so there is nowhere to record one; `_write` refuses the lang mode for xlsx before
+    reaching here. Present so the dialect table stays total, and raising rather than silently
+    returning the run unchanged — a caller that got here has a bug, and a quiet no-op would
+    report a successful write that wrote nothing."""
+    raise NotImplementedError("SpreadsheetML has no per-run language element (WCAG 3.1.2)")
+
+
 def _docx_parts(names: list[str]) -> list[str]:
     return [n for n in names if n == "word/document.xml"]
 
 
 def _pptx_parts(names: list[str]) -> list[str]:
     return sorted(n for n in names if re.fullmatch(r"ppt/slides/slide\d+\.xml", n))
+
+
+def _xlsx_parts(names: list[str]) -> list[str]:
+    """The shared string table first, then every sheet for inline strings.
+
+    Most Excel text is pooled in sharedStrings.xml and referenced by index; inline <is>
+    strings are rarer but real, and a writer that read only the pool would silently miss them.
+    """
+    out = [n for n in names if n == "xl/sharedStrings.xml"]
+    out += sorted(n for n in names if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", n))
+    return out
 
 
 _DIALECTS = {
@@ -136,9 +174,17 @@ _DIALECTS = {
     "pptx": _Dialect(para=_A_PARA, run=_A_RUN, text=_A_TEXT, rpr=_A_RPR,
                      text_tag="<a:t>{}</a:t>",
                      parts=_pptx_parts, set_lang=_pptx_set_lang),
+    "xlsx": _Dialect(para=_X_ITEM, run=_X_RUN, text=_X_TEXT, rpr=_X_RPR,
+                     text_tag='<t xml:space="preserve">{}</t>',
+                     parts=_xlsx_parts, set_lang=_xlsx_set_lang),
 }
 
 SUPPORTED_EXTS = tuple(_DIALECTS)
+
+# 3.1.2 needs somewhere to record a language. Word and PowerPoint have one; SpreadsheetML
+# does not, at any level — so the language write-back is scoped here rather than by silently
+# failing to match, which would look like a missing passage instead of a missing mechanism.
+LANGUAGE_EXTS = ("docx", "pptx")
 
 
 def _xesc(s: str) -> str:
@@ -178,16 +224,24 @@ def _flexible(needle: str) -> re.Pattern:
     return re.compile(r"\s+".join(re.escape(p) for p in needle.split()))
 
 
-def _locate(xml: str, locator: str, d: "_Dialect") -> tuple[str, list[dict], int, int] | None:
-    """Find `locator` in this part's paragraph text.
+def _locate_all(xml: str, locator: str, d: "_Dialect") -> list[tuple[str, list[dict], int, int]]:
+    """EVERY paragraph in this part whose text contains `locator`.
 
-    Returns (paragraph_xml, runs, span_start, span_end) with the span expressed as offsets
-    into the paragraph's CONCATENATED run text, or None when no paragraph contains it.
+    Each hit is (paragraph_xml, runs, span_start, span_end), the span expressed as offsets
+    into that paragraph's CONCATENATED run text.
+
+    All of them, not the first: both proposers dedupe by sentence
+    (propose_sensory_rewrite's `seen`, detect_sensory's), so ONE approved value stands for
+    every occurrence of that sentence in the document. Fixing only the first leaves the rest
+    firing, the residual re-scan still reports the criterion, and the approval earns no
+    credit — which is precisely what a repeated cell exposed on xlsx. apply_link_text already
+    works this way, rewriting every hyperlink pointing at an approved href.
     """
     needle = " ".join((locator or "").split())
     if not needle:
-        return None
+        return []
     pat = _flexible(needle)
+    hits: list[tuple[str, list[dict], int, int]] = []
     for pm in d.para.finditer(xml):
         para = pm.group(0)
         runs = _runs_with_text(para, d)
@@ -196,8 +250,8 @@ def _locate(xml: str, locator: str, d: "_Dialect") -> tuple[str, list[dict], int
         joined = "".join(r["text"] for r in runs)
         m = pat.search(joined)
         if m:
-            return para, runs, m.start(), m.end()
-    return None
+            hits.append((para, runs, m.start(), m.end()))
+    return hits
 
 
 def _rebuild_run(run_xml: str, text: str, d: "_Dialect", *, lang: str | None = None) -> str:
@@ -270,7 +324,8 @@ def _write(data: bytes, ext: str, values: dict[str, str], *, mode: str) -> tuple
     """Shared body for both writers. `mode` is "sensory" (replace) or "lang" (mark)."""
     ext = (ext or "").lower().lstrip(".")
     values = {k: v for k, v in (values or {}).items() if k and v and str(v).strip()}
-    if not values or ext not in SUPPORTED_EXTS:
+    supported = SUPPORTED_EXTS if mode == "sensory" else LANGUAGE_EXTS
+    if not values or ext not in supported:
         return data, [], list(values.keys())
 
     d = _DIALECTS[ext]
@@ -294,30 +349,28 @@ def _write(data: bytes, ext: str, values: dict[str, str], *, mode: str) -> tuple
             # A language mark is an ISO code, not prose. Anything else is a bad row, and
             # writing it would put junk where assistive tech reads a language.
             continue
-        # A pptx passage lives on ONE slide but we do not know which, so every part is
-        # searched in order and the first match wins — the same "first match wins" rule the
-        # single-part docx case already had, just across more parts.
+        # Every part, and every occurrence within it. A passage may sit on any slide or in any
+        # cell, and the same sentence may legitimately appear more than once — one approved
+        # value covers all of them (see _locate_all).
         for name in parts:
-            found = _locate(parts[name], locator, d)
-            if not found:
-                continue
-            para, runs, start, end = found
-            joined = "".join(r["text"] for r in runs)
-            # BOTH modes act on the whole passage, not on the 60-char locator. The locator is
-            # a truncated lookup key, not the unit of work: marking only its span left a
-            # French sentence tagged for 60 characters and untagged (mid-word) for the rest,
-            # which is wrong on its own terms and left 3.1.2 firing, so it never earned credit.
-            end = _sentence_end(joined, start, end)
-            before = joined[start:end]
-            new_para = _splice(para, runs, start, end, d,
-                               replacement=value if mode == "sensory" else None,
-                               lang=value if mode == "lang" else None)
-            if new_para == para:
-                continue
-            parts[name] = parts[name].replace(para, new_para, 1)
-            applied.append({"locator": locator, "before": before,
-                            "after": value if mode == "sensory" else f'{before} (lang="{value}")'})
-            break
+            for para, runs, start, end in _locate_all(parts[name], locator, d):
+                joined = "".join(r["text"] for r in runs)
+                # BOTH modes act on the whole passage, not on the 60-char locator. The locator
+                # is a truncated lookup key, not the unit of work: marking only its span left a
+                # French sentence tagged for 60 characters and untagged (mid-word) for the
+                # rest, wrong on its own terms and leaving 3.1.2 firing, so it never credited.
+                end = _sentence_end(joined, start, end)
+                before = joined[start:end]
+                new_para = _splice(para, runs, start, end, d,
+                                   replacement=value if mode == "sensory" else None,
+                                   lang=value if mode == "lang" else None)
+                if new_para == para:
+                    continue
+                # Identical paragraphs (two cells holding the same sentence) are identical
+                # STRINGS, so replacing one occurrence per hit walks through them in order.
+                parts[name] = parts[name].replace(para, new_para, 1)
+                applied.append({"locator": locator, "before": before,
+                                "after": value if mode == "sensory" else f'{before} (lang="{value}")'})
 
     unresolved = [k for k in values if k not in {a["locator"] for a in applied}]
     if not applied:

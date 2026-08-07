@@ -308,3 +308,97 @@ def test_output_is_still_a_readable_word_document():
     assert applied
     reopened = Document(io.BytesIO(out))
     assert "Press Submit." in "\n".join(p.text for p in reopened.paragraphs)
+
+
+# ── every occurrence, not just the first ─────────────────────────────────────
+
+def test_a_repeated_sentence_is_rewritten_everywhere():
+    """One approved value stands for every occurrence of that sentence.
+
+    Both the detector and the proposer dedupe by sentence, so a document repeating an
+    instruction produces ONE card. Rewriting only the first occurrence leaves the rest
+    firing, the residual re-scan still reports 1.3.3, and the approval earns no credit --
+    found on xlsx, where two cells holding the same string is entirely ordinary.
+    """
+    sent = "Press the round green button to submit."
+    pkg = _pkg(_para(_run(sent)) + _para(_run("Filler.")) + _para(_run(sent)))
+    out, applied, unresolved = apply_sensory_rewrite(pkg, "docx", {sent: "Press Submit."})
+    assert len(applied) == 2 and not unresolved
+    joined = "".join(_texts(out))
+    assert joined.count("Press Submit.") == 2
+    assert "round green button" not in joined
+
+
+# ── xlsx: pooled text, and no language mechanism at all ──────────────────────
+
+_SHEET = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetData>{body}</sheetData></worksheet>"""
+
+_SST = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">{body}</sst>"""
+
+
+def _xpkg(*, shared: str = "", sheet: str = "") -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        if shared:
+            z.writestr("xl/sharedStrings.xml", _SST.format(body=shared))
+        z.writestr("xl/worksheets/sheet1.xml", _SHEET.format(body=sheet))
+    return buf.getvalue()
+
+
+def _xpart(data: bytes, name: str) -> str:
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        return z.read(name).decode("utf-8")
+
+
+def test_xlsx_rewrites_a_plain_shared_string_with_no_runs():
+    """<si><t>text</t></si> has no <r> at all -- a bare <t> must count as its own run,
+    or every plain cell (the overwhelming majority) would silently never match."""
+    sent = "Press the round green button to submit."
+    pkg = _xpkg(shared=f"<si><t>{sent}</t></si>")
+    out, applied, unresolved = apply_sensory_rewrite(pkg, "xlsx", {sent: "Press Submit."})
+    assert applied and not unresolved
+    ss = _xpart(out, "xl/sharedStrings.xml")
+    assert "Press Submit." in ss and "round green button" not in ss
+
+
+def test_xlsx_rewrites_rich_text_runs_and_keeps_their_formatting():
+    pkg = _xpkg(shared="<si><r><rPr><b/></rPr>"
+                       "<t>Press the round green button to submit.</t></r></si>")
+    out, _, _ = apply_sensory_rewrite(
+        pkg, "xlsx", {"Press the round green button to submit.": "Press Submit."})
+    ss = _xpart(out, "xl/sharedStrings.xml")
+    assert "Press Submit." in ss
+    assert "<b/>" in ss                                  # run properties survive
+
+
+def test_xlsx_rewrites_an_inline_string_in_a_sheet():
+    """openpyxl writes inline <is> rather than the shared table, so both are searched."""
+    sent = "Press the round green button to submit."
+    pkg = _xpkg(sheet=f'<row><c r="A1" t="inlineStr"><is><t>{sent}</t></is></c></row>')
+    out, applied, _ = apply_sensory_rewrite(pkg, "xlsx", {sent: "Press Submit."})
+    assert applied
+    assert "Press Submit." in _xpart(out, "xl/worksheets/sheet1.xml")
+
+
+def test_xlsx_rewrites_the_same_sentence_in_every_cell():
+    sent = "Press the round green button to submit."
+    pkg = _xpkg(sheet=f'<row><c r="A1" t="inlineStr"><is><t>{sent}</t></is></c>'
+                      f'<c r="A2" t="inlineStr"><is><t>{sent}</t></is></c></row>')
+    out, applied, _ = apply_sensory_rewrite(pkg, "xlsx", {sent: "Press Submit."})
+    assert len(applied) == 2
+    sheet = _xpart(out, "xl/worksheets/sheet1.xml")
+    assert sheet.count("Press Submit.") == 2 and "round green button" not in sheet
+
+
+def test_xlsx_refuses_the_language_lane_outright():
+    """Not "found no match" -- refused. SpreadsheetML has no per-run language element, so a
+    lane here could never clear 3.1.2 and would strand every approval it accepted."""
+    pkg = _xpkg(shared="<si><t>Bonjour le monde.</t></si>")
+    out, applied, unresolved = apply_language_parts(pkg, "xlsx", {"Bonjour le monde.": "fr"})
+    assert not applied
+    assert unresolved == ["Bonjour le monde."]
+    assert out == pkg
