@@ -25,6 +25,11 @@ from __future__ import annotations
 # here. store.py still imports Path for its own use, so nothing was taken from it.
 from pathlib import Path
 
+# Added when the scan scope became expressible as DATA (a JSON map in the setting) and not only
+# as a preset name compiled into this file. Both are stdlib; nothing new enters the dependency set.
+import json
+import re
+
 # Rule catalog — mirrors frontend/src/rules/index.js.
 # Used to compute per-file pass/fail/skip traces when saving scan results.
 # fix_mode: 'auto' = deterministic, 'ai-assisted' = AI draft + human approve,
@@ -359,19 +364,110 @@ SCOPE_PRESETS: dict[str, dict[str, frozenset[str]]] = {
     },
 }
 
-SCOPE_SETTING = "scan_scope"          # preset name, or "" / absent for no restriction
+SCOPE_SETTING = "scan_scope"          # preset name, a JSON map, or "" / absent for no restriction
 _scope_override: str | None = None    # tests and per-call use; None = read the setting
+
+# A scope may be written as DATA, not only chosen from the presets above. The setting holds
+# either a preset NAME (as it always has) or a JSON object `{"1.4.3": ["docx","pdf"], ...}`.
+#
+# Why both. A preset is a name an operator recognises and a reviewer can audit at a glance, and
+# `deva-final` earns its place because it mirrors an external artifact that must not drift. But
+# every OTHER engagement needed a code change, a review and a deploy to express a scope that is
+# really just a customer's list of criteria — a configuration fact wearing a source-code costume.
+# Data removes that without removing the presets: the two forms resolve to the same shape, so
+# every caller, every denominator and the /config report are unchanged by which one is in use.
+_SC_RE = re.compile(r"^\d+\.\d+\.\d+$")
+_SCOPE_FORMATS = frozenset({"docx", "xlsx", "pptx", "pdf", "html"})
+
+
+def parse_scope_setting(raw: str) -> tuple[dict[str, frozenset[str]] | None, str | None]:
+    """Resolve a raw `scan_scope` value to (scope, error). Exactly one is ever non-None.
+
+    Validation is strict and the failure is LOUD-BUT-OPEN: an unusable value resolves to None
+    (no restriction) and reports why, rather than resolving to a scope that excludes everything.
+    Both directions of that choice matter —
+
+      * fail-CLOSED on a typo would silently stop scanning a customer's whole estate, and the
+        symptom (every criterion NOT_EVALUATED) looks exactly like a correctly narrow scope;
+      * fail-OPEN silently is how #107's flag was off for weeks, so the error is surfaced on
+        /config rather than only logged.
+
+    An empty object `{}` means NO RESTRICTION, not "nothing in scope" — `in_scope` has always
+    treated a falsy scope that way, and changing it here would make `{}` the most destructive
+    two characters an operator could type.
+    """
+    val = (raw or "").strip()
+    if not val:
+        return None, None
+
+    # Dispatch on the first character: a preset name is an identifier and can never start with
+    # a JSON bracket. `[` is included so a JSON ARRAY reports "must be a JSON object" rather
+    # than the baffling "unknown scope preset '[\"1.4.3\"]'" — the value is clearly meant as
+    # data, and the useful error names the shape it should have had.
+    if val[0] not in "{[":
+        preset = SCOPE_PRESETS.get(val)
+        if preset is None:
+            known = ", ".join(sorted(SCOPE_PRESETS)) or "(none defined)"
+            return None, f"unknown scope preset {val!r} — known presets: {known}"
+        return preset, None
+
+    try:
+        data = json.loads(val)
+    except Exception as e:  # noqa: BLE001 — any parse failure is the same answer to the caller
+        return None, f"scope is not valid JSON: {e}"
+    if not isinstance(data, dict):
+        return None, ("scope must be a JSON object mapping criteria to formats, "
+                      f'e.g. {{"1.4.3": ["docx","pdf"]}} — got {type(data).__name__}')
+
+    out: dict[str, frozenset[str]] = {}
+    for sc, fmts in data.items():
+        sc = str(sc)
+        if not _SC_RE.match(sc):
+            return None, f'{sc!r} is not a WCAG criterion id (expected e.g. "1.4.3")'
+        # A criterion this build has never heard of is a typo, and a typo must not quietly
+        # narrow the scope: naming only unknown criteria would exclude every real one.
+        if sc not in RULE_FORMATS:
+            return None, f"{sc} is not a criterion this build knows about — check the id"
+        if isinstance(fmts, str):
+            fmts = [fmts]
+        if not isinstance(fmts, (list, tuple, set)):
+            return None, f"{sc}: formats must be a list, got {type(fmts).__name__}"
+        unknown = sorted({f for f in fmts if f not in _SCOPE_FORMATS})
+        if unknown:
+            return None, (f"{sc}: unknown format(s) {', '.join(unknown)} — "
+                          f"known: {', '.join(sorted(_SCOPE_FORMATS))}")
+        out[sc] = frozenset(str(f) for f in fmts)
+
+    # `{}` and `{"1.4.3": []}` both resolve to no restriction rather than a total block, for the
+    # reason in the docstring. An operator who means "assess nothing" turns scanning off.
+    return ({k: v for k, v in out.items() if v} or None), None
+
+
+def scope_problem(store=None) -> str | None:
+    """Why the configured scope is not in force, or None when it is (or none is set).
+
+    Separate from active_scope() so the hot path stays a plain lookup and nothing has to thread
+    an error channel through every caller. /config reads this so an operator can SEE that the
+    scope they saved is being ignored, instead of inferring it from unexpectedly broad results.
+    """
+    raw = _scope_override
+    if raw is None and store is not None:
+        try:
+            raw = store.get_setting(SCOPE_SETTING, "") or ""
+        except Exception:
+            return None
+    return parse_scope_setting(raw or "")[1]
 
 
 def active_scope(store=None) -> dict[str, frozenset[str]] | None:
     """The (criterion -> formats) map currently in force, or None for no restriction."""
-    name = _scope_override
-    if name is None and store is not None:
+    raw = _scope_override
+    if raw is None and store is not None:
         try:
-            name = store.get_setting(SCOPE_SETTING, "") or ""
+            raw = store.get_setting(SCOPE_SETTING, "") or ""
         except Exception:
-            name = ""
-    return SCOPE_PRESETS.get(name or "")
+            raw = ""
+    return parse_scope_setting(raw or "")[0]
 
 
 def in_scope(rule_id: str, fmt: str | None, scope: dict | None = None) -> bool:

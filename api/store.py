@@ -375,7 +375,8 @@ from assessment_policy import (  # noqa: F401,E402  (re-export)
     RULE_CATALOG, RULE_FORMATS, REVIEW_FORMATS, SCOPE_PRESETS, SCOPE_SETTING,
     LEVEL_RANK, TARGET_LEVELS, DEFAULT_TARGET, NOT_EVALUATED, REVIEW,
     _LEGACY_NOT_EVALUATED, _SUPERSEDING_OUTCOMES, _SC_LEVEL, _ALL_FORMATS,
-    active_scope, in_scope, in_target, parse_target, config_target,
+    active_scope, scope_problem, parse_scope_setting,
+    in_scope, in_target, parse_target, config_target,
     filter_issues_to_target, filter_issues_to_scope, _rule_outcome, _certify, _registry_for,
     _split_sc_counts, _file_format, _extract_sc, _pages_csv,
 )
