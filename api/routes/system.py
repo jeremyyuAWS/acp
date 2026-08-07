@@ -322,11 +322,23 @@ def _active_scope_info() -> dict:
     `{"name": "", "criteria": null}` means no restriction — every criterion in scope.
     """
     try:
-        from store import active_scope, SCOPE_SETTING
-        name = core.store.get_setting(SCOPE_SETTING, "") or ""
+        from store import active_scope, scope_problem, SCOPE_SETTING
+        raw = core.store.get_setting(SCOPE_SETTING, "") or ""
         scope = active_scope(core.store)
+        problem = scope_problem(core.store)
+        # A scope written as DATA has no preset name to show. Reporting the raw JSON here would
+        # put a wall of text where the UI expects a label, so it is named for what it is and the
+        # criteria map — which the SPA already renders — carries the detail.
+        name = "" if not raw else ("custom" if raw.strip().startswith("{") else raw)
+        # `error` appears ONLY when there is something to say. The no-restriction response stays
+        # byte-identical to what #138 pinned, so every existing consumer is untouched, and the
+        # key's mere presence is the signal — it is the difference between "no scope is set" and
+        # "a scope IS set and the server is ignoring it", which otherwise both read criteria:null.
         if not scope:
-            return {"name": "", "criteria": None}
+            out = {"name": "", "criteria": None}
+            if problem:
+                out["error"] = problem
+            return out
         return {"name": name, "criteria": {sc: sorted(f) for sc, f in scope.items()}}
     except Exception:
         # A scope we cannot read must not be reported as a scope that excludes everything.
