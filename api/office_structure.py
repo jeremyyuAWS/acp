@@ -1919,7 +1919,13 @@ def office_color_only_checks(path: Path, ext: str) -> list[dict]:
                         "XLSX_COLOR_ONLY_STATUS", "1.4.1 Use of Color",
                         f"{cf} conditional-formatting rule(s) shade cells by value — verify the "
                         "status they signal is ALSO conveyed without colour (a label or icon), so "
-                        "it isn't lost for colour-blind or screen-reader users"))
+                        "it isn't lost for colour-blind or screen-reader users",
+                        # A count, with no threshold to compare it against: 1.4.1 has no "how
+                        # many is too many", one colour-only rule is already the barrier. Carried
+                        # anyway so the card states HOW MUCH there is to check without the
+                        # reviewer re-counting (same shape as the scanned-pages evidence above).
+                        evidence={"method": "structural", "metric": "Colour-only rules",
+                                  "value": cf}))
             if ext == ".docx":
                 doc = _read(zf, "word/document.xml") or ""
                 colour_only = sum(1 for _rid, inner in _HYPERLINK.findall(doc) if _W_U_NONE.search(inner))
@@ -1928,7 +1934,9 @@ def office_color_only_checks(path: Path, ext: str) -> list[dict]:
                         "DOCX_COLOR_ONLY_LINK", "1.4.1 Use of Color",
                         f"{colour_only} hyperlink(s) have their underline removed — a link set apart "
                         "from body text by colour alone fails for colour-blind users; verify each "
-                        "link is identifiable without relying on colour"))
+                        "link is identifiable without relying on colour",
+                        evidence={"method": "structural", "metric": "Colour-only links",
+                                  "value": colour_only}))
     except Exception:
         return findings
     return findings
@@ -2039,7 +2047,9 @@ def docx_nontext_contrast_checks(path: Path) -> list[dict]:
     return [_review_finding(
         "DOCX_NONTEXT_LOW_CONTRAST", "1.4.11 Non-text Contrast",
         f"a shape outline #{border_hex} on its #{fill_hex} fill is {ratio:.1f}:1 (needs 3:1) — if the "
-        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative")]
+        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative",
+        evidence={"method": "structural", "metric": "Contrast", "value": round(ratio, 2),
+                  "required": 3.0, "unit": ":1"})]
 
 
 # xlsx shapes live in xl/drawings/drawingN.xml under the spreadsheetDrawing namespace (<xdr:sp>),
@@ -2081,7 +2091,9 @@ def xlsx_nontext_contrast_checks(path: Path) -> list[dict]:
     return [_review_finding(
         "XLSX_NONTEXT_LOW_CONTRAST", "1.4.11 Non-text Contrast",
         f"a shape outline #{border_hex} on its #{fill_hex} fill is {ratio:.1f}:1 (needs 3:1) — if the "
-        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative")]
+        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative",
+        evidence={"method": "structural", "metric": "Contrast", "value": round(ratio, 2),
+                  "required": 3.0, "unit": ":1"})]
 
 
 # ── ADR 0024 Tier A — render-gated criteria, structural proxies (no rendering) ──
