@@ -5,6 +5,7 @@ import FileDrawer, { retentionOf } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FolderPicker from './FolderPicker.jsx'
 import Upload from './Upload.jsx'
+import ScanScope from './ScanScope.jsx'
 import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
 import { dupeCountOf, duplicateFiles } from './dedupe.js'
@@ -245,6 +246,24 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
 
   return (
     <>
+      {/* Scan scope, ABOVE the scan controls, because that is the order the decision happens in:
+          what to assess is chosen BEFORE discovery runs, not corrected afterwards in an admin
+          screen nobody opens. In frontend/ this panel lives behind Platform settings -> Scan
+          scope; that is the right place for a rarely-touched platform default and the wrong one
+          for a per-engagement choice the operator makes every time.
+
+          Open by default only until an estate exists. `files.length === 0` is the pre-discovery
+          state, and it is exactly when the choice is both consequential and free — narrowing
+          after a scan means the results on screen no longer match the scope beside them. Once
+          files are in, it collapses to a summary line and stays one click away. */}
+      <details className="panel scopestep" open={files.length === 0}>
+        <summary>
+          <b>1 · Choose what to assess</b>
+          <span className="muted"> · criteria and file types, before you scan</span>
+        </summary>
+        <ScanScope />
+      </details>
+
       <div className="estatebar">
         <div>
           <b>{files.length} documents</b> discovered across {sources.length} sources · {Object.keys(groups).length} departments
