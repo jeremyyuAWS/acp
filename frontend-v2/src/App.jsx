@@ -30,7 +30,6 @@ import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
 import Dashboard from './Dashboard.jsx'
 import Remediate from './Remediate.jsx'
-import Upload from './Upload.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
 import { applyScopeConfig } from './activeScope.js'
@@ -50,7 +49,6 @@ const TABS = [
   ['remediate',     'Remediate',     'fix issues',          3],
   ['publish',       'Publish',       'certify',             4],
   ['monitor',       'Monitor',       'track compliance',    5],
-  ['upload',        'Upload',        'try it live',         0],
   ['graph',         'Knowledge Graph', 'explore findings',   0],
 ]
 
@@ -301,7 +299,7 @@ export default function App() {
   const PRIV_PROFILE = {
     id: 'jeremy-yu', name: 'Jeremy Yu', role: 'Compliance Officer & Admin',
     scope: { label: 'Full estate · all departments', departments: 'all' },
-    allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'settings', 'upload'],
+    allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'settings'],
   }
   const PRIVILEGED = { 'jeremyyu.movate@gmail.com': PRIV_PROFILE }
 
@@ -799,7 +797,12 @@ export default function App() {
           excludeRemediated={excludeRemediated} setExcludeRemediated={setExcludeRemediated}
           incremental={incremental} setIncremental={setIncremental} scanId={run?.id} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} hasDriveToken={hasDriveToken} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} scope={run?.scope || null} decisions={decisions} setDecisions={setDecisions} />}
+        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} hasDriveToken={hasDriveToken} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} scope={run?.scope || null} decisions={decisions} setDecisions={setDecisions}
+          /* Upload lost its top-level tab in the v2 simplification, but not its capability:
+             it is a secondary action inside Discover now, which is where "get files in front
+             of ACP" already lives. Dropping it outright would have removed the only way to try
+             a single ad-hoc file without wiring a whole source. */
+          me={me} onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
 
         {view === 'assess' && (run ? (
           <>
@@ -821,7 +824,6 @@ export default function App() {
 
         {view === 'monitor' && (run ? (assessed ? <Monitor me={me} run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} /> : assessGate) : placeholder)}
 
-        {view === 'upload' && <Upload me={me} onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
 
         {/* Standalone Knowledge Graph — was nested inside Assess (findable only after
             scrolling past the score/dashboard); now its own tab so it's directly
@@ -866,8 +868,10 @@ export default function App() {
 
       <ChatWidget files={files} run={run} trend={trend} trendDates={trendDates} me={me} />
       {SHOW_A11Y && <A11ySelfCheck />}
-      {settingsOpen && me.allow?.includes('settings') && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onOntologyChange={() => setOntology(loadPublished())} onDelegationChange={setDelegations} onFileTypeChange={(cfg) => setFileTypeConfig(cfg)}
-            onPrivilegeChange={setRolePrivileges} />}
+      {/* onOntologyChange / onPrivilegeChange are gone with the Business ontology and Permissions
+          panels. The ontology DATA path below is untouched — App still annotates the corpus from
+          whatever was last published; only its editor left Settings. */}
+      {settingsOpen && me.allow?.includes('settings') && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onDelegationChange={setDelegations} onFileTypeChange={(cfg) => setFileTypeConfig(cfg)} />}
     </div>
   )
 }

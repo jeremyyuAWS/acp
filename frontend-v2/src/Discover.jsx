@@ -4,6 +4,7 @@ import WindowedRows from './WindowedRows.jsx'
 import FileDrawer, { retentionOf } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FolderPicker from './FolderPicker.jsx'
+import Upload from './Upload.jsx'
 import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
 import { dupeCountOf, duplicateFiles } from './dedupe.js'
@@ -72,7 +73,10 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 // makes decide()/undoDec() below actually survive a reload instead of resetting on every
 // visit to this tab, and is also what feeds the campaign "resolved" counts (ADR 0003
 // Phase 4) real data instead of always reading 0.
-export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, fileTypeConfig = {}, onAdvance, progress = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp }) {
+// `me` / `onCertified` arrive with Upload, which folded in here when v2 dropped its top-level
+// tab. Both OPTIONAL: every existing caller and test constructs Discover without them, and the
+// ad-hoc panel simply does not render when `me` is absent rather than throwing.
+export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, fileTypeConfig = {}, onAdvance, progress = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null, onCertified }) {
   const [sel, setSel] = useState(null)
   const [showPicker, setShowPicker] = useState(false)   // Drive folder picker modal (Choose folder to scan)
   const [open, setOpen] = useState(() => new Set())
@@ -278,6 +282,17 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         <FolderPicker
           onScan={(folder) => { setShowPicker(false); onScan('drive', folder) }}
           onClose={() => setShowPicker(false)} />
+      )}
+
+      {/* Upload, folded in from its own tab. Collapsed by default so it stays a secondary
+          action: the primary path is a connected source, and a permanently-open drop zone
+          would compete with it for the eye at the top of the estate view. <details> is
+          natively keyboard-operable, so this adds no focus handling of its own. */}
+      {me && (
+        <details className="panel adhocupload">
+          <summary>Assess a single file <span className="muted">· without connecting a source</span></summary>
+          <Upload me={me} onCertified={onCertified} />
+        </details>
       )}
 
       {files.length === 0 ? (

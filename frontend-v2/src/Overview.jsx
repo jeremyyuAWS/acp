@@ -12,7 +12,6 @@ import WordCloud from './WordCloud.jsx'
 import Insight from './Insight.jsx'
 import { TraceChip } from './Transparency.jsx'
 import PiiPanel from './PiiPanel.jsx'
-import WhatsChanged from './WhatsChanged.jsx'
 import { scopeChip, scopeSentence, isNarrowScope } from './scanScope.js'
 
 // The estate dashboard — doubles as the exportable compliance report.
@@ -291,8 +290,6 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           <span className="ontovtext"><b>{ontDocs.length}</b> of {n.toLocaleString()} documents classified by your rules — <b style={{ color: '#1F5FA8' }}>{ontCrit} Critical</b> · <b style={{ color: '#854F0B' }}>{ontHigh} High</b> by business priority</span>
         </div>
       )}
-
-      <WhatsChanged run={run} files={files} scanList={scanList} onPick={setSeg} onGo={onGo} />
 
       {scanList.length > 0 && (
         <section className="panel">

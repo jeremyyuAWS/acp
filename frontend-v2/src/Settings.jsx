@@ -305,11 +305,8 @@ function DriveMirror() {
 }
 import Rubric from './Rubric.jsx'
 import Disposition from './Disposition.jsx'
-import WcagCoverage from './WcagCoverage.jsx'
-import Ontology from './Ontology.jsx'
 import OwnerDelegate from './OwnerDelegate.jsx'
 import FileTypeConfig from './FileTypeConfig.jsx'
-import RolePrivilege from './RolePrivilege.jsx'
 import UserManagement from './UserManagement.jsx'
 import { useDialog } from './a11y.js'
 import { downloadUpdatedXlsx, downloadUpdatedPptx } from './exportDeliverables.js'
@@ -554,7 +551,7 @@ const SimNotice = () => (
 const INP = { display: 'block', width: '100%', padding: '4px 8px', marginTop: 4, border: '1px solid var(--line)', borderRadius: 6, boxSizing: 'border-box' }
 const L = ({ label, children }) => (<label style={{ fontSize: 12 }} className="muted">{label}{children}</label>)
 
-export default function Settings({ onClose, onRubricSaved, files = [], onOntologyChange, onDelegationChange, onFileTypeChange, onPrivilegeChange }) {
+export default function Settings({ onClose, onRubricSaved, files = [], onDelegationChange, onFileTypeChange }) {
   const [tab, setTab] = useState('rules')
   const [dl, setDl] = useState(null) // 'xlsx' | 'pptx' while a deliverable is generating
   const panelRef = useRef(null)
@@ -579,11 +576,8 @@ export default function Settings({ onClose, onRubricSaved, files = [], onOntolog
         </div>
         <div className="subtabs" role="tablist" aria-label="Settings sections">
           <button role="tab" aria-selected={tab === 'rules'} className={tab === 'rules' ? 'fchip on' : 'fchip'} onClick={() => setTab('rules')}>Scoring rules</button>
-          <button role="tab" aria-selected={tab === 'validation'} className={tab === 'validation' ? 'fchip on' : 'fchip'} onClick={() => setTab('validation')}>Validation coverage</button>
-          <button role="tab" aria-selected={tab === 'ontology'} className={tab === 'ontology' ? 'fchip on' : 'fchip'} onClick={() => setTab('ontology')}>Business ontology</button>
           <button role="tab" aria-selected={tab === 'filetypes'} className={tab === 'filetypes' ? 'fchip on' : 'fchip'} onClick={() => setTab('filetypes')}>File types</button>
           <button role="tab" aria-selected={tab === 'owners'} className={tab === 'owners' ? 'fchip on' : 'fchip'} onClick={() => setTab('owners')}>Owners</button>
-          <button role="tab" aria-selected={tab === 'permissions'} className={tab === 'permissions' ? 'fchip on' : 'fchip'} onClick={() => setTab('permissions')}>Permissions</button>
           <button role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'fchip on' : 'fchip'} onClick={() => setTab('users')}>Users</button>
           <button role="tab" aria-selected={tab === 'access'} className={tab === 'access' ? 'fchip on' : 'fchip'} onClick={() => setTab('access')}>Test users</button>
           <button role="tab" aria-selected={tab === 'drivemirror'} className={tab === 'drivemirror' ? 'fchip on' : 'fchip'} onClick={() => setTab('drivemirror')}>Remediated storage</button>
@@ -592,11 +586,8 @@ export default function Settings({ onClose, onRubricSaved, files = [], onOntolog
         </div>
         <div className="setbody">
           {tab === 'rules' && <Rubric onSaved={onRubricSaved} />}
-          {tab === 'validation' && <WcagCoverage />}
-          {tab === 'ontology' && <Ontology files={files} onPublished={onOntologyChange} />}
           {tab === 'filetypes' && <FileTypeConfig onChanged={(cfg, custom) => onFileTypeChange?.(cfg, custom)} />}
           {tab === 'owners' && <OwnerDelegate files={files} onChanged={onDelegationChange} />}
-          {tab === 'permissions' && <RolePrivilege onChanged={onPrivilegeChange} />}
           {tab === 'users' && <UserManagement />}
           {tab === 'access' && <AllowList />}
           {tab === 'drivemirror' && <DriveMirror />}
