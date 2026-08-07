@@ -419,8 +419,70 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
     return result
 
 
-def _sp_list(token: str, max_files: int = 200) -> list[dict]:
-    """List scannable files from OneDrive personal via MS Graph search.
+GRAPH = "https://graph.microsoft.com/v1.0"
+
+
+def _sp_get(token: str, url: str, timeout: int = 30):
+    """One Graph GET, with the permission failure translated into something actionable.
+
+    A 403 here is almost always a MISSING SCOPE rather than a missing document, and the raw
+    Graph body says "Access denied" without naming what would fix it. Listing sites needs
+    Sites.Read.All, which is admin-consent territory in most tenants — so the operator who sees
+    this needs to be told which consent to go and get, not that something was denied.
+    """
+    import httpx
+    r = httpx.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                  timeout=timeout, follow_redirects=True)
+    if r.status_code in (401, 403):
+        raise PermissionError(
+            f"Microsoft Graph refused this request ({r.status_code}). SharePoint SITES need the "
+            "Sites.Read.All delegated permission on the Azure app registration, granted with "
+            "tenant admin consent; Files.Read.All alone only reaches the signed-in user's "
+            "OneDrive. URL: " + url.split("?")[0])
+    r.raise_for_status()
+    return r.json()
+
+
+def _sp_sites(token: str, query: str = "", max_sites: int = 50) -> list[dict]:
+    """SharePoint sites the signed-in user can see, newest Graph shape.
+
+    `search=*` is Graph's own idiom for "everything I can see" — an empty `search=` returns
+    nothing at all rather than everything, which reads as "this tenant has no sites" and is the
+    single most confusing way this could fail.
+    """
+    q = query.strip() or "*"
+    out: list[dict] = []
+    url = f"{GRAPH}/sites?search={q}&$select=id,name,displayName,webUrl&$top=50"
+    while url and len(out) < max_sites:
+        data = _sp_get(token, url)
+        for site in data.get("value", []):
+            out.append({"id": site.get("id"),
+                        "name": site.get("displayName") or site.get("name") or site.get("id"),
+                        "url": site.get("webUrl")})
+        url = data.get("@odata.nextLink")
+    return out[:max_sites]
+
+
+def _sp_drives(token: str, site_id: str) -> list[dict]:
+    """The document libraries on a site. A team site routinely has several ("Documents",
+    "Policies", …) and they are separate drives — scanning only the default would silently miss
+    whole libraries, which looks exactly like an estate that is smaller than it is."""
+    data = _sp_get(token, f"{GRAPH}/sites/{site_id}/drives?$select=id,name,webUrl")
+    return [{"id": d.get("id"), "name": d.get("name"), "url": d.get("webUrl")}
+            for d in data.get("value", []) if d.get("id")]
+
+
+def _sp_list(token: str, max_files: int = 200, site: str | None = None) -> list[dict]:
+    """List scannable files from OneDrive, or from every document library on a SharePoint site.
+
+    `site` is a Graph site id. Absent, this behaves exactly as it always has (the signed-in
+    user's OneDrive), so an existing scan is unchanged by this function growing a second mode.
+
+    EVERY ITEM CARRIES ITS driveId, and that is not cosmetic. Graph item ids are unique only
+    WITHIN a drive, so two libraries can legitimately hand back the same id — and the download
+    path used to hardcode /me/drive, which would have fetched the signed-in user's file of that
+    id, or 404ed, for anything listed from a site. Listing without recording the drive is how
+    you get a scan that reports a site's documents and analyses somebody's OneDrive.
 
     Identity dedup, same rule as _normalize's for Drive: a drive-item id IS the document,
     and Graph's paged /search can return the same item on more than one page. Without this,
@@ -429,41 +491,69 @@ def _sp_list(token: str, max_files: int = 200) -> list[dict]:
     analysed a second time, and surfaces in the UI as "x2 copies". Each source is responsible
     for yielding unique IDENTITIES; _dedupe_names only disambiguates genuine NAME collisions
     between different items."""
-    import httpx
     exts = {".docx", ".pptx", ".xlsx", ".pdf", ".html", ".htm"}
-    hdrs = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     files: list[dict] = []
-    seen_ids: set[str] = set()
+    # Keyed by (drive, item) — an item id is unique only within its drive, so a bare id would
+    # collapse two genuinely different documents from two libraries into one.
+    seen: set[tuple[str | None, str]] = set()
     relisted = 0
-    url = "https://graph.microsoft.com/v1.0/me/drive/root/search(q='')?$select=id,name,file&$top=200"
-    while url and len(files) < max_files:
-        r = httpx.get(url, headers=hdrs, timeout=30, follow_redirects=True)
-        r.raise_for_status()
-        data = r.json()
-        for item in data.get("value", []):
-            if "file" not in item:
-                continue
-            item_id = item.get("id")
-            if item_id is not None:
-                if item_id in seen_ids:
-                    relisted += 1
+
+    if site:
+        drives = _sp_drives(token, site)
+        if not drives:
+            print(f"[scan] SharePoint site {site} has no document libraries visible to this "
+                  f"token — nothing to scan", flush=True)
+        targets = [(d["id"], f"{GRAPH}/drives/{d['id']}/root/search(q='')"
+                              "?$select=id,name,file&$top=200") for d in drives]
+    else:
+        # None, not a resolved id: the download path reads a missing driveId as /me/drive, which
+        # is what every item stored before this change looks like.
+        targets = [(None, f"{GRAPH}/me/drive/root/search(q='')?$select=id,name,file&$top=200")]
+
+    for drive_id, start in targets:
+        url = start
+        while url and len(files) < max_files:
+            data = _sp_get(token, url)
+            for item in data.get("value", []):
+                if "file" not in item:
                     continue
-                seen_ids.add(item_id)
-            name = item.get("name", "")
-            if Path(name).suffix.lower() in exts:
-                files.append({"name": _safe_name(name), "id": item_id, "sp": True})
-        url = data.get("@odata.nextLink")
+                item_id = item.get("id")
+                if item_id is not None:
+                    key = (drive_id, item_id)
+                    if key in seen:
+                        relisted += 1
+                        continue
+                    seen.add(key)
+                name = item.get("name", "")
+                if Path(name).suffix.lower() in exts:
+                    rec = {"name": _safe_name(name), "id": item_id, "sp": True}
+                    if drive_id:
+                        rec["driveId"] = drive_id
+                    files.append(rec)
+            url = data.get("@odata.nextLink")
+        if len(files) >= max_files:
+            break
+
     if relisted:
-        print(f"[scan] {relisted} duplicate listing(s) of the same OneDrive item id collapsed "
+        where = f"site {site}" if site else "OneDrive"
+        print(f"[scan] {relisted} duplicate listing(s) of the same {where} item id collapsed "
               f"(paged /search overlap) — not extra documents", flush=True)
     return files[:max_files]
 
 
 def _sp_download(token: str, item: dict, dest: Path) -> None:
-    """Download a file from OneDrive via MS Graph /content redirect."""
+    """Download from the drive the item was LISTED from, via MS Graph /content redirect.
+
+    An absent `driveId` means /me/drive — the shape every item had before site support, so a
+    re-run of an older scan still resolves. Present, it must be honoured: item ids are unique
+    only within a drive, so asking /me/drive for a site's item id either 404s or, worse, returns
+    a different document that happens to share the id.
+    """
     import httpx
     hdrs = {"Authorization": f"Bearer {token}"}
-    url = f"https://graph.microsoft.com/v1.0/me/drive/items/{item['id']}/content"
+    drive_id = item.get("driveId")
+    base = f"{GRAPH}/drives/{drive_id}" if drive_id else f"{GRAPH}/me/drive"
+    url = f"{base}/items/{item['id']}/content"
     r = httpx.get(url, headers=hdrs, timeout=120, follow_redirects=True)
     r.raise_for_status()
     (dest / item["name"]).write_bytes(r.content)
@@ -530,9 +620,13 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
             scope_out.update({"kind": "local", "path": str(corpus), "kept": len(result),
                               "truncated": False})
     elif source == "sharepoint":
-        result = _sp_list(sp_token, max_files or 200)
+        # `folder` carries the SharePoint SITE id here, reusing the parameter Drive already uses
+        # to narrow a scan rather than threading a second one through five call sites. "root" is
+        # Drive's own sentinel for "no narrowing" and means the same thing here: OneDrive.
+        site = None if folder in (None, "", "root") else folder
+        result = _sp_list(sp_token, max_files or 200, site=site)
         if scope_out is not None:
-            scope_out.update({"kind": "sharepoint", "kept": len(result),
+            scope_out.update({"kind": "sharepoint", "site": site, "kept": len(result),
                               "truncated": len(result) >= (max_files or 200)})
     elif folder and folder != "root":
         # Specific folder: recursive BFS
