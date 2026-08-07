@@ -213,6 +213,43 @@ reason it surfaced was an unrelated `fatal:` leaking into the next command's out
 Both commands were written *to verify* — which is what makes the shape worth knowing. A check
 that cannot fail is indistinguishable from a check that passed.
 
+### `pytest tests/` is NOT the backend CI job
+
+The "Backend suite" job runs **four** checks, and the test suite is only the first. Running
+pytest and calling the job verified is a claim about three checks you did not run:
+
+```
+python -m pytest tests/ -q            # the suite
+python scripts/gen_matrix_coverage.py --check    # capability ceiling still derivable
+python scripts/gen_todo_status.py --check        # docs/TODO.md coverage block is current
+python scripts/gen_progress_log.py --check       # rule changes declare their matrix impact
+```
+
+The last one is the one that bites, because **nothing local prompts you for it**. It fails when a
+commit touches `RULE_PATHS` — which includes the bare prefix `api/remediate`, so
+`remediate_office.py` and `remediate_pdf.py` both match — without a `Matrix-Note:` trailer in its
+message. The fix is a trailer, or `Matrix-Note: none` to record that the omission was considered.
+
+**Why.** On 2026-08-06 #141 (`44d04d0`) changed both remediate files, was verified with the full
+suite green (2112 passed) and merged during a GitHub Actions outage that stopped CI running at
+all. When Actions recovered, the suite passed on ubuntu and this guard failed: the squash commit
+carried no trailer. By then the message was published and could not be fixed, so that change has
+no `PROGRESS_LOG` entry and never will — the guard exists precisely to stop that, and it was
+bypassed by verifying the wrong thing rather than by anything the guard got wrong.
+
+Two things worth knowing about the failure mode:
+
+- **It is transient on `main`, permanent in the record.** `--check` scans `HEAD~1..HEAD` (or the
+  PR's own commits when `BASE_REF` is set), so the next commit to land clears the red. What does
+  not come back is the declaration the commit should have carried.
+- **The trailer is a per-commit fact.** A follow-up commit cannot supply one for its predecessor,
+  and rewriting published history to add it is worse than the omission (see "Never push from the
+  shared checkout"). Get it right before the squash, or accept the gap and say so.
+
+So: run all four before pushing anything under `RULE_PATHS`, and when you tell someone you ran
+"the workflow's own commands", make sure that is the whole job and not the part you happened to
+think of.
+
 ## Never merge red, and don't trust `mergeable` alone
 
 Read the checks themselves:
