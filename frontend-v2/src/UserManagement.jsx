@@ -87,7 +87,7 @@ function EffectivePermsPopover({ user, onClose }) {
           Union of {user.roles.length} role{user.roles.length !== 1 ? 's' : ''}: {user.roles.join(', ')} · via {solution} / {team}
         </div>
         {!hasAny ? (
-          <p className="muted" style={{ fontSize: 13 }}>No permissions configured yet for these roles. Open Settings → Permissions to assign them.</p>
+          <p className="muted" style={{ fontSize: 13 }}>No permissions configured yet for these roles. Roles are assigned by the platform owner.</p>
         ) : (
           Object.entries(effective).map(([mod, pages]) => (
             <div key={mod} style={{ marginBottom: 12 }}>

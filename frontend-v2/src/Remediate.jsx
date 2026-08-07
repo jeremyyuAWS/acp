@@ -241,6 +241,35 @@ function GroupedFixes({ fixGroups, appliedFixes = [], impact }) {
 }
 
 // Verification state (§8) — real, tied to the re-scan/job state; never "0 → 0".
+// A remediation section that collapses. Remediate stacks eight panels, and an operator working
+// the queue reads one of them — the rest are reference they scroll past every time.
+//
+// TWO RULES, both learned from the panels this replaces:
+//
+//   * The SUMMARY carries the number. A collapsed section that says only "Deferred" hides the one
+//     fact you need to decide whether to open it; the count has to survive the collapse or the
+//     control just costs a click.
+//   * `defaultOpen` is DERIVED from content, never a constant. A section with nothing in it opens
+//     to disappointment, and a section with work in it should not need discovering. Callers pass
+//     the same expression that decides whether to render at all.
+//
+// <details> rather than a button + state: it is natively keyboard-operable and announces its own
+// expanded state, so this adds no focus handling and no aria-expanded to keep in sync — which is
+// the kind of thing that rots silently on a product that certifies accessibility.
+function RemSection({ id, title, count, hint, defaultOpen = false, children }) {
+  return (
+    <details className="panel rem-sec" id={id} open={defaultOpen}>
+      <summary className="rem-sec-sum">
+        <h2 className="rem-sec-title">{title}</h2>
+        {count != null && <span className="reviewpill">{count}</span>}
+        {hint && <span className="muted rem-sec-hint">{hint}</span>}
+      </summary>
+      <div className="rem-sec-body">{children}</div>
+    </details>
+  )
+}
+
+
 function VerifyState({ state, pct, remaining, ready, latest }) {
   if (state === 'running') return (
     <div className="verify-run" role="status" aria-live="polite">
@@ -797,8 +826,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       </section>
 
       {/* ── VERIFICATION (§8) — real state, tied to the re-scan/job, auto-begins on approval. ── */}
-      <section className="panel" id="rem-verify">
-        <div className="rem-sec-hd"><h2 style={{ margin: 0 }}>Verification</h2></div>
+      <RemSection id="rem-verify" title="Verification"
+                  count={revalidated.length || null}
+                  hint={verifyState === 'idle' ? '· nothing to verify yet' : null}
+                  defaultOpen={verifyState === 'running' || revalidated.length > 0}>
         <VerifyState state={verifyState} pct={verifyPct} remaining={queue.length} ready={revalidated.length} latest={remProg?.latest} />
         {revalidated.length > 0 && (
           <div className="publist" style={{ marginTop: 12 }}>
@@ -811,13 +842,13 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             {revalidated.length > 12 && <div className="muted" style={{ fontSize: 12, padding: '6px 2px' }}>+{revalidated.length - 12} more</div>}
           </div>
         )}
-      </section>
+      </RemSection>
 
       {/* ── DOCUMENTS (§5) — file triage + remediation plan merged into ONE list: per-doc
           progress · fixes · items needing you · scope · Open. Everything about a doc here. ── */}
-      <section className="panel" id="rem-docs">
+      <RemSection id="rem-docs" title="Documents" count={docList.length}
+                  defaultOpen={docList.length > 0}>
         <div className="rem-sec-hd">
-          <h2 style={{ margin: 0 }}>Documents <span className="muted">· {docList.length}</span></h2>
           <button className="exportbtn" onClick={downloadRemediationReport} disabled={reportBusy}
                   title="A signed record of every change applied, with a checkbox per item and how to verify it in Word / PowerPoint / Excel / Acrobat on Mac and Windows">
             {reportBusy ? 'Generating…' : '⤓ Remediation report (PDF)'}
@@ -891,15 +922,15 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             )
           })}
         </div>
-      </section>
+      </RemSection>
 
       {/* ── Recent AI fixes, grouped (§6) + Accessibility improvements impact (§7) ── */}
       <GroupedFixes fixGroups={fixGroups} appliedFixes={appliedFixes} impact={impact} />
 
       {/* Self-remediation — you're fixing these yourself; visible whenever active. */}
       {self.length > 0 && (
-        <section className="panel">
-          <h2>Self-remediation <span className="muted">· you’re fixing these — re-scan to confirm</span></h2>
+        <RemSection id="rem-self" title="Self-remediation" count={self.length}
+                    hint="· you’re fixing these — re-scan to confirm" defaultOpen>
           <div className="queue">
             {self.map((it) => (
               <div className={`qrow${it.status === 'verified' ? ' qdone' : ''}`} key={it.id}>
@@ -923,12 +954,12 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             ))}
           </div>
           <p className="muted" style={{ marginTop: 12 }}>When you remediate a document yourself, the agent re-runs every engine to independently confirm the fix before it’s certified — no manual sign-off taken on trust.</p>
-        </section>
+        </RemSection>
       )}
 
       {deferredItems.length > 0 && (
-        <section className="panel">
-          <h2>Deferred <span className="muted">· {deferredItems.length} item{deferredItems.length !== 1 && "s"} &mdash; resurface on next scan</span></h2>
+        <RemSection id="rem-deferred" title="Deferred" count={deferredItems.length}
+                    hint="— resurface on next scan">
           <div className="queue">
             {deferredItems.map((it) => (
               <div className="qrow" key={it.id} style={{ opacity: 0.7 }}>
@@ -943,7 +974,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             ))}
           </div>
           <p className="muted" style={{ marginTop: 10 }}>Deferred findings are tracked in the compliance record and flagged automatically when the next scheduled scan runs.</p>
-        </section>
+        </RemSection>
       )}
 
       {/* ── ADVANCED (§10) — the engine, hidden by default: live metrics, worker queue,
@@ -1069,7 +1100,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           {remediable.length > 0 && (
             <section className="panel">
               <h2>Documents to remediate <span className="muted">· {remediable.length} · <b style={{ color: 'var(--ink)', fontWeight: 500 }}>AI-triaged</b> by business risk — exposure × severity × ownership — accept / reject / modify</span></h2>
-              {ontCount > 0 && <div className="ontbanner">⬆ Ordered by your <b>business ontology</b> — {ontCount} document{ontCount === 1 ? '' : 's'} elevated by published rules (Settings → Business ontology)</div>}
+              {ontCount > 0 && <div className="ontbanner">⬆ Ordered by your <b>business ontology</b> — {ontCount} document{ontCount === 1 ? '' : 's'} elevated by published rules (published from the ontology rules)</div>}
               <div className="remlist">
                 {remediable.map((f) => {
                   const rec = f.rec; const dec = decisions[f.file]
