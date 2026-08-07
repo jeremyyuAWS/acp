@@ -316,31 +316,51 @@ def test_docx_toc_content_control_without_alias_not_flagged(tmp_path):
 # identifier assistive tech reads for Name — a field can have one without the
 # other, so this is a separate check from the 3.3.2 alias check above.
 
-def test_docx_checkbox_with_no_tag_flagged(tmp_path):
+def test_docx_checkbox_with_no_alias_fails_name_role(tmp_path):
+    """4.1.2 keys on w:alias, the Title Word exposes to assistive tech as the accessible NAME.
+
+    This replaces three tests that asserted the criterion keyed on w:tag (062642f / PR #6).
+    w:tag is a developer-facing identifier for data binding and is never announced, so those
+    tests pinned the wrong attribute in both directions: a field with a Title but no tag was
+    flagged though AT announces it fine, and a field with a tag but no Title passed though AT
+    announces nothing. The fixtures below are the same shapes, re-pointed at the right one.
+    """
+    doc = """<w:document><w:body>
+    <w:sdt><w:sdtPr><w:id w:val="1"/><w:checkbox/></w:sdtPr>
+    <w:sdtContent><w:r><w:t>[ ]</w:t></w:r></w:sdtContent></w:sdt>
+    </w:body></w:document>"""
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert any(f["ruleId"] == "DOCX_FORM_FIELD_NO_NAME" for f in findings)
+
+
+def test_docx_checkbox_with_empty_alias_fails_name_role(tmp_path):
+    doc = """<w:document><w:body>
+    <w:sdt><w:sdtPr><w:alias w:val=""/><w:id w:val="1"/><w:checkbox/></w:sdtPr>
+    <w:sdtContent><w:r><w:t>[ ]</w:t></w:r></w:sdtContent></w:sdt>
+    </w:body></w:document>"""
+    findings = os_.docx_checks(_docx(tmp_path, doc))
+    assert any(f["ruleId"] == "DOCX_FORM_FIELD_NO_NAME" for f in findings)
+
+
+def test_docx_checkbox_with_a_title_passes_name_role(tmp_path):
+    """A tag is neither necessary nor sufficient — this field has a Title and no tag."""
     doc = """<w:document><w:body>
     <w:sdt><w:sdtPr><w:alias w:val="Agree to terms"/><w:id w:val="1"/><w:checkbox/></w:sdtPr>
     <w:sdtContent><w:r><w:t>[ ]</w:t></w:r></w:sdtContent></w:sdt>
     </w:body></w:document>"""
     findings = os_.docx_checks(_docx(tmp_path, doc))
-    assert any(f["ruleId"] == "DOCX_FORM_FIELD_NO_TAG" for f in findings)
+    assert not any(f["ruleId"] == "DOCX_FORM_FIELD_NO_NAME" for f in findings)
 
 
-def test_docx_checkbox_with_empty_tag_flagged(tmp_path):
+def test_docx_a_tag_alone_does_not_satisfy_name_role(tmp_path):
+    """The regression the old tests would have allowed: tag set, Title absent. AT announces
+    nothing, so this must FAIL 4.1.2 — under the w:tag rule it passed."""
     doc = """<w:document><w:body>
-    <w:sdt><w:sdtPr><w:alias w:val="Agree to terms"/><w:tag w:val=""/><w:checkbox/></w:sdtPr>
+    <w:sdt><w:sdtPr><w:tag w:val="agree_terms"/><w:id w:val="1"/><w:checkbox/></w:sdtPr>
     <w:sdtContent><w:r><w:t>[ ]</w:t></w:r></w:sdtContent></w:sdt>
     </w:body></w:document>"""
     findings = os_.docx_checks(_docx(tmp_path, doc))
-    assert any(f["ruleId"] == "DOCX_FORM_FIELD_NO_TAG" for f in findings)
-
-
-def test_docx_checkbox_with_tag_not_flagged(tmp_path):
-    doc = """<w:document><w:body>
-    <w:sdt><w:sdtPr><w:alias w:val="Agree to terms"/><w:tag w:val="agree_terms"/><w:id w:val="1"/><w:checkbox/></w:sdtPr>
-    <w:sdtContent><w:r><w:t>[ ]</w:t></w:r></w:sdtContent></w:sdt>
-    </w:body></w:document>"""
-    findings = os_.docx_checks(_docx(tmp_path, doc))
-    assert not any(f["ruleId"] == "DOCX_FORM_FIELD_NO_TAG" for f in findings)
+    assert any(f["ruleId"] == "DOCX_FORM_FIELD_NO_NAME" for f in findings)
 
 
 def test_docx_toc_content_control_without_tag_not_flagged(tmp_path):
@@ -352,7 +372,7 @@ def test_docx_toc_content_control_without_tag_not_flagged(tmp_path):
     </w:sdtPr><w:sdtContent><w:r><w:t>Contents...</w:t></w:r></w:sdtContent></w:sdt>
     </w:body></w:document>"""
     findings = os_.docx_checks(_docx(tmp_path, doc))
-    assert not any(f["ruleId"] == "DOCX_FORM_FIELD_NO_TAG" for f in findings)
+    assert not any(f["ruleId"] == "DOCX_FORM_FIELD_NO_NAME" for f in findings)
 
 
 # --- docx: 2.4.10 section headings -------------------------------------------
