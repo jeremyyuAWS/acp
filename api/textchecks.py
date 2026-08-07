@@ -101,7 +101,33 @@ def _langdetect_available() -> bool:
         return False
 
 
-def detect_language_parts(text: str) -> list[dict]:
+def _is_marked(seg: str, lang: str, marked: dict[str, str]) -> bool:
+    """True when `seg` is already marked as `lang` in the document's own markup.
+
+    `marked` is {base language subtag: text carrying that mark} from
+    office_structure.language_marked_spans. The passage must be marked as the language it
+    WAS DETECTED AS — a run stamped with the document's default en-US does not satisfy 3.1.2
+    for a French passage, and PowerPoint stamps that default on nearly every run, so matching
+    on "has any mark" would silently retire this detector.
+
+    Whether the marked code is the linguistically CORRECT one is a content question 3.1.2
+    does not ask — the same reading the capability registry already records for 3.1.1 html.
+    """
+    pool = marked.get((lang or "").split("-")[0].strip().lower(), "")
+    if not pool:
+        return False
+    needle = " ".join(seg.split())
+    return bool(needle) and " ".join(pool.split()).find(needle[:80]) != -1
+
+
+def detect_language_parts(text: str, marked: dict[str, str] | None = None) -> list[dict]:
+    """Foreign passages whose language the document never identifies (WCAG 3.1.2).
+
+    `marked` (optional) is the document's own language marks, so a passage that IS marked
+    stops counting. Omitted, the check behaves exactly as before — every caller that cannot
+    supply markup (plain text, PDF, xlsx) keeps its previous behaviour.
+    """
+    marked = marked or {}
     if not text or not _langdetect_available():
         return []
     import html as _html
@@ -113,7 +139,14 @@ def detect_language_parts(text: str) -> list[dict]:
             if len(s.split()) >= _MIN_SEG_WORDS and not _looks_like_code(s)]
     if len(segs) < 2:
         return []
+    # Every confident passage, with whether the document identifies it as what it IS.
+    # The primary language is counted over ALL of them, marked or not: it is the document's
+    # own baseline, and dropping marked passages first would erase it. Word and PowerPoint
+    # stamp the default language on nearly every run, so a document whose English is marked
+    # en-US and whose French is marked not at all would have looked single-language and
+    # passed — retiring this detector on exactly the files it exists to catch.
     counts: dict[str, int] = {}
+    seen: list[tuple[str, str]] = []          # (segment, detected language)
     for s in segs[:_MAX_SEGS]:
         try:
             res = detect_langs(s)
@@ -121,14 +154,26 @@ def detect_language_parts(text: str) -> list[dict]:
             continue
         if res and res[0].prob >= _MIN_CONF:
             counts[res[0].lang] = counts.get(res[0].lang, 0) + 1
-    # Two+ languages, each backed by at least one confident passage -> the
-    # document mixes languages and each part's language should be marked.
-    if len([lang for lang, n in counts.items() if n >= 1]) >= 2:
+            seen.append((s, res[0].lang))
+    if len(counts) < 2:
+        return []
+    primary = max(counts, key=lambda k: counts[k])
+    # 3.1.2 is about the PARTS: a passage in a language other than the document's own, whose
+    # language the document never identifies. A passage already marked as the language it was
+    # detected as satisfies the criterion and must stop keeping the finding alive — counting
+    # it anyway is what made this check unclearable by any write.
+    unmarked: dict[str, int] = {}
+    for s, lang in seen:
+        if lang == primary or _is_marked(s, lang, marked):
+            continue
+        unmarked[lang] = unmarked.get(lang, 0) + 1
+    if unmarked:
         mix = ", ".join(f"{lang} ({n} passage{'s' if n != 1 else ''})"
-                        for lang, n in sorted(counts.items(), key=lambda kv: -kv[1]))
+                        for lang, n in sorted(unmarked.items(), key=lambda kv: -kv[1]))
         return [{"ruleId": "LANG_PARTS_UNMARKED", "wcag": "3.1.2 Language of Parts",
                  "severity": "MODERATE",
-                 "detail": f"document mixes languages — confidently detected: {mix}"}]
+                 "detail": f"document is mainly {primary} but has unmarked passages in "
+                           f"another language: {mix}"}]
     return []
 
 
@@ -192,15 +237,20 @@ def detect_reading_level(text: str) -> list[dict]:
     return []
 
 
-def content_findings(text: str) -> list[dict]:
-    """All text-content findings for one document (1.3.3 + 3.1.2 + 3.1.5)."""
+def content_findings(text: str, marked: dict[str, str] | None = None) -> list[dict]:
+    """All text-content findings for one document (1.3.3 + 3.1.2 + 3.1.5).
+
+    `marked` is the document's own language marks (office_structure.language_marked_spans),
+    so 3.1.2 can tell a marked passage from an unmarked one. Optional: a caller with only
+    text — and every format with no per-run language mechanism — gets the previous behaviour.
+    """
     out: list[dict] = []
     try:
         out += detect_sensory(text)
     except Exception:
         pass
     try:
-        out += detect_language_parts(text)
+        out += detect_language_parts(text, marked)
     except Exception:
         pass
     try:

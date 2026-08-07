@@ -1650,6 +1650,64 @@ def office_non_text_content_checks(path: Path, ext: str) -> list[dict]:
     return mod.detect(path)
 
 
+# ── 3.1.2 Language of Parts — which passages already carry a language mark ────
+# textchecks.detect_language_parts reads extracted TEXT and nothing else, so until this
+# existed it could not tell a correctly-marked multilingual document from an unmarked one:
+# it fired on both, could never certify a pass, and — the reason this was built — no write
+# could ever clear it. apply_text_values writes w:lang on the runs of an approved passage
+# and the criterion kept firing, so the value never earned credit.
+_W_RUN_L = re.compile(r"<w:r\b[^>]*>.*?</w:r>", re.S)
+_W_LANG_VAL = re.compile(r'<w:lang\b[^>]*\bw:val="([^"]+)"')
+_A_RUN_L = re.compile(r"<a:r>.*?</a:r>", re.S)
+_A_LANG_VAL = re.compile(r'<a:rPr\b[^>]*\blang="([^"]+)"')
+
+
+def language_marked_spans(path: Path, ext: str) -> dict[str, str]:
+    """{base language subtag: all text explicitly marked with it} for an Office file.
+
+    Keyed by the BASE subtag ("fr" for fr-FR), because 3.1.2 asks that a passage's language
+    be identified, not that a region be. Never raises; {} for a format with no per-run
+    language mechanism.
+
+    Keyed by language rather than returned as one "is marked" flag on purpose. PowerPoint
+    stamps `lang="en-US"` on essentially every run it writes, and Word does the same through
+    docDefaults, so "this run carries a language mark" is near-universal and proves nothing.
+    What 3.1.2 actually asks is whether the passage is marked as the language it IS — so the
+    caller matches a passage's DETECTED language against the text marked with that language,
+    and a document full of default en-US marks still fails for its unmarked French.
+
+    xlsx is absent by construction, not by omission: SpreadsheetML's rich-text run properties
+    (CT_RPrElt) have no language element at all — verified against the schema — so there is
+    nowhere in the format to record this and no write can ever clear 3.1.2 there. PDF would
+    need a /Lang walk of the structure tree and is not built, so PDF behaviour is unchanged.
+    """
+    fmt = (ext or "").lower().lstrip(".")
+    out: dict[str, list[str]] = {}
+
+    def _collect(xml: str, run_re, lang_re, text_re) -> None:
+        for rm in run_re.finditer(xml):
+            run = rm.group(0)
+            lm = lang_re.search(run)
+            if not lm:
+                continue
+            base = lm.group(1).split("-")[0].strip().lower()
+            text = "".join(text_re.findall(run)).strip()
+            if base and text:
+                out.setdefault(base, []).append(text)
+
+    try:
+        with zipfile.ZipFile(path) as zf:
+            if fmt == "docx":
+                _collect(_read(zf, "word/document.xml") or "", _W_RUN_L, _W_LANG_VAL, _WT)
+            elif fmt == "pptx":
+                for n in zf.namelist():
+                    if re.fullmatch(r"ppt/slides/slide\d+\.xml", n):
+                        _collect(_read(zf, n) or "", _A_RUN_L, _A_LANG_VAL, _AT)
+    except Exception:
+        return {}
+    return {k: " ".join(v) for k, v in out.items()}
+
+
 def checks_for(path: Path, ext: str) -> list[dict]:
     """Dispatch by extension; returns [] for formats with no structural check yet."""
     ext = ext.lower()
@@ -1861,7 +1919,13 @@ def office_color_only_checks(path: Path, ext: str) -> list[dict]:
                         "XLSX_COLOR_ONLY_STATUS", "1.4.1 Use of Color",
                         f"{cf} conditional-formatting rule(s) shade cells by value — verify the "
                         "status they signal is ALSO conveyed without colour (a label or icon), so "
-                        "it isn't lost for colour-blind or screen-reader users"))
+                        "it isn't lost for colour-blind or screen-reader users",
+                        # A count, with no threshold to compare it against: 1.4.1 has no "how
+                        # many is too many", one colour-only rule is already the barrier. Carried
+                        # anyway so the card states HOW MUCH there is to check without the
+                        # reviewer re-counting (same shape as the scanned-pages evidence above).
+                        evidence={"method": "structural", "metric": "Colour-only rules",
+                                  "value": cf}))
             if ext == ".docx":
                 doc = _read(zf, "word/document.xml") or ""
                 colour_only = sum(1 for _rid, inner in _HYPERLINK.findall(doc) if _W_U_NONE.search(inner))
@@ -1870,7 +1934,9 @@ def office_color_only_checks(path: Path, ext: str) -> list[dict]:
                         "DOCX_COLOR_ONLY_LINK", "1.4.1 Use of Color",
                         f"{colour_only} hyperlink(s) have their underline removed — a link set apart "
                         "from body text by colour alone fails for colour-blind users; verify each "
-                        "link is identifiable without relying on colour"))
+                        "link is identifiable without relying on colour",
+                        evidence={"method": "structural", "metric": "Colour-only links",
+                                  "value": colour_only}))
     except Exception:
         return findings
     return findings
@@ -1981,7 +2047,9 @@ def docx_nontext_contrast_checks(path: Path) -> list[dict]:
     return [_review_finding(
         "DOCX_NONTEXT_LOW_CONTRAST", "1.4.11 Non-text Contrast",
         f"a shape outline #{border_hex} on its #{fill_hex} fill is {ratio:.1f}:1 (needs 3:1) — if the "
-        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative")]
+        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative",
+        evidence={"method": "structural", "metric": "Contrast", "value": round(ratio, 2),
+                  "required": 3.0, "unit": ":1"})]
 
 
 # xlsx shapes live in xl/drawings/drawingN.xml under the spreadsheetDrawing namespace (<xdr:sp>),
@@ -2023,7 +2091,9 @@ def xlsx_nontext_contrast_checks(path: Path) -> list[dict]:
     return [_review_finding(
         "XLSX_NONTEXT_LOW_CONTRAST", "1.4.11 Non-text Contrast",
         f"a shape outline #{border_hex} on its #{fill_hex} fill is {ratio:.1f}:1 (needs 3:1) — if the "
-        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative")]
+        "shape conveys meaning, its boundary may be too faint to see; verify it isn't decorative",
+        evidence={"method": "structural", "metric": "Contrast", "value": round(ratio, 2),
+                  "required": 3.0, "unit": ":1"})]
 
 
 # ── ADR 0024 Tier A — render-gated criteria, structural proxies (no rendering) ──

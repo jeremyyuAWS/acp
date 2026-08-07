@@ -2658,6 +2658,32 @@ class Store:
                 out.update(self._row_approved_values(row))
         return out
 
+    def approved_sensory_values(self, scan_id: str, file: str) -> dict[str, str]:
+        """{locator: rewrite} awaiting a write into `file`, from its approved 1.3.3 rows.
+
+        The locator is a sentence prefix, not a part#rId or an href — see
+        apply_text_values.py's module docstring for why the two text-span criteria need a
+        writer of their own.
+        """
+        out: dict[str, str] = {}
+        for row in self._approved_unapplied_rows(scan_id, file):
+            if str(row.get("rule_id") or "").strip() == "1.3.3":
+                out.update(self._row_approved_values(row))
+        return out
+
+    def approved_language_values(self, scan_id: str, file: str) -> dict[str, str]:
+        """{locator: ISO language code} awaiting a write into `file`, from approved 3.1.2 rows.
+
+        Kept apart from the sensory map even though both are text-span keyed: the value is a
+        language code rather than prose, the write is an attribute rather than a replacement,
+        and each lane may only credit the criterion its own re-scan verified.
+        """
+        out: dict[str, str] = {}
+        for row in self._approved_unapplied_rows(scan_id, file):
+            if str(row.get("rule_id") or "").strip() == "3.1.2":
+                out.update(self._row_approved_values(row))
+        return out
+
     def has_approved_values_to_write(self, scan_id: str, file: str) -> bool:
         """True when `file` holds approved content some applier can write into the document.
 
@@ -2674,7 +2700,9 @@ class Store:
         return bool(self.approved_alt_values(scan_id, file)
                     or self.approved_decorative_locators(scan_id, file)
                     or self.approved_link_values(scan_id, file)
-                    or self.approved_field_values(scan_id, file))
+                    or self.approved_field_values(scan_id, file)
+                    or self.approved_sensory_values(scan_id, file)
+                    or self.approved_language_values(scan_id, file))
 
     def approve_proposal_values(self, item_id: str, values: list[str | None]) -> int:
         """Record the reviewer's final text per instance, positionally.

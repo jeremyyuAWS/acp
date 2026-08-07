@@ -1469,7 +1469,10 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
     try:
         import pii as _pii_mod2
         import textchecks as _txt_mod
-        raw["issues"] = list(raw.get("issues", [])) + _txt_mod.content_findings(_pii_mod2.extract_text(tmp / name))
+        import office_structure as _off_lang
+        raw["issues"] = list(raw.get("issues", [])) + _txt_mod.content_findings(
+            _pii_mod2.extract_text(tmp / name),
+            _off_lang.language_marked_spans(tmp / name, ext))
     except Exception:
         pass
     # 2.4.6 / 2.4.9 / 1.4.3 / 1.4.6 — first-party OOXML/PDF structural checks
@@ -1571,7 +1574,9 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                 pass
             # 1.3.3 Sensory Characteristics + 3.1.2 Language of Parts — text-content checks.
             try:
-                r["issues"] = list(r.get("issues", [])) + _txt_mod.content_findings(_pii_mod.extract_text(tmp / name))
+                r["issues"] = list(r.get("issues", [])) + _txt_mod.content_findings(
+                    _pii_mod.extract_text(tmp / name),
+                    _off_mod.language_marked_spans(tmp / name, ext))
             except Exception:
                 pass
             # 2.4.6 / 2.4.9 / 1.4.3 / 1.4.6 — first-party OOXML/PDF structural checks.
