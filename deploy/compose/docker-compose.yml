@@ -6,6 +6,7 @@
 #
 # Brings up four services, no external dependencies (no Azure, no MDK):
 #   db        Postgres 16   — acpdb (app) + langfusedb (tracing), one instance
+#   ollama    local models  — the AI lane (http://localhost:11434), models on a VOLUME
 #   acp-app   FastAPI + SPA — the platform itself (http://localhost:8077)
 #   grafana   dashboards    — 10-panel ACP board (http://localhost:3000, anon viewer)
 #   langfuse  LLM tracing   — per-scan / per-rule traces (http://localhost:3001)
@@ -58,8 +59,43 @@ services:
       # Optional: set to enable per-user Google sign-in. Unset → demo/local mode.
       ACP_GOOGLE_CLIENT_ID: ${ACP_GOOGLE_CLIENT_ID:-}
       ACP_E2E_KEY: ${ACP_E2E_KEY:-}
+      # The AI lane. api/ai.py degrades to deterministic prose when this is unreachable, so a
+      # stack without the ollama service still works — it just stops drafting.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-moondream}
     ports:
       - "${ACP_APP_PORT:-8077}:8077"
+
+  # Models live on a NAMED VOLUME here, not baked into the image — the opposite of
+  # deploy/ollama/Dockerfile, and deliberately.
+  #
+  # That image bakes llama3.1:8b + moondream so a cloud container has no multi-GB cold start,
+  # and its own comment records why those two: llava:7b + llama came to ~9.2GB and OOM-killed
+  # the container against an 8Gi Azure Consumption ceiling. Those are DEPLOYMENT constraints.
+  #
+  # Locally the constraint is the opposite one. Trying a different model should not mean
+  # rebuilding an image, and a workstation with real memory is not choosing models to fit 8Gi.
+  # A volume makes `ollama pull qwen3:14b` a one-liner that survives restarts, which is the
+  # whole point of scripts/bench_models.py.
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    environment:
+      # 2 so a text and a vision model stay resident together — swapping between them per call
+      # is what made the cloud image slow before the models were made to fit side by side.
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-2}
+    volumes:
+      - acp-ollama:/root/.ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    healthcheck:
+      # /api/tags answers as soon as the server is up and needs no model pulled — a check that
+      # required a model would report unhealthy on a fresh volume, which is the normal state.
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   grafana:
     build:
@@ -97,4 +133,5 @@ services:
       - "${LANGFUSE_PORT:-3001}:3000"
 
 volumes:
+  acp-ollama:
   acp-db:
