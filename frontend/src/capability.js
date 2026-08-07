@@ -51,7 +51,7 @@ export const CAPABILITY_FALLBACK = {
     "2.4.4": "assisted",
     "2.4.6": "assisted",
     "3.1.1": "auto",
-    "3.1.2": "assisted",
+    "3.1.2": "human",
     "3.1.5": "assisted"
   },
   "pptx": {
