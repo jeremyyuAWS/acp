@@ -94,23 +94,56 @@ _DOC_FORMATS = ("docx", "xlsx", "pptx", "pdf")
 def _universe() -> list[dict]:
     """Every (criterion, format) pair an operator may put in scope, with display labels.
 
-    A pair is selectable when the backend can reach a verdict on it AT ALL — either a pass/fail
-    validator (RULE_FORMATS) or a review lane (REVIEW_FORMATS, which resolves to REVIEW and never
-    to PASS). Both count: scoping IN a review-lane pair is a legitimate choice, and omitting them
-    would hide criteria the product genuinely reports on.
+    A pair is selectable when the backend can reach a verdict on it AT ALL. There are THREE
+    sources of that, not two, and `_rule_outcome` consults all three:
 
-    Selecting a pair the backend cannot evaluate would be a checkbox that changes nothing, so the
-    grid never offers one. That is the whole reason this is derived rather than typed: the admin
-    UI cannot drift into offering capability that does not exist.
+      * RULE_FORMATS    — a pass/fail validator.
+      * REVIEW_FORMATS  — a review lane (resolves to REVIEW, never to PASS). Scoping one in is a
+                          legitimate choice, and omitting them would hide criteria the product
+                          genuinely reports on.
+      * the CAPABILITY REGISTRY — pairs migrated to api/rule_registry.py, where COVERAGE decides
+                          what a clean scan is worth. `_rule_outcome`'s registry branch exists
+                          precisely for pairs in NEITHER table, and its own comment names 4.1.2
+                          and 2.4.3 on PDF as the reason.
+
+    The third was missed when this function was written, and the omission is not academic: it
+    dropped 4 pairs that the engine evaluates and `in_scope` genuinely gates —
+    1.4.11×xlsx, 2.4.3×pdf, 4.1.2×docx and 4.1.2×pdf. Two of them are the very pairs the
+    registry branch was built for, and 4.1.2×docx became invisible the moment #149 moved docx
+    out of the legacy tables and onto its own detector.
+
+    That is the OPPOSITE failure from the one this derivation was designed against, and worth
+    naming so neither is traded for the other. Offering a pair the backend cannot evaluate is a
+    checkbox that changes nothing; omitting a pair it CAN is a capability the operator is not
+    allowed to control, with nothing on screen to say so. The gate does not care which table a
+    verdict came from — `in_scope` is a plain lookup in the operator's own dict, applied in
+    `_rule_outcome` before any lane branching — so the universe must not care either.
     """
     import store  # noqa: PLC0415
 
+    # A plain import, NOT a private copy, for the reason gen_matrix_coverage.py spells out: the
+    # format packages register themselves into the canonical `rule_registry` module, so a second
+    # copy under another name would read an empty _REGISTRY and fail SILENTLY — zero entries, no
+    # error, pairs quietly missing from the grid again.
+    #
+    # Unlike that generator, a failure here is FATAL rather than a fallback. It degrades to the
+    # legacy tables because a matrix that under-reports is still a readable matrix; this file is
+    # byte-compared by CI and consumed by an admin UI, so degrading would emit a valid-looking
+    # module that silently omits real pairs — exactly the drift the whole script exists to stop.
+    import rule_registry as _reg  # noqa: PLC0415
+    _reg.load()
+
+    registered: dict[str, set[str]] = {}
+    for r in _reg.all_registrations():
+        registered.setdefault(r.rule, set()).add(r.fmt)
+
     names = {r["id"]: (r["name"], r["level"]) for r in store.RULE_CATALOG}
     out = []
-    for sc in sorted(set(store.RULE_FORMATS) | set(store.REVIEW_FORMATS),
+    for sc in sorted(set(store.RULE_FORMATS) | set(store.REVIEW_FORMATS) | set(registered),
                      key=lambda x: [int(n) for n in x.split(".")]):
         fmts = sorted((set(store.RULE_FORMATS.get(sc, ()))
-                       | set(store.REVIEW_FORMATS.get(sc, ()))) & set(_DOC_FORMATS))
+                       | set(store.REVIEW_FORMATS.get(sc, ()))
+                       | registered.get(sc, set())) & set(_DOC_FORMATS))
         if not fmts:
             continue                      # html-only criteria are not a document engagement
         name, level = names.get(sc, (sc, ""))
@@ -152,11 +185,12 @@ def render() -> str:
     lines.append("")
     lines.append(
         "// Every (criterion, format) pair an operator may put in scope, with display labels —\n"
-        "// the universe the admin scope grid renders. A pair appears here only when the backend\n"
-        "// can reach a verdict on it (a pass/fail validator OR a review lane), so the grid can\n"
-        "// never offer a checkbox that would change nothing. Derived, so it cannot drift into\n"
-        "// claiming capability the engine does not have. `html` is excluded: this configures a\n"
-        "// DOCUMENT engagement."
+        "// the universe the admin scope grid renders. A pair appears here when the backend can\n"
+        "// reach a verdict on it by ANY of the three routes _rule_outcome consults: a pass/fail\n"
+        "// validator (RULE_FORMATS), a review lane (REVIEW_FORMATS), or the capability registry.\n"
+        "// Derived from all three, so the grid can neither offer a checkbox that changes nothing\n"
+        "// nor hide a capability the operator is entitled to control. `html` is excluded: this\n"
+        "// configures a DOCUMENT engagement."
     )
     lines.append("export const SCOPE_UNIVERSE = [")
     for row in _universe():
