@@ -1795,6 +1795,31 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
   padding: 0 7px; border-radius: 999px; background: #854F0B; color: #fff; font-size: 13px; font-weight: 700; vertical-align: middle; }
 .rem-review-panel { border-color: #E6C461; box-shadow: 0 0 0 1px #F3E2B4 inset; }
 
+/* Collapsible remediation sections (RemSection). The summary has to READ as the panel heading
+   it replaces, or collapsing the page costs it its scan structure -- so the h2 keeps its own
+   size and weight and the row simply becomes clickable.
+
+   list-style:none + ::marker on Safari: the default triangle sits outside the flex row and
+   pushes the heading off its baseline. Drawn as a rotating chevron instead, which also gives a
+   direction the default marker does not have at a glance. */
+.rem-sec > summary.rem-sec-sum { display: flex; align-items: center; gap: 8px; cursor: pointer;
+  list-style: none; padding: 0; margin: 0; }
+.rem-sec > summary.rem-sec-sum::-webkit-details-marker { display: none; }
+.rem-sec > summary.rem-sec-sum::marker { content: ""; }
+.rem-sec > summary.rem-sec-sum::before { content: "\25B8"; color: var(--muted, #5F5E5A); font-weight: 700;
+  flex: none; transition: transform .15s ease; }
+.rem-sec[open] > summary.rem-sec-sum::before { transform: rotate(90deg); }
+.rem-sec .rem-sec-title { margin: 0; font-size: inherit; }
+.rem-sec h2.rem-sec-title { font-size: 1.05rem; }
+.rem-sec .rem-sec-hint { font-weight: 400; }
+.rem-sec[open] .rem-sec-body { margin-top: 10px; }
+/* Focus must be visible on the whole row, not just the text -- the summary IS the control. */
+.rem-sec > summary.rem-sec-sum:focus-visible { outline: 2px solid #0b57d0; outline-offset: 2px;
+  border-radius: 4px; }
+@media (prefers-reduced-motion: reduce) {
+  .rem-sec > summary.rem-sec-sum::before { transition: none; }
+}
+
 /* The review list — the container the AI Work Inbox renders its EvidenceCards into. The
    .reviewcard / .autobadge / .whyreview-* rules that used to follow here styled Remediate's
    ReviewItemCard, WhyReview and ReviewComparison, all deleted as unreachable. `.diffbox` and

@@ -134,7 +134,7 @@ const PHASES = [
     desc: 'SSO, RBAC, audit log, data residency — what enterprise procurement checklists require.',
     items: [
       { text: 'SSO / SAML 2.0 integration (Okta, Azure AD, Google Workspace IdP)', status: 'todo' },
-      { text: 'Role-based access control: enforce the privilege matrix from Settings → Permissions', status: 'todo' },
+      { text: 'Role-based access control: enforce the privilege matrix the platform owner assigns', status: 'todo' },
       { text: 'Immutable audit log: who scanned what, when, result hash (Postgres append-only table)', status: 'todo' },
       { text: 'Data residency controls: EU (GCP europe-west1 / Azure North Europe) vs. US', status: 'todo' },
       { text: 'GDPR / data retention policy: auto-purge results older than N days', status: 'todo' },
