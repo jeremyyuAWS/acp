@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
+
+// fileURLToPath, not `new URL(..., import.meta.url)`: under vitest import.meta.url is not a
+// file: URL, and readFileSync rejects it with "The URL must be of scheme file". This is the
+// pattern the other v2 source-level tests already use.
+const HERE = dirname(fileURLToPath(import.meta.url))
+const source = () => readFileSync(join(HERE, 'SharePoint.jsx'), 'utf8')
 
 // SharePoint's "↑ SharePoint" button does a destructive in-place PUT, exactly as Drive's does.
 // Drive copies the original into _mova-originals/<date>/ first. SharePoint did not — so a save
@@ -79,8 +88,7 @@ describe('spArchiveOriginal', () => {
   it('never asks Graph to replace an existing folder', async () => {
     // `conflictBehavior: replace` on _mova-originals would clobber the archive itself — the one
     // outcome this whole path exists to prevent.
-    const src = (await import('node:fs')).readFileSync(
-      new URL('./SharePoint.jsx', import.meta.url), 'utf8')
+    const src = source()
     expect(src).not.toMatch(/conflictBehavior'?\s*:\s*'replace'/)
     expect(src).toMatch(/conflictBehavior'\]?\s*:\s*'fail'/)
   })
@@ -88,8 +96,7 @@ describe('spArchiveOriginal', () => {
 
 describe('the save path', () => {
   it('archives before it overwrites, and does not swallow the failure', async () => {
-    const src = (await import('node:fs')).readFileSync(
-      new URL('./SharePoint.jsx', import.meta.url), 'utf8')
+    const src = source()
     const archive = src.indexOf('await spArchiveOriginal(')
     const put = src.indexOf("method: 'PUT'")
     expect(archive).toBeGreaterThan(-1)
@@ -99,8 +106,7 @@ describe('the save path', () => {
   })
 
   it('tells the user what the confirmation actually does', async () => {
-    const src = (await import('node:fs')).readFileSync(
-      new URL('./SharePoint.jsx', import.meta.url), 'utf8')
+    const src = source()
     expect(src).toContain('_mova-originals')
     expect(src).toMatch(/Replace in SharePoint\? Original is copied/)
   })
