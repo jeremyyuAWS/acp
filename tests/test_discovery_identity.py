@@ -122,6 +122,11 @@ def _graph(monkeypatch, pages):
     calls = iter(pages)
 
     class _Resp:
+        # `status_code` is not optional decoration: _sp_get inspects it to tell a MISSING SCOPE
+        # (401/403, which needs Sites.Read.All and admin consent) from a transport failure, and a
+        # real httpx.Response always carries one. The stub simply predated that distinction.
+        status_code = 200
+
         def __init__(self, payload):
             self._p = payload
 
