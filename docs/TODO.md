@@ -57,13 +57,14 @@ Regenerate with `python scripts/gen_todo_status.py`; CI fails if this block is s
 
 This is a behaviour change, not bookkeeping: several detectors compute the AA and AAA thresholds in one pass, so AAA findings were previously scored against AA-target files.
 
-**Capability registry — 4 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
+**Capability registry — 5 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
 
 | Criterion | Format | Coverage | Confidence | Not covered |
 |---|---|---|---|---|
 | `1.4.11` | xlsx | **partial** | medium | theme-coloured shapes, gradients, images and control affordances are not examined, and whether a shape conveys |
 | `2.4.3` | pdf | **heuristic** | medium | actually comparing the widget order to the structure order needs a /StructTreeRoot walk that is not built |
 | `3.1.1` | html | **full** | high | whether the declared language is the CORRECT one is a content question 3.1.1 does not ask |
+| `4.1.2` | docx | **partial** | high | ActiveX controls, embedded OLE objects and other form content are not examined, which would need reading each  |
 | `4.1.2` | pdf | **partial** | high | components expressed through the tagged-structure tree are not examined, which needs a /StructTreeRoot walker  |
 
 **The four Required format gaps** this file's header has tracked since the first snapshot — auto-detected for HTML, historically UNCHECKED for PDF/Office:
@@ -73,7 +74,7 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 | `1.4.1` | pass/fail | review | review | — | review |
 | `1.3.5` | pass/fail | — | — | — | — |
 | `2.5.3` | pass/fail | — | — | — | — |
-| `4.1.2` | pass/fail | pass/fail | review | review | partial |
+| `4.1.2` | pass/fail | partial | review | review | partial |
 
 `partial` / `heuristic` / `full` come from the registry and mean a real detector runs. `review` means a review-lane detector surfaces evidence but never certifies. `—` means no signal of any kind — the genuine remaining gap.
 

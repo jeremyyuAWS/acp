@@ -69,9 +69,19 @@ BASELINE: dict[str, frozenset[Capability]] = {
         Capability.TEXT, Capability.LINKS, Capability.FORMS, Capability.ANNOTATIONS,
         Capability.METADATA, Capability.COLOR, Capability.FONTS,
     }),
+    # FORMS added when docx 4.1.2 was migrated to the registry. Word documents do carry
+    # interactive fields — content controls (w:sdt with a checkbox/date/dropDown/comboBox/
+    # picture gallery), whose Title is read straight from w:sdtPr — so the capability was
+    # always present and simply undeclared. It is listed for docx and NOT for pptx/xlsx
+    # because only Word has that construct; a spreadsheet's form controls are a different
+    # object nothing here reads.
+    #
+    # Same discipline as TAG_TREE's absence from pdf, noted above: a capability appears here
+    # when something in this codebase actually reads it, never to make a rule look supported.
     "docx": frozenset({
         Capability.TEXT, Capability.STRUCTURE, Capability.LINKS, Capability.TABLES,
         Capability.METADATA, Capability.COLOR, Capability.FONTS, Capability.READING_ORDER,
+        Capability.FORMS,
     }),
     "pptx": frozenset({
         Capability.TEXT, Capability.STRUCTURE, Capability.LINKS, Capability.TABLES,

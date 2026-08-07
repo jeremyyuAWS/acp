@@ -118,10 +118,46 @@ def test_a_retracted_item_comes_back_if_the_finding_regresses(st):
 def test_an_item_that_falls_back_to_not_evaluated_retracts(st):
     """The other superseding outcome, and the commoner of the two in practice.
 
-    4.1.2 on docx sits in REVIEW_FORMATS, so a recorded blocking finding surfaces as FAIL (and
-    queues), while clearing it drops the pair to NOT_EVALUATED rather than PASS — there is no
-    detector that can certify name/role/value on a Word file. NOT_EVALUATED is "we did not
-    look", which is not work either, so the item must retract just the same."""
+    4.1.2 on PPTX sits in REVIEW_FORMATS, so a recorded blocking finding surfaces as FAIL (and
+    queues), while clearing it drops the pair to NOT_EVALUATED rather than PASS — no detector
+    certifies name/role/value on a slide deck. NOT_EVALUATED is "we did not look", which is not
+    work either, so the item must retract just the same.
+
+    This used to be written against DOCX. It moved to PPTX when docx 4.1.2 was migrated to the
+    capability registry: PARTIAL coverage makes a clean Word file read REVIEW, not
+    NOT_EVALUATED, so docx no longer exercises the fall-back-to-superseding path this test is
+    about. The docx behaviour is pinned separately below rather than folded in here.
+    """
+    def _rec(*, failing):
+        issues = [{"ruleId": "PPTX-NRV-001", "wcag": "4.1.2", "severity": "CRITICAL"}] if failing else []
+        return {"file": "app.pptx", "engine": "office", "status": "analysed",
+                "score": 40 if failing else 100, "compliant": 0 if failing else 1,
+                "skipped_rules": 0, "issues": issues}
+
+    st.init_scan_run("s1", "drive", 1, "t0", "r", "h")
+    st.save_file_result("s1", _rec(failing=True), "t1")
+    assert "4.1.2" in _ids(st.queue_hitl_items("s1"))
+    assert _outcome(st, "s1", "app.pptx", "4.1.2") == "FAIL"
+
+    st.save_file_result("s1", _rec(failing=False), "t2")
+    assert _outcome(st, "s1", "app.pptx", "4.1.2") == "NOT_EVALUATED"
+    assert "4.1.2" not in _ids(st.list_hitl_queue(scan_id="s1"))
+
+
+def test_a_partial_coverage_pair_does_not_retract_when_its_findings_clear(st):
+    """The consequence of declaring coverage, stated as an assertion rather than discovered.
+
+    A registry pair with PARTIAL coverage resolves to REVIEW on a clean scan — the technique ran
+    and covered part of the criterion. REVIEW is deliberately NOT in _SUPERSEDING_OUTCOMES, so
+    naming every content control in a Word file does NOT retract its 4.1.2 item: the criterion
+    also covers ActiveX and embedded OLE controls, which nothing here examines, so the question
+    is genuinely still open for a human.
+
+    That is a change in queue behaviour, not only in a token — before the migration a cleared
+    docx 4.1.2 item disappeared. PDF 4.1.2 has behaved this way since its own migration, so this
+    makes the two consistent rather than introducing a new shape. Worth revisiting if the queue
+    proves noisy: the lever is coverage, not this test.
+    """
     def _rec(*, failing):
         issues = [{"ruleId": "DOCX-NRV-001", "wcag": "4.1.2", "severity": "CRITICAL"}] if failing else []
         return {"file": "app.docx", "engine": "office", "status": "analysed",
@@ -134,8 +170,8 @@ def test_an_item_that_falls_back_to_not_evaluated_retracts(st):
     assert _outcome(st, "s1", "app.docx", "4.1.2") == "FAIL"
 
     st.save_file_result("s1", _rec(failing=False), "t2")
-    assert _outcome(st, "s1", "app.docx", "4.1.2") == "NOT_EVALUATED"
-    assert "4.1.2" not in _ids(st.list_hitl_queue(scan_id="s1"))
+    assert _outcome(st, "s1", "app.docx", "4.1.2") == "REVIEW"
+    assert "4.1.2" in _ids(st.list_hitl_queue(scan_id="s1"))
 
 
 # ── what must NOT retract ─────────────────────────────────────────────────────────────

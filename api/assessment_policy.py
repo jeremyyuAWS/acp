@@ -108,10 +108,18 @@ RULE_FORMATS: dict[str, frozenset[str]] = {
     "2.4.10": frozenset({"docx"}),
     "2.5.3": frozenset({"html"}), "2.5.8": frozenset({"html"}), "3.1.1": _ALL_FORMATS,
     "3.1.2": _ALL_FORMATS, "3.1.4": frozenset({"html"}), "3.1.5": _ALL_FORMATS, "3.3.2": frozenset({"docx", "html"}),
-    # docx: a content control's Title (w:alias) is both its visible label (3.3.2) and the
-    # accessible name Word exposes to AT, so docx_checks' form-field check certifies 4.1.2 for
-    # docx the same way it certifies 3.3.2 — a clean file can now PASS, not merely avoid a flag.
-    "4.1.2": frozenset({"html", "docx"}),
+    # docx is ABSENT here, and that is the migration rather than a regression. #144 added it,
+    # which made a FAILING Word file report FAIL correctly but left a CLEAN one reading
+    # NOT_EVALUATED: this table can say WHICH formats a criterion is judged on and cannot say
+    # how much of it a detector reaches, and the docx check reaches content controls only.
+    # Coverage=PARTIAL in formats/docx/__init__.py says exactly that, and a clean file now
+    # reads REVIEW.
+    #
+    # Both tables describing one pair is the contradiction test_rule_registry asserts against —
+    # "one of the two is wrong, reconcile, don't exempt" — so docx leaves RULE_FORMATS and
+    # REVIEW_FORMATS together, exactly as pdf 4.1.2 and pdf 2.4.3 already have. The remediation
+    # lane is unaffected: its contract test counts registry-declared pairs as in scope.
+    "4.1.2": frozenset({"html"}),
 }
 
 
@@ -157,7 +165,17 @@ _SUPERSEDING_OUTCOMES = frozenset({"PASS", NOT_EVALUATED, _LEGACY_NOT_EVALUATED}
 # office interactive-control detector (office_structure.office_control_review_checks).
 REVIEW_FORMATS: dict[str, frozenset[str]] = {
     "2.1.2": frozenset({"docx", "pptx", "xlsx"}),   # No Keyboard Trap — controls present
-    "4.1.2": frozenset({"docx", "pptx", "xlsx"}),   # Name/Role/Value — controls present
+    # Name/Role/Value — controls present. docx is ABSENT because it is registry-backed now
+    # (formats/docx/__init__.py, coverage=PARTIAL), exactly as pdf already was. The review-lane
+    # branch in _rule_outcome runs BEFORE the registry branch and answers NOT_EVALUATED on a
+    # clean file, so leaving docx here would have silently outranked the coverage declaration
+    # and kept the very answer this migration exists to fix. Both mechanisms describe the same
+    # pair; only the finer one should be consulted.
+    #
+    # Nothing is lost for the controls the review lane covered: an ActiveX or OLE control still
+    # emits the advisory, and the registry branch turns any review finding into REVIEW. What
+    # changes is the CLEAN case, which now reads REVIEW instead of "we did not look".
+    "4.1.2": frozenset({"pptx", "xlsx"}),
     "1.4.1": frozenset({"docx", "xlsx", "pdf"}),    # Use of Color — colour-only status/links (pdf: colour-only link, ADR 0025)
     "2.4.3": frozenset({"pptx"}),                   # Focus Order — title not first in reading order
     "1.4.11": frozenset({"pptx", "docx", "pdf"}),   # Non-text Contrast — faint shape outline (docx/pdf shapes too)

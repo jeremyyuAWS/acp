@@ -20,34 +20,37 @@ import store  # noqa: E402
 # ── review-lane resolution (4.1.2 is a catalog rule; office is its review lane) ──
 def test_review_lane_no_signal_is_not_evaluated_never_pass():
     # A control-free office doc: no advisory finding → genuine N/A, NOT a fabricated pass.
-    assert store._rule_outcome("4.1.2", "docx", 0, 0) == store.NOT_EVALUATED
+    # pptx, not docx: docx 4.1.2 left REVIEW_FORMATS when it was migrated to the capability
+    # registry, and now reports REVIEW on a clean file by the coverage route asserted below.
+    assert store._rule_outcome("4.1.2", "pptx", 0, 0) == store.NOT_EVALUATED
     assert store._rule_outcome("2.1.2", "pptx", 0, 0) == store.NOT_EVALUATED
 
 
 def test_review_lane_with_signal_is_review():
-    assert store._rule_outcome("4.1.2", "docx", 0, 1) == store.REVIEW
+    assert store._rule_outcome("4.1.2", "pptx", 0, 1) == store.REVIEW
     assert store._rule_outcome("2.1.2", "xlsx", 0, 3) == store.REVIEW
 
 
 def test_review_lane_blocking_finding_outranks_review():
     # If a definite FAIL also landed on a review-lane criterion, FAIL wins.
-    assert store._rule_outcome("4.1.2", "docx", 1, 2) == "FAIL"
+    assert store._rule_outcome("4.1.2", "pptx", 1, 2) == "FAIL"
 
 
 def test_review_lane_is_format_scoped():
-    # 4.1.2's REVIEW_FORMATS lane is office-only, and pdf is not in it. pdf reaches REVIEW by a
-    # different route: it is registered in the capability registry with PARTIAL coverage (the
-    # AcroForm technique in formats/pdf/detectors/name_role_value.py), and partial coverage
-    # cannot certify a pass. Same token, different reason — which is the point of the coverage
-    # axis. It read NOT_EVALUATED before the registry, despite the detector having shipped.
+    # 4.1.2 reaches REVIEW by TWO different routes, and the difference is the whole point of the
+    # coverage axis. pdf and docx are registered in the capability registry with PARTIAL
+    # coverage — the AcroForm technique in formats/pdf/detectors/name_role_value.py and the
+    # content-control technique in formats/docx/ — and partial coverage cannot certify a pass.
+    # Both read NOT_EVALUATED before their migration, despite the detectors having shipped.
     assert store._rule_outcome("4.1.2", "pdf", 0, 0) == store.REVIEW
-    # The two routes to REVIEW differ in when they fire, and that difference is real. A
-    # REVIEW_FORMATS lane needs a signal — its detector surfaces evidence or says nothing — so
-    # docx with no findings is still "we did not look". A registry lane with PARTIAL coverage
-    # reports REVIEW on a CLEAN scan, because the technique ran and covered part of the
-    # criterion. Same token; one is "found something to look at", the other "looked partially".
-    assert store._rule_outcome("4.1.2", "docx", 0, 0) == store.NOT_EVALUATED
-    assert store._rule_outcome("4.1.2", "docx", 0, 1) == store.REVIEW
+    assert store._rule_outcome("4.1.2", "docx", 0, 0) == store.REVIEW
+    # pptx and xlsx stay on the REVIEW_FORMATS lane, which fires only on a SIGNAL: its detector
+    # surfaces evidence or says nothing, so a clean file is still "we did not look". Contrast
+    # the registry lane above, which reports REVIEW on a CLEAN scan because the technique ran
+    # and covered part of the criterion. Same token; one is "found something to look at", the
+    # other "looked partially". Keeping both exemplars is what makes the distinction testable.
+    assert store._rule_outcome("4.1.2", "pptx", 0, 0) == store.NOT_EVALUATED
+    assert store._rule_outcome("4.1.2", "pptx", 0, 1) == store.REVIEW
     # A format with neither a review lane nor a registry entry still reads "we did not look".
     assert store._rule_outcome("2.4.3", "xlsx", 0, 0) == store.NOT_EVALUATED
     # html keeps its real pass/fail lane for 4.1.2.
@@ -289,7 +292,7 @@ def test_three_arg_call_is_back_compatible():
     # Existing callers pass 3 args; review_count defaults to 0.
     assert store._rule_outcome("3.1.1", "pdf", 0) == "PASS"           # 🟢 auto → pass
     assert store._rule_outcome("1.1.1", "pdf", 0) == store.REVIEW     # 🟡 review-lane → verify
-    assert store._rule_outcome("4.1.2", "docx", 0) == store.NOT_EVALUATED
+    assert store._rule_outcome("4.1.2", "pptx", 0) == store.NOT_EVALUATED
 
 
 # ── count split by advisory severity ────────────────────────────────────────────

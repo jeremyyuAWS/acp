@@ -59,10 +59,15 @@ _OFFICE_STRUCT_FORMATS = {
     "1.4.6": {"pdf", "pptx", "xlsx"},
     "2.4.1": {"pdf"},
     "3.3.2": {"docx"},
-    # docx_checks()'s form-field check covers BOTH 3.3.2 (missing visible label) and 4.1.2
-    # (missing accessible name) — a content control's w:alias Title is simultaneously both,
-    # so one absent attribute fails both criteria. The html coverage for 4.1.2 is scanner.py's.
-    "4.1.2": {"docx"},
+    # 4.1.2 docx is deliberately NOT listed. The w:alias check still fires — but it moved to
+    # formats/docx/detectors/name_role_value.py when the pair was migrated to the capability
+    # registry, so its scope is declared there (coverage=PARTIAL) rather than in RULE_FORMATS.
+    # This map derives from office_structure's checks, so listing it here would re-derive a
+    # docx that RULE_FORMATS no longer claims and report drift against the migration itself.
+    # Exactly why pdf 4.1.2, registry-backed since ADR 0023, has never appeared in this map.
+    #
+    # 3.3.2 above still does, and still says {"docx"}: it is not a registry pair, and its half
+    # of the same w:alias condition stayed in docx_checks.
     "2.4.10": {"docx"},
     "1.4.8": {"docx"},    # docx_checks() justified-body-text check
     "1.4.2": {"pptx"},    # pptx_audio_autoplay_checks() — auto-starting embedded audio
