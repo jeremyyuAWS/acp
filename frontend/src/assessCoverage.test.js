@@ -131,9 +131,12 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     expect(s.auto + s.review + s.human + s.gap + s.at + s.na).toBe(20)
   })
 
-  it('remediation axis is counted independently (docx: 5⚡ 6🤖 0👤)', () => {
+  it('remediation axis is counted independently (docx: 5⚡ 7🤖 0👤)', () => {
     const s = coverageSummary(filesOf('docx'), { documents: true })
-    expect({ remAuto: s.remAuto, remAi: s.remAi, remHuman: s.remHuman }).toEqual({ remAuto: 5, remAi: 6, remHuman: 0 })
+    // 7🤖, not 6: docx 4.1.2 gained an assisted lane when the form-field name became writable
+    // (propose_forms drafts the w:alias Title, apply_field_name writes it on approval). The
+    // criterion was previously review-only on docx, so it contributed no remediation cell.
+    expect({ remAuto: s.remAuto, remAi: s.remAi, remHuman: s.remHuman }).toEqual({ remAuto: 5, remAi: 7, remHuman: 0 })
   })
 
   it('union prefers the best assessment lane; a distinct remediation resolver is honored', () => {
