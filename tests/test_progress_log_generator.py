@@ -267,3 +267,80 @@ def test_generation_succeeds_over_this_repos_real_history():
     entries = json.loads(r.stdout)
     assert entries, "the generator produced an empty log over real history"
     assert all(e["scs"] for e in entries), "an entry rendered with no SC to place it under"
+
+
+# ── A squash carries as many Matrix-Notes as it squashed ──────────────────────
+# GitHub pre-fills the merge description with the concatenated commit messages, so a squash of N
+# trailer-bearing commits arrives here with N notes. The parser used to take the FIRST via
+# `_NOTE_RE.search()`, which published one and silently dropped the rest.
+#
+# Both real outcomes came from that one rule, and only their ORDER differed:
+#   acp #144 — real note then `Matrix-Note: none`  -> published correctly, by luck.
+#   acp #146 — four real notes                     -> would have dropped three, and only
+#              published in full because a human rewrote the description at the merge screen.
+
+def _squashed(*notes: str) -> str:
+    """A merge body shaped like GitHub's: `* subject`, blank line, body, trailers, repeat.
+
+    Each part ends with a `Key: value` trailer on purpose — that is what terminates a note body
+    (_NOTE_RE stops at the next `^\\S+:`). Without one the note runs on into the FOLLOWING
+    commit's `* subject` line and swallows it as a bullet. Real messages always carry a
+    Co-authored-by, so this mirrors them rather than the degenerate case.
+    """
+    return "\n\n".join(
+        f"* commit {i} subject\n\nWCAG: 1.3.3 (docx)\nMatrix-Note: {n}\n"
+        f"Co-authored-by: A <a@example.com>"
+        for i, n in enumerate(notes, 1))
+
+
+def test_every_note_in_a_squash_is_kept():
+    body = _squashed(
+        "Word got the write-back.\n  - **DOCX 1.3.3** — the Word half.",
+        "PowerPoint got it too.\n  - **PPTX 1.3.3** — the slide half.",
+        "Excel completes it.\n  - **XLSX 1.3.3** — the spreadsheet half.",
+    )
+    notes = glog.collect_notes(body)
+    assert len(notes) == 3
+    lead, bullets = glog.merge_notes(notes)
+    assert [b["label"] for b in bullets] == ["DOCX 1.3.3", "PPTX 1.3.3", "XLSX 1.3.3"]
+    # The lead is what the matrix shows COLLAPSED, so keeping only the first would describe one
+    # change and hide two.
+    assert lead == "Word got the write-back. PowerPoint got it too. Excel completes it."
+
+
+def test_a_none_among_real_notes_is_ignored_not_counted():
+    """acp #144's exact shape. `none` is a statement about its OWN commit, not the others."""
+    body = _squashed("The real note.\n  - **DOCX 4.1.2** — a bullet.", "none")
+    notes = glog.collect_notes(body)
+    assert len(notes) == 1
+    lead, bullets = glog.merge_notes(notes)
+    assert lead == "The real note."
+    assert [b["label"] for b in bullets] == ["DOCX 4.1.2"]
+
+
+def test_a_none_that_arrives_first_does_not_suppress_the_real_note():
+    """The ordering that first-match got wrong in the other direction — and the reason ordering
+    must stop mattering at all."""
+    body = _squashed("none", "The real note.\n  - **DOCX 4.1.2** — a bullet.")
+    lead, bullets = glog.merge_notes(glog.collect_notes(body))
+    assert lead == "The real note."
+    assert [b["label"] for b in bullets] == ["DOCX 4.1.2"]
+
+
+def test_all_notes_being_omissions_still_skips_the_entry():
+    """Today's behaviour, preserved exactly: nothing to declare stays nothing to declare."""
+    assert glog.collect_notes(_squashed("none", "none — considered, no matrix impact")) == []
+
+
+def test_a_squashed_commit_publishes_every_note(repo):
+    """End to end through the generator, not just the helpers."""
+    _commit(repo, _squashed(
+        "Word got it.\n  - **DOCX 1.3.3** — one.",
+        "PowerPoint too.\n  - **PPTX 1.3.3** — two."))
+    r = subprocess.run([sys.executable, str(SCRIPT)], cwd=repo, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    entry = json.loads(r.stdout)[0]
+    assert [p["label"] for p in entry["points"]] == ["DOCX 1.3.3", "PPTX 1.3.3"]
+    assert entry["summary"] == "Word got it. PowerPoint too."
+    # Merging is normal but worth seeing — reported, never silent.
+    assert "::notice::" in r.stderr and "merged 2 Matrix-Note" in r.stderr

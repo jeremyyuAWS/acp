@@ -243,6 +243,55 @@ def _is_omission(note_body: str) -> bool:
     return bool(_OMISSION_RE.match(first_line))
 
 
+def collect_notes(body: str) -> list[str]:
+    """EVERY Matrix-Note body in a commit message, with the deliberate omissions dropped.
+
+    One commit normally carries one note. A SQUASH commit carries as many as it squashed, because
+    GitHub pre-fills the merge description with the concatenated messages — and that is the case
+    this exists for. `_NOTE_RE.search()` returned the FIRST, so:
+
+      * acp #144 squashed a real note and a later `Matrix-Note: none`. First-match published the
+        real one. Correct, by luck of ordering.
+      * acp #146 squashed FOUR real notes (docx, pptx, xlsx, review-cards). First-match would have
+        published the docx one and silently dropped three — three formats' worth of shipped
+        capability, absent from the public log with nothing anywhere reporting it. It only
+        published in full because a human rewrote the merge description by hand at the merge
+        screen, which is not a control anyone should have to remember.
+
+    Both outcomes came from the same rule, and the difference between them was the order the
+    commits happened to be in. So the rule is replaced rather than tightened.
+
+    Omissions are dropped rather than counted: `Matrix-Note: none` means "this commit had nothing
+    to declare", which is a statement about ITS OWN change and says nothing about the others it
+    was squashed with. Returning [] when every note is an omission preserves today's behaviour
+    exactly — the entry is skipped.
+    """
+    return [m.group(1) for m in _NOTE_RE.finditer(body) if not _is_omission(m.group(1))]
+
+
+def merge_notes(bodies: list[str]) -> tuple[str, list[dict]]:
+    """Several note bodies -> one (lead, bullets), in commit order.
+
+    MERGED, not rejected, and the choice follows this module's own severity-follows-fixability
+    rule (see TrailerProblem): a trailer lives in a commit message, so once the squash is on main
+    nobody can fix it without rewriting shared history. Raising here would therefore not prompt a
+    correction — it would drop the entry entirely, which is strictly worse than the first-match
+    behaviour it replaces. Merging recovers every note instead of reporting that it could have.
+
+    Leads are joined because the lead is what the matrix shows when an entry is COLLAPSED: keeping
+    only the first would leave a summary that describes one of the changes and hides the rest,
+    which is the same under-reporting in a smaller place.
+    """
+    leads: list[str] = []
+    bullets: list[dict] = []
+    for body in bodies:
+        lead, pts = parse_note(body)
+        if lead:
+            leads.append(lead)
+        bullets.extend(pts)
+    return " ".join(leads), bullets
+
+
 class TrailerProblem(Exception):
     """A malformed matrix trailer. Fatal pre-merge (--check), reported-and-skipped after.
 
@@ -268,12 +317,18 @@ def parse_commit(raw: str, repo: str, strict: bool = False) -> dict | None:
     """
     sha, authored, subject, body = raw.split("\x1f", 3)
     date, time, tz = _split_when(authored)
-    note = _NOTE_RE.search(body)
-    if not note:
-        return None
-    summary, points = parse_note(note.group(1))
-    if _is_omission(note.group(1)):
-        return None            # explicit, deliberate omission
+    if not _NOTE_RE.search(body):
+        return None            # never opted in
+    notes = collect_notes(body)
+    if not notes:
+        return None            # every note present is an explicit, deliberate omission
+    summary, points = merge_notes(notes)
+    if len(notes) > 1:
+        # Loud, not silent — the same reason the skip path below annotates. A squash that merged
+        # several notes is a normal, correct outcome, but it is also the moment a reviewer would
+        # want to read the combined lead rather than assume it.
+        print(f"::notice::{sha[:7]}: merged {len(notes)} Matrix-Note trailers from a squash",
+              file=sys.stderr)
 
     def bad(msg: str):
         problem = TrailerProblem(f"{sha[:7]}: {msg}")
