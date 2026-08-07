@@ -306,8 +306,13 @@ export function RuleBreakdown({ scanId, files }) {
           const total = r.pass + r.fail + r.skip || 1
           return (
             <div className="rulerow" key={r.id}>
-              <div className="rulemeta"><b>{r.id}</b> <span className="lvlpill">{r.level}</span> <span>{r.name}</span>
-                <RuleDetail sc={r.id} /></div>
+              <div className="rulemeta"><b>{r.id}</b> <span className="lvlpill">{r.level}</span> <span>{r.name}</span></div>
+              {/* OUTSIDE .rulemeta, deliberately. That element identifies the row's criterion, and
+                  `.rulemeta b` is how callers read it — RuleDetail emits a <b> per rule doc, so
+                  nesting it here made one row report 1 criterion plus 6 rule ids. Caught by
+                  ruleBreakdownScope14.test.jsx counting 125 ids where 17 were expected; any other
+                  consumer of that selector would have broken the same way, silently. */}
+              <RuleDetail sc={r.id} />
               <div className="rulebar" title={`${r.pass} pass · ${r.fail} document(s) failed${r.findings > r.fail ? ` · ${r.findings} findings` : ''} · ${r.skip} N/A`}>
                 <i className="rb-pass" style={{ width: `${(r.pass / total) * 100}%` }} />
                 <i className="rb-fail" style={{ width: `${(r.fail / total) * 100}%` }} />
@@ -351,7 +356,7 @@ export function RuleBreakdown({ scanId, files }) {
           carrying findings. `outOfScopeFindings` is 0 on a scan the operator ran scoped (the
           backend already reads those pairs as NOT_EVALUATED) and non-zero on an unscoped one,
           where the narrowing really is holding back recorded failures. */}
-      {!showAllCore && untrackedScs.length > 0 && (
+      {!showAllCore && (
         <p className="muted" style={{ fontSize: 11.5, margin: '10px 0 0' }}>
           {untrackedScs.length} of the {CORE_SCS.size} document-core criteria
           ({untrackedScs.sort().join(', ')}) are not tracked for this engagement and are not
