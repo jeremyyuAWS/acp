@@ -258,6 +258,27 @@ _SCHEMA = [
       usage_signal INT, regulatory_tags TEXT, business_criticality TEXT,
       triage_score INT, triage_rationale TEXT
     )""",
+    # WHICH TENANT a document belongs to. This separates two meanings that are currently
+    # COLLAPSED INTO ONE COLUMN, and the collapse is the hazard — not an absence.
+    #
+    # `documents.owner` is populated with the scan's owner_email (save_scan passes the same
+    # report["owner"] it writes to scan_runs.owner_email; handlers passes payload["user"]). So
+    # the tenant IS recorded today. But this table is the document-GOVERNANCE layer (ADR 0003):
+    # `owner` sits beside `department`, `business_criticality` and `regulatory_tags`, and those
+    # are facts about the customer's document, not about which customer we are. The column was
+    # designed for a business owner and is being fed a tenant id.
+    #
+    # That works right up until somebody populates `owner` as designed — which ADR 0003 intends
+    # and OwnerDelegate already implies — at which point every tenant-scoped read silently starts
+    # matching on a person's name. Nothing errors. The estate simply becomes visible to the wrong
+    # customer. `documents` is also the only table carrying `department`, so it is exactly where
+    # a "filter by dept" view would be built.
+    #
+    # NULL means "tenant unknown", and a scoped read must EXCLUDE it rather than treat it as a
+    # wildcard. Rows predating this column stay NULL until backfilled (below): the cost of
+    # excluding them is a document nobody sees, the cost of including them is a document the
+    # wrong customer sees, and those are not the same size of mistake.
+    "ALTER TABLE documents ADD COLUMN IF NOT EXISTS owner_email TEXT",
     # ADR 0020 stage 2 — lightweight Discover-side classification (inventory, not conformance).
     "ALTER TABLE documents ADD COLUMN IF NOT EXISTS pages INT",
     "ALTER TABLE documents ADD COLUMN IF NOT EXISTS images INT",
@@ -359,6 +380,11 @@ _SCHEMA = [
 _LEGACY_OWNER = os.environ.get("ACP_LEGACY_SCAN_OWNER", "").strip().lower()
 if _LEGACY_OWNER and "@" in _LEGACY_OWNER and all(c.isalnum() or c in ".+-_@" for c in _LEGACY_OWNER):
     _SCHEMA.append(f"UPDATE scan_runs SET owner_email='{_LEGACY_OWNER}' WHERE owner_email IS NULL")
+    # Same env var, same one-time shape, for the documents table. Deliberately the SAME switch
+    # rather than a second one: an operator who has already decided who owns pre-isolation
+    # history should not have to decide it twice, and two switches is how the two tables end up
+    # disagreeing about the same scan's documents.
+    _SCHEMA.append(f"UPDATE documents SET owner_email='{_LEGACY_OWNER}' WHERE owner_email IS NULL")
 
 _UPSERT_INV = (
     "INSERT INTO inventory(file,first_seen,last_seen,last_status,last_score) "
@@ -751,8 +777,14 @@ class Store:
                     compliance_score=f.get("score"), pii_severity=(f.get("pii") or {}).get("severity"),
                     pii_total=(f.get("pii") or {}).get("total", 0), age_days=age_days,
                     skipped_rules=f.get("skipped_rules", 0))
+                # owner AND owner_email from the same value, deliberately and temporarily:
+                # report["owner"] is the tenant (it is what scan_runs.owner_email gets), so this
+                # preserves today's behaviour exactly while giving the tenant its own column.
+                # When `owner` is finally populated as ADR 0003 intends — a business owner —
+                # only the first argument changes and isolation keeps working.
                 self.upsert_document(doc_id, source=report["source"], path=f["file"],
                                      content_hash=f.get("checksum"), owner=report.get("owner"),
+                                     owner_email=report.get("owner"),
                                      created_at=created_at, last_seen=now,
                                      triage_score=tscore, triage_rationale=rationale,
                                      classify=f.get("classify"))
@@ -3574,7 +3606,7 @@ class Store:
     def upsert_document(self, doc_id: str, *, source: str, path: str, content_hash: str | None,
                         owner: str | None, created_at: str, last_seen: str,
                         triage_score: int, triage_rationale: str,
-                        classify: dict | None = None) -> None:
+                        classify: dict | None = None, owner_email: str | None = None) -> None:
         """Upsert a document's scan-derived fields. department/regulatory_tags/
         business_criticality/usage_signal aren't set here (no real-scan source for them
         yet — ADR 0003's own noted gap) and are left for an admin/connector to populate
@@ -3589,10 +3621,27 @@ class Store:
             self._db.execute(cur,
                 "INSERT INTO documents(doc_id,source,path,content_hash,owner,created_at,"
                 "last_seen,triage_score,triage_rationale,pages,images,has_text,has_images,"
-                "is_scanned,doc_class,classified_at) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "is_scanned,doc_class,classified_at,owner_email) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                # owner_email IS updated on conflict, and the reason is worth stating because the
+                # alternative looks safer and is not. doc_id falls back to
+                # `{source}:{content_hash}` (documents.resolve_doc_id), so two tenants scanning
+                # the SAME BYTES — a shared template, the same public PDF — collide on one row.
+                #
+                # Either choice loses VISIBILITY for one of them; neither leaks, because a scoped
+                # read matches a single owner_email. Updating means the row reflects whoever
+                # scanned last, which at least stays consistent with the rest of the row (path,
+                # last_seen, classification) — all of which already come from that same scan.
+                # Leaving it would pin ownership to whoever happened to scan first while every
+                # other column describes someone else's file.
+                #
+                # The real fix is a composite key, PRIMARY KEY (owner_email, doc_id), so the two
+                # tenants get two rows. That is a bigger migration than adding a column and is
+                # deliberately NOT smuggled in here — see the test that pins this behaviour so the
+                # follow-up is a decision rather than a discovery.
                 "ON CONFLICT(doc_id) DO UPDATE SET path=EXCLUDED.path, "
                 "content_hash=EXCLUDED.content_hash, last_seen=EXCLUDED.last_seen, "
+                "owner_email=EXCLUDED.owner_email, "
                 "triage_score=EXCLUDED.triage_score, triage_rationale=EXCLUDED.triage_rationale"
                 + (", pages=EXCLUDED.pages, images=EXCLUDED.images, has_text=EXCLUDED.has_text, "
                    "has_images=EXCLUDED.has_images, is_scanned=EXCLUDED.is_scanned, "
@@ -3602,7 +3651,7 @@ class Store:
                  triage_score, triage_rationale,
                  c.get("pages"), c.get("images"), b(c.get("has_text")), b(c.get("has_images")),
                  b(c.get("is_scanned")), c.get("doc_class"),
-                 (last_seen if classify else None)))
+                 (last_seen if classify else None), owner_email))
 
     def get_document_examined(self, path: str) -> dict | None:
         """The engine-reported inventory counts for a document, by path (latest classification

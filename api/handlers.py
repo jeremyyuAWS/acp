@@ -982,8 +982,11 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                 compliance_score=fdict.get("score"), pii_severity=(pinfo or {}).get("severity"),
                 pii_total=(pinfo or {}).get("total", 0), age_days=age_days,
                 skipped_rules=fdict.get("skipped_rules", 0))
+            # owner_email from the same `user` — see store.save_scan's note: the tenant gets its
+            # own column now, and `owner` keeps whatever it had so nothing changes today.
             core.store.upsert_document(doc_id, source=source, path=name, content_hash=checksum,
-                                       owner=user, created_at=created_at, last_seen=now,
+                                       owner=user, owner_email=user,
+                                       created_at=created_at, last_seen=now,
                                        triage_score=tscore, triage_rationale=rationale,
                                        classify=fdict.get("classify"))   # ADR 0020 stage 2
         except Exception:
