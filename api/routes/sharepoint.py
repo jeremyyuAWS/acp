@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
+import core
 import scanner
 
 router = APIRouter()
@@ -63,3 +64,53 @@ def drives(site_id: str, request: Request):
         raise HTTPException(status_code=403, detail=str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Microsoft Graph error: {e}") from e
+
+
+@router.post("/sharepoint/upload")
+async def sharepoint_upload(request: Request):
+    """Write one remediated file back to SharePoint.
+
+    The counterpart of /drive/upload, and deliberately the same shape: multipart with scan_id,
+    file and blob, and the same `record_remediation` call at the end so a SharePoint write shows
+    up in the compliance record exactly like a Drive one.
+
+    `drive_id` is REQUIRED and comes from the scan, not from the browser's idea of where the file
+    lives. Graph item ids are unique only within a drive, so writing to the wrong one is not an
+    error you would see — it succeeds, into somebody else's library.
+
+    The destination folder is the SAME setting Drive uses (core.store.get_drive_mirror_folder),
+    so renaming the mirror renames it for both sources rather than leaving SharePoint writing to
+    a name only this route knows.
+    """
+    from fastapi import UploadFile
+
+    form = await request.form()
+    scan_id = form.get("scan_id", "")
+    filename = form.get("file", "")
+    drive_id = form.get("drive_id", "")
+    upload_file: UploadFile = form.get("blob")
+    if not upload_file:
+        raise HTTPException(400, "missing blob field")
+    if not drive_id:
+        raise HTTPException(
+            400,
+            "missing drive_id. A SharePoint item id is only unique within its drive, so the "
+            "write target has to be named explicitly — the scan records it on every item it "
+            "lists from a site.")
+
+    token = _token(request)
+    content = await upload_file.read()
+    content_type = upload_file.content_type or "application/octet-stream"
+    folder = core.store.get_drive_mirror_folder()
+
+    try:
+        item = scanner._sp_upload(token, drive_id, folder, filename, content, content_type)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"SharePoint upload failed: {e}") from e
+
+    web_url = item.get("webUrl", "")
+    if scan_id and filename:
+        core.store.record_remediation(scan_id, filename, drive_write_url=web_url)
+    return {"ok": True, "url": web_url, "folder": folder, "driveId": drive_id}

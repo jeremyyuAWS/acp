@@ -472,7 +472,8 @@ def _sp_drives(token: str, site_id: str) -> list[dict]:
             for d in data.get("value", []) if d.get("id")]
 
 
-def _sp_list(token: str, max_files: int = 200, site: str | None = None) -> list[dict]:
+def _sp_list(token: str, max_files: int = 200, site: str | None = None,
+             exclude_remediated: bool = False) -> list[dict]:
     """List scannable files from OneDrive, or from every document library on a SharePoint site.
 
     `site` is a Graph site id. Absent, this behaves exactly as it always has (the signed-in
@@ -492,6 +493,24 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None) -> list[
     for yielding unique IDENTITIES; _dedupe_names only disambiguates genuine NAME collisions
     between different items."""
     exts = {".docx", ".pptx", ".xlsx", ".pdf", ".html", ".htm"}
+    # ACP's own output must never be re-ingested: a remediated copy re-discovered inflates the
+    # file count and shows "remediated ✓" on a scan that remediated nothing (provenance.py).
+    #
+    # THIS IS THE WEAKER OF THE TWO DEFENCES AND THAT IS A KNOWN GAP. Drive stamps the ARTIFACT
+    # (properties.acpGenerated), which survives a rename or a move; provenance.py lists five ways
+    # folder-based exclusion breaks and rejects it for Drive on exactly those grounds. Graph has
+    # no equivalent of Drive's arbitrary `properties` — the nearest is a custom SharePoint column
+    # on the library's listItem, which needs Sites.Manage.All and per-library provisioning. So
+    # this ships folder-scoped, deliberately and with the limitation written down rather than
+    # implied: rename the mirror on one side only, move a remediated file out of it, or create a
+    # second folder of the same name, and re-ingestion comes back.
+    mirror = ""
+    if exclude_remediated:
+        try:
+            import core
+            mirror = core.store.get_drive_mirror_folder()
+        except Exception:      # noqa: BLE001 — no store (tests, tooling): fall back to the default
+            mirror = "Remediated"
     files: list[dict] = []
     # Keyed by (drive, item) — an item id is unique only within its drive, so a bare id would
     # collapse two genuinely different documents from two libraries into one.
@@ -504,11 +523,12 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None) -> list[
             print(f"[scan] SharePoint site {site} has no document libraries visible to this "
                   f"token — nothing to scan", flush=True)
         targets = [(d["id"], f"{GRAPH}/drives/{d['id']}/root/search(q='')"
-                              "?$select=id,name,file&$top=200") for d in drives]
+                              "?$select=id,name,file,parentReference&$top=200") for d in drives]
     else:
         # None, not a resolved id: the download path reads a missing driveId as /me/drive, which
         # is what every item stored before this change looks like.
-        targets = [(None, f"{GRAPH}/me/drive/root/search(q='')?$select=id,name,file&$top=200")]
+        targets = [(None, f"{GRAPH}/me/drive/root/search(q='')"
+                          "?$select=id,name,file,parentReference&$top=200")]
 
     for drive_id, start in targets:
         url = start
@@ -525,6 +545,14 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None) -> list[
                         continue
                     seen.add(key)
                 name = item.get("name", "")
+                if mirror:
+                    # parentReference.path looks like "/drive/root:/Remediated/sub". Matched as a
+                    # PATH SEGMENT, not a substring: a library called "Remediated Policies" is a
+                    # different folder and must still be scanned.
+                    parent = (item.get("parentReference") or {}).get("path", "")
+                    segments = parent.split(":", 1)[-1].strip("/").split("/")
+                    if mirror in segments:
+                        continue
                 if Path(name).suffix.lower() in exts:
                     rec = {"name": _safe_name(name), "id": item_id, "sp": True}
                     if drive_id:
@@ -539,6 +567,109 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None) -> list[
         print(f"[scan] {relisted} duplicate listing(s) of the same {where} item id collapsed "
               f"(paged /search overlap) — not extra documents", flush=True)
     return files[:max_files]
+
+
+# Graph's simple upload tops out at 4 MiB; past that it needs a resumable session. Remediated
+# PPTX and PDF routinely exceed it, so this is not an edge case worth deferring — a write-back
+# that works for small files and fails for the ones a customer notices is worse than none.
+_SP_SIMPLE_MAX = 4 * 1024 * 1024
+
+
+def _sp_put(token: str, url: str, data: bytes, content_type: str):
+    import httpx
+    r = httpx.put(url, headers={"Authorization": f"Bearer {token}", "Content-Type": content_type},
+                  content=data, timeout=120, follow_redirects=True)
+    if r.status_code in (401, 403):
+        raise PermissionError(
+            "Microsoft Graph refused the write. Writing remediated copies needs a WRITE scope "
+            "(Files.ReadWrite.All, or Sites.ReadWrite.All for a team site) on the Azure app "
+            "registration — reading a site with Sites.Read.All does not grant it.")
+    r.raise_for_status()
+    return r.json() if r.content else {}
+
+
+def _sp_folder_id(token: str, drive_id: str, name: str) -> str:
+    """Find-or-create a folder at the root of a drive, returning its id.
+
+    The Graph counterpart of handlers.ensure_remediated_folder, and it reuses that folder's
+    NAME from the same setting so an operator who renames the mirror renames it everywhere.
+    `conflictBehavior: replace` on create would clobber an existing folder's contents, so the
+    lookup comes first and create is only the miss path.
+    """
+    import httpx
+    listing = _sp_get(token, f"{GRAPH}/drives/{drive_id}/root/children"
+                             f"?$select=id,name,folder&$top=200")
+    for item in listing.get("value", []):
+        if item.get("name") == name and "folder" in item:
+            return item["id"]
+    r = httpx.post(f"{GRAPH}/drives/{drive_id}/root/children",
+                   headers={"Authorization": f"Bearer {token}",
+                            "Content-Type": "application/json"},
+                   json={"name": name, "folder": {},
+                         "@microsoft.graph.conflictBehavior": "fail"},
+                   timeout=30, follow_redirects=True)
+    if r.status_code in (401, 403):
+        raise PermissionError(
+            f"Microsoft Graph refused to create the '{name}' folder — this needs a WRITE scope "
+            "(Files.ReadWrite.All / Sites.ReadWrite.All).")
+    if r.status_code == 409:
+        # Created by a concurrent write between the list and the create. Re-read rather than
+        # fail: two workers remediating the same library at once is normal, and this is exactly
+        # how Drive grew duplicate mirror folders before ensure_remediated_folder was hoisted
+        # out of the workers.
+        listing = _sp_get(token, f"{GRAPH}/drives/{drive_id}/root/children"
+                                 f"?$select=id,name,folder&$top=200")
+        for item in listing.get("value", []):
+            if item.get("name") == name and "folder" in item:
+                return item["id"]
+    r.raise_for_status()
+    return r.json()["id"]
+
+
+def _sp_upload(token: str, drive_id: str, folder: str, filename: str,
+               content: bytes, content_type: str = "application/octet-stream") -> dict:
+    """Write one remediated file into `folder` on `drive_id`. Returns the Graph driveItem.
+
+    Small files go straight up; anything over 4 MiB uses a resumable session, because Graph
+    rejects a simple PUT past that limit and the rejection is a 413 that says nothing about
+    chunking.
+    """
+    folder_id = _sp_folder_id(token, drive_id, folder)
+    safe = _safe_name(filename)
+    if len(content) <= _SP_SIMPLE_MAX:
+        return _sp_put(token,
+                       f"{GRAPH}/drives/{drive_id}/items/{folder_id}:/{safe}:/content",
+                       content, content_type)
+
+    import httpx
+    r = httpx.post(f"{GRAPH}/drives/{drive_id}/items/{folder_id}:/{safe}:/createUploadSession",
+                   headers={"Authorization": f"Bearer {token}",
+                            "Content-Type": "application/json"},
+                   json={"item": {"@microsoft.graph.conflictBehavior": "replace"}},
+                   timeout=30, follow_redirects=True)
+    if r.status_code in (401, 403):
+        raise PermissionError(
+            "Microsoft Graph refused to open an upload session — writing needs "
+            "Files.ReadWrite.All / Sites.ReadWrite.All.")
+    r.raise_for_status()
+    url = r.json()["uploadUrl"]
+
+    # 320 KiB * 10. Graph requires every chunk except the last to be a multiple of 320 KiB, and
+    # a size that is not is rejected with a message that does not say so.
+    chunk = 320 * 1024 * 10
+    total = len(content)
+    out: dict = {}
+    for start in range(0, total, chunk):
+        end = min(start + chunk, total) - 1
+        # No Authorization header: the session URL carries its own credential, and sending the
+        # bearer token to it is rejected by Graph rather than ignored.
+        cr = httpx.put(url, headers={"Content-Length": str(end - start + 1),
+                                     "Content-Range": f"bytes {start}-{end}/{total}"},
+                       content=content[start:end + 1], timeout=300)
+        cr.raise_for_status()
+        if cr.content:
+            out = cr.json()
+    return out
 
 
 def _sp_download(token: str, item: dict, dest: Path) -> None:
@@ -624,7 +755,8 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         # to narrow a scan rather than threading a second one through five call sites. "root" is
         # Drive's own sentinel for "no narrowing" and means the same thing here: OneDrive.
         site = None if folder in (None, "", "root") else folder
-        result = _sp_list(sp_token, max_files or 200, site=site)
+        result = _sp_list(sp_token, max_files or 200, site=site,
+                          exclude_remediated=exclude_remediated)
         if scope_out is not None:
             scope_out.update({"kind": "sharepoint", "site": site, "kept": len(result),
                               "truncated": len(result) >= (max_files or 200)})
