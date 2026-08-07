@@ -1795,6 +1795,25 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
   padding: 0 7px; border-radius: 999px; background: #854F0B; color: #fff; font-size: 13px; font-weight: 700; vertical-align: middle; }
 .rem-review-panel { border-color: #E6C461; box-shadow: 0 0 0 1px #F3E2B4 inset; }
 
+/* Per-rule "what we check" detail, inline in the criterion table (RuleDetail).
+   Deliberately quiet: the table is a scoreboard first, and this is the answer to a question the
+   reader has to ask before it earns space. Closed by default; the summary reads as a link, not
+   as another column of data competing with the pass/fail bars. */
+.ruledetail { display: inline-block; margin-left: 8px; }
+.ruledetail > summary { cursor: pointer; font-size: 11.5px; color: #1F5FA8; list-style: none; }
+.ruledetail > summary::-webkit-details-marker { display: none; }
+.ruledetail > summary::marker { content: ""; }
+.ruledetail > summary:hover { text-decoration: underline; }
+.ruledetail > summary:focus-visible { outline: 2px solid #0b57d0; outline-offset: 2px; border-radius: 3px; }
+.ruledetail[open] > summary { font-weight: 600; }
+.rd-rule { margin: 8px 0 0; padding: 8px 10px; background: #F7F8FA; border: 1px solid var(--line, #E3E6EC);
+  border-radius: 6px; }
+.rd-hd { font-size: 12px; margin-bottom: 4px; }
+.rd-checks, .rd-fix { margin: 4px 0 0; font-size: 12px; line-height: 1.5; }
+/* The fix line is the one that may legitimately say "not documented yet". Kept visually equal to
+   the assess line rather than dimmed away, so the gap is admitted rather than hidden. */
+.rd-fix b { color: var(--navy, #1e2a4a); }
+
 /* Collapsible remediation sections (RemSection). The summary has to READ as the panel heading
    it replaces, or collapsing the page costs it its scan structure -- so the h2 keeps its own
    size and weight and the row simply becomes clickable.

@@ -385,6 +385,31 @@ SCOPE_PRESETS: dict[str, dict[str, frozenset[str]]] = {
     },
 }
 
+# The criteria Mova iO AccessOps actually TRACKS — column G of its coverage workbook, 17 of 50
+# rows. A fifth number in a product that already has four, so it is defined once, here, and
+# generated into both SPAs rather than retyped in JS.
+#
+# HOW IT RELATES TO THE OTHERS, because the four are routinely confused:
+#
+#   ~38  TRACED         — criteria ACP recorded an outcome for on a format. A fact about the code.
+#    29  SCOPE_UNIVERSE — (criterion, format) pairs an operator may scope. Derived, see
+#                         scripts/gen_scope_presets.py.
+#    20  DOCUMENT CORE  — what the product certifies against (frontend documents20.js).
+#    17  THIS           — what the customer tracks. DOCUMENT CORE minus 1.4.4, 1.4.10 and 1.4.12.
+#    14  deva-final     — the narrower per-format checklist agreed for one engagement.
+#
+# The three it drops are the ones column G marks "No", and they share a reason: resize, reflow
+# and text-spacing are VIEWER behaviours, not properties of a static document — there is nothing
+# in the file for a rule to disagree with. Recorded so a future reader does not "restore" them as
+# an oversight.
+#
+# NOT a scope preset: a preset gates assessment per format, and this is an SC-level DISPLAY list.
+# Conflating the two would silently narrow what gets assessed the first time someone loaded it.
+MOVA_TRACKED: frozenset[str] = frozenset({
+    "1.1.1", "1.3.1", "1.3.2", "1.3.3", "1.4.1", "1.4.3", "1.4.5", "1.4.11",
+    "2.1.1", "2.1.2", "2.4.2", "2.4.3", "2.4.4", "2.4.6", "3.1.1", "3.1.2", "4.1.2",
+})
+
 SCOPE_SETTING = "scan_scope"          # preset name, a JSON map, or "" / absent for no restriction
 _scope_override: str | None = None    # tests and per-call use; None = read the setting
 
