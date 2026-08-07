@@ -121,7 +121,8 @@ def test_large_files_use_a_resumable_session_in_320k_multiples(monkeypatch):
     out = scanner._sp_upload("tok", "d1", "Remediated", "big.pptx", b"y" * size)
     assert out["webUrl"] == "https://x/big.pptx"
     assert len(chunks) > 1, "a 5 MiB file went up in one chunk"
-    first = int(chunks[0].split()[1].split("-")[1]) + 1
+    # "bytes 0-3276799/5242880" — drop the "/total" before reading the end offset.
+    first = int(chunks[0].split()[1].split("/")[0].split("-")[1]) + 1
     assert first % (320 * 1024) == 0, f"first chunk {first} is not a 320 KiB multiple"
 
 
