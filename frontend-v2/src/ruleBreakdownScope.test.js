@@ -9,7 +9,9 @@ const src = readFileSync(join(here, 'Transparency.jsx'), 'utf8')
 
 describe('estate "By WCAG criterion" panel — the agreed scope by default, at/below the assessed level', () => {
   it('takes its criteria list from activeScope, never from a literal in this file', () => {
-    expect(src).toMatch(/const criteria = criteriaFor\(showAllCore\)/)
+    // The default is the tracked 17 now, not the agreed 14 — but the GUARD is unchanged in
+    // spirit: both branches come from an imported set, never from a literal typed here.
+    expect(src).toMatch(/const criteria = showAllCore \? criteriaFor\(true\) : TRACKED_17/)
     // The 14 are defined server-side (SCOPE_PRESETS) and reach the SPA through the generated
     // scopePresets.js. A second hand-typed copy on the customer-facing panel is the failure this
     // pins: two lists of the same agreed checklist drift, and nothing here would report it.

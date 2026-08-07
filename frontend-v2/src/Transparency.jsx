@@ -6,7 +6,7 @@ import { WCAG } from './wcagCatalog.js'
 import { allRules } from './rules/index.js'
 import { DOCUMENTS_20 } from './documents20.js'
 import { RULE_DETAILS, RULES_BY_SC, TRACKED_17 } from './ruleDetails.js'
-import { OUT_OF_SCOPE_SCS, DENOMINATOR, outOfScopeNote, criteriaFor } from './activeScope.js'
+import { OUT_OF_SCOPE_SCS, DENOMINATOR, outOfScopeNote, criteriaFor, CORE_SCS, SCOPE_SIZE, SCOPE_LABEL } from './activeScope.js'
 
 // SCs a rule module exists for — distinguishes "check built, no data in this scan"
 // from "no automated check exists yet".
@@ -180,7 +180,13 @@ export function RuleBreakdown({ scanId, files }) {
   // reported by outOfScopeNote below; adding a third toggle state would ask the reader to hold
   // three denominators at once to answer one question.
   const criteria = showAllCore ? criteriaFor(true) : TRACKED_17
-  const den = showAllCore ? DENOMINATOR.core : DENOMINATOR.scope
+  // DENOMINATOR.scope names the AGREED scope (14). The narrowed view is the tracked 17 now, so
+  // reusing it would print "of 17 criteria in the agreed scope" — a label describing one set
+  // above a count of another, which is the reconcilability problem in miniature.
+  const den = showAllCore
+    ? DENOMINATOR.core
+    : { total: criteria.size, noun: 'criteria tracked for this engagement',
+        question: `what do we track? — the ${criteria.size} criteria Mova iO follows, of the ${CORE_SCS.size} document core` }
   const [hideNA, setHideNA] = useState(true)   // default to hiding the N/A rows; the toggle reveals them
   const [exporting, setExporting] = useState(false)
   const doScanExport = async () => {
@@ -225,8 +231,15 @@ export function RuleBreakdown({ scanId, files }) {
   // narrowing the view would otherwise make them disappear with no account of themselves — the
   // same trust problem as a total that cannot be reconciled on screen (#77, #84). Reported in
   // the note below whether or not it flatters the score.
+  //
+  // WHICH set that is changed when the default became the tracked 17. It must be the criteria
+  // THIS VIEW hides — the 3 untracked — not the 6 outside the agreed scope. Reporting the 6 while
+  // rendering 17 rows would put a note on screen that cannot be reconciled against the rows above
+  // it, which is the exact defect this panel shipped with (a "20 of 20" header above six rows)
+  // and the reason ruleBreakdownScope14.test.jsx renders rather than reads the source.
+  const untrackedScs = [...CORE_SCS].filter((sc) => !criteria.has(sc))
   const outOfScopeFindings = rulesAll
-    .filter((r) => (LEVEL_RANK[r.level] || 1) <= targetRank && OUT_OF_SCOPE_SCS.has(r.id))
+    .filter((r) => (LEVEL_RANK[r.level] || 1) <= targetRank && untrackedScs.includes(r.id))
     .reduce((n, r) => n + (r.findings || r.fail), 0)
   // A row is "N/A" when the criterion doesn't apply to this file type — the engine ran it but it
   // can't fire (no pass, no fail, only skip). The Hide-N/A toggle collapses those to the ones that
@@ -338,9 +351,24 @@ export function RuleBreakdown({ scanId, files }) {
           carrying findings. `outOfScopeFindings` is 0 on a scan the operator ran scoped (the
           backend already reads those pairs as NOT_EVALUATED) and non-zero on an unscoped one,
           where the narrowing really is holding back recorded failures. */}
-      {!showAllCore && (
+      {!showAllCore && untrackedScs.length > 0 && (
         <p className="muted" style={{ fontSize: 11.5, margin: '10px 0 0' }}>
-          {outOfScopeNote(outOfScopeFindings)}
+          {untrackedScs.length} of the {CORE_SCS.size} document-core criteria
+          ({untrackedScs.sort().join(', ')}) are not tracked for this engagement and are not
+          counted above — resize, reflow and text spacing are viewer behaviours rather than
+          properties of a static document
+          {outOfScopeFindings > 0
+            ? `, including ${outOfScopeFindings} recorded finding${outOfScopeFindings === 1 ? '' : 's'}`
+            : ''}.
+        </p>
+      )}
+      {/* The agreed scope is a DIFFERENT fact from what this table shows, and it is the one the
+          backend gates on — so it is stated separately rather than folded into the line above.
+          Collapsing the two would make one number answer two questions. */}
+      {!showAllCore && OUT_OF_SCOPE_SCS.size > 0 && (
+        <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>
+          Assessment itself is gated by the {SCOPE_LABEL}: {SCOPE_SIZE} of these criteria.
+          {' '}{outOfScopeNote(0)}
         </p>
       )}
       <button className="ghost small" style={{ marginTop: 8 }} onClick={() => setShowAllCore((v) => !v)}
