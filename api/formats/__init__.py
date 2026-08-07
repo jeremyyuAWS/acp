@@ -7,4 +7,4 @@ format's parser dependencies.
 """
 from __future__ import annotations
 
-from formats import html, pdf, xlsx  # noqa: F401  — registration happens on import
+from formats import docx, html, pdf, xlsx  # noqa: F401  — registration happens on import

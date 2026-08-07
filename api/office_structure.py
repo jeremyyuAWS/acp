@@ -386,6 +386,17 @@ def docx_checks(path: Path) -> list[dict]:
             # reaches the accessibility tree. So the old check could fail a document
             # whose fields were perfectly announceable, and pass one whose fields were
             # anonymous to AT — wrong in both directions on the criterion it claimed.
+            # The 4.1.2 half moved to formats/docx/detectors/name_role_value.py when the pair
+            # was migrated to the capability registry — the same move PDF 4.1.2 made, and for
+            # the same reason. RULE_FORMATS could say WHICH formats the criterion is judged on
+            # but not how much of it a detector reaches, so a clean document reported
+            # NOT_EVALUATED ("we did not look") for a check that had in fact run. Coverage lives
+            # in the registration now, and a clean file reads REVIEW.
+            #
+            # 3.3.2 stays here: it is not a registry pair, and it is the SAME condition — a
+            # missing Title fails both at once. Delegating the 4.1.2 emission rather than
+            # re-deriving it is what keeps the two from drifting apart.
+            from formats.docx.detectors.name_role_value import detect as _docx_name_role
             for sdt_inner in _SDT.findall(doc):
                 pr_m = _SDT_PR.search(sdt_inner)
                 if not pr_m or not _SDT_INPUT_TYPE.search(pr_m.group(1)):
@@ -393,7 +404,7 @@ def docx_checks(path: Path) -> list[dict]:
                 alias_m = _SDT_ALIAS.search(pr_m.group(1))
                 if not alias_m or not alias_m.group(1).strip():
                     findings.append(_finding("DOCX_FORM_FIELD_NO_LABEL", "3.3.2 Labels or Instructions", "SERIOUS"))
-                    findings.append(_finding("DOCX_FORM_FIELD_NO_NAME", "4.1.2 Name, Role, Value", "SERIOUS"))
+            findings += _docx_name_role(path)
 
             # 2.4.10 — a document long enough to need section structure that uses
             # no heading styles at all. A short letter/memo legitimately has none,
