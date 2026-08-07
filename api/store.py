@@ -3653,6 +3653,64 @@ class Store:
                  b(c.get("is_scanned")), c.get("doc_class"),
                  (last_seen if classify else None), owner_email))
 
+    def estate_by_department(self, owner_email: str, *, department: str | None = None,
+                             owner: str | None = None) -> list[dict]:
+        """Document counts per department for ONE tenant — the control plane's core query.
+
+        SCOPED, AND NULL IS NOT A WILDCARD. `owner_email IS NOT NULL AND owner_email = %s` rather
+        than a bare equality: rows written before that column existed carry NULL, and in SQL
+        `NULL = 'anyone'` is not true — but a hand-written OR that tried to be helpful about
+        "unknown" rows is exactly how one customer's estate reaches another. Excluding them shows
+        a document to nobody; including them shows it to the wrong person. Those are not the same
+        size of mistake, so the omission is deliberate and stated rather than incidental.
+        `owner_email` is REQUIRED, not defaulted — an optional tenant is one forgotten argument
+        away from an unscoped read, and the caller always knows who is asking.
+
+        `department` and `owner` narrow further and are the operator's own filters. NULL/empty
+        departments are reported under a single "(unassigned)" bucket rather than dropped: ADR
+        0003 notes department has no scan-derived source yet, so on most estates that bucket IS
+        the estate, and hiding it would show an operator a confident, tiny, wrong total.
+        """
+        where = ["owner_email IS NOT NULL", "owner_email = %s"]
+        params: list = [owner_email]
+        if department:
+            where.append("COALESCE(NULLIF(department, ''), '(unassigned)') = %s")
+            params.append(department)
+        if owner:
+            where.append("owner = %s")
+            params.append(owner)
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COALESCE(NULLIF(department, ''), '(unassigned)') AS department, "
+                "COUNT(*) AS documents, "
+                "COUNT(DISTINCT owner) AS owners, "
+                "AVG(triage_score) AS avg_triage, "
+                "MAX(last_seen) AS last_seen "
+                f"FROM documents WHERE {' AND '.join(where)} "
+                "GROUP BY COALESCE(NULLIF(department, ''), '(unassigned)') "
+                "ORDER BY COUNT(*) DESC", tuple(params))
+            rows = [dict(r) for r in self._db.fetchall(cur)]
+        for r in rows:
+            # AVG returns a Decimal on Postgres and a float on SQLite. The UI renders it either
+            # way, but a Decimal is not JSON-serialisable and the failure is a 500 from the route
+            # rather than anything that points at this line.
+            r["avg_triage"] = round(float(r["avg_triage"]), 1) if r["avg_triage"] is not None else None
+        return rows
+
+    def estate_owners(self, owner_email: str) -> list[dict]:
+        """Document counts per BUSINESS owner, for one tenant. The other half of "filter by
+        dept, user" — and a different question from list_org_owners(), which answers "which
+        tenants exist". Same scoping rule as above."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COALESCE(NULLIF(owner, ''), '(unassigned)') AS owner, "
+                "COUNT(*) AS documents, "
+                "COUNT(DISTINCT COALESCE(NULLIF(department, ''), '(unassigned)')) AS departments "
+                "FROM documents WHERE owner_email IS NOT NULL AND owner_email = %s "
+                "GROUP BY COALESCE(NULLIF(owner, ''), '(unassigned)') "
+                "ORDER BY COUNT(*) DESC", (owner_email,))
+            return [dict(r) for r in self._db.fetchall(cur)]
+
     def get_document_examined(self, path: str) -> dict | None:
         """The engine-reported inventory counts for a document, by path (latest classification
         wins). Backs the honest examined-element denominators (ADR 0026 Epic 2): classify() walks
