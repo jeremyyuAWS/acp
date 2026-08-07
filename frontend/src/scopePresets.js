@@ -43,3 +43,45 @@ export const inScope = (name, sc, fmt) => {
   const fmts = scope[sc]
   return Boolean(fmts && fmts.includes(fmt))
 }
+
+// Every (criterion, format) pair an operator may put in scope, with display labels —
+// the universe the admin scope grid renders. A pair appears here only when the backend
+// can reach a verdict on it (a pass/fail validator OR a review lane), so the grid can
+// never offer a checkbox that would change nothing. Derived, so it cannot drift into
+// claiming capability the engine does not have. `html` is excluded: this configures a
+// DOCUMENT engagement.
+export const SCOPE_UNIVERSE = [
+  { sc: "1.1.1", name: "Non-text Content", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
+  { sc: "1.3.1", name: "Info and Relationships", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
+  { sc: "1.3.2", name: "Meaningful Sequence", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
+  { sc: "1.3.3", name: "Sensory Characteristics", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
+  { sc: "1.4.1", name: "Use of Color", level: "A", formats: ["docx", "pdf", "xlsx"] },
+  { sc: "1.4.2", name: "Audio Control", level: "A", formats: ["pptx"] },
+  { sc: "1.4.3", name: "Contrast (Minimum)", level: "AA", formats: ["docx", "pdf", "pptx", "xlsx"] },
+  { sc: "1.4.4", name: "Resize Text", level: "AA", formats: ["pptx"] },
+  { sc: "1.4.5", name: "Images of Text", level: "AA", formats: ["docx", "pdf", "pptx", "xlsx"] },
+  { sc: "1.4.6", name: "Contrast (Enhanced)", level: "AAA", formats: ["pdf", "pptx", "xlsx"] },
+  { sc: "1.4.8", name: "Visual Presentation", level: "AAA", formats: ["docx"] },
+  { sc: "1.4.9", name: "Images of Text (No Exception)", level: "AAA", formats: ["docx", "pdf", "pptx", "xlsx"] },
+  { sc: "1.4.10", name: "Reflow", level: "AA", formats: ["docx", "pptx"] },
+  { sc: "1.4.11", name: "Non-text Contrast", level: "AA", formats: ["docx", "pdf", "pptx"] },
+  { sc: "1.4.12", name: "Text Spacing", level: "AA", formats: ["docx", "pdf", "pptx"] },
+  { sc: "2.1.1", name: "Keyboard", level: "A", formats: ["pptx"] },
+  { sc: "2.1.2", name: "No Keyboard Trap", level: "A", formats: ["docx", "pptx", "xlsx"] },
+  { sc: "2.4.1", name: "Bypass Blocks", level: "A", formats: ["pdf"] },
+  { sc: "2.4.2", name: "Page Titled", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
+  { sc: "2.4.3", name: "Focus Order", level: "A", formats: ["pptx"] },
+  { sc: "2.4.4", name: "Link Purpose (In Context)", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
+  { sc: "2.4.6", name: "Headings and Labels", level: "AA", formats: ["docx", "pdf", "pptx", "xlsx"] },
+  { sc: "2.4.9", name: "Link Purpose (Link Only)", level: "AAA", formats: ["docx", "pptx"] },
+  { sc: "2.4.10", name: "Section Headings", level: "AAA", formats: ["docx"] },
+  { sc: "3.1.1", name: "Language of Page", level: "A", formats: ["docx", "pdf", "pptx", "xlsx"] },
+  { sc: "3.1.2", name: "Language of Parts", level: "AA", formats: ["docx", "pdf", "pptx", "xlsx"] },
+  { sc: "3.1.5", name: "Reading Level", level: "AAA", formats: ["docx", "pdf", "pptx", "xlsx"] },
+  { sc: "3.3.2", name: "Labels or Instructions", level: "A", formats: ["docx"] },
+  { sc: "4.1.2", name: "Name, Role, Value", level: "A", formats: ["docx", "pptx", "xlsx"] },
+]
+
+// The format columns the grid draws, in a fixed order so the header and every
+// row line up regardless of which criteria happen to be selectable.
+export const SCOPE_FORMATS = ["docx", "xlsx", "pptx", "pdf"]

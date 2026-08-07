@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hmac
+import json
 import re
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -402,7 +403,20 @@ _AI_VALIDATORS = {"ai_base_url": _ai_base_url_error}
 
 
 class SettingsUpdate(BaseModel):
+    # A PUT naming a field this model does not have used to return 200 and change nothing —
+    # the request echoed back as a success. That cost two debugging cycles on a production
+    # vision-model override (2026-07-30/31): the setting was "saved" repeatedly and the worker
+    # went on using the old value, with no error anywhere to explain it. A typo'd or renamed
+    # field is now a 422 the caller can see, which matters most for the admin scope grid: a
+    # scope that silently fails to save is indistinguishable from one that saved and is being
+    # ignored, and only one of those is a bug the operator can act on.
+    model_config = ConfigDict(extra="forbid")
+
     ai_enabled: bool | None = None
+    # The operator scan scope. Accepts what the setting accepts — a preset NAME, or the scope as
+    # DATA. `dict` is listed first so an admin UI can PUT the grid's own state without
+    # stringifying it; "" clears the scope back to no restriction.
+    scan_scope: dict[str, list[str]] | str | None = None
     drive_mirror_enabled: bool | None = None
     drive_mirror_folder: str | None = None
     auto_apply_validated: bool | None = None
@@ -423,7 +437,12 @@ def get_settings():
             # Runtime AI endpoint override (GPU burst) — empty string = env default in use.
             "ai_base_url": core.store.get_setting("ai_base_url", "") or "",
             "ai_vision_model": core.store.get_setting("ai_vision_model", "") or "",
-            "ai_text_model": core.store.get_setting("ai_text_model", "") or ""}
+            "ai_text_model": core.store.get_setting("ai_text_model", "") or "",
+            # The RAW setting, not the resolved map: this is the admin edit surface, and an
+            # editor must show what is stored so a save round-trips. /config reports the
+            # RESOLVED scope for everything that renders it — the two are different questions
+            # and conflating them is how an editor starts overwriting what it never loaded.
+            "scan_scope": core.store.get_setting("scan_scope", "") or ""}
 
 
 @router.put("/settings")
@@ -441,6 +460,25 @@ def update_settings(body: SettingsUpdate, request: Request):
         core.store.log_decision(
             "admin", "settings.drive_mirror_folder",
             detail=f"drive_mirror_folder set to {folder}")
+    # SCOPE. Validated BEFORE writing, and rejected with a reason rather than stored: a scope
+    # that cannot be parsed fails open at read time (assessment_policy.parse_scope_setting), so
+    # storing a broken one would leave the operator looking at a saved value the engine silently
+    # ignores. That is precisely the failure /config's `error` key exists to surface, and it is
+    # better never to create it. `""` is always legal — it clears the scope.
+    if body.scan_scope is not None:
+        from store import parse_scope_setting
+        raw = (json.dumps(body.scan_scope) if isinstance(body.scan_scope, dict)
+               else str(body.scan_scope).strip())
+        if raw and raw != "{}":
+            problem = parse_scope_setting(raw)[1]
+            if problem:
+                raise HTTPException(422, f"scan_scope: {problem}")
+        else:
+            raw = ""            # {} and "" both mean no restriction; store the simpler one
+        core.store.set_setting("scan_scope", raw)
+        core.store.log_decision("admin", "settings.scan_scope",
+                                detail=f"scan_scope set to {raw or '(no restriction)'}")
+
     ai_updates = [(key, val.strip())
                   for key, val in (("ai_base_url", body.ai_base_url),
                                    ("ai_vision_model", body.ai_vision_model),
