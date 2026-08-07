@@ -28,6 +28,11 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 GEN = ROOT / "scripts" / "gen_scope_presets.py"
 OUT = ROOT / "frontend" / "src" / "scopePresets.js"
+# The redesign fork gets the same generated module and the same guard. Imported from the
+# generator rather than retyped: a second hand-maintained list of where the generated files go
+# is the identical failure mode this whole module exists to prevent, one level up.
+sys.path.insert(0, str(ROOT / "scripts"))
+from gen_scope_presets import OUTS  # noqa: E402
 
 sys.path.insert(0, str(ROOT / "api"))
 
@@ -44,11 +49,38 @@ def _run(*args: str) -> subprocess.CompletedProcess:
 
 
 def test_generated_file_is_current():
-    """The committed scopePresets.js matches what the Python defines right now."""
+    """Every committed scopePresets.js matches what the Python defines right now."""
     r = _run("--check")
     assert r.returncode == 0, (
-        "frontend/src/scopePresets.js is stale — SCOPE_PRESETS moved without regenerating it.\n"
+        "a generated scopePresets.js is stale — the tables moved without regenerating it.\n"
         "Fix: python scripts/gen_scope_presets.py\n\n" + r.stderr)
+
+
+@pytest.mark.parametrize("out", OUTS, ids=lambda p: p.parent.parent.name)
+def test_every_target_exists_and_is_current(out):
+    """Each SPA's copy individually, so a failure names the one that drifted.
+
+    The aggregate check above would go red either way; this says WHICH. That mattered on
+    2026-08-07: #145 generated the file from a base that predated #149's removal of docx from
+    the 4.1.2 tables, and frontend-v2/ had never been generated at all — two different staleness
+    causes in one run, and one message naming only "frontend/" would have hidden the second.
+    """
+    assert out.exists(), f"{out.relative_to(ROOT)} was never generated"
+    r = _run("--stdout")
+    assert r.returncode == 0, r.stderr
+    assert out.read_text() == r.stdout, (
+        f"{out.relative_to(ROOT)} is stale — regenerate with: python scripts/gen_scope_presets.py")
+
+
+def test_both_spas_get_byte_identical_content():
+    """The two SPAs must not be allowed to diverge into 'nearly the same' generated module.
+
+    A fork that is 99% identical is worse than one that is obviously different: the drift hides
+    in the 1%, and the v2 panel would render a scope the backend does not gate on.
+    """
+    texts = {out.relative_to(ROOT).as_posix(): out.read_text() for out in OUTS}
+    assert len(set(texts.values())) == 1, (
+        "generated scopePresets.js differs between SPAs: " + ", ".join(texts))
 
 
 def test_check_actually_fails_on_drift(tmp_path, monkeypatch):

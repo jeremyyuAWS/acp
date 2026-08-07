@@ -79,7 +79,7 @@ export const SCOPE_UNIVERSE = [
   { sc: "3.1.2", name: "Language of Parts", level: "AA", formats: ["docx", "pdf", "pptx", "xlsx"] },
   { sc: "3.1.5", name: "Reading Level", level: "AAA", formats: ["docx", "pdf", "pptx", "xlsx"] },
   { sc: "3.3.2", name: "Labels or Instructions", level: "A", formats: ["docx"] },
-  { sc: "4.1.2", name: "Name, Role, Value", level: "A", formats: ["docx", "pptx", "xlsx"] },
+  { sc: "4.1.2", name: "Name, Role, Value", level: "A", formats: ["pptx", "xlsx"] },
 ]
 
 // The format columns the grid draws, in a fixed order so the header and every

@@ -20,10 +20,12 @@ endpoint answers only in the first, so a SIM build would still need a fallback c
 second copy again, on the surface where nobody would notice it going stale. A generated module
 is one copy, derived, and `--check` fails CI the moment the Python moves.
 
+Emitted to BOTH SPAs — `frontend/` and the redesign fork `frontend-v2/` (see OUTS).
+
 Usage:
-    python scripts/gen_scope_presets.py            # write frontend/src/scopePresets.js
+    python scripts/gen_scope_presets.py            # write every target in OUTS
     python scripts/gen_scope_presets.py --stdout    # print it instead
-    python scripts/gen_scope_presets.py --check     # exit 1 (with a diff) if the file is stale
+    python scripts/gen_scope_presets.py --check     # exit 1 (with a diff) if any target is stale
 
 Pinned by tests/test_scope_presets_frontend_sync.py.
 """
@@ -36,7 +38,23 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "frontend" / "src" / "scopePresets.js"
+
+# BOTH SPAs get this module. `frontend-v2` is the redesign fork (#139) — a separate checkout of
+# the same app, not a symlink — so it needs its own copy of every generated file.
+#
+# Until this list existed it had one that nothing wrote and nothing checked. It forked at
+# 0e8f55d, *before* #145 added SCOPE_UNIVERSE, so the v2 copy was already stale on the day the
+# redesign started and would have stayed that way: a scope panel ported into v2 would import an
+# export that is not there, and the preset list behind it would drift from the backend with no
+# guard to say so. That is the same failure `documents20.js` is cited for in the docstring
+# above, reintroduced by copying the directory.
+#
+# Listed explicitly rather than globbed `frontend*`: a glob would silently adopt any future
+# directory that happened to match and start writing generated code into it.
+OUTS = (
+    ROOT / "frontend" / "src" / "scopePresets.js",
+    ROOT / "frontend-v2" / "src" / "scopePresets.js",
+)
 
 # Read through api/store.py rather than api/assessment_policy.py. PR #94 moves the definitions
 # into assessment_policy and re-exports them from store, so store's namespace is the name that
@@ -167,18 +185,27 @@ def main() -> int:
         sys.stdout.write(want)
         return 0
     if args.check:
-        have = OUT.read_text() if OUT.exists() else ""
-        if have == want:
+        # Every target is reported, not just the first. One SPA can be current while the other
+        # is stale — that is the whole failure this list was added for — and stopping at the
+        # first would hide the second behind a fix for the first.
+        stale = []
+        for out in OUTS:
+            have = out.read_text() if out.exists() else ""
+            if have != want:
+                stale.append((out, have))
+        if not stale:
             return 0
-        rel = OUT.relative_to(ROOT)
-        print(f"{rel} is stale — regenerate with: python scripts/gen_scope_presets.py",
-              file=sys.stderr)
-        sys.stderr.writelines(difflib.unified_diff(
-            have.splitlines(keepends=True), want.splitlines(keepends=True),
-            fromfile=f"{rel} (on disk)", tofile=f"{rel} (from api/store.py)"))
+        for out, have in stale:
+            rel = out.relative_to(ROOT)
+            print(f"{rel} is stale — regenerate with: python scripts/gen_scope_presets.py",
+                  file=sys.stderr)
+            sys.stderr.writelines(difflib.unified_diff(
+                have.splitlines(keepends=True), want.splitlines(keepends=True),
+                fromfile=f"{rel} (on disk)", tofile=f"{rel} (from api/store.py)"))
         return 1
-    OUT.write_text(want)
-    print(f"wrote {OUT.relative_to(ROOT)}")
+    for out in OUTS:
+        out.write_text(want)
+        print(f"wrote {out.relative_to(ROOT)}")
     return 0
 
 
