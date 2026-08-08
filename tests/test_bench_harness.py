@@ -89,7 +89,18 @@ def test_the_app_is_wired_to_the_service_with_a_working_default():
     WITHOUT the service still works; this only decides whether drafting happens."""
     assert "OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}" in COMPOSE
     assert "OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}" in COMPOSE
-    assert "OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-moondream}" in COMPOSE
+    # qwen2.5vl:7b, not moondream, and the divergence from the cloud default is the point.
+    # moondream exists because of the 8Gi Azure Consumption ceiling (deploy/ollama/Dockerfile);
+    # this stack has no such ceiling, and the two are not equivalent in practice. Measured
+    # 2026-08-08 on test-corpus's enrollment-notice fixture: moondream returned an empty
+    # response twice and then a hallucinated URL fragment its own alt-text guard rejected, while
+    # qwen2.5vl:7b returned clean alt every call.
+    #
+    # Updated rather than loosened to a regex. What this test protects is that a stack brought
+    # up with NO .env still has a working default — a pinned string is how that stays true, and
+    # relaxing the assertion to "some model" would let the default silently become one nobody
+    # chose.
+    assert "OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-qwen2.5vl:7b}" in COMPOSE
 
 
 def test_the_healthcheck_uses_a_binary_the_image_actually_has():
