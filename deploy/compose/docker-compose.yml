@@ -140,6 +140,37 @@ services:
     ports:
       - "${LANGFUSE_PORT:-3001}:3000"
 
+  # NOT part of the stack above, and started separately — `docker compose --profile ci up -d`.
+  # It shares nothing with the app services; it is only here so there is one compose file per
+  # machine rather than two. See ../agent/README.md for what to do on the Azure DevOps side
+  # first (the pool, and the token, which is yours to mint and paste — it never belongs in a
+  # committed file).
+  #
+  # WHY: MovateAI-Foundry has ONE hosted parallel job across all its pipelines, so acp's PRs
+  # queue behind every other project's builds. A self-hosted agent is a free second lane with
+  # unlimited minutes, and after the first run its caches are warm — which a hosted agent's
+  # fresh VM can never be.
+  azp-agent:
+    profiles: ["ci"]
+    build:
+      context: ../agent
+    restart: unless-stopped
+    environment:
+      AZP_URL: ${AZP_URL:?set AZP_URL in .env, e.g. https://dev.azure.com/MovateAI-Foundry}
+      AZP_TOKEN: ${AZP_TOKEN:?set AZP_TOKEN in .env — a PAT with Agent Pools (read, manage)}
+      AZP_POOL: ${AZP_POOL:-acp-local}
+      AZP_AGENT_NAME: ${AZP_AGENT_NAME:-m5-local}
+    volumes:
+      # The whole speed argument lives on this line. start.sh runs the agent with --once so the
+      # PROCESS is disposable, but _work/ holds the git checkout and the tool cache (.NET SDK,
+      # Node, npm and pip downloads). Persist it and the second run skips what the first paid
+      # for; drop it and this is just a hosted agent that happens to be in the room.
+      - acp-azp-work:/azp/_work
+    # No `ports` and no docker socket — nothing needs to reach in, and the pipeline builds no
+    # images locally (`az acr build` runs server-side). Mounting the socket here would hand
+    # any pipeline edit root on the host, for no capability this repo actually uses.
+
 volumes:
   acp-ollama:
   acp-db:
+  acp-azp-work:
