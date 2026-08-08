@@ -790,7 +790,10 @@ export default function App() {
 
       <main id="main-content" tabIndex={-1}>
       <ErrorBoundary key={view}>
-        {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} me={me} /> : assessGate) : placeholder)}
+        {/* onScan/busy/tokens are threaded so Overview can offer the scan-scope editor after a
+            scan exists. Before one, `placeholder` (EmptyState → ScanSetup) is the whole screen;
+            without these the editor would still be reachable exactly once per workspace. */}
+        {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} me={me} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} /> : assessGate) : placeholder)}
 
         {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
           deepScan={deepScan} setDeepScan={setDeepScan} queuedScan={queuedScan} setQueuedScan={setQueuedScan}
