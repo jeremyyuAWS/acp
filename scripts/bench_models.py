@@ -97,6 +97,18 @@ LADDER = {
 }
 
 
+def _norm(model: str) -> str:
+    """`moondream` and `moondream:latest` are the same model. Ollama's /api/tags always answers
+    with the explicit tag, so comparing raw strings makes an installed bare-named model report as
+    missing — and the "report and skip" path then drops it from the run.
+
+    That failed silently in the worst possible place: moondream is rung 0 of the vision ladder,
+    the model that SHIPS, so the baseline vanished from the comparison and every candidate was
+    left being measured against nothing. Observed with moondream:latest present on the server.
+    """
+    return model if ":" in model else f"{model}:latest"
+
+
 def _pull_hint(model: str) -> str:
     """Tell the user how to pull FOR THE SERVER THEY ARE ACTUALLY TALKING TO.
 
@@ -190,7 +202,7 @@ def main() -> int:
     if args.ladder and args.pull:
         wanted = [(m, size, note) for m, size, note in
                   [r for k, v in LADDER.items() if args.ladder in (k, "all") for r in v]
-                  if m not in have]
+                  if _norm(m) not in have]
         if wanted:
             # Print the bill before spending it. The module's rule is that a benchmark must never
             # download 20GB because of a typo; --pull is the explicit opt-out of that, so it stays
@@ -224,10 +236,10 @@ def main() -> int:
         return 0
 
     # Report and skip, never pull. See the module docstring.
-    missing = [m for m in args.models if m not in have]
+    missing = [m for m in args.models if _norm(m) not in have]
     for m in missing:
         print(f"skip {m} — not pulled. `{_pull_hint(m)}`", file=sys.stderr)
-    models = [m for m in args.models if m in have]
+    models = [m for m in args.models if _norm(m) in have]
     if not models:
         return 1
 
