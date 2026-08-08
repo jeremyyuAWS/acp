@@ -21,18 +21,30 @@ import { scopeSentence, isNarrowScope } from './scanScope.js'
 //   * WHICH FILES were scanned — run.scope, the folder/site narrowing. A one-folder scan and a
 //     whole-drive scan produce very different totals from the same estate.
 //
+// THREE now. The per-document selection is the third: marking one document in scope excludes
+// every unmarked one, and that restriction lived entirely inside Remediate — Publish, which
+// produces the compliance record, had no idea it existed. An operator could mark 2 of 258
+// documents, remediate those two, and read a report whose every number is about 258.
+//
+// It comes in as a SENTENCE rather than as `triage`, so this component keeps knowing nothing
+// about triage semantics and the two screens cannot word the same fact differently
+// (remediableScope.documentScopeSentence owns it).
+//
 // Rendered whether or not the scope is narrow, and that is deliberate: a caveat that appears only
 // sometimes teaches a reader to read its absence as "everything", which is exactly how the
-// original folder-scan incident went unnoticed (see scanScope.js).
-export default function ScopeBanner({ run, fileCount, findings = 0 }) {
+// original folder-scan incident went unnoticed (see scanScope.js). The document clause is the
+// exception — it is absent precisely when there IS no per-document restriction, and saying "all
+// 258 documents in scope" on every screen would be noise around the one case that matters.
+export default function ScopeBanner({ run, fileCount, findings = 0, docScope = null }) {
   const fileScope = scopeSentence(run?.scope, fileCount)
-  const narrow = isNarrowScope(run?.scope)
+  const narrow = isNarrowScope(run?.scope) || !!docScope
   return (
     <div className={`scopebanner${narrow ? ' scopebanner-narrow' : ''}`} role="note">
       <span className="scopebanner-lead">Counting</span>
       <span>
         <b>{SCOPE_SIZE}</b> criteria in the {SCOPE_LABEL}
-        {fileScope ? <> · {narrow ? '⚠ ' : ''}{fileScope}</> : null}
+        {fileScope ? <> · {isNarrowScope(run?.scope) ? '⚠ ' : ''}{fileScope}</> : null}
+        {docScope ? <> · ⚠ {docScope}</> : null}
       </span>
       {OUT_OF_SCOPE_SCS.size > 0 && (
         <span className="scopebanner-note">{outOfScopeNote(findings)}</span>

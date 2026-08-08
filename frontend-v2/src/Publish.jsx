@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
+import { documentSelection, documentScopeSentence } from './remediableScope.js'
 import FileDrawer from './FileDrawer.jsx'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import { openReport, publishFile, publishAllFiles, listHitlQueue } from './api.js'
@@ -12,7 +13,8 @@ const scoreColor = (s) => (s >= 80 ? '#3B6D11' : s >= 50 ? '#854F0B' : '#7B1D1D'
 // notification are roadmap — the UI must not claim them until they're real.
 // publish() persists via POST /scans/{sid}/publish.
 // readOnly: time-travel replay — publishing must act on the live estate, not a snapshot.
-export default function Publish({ run, files = [], certified = [], readOnly = false, onPublish, me }) {
+export default function Publish({ run, files = [], certified = [], readOnly = false, onPublish, me,
+  triage = {} }) {
   const ready = files.filter((f) => f.compliant)
   const sfP = useSearchFilter('publish')
   const PUB_FACETS = [
@@ -89,7 +91,11 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       {/* ABOVE the conformance report, not below it. The artifact this screen produces is a
           compliance record, and "certified" against an unstated scope is a claim nobody can
           check later — so what was assessed is stated before what was concluded. */}
-      <ScopeBanner run={run} fileCount={files.length} />
+      {/* The document selection reaches THIS screen for the first time. Remediate has always
+          honoured it; the screen that produces the compliance record never knew about it, so
+          a report could be read as covering an estate that two documents of it were fixed in. */}
+      <ScopeBanner run={run} fileCount={files.length}
+                   docScope={documentScopeSentence(documentSelection(files, triage))} />
       {/* The deliverable: a conformance-report header a compliance officer hands to legal. */}
       <section className="panel" style={{ borderLeft: '4px solid #3B6D11' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 18, flexWrap: 'wrap' }}>
