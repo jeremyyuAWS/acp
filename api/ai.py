@@ -464,6 +464,17 @@ _ALT_LABEL = re.compile(r"^\s*(?:alt(?:\s*text)?|description|caption|answer)\s*[
 _ALT_LEAD = re.compile(
     r"^\s*(?:the|a|an|this)?\s*(?:image|picture|photo|photograph|graphic|illustration|screenshot|figure)\s+"
     r"(?:shows|depicts|of|is\s+of|is\s+a|contains|displays|features|portrays|represents|"
+    # "presents" was the gap that showed up in real output, not in review: moondream answered
+    # "The image presents a bar graph with six vertical bars…" and this pattern passed it through
+    # untouched, so the redundant lead shipped into the alt attribute. A screen reader has already
+    # announced that it is an image; "The image presents" is exactly the wording this regex exists
+    # to remove, and it was one verb away from doing so.
+    #
+    # illustrates/captures are added alongside it. They are the same register and the same failure
+    # — a caption-shaped opening — and a list that has now been caught missing one member is worth
+    # widening past the single instance that caught it, since each miss is silent by construction:
+    # the output is fluent, the tests pass, and only the redundancy reaches the user.
+    r"presents|illustrates|captures|"
     r"is\s+a\s+representation\s+of)\s*[:,-]?\s*", re.I)
 
 
