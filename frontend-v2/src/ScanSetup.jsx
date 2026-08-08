@@ -4,6 +4,7 @@ import { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } from './scopePresets.js'
 import { TRACKED_17 } from './ruleDetails.js'
 import { parseStoredScope } from './ScanScope.jsx'
 import { CAPABILITY_FALLBACK, modeFor } from './capability.js'
+import { saveScopedFileTypes } from './FileTypeConfig.jsx'
 
 // The pre-scan setup: what ACP should inspect, decided before anything is scanned.
 //
@@ -69,7 +70,7 @@ const LANE_TONE = {
   mixed: ['#EFEDEA', '#5F5E5A'],
 }
 
-export default function ScanSetup({ onScan, busy, hasDriveToken, hasSPToken }) {
+export default function ScanSetup({ onScan, busy, hasDriveToken, hasSPToken, onFileTypeChange }) {
   const [formats, setFormats] = useState(() => new Set(SCOPE_FORMATS))
   const [criteria, setCriteria] = useState(() => new Set(Object.keys(SCOPE_PRESETS[CORE] || {})))
   const [custom, setCustom] = useState(false)
@@ -128,6 +129,15 @@ export default function ScanSetup({ onScan, busy, hasDriveToken, hasSPToken }) {
     setSaving(true); setMsg('')
     try {
       await updateSettings({ scan_scope: JSON.stringify(scope) })
+      // BOTH stores, because one fact is kept in two places. `scan_scope` above decides what is
+      // ASSESSED; the localStorage config decides what Discover LISTS (Discover.jsx filters on
+      // `fileTypeConfig[f.type] !== false`). Writing only the first is what made unticking PDF
+      // here scope the assessment while every PDF stayed in the inventory — the file types were
+      // honoured everywhere except the screen the operator looks at next.
+      //
+      // saveScopedFileTypes MERGES the four engine-scoped formats into the stored config; html,
+      // video, audio and custom extensions have no scan_scope axis and are left untouched.
+      onFileTypeChange?.(saveScopedFileTypes(formats))
       setMsg(`✓ Saved · ${scCount} checks on ${formats.size} file type${formats.size === 1 ? '' : 's'}`)
       return true
     } catch (e) {

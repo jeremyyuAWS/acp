@@ -53,7 +53,13 @@ describe('one editor, two axes, one write', () => {
 
   it('does not compose the two panels that fight over the setting', () => {
     // The whole reason this component exists rather than a two-panel layout.
-    expect(s(), 'FileTypeConfig would overwrite the criterion selection').not.toContain('FileTypeConfig')
+    // Match the ELEMENT, not the name — symmetric with the ScanScope line below, which always
+    // did. `toContain('FileTypeConfig')` also matched an import, and ScanSetup now imports one
+    // pure helper from that module (saveScopedFileTypes) to keep the localStorage view config in
+    // step with scan_scope. Rendering the panel is what would overwrite the criterion selection;
+    // importing a function that writes four keys does not, and the assertion could not tell the
+    // difference.
+    expect(s(), 'FileTypeConfig would overwrite the criterion selection').not.toMatch(/<FileTypeConfig\b/)
     expect(s(), 'ScanScope would overwrite the format selection').not.toMatch(/<ScanScope\b/)
   })
 

@@ -12,11 +12,12 @@ import ScanSetup from './ScanSetup.jsx'
 // inherits it" is already true architecturally: `scan_scope` is gated once inside
 // `_rule_outcome`, so assess, remediate and publish all inherit it. It just was not true of the
 // first screen, which asked for nothing and then scanned everything.
-export default function EmptyState({ onScan, busy, hasDriveToken, hasSPToken = false }) {
+export default function EmptyState({ onScan, busy, hasDriveToken, hasSPToken = false, onFileTypeChange }) {
   return (
     <div className="empty">
       <ScanSetup onScan={onScan} busy={busy}
-                 hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} />
+                 hasDriveToken={hasDriveToken} hasSPToken={hasSPToken}
+                 onFileTypeChange={onFileTypeChange} />
     </div>
   )
 }
