@@ -13,9 +13,28 @@ name: monitor
 
 on:
   schedule:
-    # Every 15 minutes. Frequent enough that a five-minute-interval bug is caught within a few
-    # cycles; infrequent enough that a genuine outage does not open a hundred identical failures.
-    - cron: "*/15 * * * *"
+    # Every 30 minutes — which is what the */15 above it was actually delivering.
+    #
+    # THE CRON WAS NOT DOING WHAT IT SAID. GitHub does not guarantee scheduled runs; it delays
+    # or drops them under load, and on this repo it dropped roughly half. Measured over the last
+    # 100 scheduled runs: median gap 27.7 min, mean 30.5, only 23 of them landing in the 13-18
+    # minute band the config implied, and 20 gaps over 45 minutes. So the reasoning that used to
+    # sit here — "frequent enough that a five-minute-interval bug is caught within a few cycles"
+    # — was arithmetic about a cadence that was not happening. A 5-minute bug was getting ~6
+    # cycles, not 3.
+    #
+    # Stating 30 makes the file describe reality, which matters more here than the minutes saved:
+    # the next person to reason about detection latency should reason from the real number.
+    #
+    # WHAT THIS COSTS. Worst-case detection of the 2026-07-29 failure mode (a sweep quietly
+    # replacing a 258-document estate every five minutes) moves from ~28 to ~30 minutes at the
+    # median. That is not a meaningful change, because the 15 was already fiction.
+    #
+    # WHAT IT SAVES, honestly: ~16 runs/day at 1 billed minute each (the job itself takes 8
+    # seconds; GitHub rounds every job up to a minute), so ~480 min/month, about $4. This is a
+    # rounding error against CI, which bills 6 minutes per run across three jobs. It is worth
+    # doing because it is free and the config was wrong, not because it fixes the bill.
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 # Read-only. This job observes production; it must never be able to change it.
