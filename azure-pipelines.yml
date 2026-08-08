@@ -110,9 +110,21 @@ steps:
       fi
     displayName: Matrix guard — rule changes declare their matrix impact
 
-  - task: NodeTool@0
+  # UseNode@1, not NodeTool@0. The first real run of this pipeline against the GitHub repo
+  # (acp-ci-github #20260808.1) warned twice at Initialize job: "Task 'Node.js tool installer'
+  # version 0 (NodeTool@0) is deprecated" and "will no longer receive updates. Please use
+  # UseNodeV1 as a replacement."
+  #
+  # Same installer, same version, same result — a task-version bump, not a change of behaviour.
+  # The input is renamed, though: NodeTool@0 took `versionSpec`, UseNode@1 takes `version`. Left
+  # as `versionSpec` it would not fail loudly; the task would install whatever it defaults to,
+  # which is the sort of green build that is quietly testing the wrong Node.
+  #
+  # Worth taking now rather than later: a deprecated task keeps working right up until it does
+  # not, and this file has just become the gate that matters.
+  - task: UseNode@1
     inputs:
-      versionSpec: '22.x'
+      version: '22.x'
     displayName: Node 22 (pdfjs-dist requires >=22.13)
 
   - script: npm install -g npm@11 --no-audit --no-fund
