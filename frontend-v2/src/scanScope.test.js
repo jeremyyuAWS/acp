@@ -103,6 +103,69 @@ describe('wording', () => {
     expect(scopeSentence({ kind: 'local', kept: 3, truncated: false }, 3))
       .toContain('in the local corpus')
     expect(scopeSentence({ kind: 'sharepoint', kept: 4, truncated: false }, 4))
-      .toContain('across OneDrive')
+      .toContain('across your OneDrive')
+  })
+})
+
+// ── one SharePoint site is a boundary, not an estate ──────────────────────────────────────────
+//
+// The site picker (#167) made "scan one site" a one-click action, and `kind: 'sharepoint'` had
+// meant exactly one thing when it was written: the signed-in user's OneDrive. So a one-site scan
+// and a OneDrive scan came back with the same caption and different counts — the incident at the
+// top of this file, with Google Drive swapped for Microsoft 365.
+describe('a single SharePoint site', () => {
+  const SITE = { kind: 'sharepoint', site: 'contoso.sharepoint.com,g1,g2',
+                 site_name: 'Policies', kept: 12, truncated: false }
+  const ONEDRIVE = { kind: 'sharepoint', site: null, site_name: null, kept: 40, truncated: false }
+
+  it('reads as narrow, exactly as a Drive folder does', () => {
+    expect(isNarrowScope(SITE)).toBe(true)
+    expect(isNarrowScope(ONEDRIVE)).toBe(false)
+  })
+
+  it('names the site rather than claiming the whole of OneDrive', () => {
+    expect(scopeLabel(SITE)).toBe('in the SharePoint site “Policies”')
+    expect(scopeLabel(ONEDRIVE)).toBe('across your OneDrive')
+  })
+
+  it('says what was NOT scanned, at any size', () => {
+    // The clause the folder branch has, and for the same reason: the reader's question is "is
+    // this my estate?" and one site is not, whether it holds 12 documents or 12,000.
+    expect(scopeSentence(SITE, 12)).toMatch(/not scanned/)
+    expect(scopeSentence(SITE, 12)).toContain('other SharePoint sites')
+    // …and does NOT appear on a OneDrive scan, which really is the whole of that boundary.
+    expect(scopeSentence(ONEDRIVE, 40)).not.toMatch(/not scanned/)
+  })
+
+  it('promises no scan that does not exist', () => {
+    // _sp_list takes one site OR OneDrive; there is no all-sites scan to point a reader at.
+    expect(scopeSentence(SITE, 12)).not.toMatch(/whole SharePoint|all sites|every site/i)
+  })
+
+  it('never shows the raw Graph site id, which names nothing to a reader', () => {
+    // Same guarantee the folder branch makes about a Drive folder id. A compound site id
+    // (host,guid,guid) is the least recognisable string in this product.
+    const unnamed = { ...SITE, site_name: null }
+    expect(scopeLabel(unnamed)).toBe('in one SharePoint site')
+    expect(scopeLabel(unnamed)).not.toContain('contoso.sharepoint.com')
+    expect(scopeChip(unnamed).text).not.toContain('g1')
+  })
+
+  it('is distinguishable from a OneDrive scan in a list, not only on a detail screen', () => {
+    // The scan-history table is where two counts sat in adjacent rows under one label.
+    expect(scopeChip(SITE).text).not.toBe(scopeChip(ONEDRIVE).text)
+    expect(scopeChip(SITE).text).toContain('Policies')
+    expect(scopeChip(SITE).narrow).toBe(true)
+    expect(scopeChip(ONEDRIVE).narrow).toBe(false)
+  })
+
+  it('still says WHICH site when the scan also hit its cap', () => {
+    // 'partial listing' alone would lose the site — and a capped site scan is the case where a
+    // reader most needs both facts. The truncation still reaches the sentence and the ⚠.
+    const capped = { ...SITE, truncated: true }
+    expect(scopeChip(capped).text).toContain('Policies')
+    expect(isNarrowScope(capped)).toBe(true)
+    expect(isTruncated(capped)).toBe(true)
+    expect(scopeSentence(capped, 200)).toMatch(/did not see/)
   })
 })

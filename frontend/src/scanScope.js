@@ -29,7 +29,15 @@ const plural = (n) => (n === 1 ? 'document' : 'documents')
 // the case a reader needs told, rather than merely available.
 export function isNarrowScope(scope) {
   if (!scope) return false
-  return scope.kind === 'folder' || !!scope.truncated
+  // A single SharePoint site is exactly as narrow as a single Drive folder, and the site picker
+  // (#167) made it a thing an operator does in one click. Before this it read as whole-estate:
+  // scanning one site and then OneDrive produced two counts with the same caption, which is the
+  // incident at the top of this file with the source swapped.
+  //
+  // Fixed in BOTH SPAs even though only frontend-v2 has the picker: the scan lands in scan_runs,
+  // and frontend/ renders the same row from the same column. A scan started in one app and read
+  // in the other is the case where a stale label is least likely to be questioned.
+  return scope.kind === 'folder' || !!scope.site || !!scope.truncated
 }
 
 // True when the scan hit a cap and there ARE files it did not list. Strictly different from a
@@ -49,7 +57,14 @@ export function scopeLabel(scope) {
     case 'drive':
       return 'across your whole Google Drive'
     case 'sharepoint':
-      return 'across OneDrive'
+      // Two different boundaries share this kind. Without a site the scan read the signed-in
+      // user's OneDrive, as it always has; with one it read every document library on that site
+      // and nothing else. Calling both "across OneDrive" named the wrong source AND claimed the
+      // whole of it.
+      if (!scope.site) return 'across your OneDrive'
+      return scope.site_name
+        ? `in the SharePoint site “${scope.site_name}”`
+        : 'in one SharePoint site'
     case 'local':
       return 'in the local corpus'
     default:
@@ -72,6 +87,14 @@ export function scopeSentence(scope, count) {
       scope.folders_walked > 1 ? `; this folder and its ${scope.folders_walked - 1} subfolder${scope.folders_walked === 2 ? '' : 's'} were` : ''
     }.`
   }
+  if (scope.kind === 'sharepoint' && scope.site) {
+    // The folder clause's counterpart, and unconditional for the same reason: the reader's
+    // question is "is this my estate?", and one site is not, at any size. Said as "other sites"
+    // rather than "your whole SharePoint" because there is no scan that covers every site —
+    // _sp_list takes one site or OneDrive — so promising a wider one would be a lie about a
+    // button that does not exist.
+    s += ' Documents on other SharePoint sites, and in your OneDrive, were not scanned.'
+  }
   if (scope.truncated) {
     s += ` This scan hit its ${
       Number.isFinite(scope.cap) ? scope.cap.toLocaleString() + '-file ' : ''
@@ -87,6 +110,12 @@ export function scopeChip(scope) {
   if (!scope) return null
   if (scope.kind === 'folder') {
     return { text: scope.folder_name ? `📁 ${scope.folder_name}` : '📁 one folder', narrow: true }
+  }
+  // Before `truncated`, because a site scan that also hit its cap is still most usefully
+  // identified by WHICH site — the folder branch above takes the same precedence for the same
+  // reason, and `truncated` still reaches the sentence and the ⚠ either way.
+  if (scope.kind === 'sharepoint' && scope.site) {
+    return { text: scope.site_name ? `🏢 ${scope.site_name}` : '🏢 one site', narrow: true }
   }
   if (scope.truncated) return { text: 'partial listing', narrow: true }
   if (scope.kind === 'drive') return { text: 'whole Drive', narrow: false }

@@ -217,6 +217,62 @@ def test_local_and_sharepoint_scopes_are_named_too(tmp_path, monkeypatch):
     sp: dict = {}
     scanner._list("sharepoint", sp_token="t", scope_out=sp)
     assert sp["kind"] == "sharepoint"
+    # No site was chosen, so there is no site to name — and no Graph round trip spent looking.
+    assert sp["site"] is None
+    assert sp["site_name"] is None
+
+
+def _stub_sp(monkeypatch, names=None, raises=None):
+    """_sp_list plus the site-name lookup, with the calls recorded.
+
+    `names`/`raises` drive _sp_site_name only. Patched at the _sp_get level rather than by
+    replacing _sp_site_name, so the swallow-everything behaviour under test is the real one.
+    """
+    calls: list = []
+    monkeypatch.setattr(scanner, "_sp_list",
+                        lambda tok, n, site=None, exclude_remediated=False:
+                        [{"name": "a.docx", "id": "1"}])
+
+    def fake_get(token, url, timeout=30):
+        calls.append(url)
+        if raises:
+            raise raises
+        return names or {}
+
+    monkeypatch.setattr(scanner, "_sp_get", fake_get)
+    return calls
+
+
+def test_a_site_scan_records_which_site_by_name(monkeypatch):
+    """A Graph site id is `host,<guid>,<guid>`. Reporting a count against a boundary the reader
+    cannot recognise is the `folder_name` problem with a less readable id — so the site branch
+    resolves a name the same way the Drive branch does."""
+    calls = _stub_sp(monkeypatch, names={"displayName": "Policies"})
+    sp: dict = {}
+    scanner._list("sharepoint", sp_token="t", folder="contoso.sharepoint.com,g1,g2", scope_out=sp)
+    assert sp["site"] == "contoso.sharepoint.com,g1,g2"
+    assert sp["site_name"] == "Policies"
+    assert len(calls) == 1, "the label lookup should cost exactly one Graph read"
+
+
+def test_the_label_lookup_never_fails_the_scan(monkeypatch):
+    """A tenant can grant enough to read a site's DRIVES — which is what the scan then does
+    successfully — while refusing the site metadata read. A raising label lookup would turn a
+    working scan into a failed one over a caption."""
+    _stub_sp(monkeypatch, raises=PermissionError("Sites.Read.All not granted"))
+    sp: dict = {}
+    items = scanner._list("sharepoint", sp_token="t", folder="s1", scope_out=sp)
+    assert len(items) == 1, "the scan itself must still return its files"
+    assert sp["site"] == "s1"
+    assert sp["site_name"] is None   # unnamed, never the raw id
+
+
+def test_no_name_is_looked_up_when_nobody_asked_for_the_label(monkeypatch):
+    """Mirrors test_scope_out_is_optional_so_existing_callers_are_unaffected: a caller that wants
+    files and no scope should not pay for a metadata read it will never look at."""
+    calls = _stub_sp(monkeypatch, names={"displayName": "Policies"})
+    scanner._list("sharepoint", sp_token="t", folder="s1")
+    assert calls == []
 
 
 def test_subfolder_count_is_recorded_so_the_ui_can_say_what_was_walked():
