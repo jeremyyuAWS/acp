@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { loadScores, saveDriveScore, uploadToDrive } from './GoogleDrive.jsx'
+import { uploadToSharePoint } from './api.js'
 
 const CLIENT_ID = import.meta.env.VITE_AZURE_CLIENT_ID || ''
 const TENANT   = import.meta.env.VITE_AZURE_TENANT_ID  || 'common'
@@ -28,98 +29,37 @@ function fmtSize(bytes) {
 
 // ── Per-item write-back button ─────────────────────────────────────────────────
 
-// Copy the original aside before it is overwritten — the Graph counterpart of GoogleDrive's
-// archiveOriginal, which SharePoint has been missing while doing the same destructive PUT.
+// The write goes through the SERVER (/sharepoint/upload with item_id), not straight to Graph
+// from here.
 //
-// FAIL-CLOSED, and that is a deliberate difference from Drive. Drive's call is best-effort
-// (`catch { /* archive best-effort */ }`), so a failed archive there is followed by the
-// overwrite anyway and the original is gone with nothing said. An archive that only sometimes
-// happens is not a backup, and the failure is invisible precisely when it matters. So here a
-// failed archive ABORTS the save: the worst outcome becomes "your file was not remediated",
-// which the user can see and retry, instead of "your file was replaced and the original is
-// gone", which they cannot.
+// What moves server-side: the archive-before-overwrite and its fail-closed behaviour
+// (scanner._sp_archive_original), the >4 MiB resumable session this path never had — a simple
+// PUT past 4 MiB is a 413 that says nothing about chunking — and Graph's permission errors
+// translated into the consent that would fix them instead of "Reconnect SharePoint".
 //
-// Drive's best-effort behaviour is left alone on purpose — making the two consistent is the
-// separate "should either button replace originals at all?" decision, and quietly changing
-// Drive's semantics inside a SharePoint fix is how that decision would get made by accident.
-export async function spArchiveOriginal(token, driveId, itemId) {
-  const base = driveId ? `${GRAPH}/drives/${driveId}` : `${GRAPH}/me/drive`
-  const today = new Date().toISOString().slice(0, 10)
-  const root = await spFolder(token, base, 'root', '_mova-originals')
-  const dated = await spFolder(token, base, root, today)
-  const r = await fetch(`${base}/items/${itemId}/copy`, {
-    method: 'POST',
-    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ parentReference: { id: dated } }),
-  })
-  // Graph answers a copy with 202 Accepted and a Location to poll — it is asynchronous by
-  // design, so anything 2xx means the copy was accepted and only a real failure is an error.
-  if (!r.ok) throw new Error('archive failed: HTTP ' + r.status)
-  return dated
-}
-
-// Find-or-create one folder under `parentId`. Looks BEFORE creating: `conflictBehavior: fail`
-// on an existing folder would error, and `replace` would clobber whatever is already archived
-// there — which on a folder named _mova-originals is the one thing that must never happen.
-async function spFolder(token, base, parentId, name) {
-  const listUrl = parentId === 'root'
-    ? `${base}/root/children?$select=id,name,folder&$top=200`
-    : `${base}/items/${parentId}/children?$select=id,name,folder&$top=200`
-  const lr = await fetch(listUrl, { headers: { Authorization: 'Bearer ' + token } })
-  if (lr.ok) {
-    const data = await lr.json()
-    const hit = (data.value || []).find((i) => i.name === name && i.folder)
-    if (hit) return hit.id
-  }
-  const createUrl = parentId === 'root'
-    ? `${base}/root/children`
-    : `${base}/items/${parentId}/children`
-  const cr = await fetch(createUrl, {
-    method: 'POST',
-    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }),
-  })
-  if (cr.status === 409) {
-    // Someone created it between the list and the create. Re-read rather than fail.
-    const rr = await fetch(listUrl, { headers: { Authorization: 'Bearer ' + token } })
-    const data = await rr.json()
-    const hit = (data.value || []).find((i) => i.name === name && i.folder)
-    if (hit) return hit.id
-  }
-  if (!cr.ok) throw new Error('folder create failed: HTTP ' + cr.status)
-  return (await cr.json()).id
-}
-
-export function SpUploadButton({ itemId, driveId, blob, score, engine }) {
+// And record_remediation, WHEN there is a scan to record against. Being precise about that: the
+// route calls it only if a scanId is passed, and the one caller here is the ad-hoc upload panel,
+// where files are assessed individually and belong to no scan run. So this does not by itself
+// close the record gap for ad-hoc saves — nothing to record them against would be invented, and
+// inventing one would be worse than the gap. It closes it for any caller that HAS a scan, which
+// is what the remediation flow will pass when this button is reused there.
+export function SpUploadButton({ itemId, driveId, blob, score, engine, scanId, file }) {
   const [phase, setPhase] = useState('idle') // idle|confirm|saving|done|error
   const [errMsg, setErrMsg] = useState('')
 
   const doSave = async () => {
-    const token = sessionStorage.getItem('sp_token')
-    if (!token) { setPhase('error'); setErrMsg('Reconnect SharePoint'); return }
     setPhase('saving')
     try {
-      // Back up BEFORE the destructive write, and stop if it fails — see spArchiveOriginal.
-      await spArchiveOriginal(token, driveId, itemId)
-      const url = driveId
-        ? `${GRAPH}/drives/${driveId}/items/${itemId}/content`
-        : `${GRAPH}/me/drive/items/${itemId}/content`
-      const r = await fetch(url, {
-        method: 'PUT',
-        headers: { Authorization: 'Bearer ' + token, 'Content-Type': blob.type },
-        body: blob,
-      })
-      if (r.status === 401 || r.status === 403) { setPhase('error'); setErrMsg('Reconnect SharePoint'); return }
-      if (!r.ok) throw new Error('HTTP ' + r.status)
-      // Stamp mova metadata as file description via PATCH
-      const scored = score != null ? ` · Score: ${score}/100` : ''
-      await fetch((driveId ? `${GRAPH}/drives/${driveId}/items/${itemId}` : `${GRAPH}/me/drive/items/${itemId}`), {
-        method: 'PATCH',
-        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description: `Remediated for WCAG 2.1 AA by mova.io · ${new Date().toISOString().slice(0, 10)}${scored}` }),
-      }).catch(() => {})
+      // item_id present → the server archives the original, then replaces it in place.
+      await uploadToSharePoint({ scanId, file, driveId, itemId, blob, score })
       setPhase('done')
-    } catch (e) { setPhase('error'); setErrMsg(e.message || 'Upload failed') }
+    } catch (e) {
+      setPhase('error')
+      // The server distinguishes a missing scope (403, naming the consent) from a transport
+      // failure, and says which. Flattening that to "Reconnect SharePoint" sent people to
+      // re-authenticate when the fix was a tenant-admin grant they could not make themselves.
+      setErrMsg(e?.message || 'Upload failed')
+    }
   }
 
   if (phase === 'idle') return (

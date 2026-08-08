@@ -78,20 +78,44 @@ async def sharepoint_upload(request: Request):
     lives. Graph item ids are unique only within a drive, so writing to the wrong one is not an
     error you would see — it succeeds, into somebody else's library.
 
-    The destination folder is the SAME setting Drive uses (core.store.get_drive_mirror_folder),
-    so renaming the mirror renames it for both sources rather than leaving SharePoint writing to
-    a name only this route knows.
+    TWO MODES, chosen by whether `item_id` is present.
+
+    Without it, the file is written into the mirror folder — the SAME setting Drive uses
+    (core.store.get_drive_mirror_folder), so renaming the mirror renames it for both sources
+    rather than leaving SharePoint writing to a name only this route knows.
+
+    With it, the remediated bytes REPLACE that item in place. The item keeps its URL, its
+    sharing links and its version history, which is the whole point: everyone who already has a
+    link to the document gets the remediated one, instead of a corrected copy sitting in a folder
+    they will never open. The original is archived first and a failed archive ABORTS the write.
+
+    The in-place path also removes a re-ingestion problem rather than adding one: a mirror write
+    leaves two copies of the same document in the library, and SharePoint's defence against
+    re-scanning its own output is folder-scoped and admits to being the weaker of the two
+    (see scanner._sp_list). Replacing leaves exactly one file, at the path it always had.
     """
+    from datetime import date
+
     from fastapi import UploadFile
 
     form = await request.form()
     scan_id = form.get("scan_id", "")
     filename = form.get("file", "")
     drive_id = form.get("drive_id", "")
+    item_id = form.get("item_id", "")
+    score = form.get("score", "")
     upload_file: UploadFile = form.get("blob")
     if not upload_file:
         raise HTTPException(400, "missing blob field")
-    if not drive_id:
+    if not drive_id and not item_id:
+        # Required for a MIRROR write, and only there. That write has to find-or-create a folder
+        # and drop a new file in it, so an unnamed drive means guessing which library to create
+        # it in — and guessing wrong succeeds, into somebody else's.
+        #
+        # A REPLACE names an existing item instead, and an item listed from OneDrive carries no
+        # driveId at all (scanner._sp_list). Demanding one would break every OneDrive write-back
+        # while reading like a safety check; absent, scanner._sp_base resolves /me/drive, exactly
+        # as the download path has always done for the same items.
         raise HTTPException(
             400,
             "missing drive_id. A SharePoint item id is only unique within its drive, so the "
@@ -101,8 +125,28 @@ async def sharepoint_upload(request: Request):
     token = _token(request)
     content = await upload_file.read()
     content_type = upload_file.content_type or "application/octet-stream"
-    folder = core.store.get_drive_mirror_folder()
 
+    if item_id:
+        try:
+            # Archive, THEN write. Ordered, and not wrapped in its own try: an archive failure
+            # must propagate as a refusal to write, never be logged past.
+            scanner._sp_archive_original(token, drive_id, item_id, date.today().isoformat())
+            item = scanner._sp_replace(token, drive_id, item_id, content, content_type)
+        except PermissionError as e:
+            raise HTTPException(status_code=403, detail=str(e)) from e
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(502, f"SharePoint replace failed: {e}") from e
+        stamped = f"Remediated for WCAG 2.1 AA by mova.io · {date.today().isoformat()}"
+        if score:
+            stamped += f" · Score: {score}/100"
+        scanner._sp_describe(token, drive_id, item_id, stamped)
+        web_url = item.get("webUrl", "")
+        if scan_id and filename:
+            core.store.record_remediation(scan_id, filename, drive_write_url=web_url)
+        return {"ok": True, "url": web_url, "replaced": True,
+                "archivedTo": scanner.SP_ARCHIVE_FOLDER, "driveId": drive_id}
+
+    folder = core.store.get_drive_mirror_folder()
     try:
         item = scanner._sp_upload(token, drive_id, folder, filename, content, content_type)
     except PermissionError as e:
@@ -113,4 +157,4 @@ async def sharepoint_upload(request: Request):
     web_url = item.get("webUrl", "")
     if scan_id and filename:
         core.store.record_remediation(scan_id, filename, drive_write_url=web_url)
-    return {"ok": True, "url": web_url, "folder": folder, "driveId": drive_id}
+    return {"ok": True, "url": web_url, "replaced": False, "folder": folder, "driveId": drive_id}

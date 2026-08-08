@@ -528,6 +528,21 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
             mirror = core.store.get_drive_mirror_folder()
         except Exception:      # noqa: BLE001 — no store (tests, tooling): fall back to the default
             mirror = "Remediated"
+    # The archive is skipped UNCONDITIONALLY, unlike the mirror, and the difference is not an
+    # oversight.
+    #
+    # The mirror holds ACP's OUTPUT, so excluding it is about not reporting "remediated ✓" on a
+    # scan that remediated nothing — a judgement an operator can reasonably switch off.
+    # SP_ARCHIVE_FOLDER holds displaced ORIGINALS: byte-for-byte copies of documents that still
+    # exist at their own paths, put there by ACP immediately before overwriting them. Counting
+    # one is counting the same document twice, and reporting its failures is reporting failures
+    # that the file at the real path no longer has. It also grows without bound — one more copy
+    # per save — so a library saved back a few times reads as an estate that is mostly broken.
+    #
+    # There is no scan for which including them is the right answer, so there is no flag.
+    skip_folders = {SP_ARCHIVE_FOLDER}
+    if mirror:
+        skip_folders.add(mirror)
     files: list[dict] = []
     # Keyed by (drive, item) — an item id is unique only within its drive, so a bare id would
     # collapse two genuinely different documents from two libraries into one.
@@ -562,14 +577,13 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                         continue
                     seen.add(key)
                 name = item.get("name", "")
-                if mirror:
-                    # parentReference.path looks like "/drive/root:/Remediated/sub". Matched as a
-                    # PATH SEGMENT, not a substring: a library called "Remediated Policies" is a
-                    # different folder and must still be scanned.
-                    parent = (item.get("parentReference") or {}).get("path", "")
-                    segments = parent.split(":", 1)[-1].strip("/").split("/")
-                    if mirror in segments:
-                        continue
+                # parentReference.path looks like "/drive/root:/Remediated/sub". Matched as PATH
+                # SEGMENTS, not substrings: a library called "Remediated Policies" is a different
+                # folder and must still be scanned.
+                parent = (item.get("parentReference") or {}).get("path", "")
+                segments = parent.split(":", 1)[-1].strip("/").split("/")
+                if skip_folders.intersection(segments):
+                    continue
                 if Path(name).suffix.lower() in exts:
                     rec = {"name": _safe_name(name), "id": item_id, "sp": True}
                     if drive_id:
@@ -591,6 +605,22 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
 # that works for small files and fails for the ones a customer notices is worse than none.
 _SP_SIMPLE_MAX = 4 * 1024 * 1024
 
+# Where an original goes immediately before it is overwritten in place. Matches the name the
+# browser path has been using since the SharePoint write-back shipped, so archives written by
+# either path land in the same folder rather than in two nobody thinks to look in both of.
+SP_ARCHIVE_FOLDER = "_mova-originals"
+
+
+def _sp_base(drive_id: str | None) -> str:
+    """The Graph drive root for a write. Absent `drive_id` means the signed-in user's OneDrive.
+
+    The same convention `_sp_download` established, and it has to be the same one: an item listed
+    from OneDrive carries no driveId at all (see _sp_list), so requiring one here would break
+    every OneDrive write-back while looking like a safety improvement. Where a drive IS named it
+    must be honoured — item ids are unique only within a drive.
+    """
+    return f"{GRAPH}/drives/{drive_id}" if drive_id else f"{GRAPH}/me/drive"
+
 
 def _sp_put(token: str, url: str, data: bytes, content_type: str):
     import httpx
@@ -605,21 +635,24 @@ def _sp_put(token: str, url: str, data: bytes, content_type: str):
     return r.json() if r.content else {}
 
 
-def _sp_folder_id(token: str, drive_id: str, name: str) -> str:
-    """Find-or-create a folder at the root of a drive, returning its id.
+def _sp_folder_id(token: str, drive_id: str, name: str, parent_id: str = "") -> str:
+    """Find-or-create a folder, returning its id. At the drive root unless `parent_id` is given.
 
     The Graph counterpart of handlers.ensure_remediated_folder, and it reuses that folder's
     NAME from the same setting so an operator who renames the mirror renames it everywhere.
     `conflictBehavior: replace` on create would clobber an existing folder's contents, so the
-    lookup comes first and create is only the miss path.
+    lookup comes first and create is only the miss path. On an ARCHIVE folder that ordering is
+    not a nicety — replace there would destroy the backups this whole path exists to keep.
     """
     import httpx
-    listing = _sp_get(token, f"{GRAPH}/drives/{drive_id}/root/children"
-                             f"?$select=id,name,folder&$top=200")
+    root = _sp_base(drive_id)
+    base = f"{root}/items/{parent_id}" if parent_id else f"{root}/root"
+    children = f"{base}/children"
+    listing = _sp_get(token, f"{children}?$select=id,name,folder&$top=200")
     for item in listing.get("value", []):
         if item.get("name") == name and "folder" in item:
             return item["id"]
-    r = httpx.post(f"{GRAPH}/drives/{drive_id}/root/children",
+    r = httpx.post(children,
                    headers={"Authorization": f"Bearer {token}",
                             "Content-Type": "application/json"},
                    json={"name": name, "folder": {},
@@ -634,8 +667,7 @@ def _sp_folder_id(token: str, drive_id: str, name: str) -> str:
         # fail: two workers remediating the same library at once is normal, and this is exactly
         # how Drive grew duplicate mirror folders before ensure_remediated_folder was hoisted
         # out of the workers.
-        listing = _sp_get(token, f"{GRAPH}/drives/{drive_id}/root/children"
-                                 f"?$select=id,name,folder&$top=200")
+        listing = _sp_get(token, f"{children}?$select=id,name,folder&$top=200")
         for item in listing.get("value", []):
             if item.get("name") == name and "folder" in item:
                 return item["id"]
@@ -643,23 +675,49 @@ def _sp_folder_id(token: str, drive_id: str, name: str) -> str:
     return r.json()["id"]
 
 
-def _sp_upload(token: str, drive_id: str, folder: str, filename: str,
-               content: bytes, content_type: str = "application/octet-stream") -> dict:
-    """Write one remediated file into `folder` on `drive_id`. Returns the Graph driveItem.
+def _sp_archive_original(token: str, drive_id: str, item_id: str, today: str) -> str:
+    """Copy the item into SP_ARCHIVE_FOLDER/<today>/ before it is overwritten. Returns folder id.
 
-    Small files go straight up; anything over 4 MiB uses a resumable session, because Graph
-    rejects a simple PUT past that limit and the rejection is a 413 that says nothing about
-    chunking.
+    FAIL-CLOSED. Every failure raises, and the caller must not write if it does. An archive that
+    only sometimes happens is not a backup, and it fails invisibly at exactly the moment it
+    matters — so the worst outcome here is "your file was not remediated", which a user can see
+    and retry, rather than "your file was replaced and the original is gone", which they cannot.
+
+    Graph answers a copy with 202 Accepted and a Location header to poll: it is asynchronous by
+    design, so any 2xx means the copy was ACCEPTED, not that it has finished. This does not
+    poll, which is a deliberate limit worth naming — a copy accepted and then failing server-side
+    would not be caught here. Polling would serialise every save behind Graph's copy queue.
     """
-    folder_id = _sp_folder_id(token, drive_id, folder)
-    safe = _safe_name(filename)
+    import httpx
+    root = _sp_folder_id(token, drive_id, SP_ARCHIVE_FOLDER)
+    dated = _sp_folder_id(token, drive_id, today, parent_id=root)
+    r = httpx.post(f"{_sp_base(drive_id)}/items/{item_id}/copy",
+                   headers={"Authorization": f"Bearer {token}",
+                            "Content-Type": "application/json"},
+                   json={"parentReference": {"id": dated}},
+                   timeout=60, follow_redirects=True)
+    if r.status_code in (401, 403):
+        raise PermissionError(
+            "Microsoft Graph refused to archive the original — replacing a file in place needs a "
+            "WRITE scope (Files.ReadWrite.All / Sites.ReadWrite.All). Nothing was overwritten.")
+    if not r.is_success:
+        raise RuntimeError(f"archive failed (HTTP {r.status_code}) — nothing was overwritten")
+    return dated
+
+
+def _sp_write(token: str, *, put_url: str, session_url: str, content: bytes,
+              content_type: str) -> dict:
+    """One Graph write, simple or resumable depending on size.
+
+    Graph rejects a simple PUT past 4 MiB with a 413 that says nothing about chunking, so the
+    large path opens an upload session instead. Shared by the mirror upload and the in-place
+    replace, which differ only in the URLs they aim at.
+    """
     if len(content) <= _SP_SIMPLE_MAX:
-        return _sp_put(token,
-                       f"{GRAPH}/drives/{drive_id}/items/{folder_id}:/{safe}:/content",
-                       content, content_type)
+        return _sp_put(token, put_url, content, content_type)
 
     import httpx
-    r = httpx.post(f"{GRAPH}/drives/{drive_id}/items/{folder_id}:/{safe}:/createUploadSession",
+    r = httpx.post(session_url,
                    headers={"Authorization": f"Bearer {token}",
                             "Content-Type": "application/json"},
                    json={"item": {"@microsoft.graph.conflictBehavior": "replace"}},
@@ -687,6 +745,55 @@ def _sp_upload(token: str, drive_id: str, folder: str, filename: str,
         if cr.content:
             out = cr.json()
     return out
+
+
+def _sp_replace(token: str, drive_id: str, item_id: str, content: bytes,
+                content_type: str = "application/octet-stream") -> dict:
+    """Overwrite one existing item IN PLACE. The caller must have archived it first.
+
+    Writing to the item's own id keeps its URL, its sharing links and its version history — the
+    reason to replace rather than mirror is that everyone who already has a link to the document
+    gets the remediated one. Nothing else in this module writes over a user's file, so the
+    archive in front of it is not optional.
+    """
+    base = f"{_sp_base(drive_id)}/items/{item_id}"
+    return _sp_write(token, put_url=f"{base}/content",
+                     session_url=f"{base}/createUploadSession",
+                     content=content, content_type=content_type)
+
+
+def _sp_describe(token: str, drive_id: str, item_id: str, text: str) -> None:
+    """Stamp a human-readable note on the item. Best-effort by design.
+
+    This is the nearest SharePoint gets to Drive's provenance stamp, and it is NOT equivalent:
+    a description is a label a person reads, not something the scanner keys off (see _sp_list —
+    SharePoint re-ingestion is folder-scoped and this does not change that). So a failure here
+    must never fail a write that already succeeded; the bytes are the deliverable.
+    """
+    import httpx
+    try:
+        httpx.patch(f"{_sp_base(drive_id)}/items/{item_id}",
+                    headers={"Authorization": f"Bearer {token}",
+                             "Content-Type": "application/json"},
+                    json={"description": text}, timeout=30, follow_redirects=True)
+    except Exception:      # noqa: BLE001 — a label is not worth failing a successful write over
+        pass
+
+
+def _sp_upload(token: str, drive_id: str, folder: str, filename: str,
+               content: bytes, content_type: str = "application/octet-stream") -> dict:
+    """Write one remediated file into `folder` on `drive_id`. Returns the Graph driveItem.
+
+    Small files go straight up; anything over 4 MiB uses a resumable session, because Graph
+    rejects a simple PUT past that limit and the rejection is a 413 that says nothing about
+    chunking.
+    """
+    folder_id = _sp_folder_id(token, drive_id, folder)
+    safe = _safe_name(filename)
+    base = f"{GRAPH}/drives/{drive_id}/items/{folder_id}:/{safe}:"
+    return _sp_write(token, put_url=f"{base}/content",
+                     session_url=f"{base}/createUploadSession",
+                     content=content, content_type=content_type)
 
 
 def _sp_download(token: str, item: dict, dest: Path) -> None:

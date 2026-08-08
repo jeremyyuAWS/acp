@@ -1,113 +1,92 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-// fileURLToPath, not `new URL(..., import.meta.url)`: under vitest import.meta.url is not a
-// file: URL, and readFileSync rejects it with "The URL must be of scheme file". This is the
-// pattern the other v2 source-level tests already use.
-const HERE = dirname(fileURLToPath(import.meta.url))
-const source = () => readFileSync(join(HERE, 'SharePoint.jsx'), 'utf8')
-
-// SharePoint's "↑ SharePoint" button does a destructive in-place PUT, exactly as Drive's does.
-// Drive copies the original into _mova-originals/<date>/ first. SharePoint did not — so a save
-// there replaced the user's file with no way back, and nothing on screen said so.
+// SharePoint's "↑ SharePoint" button did a destructive in-place PUT straight to Graph from the
+// browser, with its own archive-first copy alongside it.
 //
-// The difference from Drive is deliberate and is the point of these tests: Drive's archive is
-// best-effort (`catch { /* archive best-effort */ }`), so a failed archive is followed by the
-// overwrite anyway. An archive that only sometimes happens is not a backup, and it fails
-// invisibly precisely when it matters. Here a failed archive ABORTS the save.
+// This file used to test that browser-side archive (spArchiveOriginal). The archive did not go
+// away — it moved to scanner._sp_archive_original, where it is tested end-to-end against the
+// route in tests/test_sharepoint_writeback.py, including the ordering and the fail-closed
+// behaviour that were the point of the original tests. Keeping a duplicate here would be a
+// second implementation to maintain; what is worth pinning on this side is that the button
+// stopped writing to Graph itself, because that is the thing a future edit could quietly undo.
+//
+// Source-level: this asserts which HTTP call a component makes, and a mounted test that stubbed
+// fetch would pass just as happily with the direct Graph PUT restored beside the route call.
 
-const { spArchiveOriginal } = await import('./SharePoint.jsx')
+const HERE = dirname(fileURLToPath(import.meta.url))
+const read = (f) => readFileSync(join(HERE, f), 'utf8')
 
-afterEach(() => { vi.restoreAllMocks() })
-
-const ok = (payload) => ({ ok: true, status: 200, json: async () => payload })
-const err = (status) => ({ ok: false, status, json: async () => ({}) })
-
-function stub(handlers) {
-  const seen = []
-  global.fetch = vi.fn(async (url, opts = {}) => {
-    seen.push({ url, method: opts.method || 'GET' })
-    for (const [match, resp] of handlers) {
-      if (url.includes(match) && (!resp.method || resp.method === (opts.method || 'GET'))) {
-        return resp.value
-      }
-    }
-    return ok({ value: [] })
-  })
-  return seen
+const button = () => {
+  const s = read('SharePoint.jsx')
+  const start = s.indexOf('export function SpUploadButton')
+  const end = s.indexOf('// ── Main SharePoint component')
+  expect(start, 'SpUploadButton not found').toBeGreaterThan(-1)
+  expect(end, 'component boundary not found').toBeGreaterThan(start)
+  return s.slice(start, end)
 }
 
-describe('spArchiveOriginal', () => {
-  it('copies the original into a dated folder under _mova-originals', async () => {
-    const seen = stub([
-      ['/root/children', { method: 'GET', value: ok({ value: [{ id: 'ORIG', name: '_mova-originals', folder: {} }] }) }],
-      ['/items/ORIG/children', { method: 'GET', value: ok({ value: [{ id: 'DATED', name: new Date().toISOString().slice(0, 10), folder: {} }] }) }],
-      ['/copy', { method: 'POST', value: ok({ id: 'copied' }) }],
-    ])
-    await spArchiveOriginal('tok', 'd1', 'i1')
-    const copy = seen.find((s) => s.url.includes('/copy'))
-    expect(copy, 'no copy was issued — the original would be overwritten unbacked').toBeTruthy()
-    expect(copy.url).toContain('/drives/d1/items/i1/copy')
+describe('the SharePoint write-back button', () => {
+  it('writes through the server route, not straight to Graph', () => {
+    expect(button()).toMatch(/await uploadToSharePoint\(/)
+    expect(read('SharePoint.jsx')).toContain("import { uploadToSharePoint } from './api.js'")
   })
 
-  it('falls back to /me/drive when the item has no drive id', async () => {
-    // An item listed before site support carries no driveId; it lives in the user's OneDrive.
-    const seen = stub([
-      ['/root/children', { method: 'GET', value: ok({ value: [{ id: 'ORIG', name: '_mova-originals', folder: {} }] }) }],
-      ['/items/ORIG/children', { method: 'GET', value: ok({ value: [{ id: 'DATED', name: new Date().toISOString().slice(0, 10), folder: {} }] }) }],
-      ['/copy', { method: 'POST', value: ok({}) }],
-    ])
-    await spArchiveOriginal('tok', null, 'i1')
-    expect(seen.find((s) => s.url.includes('/copy')).url).toContain('/me/drive/items/i1/copy')
+  it('makes no Graph call of its own', () => {
+    // The specific regression: a PUT to /items/<id>/content re-added beside the route call would
+    // overwrite the file WITHOUT the server's archive in front of it.
+    const b = button()
+    expect(b).not.toMatch(/method:\s*'PUT'/)
+    expect(b).not.toMatch(/method:\s*'PATCH'/)
+    expect(b).not.toMatch(/GRAPH/)
+    expect(b, 'still reading the token to call Graph directly').not.toMatch(/sessionStorage/)
   })
 
-  it('throws when the copy fails, so the caller does not overwrite', async () => {
-    stub([
-      ['/root/children', { method: 'GET', value: ok({ value: [{ id: 'ORIG', name: '_mova-originals', folder: {} }] }) }],
-      ['/items/ORIG/children', { method: 'GET', value: ok({ value: [{ id: 'DATED', name: new Date().toISOString().slice(0, 10), folder: {} }] }) }],
-      ['/copy', { method: 'POST', value: err(507) }],
-    ])
-    await expect(spArchiveOriginal('tok', 'd1', 'i1')).rejects.toThrow(/archive failed/)
+  it('passes item_id, which is what selects replace-in-place', () => {
+    // Without itemId the route writes a COPY into the mirror folder instead — same endpoint,
+    // silently different outcome, and the confirmation below would then be a lie.
+    expect(button()).toMatch(/uploadToSharePoint\(\{[^}]*itemId[^}]*\}\)/)
   })
 
-  it('reuses an existing _mova-originals rather than creating a second one', async () => {
-    // Creating unconditionally is how Drive grew duplicate mirror folders, and on an ARCHIVE
-    // folder a second one means half the backups are somewhere nobody looks.
-    const seen = stub([
-      ['/root/children', { method: 'GET', value: ok({ value: [{ id: 'ORIG', name: '_mova-originals', folder: {} }] }) }],
-      ['/items/ORIG/children', { method: 'GET', value: ok({ value: [{ id: 'DATED', name: new Date().toISOString().slice(0, 10), folder: {} }] }) }],
-      ['/copy', { method: 'POST', value: ok({}) }],
-    ])
-    await spArchiveOriginal('tok', 'd1', 'i1')
-    const creates = seen.filter((s) => s.method === 'POST' && s.url.includes('children'))
-    expect(creates, 'created a folder that already existed').toHaveLength(0)
+  it('still tells the user what the confirmation actually does', () => {
+    expect(button()).toMatch(/Replace in SharePoint\? Original is copied/)
+    expect(button()).toContain('_mova-originals')
   })
 
-  it('never asks Graph to replace an existing folder', async () => {
-    // `conflictBehavior: replace` on _mova-originals would clobber the archive itself — the one
-    // outcome this whole path exists to prevent.
-    const src = source()
-    expect(src).not.toMatch(/conflictBehavior'?\s*:\s*'replace'/)
-    expect(src).toMatch(/conflictBehavior'\]?\s*:\s*'fail'/)
+  it('surfaces the server error instead of flattening it to "Reconnect"', () => {
+    // Graph refuses a write with a 403 the route translates into the CONSENT that would fix it.
+    // "Reconnect SharePoint" sent people to re-authenticate when the fix was a tenant-admin
+    // grant they could not make themselves.
+    const b = button()
+    expect(b).toMatch(/setErrMsg\(e\?\.message/)
+    expect(b).not.toMatch(/setErrMsg\('Reconnect SharePoint'\)/)
+  })
+
+  it('no longer ships the browser-side archive helpers', () => {
+    // Dead code that still looks callable is how a later edit reintroduces the direct write.
+    const s = read('SharePoint.jsx')
+    expect(s).not.toContain('spArchiveOriginal')
+    expect(s).not.toMatch(/async function spFolder\(/)
   })
 })
 
-describe('the save path', () => {
-  it('archives before it overwrites, and does not swallow the failure', async () => {
-    const src = source()
-    const archive = src.indexOf('await spArchiveOriginal(')
-    const put = src.indexOf("method: 'PUT'")
-    expect(archive).toBeGreaterThan(-1)
-    expect(archive, 'the overwrite runs before the backup').toBeLessThan(put)
-    // Drive wraps its archive in a catch; SharePoint deliberately must not.
-    expect(src).not.toMatch(/spArchiveOriginal\([^)]*\)\s*\.catch/)
+describe('the upload client', () => {
+  const api = () => {
+    const s = read('api.js')
+    return s.slice(s.indexOf('export const uploadToSharePoint'), s.indexOf('export const queueHitlVerify'))
+  }
+
+  it('sends item_id only when replacing', () => {
+    expect(api()).toMatch(/if \(itemId\) form\.append\('item_id', itemId\)/)
   })
 
-  it('tells the user what the confirmation actually does', async () => {
-    const src = source()
-    expect(src).toContain('_mova-originals')
-    expect(src).toMatch(/Replace in SharePoint\? Original is copied/)
+  it('requires a drive id for a MIRROR write and not for a replace', () => {
+    // An item listed from OneDrive carries no driveId at all (scanner._sp_list), and the server
+    // resolves that to /me/drive exactly as the download path always has. Demanding one here
+    // would break every OneDrive write-back while reading like a safety check.
+    expect(api()).toMatch(/if \(!driveId && !itemId\)/)
+    expect(api()).toMatch(/if \(driveId\) form\.append\('drive_id', driveId\)/)
   })
 })
