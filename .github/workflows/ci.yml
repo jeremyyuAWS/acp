@@ -91,7 +91,21 @@ jobs:
         # aborts during collection, not merely at runtime.
 
       - name: Backend suite
-        run: python -m pytest tests/ -q --junitxml=test-results.xml
+        # -n auto: the suite is ~2,380 tests and was 77s of this job's 118s — the whole critical
+        # path, since the two frontend jobs finish sooner and run in parallel. Measured 47.9s →
+        # 15.5s locally.
+        #
+        # --dist loadfile is NOT a tuning knob, it is the correctness requirement, and without it
+        # this is flaky rather than fast. tests/test_scope_presets_frontend_sync.py::
+        # test_check_actually_fails_on_drift deliberately corrupts the real generated
+        # scopePresets.js and restores it in a finally — which is the right test to have, because
+        # a --check that cannot fail is indistinguishable from one that passed. Under plain -n
+        # auto any worker reading that file during the window sees the corrupted copy, and three
+        # tests fail with "a generated scopePresets.js is stale", naming the wrong cause.
+        # loadfile keeps every test in a file on one worker, so the mutation and its readers are
+        # serial with respect to each other. Verified: plain -n auto fails 3; with loadfile,
+        # 2,381 pass.
+        run: python -m pytest tests/ -q -n auto --dist loadfile --junitxml=test-results.xml
 
       # ── WCAG-matrix + backlog guards ──────────────────────────────────────────────
       # Mirrors azure-pipelines.yml. Each one exists because something drifted silently

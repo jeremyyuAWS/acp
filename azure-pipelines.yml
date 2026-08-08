@@ -85,7 +85,11 @@ steps:
     # only ever present ambiently on dev machines — harmless while the engine-gated tests
     # skipped here, load-bearing now that the engine is built.
 
-  - script: python -m pytest tests/ -q --junitxml=test-results.xml
+  # -n auto --dist loadfile, mirroring ci.yml — see the long note there. loadfile is load-bearing
+  # rather than a tuning choice: test_check_actually_fails_on_drift corrupts the real generated
+  # scopePresets.js and restores it, so plain -n auto lets other workers read the corrupted
+  # window and fail with a stale-file message that names the wrong cause.
+  - script: python -m pytest tests/ -q -n auto --dist loadfile --junitxml=test-results.xml
     displayName: Backend suite (incl. auth-coverage guard)
 
   - task: PublishTestResults@2
