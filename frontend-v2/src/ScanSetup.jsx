@@ -124,17 +124,26 @@ export default function ScanSetup({ onScan, busy, hasDriveToken, hasSPToken }) {
     // An empty selection stored literally would read as NO restriction on the backend —
     // "assess nothing" saved as "assess everything", silently. Refused with a reason, the same
     // way ScanScope refuses it.
-    if (!scCount) { setMsg('Pick at least one check and one file type — an empty scope would assess everything.'); return }
+    if (!scCount) { setMsg('Pick at least one check and one file type — an empty scope would assess everything.'); return false }
     setSaving(true); setMsg('')
     try {
       await updateSettings({ scan_scope: JSON.stringify(scope) })
       setMsg(`✓ Saved · ${scCount} checks on ${formats.size} file type${formats.size === 1 ? '' : 's'}`)
+      return true
     } catch (e) {
       setMsg(e?.message || 'Could not save the scan scope.')
+      return false
     } finally { setSaving(false) }
   }
 
-  const scanAndSave = async (source) => { await save(); onScan(source) }
+  // Scan only if the scope actually persisted. save() reports its failure into a status message
+  // rather than throwing, so awaiting it and calling onScan regardless started a scan whose
+  // scope had NOT been written — it would run against whatever was stored before, while this
+  // screen displayed the selection the operator had just made. The scope is the entire purpose
+  // of this screen, so a scan without it is worse than no scan: it produces a result that looks
+  // scoped and is not. Caught by scanSetupDom.test.jsx, which renders the failure path; the
+  // source-text tests could not see it.
+  const scanAndSave = async (source) => { if (await save()) onScan(source) }
 
   const groups = PRINCIPLES.map(([digit, name]) => {
     const rows = OFFERED.filter((r) => r.sc.startsWith(digit + '.'))
