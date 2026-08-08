@@ -591,7 +591,7 @@ export default function App() {
     acc[action] = (acc[action] || 0) + 1; acc.total += 1
     return acc
   }, { auto: 0, assisted: 0, review: 0, archive: 0, keep: 0, manual: 0, total: 0 })
-  const placeholder = loaded ? <EmptyState onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} /> : <Loading />
+  const placeholder = loaded ? <EmptyState onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onFileTypeChange={setFileTypeConfig} /> : <Loading />
   // The scan panel renders inside whichever view is open, so scope its narration to that view
   // when the view is a pipeline step that owns scan phases. The view ids ARE the step names in
   // PHASE_STEP ('discover', 'assess'); anything else is a non-step view and narrates the job.
@@ -793,7 +793,7 @@ export default function App() {
         {/* onScan/busy/tokens are threaded so Overview can offer the scan-scope editor after a
             scan exists. Before one, `placeholder` (EmptyState → ScanSetup) is the whole screen;
             without these the editor would still be reachable exactly once per workspace. */}
-        {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} me={me} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} /> : assessGate) : placeholder)}
+        {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} me={me} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onFileTypeChange={setFileTypeConfig} /> : assessGate) : placeholder)}
 
         {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
           deepScan={deepScan} setDeepScan={setDeepScan} queuedScan={queuedScan} setQueuedScan={setQueuedScan}

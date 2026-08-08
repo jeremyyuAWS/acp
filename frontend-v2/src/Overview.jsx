@@ -17,7 +17,8 @@ import { scopeChip, scopeSentence, isNarrowScope } from './scanScope.js'
 
 // The estate dashboard — doubles as the exportable compliance report.
 export default function Overview({ run, files, trend, trendDates, onGo, scanList = [], onPickScan, me,
-                                   onScan, busy = false, hasDriveToken = false, hasSPToken = false }) {
+                                   onScan, busy = false, hasDriveToken = false, hasSPToken = false,
+                                   onFileTypeChange }) {
   // Real signed-in org (email domain) — the hardcoded demo org only ever shows in SIM.
   const orgName = SIM ? IDENTITY.org : (me?.email?.split('@')[1]?.replace(/\.[^.]+$/, '') || me?.name || 'your organisation')
   const [on, setOn] = useState(false)
@@ -272,7 +273,8 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
         <details className="panel scopeeditor">
           <summary>Scan scope <span className="muted">· which checks, and which file types</span></summary>
           <ScanSetup onScan={onScan} busy={busy}
-                     hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} />
+                     hasDriveToken={hasDriveToken} hasSPToken={hasSPToken}
+                     onFileTypeChange={onFileTypeChange} />
         </details>
       )}
       <div ref={reportRef}>

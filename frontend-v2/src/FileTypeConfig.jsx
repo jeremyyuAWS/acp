@@ -47,6 +47,26 @@ const loadCustom = () => { try { return JSON.parse(localStorage.getItem(LS_CUSTO
 export const loadFileTypeConfig = loadConfig
 export const loadCustomExclusions = loadCustom
 
+/** Write the four ENGINE-scoped formats into the stored view config, leaving everything else be.
+ *
+ * Exists so ScanSetup can keep the two stores in step. `scan_scope` (server) decides what is
+ * ASSESSED; this localStorage config decides what Discover LISTS (Discover.jsx filters on
+ * `fileTypeConfig[f.type] !== false`). ScanSetup wrote only the first, so unticking PDF on the
+ * first screen scoped the assessment and left every PDF in the inventory — the same "two stores
+ * for one fact" this panel's own comment records having already lied about once.
+ *
+ * MERGES rather than replaces, and that is the whole reason this is a function here instead of a
+ * setItem at the call site: the stored config also covers html, video, audio and custom
+ * extensions, which have no scan_scope axis and which ScanSetup never offers. Writing the four
+ * it knows about as a whole object would silently discard preferences the user set in Settings.
+ */
+export function saveScopedFileTypes(allowed) {
+  const next = { ...loadConfig() }
+  for (const ext of SCOPED_EXTS) next[ext] = allowed.has(ext)
+  try { localStorage.setItem(LS_KEY, JSON.stringify(next)) } catch { /* private mode: view-only */ }
+  return next
+}
+
 // Settings panel — configure which file types the platform actively remediates.
 // Types toggled off still appear in the Discover inventory (they're in the estate)
 // but are excluded from automated remediation scoring and queuing.
