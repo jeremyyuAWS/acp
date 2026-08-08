@@ -671,6 +671,37 @@ export const uploadToDrive = (scanId, file, blob, contentType) => {
   return fetch(`${BASE}/drive/upload`, { method: 'POST', headers: headers(), body: fd }).then(j)
 }
 
+// Replace one SharePoint file with its remediated bytes, through the server.
+//
+// The server archives the original into _mova-originals/<date>/ BEFORE it overwrites, and a
+// failed archive aborts the write (scanner._sp_archive_original). This SPA used to PUT to Graph
+// directly with no backup of any kind, so a save replaced the user's file with nothing to
+// recover from and nothing on screen saying so.
+//
+// Not reimplemented here. The archive is the safety-critical part of this path, and a second
+// copy of it in the browser is a second thing to keep correct — the failure mode being one copy
+// silently losing its fail-closed behaviour while the other keeps it.
+//
+// `driveId` may be absent: an item listed from OneDrive carries none, and the server resolves
+// that to /me/drive exactly as the download path does for the same items.
+export const uploadToSharePoint = ({ scanId, file, driveId, itemId, blob, score }) => {
+  if (!itemId) return Promise.reject(new Error('No SharePoint item id — nothing to replace.'))
+  // No SIM branch that fabricates success: this button's whole claim is that a real file was
+  // replaced, and a demo build reporting "✓ Saved to SharePoint" for a write that never left
+  // the browser is the one lie a viewer would act on.
+  if (SIM) return Promise.reject(new Error('SIM build — no SharePoint tenant to write to.'))
+  const fd = new FormData()
+  fd.append('scan_id', scanId || '')
+  fd.append('file', file || '')
+  if (driveId) fd.append('drive_id', driveId)
+  fd.append('item_id', itemId)
+  if (score != null) fd.append('score', String(score))
+  fd.append('blob', blob, file || 'remediated')
+  // No Content-Type header: the browser sets multipart/form-data WITH the boundary, and setting
+  // it by hand omits the boundary and the server cannot parse the body.
+  return fetch(`${BASE}/sharepoint/upload`, { method: 'POST', headers: headers(), body: fd }).then(j)
+}
+
 export const explainFinding = (scanId, file, ruleId) => (SIM
   ? sim({ why: 'Screen readers cannot announce this element — blind users get no information about it.', fix: 'Add a descriptive alt attribute: <img src="logo.png" alt="Company logo">', model: 'llama3.2 (simulated)' })
   : fetch(`${BASE}/ai/explain?scan_id=${encodeURIComponent(scanId)}&file=${encodeURIComponent(file)}&rule_id=${encodeURIComponent(ruleId)}`, { headers: headers() }).then(j))
