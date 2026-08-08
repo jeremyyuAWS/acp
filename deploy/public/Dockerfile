@@ -30,9 +30,20 @@ ARG VITE_SIM=false
 # Present in the base image; re-copied so a from-scratch build (BASE_WEB unset) still resolves
 # deps. When BASE_WEB is a prebuilt base these are already satisfied and npm install is a no-op
 # against the existing node_modules.
-COPY frontend/package.json frontend/package-lock.json ./
+# frontend-v2 — the SPA this image serves. Three places name the tree and they must agree:
+# here, Dockerfile.base-web, and redeploy.sh's WEB_HASH. The guard below tests only that
+# node_modules EXISTS, so a base built from a DIFFERENT lockfile would satisfy it and the
+# install would be skipped — the SPA would then build against the other tree's dependencies,
+# with no error. WEB_HASH hashes the lockfile, so keeping all three on frontend-v2 is what
+# makes a mismatch impossible rather than merely unlikely.
+#
+# Why v2 at all: the file-type and criterion selectors an operator uses to scope a scan live in
+# frontend-v2/src/ScanSetup.jsx, rendered by its EmptyState. v1 has neither, so the first screen
+# still explains the tabs instead of asking what to assess — which is what shipped while the
+# feature was merged, tested and unreachable.
+COPY frontend-v2/package.json frontend-v2/package-lock.json ./
 RUN [ -d node_modules ] || npm install --prefer-offline 2>/dev/null || npm install
-COPY frontend/ ./
+COPY frontend-v2/ ./
 RUN printf 'VITE_API=\nVITE_SIM=%s\n' "$VITE_SIM" > .env.production && npm run build   # -> /web/dist
 
 # ---- stage 2: runtime ----
