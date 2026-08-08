@@ -700,7 +700,10 @@ def _sp_archive_original(token: str, drive_id: str, item_id: str, today: str) ->
         raise PermissionError(
             "Microsoft Graph refused to archive the original — replacing a file in place needs a "
             "WRITE scope (Files.ReadWrite.All / Sites.ReadWrite.All). Nothing was overwritten.")
-    if not r.is_success:
+    # Any 2xx, checked on status_code rather than httpx's `is_success`: every other _sp_* helper
+    # reads status_code, and the tests' Graph double implements exactly the surface those use.
+    # A second idiom here means the double is silently partial for one function.
+    if not 200 <= r.status_code < 300:
         raise RuntimeError(f"archive failed (HTTP {r.status_code}) — nothing was overwritten")
     return dated
 
