@@ -1795,6 +1795,21 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
   padding: 0 7px; border-radius: 999px; background: #854F0B; color: #fff; font-size: 13px; font-weight: 700; vertical-align: middle; }
 .rem-review-panel { border-color: #E6C461; box-shadow: 0 0 0 1px #F3E2B4 inset; }
 
+/* Scope banner (ScopeBanner) — what the numbers below it are counting.
+   Quiet by default and louder only when the scan itself was narrowed: a caveat that shouts
+   every time trains a reader to skip it, and this one has to still be read on the visit where
+   it matters. Never hidden when the scope is wide, though — an absent caveat reads as
+   "everything", which is the failure mode scanScope.js was written for. */
+.scopebanner { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin: 0 0 12px; padding: 7px 12px; font-size: 12.5px; line-height: 1.5;
+  background: #F5F7FA; border: 1px solid var(--line, #E3E6EC); border-left: 3px solid #9AA6B8;
+  border-radius: 6px; color: var(--ink, #202124); }
+.scopebanner-lead { font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase;
+  font-weight: 700; color: var(--muted, #5F5E5A); flex: none; }
+.scopebanner-note { flex: 1 1 100%; color: var(--muted, #5F5E5A); font-size: 11.5px; }
+/* A narrowed SCAN is the case where the total genuinely does not describe the estate. */
+.scopebanner-narrow { background: #FBF4E6; border-left-color: #C8922B; }
+
 /* Per-rule "what we check" detail, inline in the criterion table (RuleDetail).
    Deliberately quiet: the table is a scoreboard first, and this is the answer to a question the
    reader has to ask before it earns space. Closed by default; the summary reads as a link, not

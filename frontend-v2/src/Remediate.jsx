@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
+import ScopeBanner from './ScopeBanner.jsx'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
 import EvidenceCard from './EvidenceCard.jsx'
@@ -722,6 +723,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       {/* GitHub-style progress rail (§2) — where am I in the pipeline. */}
       <ProgressRail steps={progressSteps} />
 
+      {/* Above the hero, which carries the headline finding counts — the numbers a reader would
+          otherwise take as "the estate". No findings count is passed: there is no open-findings
+          total in scope here, and inventing one to fill the sentence would be the opposite of
+          what this banner is for. */}
+      <ScopeBanner run={run} fileCount={files.length} />
       {/* HERO (§1) — the 5-second story + ONE primary action (§11). Every count is real:
           documents from the scan, issues fixed from applied-fix evidence, review from the
           live HITL queue, savings from the recommendation model. */}

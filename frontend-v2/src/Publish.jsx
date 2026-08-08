@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import ScopeBanner from './ScopeBanner.jsx'
 import FileDrawer from './FileDrawer.jsx'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import { openReport, publishFile, publishAllFiles, listHitlQueue } from './api.js'
@@ -85,6 +86,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
 
   return (
     <>
+      {/* ABOVE the conformance report, not below it. The artifact this screen produces is a
+          compliance record, and "certified" against an unstated scope is a claim nobody can
+          check later — so what was assessed is stated before what was concluded. */}
+      <ScopeBanner run={run} fileCount={files.length} />
       {/* The deliverable: a conformance-report header a compliance officer hands to legal. */}
       <section className="panel" style={{ borderLeft: '4px solid #3B6D11' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 18, flexWrap: 'wrap' }}>
