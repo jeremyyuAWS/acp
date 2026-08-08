@@ -39,8 +39,4 @@
 
 ## Test fixtures
 
-| File | What it exercises |
-|------|-------------------|
-| `test-corpus/files/docx-critical-no-headings.docx` | Bold-as-heading, low-contrast text, pseudo-bullets, no title |
-| `test-corpus/files/docx-moderate-skipped-headings.docx` | H1 → H3 (skips H2), otherwise well-structured |
-| `test-corpus/files/docx-clean-accessible.docx` | Full heading hierarchy, title set, lang set — should pass |
+_No dedicated fixture yet — add one to `test-corpus/` and regenerate._

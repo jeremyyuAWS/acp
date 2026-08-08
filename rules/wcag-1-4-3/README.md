@@ -40,9 +40,4 @@
 
 ## Test fixtures
 
-| File | What it exercises |
-|------|-------------------|
-| `test-corpus/files/docx-critical-no-headings.docx` | Bold-as-heading, low-contrast text, pseudo-bullets, no title |
-| `test-corpus/files/pptx-critical-no-titles.pptx` | Blank layout slides, no slide titles, low contrast, no semantic structure |
-| `test-corpus/files/pdf-serious-contrast.pdf` | Nearly-invisible light-grey text on white, no language |
-| `test-corpus/files/pdf-borderline-contrast.pdf` | One slightly low-contrast section, otherwise OK |
+_No dedicated fixture yet — add one to `test-corpus/` and regenerate._

@@ -22,6 +22,4 @@
 
 ## Test fixtures
 
-| File | What it exercises |
-|------|-------------------|
-| `test-corpus/files/docx-serious-ambiguous-links.docx` | Ambiguous link text (click here / read more), images without alt |
+_No dedicated fixture yet — add one to `test-corpus/` and regenerate._

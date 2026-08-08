@@ -326,7 +326,15 @@ def fixtures_for(sc: str, name: str, manifest: list[dict]) -> list[dict]:
     }.get(sc, [name.lower().split()[0]])
     hits = []
     for entry in manifest:
-        desc = (entry.get("desc", "") + " " + entry.get("file", "")).lower()
+        # `notes` as well as `desc`, because two generators write this file and they disagree.
+        # scripts/gen_test_corpus.py emits a descriptive index (file/size_kb/desc);
+        # test-corpus/generate.py emits the ORACLE (file/format/expected_rule_ids/notes) — the
+        # one with ground truth in it. Reading only `desc` meant regenerating the oracle silently
+        # matched zero fixtures here, and nothing would have failed: every rules/*/README.md
+        # would simply have rendered without its fixture list. Neither generator is wrong; this
+        # reader just has to survive both until one is made authoritative.
+        desc = " ".join([entry.get("desc", ""), entry.get("notes", ""),
+                         entry.get("file", "")]).lower()
         if any(k in desc for k in keywords):
             hits.append(entry)
     return hits
@@ -410,7 +418,12 @@ def render_sc(sc: str, name: str, level: str, cat_rules: list[dict],
     if fixtures:
         lines += ["| File | What it exercises |", "|------|-------------------|"]
         for fx in fixtures:
-            lines.append(f"| `test-corpus/files/{fx['file']}` | {fx.get('desc','')} |")
+            # Same two-generator problem as fixtures_for: `desc` is the descriptive index's word
+            # and `notes` is the oracle's. Reading only `desc` rendered a table of fixture names
+            # with an empty column beside every one of them — which looks like the fixtures
+            # exercise nothing, rather than like the field is named differently.
+            lines.append(f"| `test-corpus/files/{fx['file']}` | "
+                         f"{fx.get('desc') or fx.get('notes', '')} |")
     else:
         lines.append("_No dedicated fixture yet — add one to `test-corpus/` and "
                      "regenerate._")

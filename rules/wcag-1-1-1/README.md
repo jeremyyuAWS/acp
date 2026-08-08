@@ -27,8 +27,11 @@
 
 | Rule ID | Formats | Source |
 |---------|---------|--------|
+| `DOCX_IMAGE_NO_ALT` | docx | `api/formats/docx/detectors/non_text_content.py` |
 | `HTML_IMG_MISSING_ALT` | html | `api/scanner.py:_analyse_html` |
 | `PDF_FIGURE_NO_ALT` | pdf | `api/formats/pdf/detectors/non_text_content.py` |
+| `PPTX_IMAGE_NO_ALT` | pptx | `api/formats/pptx/detectors/non_text_content.py` |
+| `XLSX_IMAGE_NO_ALT` | xlsx | `api/formats/xlsx/detectors/non_text_content.py` |
 
 ## How to change this rule
 
@@ -40,4 +43,8 @@
 
 | File | What it exercises |
 |------|-------------------|
-| `test-corpus/files/docx-serious-ambiguous-links.docx` | Ambiguous link text (click here / read more), images without alt |
+| `test-corpus/files/docx-compliant.docx` | title+lang+alt+header row+descriptive link; expect ~0 issues, high score |
+| `test-corpus/files/docx-moderate.docx` | title+lang OK; missing alt + generic link text |
+| `test-corpus/files/docx-noncompliant.docx` | no title/lang, missing alt, generic link, table w/o header — many SERIOUS/CRITICAL |
+| `test-corpus/files/pptx-compliant.pptx` | slide title + image alt + language; expect ~0 issues |
+| `test-corpus/files/pptx-noncompliant.pptx` | no slide title, image w/o alt, no language (rule ids approximate) |
