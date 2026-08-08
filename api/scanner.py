@@ -472,6 +472,23 @@ def _sp_drives(token: str, site_id: str) -> list[dict]:
             for d in data.get("value", []) if d.get("id")]
 
 
+def _sp_site_name(token: str, site_id: str) -> str | None:
+    """A site's display name, or None. The SharePoint counterpart of `_folder_name`, and
+    best-effort for the same reason: this exists only so the UI can NAME the boundary it reports
+    a count against, and a scan must never fail because a label lookup did.
+
+    Swallows PermissionError too, not just transport errors. Listing sites needs Sites.Read.All,
+    and a tenant can legitimately grant a token enough to READ a site's drives (which is what the
+    scan then does successfully) while refusing the site metadata read — so a raising label lookup
+    would fail scans that were about to work.
+    """
+    try:
+        data = _sp_get(token, f"{GRAPH}/sites/{site_id}?$select=displayName,name")
+        return data.get("displayName") or data.get("name") or None
+    except Exception:
+        return None
+
+
 def _sp_list(token: str, max_files: int = 200, site: str | None = None,
              exclude_remediated: bool = False) -> list[dict]:
     """List scannable files from OneDrive, or from every document library on a SharePoint site.
@@ -758,7 +775,13 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         result = _sp_list(sp_token, max_files or 200, site=site,
                           exclude_remediated=exclude_remediated)
         if scope_out is not None:
+            # `site_name` for the same reason `folder_name` exists on the Drive branch: a Graph
+            # site id is `contoso.sharepoint.com,<guid>,<guid>`, and a boundary the reader cannot
+            # recognise is not a boundary they can check the count against. Resolved only when a
+            # site was actually chosen — OneDrive has no id to name, and an unasked-for lookup is
+            # a Graph round trip spent on nothing.
             scope_out.update({"kind": "sharepoint", "site": site, "kept": len(result),
+                              "site_name": _sp_site_name(sp_token, site) if site else None,
                               "truncated": len(result) >= (max_files or 200)})
     elif folder and folder != "root":
         # Specific folder: recursive BFS
