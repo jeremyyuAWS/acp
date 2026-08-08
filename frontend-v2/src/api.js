@@ -841,8 +841,14 @@ export const listSharePointDrives = (siteId) => (SIM
 // `driveId` is REQUIRED and comes from the SCAN, not from the browser's idea of where the file
 // lives: a Graph item id is unique only within its drive, so writing to the wrong one does not
 // error — it succeeds, into somebody else's library.
-export const uploadToSharePoint = ({ scanId, file, driveId, blob }) => {
-  if (!driveId) {
+// `itemId` selects the mode the server takes. Absent, the file lands in the mirror folder.
+// Present, the remediated bytes REPLACE that item in place — the original archived first, and a
+// failed archive aborting the write. Both decisions are the server's; this only names the target.
+export const uploadToSharePoint = ({ scanId, file, driveId, itemId, blob, score }) => {
+  // Required for a MIRROR write only. Replacing names an existing item, and an item listed from
+  // OneDrive carries no driveId — the server resolves that to /me/drive, the same convention the
+  // download path uses for the very same items.
+  if (!driveId && !itemId) {
     return Promise.reject(new Error(
       'No drive id for this file. A SharePoint item id is only unique within its drive, so the '
       + 'write target has to be named explicitly — re-scan the site so the item carries it.'))
@@ -851,7 +857,9 @@ export const uploadToSharePoint = ({ scanId, file, driveId, blob }) => {
   const form = new FormData()
   form.append('scan_id', scanId || '')
   form.append('file', file || '')
-  form.append('drive_id', driveId)
+  if (driveId) form.append('drive_id', driveId)
+  if (itemId) form.append('item_id', itemId)
+  if (score != null) form.append('score', String(score))
   form.append('blob', blob, file || 'remediated')
   // No Content-Type header: the browser sets multipart/form-data WITH the boundary, and setting
   // it by hand omits the boundary and the server cannot parse the body.

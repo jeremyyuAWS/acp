@@ -168,3 +168,140 @@ def test_the_upload_route_is_registered():
 
     paths = {r.path for r in sharepoint.router.routes}
     assert "/sharepoint/upload" in paths
+
+
+# ── replace-in-place ──────────────────────────────────────────────────────────────────────────
+#
+# The write-back button used to PUT to Graph from the browser. Routing it through this route
+# moves four things server-side: the archive-before-overwrite and its fail-closed behaviour, the
+# >4 MiB resumable session the browser path never had, Graph's permission errors translated into
+# the consent that would fix them, and record_remediation for any caller that has a scan.
+
+def test_the_archive_folder_is_never_scanned(monkeypatch):
+    """Unconditional, unlike the mirror — and a LIVE defect before this change, since the browser
+    button has been archiving into that folder all along.
+
+    These are displaced ORIGINALS: byte-identical copies of documents that still exist at their
+    own paths. Counting one counts the same document twice and reports failures the file at the
+    real path no longer has, and the pile grows by one per save."""
+    _stub_search(monkeypatch, [
+        _item("i1", "policy.docx", "/Policies"),
+        _item("i2", "policy.docx", f"/{scanner.SP_ARCHIVE_FOLDER}/2026-08-07"),
+    ])
+    assert [f["id"] for f in scanner._sp_list("tok", 50, exclude_remediated=True)] == ["i1"]
+
+
+def test_the_archive_is_skipped_even_with_exclusion_off(monkeypatch):
+    """No flag, deliberately. `exclude_remediated` is a judgement about ACP's OUTPUT; a backup of
+    the user's own file is never an estate document under any setting."""
+    _stub_search(monkeypatch, [_item("i2", "p.docx", f"/{scanner.SP_ARCHIVE_FOLDER}/2026-08-07")])
+    assert scanner._sp_list("tok", 50) == []
+
+
+def test_a_folder_named_like_the_archive_is_still_scanned(monkeypatch):
+    """Segment matching, the same rule the mirror gets."""
+    _stub_search(monkeypatch, [_item("i1", "a.docx", "/_mova-originals-archive")])
+    assert [f["id"] for f in scanner._sp_list("tok", 50)] == ["i1"]
+
+
+def test_the_original_is_archived_before_it_is_overwritten(monkeypatch):
+    """Ordering is the whole guarantee. A copy issued after the PUT archives the REMEDIATED bytes
+    and calls it a backup."""
+    import httpx
+    seen: list[str] = []
+    monkeypatch.setattr(httpx, "get", lambda url, **kw: _Resp(
+        {"value": [{"id": "ARCH", "name": scanner.SP_ARCHIVE_FOLDER, "folder": {}},
+                   {"id": "DATED", "name": "2026-08-07", "folder": {}}]}))
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: seen.append(url) or _Resp({}, status=202))
+    monkeypatch.setattr(httpx, "put", lambda url, **kw: seen.append(url) or
+                        _Resp({"webUrl": "https://x/p.docx"}, content=b"{}"))
+
+    scanner._sp_archive_original("tok", "d1", "i1", "2026-08-07")
+    scanner._sp_replace("tok", "d1", "i1", b"x" * 10, "application/vnd.ms-word")
+
+    copy = next(i for i, u in enumerate(seen) if "/copy" in u)
+    put = next(i for i, u in enumerate(seen) if u.endswith("/items/i1/content"))
+    assert copy < put, f"the overwrite ran before the backup: {seen}"
+
+
+def test_a_failed_archive_raises_so_the_caller_cannot_overwrite(monkeypatch):
+    """Fail-closed. The worst outcome must be "your file was not remediated" — visible and
+    retryable — never "your file was replaced and the original is gone"."""
+    import httpx
+    monkeypatch.setattr(httpx, "get", lambda url, **kw: _Resp(
+        {"value": [{"id": "ARCH", "name": scanner.SP_ARCHIVE_FOLDER, "folder": {}},
+                   {"id": "DATED", "name": "2026-08-07", "folder": {}}]}))
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: _Resp({}, status=507))
+    with pytest.raises(RuntimeError, match="nothing was overwritten"):
+        scanner._sp_archive_original("tok", "d1", "i1", "2026-08-07")
+
+
+def test_a_refused_archive_names_the_write_scope(monkeypatch):
+    import httpx
+    monkeypatch.setattr(httpx, "get", lambda url, **kw: _Resp(
+        {"value": [{"id": "ARCH", "name": scanner.SP_ARCHIVE_FOLDER, "folder": {}},
+                   {"id": "DATED", "name": "2026-08-07", "folder": {}}]}))
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: _Resp({}, status=403))
+    with pytest.raises(PermissionError, match="ReadWrite"):
+        scanner._sp_archive_original("tok", "d1", "i1", "2026-08-07")
+
+
+def test_the_archive_folder_is_never_replaced_on_create(monkeypatch):
+    """`conflictBehavior: replace` on the archive would destroy the backups this path exists to
+    keep, so the lookup comes first and create is only the miss path."""
+    import httpx
+    monkeypatch.setattr(httpx, "get", lambda url, **kw: _Resp(
+        {"value": [{"id": "ARCH", "name": scanner.SP_ARCHIVE_FOLDER, "folder": {}}]}))
+    monkeypatch.setattr(httpx, "post",
+                        lambda *a, **kw: pytest.fail("created a folder that already existed"))
+    assert scanner._sp_folder_id("tok", "d1", scanner.SP_ARCHIVE_FOLDER) == "ARCH"
+
+
+def test_a_onedrive_item_with_no_drive_id_resolves_to_me_drive(monkeypatch):
+    """An item listed from OneDrive carries NO driveId (_sp_list), and _sp_download has always
+    read that as /me/drive. Requiring one on the write side would break every OneDrive
+    write-back while reading like a safety check."""
+    assert scanner._sp_base(None).endswith("/me/drive")
+    assert scanner._sp_base("d1").endswith("/drives/d1")
+
+    import httpx
+    seen: list[str] = []
+    monkeypatch.setattr(httpx, "put", lambda url, **kw: seen.append(url) or
+                        _Resp({"webUrl": "https://x/p.docx"}, content=b"{}"))
+    scanner._sp_replace("tok", None, "i1", b"x" * 10)
+    assert seen == ["https://graph.microsoft.com/v1.0/me/drive/items/i1/content"]
+
+
+def test_a_large_replace_uses_a_resumable_session(monkeypatch):
+    """The browser path had no session at all: a simple PUT past 4 MiB is a 413 that says nothing
+    about chunking, so a big remediated deck failed with an error naming no cause."""
+    import httpx
+    size = scanner._SP_SIMPLE_MAX + 1024
+    ranges: list[str] = []
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: _Resp({"uploadUrl": "https://up/1"}))
+
+    def put(url, **kw):
+        assert url == "https://up/1", f"simple PUT for a {size}-byte file: {url}"
+        ranges.append(kw["headers"]["Content-Range"])
+        return _Resp({"webUrl": "https://x/big.pptx"}, content=b"{}")
+
+    monkeypatch.setattr(httpx, "put", put)
+    out = scanner._sp_replace("tok", "d1", "i1", b"y" * size)
+    assert out["webUrl"] == "https://x/big.pptx"
+    assert ranges, "no chunk was sent"
+    for r in ranges[:-1]:
+        span = r.split(" ", 1)[1].split("/")[0]
+        lo, hi = (int(x) for x in span.split("-"))
+        assert (hi - lo + 1) % (320 * 1024) == 0, f"chunk {r} is not a 320 KiB multiple"
+
+
+def test_a_description_failure_never_fails_a_successful_write(monkeypatch):
+    """The bytes are the deliverable. A label is not worth turning a completed replace into an
+    error the user reads as "it did not save"."""
+    import httpx
+
+    def boom(*a, **kw):
+        raise RuntimeError("graph down")
+
+    monkeypatch.setattr(httpx, "patch", boom)
+    scanner._sp_describe("tok", "d1", "i1", "note")      # must not raise

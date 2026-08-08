@@ -698,7 +698,7 @@ export default function Upload({ onCertified, me }) {
                       <DriveUploadButton driveFileId={item.driveFileId} blob={item.remBlob} score={item.score} engine={item.engine} />
                     )}
                     {item.status === 'done' && item.remBlob && item.spItemId && (
-                      <SpUploadButton itemId={item.spItemId} driveId={item.spDriveId} blob={item.remBlob} score={item.score} engine={item.engine} />
+                      <SpUploadButton itemId={item.spItemId} driveId={item.spDriveId} blob={item.remBlob} score={item.score} engine={item.engine} file={item.file.name} />
                     )}
                     {!batchRunning && item.status === 'waiting' && (
                       <button

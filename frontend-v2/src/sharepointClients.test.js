@@ -50,13 +50,22 @@ describe('the site id is not encoded', () => {
 })
 
 describe('the upload refuses to guess', () => {
-  it('rejects without a drive id rather than defaulting', () => {
+  it('rejects a MIRROR write with no drive id rather than defaulting', () => {
     // Writing to the wrong drive does not error — it SUCCEEDS, into somebody else's library,
     // because item ids are unique only within a drive. A default here would be silent
     // cross-library writes.
+    //
+    // Narrowed from `if (!driveId)` when the replace path landed, and the distinction is the
+    // point rather than a loosening: a MIRROR write has to pick a library to create a folder in,
+    // which is the guess this guards. A REPLACE names an existing item, and an item listed from
+    // OneDrive carries no driveId at all (scanner._sp_list) — the server resolves that to
+    // /me/drive, exactly as the download path has always done for those same items. Keeping the
+    // broad check would have broken every OneDrive write-back while reading like a safety check.
     const s = API()
-    expect(s).toMatch(/if \(!driveId\)/)
+    expect(s).toMatch(/if \(!driveId && !itemId\)/)
     expect(s).toMatch(/only unique within its drive/)
+    // …and the field is still sent whenever it is known.
+    expect(s).toMatch(/if \(driveId\) form\.append\('drive_id', driveId\)/)
   })
 
   it('does not set Content-Type on the multipart body', () => {
