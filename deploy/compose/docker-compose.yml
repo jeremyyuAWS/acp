@@ -63,7 +63,21 @@ services:
       # stack without the ollama service still works — it just stops drafting.
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
-      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-moondream}
+      # qwen2.5vl:7b LOCALLY, not moondream. moondream is the CLOUD default and stays one —
+      # deploy/ollama/Dockerfile records the 8Gi Azure Consumption ceiling that forced it, and
+      # ADR 0022 requires the CPU floor to remain always-available, so the deployed default is
+      # not this file's to change.
+      #
+      # Locally that ceiling does not exist, and the difference is measurable rather than
+      # theoretical. On 2026-08-08, against test-corpus's own enrollment-notice fixture:
+      # moondream returned an EMPTY response twice, then a hallucinated URL fragment its own
+      # alt-text guard rejected; qwen2.5vl:7b returned clean, accurate alt on every call. On a
+      # generated .docx, remediation applied 9 fixes with 1.1.1 among them.
+      #
+      # Neither model is pre-pulled — this stack keeps models on a volume (see the ollama
+      # service below), so the first run pulls whichever is named here either way. Pointing at
+      # the one that works costs nothing extra.
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-qwen2.5vl:7b}
     ports:
       - "${ACP_APP_PORT:-8077}:8077"
 

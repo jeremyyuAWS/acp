@@ -50,9 +50,29 @@ _MEDIA_RE = re.compile(r"^(word|ppt|xl)/media/", re.I)
 _WORD_RE = re.compile(r"[A-Za-z]{2,}")
 
 
+_WARNED = False
+
+
 def is_available() -> bool:
     """True only when the OCR stack is actually usable — env-enabled, pytesseract
-    importable, and the tesseract binary present."""
+    importable, and the tesseract binary present.
+
+    Says so ONCE when the binary is what is missing, because the degradation is otherwise
+    invisible and does not look like a missing dependency. api/requirements.txt installs
+    pytesseract, which is only a WRAPPER; the tesseract binary comes from the Dockerfile, so a
+    developer who pip-installs the requirements locally has the import and not the engine.
+    Nothing then errors — 1.1.1 alt text simply stops being auto-applied, because an alt is
+    only written inline when it is GROUNDED in text read from the image, and with no OCR
+    nothing can be. The drafts route to `proposals` for human approval instead, which is the
+    correct behaviour for an ungrounded guess and indistinguishable from the model being poor.
+
+    That cost most of a day on 2026-08-08: remediation was read as broken, then as a wiring
+    bug, then as model quality, on a machine that was simply missing the binary. Installing it
+    took one command and the fix count went from 8 to 9 with 1.1.1 among them.
+
+    The env-disabled case stays silent — that one is a decision, not a misconfiguration, and
+    warning about it would train people to ignore the line that matters.
+    """
     if os.environ.get("ACP_DETECT_IMAGES_OF_TEXT", "1").lower() in ("0", "false", "no"):
         return False
     try:
@@ -60,6 +80,16 @@ def is_available() -> bool:
         pytesseract.get_tesseract_version()
         return True
     except Exception:
+        global _WARNED
+        if not _WARNED:
+            _WARNED = True
+            print("[acp] OCR unavailable — the tesseract binary was not found. Images-of-text "
+                  "(1.4.5/1.4.9) will not be detected, and 1.1.1 alt text will be PROPOSED "
+                  "rather than applied, because an alt is only written inline when grounded in "
+                  "the image's own text. Install it: `brew install tesseract` (macOS) or "
+                  "`apt-get install -y tesseract-ocr` (Debian). Set "
+                  "ACP_DETECT_IMAGES_OF_TEXT=0 to disable this lane deliberately and silence "
+                  "this.", flush=True)
         return False
 
 
