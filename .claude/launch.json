@@ -7,6 +7,13 @@
       "runtimeArgs": ["--prefix", "frontend", "run", "dev"],
       "port": 5174,
       "autoPort": true
+    },
+    {
+      "name": "acp-frontend-v2",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "frontend-v2", "run", "dev"],
+      "port": 5175,
+      "autoPort": true
     }
   ]
 }
