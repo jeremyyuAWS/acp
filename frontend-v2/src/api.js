@@ -759,6 +759,57 @@ export const listDispositionAudit = (limit = 100) => (SIM
   ? sim([..._simDisp.approvals].slice().reverse())
   : fetch(`${BASE}/disposition/audit?limit=${limit}`, { headers: headers() }).then(j))
 
+// The control plane's estate view. `dept`/`owner` narrow WITHIN the caller's tenant; there is
+// deliberately no tenant parameter, because a caller-settable tenant is not a filter — the
+// server takes it from the request (see api/routes/control.py).
+//
+// The SIM shape is DERIVED from simGetScan's own files rather than from a second synthetic
+// estate. A prettier fake here would be the one place a viewer could catch the demo
+// contradicting itself: Discover and this tab would disagree about how many documents exist,
+// in a product whose entire pitch is that its numbers reconcile.
+export const getEstate = (dept = '', owner = '') => (SIM
+  ? sim((() => {
+      const files = (simGetScan('scan-cur').files || [])
+      const D = (f) => f.department || '(unassigned)'
+      const O = (f) => f.owner || '(unassigned)'
+      const kept = files.filter((f) => (!dept || D(f) === dept) && (!owner || O(f) === owner))
+
+      const byDept = {}
+      for (const f of kept) {
+        const k = D(f)
+        byDept[k] = byDept[k] || { department: k, documents: 0, _owners: new Set(), avg_triage: null }
+        byDept[k].documents += 1
+        byDept[k]._owners.add(O(f))
+      }
+      const departments = Object.values(byDept)
+        .map(({ _owners, ...r }) => ({ ...r, owners: _owners.size }))
+        .sort((a, b) => b.documents - a.documents)
+
+      // Owners are NOT narrowed by the filters: the panel exists to let a reader pick one, and
+      // a list that shrinks to match the current selection cannot be used to change it.
+      const byOwner = {}
+      for (const f of files) {
+        const k = O(f)
+        byOwner[k] = byOwner[k] || { owner: k, documents: 0, _depts: new Set() }
+        byOwner[k].documents += 1
+        byOwner[k]._depts.add(D(f))
+      }
+      const owners = Object.values(byOwner)
+        .map(({ _depts, ...o }) => ({ ...o, departments: _depts.size }))
+        .sort((a, b) => b.documents - a.documents)
+
+      return {
+        tenant: 'demo',
+        departments,
+        owners,
+        documents: departments.reduce((n, r) => n + r.documents, 0),
+        filters: { department: dept || null, owner: owner || null },
+        filtered: Boolean(dept || owner),
+      }
+    })())
+  : fetch(`${BASE}/control/estate?dept=${encodeURIComponent(dept)}&owner=${encodeURIComponent(owner)}`,
+          { headers: headers() }).then(j))
+
 export const queueHitlVerify = (scanId, file) => (SIM
   ? sim({ queued: 1 })
   : fetch(`${BASE}/hitl/queue/${encodeURIComponent(scanId)}/verify?file=${encodeURIComponent(file)}`, { method: 'POST', headers: headers() }).then(j))

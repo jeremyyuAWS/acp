@@ -304,6 +304,7 @@ function DriveMirror() {
   )
 }
 import Rubric from './Rubric.jsx'
+import ControlPlane from './ControlPlane.jsx'
 import Disposition from './Disposition.jsx'
 import OwnerDelegate from './OwnerDelegate.jsx'
 import FileTypeConfig from './FileTypeConfig.jsx'
@@ -576,6 +577,7 @@ export default function Settings({ onClose, onRubricSaved, files = [], onDelegat
         </div>
         <div className="subtabs" role="tablist" aria-label="Settings sections">
           <button role="tab" aria-selected={tab === 'rules'} className={tab === 'rules' ? 'fchip on' : 'fchip'} onClick={() => setTab('rules')}>Scoring rules</button>
+          <button role="tab" aria-selected={tab === 'estate'} className={tab === 'estate' ? 'fchip on' : 'fchip'} onClick={() => setTab('estate')}>Estate</button>
           <button role="tab" aria-selected={tab === 'filetypes'} className={tab === 'filetypes' ? 'fchip on' : 'fchip'} onClick={() => setTab('filetypes')}>File types</button>
           <button role="tab" aria-selected={tab === 'owners'} className={tab === 'owners' ? 'fchip on' : 'fchip'} onClick={() => setTab('owners')}>Owners</button>
           <button role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'fchip on' : 'fchip'} onClick={() => setTab('users')}>Users</button>
@@ -586,6 +588,7 @@ export default function Settings({ onClose, onRubricSaved, files = [], onDelegat
         </div>
         <div className="setbody">
           {tab === 'rules' && <Rubric onSaved={onRubricSaved} />}
+          {tab === 'estate' && <ControlPlane />}
           {tab === 'filetypes' && <FileTypeConfig onChanged={(cfg, custom) => onFileTypeChange?.(cfg, custom)} />}
           {tab === 'owners' && <OwnerDelegate files={files} onChanged={onDelegationChange} />}
           {tab === 'users' && <UserManagement />}
