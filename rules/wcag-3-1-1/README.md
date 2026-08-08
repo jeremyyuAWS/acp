@@ -40,7 +40,13 @@
 
 | File | What it exercises |
 |------|-------------------|
-| `test-corpus/files/pdf-critical-untagged-no-lang.pdf` | No tags, no title, no language, ambiguous link text — worst case |
-| `test-corpus/files/pdf-serious-contrast.pdf` | Nearly-invisible light-grey text on white, no language |
-| `test-corpus/files/pdf-moderate-mixed.pdf` | Has title but missing lang, abbreviations unexplained |
-| `test-corpus/files/docx-clean-accessible.docx` | Full heading hierarchy, title set, lang set — should pass |
+| `test-corpus/files/docx-compliant.docx` | title+lang+alt+header row+descriptive link; expect ~0 issues, high score |
+| `test-corpus/files/docx-moderate.docx` | title+lang OK; missing alt + generic link text |
+| `test-corpus/files/docx-noncompliant.docx` | no title/lang, missing alt, generic link, table w/o header — many SERIOUS/CRITICAL |
+| `test-corpus/files/docx-empty.docx` | empty body but title+lang set; tests empty-content handling, expect ~0 issues |
+| `test-corpus/files/pptx-compliant.pptx` | slide title + image alt + language; expect ~0 issues |
+| `test-corpus/files/pptx-noncompliant.pptx` | no slide title, image w/o alt, no language (rule ids approximate) |
+| `test-corpus/files/xlsx-compliant.xlsx` | named sheet + title + lang + header row; expect ~0 issues |
+| `test-corpus/files/xlsx-noncompliant.xlsx` | no title/lang, generic 'Sheet' name, merged cells, hidden sheet (rule ids approximate) |
+| `test-corpus/files/pdf-untagged.pdf` | untagged + no title + no /Lang (rule ids approximate) |
+| `test-corpus/files/pdf-titled-lang.pdf` | title + /Lang set, but still untagged — title/lang pass, tagging fails |

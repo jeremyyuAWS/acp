@@ -27,6 +27,4 @@
 
 ## Test fixtures
 
-| File | What it exercises |
-|------|-------------------|
-| `test-corpus/files/pdf-moderate-mixed.pdf` | Has title but missing lang, abbreviations unexplained |
+_No dedicated fixture yet — add one to `test-corpus/` and regenerate._

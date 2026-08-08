@@ -29,5 +29,5 @@
 
 | File | What it exercises |
 |------|-------------------|
-| `test-corpus/files/pdf-critical-untagged-no-lang.pdf` | No tags, no title, no language, ambiguous link text — worst case |
-| `test-corpus/files/pdf-serious-contrast.pdf` | Nearly-invisible light-grey text on white, no language |
+| `test-corpus/files/pptx-compliant.pptx` | slide title + image alt + language; expect ~0 issues |
+| `test-corpus/files/pptx-noncompliant.pptx` | no slide title, image w/o alt, no language (rule ids approximate) |

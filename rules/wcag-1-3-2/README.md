@@ -32,6 +32,4 @@
 
 ## Test fixtures
 
-| File | What it exercises |
-|------|-------------------|
-| `test-corpus/files/pdf-borderline-contrast.pdf` | One slightly low-contrast section, otherwise OK |
+_No dedicated fixture yet — add one to `test-corpus/` and regenerate._
