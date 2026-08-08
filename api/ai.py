@@ -996,7 +996,20 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
         r = httpx.post(
             f"{OLLAMA_BASE_URL}/api/generate",
             json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
-                  "options": {"temperature": 0.4, "num_predict": 60}},
+                  # num_predict is a CEILING, not a target: a model that finishes stops at its own
+                  # EOS, so raising this costs a non-reasoning model nothing. 60 was sized for the
+                  # answer alone — "under 30 words" — and that silently excluded every REASONING
+                  # model from this lane. qwen3 and its kind emit a thinking pass first and spend
+                  # the whole budget on it, so the answer is never reached: the response comes back
+                  # EMPTY, `if not text: return None` fires, and the card says "no draft".
+                  #
+                  # Measured on qwen3:14b with this exact prompt: num_predict=60 returns 0
+                  # characters in 2.2s; num_predict=400 returns "Access the benchmark document for
+                  # detailed information." in 14.0s. Nothing was wrong with the model — the budget
+                  # ran out mid-thought, and the failure was indistinguishable from a model that
+                  # cannot do the task. Every comparison of a reasoning model against this lane was
+                  # measuring the cap.
+                  "options": {"temperature": 0.4, "num_predict": 400}},
             timeout=90,
         )
         r.raise_for_status()
