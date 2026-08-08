@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { loadScores, saveDriveScore, uploadToDrive } from './GoogleDrive.jsx'
+import { uploadToSharePoint } from './api.js'
 
 const CLIENT_ID = import.meta.env.VITE_AZURE_CLIENT_ID || ''
 const TENANT   = import.meta.env.VITE_AZURE_TENANT_ID  || 'common'
@@ -28,34 +29,39 @@ function fmtSize(bytes) {
 
 // ── Per-item write-back button ─────────────────────────────────────────────────
 
-export function SpUploadButton({ itemId, driveId, blob, score, engine }) {
+// This button replaced the user's file in place with NO backup of any kind.
+//
+// It PUT the remediated bytes straight to Graph over the original item. If the remediation was
+// wrong, or the wrong file was queued, or the blob was truncated, the original was gone — and
+// the confirmation said only "Replace in SharePoint?", so nobody agreeing to it was agreeing to
+// that. Drive's button in this same SPA has archived to _mova-originals since it shipped; only
+// SharePoint was unprotected.
+//
+// It now posts to /sharepoint/upload with item_id. The server copies the original into
+// _mova-originals/<date>/ first and ABORTS the write if that copy fails, so the worst outcome
+// becomes "your file was not remediated" — visible, retryable — instead of "your file was
+// replaced and the original is gone", which is neither.
+//
+// Three things come with the route rather than being reimplemented here: a resumable session
+// past 4 MiB (a simple PUT over the limit is a 413 that says nothing about chunking), Graph's
+// permission errors translated into the consent that would fix them, and record_remediation
+// when a scan is passed.
+export function SpUploadButton({ itemId, driveId, blob, score, engine, scanId, file }) {
   const [phase, setPhase] = useState('idle') // idle|confirm|saving|done|error
   const [errMsg, setErrMsg] = useState('')
 
   const doSave = async () => {
-    const token = sessionStorage.getItem('sp_token')
-    if (!token) { setPhase('error'); setErrMsg('Reconnect SharePoint'); return }
     setPhase('saving')
     try {
-      const url = driveId
-        ? `${GRAPH}/drives/${driveId}/items/${itemId}/content`
-        : `${GRAPH}/me/drive/items/${itemId}/content`
-      const r = await fetch(url, {
-        method: 'PUT',
-        headers: { Authorization: 'Bearer ' + token, 'Content-Type': blob.type },
-        body: blob,
-      })
-      if (r.status === 401 || r.status === 403) { setPhase('error'); setErrMsg('Reconnect SharePoint'); return }
-      if (!r.ok) throw new Error('HTTP ' + r.status)
-      // Stamp mova metadata as file description via PATCH
-      const scored = score != null ? ` · Score: ${score}/100` : ''
-      await fetch((driveId ? `${GRAPH}/drives/${driveId}/items/${itemId}` : `${GRAPH}/me/drive/items/${itemId}`), {
-        method: 'PATCH',
-        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description: `Remediated for WCAG 2.1 AA by mova.io · ${new Date().toISOString().slice(0, 10)}${scored}` }),
-      }).catch(() => {})
+      await uploadToSharePoint({ scanId, file, driveId, itemId, blob, score })
       setPhase('done')
-    } catch (e) { setPhase('error'); setErrMsg(e.message || 'Upload failed') }
+    } catch (e) {
+      setPhase('error')
+      // The server tells a missing SCOPE (403, naming the consent) apart from a transport
+      // failure. "Reconnect SharePoint" sent people to re-authenticate when the fix was a
+      // tenant-admin grant they could not make themselves.
+      setErrMsg(e?.message || 'Upload failed')
+    }
   }
 
   if (phase === 'idle') return (
@@ -65,7 +71,9 @@ export function SpUploadButton({ itemId, driveId, blob, score, engine }) {
   )
   if (phase === 'confirm') return (
     <span style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0, fontSize: 12 }}>
-      <span style={{ color: 'var(--muted)' }}>Replace in SharePoint?</span>
+      {/* Says what the confirmation now buys. It used to read "Replace in SharePoint?" over a
+          write with no backup, which asked for consent to something other than what happened. */}
+      <span style={{ color: 'var(--muted)' }}>Replace in SharePoint? Original is copied to _mova-originals first.</span>
       <button className="ghost small" style={{ fontSize: 11, padding: '1px 6px' }} onClick={doSave}>Yes</button>
       <button className="ghost small" style={{ fontSize: 11, padding: '1px 6px' }} onClick={() => setPhase('idle')}>No</button>
     </span>
