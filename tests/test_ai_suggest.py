@@ -62,6 +62,25 @@ def test_clean_alt_strips_leads_and_labels():
     assert ai._clean_alt("") == ""
 
 
+def test_clean_alt_strips_presents_and_siblings():
+    """Verbs the lead pattern used to miss.
+
+    Not invented: the first is the exact reply moondream gave for
+    frontend/public/samples/sample-image.png on 2026-08-08, captured before cleaning. The lead
+    survived _clean_alt untouched and would have reached the alt attribute, where a screen
+    reader has already said "image" — the precise redundancy the pattern exists to strip.
+
+    This is the failure mode worth a regression test rather than a one-line fix: nothing errors,
+    the draft reads fluently, and the only symptom is wording nobody reviews. A missing verb is
+    invisible until someone diffs raw output against cleaned output.
+    """
+    assert ai._clean_alt("The image presents a bar graph with six vertical bars") == \
+        "A bar graph with six vertical bars"
+    assert ai._clean_alt("The figure illustrates a quarterly revenue trend") == \
+        "A quarterly revenue trend"
+    assert ai._clean_alt("This photo captures a wheelchair ramp") == "A wheelchair ramp"
+
+
 def _vision_resp(monkeypatch, text):
     import httpx
 
