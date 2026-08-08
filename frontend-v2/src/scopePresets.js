@@ -11,6 +11,25 @@
 // every stored trace; this file is the same list, for the surfaces that display it.
 
 export const SCOPE_PRESETS = {
+  "acp-core-17": {
+    "1.1.1": ["docx", "pdf", "pptx", "xlsx"],
+    "1.3.1": ["docx", "pdf", "pptx", "xlsx"],
+    "1.3.2": ["docx", "pdf", "pptx", "xlsx"],
+    "1.3.3": ["docx", "pdf", "pptx", "xlsx"],
+    "1.4.1": ["docx", "pdf", "xlsx"],
+    "1.4.11": ["docx", "pdf", "pptx", "xlsx"],
+    "1.4.3": ["docx", "pdf", "pptx", "xlsx"],
+    "1.4.5": ["docx", "pdf", "pptx", "xlsx"],
+    "2.1.1": ["pptx"],
+    "2.1.2": ["docx", "pptx", "xlsx"],
+    "2.4.2": ["docx", "pdf", "pptx", "xlsx"],
+    "2.4.3": ["pdf", "pptx"],
+    "2.4.4": ["docx", "pdf", "pptx", "xlsx"],
+    "2.4.6": ["docx", "pdf", "pptx", "xlsx"],
+    "3.1.1": ["docx", "pdf", "pptx", "xlsx"],
+    "3.1.2": ["docx", "pdf", "pptx", "xlsx"],
+    "4.1.2": ["docx", "pdf", "pptx", "xlsx"],
+  },   // 17 criteria
   "deva-final": {
     "1.1.1": ["docx", "pdf", "pptx", "xlsx"],
     "1.3.1": ["docx", "pdf", "pptx", "xlsx"],
