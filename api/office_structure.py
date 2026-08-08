@@ -62,6 +62,7 @@ from __future__ import annotations
 import io
 import re
 import zipfile
+from collections import Counter
 from pathlib import Path
 
 _HEADING_STYLE = re.compile(r'<w:pStyle\s+w:val="Heading(\d)"\s*/>')
@@ -182,6 +183,122 @@ def looks_like_pseudo_heading(text: str, *, bold: bool, max_half_pt: int,
         return True
     # a slightly-smaller but bold-and-short line is still heading-like
     return bool(bold and max_half_pt >= PSEUDO_HEADING_MIN_HALF_PT - 2)
+
+
+# ── Is a heading-like paragraph DISTINGUISHED from this document's own body text? ────────────
+#
+# `looks_like_pseudo_heading` asks "does this read as a heading" against an ABSOLUTE floor of
+# 14pt, and its own comment records the assumption underneath: "body text is ~22 (11pt)". That
+# assumption is a property of the document, not a fact about documents.
+#
+# In a large-print document — body set at 14pt or 16pt, which is exactly what a low-vision
+# reader is given — EVERY short paragraph clears the floor. The remediator then writes
+# w:pStyle unattended on all of them, and a document whose real structure was fine comes back
+# with a heading outline built from its body copy. The failure is silent, it is worst on the
+# documents most likely to have been accessibility-remediated already, and nothing on screen
+# says it happened.
+#
+# So the promoter asks a second, RELATIVE question before it stamps anything: is this paragraph
+# clearly larger than the body text of the document it lives in? Detection is unchanged — a
+# flagged paragraph is still flagged — this only decides auto-fix versus review.
+STRONG_SIZE_MARGIN_HALF_PT = 4        # ≥ +2pt over this document's body → unambiguous on size
+STRONG_BOLD_MARGIN_HALF_PT = 2        # ≥ +1pt over body AND bold → unambiguous
+
+
+# Each pattern is bounded by its OWN closing tag, and that is not tidiness.
+#
+# `<w:style … styleId="Normal">.*?<w:sz>` without the `</w:style>` bound runs straight past the
+# end of the Normal style and matches the first <w:sz> in whatever style comes next. Measured on
+# three real fixtures (python-docx's default template and two Word-authored files): Normal
+# carries NO explicit size, and the unbounded pattern returned 28 — the Heading style's 14pt —
+# for every one of them. That is the baseline reading the WRONG way, since a too-large baseline
+# makes real headings look undistinguished and routes correct auto-fixes to review.
+_DOC_DEFAULT_SZ = re.compile(
+    r"<w:docDefaults>.*?<w:rPrDefault>(.*?)</w:rPrDefault>", re.S)
+_NORMAL_STYLE = re.compile(
+    r"<w:style\b[^>]*w:styleId=\"Normal\"[^>]*>(.*?)</w:style>", re.S)
+# `\s` after `w:sz` so this never matches `<w:szCs`, the complex-script size.
+_SZ = re.compile(r"<w:sz\s+w:val=\"(\d+)\"")
+
+
+def default_run_half_pt(styles_xml: str | bytes | None) -> int:
+    """The size body text is set at when no run says otherwise, from word/styles.xml.
+
+    THIS is the number that makes the baseline honest, and getting it from run sizes alone does
+    not work. Word writes an explicit <w:sz> on a run only when it DIFFERS from the style — so a
+    document's ordinary prose usually carries no size at all, and the explicit sizes that do
+    exist are disproportionately the headings. Sampling those would compute a "body baseline"
+    out of the headings and then measure the headings against it, which is both circular and
+    biased in the dangerous direction: it makes every heading look un-distinguished.
+
+    docDefaults first, then the Normal style. 0 when neither says.
+    """
+    if not styles_xml:
+        return 0
+    xml = styles_xml.decode("utf-8", "replace") if isinstance(styles_xml, bytes) else styles_xml
+    for pat in (_DOC_DEFAULT_SZ, _NORMAL_STYLE):
+        block = pat.search(xml)
+        if not block:
+            continue
+        sz = _SZ.search(block.group(1))
+        if sz:
+            try:
+                return int(sz.group(1))
+            except (TypeError, ValueError):
+                pass
+    return 0
+
+
+def body_baseline_half_pt(sizes) -> int:
+    """This document's body-text size, in half-points: the most common PARAGRAPH size in it.
+
+    Per paragraph, not per run — one paragraph is one vote. A run-weighted count lets a single
+    heavily-split paragraph (Word fragments runs on every formatting or spell-check boundary)
+    outvote the rest of the document, and the split has nothing to do with what the text is.
+
+    Ties break to the SMALLER size. Body text is the common, small size and headings are the
+    rarer large ones, so on a tie the smaller reading is the one that cannot mistake a heading
+    for body — and mistaking a heading for body only costs a missed promotion, while the reverse
+    restyles body copy, which is the failure this whole gate exists to stop.
+
+    Returns 0 when there is nothing to count, which callers must read as "no baseline
+    available", never as "body is 0pt".
+    """
+    counts = Counter(int(s) for s in sizes if s)
+    if not counts:
+        return 0
+    top = max(counts.values())
+    return min(s for s, c in counts.items() if c == top)
+
+
+def heading_signal(text: str, *, bold: bool, max_half_pt: int, body_half_pt: int,
+                   styled_heading: bool) -> str | None:
+    """'strong' | 'weak' | None for one paragraph.
+
+    None     — not heading-like at all, or already styled as a heading.
+    'strong' — heading-like AND clearly larger (or bold and larger) than this document's body
+               baseline. Deterministic and reproducible, so it is auto-fixed with no approval.
+    'weak'   — heading-like by the absolute floor but NOT distinguished from the body around it.
+               Ambiguous: it may be a section name in a large-print document, or it may be an
+               emphasised sentence. Never stamped; routed to review instead.
+
+    `body_half_pt` of 0 means no baseline could be measured (no explicit run sizes anywhere).
+    That is treated as STRONG — i.e. exactly the behaviour before this gate existed — because a
+    document with no size information gives this refinement nothing to work with, and silently
+    downgrading every promotion to review there would remove a working fix rather than sharpen
+    it. The gate narrows what gets stamped only where it has evidence to narrow it.
+    """
+    if not looks_like_pseudo_heading(text, bold=bold, max_half_pt=max_half_pt,
+                                     styled_heading=styled_heading):
+        return None
+    if not body_half_pt:
+        return "strong"
+    over = max_half_pt - body_half_pt
+    if over >= STRONG_SIZE_MARGIN_HALF_PT:
+        return "strong"
+    if bold and over >= STRONG_BOLD_MARGIN_HALF_PT:
+        return "strong"
+    return "weak"
 
 # Content control (structured document tag) blocks and their title/label.
 # w:sdt wraps a LOT of non-form Word content too (TOC blocks, citations,
