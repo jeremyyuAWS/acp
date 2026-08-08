@@ -198,6 +198,22 @@ def test_deva_final_is_the_fourteen_the_panel_claims():
     assert all(fmts for fmts in scope.values()), "a criterion in scope for no format is not in scope"
 
 
+def _emitted_preset(js: str, name: str) -> dict[str, list[str]]:
+    """The criterion → formats map the generated module emits for ONE preset.
+
+    Scoped to that preset's own block, and this is the whole point of the function. The earlier
+    version searched the entire file for the first `    "1.3.2": [...]` line, which was correct
+    only while `deva-final` was the sole preset. Adding `acp-core-17` — which sorts first —
+    silently repointed every lookup at the new preset's rows while the Python side still read
+    deva-final's, and the test reported the two disagreeing about 1.3.2 × docx. The data was
+    fine; the reader was.
+    """
+    block = re.search(rf'^  "{re.escape(name)}": \{{$(.*?)^  \}},.*$', js, flags=re.M | re.S)
+    assert block, f"preset {name} is not in the generated module"
+    return {m.group(1): json.loads(f"[{m.group(2)}]")
+            for m in re.finditer(r'^    "([\d.]+)": \[(.*?)\],$', block.group(1), flags=re.M)}
+
+
 @pytest.mark.parametrize("fmt", ["docx", "xlsx", "pptx", "pdf"])
 def test_frontend_gate_agrees_with_in_scope(fmt):
     """The emitted per-format lists are exactly what `store.in_scope()` answers.
@@ -205,14 +221,21 @@ def test_frontend_gate_agrees_with_in_scope(fmt):
     The JS `inScope()` is a transliteration of the Python one, so the risk is not the logic but
     the DATA behind it disagreeing per format. 1.3.2, 2.1.1, 2.4.3 and 4.1.2 are scoped to a
     subset of the four formats, so a whole-format drift shows up here rather than in a count.
+
+    Over EVERY preset, not just deva-final. One preset checked is one preset guarded, and the
+    generator emits them all — a second going wrong would otherwise ship unnoticed, which is
+    close to what just happened.
     """
     import store
 
-    scope = store.SCOPE_PRESETS["deva-final"]
     js = OUT.read_text()
-    for sc in scope:
-        emitted = re.search(rf'^    "{re.escape(sc)}": \[(.*?)\],$', js, flags=re.M)
-        assert emitted, f"{sc} not found in the generated module"
-        in_js = fmt in json.loads(f"[{emitted.group(1)}]")
-        assert in_js is store.in_scope(sc, fmt, scope), (
-            f"{sc} × {fmt}: generated module says {in_js}, store.in_scope says the opposite")
+    for name, scope in store.SCOPE_PRESETS.items():
+        emitted = _emitted_preset(js, name)
+        assert set(emitted) == set(scope), (
+            f"{name}: the generated module lists {sorted(set(emitted) ^ set(scope))} differently "
+            "from the backend")
+        for sc in scope:
+            in_js = fmt in emitted[sc]
+            assert in_js is store.in_scope(sc, fmt, scope), (
+                f"{name}: {sc} × {fmt}: generated module says {in_js}, store.in_scope says the "
+                "opposite")

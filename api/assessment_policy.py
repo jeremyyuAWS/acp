@@ -365,8 +365,45 @@ def _certify(rule_id: str, fmt: str | None) -> str:
 # (criterion, format) leaves every file scanned and every in-scope result counted; only the
 # pairs nobody asked about go quiet.
 SCOPE_PRESETS: dict[str, dict[str, frozenset[str]]] = {
+    # ACP Core 17 — the DEFAULT engagement scope, and the one an operator should almost always
+    # pick. Every criterion Mova iO tracks (MOVA_TRACKED), on every format the engine can reach a
+    # verdict for. 17 criteria, 61 pairs.
+    #
+    # It is exactly SCOPE_UNIVERSE ∩ MOVA_TRACKED — the same intersection ScanScope.jsx computes
+    # to decide which rows to offer (#168) — so the preset and the grid cannot disagree about what
+    # "all of them" means. Written out rather than derived at import because SCOPE_PRESETS is read
+    # as a plain dict at module scope and deriving it would mean loading the rule registry during
+    # import; test_core17_preset.py recomputes the intersection and fails on drift, which is where
+    # this repo puts that guarantee.
+    #
+    # Its per-format asymmetries are the engine's real coverage, not an editorial choice: 2.1.1 is
+    # pptx-only, 2.4.3 is pdf+pptx, 1.4.1 has no pptx lane, 2.1.2 has no pdf lane. A flat
+    # 17 × 4 grid would claim eleven pairs the engine cannot judge.
+    "acp-core-17": {
+        "1.1.1": frozenset({"docx", "pdf", "pptx", "xlsx"}),
+        "1.3.1": frozenset({"docx", "pdf", "pptx", "xlsx"}),
+        "1.3.2": frozenset({"docx", "pdf", "pptx", "xlsx"}),
+        "1.3.3": frozenset({"docx", "pdf", "pptx", "xlsx"}),
+        "1.4.1": frozenset({"docx", "pdf", "xlsx"}),
+        "1.4.3": frozenset({"docx", "pdf", "pptx", "xlsx"}),
+        "1.4.5": frozenset({"docx", "pdf", "pptx", "xlsx"}),
+        "1.4.11": frozenset({"docx", "pdf", "pptx", "xlsx"}),
+        "2.1.1": frozenset({"pptx"}),
+        "2.1.2": frozenset({"docx", "pptx", "xlsx"}),
+        "2.4.2": frozenset({"docx", "pdf", "pptx", "xlsx"}),
+        "2.4.3": frozenset({"pdf", "pptx"}),
+        "2.4.4": frozenset({"docx", "pdf", "pptx", "xlsx"}),
+        "2.4.6": frozenset({"docx", "pdf", "pptx", "xlsx"}),
+        "3.1.1": frozenset({"docx", "pdf", "pptx", "xlsx"}),
+        "3.1.2": frozenset({"docx", "pdf", "pptx", "xlsx"}),
+        "4.1.2": frozenset({"docx", "pdf", "pptx", "xlsx"}),
+    },
     # Deva's FINAL tab, IN-SCOPE grid — 14 criteria, per-format. Mirrors V5_APPLICABLE in the
     # WCAG matrix, which was built from the same sheet; the two must not drift.
+    #
+    # NARROWER than Core 17 and specific to one engagement, so it is no longer the only preset on
+    # offer. Kept because it mirrors an external artifact that must not drift, not because it is a
+    # sensible default for a new customer.
     "deva-final": {
         "1.1.1": frozenset({"docx", "xlsx", "pptx", "pdf"}),
         "1.3.1": frozenset({"docx", "xlsx", "pptx", "pdf"}),
