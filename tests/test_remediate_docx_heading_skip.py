@@ -154,6 +154,68 @@ def test_promotion_leaves_an_existing_styled_heading_1_as_the_title(tmp_path):
     assert _heading_skip_findings(Path(fixed)) == []
 
 
+def _sized_body(doc, pt: int) -> None:
+    """A real body paragraph at an explicit size — too long to be heading-like, so it is never a
+    candidate, but it is what the baseline is measured from."""
+    doc.add_paragraph().add_run(BODY).font.size = Pt(pt)
+
+
+def _large_print_policy(tmp_path, body_pt: int) -> Path:
+    """The same document twice, at two body sizes. Everything else is identical: one clearly
+    larger title, three short bold lines set at 14pt, body between them.
+
+    At 11pt body those three lines are 3pt larger than their surroundings and are headings. At
+    14pt body they are exactly the size of the text around them and could be anything — a
+    section name, or a bold lead-in. The bytes of those three paragraphs do not change; only the
+    document they sit in does.
+    """
+    doc = Document()
+    _pseudo(doc, "Benefits Policy", 20)               # clearly larger at either body size
+    _sized_body(doc, body_pt)
+    for text in ["Eligibility", "How to enrol", "Appeals"]:
+        _pseudo(doc, text, 14)                        # exactly PSEUDO_HEADING_MIN_HALF_PT
+        _sized_body(doc, body_pt)
+        _sized_body(doc, body_pt)
+    src = tmp_path / f"policy-{body_pt}pt.docx"
+    doc.save(src)
+    return src
+
+
+def test_an_ordinary_document_still_promotes_all_of_its_headings(tmp_path):
+    """The control, and the half that makes the other test mean anything. Without it, a gate
+    that simply refused to promote 14pt lines would pass the large-print test and be a
+    regression."""
+    fixed, _applied, _skipped = R.remediate_office(_large_print_policy(tmp_path, 11))
+    promoted = [text for text, _lvl in _outline(fixed)]
+    assert promoted == ["Benefits Policy", "Eligibility", "How to enrol", "Appeals"]
+
+
+def test_a_large_print_document_is_not_restyled_out_of_its_own_body_text(tmp_path):
+    """14pt body. The three 14pt lines clear the ABSOLUTE floor and are indistinguishable from
+    the text around them, so promoting them writes a heading outline out of body copy —
+    unattended, on precisely the documents most likely to have been remediated for low vision
+    already."""
+    src = _large_print_policy(tmp_path, 14)
+    fixed, _applied, skipped = R.remediate_office(src)
+
+    promoted = [text for text, _lvl in _outline(fixed)]
+    assert promoted == ["Benefits Policy"], (
+        "a 14pt line in a 14pt document was restyled as a heading")
+
+    # Deferred, not dropped. The finding stands — silence here would read as "nothing to fix".
+    assert any("not larger than this document's body text" in s for s in skipped), skipped
+    assert any("3 paragraph(s)" in s for s in skipped), skipped
+
+
+def test_the_deferred_paragraphs_keep_their_finding(tmp_path):
+    """The honest consequence, asserted rather than discovered: declining to guess means
+    DOCX_PSEUDO_HEADING still fires on re-scan. A fix that cleared the detector by leaving the
+    document alone would be the worst of both — no change, and no finding either."""
+    fixed, _applied, _skipped = R.remediate_office(_large_print_policy(tmp_path, 14))
+    assert [f["ruleId"] for f in osx.docx_checks(Path(fixed))
+            if f["ruleId"] == "DOCX_PSEUDO_HEADING"], "the deferred finding disappeared"
+
+
 def test_docx_valid_outline_untouched(tmp_path):
     d = Document()
     d.add_heading("Overview", level=1)

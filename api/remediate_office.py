@@ -910,7 +910,15 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None, in_scope=
     # so promoted paragraphs are counted by the heading-collection that follows.
     import office_structure as _osx
     import proposals as _prop
-    pseudo: list = []                      # (pPr_or_None, p, max_half_pt)
+    pseudo: list = []                      # (pPr_or_None, p, max_half_pt) — STRONG, auto-promote
+    ambiguous: list = []                   # heading-like but not distinguished from body
+    scanned: list = []                     # (pPr, p, max_hp, text, bold, styled)
+    # One vote per BODY paragraph, at its effective size — the explicit run size when it has
+    # one, otherwise the style default. Paragraphs already styled as headings are excluded:
+    # the question is what this document's BODY is set at, and counting the headings toward it
+    # is what would make them stop looking distinguished from it.
+    default_hp = _osx.default_run_half_pt(entries.get("word/styles.xml"))
+    para_sizes: list[int] = []
     for p in root.iter(f"{{{W}}}p"):
         pPr = p.find(f"{{{W}}}pPr")
         st = pPr.find(f"{{{W}}}pStyle") if pPr is not None else None
@@ -927,11 +935,34 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None, in_scope=
             szel = rPr.find(f"{{{W}}}sz")
             if szel is not None:
                 try:
-                    max_hp = max(max_hp, int(szel.get(val_attr) or 0))
+                    sz = int(szel.get(val_attr) or 0)
                 except (TypeError, ValueError):
-                    pass
-        if _osx.looks_like_pseudo_heading(text, bold=bold, max_half_pt=max_hp, styled_heading=styled):
+                    sz = 0
+                if sz:
+                    max_hp = max(max_hp, sz)
+        scanned.append((pPr, p, max_hp, text, bold, styled))
+        if text and not styled:
+            eff = max_hp or default_hp
+            if eff:
+                para_sizes.append(eff)
+
+    # The baseline is measured across the WHOLE document, so it has to be complete before any
+    # paragraph is judged — hence the two passes. `looks_like_pseudo_heading` asks the absolute
+    # question ("does this read as a heading"); `heading_signal` adds the relative one ("is it
+    # distinguished from the body around it") and only the STRONG answers are stamped.
+    body_hp = _osx.body_baseline_half_pt(para_sizes)
+    for pPr, p, max_hp, text, bold, styled in scanned:
+        # max_hp RAW, not defaulted — heading_signal's first question is the detector's own
+        # predicate, and the scanner reads raw run sizes. Substituting the style default here
+        # would make a size-less body paragraph clear the 14pt floor in a large-print document
+        # and become a candidate the scanner never flagged, breaking the lock-step this gate
+        # depends on. The default belongs to the BASELINE only.
+        sig = _osx.heading_signal(text, bold=bold, max_half_pt=max_hp,
+                                  body_half_pt=body_hp, styled_heading=styled)
+        if sig == "strong":
             pseudo.append((pPr, p, max_hp, text))
+        elif sig == "weak":
+            ambiguous.append(text)
     if pseudo and _sc_ok(in_scope, "1.3.1"):
         # Levels come from the font hierarchy IN DOCUMENT ORDER, not from absolute size rank
         # across the whole document. Rank gave Heading 1 to the largest paragraph whatever it
@@ -957,6 +988,18 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None, in_scope=
                  f"promoted to Heading {lvl} style",
                  "so it joins the heading outline assistive tech navigates by")
         applied.append(f"Promoted {len(pseudo)} visually-styled pseudo-heading(s) to real headings · 1.3.1")
+
+    # Ambiguous candidates are DEFERRED, not dropped. The finding still stands — the scanner
+    # flagged these and this function declined to guess — so it has to be visible, or a
+    # large-print document reads as "nothing to fix here" when the truth is "we could not tell
+    # which of these are sections". Reported whether or not anything was promoted, and outside
+    # the `pseudo` branch for exactly that reason: the all-weak document is the case this exists
+    # for, and it is the one where `pseudo` is empty.
+    if ambiguous and skipped is not None and _sc_ok(in_scope, "1.3.1"):
+        skipped.append(
+            f"{len(ambiguous)} paragraph(s) look like headings but are not larger than this "
+            f"document's body text — left unchanged for review rather than restyled "
+            f"(e.g. “{ambiguous[0][:40]}”)")
 
     # Table headers (1.3.1): the first row of every multi-row table gets w:tblHeader,
     # which is exactly what the analyser's HasHeaderRow() checks for.
