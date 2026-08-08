@@ -33,6 +33,12 @@ vi.mock('./api.js', () => ({
 
 const { default: ScanScope, parseStoredScope } = await import('./ScanScope.jsx')
 const { SCOPE_PRESETS, SCOPE_UNIVERSE } = await import('./scopePresets.js')
+const { TRACKED_17 } = await import('./ruleDetails.js')
+
+// What the grid OFFERS — the universe narrowed to the criteria Mova iO tracks. Derived here the
+// same way the component derives it, so these tests keep asserting behaviour against generated
+// data rather than a hand-typed list (see the header).
+const OFFERED = SCOPE_UNIVERSE.filter((r) => TRACKED_17.has(r.sc))
 
 async function render(stored = '') {
   settingsMock.get = vi.fn(async () => ({ scan_scope: stored }))
@@ -168,7 +174,32 @@ describe('the grid', () => {
     const c = await render('deva-final')
     expect(c.querySelector('caption')).toBeTruthy()
     expect([...c.querySelectorAll('th[scope="col"]')].length).toBeGreaterThan(4)
-    expect([...c.querySelectorAll('th[scope="row"]')].length).toBe(SCOPE_UNIVERSE.length)
+    expect([...c.querySelectorAll('th[scope="row"]')].length).toBe(OFFERED.length)
+  })
+
+  it('offers the tracked criteria only, not the whole universe', async () => {
+    // The universe is every pair the engine can reach a verdict on — the right answer to "what
+    // COULD be scoped", and the wrong one to "what should this operator choose between". Twelve
+    // of the 29 are AAA rules and viewer behaviours Mova iO does not track, and each was a row to
+    // read and dismiss on the screen meant to be the first thing an operator does.
+    const c = await render('deva-final')
+    const shown = [...c.querySelectorAll('th[scope="row"] b')].map((b) => b.textContent)
+    expect(new Set(shown)).toEqual(new Set([...TRACKED_17]))
+
+    // Derived on both sides, so this keeps meaning something as either list changes.
+    const untracked = SCOPE_UNIVERSE.map((r) => r.sc).filter((sc) => !TRACKED_17.has(sc))
+    expect(untracked.length, 'nothing to filter — the universe is already the tracked list')
+      .toBeGreaterThan(0)
+    for (const sc of untracked) expect(shown, `${sc} is offered but not tracked`).not.toContain(sc)
+  })
+
+  it('drops no tracked criterion — every one of the 17 has a row', async () => {
+    // The failure this guards is the quiet direction: a filter that hides a criterion the product
+    // says it follows, leaving an operator unable to scope it and nothing on screen to say why.
+    const c = await render('deva-final')
+    const shown = [...c.querySelectorAll('th[scope="row"] b')].map((b) => b.textContent)
+    const missing = [...TRACKED_17].filter((sc) => !shown.includes(sc))
+    expect(missing, `tracked but not offerable: ${missing.join(', ')}`).toHaveLength(0)
   })
 })
 
