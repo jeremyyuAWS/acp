@@ -15,7 +15,8 @@ import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummar
 import { firstProposed, firstBefore, firstThumb, firstKind, firstRationale, firstSource, pageOf,
          appliedFixAlt } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
-import { remediableFiles, emptyScopeReason, scopeSummary, ineligibleReason } from './remediableScope.js'
+import { remediableFiles, emptyScopeReason, scopeSummary, ineligibleReason,
+         hasDocumentSelection, documentSelection, documentScopeSentence } from './remediableScope.js'
 import { measuredReviewTime, REVIEW_TIME_BASIS } from './reviewerTime.js'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
@@ -127,7 +128,7 @@ function dbItemToUi(it, files) {
 }
 
 function buildHumanQueue(files, triage = {}) {
-  const hasInscope = Object.values(triage).some((v) => v === 'inscope')
+  const hasInscope = hasDocumentSelection(triage)
   const active = files.filter((f) => !(f.remediated_at || f.drive_write_url))  // exclude already-fixed
   const candidates = hasInscope ? active.filter((f) => triage[f.file] === 'inscope') : active
   const assisted = candidates.filter((f) => (f.rec?.action === 'assisted' || f.rec?.action === 'review') && (f.issues || []).length > 0)
@@ -561,7 +562,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // Published business ontology takes precedence in the queue order (Critical → Low),
   // then the AI risk triage breaks ties.
   const ontRank = (f) => f.ont?.priority ? PRI_RANK[f.ont.priority] : 9
-  const hasInscopeSelections = Object.values(triage).some((v) => v === 'inscope')
+  const hasInscopeSelections = hasDocumentSelection(triage)
   // One eligibility test, shared with emptyScopeReason() — so what the button acts on and what
   // it says when it can't act on anything are derived from the same rules, in the same order.
   const scopeOpts = { triage, hasInscopeSelections, remActions: REM_ACTIONS }
@@ -727,7 +728,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           otherwise take as "the estate". No findings count is passed: there is no open-findings
           total in scope here, and inventing one to fill the sentence would be the opposite of
           what this banner is for. */}
-      <ScopeBanner run={run} fileCount={files.length} />
+      <ScopeBanner run={run} fileCount={files.length}
+                   docScope={documentScopeSentence(documentSelection(files, triage))} />
       {/* HERO (§1) — the 5-second story + ONE primary action (§11). Every count is real:
           documents from the scan, issues fixed from applied-fix evidence, review from the
           live HITL queue, savings from the recommendation model. */}
