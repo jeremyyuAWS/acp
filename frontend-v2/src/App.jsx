@@ -7,7 +7,7 @@ import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
 import { loadRolePrivileges } from './RolePrivilege.jsx'
-import { loadFileTypeConfig } from './FileTypeConfig.jsx'
+import { loadFileTypeConfig, visibleForFileTypes } from './FileTypeConfig.jsx'
 import { annotate, loadPublished } from './ontology.js'
 import { RuleBreakdown } from './Transparency.jsx'
 import Logo from './Logo.jsx'
@@ -293,7 +293,25 @@ export default function App() {
   // Attach the per-file remediation recommendation. In SIM the sim builder already sets it;
   // for a REAL backend scan the files arrive without it, so compute it here — otherwise
   // `remediable` is empty and server-side remediation finds nothing to do.
-  const files = useMemo(() => annotate(scan?.files ?? [], ontology).map((f) => (f.rec ? f : { ...f, rec: recommendFor(f) })), [scan, ontology])
+  const allFiles = useMemo(() => annotate(scan?.files ?? [], ontology).map((f) => (f.rec ? f : { ...f, rec: recommendFor(f) })), [scan, ontology])
+
+  // The file-type filter applies to EVERY tab, not just Discover.
+  //
+  // It used to be filtered inside Discover alone (`visibleFiles`), so an operator who scoped the
+  // scan to .docx saw a docx-only inventory and then a full estate everywhere after it: Assess
+  // scored the PDFs, Remediate queued them, Overview counted them, Publish certified against
+  // them. The filter looked like it worked and then silently stopped applying one tab later,
+  // which is worse than not having one — every number downstream described a different
+  // population than the screen the operator set it on.
+  //
+  // Filtered once, here, so every tab inherits the same population by construction rather than
+  // by each component remembering to. `scan_scope` on the server is the other half and gates
+  // which CRITERIA are evaluated; this gates which FILES are shown. Both are needed: the server
+  // returns the whole estate because a scan inventories everything it can see.
+  //
+  // An empty config means no restriction, matching Discover's original `!== false` test — a
+  // type absent from the map has never been excluded, only ones explicitly set false.
+  const files = useMemo(() => visibleForFileTypes(allFiles, fileTypeConfig), [allFiles, fileTypeConfig])
 
   // Real accounts that get elevated privileges on source connect (never shown in demo list)
   const PRIV_PROFILE = {

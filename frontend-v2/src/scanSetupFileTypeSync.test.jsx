@@ -47,12 +47,22 @@ const click = async (el) => { await act(async () => { el.click() }) }
 const chip = (c, fmt) => [...c.querySelectorAll('button')]
   .find((b) => new RegExp(`\\b${fmt}\\b`, 'i').test(b.textContent))
 const saveBtn = (c) => [...c.querySelectorAll('button')].find((b) => /Save scope only/.test(b.textContent))
+const pressed = (el) => el.getAttribute('aria-pressed') === 'true'
+// Set a format chip to a known state regardless of the component's default. The default is a
+// product decision that has already moved once (all four -> .docx only); tests that assumed it
+// were testing the default rather than the behaviour, and nine went red when it changed.
+const setFormat = async (c, fmt, on) => {
+  const el = chip(c, fmt)
+  if (pressed(el) !== on) await click(el)
+}
+
 
 
 describe('the two file-type stores stay in step', () => {
   it('writes the Discover view config, not only scan_scope', async () => {
     const { c } = await render()
-    await click(chip(c, 'PDF'))
+    await setFormat(c, 'DOCX', true)
+    await setFormat(c, 'PDF', false)
     await click(saveBtn(c))
 
     // the server axis
@@ -64,7 +74,8 @@ describe('the two file-type stores stay in step', () => {
 
   it('tells the app, so the inventory updates without a reload', async () => {
     const { c, onFileTypeChange } = await render()
-    await click(chip(c, 'PDF'))
+    await setFormat(c, 'DOCX', true)
+    await setFormat(c, 'PDF', false)
     await click(saveBtn(c))
     expect(onFileTypeChange).toHaveBeenCalled()
     expect(onFileTypeChange.mock.calls.at(-1)[0].pdf).toBe(false)
@@ -75,7 +86,8 @@ describe('the two file-type stores stay in step', () => {
     // four it knows about as a whole object would silently discard a choice made in Settings.
     localStorage.setItem('mova_filetypes', JSON.stringify({ html: false, video: false }))
     const { c } = await render()
-    await click(chip(c, 'PDF'))
+    await setFormat(c, 'DOCX', true)
+    await setFormat(c, 'PDF', false)
     await click(saveBtn(c))
 
     const cfg = loadFileTypeConfig()
@@ -88,7 +100,7 @@ describe('the two file-type stores stay in step', () => {
     // Empty scope is refused with a reason. Writing the view config anyway would hide files
     // from an inventory whose assessment scope never changed.
     const { c, onFileTypeChange } = await render()
-    for (const f of ['DOCX', 'XLSX', 'PPTX', 'PDF']) await click(chip(c, f))
+    for (const f of ['DOCX', 'XLSX', 'PPTX', 'PDF']) await setFormat(c, f, false)
     await click(saveBtn(c))
 
     expect(settingsMock.put).not.toHaveBeenCalled()

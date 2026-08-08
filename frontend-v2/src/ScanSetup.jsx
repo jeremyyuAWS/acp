@@ -71,7 +71,18 @@ const LANE_TONE = {
 }
 
 export default function ScanSetup({ onScan, busy, hasDriveToken, hasSPToken, onFileTypeChange }) {
-  const [formats, setFormats] = useState(() => new Set(SCOPE_FORMATS))
+  // .docx ONLY by default, not all four formats.
+  //
+  // A deliberate product choice, not a technical one: .docx is where the engine is strongest.
+  // Of the Core 17, fifteen criteria have a docx lane and four can certify a PASS
+  // (1.3.1, 1.4.3, 2.4.2, 3.1.1); remediation applies nine fixes across seven criteria on a
+  // real document. The other formats are genuinely thinner — pdf cannot be assessed at all
+  // without the external ACP_PDF_ENGINE, and 2.1.1 exists only on pptx.
+  //
+  // Defaulting to everything meant a first scan inventoried an estate the product could say
+  // least about, and the weakest formats set the tone. Starting narrow makes the first result
+  // the strongest one; widening is one click, and the chips show the other three ready to add.
+  const [formats, setFormats] = useState(() => new Set(['docx']))
   const [criteria, setCriteria] = useState(() => new Set(Object.keys(SCOPE_PRESETS[CORE] || {})))
   const [custom, setCustom] = useState(false)
   const [open, setOpen] = useState(null)         // which principle group is expanded

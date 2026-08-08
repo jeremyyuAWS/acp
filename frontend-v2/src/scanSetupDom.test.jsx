@@ -64,6 +64,15 @@ const box = (c, sc) => [...c.querySelectorAll('input[type=checkbox]')]
 // assertion about an error ends up passing against unrelated text.
 const status = (c) => c.querySelector('.setupmsg')?.textContent || ''
 const FORMAT_CHIPS = ['DOCX', 'XLSX', 'PPTX', 'PDF']
+const pressed = (el) => el.getAttribute('aria-pressed') === 'true'
+// Set a format chip to a known state regardless of the component's default. The default is a
+// product decision that has already moved once (all four -> .docx only); tests that assumed it
+// were testing the default rather than the behaviour, and nine went red when it changed.
+const setFormat = async (c, fmt, on) => {
+  const el = chip(c, fmt)
+  if (pressed(el) !== on) await click(el)
+}
+
 const savedScope = () => JSON.parse(settingsMock.put.mock.calls.at(-1)[0].scan_scope)
 
 
@@ -75,11 +84,17 @@ describe('the first screen shows both filters', () => {
     }
   })
 
-  it('starts on the Core 17 preset with every format on, so the default is scannable', async () => {
+  it('starts on .docx only — the format the engine is strongest on', async () => {
     const { c } = await render()
     await click(btn(c, /Save scope only/))
     const scope = savedScope()
-    expect(Object.keys(scope).sort()).toEqual(Object.keys(SCOPE_PRESETS[CORE]).sort())
+    for (const [sc, fmts] of Object.entries(scope)) {
+      expect(fmts, `${sc} saved a non-docx format by default`).toEqual(['docx'])
+    }
+    // ...and it is every Core-17 criterion that HAS a docx lane, not an arbitrary subset
+    const withDocx = Object.entries(SCOPE_PRESETS[CORE])
+      .filter(([, f]) => [...f].includes('docx')).map(([sc]) => sc)
+    expect(Object.keys(scope).sort()).toEqual(withDocx.sort())
   })
 })
 
@@ -87,7 +102,8 @@ describe('the first screen shows both filters', () => {
 describe('the file-type filter actually narrows what is saved', () => {
   it('drops a deselected format from every criterion', async () => {
     const { c } = await render()
-    await click(chip(c, 'PDF'))
+    for (const f of FORMAT_CHIPS) await setFormat(c, f, true)   // start from all-on
+    await setFormat(c, 'PDF', false)
     await click(btn(c, /Save scope only/))
     const scope = savedScope()
     for (const [sc, fmts] of Object.entries(scope)) {
@@ -106,7 +122,8 @@ describe('the file-type filter actually narrows what is saved', () => {
       .find(([, f]) => [...f].length === 1 && [...f][0] === 'pptx')
     expect(pptxOnly, 'expected a pptx-only criterion in the preset').toBeTruthy()
     const { c } = await render()
-    await click(chip(c, 'PPTX'))
+    for (const f of FORMAT_CHIPS) await setFormat(c, f, true)
+    await setFormat(c, 'PPTX', false)
     await click(btn(c, /Save scope only/))
     expect(savedScope()).not.toHaveProperty(pptxOnly[0])
   })
@@ -130,7 +147,7 @@ describe('the criterion filter actually narrows what is saved', () => {
 describe('an empty intersection is refused, not saved', () => {
   it('refuses when every file type is deselected, and sends nothing', async () => {
     const { c } = await render()
-    for (const f of FORMAT_CHIPS) await click(chip(c, f))
+    for (const f of FORMAT_CHIPS) await setFormat(c, f, false)
     await click(btn(c, /Save scope only/))
 
     expect(settingsMock.put).not.toHaveBeenCalled()
@@ -139,7 +156,7 @@ describe('an empty intersection is refused, not saved', () => {
 
   it('disables the scan buttons rather than scanning an empty scope', async () => {
     const { c } = await render()
-    for (const f of FORMAT_CHIPS) await click(chip(c, f))
+    for (const f of FORMAT_CHIPS) await setFormat(c, f, false)
     const scan = btn(c, /Save & /)
     expect(scan).toBeTruthy()
     expect(scan.disabled).toBe(true)
