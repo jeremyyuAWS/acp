@@ -74,13 +74,19 @@ describe('v2 Remediate: collapsible sections', () => {
 
 describe('v2: the simplification left no dangling pointers', () => {
   // #151 deleted the Permissions and Business ontology tabs but not the prose telling operators
-  // to open them. The UserManagement one was the worst: an EMPTY STATE whose entire job is to
-  // say what to do next, and what it said was "open a screen that is not there".
-  it('never sends an operator to a Settings tab v2 removed', () => {
-    for (const f of ['Remediate.jsx', 'UserManagement.jsx', 'IntegrationRoadmap.jsx']) {
+  // to open them. The worst was an EMPTY STATE whose entire job is to say what to do next, and
+  // what it said was "open a screen that is not there".
+  //
+  // UserManagement.jsx was one of the files swept here; it has since been deleted outright — it
+  // was a hardcoded roster standing in for the list of users with access — so it is no longer a
+  // file that can point anywhere. `Settings → Test users` joins the dead list in its place: that
+  // tab was merged into `Settings → Users`, and a renamed tab strands prose exactly as a removed
+  // one does.
+  it('never sends an operator to a Settings tab v2 removed or renamed', () => {
+    for (const f of ['Remediate.jsx', 'Settings.jsx', 'IntegrationRoadmap.jsx']) {
       const s = read(f)
       for (const dead of ['Settings → Permissions', 'Settings → Business ontology',
-                          'Settings → Validation coverage']) {
+                          'Settings → Validation coverage', 'Settings → Test users']) {
         expect(s, `${f} still points at "${dead}"`).not.toContain(dead)
       }
     }

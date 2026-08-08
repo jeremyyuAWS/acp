@@ -308,7 +308,6 @@ import ControlPlane from './ControlPlane.jsx'
 import Disposition from './Disposition.jsx'
 import OwnerDelegate from './OwnerDelegate.jsx'
 import FileTypeConfig from './FileTypeConfig.jsx'
-import UserManagement from './UserManagement.jsx'
 import { useDialog } from './a11y.js'
 import { downloadUpdatedXlsx, downloadUpdatedPptx } from './exportDeliverables.js'
 
@@ -353,17 +352,48 @@ function AllowList() {
   return (
     <section style={{ maxWidth: 640 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-        <h3 style={{ margin: 0 }}>Test users</h3>
-        <span className="muted" style={{ fontSize: 13 }}>{emails.length} added · who can sign in &#38; scan</span>
+        <h3 style={{ margin: 0 }}>Users with access</h3>
+        <span className="muted" style={{ fontSize: 13 }}>who can sign in &#38; scan</span>
       </div>
 
-      {/* How access works — the two gates, stated plainly */}
+      {/* THE DOMAIN RULE, which this screen used to load and not render.
+          `core.email_allowed()` admits three ways: the owner, this list, or ANY address at an
+          allowed domain. The third was fetched into `domains` and never shown — so on a
+          deployment with ACP_ALLOWED_DOMAINS set, an entire company could sign in while the
+          screen that answers "who has access" listed a handful of names and looked complete.
+          That is the failure this panel exists to prevent, on the panel itself. */}
+      {domains.length > 0 && (
+        <div role="note" style={{ marginTop: 12, padding: '12px 14px', borderRadius: 10, background: '#FBF1DF', border: '1px solid #EAD9BF' }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: '#854F0B', marginBottom: 5 }}>
+            ⚠ Anyone at {domains.length === 1 ? 'this domain' : 'these domains'} can sign in without being listed below
+          </div>
+          <div style={{ fontSize: 12.5, color: '#5C3D0B', lineHeight: 1.55 }}>
+            {domains.map((d) => <b key={d} style={{ marginRight: 10 }}>@{d}</b>)}
+            <div className="muted" style={{ marginTop: 4 }}>
+              Set by <code>ACP_ALLOWED_DOMAINS</code> at deploy time — it cannot be changed here, and
+              the people it admits do not appear in the list below.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* How access works — every gate email_allowed() actually checks, in its order */}
       <div style={{ marginTop: 12, padding: '12px 14px', borderRadius: 10, background: '#EEF2FB', border: '1px solid #D3DDF1' }}>
-        <div style={{ fontSize: 12.5, fontWeight: 700, color: '#2B4A7E', marginBottom: 6 }}>Two things let someone in:</div>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: '#2B4A7E', marginBottom: 6 }}>What lets someone in:</div>
         <div style={{ fontSize: 12.5, color: '#33405C', lineHeight: 1.55 }}>
-          <div><b>1.</b> They’re on this list <span className="muted">— manage it right here; applies on their next sign-in.</span></div>
-          <div><b>2.</b> They’re a Google <b>test user</b> <span className="muted">— required until the app is Google-verified. Add them once in&nbsp;</span>
+          <div><b>1.</b> They’re the <b>owner</b> <span className="muted">— set at deploy time, can never be removed.</span></div>
+          <div><b>2.</b> They’re on this list <span className="muted">— manage it right here; applies on their next sign-in.</span></div>
+          <div><b>3.</b> Their email is at an <b>allowed domain</b>{' '}
+            <span className="muted">{domains.length > 0 ? '— see the notice above.' : '— none configured on this deployment.'}</span>
+          </div>
+          {/* Kept, but demoted: this is a Google OAuth prerequisite, not one of ACP's gates.
+              Listing it as gate 2 of 2 implied the app checked it, and left the domain rule
+              unmentioned entirely. */}
+          <div className="muted" style={{ marginTop: 6 }}>
+            Separately, until the app is Google-verified each person must also be a Google{' '}
+            <b>test user</b> — added once in{' '}
             <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noopener noreferrer" style={{ color: '#2B6CB0', fontWeight: 600 }}>Google Cloud → OAuth consent screen ↗</a>.
+            That is a Google requirement, not an ACP one.
           </div>
         </div>
       </div>
@@ -578,7 +608,7 @@ export default function Settings({ onClose, onRubricSaved, files = [], onDelegat
           <button className="ghost small" aria-label="Close settings" onClick={onClose}>✕</button>
         </div>
         {/* Above the subtabs on purpose — it is true of every tab in this panel, not just the
-            settings write paths. Rubric, Test users, Disposition and Reset data are SIM stubs too. */}
+            settings write paths. Rubric, Users, Disposition and Reset data are SIM stubs too. */}
         {SIM && <SimNotice />}
         <div className="setexports">
           <span className="setexporthint">Updated deliverables — original format, with a live <b>Status</b> column reflecting what the platform ships today:</span>
@@ -594,7 +624,6 @@ export default function Settings({ onClose, onRubricSaved, files = [], onDelegat
           <button role="tab" aria-selected={tab === 'filetypes'} className={tab === 'filetypes' ? 'fchip on' : 'fchip'} onClick={() => setTab('filetypes')}>File types</button>
           <button role="tab" aria-selected={tab === 'owners'} className={tab === 'owners' ? 'fchip on' : 'fchip'} onClick={() => setTab('owners')}>Owners</button>
           <button role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'fchip on' : 'fchip'} onClick={() => setTab('users')}>Users</button>
-          <button role="tab" aria-selected={tab === 'access'} className={tab === 'access' ? 'fchip on' : 'fchip'} onClick={() => setTab('access')}>Test users</button>
           <button role="tab" aria-selected={tab === 'drivemirror'} className={tab === 'drivemirror' ? 'fchip on' : 'fchip'} onClick={() => setTab('drivemirror')}>Remediated storage</button>
           <button role="tab" aria-selected={tab === 'disposition'} className={tab === 'disposition' ? 'fchip on' : 'fchip'} onClick={() => setTab('disposition')}>Disposition</button>
           <button role="tab" aria-selected={tab === 'data'} className={tab === 'data' ? 'fchip on' : 'fchip'} onClick={() => setTab('data')}>Data</button>
@@ -604,8 +633,7 @@ export default function Settings({ onClose, onRubricSaved, files = [], onDelegat
           {tab === 'estate' && <ControlPlane />}
           {tab === 'filetypes' && <FileTypeConfig onChanged={(cfg, custom) => onFileTypeChange?.(cfg, custom)} />}
           {tab === 'owners' && <OwnerDelegate files={files} onChanged={onDelegationChange} />}
-          {tab === 'users' && <UserManagement />}
-          {tab === 'access' && <AllowList />}
+          {tab === 'users' && <AllowList />}
           {tab === 'drivemirror' && <DriveMirror />}
           {tab === 'disposition' && <Disposition />}
           {tab === 'data' && <ResetData />}
