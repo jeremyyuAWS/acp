@@ -6,7 +6,6 @@ const CLIENT_ID = import.meta.env.VITE_AZURE_CLIENT_ID || ''
 const TENANT   = import.meta.env.VITE_AZURE_TENANT_ID  || 'common'
 const SCOPES   = ['Files.Read', 'Files.ReadWrite', 'User.Read']
 const GRAPH    = 'https://graph.microsoft.com/v1.0'
-const LS_ARCHIVE = 'mova_drive_archive'
 
 const SUPPORTED_EXT = ['.pdf', '.docx', '.pptx', '.xlsx', '.html', '.htm']
 const EXT_ICON  = { '.pdf': '📄', '.docx': '📝', '.pptx': '📊', '.xlsx': '📗', '.html': '🌐', '.htm': '🌐' }
@@ -99,7 +98,6 @@ export default function SharePoint({ onFiles }) {
   const [dlProgress, setDlProgress]   = useState(null)
   const [search, setSearch]   = useState('')
   const [open, setOpen]       = useState(false)
-  const [archive, setArchive] = useState(() => localStorage.getItem(LS_ARCHIVE) === 'true')
   const [folderId, setFolderId] = useState(null)  // null = root
   const [folderName, setFolderName] = useState('OneDrive')
   const [folders, setFolders] = useState([])
@@ -369,10 +367,6 @@ export default function SharePoint({ onFiles }) {
 
           {/* Action bar */}
           <div style={{ padding: '7px 10px', borderTop: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', background: 'var(--bg-subtle, #F8F7F5)' }}>
-            <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', color: 'var(--muted)' }}>
-              <input type="checkbox" checked={archive} onChange={(e) => { setArchive(e.target.checked); localStorage.setItem(LS_ARCHIVE, e.target.checked) }} />
-              Archive originals first
-            </label>
             {dlProgress && <span style={{ fontSize: 12, color: 'var(--muted)' }}><span className="spinner" /> {dlProgress}</span>}
             <button disabled={!selected.size || downloading} onClick={downloadAndScan} style={{ marginLeft: 'auto' }}>
               {downloading ? 'Downloading…' : `⚡ Scan ${selected.size || 0} selected`}

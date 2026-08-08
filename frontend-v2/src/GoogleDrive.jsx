@@ -3,7 +3,6 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || ''
 const SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file'
 const LS_SCORES = 'mova_drive_scores'
-const LS_ARCHIVE = 'mova_drive_archive'
 
 const GDOC_EXPORT = {
   'application/vnd.google-apps.document':     { ext: '.docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
@@ -58,11 +57,19 @@ export const saveDriveScore = (driveFileId, score, engine) => {
   } catch {}
 }
 
+// Every response is checked, and that is the whole point of this function's shape.
+//
+// It used to read `data.files` off an unchecked response and fall through to create on a 403,
+// then read `f.id` off an unchecked create and return undefined. The copy that followed was
+// issued with `parents: [undefined]` — which Drive rejects, unchecked, so the archive resolved
+// having done nothing at all. Three unchecked responses in a row, and the failure of all three
+// looked exactly like success.
 async function findOrCreateFolder(token, name, parentId) {
   const q = "name='" + name.replace(/'/g, "\\'") + "' and mimeType='application/vnd.google-apps.folder' and '" + parentId + "' in parents and trashed=false"
   const r = await fetch('https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(q) + '&fields=files(id)', {
     headers: { Authorization: 'Bearer ' + token },
   })
+  if (!r.ok) throw new Error('could not look for the ' + name + ' folder (HTTP ' + r.status + ')')
   const data = await r.json()
   if (data.files && data.files.length > 0) return data.files[0].id
   const cr = await fetch('https://www.googleapis.com/drive/v3/files', {
@@ -70,7 +77,9 @@ async function findOrCreateFolder(token, name, parentId) {
     headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] }),
   })
+  if (!cr.ok) throw new Error('could not create the ' + name + ' folder (HTTP ' + cr.status + ')')
   const f = await cr.json()
+  if (!f.id) throw new Error('Drive created the ' + name + ' folder but returned no id')
   return f.id
 }
 
@@ -88,15 +97,28 @@ export async function uploadToDrive(token, driveFileId, blob, meta) {
   return await r.json()
 }
 
-async function archiveOriginal(token, driveFileId) {
+// Copy the original into _mova-originals/<date>/ before it is overwritten.
+//
+// FAIL-CLOSED: every failure throws, and the caller must not write if it does. This matches what
+// SharePoint does server-side (scanner._sp_archive_original). The reasoning is the same on both:
+// an archive that only sometimes happens is not a backup, and it fails invisibly at exactly the
+// moment it matters — so the worst outcome has to be "your file was not remediated", which a
+// user can see and retry, rather than "your file was replaced and the original is gone", which
+// they cannot.
+export async function archiveOriginal(token, driveFileId) {
   const today = new Date().toISOString().slice(0, 10)
   const rootId = await findOrCreateFolder(token, '_mova-originals', 'root')
   const dateId = await findOrCreateFolder(token, today, rootId)
-  await fetch('https://www.googleapis.com/drive/v3/files/' + driveFileId + '/copy', {
+  const r = await fetch('https://www.googleapis.com/drive/v3/files/' + driveFileId + '/copy', {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
     body: JSON.stringify({ parents: [dateId] }),
   })
+  // The response this function never looked at. A 403 (no write scope), a 507 (out of quota) or
+  // a 404 (the file moved) all came back here as a resolved promise, so the archive reported
+  // success having copied nothing, and the overwrite followed.
+  if (!r.ok) throw new Error('archive failed (HTTP ' + r.status + ') — nothing was overwritten')
+  return dateId
 }
 
 function buildMeta(score, engine) {
@@ -116,10 +138,22 @@ export function DriveUploadButton({ driveFileId, blob, score, engine }) {
   const doSave = async () => {
     const token = sessionStorage.getItem('gd_token')
     if (!token) { setPhase('error'); setErrMsg('Reconnect Drive'); return }
-    const archive = localStorage.getItem(LS_ARCHIVE) === 'true'
-    if (archive) {
-      setPhase('archiving')
-      try { await archiveOriginal(token, driveFileId) } catch { /* archive best-effort */ }
+    // ALWAYS, and no longer behind the `mova_drive_archive` preference.
+    //
+    // The archive was opt-in and off by default — an unset key reads as false — so the shipped
+    // behaviour for anyone who had not found a checkbox was a destructive in-place overwrite
+    // with no backup at all. An opt-out backup on a write that cannot be undone is the same
+    // defect wearing a preference, and nobody who left the box unticked was choosing "and
+    // discard the original" — the confirmation never said that was the alternative.
+    setPhase('archiving')
+    try {
+      await archiveOriginal(token, driveFileId)
+    } catch (e) {
+      // Abort. This is the line that used to be `catch { /* archive best-effort */ }`, and the
+      // overwrite ran regardless.
+      setPhase('error')
+      setErrMsg(e.message || 'Could not back up the original — nothing was changed')
+      return
     }
     setPhase('saving')
     try {
@@ -136,7 +170,10 @@ export function DriveUploadButton({ driveFileId, blob, score, engine }) {
   )
   if (phase === 'confirm') return (
     <span style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0, fontSize: 12 }}>
-      <span style={{ color: 'var(--muted)' }}>Replace in Drive?</span>
+      {/* Says what the confirmation buys. "Replace in Drive?" alone asked for consent to a
+          destructive write while saying nothing about whether anything was kept — and for the
+          default configuration, nothing was. */}
+      <span style={{ color: 'var(--muted)' }}>Replace in Drive? Original is copied to _mova-originals first.</span>
       <button className="ghost small" style={{ fontSize: 11, padding: '1px 6px' }} onClick={doSave}>Yes</button>
       <button className="ghost small" style={{ fontSize: 11, padding: '1px 6px' }} onClick={() => setPhase('idle')}>No</button>
     </span>
@@ -168,7 +205,6 @@ export default function GoogleDrive({ onFiles }) {
   const [dlProgress, setDlProgress] = useState(null)
   const [search, setSearch] = useState('')
   const [open, setOpen] = useState(false)
-  const [archive, setArchive] = useState(() => localStorage.getItem(LS_ARCHIVE) === 'true')
   const [folders, setFolders] = useState([])
   const [selectedFolder, setSelectedFolder] = useState('')
 
@@ -404,10 +440,6 @@ export default function GoogleDrive({ onFiles }) {
 
           {/* Action bar */}
           <div style={{ padding: '7px 10px', borderTop: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', background: 'var(--bg-subtle, #F8F7F5)' }}>
-            <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', color: 'var(--muted)' }}>
-              <input type="checkbox" checked={archive} onChange={e => { setArchive(e.target.checked); localStorage.setItem(LS_ARCHIVE, e.target.checked) }} />
-              Archive originals to _mova-originals/
-            </label>
             {dlProgress && <span style={{ fontSize: 12, color: 'var(--muted)' }}><span className="spinner" /> {dlProgress}</span>}
             <button disabled={!selected.size || downloading} onClick={downloadAndScan} style={{ marginLeft: 'auto' }}>
               {downloading ? 'Downloading…' : '⚡ Scan ' + (selected.size || 0) + ' selected'}
