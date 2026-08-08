@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { getConfig, setLangfuseBase } from './api.js'
 import { PERSONAS } from './sim.js'
 import Logo from './Logo.jsx'
+import { googleUserInfo } from './googleIdentity.js'
 
 const initials = (n) => n.split(' ').map((x) => x[0]).join('').slice(0, 2)
 
@@ -93,9 +94,10 @@ export default function SignIn({ onSignedIn, notice = null }) {
         setBusy(false)
         if (resp.error) { setErr(resp.error_description || resp.error); return }
         try {
-          const me = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-            headers: { Authorization: 'Bearer ' + resp.access_token },
-          }).then((r) => r.json())
+          // Throws on a non-ok response or a payload with no email, which is what makes the
+          // catch below reachable. It was already written and already correct; nothing ever
+          // threw, so a failed lookup signed the user in with `id: undefined` instead.
+          const me = await googleUserInfo(resp.access_token)
           onSignedIn({
             id: me.email,
             name: me.name || me.email,
@@ -107,8 +109,10 @@ export default function SignIn({ onSignedIn, notice = null }) {
             scope: { label: 'Full estate · all departments', departments: 'all' },
             allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'settings', 'upload'],
           })
-        } catch {
-          setErr('Could not retrieve your Google profile — please try again.')
+        } catch (e) {
+          // Google's own reason, not a generic retry prompt: an expired token and a missing
+          // profile scope need different actions from the person reading this.
+          setErr(e?.message || 'Could not retrieve your Google profile — please try again.')
         }
       },
     })
