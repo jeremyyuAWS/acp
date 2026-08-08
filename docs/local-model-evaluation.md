@@ -137,3 +137,47 @@ unfixed, this evaluation would have concluded that local models cannot do text r
   generalise to photographs, where no ground truth exists.
 - Drafts are produced through `api/ai.py`, so prompt shaping is ACP's, not the model's best case.
 - Model sizes are the on-disk quantised footprints reported by `ollama list`.
+
+---
+
+## Addendum — the 15-document DOCX corpus (2026-08-08)
+
+`scripts/gen_model_eval_corpus.py` builds 15 .docx fixtures, one issue per file;
+`scripts/eval_models_docx.py` runs every model over them and scores against each fixture's
+declared criteria. Five deterministic criteria act as controls and were **stable across every
+model in both sweeps** — so the comparisons below are valid rather than assumed to be.
+
+### Result: model choice does not change WHAT gets remediated on .docx
+
+| sweep | models | outcome |
+|---|---|---|
+| vision | moondream, llava:7b, qwen2.5vl:7b, qwen2.5vl:32b | **identical across all 4** |
+| text | llama3.1:8b, qwen3:14b, qwen3:32b | **identical across all 3** |
+
+Every model fixed the same 5 deterministic criteria, fixed 1.1.1 on the OCR-groundable image,
+raised 1 proposal for the textless image, and fixed nothing else.
+
+### The text model is never called
+
+Total wall-clock for all 15 documents:
+
+    llama3.1:8b   0.5s        qwen3:14b   0.2s        qwen3:32b   0.2s
+
+`qwen3:32b` needs 20–30s **per call**. 0.2s across fifteen documents means **zero calls**. DOCX
+remediation does not invoke the text model at all — the assisted criteria (2.4.4, 1.3.3, 3.1.2,
+1.4.5, 1.3.2) are detected during assessment and produce neither a fix nor a proposal during
+remediation.
+
+So text-model choice is irrelevant to .docx remediation **by construction**, not by coincidence.
+The earlier text-ladder numbers measure what a model would draft **if asked**, through
+`ai.suggest_fix` directly. Remediation does not ask.
+
+### What this means for the model question
+
+Model quality changes the **content** of exactly one .docx fix — the alt text — where it changes
+it a great deal (0/6 facts for moondream, 5/6 for qwen2.5vl:32b, and moondream asserts a false
+year). It changes **nothing** about which criteria are remediated.
+
+A bigger model therefore cannot raise .docx remediation coverage. Raising coverage means wiring
+the assisted criteria into the remediation path, which is a product decision about whether ACP
+drafts unattended — and then a policy decision about whether it writes.
