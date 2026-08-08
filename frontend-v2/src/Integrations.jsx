@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { getConfig } from './api.js'
 import { SIM } from './sim.js'
+import { googleUserInfo } from './googleIdentity.js'
 import SourceDrawer from './SourceDrawer.jsx'
 import FileDrawer from './FileDrawer.jsx'
 import FolderPicker from './FolderPicker.jsx'
@@ -174,11 +175,13 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
         callback: async (resp) => {
           if (resp.error) { setGdConnecting(false); setGdError(resp.error_description || resp.error); return }
           try {
-            const me = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-              headers: { Authorization: 'Bearer ' + resp.access_token },
-            }).then((r) => r.json()).catch(() => ({}))
-            onConnect('google', me.email || '', resp.access_token)
-          } catch { /* onConnect is best-effort */ }
+            // `.catch(() => ({}))` here meant a failed lookup connected the account as '' — an
+            // empty tenant key, which is not a smaller version of the right answer.
+            const me = await googleUserInfo(resp.access_token)
+            onConnect('google', me.email, resp.access_token)
+          } catch (e) {
+            setGdError(e?.message || 'Connected to Google, but could not read the account email.')
+          }
           setGdConnecting(false)
         },
       })

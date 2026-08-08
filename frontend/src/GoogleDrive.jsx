@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { googleUserInfo } from './googleIdentity.js'
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || ''
 const SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file'
@@ -291,9 +292,11 @@ export default function GoogleDrive({ onFiles }) {
         if (pending) { pending.resolve(tok); return }
         // Normal connect path
         try {
-          const ur = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', { headers: { Authorization: 'Bearer ' + tok } })
-          const u = await ur.json(); setUser(u); sessionStorage.setItem('gd_user', JSON.stringify(u))
-        } catch {}
+          // Cached under 'gd_user' and read back on reload, so storing Google's error body here
+          // persisted a bogus identity across sessions. Now nothing is stored unless it is real.
+          const u = await googleUserInfo(tok)
+          setUser(u); sessionStorage.setItem('gd_user', JSON.stringify(u))
+        } catch { /* leave the previous user; the Drive token itself is still usable */ }
         setOpen(true); fetchFiles(tok, null, '', ''); fetchFolders(tok)
       },
     })

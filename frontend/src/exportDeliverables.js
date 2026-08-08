@@ -156,10 +156,32 @@ export async function transformPptx(zip) {
 }
 
 // ---------- browser entry points: fetch the embedded source, transform, download ----------
+// One fetch for both deliverables, and it checks the response.
+//
+// Neither of these did. On a 404 an SPA host answers with index.html and a 200 — the catch-all
+// rewrite that makes client routing work also makes every missing asset look present — so
+// `.arrayBuffer()` succeeded on HTML. The xlsx path got away with it by accident, because
+// JSZip.loadAsync then rejected on non-zip input; the pptx path had no zip step, so the HTML was
+// wrapped in a Blob with a presentationml mime type and DOWNLOADED to the customer as
+// MovaiO_AccessOps_Method_Slides_with_Status.pptx. No error, anywhere.
+async function loadAsset(url) {
+  const r = await fetch(url)
+  if (!r.ok) throw new Error(`Could not load ${url} (HTTP ${r.status}) — the export asset is missing from this deployment.`)
+  const buf = await r.arrayBuffer()
+  // A 200 of HTML is the shape this guards against, and it survives the .ok check. Every asset
+  // here is a ZIP (xlsx and pptx both are), so the local file header is the cheap, format-level
+  // proof that what came back is the file and not the app.
+  const sig = new Uint8Array(buf.slice(0, 2))
+  if (sig[0] !== 0x50 || sig[1] !== 0x4b) {
+    throw new Error(`${url} did not return an Office file — the server answered with something `
+      + 'else (usually the app\'s index.html via a catch-all rewrite).')
+  }
+  return buf
+}
+
 async function loadZip(url) {
   const JSZip = (await import('jszip')).default
-  const buf = await (await fetch(url)).arrayBuffer()
-  return JSZip.loadAsync(buf)
+  return JSZip.loadAsync(await loadAsset(url))
 }
 function download(blob, filename) {
   const u = URL.createObjectURL(blob)
@@ -178,6 +200,6 @@ export async function downloadUpdatedXlsx() {
 export async function downloadUpdatedPptx() {
   // method-deck.pptx is now pre-built with slide images that include the Status column —
   // no runtime transformation needed; serve it directly.
-  const buf = await (await fetch('/exports/method-deck.pptx')).arrayBuffer()
+  const buf = await loadAsset('/exports/method-deck.pptx')
   download(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }), 'MovaiO_AccessOps_Method_Slides_with_Status.pptx')
 }
