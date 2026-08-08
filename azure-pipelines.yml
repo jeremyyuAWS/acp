@@ -16,6 +16,25 @@ pr:
 pool:
   vmImage: ubuntu-latest
 
+# ── Switching to the self-hosted agent ───────────────────────────────────────────────────
+# Replace the two lines above with:
+#
+#   pool:
+#     name: acp-local
+#
+# deploy/agent/ builds an agent that runs this file; deploy/agent/README.md has the pool and
+# token steps. Do BOTH before flipping this, in this order — a `name:` naming a pool with no
+# online agent does not fail fast, it leaves every queued run sitting in `notStarted` until
+# someone notices, and CI looks slow rather than broken.
+#
+# Left commented rather than parameterised on purpose. `pool.name` does accept a runtime
+# variable, but then the pool this repo gates on becomes a setting in the Azure DevOps UI —
+# invisible in review, changeable without a commit, and not something `git log` can answer.
+# For the one line that decides where the gate runs, two lines of diff is the better trade.
+#
+# Keep the hosted pool reachable in history: the agent is one laptop, and the honest fallback
+# when it is off or away is to put these two lines back.
+
 # Office engine: BUILT AND EXERCISED HERE (was a known gap until ADR 0012).
 # The old note said AcpScan.Cli.csproj referenced DigitalA11y.* from the sibling
 # _review-digital-accessibility checkout, so CI agents could never have it. ADR 0012
