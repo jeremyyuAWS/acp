@@ -60,6 +60,24 @@ export const loadCustomExclusions = loadCustom
  * extensions, which have no scan_scope axis and which ScanSetup never offers. Writing the four
  * it knows about as a whole object would silently discard preferences the user set in Settings.
  */
+/** The files a given config lets through — the ONE place that decides, for every tab.
+ *
+ * Was an inline filter inside Discover, so the file-type choice applied to the inventory and to
+ * nothing after it: Assess scored the excluded types, Remediate queued them, Overview counted
+ * them, Publish certified against them. A filter that stops applying one tab later is worse than
+ * none, because every downstream number then describes a different population than the screen
+ * the operator set it on.
+ *
+ * An EMPTY config means no restriction, and a type ABSENT from the config is allowed — only an
+ * explicit `false` excludes. That is the original `!== false` test, kept deliberately: custom
+ * extensions and formats added later are not silently hidden by a config written before they
+ * existed.
+ */
+export function visibleForFileTypes(files, cfg) {
+  if (!cfg || !Object.keys(cfg).length) return files
+  return files.filter((f) => cfg[f.type] !== false)
+}
+
 export function saveScopedFileTypes(allowed) {
   const next = { ...loadConfig() }
   for (const ext of SCOPED_EXTS) next[ext] = allowed.has(ext)
