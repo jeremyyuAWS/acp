@@ -4,6 +4,7 @@ import WindowedRows from './WindowedRows.jsx'
 import FileDrawer, { retentionOf } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FolderPicker from './FolderPicker.jsx'
+import SitePicker from './SitePicker.jsx'
 import Upload from './Upload.jsx'
 import ScanScope from './ScanScope.jsx'
 import { Bars } from './charts.jsx'
@@ -77,9 +78,11 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 // `me` / `onCertified` arrive with Upload, which folded in here when v2 dropped its top-level
 // tab. Both OPTIONAL: every existing caller and test constructs Discover without them, and the
 // ad-hoc panel simply does not render when `me` is absent rather than throwing.
-export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, fileTypeConfig = {}, onAdvance, progress = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null, onCertified }) {
+export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, fileTypeConfig = {}, onAdvance, progress = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null, onCertified,
+  hasSPToken = false }) {
   const [sel, setSel] = useState(null)
   const [showPicker, setShowPicker] = useState(false)   // Drive folder picker modal (Choose folder to scan)
+  const [showSites, setShowSites] = useState(false)     // SharePoint site picker modal
   const [open, setOpen] = useState(() => new Set())
   const toggle = (d) => setOpen((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n })
   // Cross-department search + facet filters — a match auto-expands ITS department
@@ -293,6 +296,15 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               Choose folder to scan…
             </button>
           )}
+          {/* Gated on the SharePoint token for the same reason the Drive button is gated on its
+              own: offering a picker that cannot authenticate produces an error where a missing
+              button would have produced an obvious next step (connect the source). */}
+          {hasSPToken && (
+            <button className="ghost" disabled={busy} onClick={() => setShowSites(true)}
+                    title="Choose a SharePoint site — every document library on it is scanned">
+              Choose SharePoint site…
+            </button>
+          )}
           <button disabled={busy} onClick={() => onScan('all')}>{busy ? 'scanning…' : 'Re-scan all sources'}</button>
         </div>
       </div>
@@ -301,6 +313,14 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         <FolderPicker
           onScan={(folder) => { setShowPicker(false); onScan('drive', folder) }}
           onClose={() => setShowPicker(false)} />
+      )}
+
+      {/* The site id travels as `folder`, which is what the backend reads it as — _list treats
+          `folder` as the site for source='sharepoint' (#156). One parameter, not two. */}
+      {showSites && (
+        <SitePicker
+          onScan={(siteId) => { setShowSites(false); onScan('sharepoint', siteId) }}
+          onClose={() => setShowSites(false)} />
       )}
 
       {/* Upload, folded in from its own tab. Collapsed by default so it stays a secondary

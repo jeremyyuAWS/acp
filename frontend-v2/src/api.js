@@ -810,6 +810,54 @@ export const getEstate = (dept = '', owner = '') => (SIM
   : fetch(`${BASE}/control/estate?dept=${encodeURIComponent(dept)}&owner=${encodeURIComponent(owner)}`,
           { headers: headers() }).then(j))
 
+// ── SharePoint (#156, #157) ───────────────────────────────────────────────────
+// Both routes shipped without a client, so site enumeration and server-side write-back existed
+// and could not be invoked by a person. These are those clients.
+//
+// The token rides on `headers()` as X-SP-Token, which the routes read — the SAME header the
+// scan path uses, deliberately: a site the browser can see with one set of scopes is not proof
+// the scan token can read it, and discovering through the path the scan takes is what makes the
+// picker's list honest (api/routes/sharepoint.py says so at length).
+//
+// NO SIM BRANCH, and that is the honest shape rather than an omission. There is no synthetic
+// SharePoint tenant to enumerate, and a fabricated site list would be the one thing a demo
+// viewer could act on and find missing — "Policies (9,870 files)" that does not exist is worse
+// than an empty state that explains itself. In SIM these reject with a message saying so.
+const SP_SIM = () => Promise.reject(new Error(
+  'SIM build — no SharePoint tenant to enumerate. Run against a real backend with a Microsoft '
+  + 'sign-in to list sites.'))
+
+export const listSharePointSites = (q = '') => (SIM
+  ? SP_SIM()
+  : fetch(`${BASE}/sharepoint/sites?q=${encodeURIComponent(q)}`, { headers: headers() }).then(j))
+
+// The site id is compound — `contoso.sharepoint.com,<guid>,<guid>` — which is why the route
+// declares `{site_id:path}`. encodeURIComponent would percent-encode the commas and the server
+// would then look up a site whose id contains "%2C"; the path converter expects them raw.
+export const listSharePointDrives = (siteId) => (SIM
+  ? SP_SIM()
+  : fetch(`${BASE}/sharepoint/sites/${siteId}/drives`, { headers: headers() }).then(j))
+
+// `driveId` is REQUIRED and comes from the SCAN, not from the browser's idea of where the file
+// lives: a Graph item id is unique only within its drive, so writing to the wrong one does not
+// error — it succeeds, into somebody else's library.
+export const uploadToSharePoint = ({ scanId, file, driveId, blob }) => {
+  if (!driveId) {
+    return Promise.reject(new Error(
+      'No drive id for this file. A SharePoint item id is only unique within its drive, so the '
+      + 'write target has to be named explicitly — re-scan the site so the item carries it.'))
+  }
+  if (SIM) return SP_SIM()
+  const form = new FormData()
+  form.append('scan_id', scanId || '')
+  form.append('file', file || '')
+  form.append('drive_id', driveId)
+  form.append('blob', blob, file || 'remediated')
+  // No Content-Type header: the browser sets multipart/form-data WITH the boundary, and setting
+  // it by hand omits the boundary and the server cannot parse the body.
+  return fetch(`${BASE}/sharepoint/upload`, { method: 'POST', headers: headers(), body: form }).then(j)
+}
+
 export const queueHitlVerify = (scanId, file) => (SIM
   ? sim({ queued: 1 })
   : fetch(`${BASE}/hitl/queue/${encodeURIComponent(scanId)}/verify?file=${encodeURIComponent(file)}`, { method: 'POST', headers: headers() }).then(j))
