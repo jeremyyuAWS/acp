@@ -14,6 +14,20 @@ BENCH = (ROOT / "scripts" / "bench_models.py").read_text()
 COMPOSE = (ROOT / "deploy" / "compose" / "docker-compose.yml").read_text()
 
 
+def _healthcheck_cmd() -> str:
+    """The healthcheck's `test:` LINE, not the block around it.
+
+    The block is mostly a comment explaining why curl was wrong, so `"curl" not in block` matches
+    the explanation and fails on a correct file. Second time in one session that an assertion has
+    read prose instead of code — the fix is the same both times: narrow to the executable line.
+    """
+    svc = COMPOSE[COMPOSE.index("\n  ollama:"):]
+    svc = svc[:svc.index("\n  grafana:")]
+    line = [ln for ln in svc.splitlines() if ln.strip().startswith("test: [")]
+    assert line, "no healthcheck test: line in the ollama service"
+    return line[0]
+
+
 def test_the_harness_drafts_through_ai_py_not_a_bespoke_prompt():
     """A hand-rolled prompt would benchmark a prompt this product does not use, while reading as
     evidence about ACP. Going through ai.suggest_fix / ai.describe_image is what makes the result
@@ -78,9 +92,29 @@ def test_the_app_is_wired_to_the_service_with_a_working_default():
     assert "OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-moondream}" in COMPOSE
 
 
-def test_the_healthcheck_does_not_require_a_pulled_model():
-    """/api/tags answers on an empty volume. A check that needed a model would report unhealthy
-    in exactly the state a fresh clone is in."""
-    svc = COMPOSE[COMPOSE.index("\n  ollama:"):]
-    svc = svc[:svc.index("\n  grafana:")]
-    assert "/api/tags" in svc
+def test_the_healthcheck_uses_a_binary_the_image_actually_has():
+    """This test used to assert "/api/tags" is in the healthcheck — and passed while the check was
+    completely broken.
+
+    The command was `curl -sf http://localhost:11434/api/tags`, and ollama/ollama ships NO curl.
+    Every probe failed with "/bin/sh: 1: curl: not found", so the container reported unhealthy
+    for a 7-minute model pull that was succeeding throughout. The old assertion verified the
+    ENDPOINT was a sensible choice and never asked whether the command could run — a test that
+    checks the argument and not the executable.
+
+    So: assert the binary, not the URL. `ollama` is the image's entrypoint, so it is present by
+    construction.
+    """
+    cmd = _healthcheck_cmd()
+    assert "ollama list" in cmd, "the healthcheck does not use the ollama CLI"
+    assert "curl" not in cmd, "curl is back, and this image has no curl"
+
+
+def test_the_healthcheck_passes_on_an_empty_volume():
+    """The property the broken check was reaching for, kept. `ollama list` exits 0 with no models
+    pulled, so a fresh clone reads healthy — a check gated on a model would report unhealthy in
+    exactly the state this stack starts in."""
+    cmd = _healthcheck_cmd()
+    for gated in ("ollama show", "ollama run", "moondream", "llama3"):
+        assert gated not in cmd, (
+            f"the healthcheck depends on {gated!r} — it would fail on an empty volume")

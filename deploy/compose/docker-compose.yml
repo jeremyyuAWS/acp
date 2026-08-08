@@ -90,9 +90,17 @@ services:
     ports:
       - "${OLLAMA_PORT:-11434}:11434"
     healthcheck:
-      # /api/tags answers as soon as the server is up and needs no model pulled — a check that
-      # required a model would report unhealthy on a fresh volume, which is the normal state.
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      # `ollama list` and NOT curl: the ollama/ollama image ships no curl, so the original check
+      # failed with "/bin/sh: 1: curl: not found" on every probe and the container sat permanently
+      # unhealthy while working perfectly. Observed live, 10s apart, for the whole of a 7-minute
+      # model pull that was succeeding the entire time.
+      #
+      # The property that mattered is unchanged and is why this is not just "use the CLI": the
+      # check must pass on an EMPTY volume, because that is what a fresh clone has. `ollama list`
+      # returns its header row and exits 0 with no models pulled, so a healthy server reads
+      # healthy before anything is downloaded — a check gated on a model would report unhealthy
+      # in exactly the state this stack starts in.
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
