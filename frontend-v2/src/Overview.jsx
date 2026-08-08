@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import ScanSetup from './ScanSetup.jsx'
 import { Sparkline } from './ScoreRing.jsx'
 import { Donut, Bars, statusSegments, severityItems } from './charts.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
@@ -15,7 +16,8 @@ import PiiPanel from './PiiPanel.jsx'
 import { scopeChip, scopeSentence, isNarrowScope } from './scanScope.js'
 
 // The estate dashboard — doubles as the exportable compliance report.
-export default function Overview({ run, files, trend, trendDates, onGo, scanList = [], onPickScan, me }) {
+export default function Overview({ run, files, trend, trendDates, onGo, scanList = [], onPickScan, me,
+                                   onScan, busy = false, hasDriveToken = false, hasSPToken = false }) {
   // Real signed-in org (email domain) — the hardcoded demo org only ever shows in SIM.
   const orgName = SIM ? IDENTITY.org : (me?.email?.split('@')[1]?.replace(/\.[^.]+$/, '') || me?.name || 'your organisation')
   const [on, setOn] = useState(false)
@@ -253,6 +255,26 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           <button className="exportbtn alt" onClick={() => openReport(run.id)} title="Backend-generated WCAG compliance report PDF">⤓ Compliance report (PDF)</button>
         )}
       </div>
+      {/* The scan scope, EDITABLE, on the first tab — after a scan as well as before one.
+          EmptyState renders ScanSetup only while `run` is null, so the criteria and file types
+          were reachable exactly once: on a workspace that had never scanned. Every session
+          after the first opened on this dashboard with no way back to the decision that shapes
+          every number on it, and the only remaining editors were two panels inside Settings.
+
+          Collapsed by default, and the same <details> pattern Discover uses to fold Upload in:
+          the primary job of this screen is still to report, so an always-open editor would
+          compete with the metrics for the top of the page. <details> is natively
+          keyboard-operable, so this adds no focus handling of its own.
+
+          Deliberately OUTSIDE reportRef — that node is what the PDF export rasterises, and a
+          collapsed control has no place in an exported compliance record. */}
+      {onScan && (
+        <details className="panel scopeeditor">
+          <summary>Scan scope <span className="muted">· which checks, and which file types</span></summary>
+          <ScanSetup onScan={onScan} busy={busy}
+                     hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} />
+        </details>
+      )}
       <div ref={reportRef}>
       <div className="metrics">
         <div className="metric"><span>documents</span><b>{n.toLocaleString()}</b></div>
