@@ -15,7 +15,7 @@ import { auditXlsx, remediateXlsx } from './xlsxAudit.js'
 import { auditPdf } from './pdfAudit.js'
 import { prescreenHtml } from './prescreen.js'
 import { useDialog } from './a11y.js'
-import GoogleDrive, { DriveUploadButton, saveDriveScore, uploadToDrive } from './GoogleDrive.jsx'
+import GoogleDrive, { DriveUploadButton, saveDriveScore, uploadToDrive, archiveOriginal } from './GoogleDrive.jsx'
 import SharePoint, { SpUploadButton } from './SharePoint.jsx'
 import { loadAiModels, modelLabel, UNKNOWN_MODEL } from './aiModel.js'
 
@@ -445,36 +445,50 @@ export default function Upload({ onCertified, me }) {
   const handleBulkSaveToDrive = async () => {
     const eligible = queue.filter((i) => i.driveFileId && i.remBlob && i.status === 'done')
     if (!eligible.length) return
-    const archive = localStorage.getItem('mova_drive_archive') === 'true'
-    const archiveNote = archive
-      ? '\n\nOriginals will be archived to _mova-originals/ first.'
-      : '\n\nDrive version history preserves the originals.'
-    if (!window.confirm('Replace ' + eligible.length + ' file' + (eligible.length !== 1 ? 's' : '') + ' in your Google Drive?' + archiveNote)) return
+    // The archive is unconditional here too, and the note says so rather than offering
+    // "Drive version history preserves the originals" as the alternative — a revision history is
+    // a different promise from a copy, and it was being used to justify not making one.
+    if (!window.confirm('Replace ' + eligible.length + ' file' + (eligible.length !== 1 ? 's' : '') + ' in your Google Drive?'
+        + '\n\nEach original is copied to _mova-originals/ first. Any file whose copy fails is skipped, not replaced.')) return
     const token = sessionStorage.getItem('gd_token')
     if (!token) return
     setBulkSaving(true); setBulkSaved(false)
+    const unsaved = []
     for (const item of eligible) {
       try {
-        if (archive) {
-          const today = new Date().toISOString().slice(0, 10)
-          const { findOrCreateFolder: fof } = await import('./GoogleDrive.jsx')
-          if (fof) {
-            const rootId = await fof(token, '_mova-originals', 'root')
-            const dateId = await fof(token, today, rootId)
-            await fetch('https://www.googleapis.com/drive/v3/files/' + item.driveFileId + '/copy', {
-              method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ parents: [dateId] }),
-            })
-          }
-        }
+        // This used to inline its own archive behind `await import('./GoogleDrive.jsx')`
+        // destructuring `findOrCreateFolder` — which that module never exported. `fof` was
+        // therefore ALWAYS undefined, the `if (fof)` guard always false, and the archive never
+        // ran once, for anybody, ticked or not. The overwrite below ran regardless.
+        //
+        // Now the shared, exported, fail-closed archiveOriginal, and a failure SKIPS this file
+        // instead of aborting the batch: one file whose copy fails should not stop the other
+        // forty, and it must not be overwritten either.
+        await archiveOriginal(token, item.driveFileId)
+      } catch (e) {
+        console.error('Bulk Drive save skipped (archive failed):', item.file?.name, e)
+        unsaved.push(item.file?.name || 'a file')
+        continue
+      }
+      try {
         const meta = {
           description: 'Remediated for WCAG 2.1 AA by mova.io · ' + new Date().toISOString().slice(0, 10) + (item.score != null ? ' · Score: ' + item.score + '/100' : ''),
           appProperties: { mova_score: item.score != null ? String(item.score) : '', mova_standard: 'WCAG 2.1 AA', mova_engine: item.engine || 'mova', mova_date: new Date().toISOString().slice(0, 10) },
         }
         await uploadToDrive(token, item.driveFileId, item.remBlob, meta)
-      } catch (e) { console.error('Bulk Drive save failed:', item.file?.name, e) }
+      } catch (e) {
+        console.error('Bulk Drive save failed:', item.file?.name, e)
+        unsaved.push(item.file?.name || 'a file')
+      }
     }
     setBulkSaving(false); setBulkSaved(true)
+    // Said out loud. A silent partial success reads as "all N replaced", which is the number the
+    // button implied when it was clicked.
+    if (unsaved.length) {
+      window.alert(unsaved.length + ' of ' + eligible.length + ' file'
+        + (eligible.length !== 1 ? 's were' : ' was') + ' NOT replaced:\n\n' + unsaved.join('\n')
+        + '\n\nTheir originals are unchanged.')
+    }
   }
 
   const downloadBatchZip = async () => {
