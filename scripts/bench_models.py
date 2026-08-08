@@ -157,7 +157,18 @@ def run_case(model: str, rule_id: str, rule_name: str, level: str, detail: str) 
         out = ai.suggest_fix(rule_id, rule_name, level, "benchmark.docx", detail=detail)
     except Exception as e:        # noqa: BLE001 — a model that errors is a RESULT, not a crash
         return {"ok": False, "error": f"{e.__class__.__name__}: {e}", "secs": time.time() - t0}
-    return {"ok": bool(out), "value": (out or {}).get("value") or (out or {}).get("alt"),
+    # "suggestion" FIRST — it is the key ai.suggest_fix actually returns, and its absence here
+    # meant the text half of this harness never displayed a single draft. Every text row printed
+    # "None" while the model was answering correctly: llama3.1:8b returned "View our Accessibility
+    # Policy" for 2.4.4 and the table showed nothing. A benchmark that silently blanks its own
+    # results does not read as broken, it reads as models that cannot do the task — the exact
+    # wrong conclusion, drawn confidently.
+    #
+    # value/alt are kept as fallbacks: describe_image's structured path returns "alt", and
+    # keeping both means this does not break again the next time a caller's shape differs.
+    return {"ok": bool(out),
+            "value": ((out or {}).get("suggestion")
+                      or (out or {}).get("value") or (out or {}).get("alt")),
             "raw": out, "secs": round(time.time() - t0, 1)}
 
 
