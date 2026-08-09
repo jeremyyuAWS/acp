@@ -131,7 +131,7 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     expect(s.auto + s.review + s.human + s.gap + s.at + s.na).toBe(20)
   })
 
-  it('remediation axis is counted independently (docx: 5⚡ 9🤖 0👤)', () => {
+  it('remediation axis is counted independently (docx: 5⚡ 9🤖 1👤)', () => {
     const s = coverageSummary(filesOf('docx'), { documents: true })
     // 7🤖, not 6: docx 4.1.2 gained an assisted lane when the form-field name became writable
     // (propose_forms drafts the w:alias Title, apply_field_name writes it on approval). The
@@ -148,8 +148,17 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     // each emits a prefilled card the human ELECTS — the 1.4.8 shape — carrying the measurement
     // so nobody re-measures.
     //
-    // 0👤 accordingly, which is where docx started. The human lane was the intermediate state.
-    expect({ remAuto: s.remAuto, remAi: s.remAi, remHuman: s.remHuman }).toEqual({ remAuto: 5, remAi: 9, remHuman: 0 })
+    // 1👤: docx 2.1.2 — the last Core-17 criterion to be declared. HUMAN here is a conclusion,
+    // not the intermediate state 1.4.1 and 1.4.11 passed through. Whether keyboard focus can
+    // move away from a control is runtime behaviour, absent from the file, so ACP cannot know a
+    // trap exists, cannot say which control traps, and could not verify a fix. There is no
+    // signal to prefill from, and no future detector supplies one.
+    //
+    // These three numbers have moved four times in one day, once per capability change, and each
+    // move was caught HERE rather than by the backend suite — this file is the only place the
+    // per-lane totals are asserted. Worth knowing before assuming a green backend means the
+    // capability tables are consistent.
+    expect({ remAuto: s.remAuto, remAi: s.remAi, remHuman: s.remHuman }).toEqual({ remAuto: 5, remAi: 9, remHuman: 1 })
   })
 
   it('union prefers the best assessment lane; a distinct remediation resolver is honored', () => {
