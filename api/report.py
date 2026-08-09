@@ -1,7 +1,7 @@
 """Branded PDF conformance report (reportlab) — the exportable audit evidence.
 
-Renders a scan run as a designed, chart-led report: logo header, certification
-decision, plain-language verdict, certification summary band, scope & methodology,
+Renders a scan run as a designed, chart-led report: logo header, outcome
+decision, plain-language verdict, outcome summary band, scope & methodology,
 scope of assertion, compliance velocity, status donut + severity split, remediation
 outcomes, open findings by criterion, the decisions snapshot (time-travel), the
 per-document file inventory, and the per-issue remediation evidence appendix.
@@ -93,7 +93,10 @@ NOT_ASSESSED = "not-assessed"
 VIOLET = colors.HexColor("#3C3489")
 STATUS_COLOR = {"certifiable": GREEN, "issues": AMBER, "uncertain": BLUE, "unanalysable": GREY,
                 "clean": BLUE, NOT_ASSESSED: VIOLET}
-STATUS_LABEL = {"certifiable": "certifiable", "issues": "open findings",
+# The KEY is a stored token shared with frontend/src/docStatus.js; the LABEL is what a reader
+# sees. Only the label changes here — "certifiable" invited a conformance reading ACP does not
+# make, and renaming the key would rewrite the meaning of every historical row to fix a word.
+STATUS_LABEL = {"certifiable": "no blocking findings", "issues": "open findings",
                 "uncertain": "uncertain", "unanalysable": "could not analyse",
                 "clean": "no findings", NOT_ASSESSED: "not assessed"}
 SEV_COLOR = {"CRITICAL": RED, "SERIOUS": AMBER, "MODERATE": BLUE, "MINOR": GREY}
@@ -195,34 +198,45 @@ def _esc(s) -> str:
 
 
 def _decision_block(run, files, meta, facts, h2, body, muted) -> list:
-    """Certification decision (backlog R2) + why it is certifiable (R3).
+    """What ACP checked, fixed and verified (backlog R2/R3).
 
-    Answers, before anything else, the question a reader actually has: can I ship this?
-    Every figure is COUNTED from stored rows; the digest is recomputable. The status is
-    deliberately three-valued — a partially-conformant estate must never render as a green
-    CERTIFIABLE just because most documents passed.
+    Answers, before anything else, the question a reader actually has: what was done to these
+    documents, and what is still open? Every figure is COUNTED from stored rows; the digest is
+    recomputable. The status is deliberately three-valued — an estate with open findings must
+    never render as a single green word because most documents came back clear.
+
+    THE VOCABULARY IS NOT "CERTIFIED", DELIBERATELY. ACP does not assert that a document
+    conforms to WCAG; it reports what it detected, what it fixed, and what it verified after
+    fixing. "Certifiable" invited the opposite reading — that a green word here was a conformance
+    claim the reader could rely on — when the section immediately below spends four paragraphs
+    saying it is not. The word was fighting its own footnotes.
+
+    So the states describe what the ENGINE knows: no blocking findings among the criteria it
+    checked, open findings, or a mix. `_status`'s internal key stays "certifiable" — it is a
+    dict key and a stored token, not prose, and renaming it would rewrite the meaning of
+    historical rows for no reader's benefit.
     """
     total = len(files)
     cert = sum(1 for f in files if _status(f) == "certifiable")
     if total and cert == total:
-        status, colour = "CERTIFIABLE", "#3B6D11"
+        status, colour = "NO BLOCKING FINDINGS", "#3B6D11"
     elif cert == 0:
-        status, colour = "NOT CERTIFIABLE", "#A32D2D"
+        status, colour = "OPEN FINDINGS", "#A32D2D"
     else:
-        status, colour = "PARTIALLY CERTIFIABLE", "#854F0B"
+        status, colour = "PARTIALLY CLEARED", "#854F0B"
 
     remediated = (facts or {}).get("remediated_total", 0)
     approvals = (facts or {}).get("approvals_total", 0)
     digest = _content_digest(run, files, meta)
 
-    el = [Paragraph("Certification decision", h2)]
+    el = [Paragraph("What ACP checked, fixed and verified", h2)]
     card = Table([[
         # meta['target'] is the full conformance target string (e.g. "WCAG 2.1 AA") — do not
         # prefix it with "WCAG 2.1" or the card reads "WCAG 2.1 · WCAG 2.1 AA".
         Paragraph(f'<font size="15" color="{colour}"><b>{status}</b></font><br/>'
                   f'<font size="8.5" color="#6c6470">{_esc(meta.get("target"))}</font>', body),
         Paragraph(f'<font size="15"><b>{cert} of {total}</b></font><br/>'
-                  f'<font size="8.5" color="#6c6470">documents certifiable</font>', body),
+                  f'<font size="8.5" color="#6c6470">with no blocking findings</font>', body),
         Paragraph(f'<font size="15"><b>{remediated}</b></font><br/>'
                   f'<font size="8.5" color="#6c6470">fixes verified on re-scan</font>', body),
         Paragraph(f'<font size="15"><b>{approvals}</b></font><br/>'
@@ -237,11 +251,13 @@ def _decision_block(run, files, meta, facts, h2, body, muted) -> list:
     el.append(card)
 
     # The plain-language WHY (R3) is the executive verdict rendered just below this card —
-    # it already states, from the same real counts, which documents are certifiable and why.
+    # it already states, from the same real counts, which documents came back clear and why.
     # Repeating it here would be noise; instead, bound what that verdict covers.
     el.append(Spacer(1, 6))
     el.append(Paragraph(
-        "<b>Any certification below covers only the criteria listed under ‘Scope of assertion’.</b>", muted))
+        "<b>“No blocking findings” means no blocking finding among the criteria ACP checked — "
+        "listed under ‘What this report covers’ below. It is not a statement that the document "
+        "conforms to WCAG.</b>", muted))
     el.append(Spacer(1, 4))
     el.append(Paragraph(
         f"Content digest (SHA-256) <b>{digest[:32]}…</b> — recomputable from the stored scan, so "
@@ -264,7 +280,7 @@ def _scope_section(files, facts, h2, body, cell, muted) -> list:
         return []
     scope = facts["scope"]
     docs = facts["documents"]
-    el = [Paragraph("Scope of assertion · what this report does and does not certify", h2)]
+    el = [Paragraph("What this report covers · and what it does not", h2)]
     el.append(Paragraph(
         f"This platform has an automated validator for <b>{scope['catalog_size']}</b> success criteria. "
         "That is <b>not</b> the full WCAG 2.1 AA criteria set: many criteria require human or "
@@ -307,7 +323,7 @@ def _scope_section(files, facts, h2, body, cell, muted) -> list:
     if hu:
         el.append(Paragraph(
             "<b>Requires human or assistive-technology judgement</b> (routed to review, never "
-            "auto-certified) — " + _esc(", ".join(f"{c['sc']} {c['name']}" for c in hu)) + ".", muted))
+            "resolved automatically) — " + _esc(", ".join(f"{c['sc']} {c['name']}" for c in hu)) + ".", muted))
     # DOCUMENTS NEVER OPENED, not merely criteria never run.
     #
     # Everything above narrows the assertion by CRITERION. None of it narrows it by DOCUMENT,
@@ -331,9 +347,10 @@ def _scope_section(files, facts, h2, body, cell, muted) -> list:
             f"{_esc(_fmt_txt)} is outside this assertion.", muted))
     el.append(Spacer(1, 4))
     el.append(Paragraph(
-        "<b>A score of 100 therefore means: no blocking findings among the criteria evaluated for that "
-        "document's format.</b> It does not mean the document is fully WCAG 2.1 AA conformant, and it "
-        "must not be represented as such.", muted))
+        "<b>A score of 100 therefore means: no blocking findings among the criteria ACP evaluated "
+        "for that document's format.</b> It is a record of what was checked and what was fixed, not "
+        "a statement that the document conforms to WCAG 2.1 AA, and it must not be represented as "
+        "such.", muted))
     return el
 
 
@@ -675,7 +692,14 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     # ── Header band: logo + title ────────────────────────────────────────────
     when = run["completed_at"][:19].replace("T", " ")
     title_block = [
-        Paragraph("Accessibility Conformance Report", H),
+        # NOT "Conformance Report". This document reports what ACP checked, what it changed
+        # and what it re-verified; it does not determine conformance, and the title was the
+        # largest claim on a page that spends three paragraphs declining to make one.
+        #
+        # Note this is the SCAN report, about a customer's documents. ACP's own VPAT-style ACR
+        # (frontend pdfReport.js) is a genuine conformance report about the mova.io product and
+        # keeps its name — the distinction is who is asserting what about whom.
+        Paragraph("Accessibility Assessment Report", H),
         Paragraph(f"{std} · generated {when} UTC", sub),
     ]
     logo = Image(str(LOGO), width=1.32 * inch, height=1.32 * inch * 264 / 800) if LOGO.exists() else Spacer(1, 1)
@@ -730,13 +754,13 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
     # denominator for a conformance claim. Both branches below said "analysed document(s)" about
     # it, and the else-branch went further: with an estate of unscored rows the only non-zero
     # count was 'clean', so the report read "All 2 analysed document(s) meet WCAG 2.1 AA with
-    # zero open blocking findings and are certifiable" about two spreadsheets nobody had opened.
-    # In a certification document that sentence is the whole liability.
+    # zero open blocking findings" about two spreadsheets nobody had opened. In a document a
+    # customer files as evidence, that sentence is the whole liability.
     unassessed = counts.get(NOT_ASSESSED, 0)
     assessed = total - unassessed
     if counts.get("issues") or counts.get("uncertain") or counts.get("unanalysable") or unassessed:
-        verdict = (f"<b>{cert} of {assessed}</b> assessed document(s) meet {std} with zero "
-                   f"open blocking findings and are certifiable. "
+        verdict = (f"<b>{cert} of {assessed}</b> assessed document(s) came back with zero open "
+                   f"blocking findings among the {std} criteria ACP checked. "
                    f"<b>{counts.get('issues', 0)}</b> document(s) still carry open findings "
                    f"({open_findings} total)")
         if counts.get("uncertain"):
@@ -751,20 +775,21 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
             verdict += (f" <b>{unassessed} of {total}</b> document(s) in scope were never "
                         f"assessed — they were listed from the source but not opened or scored, "
                         f"so this report makes no conformance claim about them either way. "
-                        f"Run Assess over them before treating this estate as certified.")
+                        f"Run Assess over them before drawing any conclusion about this "
+                        f"estate as a whole.")
     else:
-        verdict = (f"All <b>{total}</b> assessed document(s) meet {std} with zero open "
-                   "blocking findings and are certifiable.")
+        verdict = (f"All <b>{total}</b> assessed document(s) came back with zero open blocking "
+                   f"findings among the {std} criteria ACP checked.")
     if remediated_docs:
         verdict += (f" {remediated_docs} document(s) were remediated by the platform, "
                     f"clearing {resolved_total} finding(s).")
     el.append(Paragraph(verdict, lead))
 
     # ── Certification summary band ───────────────────────────────────────────
-    el.append(Paragraph("Certification summary", h2))
+    el.append(Paragraph("Outcome summary", h2))
     el.append(_stat_band([
         Paragraph(f'<font size="22" color="#3B6D11"><b>{pct}%</b></font><br/>'
-                  f'<font size="8.5" color="#6c6470">certifiable · {cert} of {total} documents</font>', body),
+                  f'<font size="8.5" color="#6c6470">no blocking findings · {cert} of {total} documents</font>', body),
         Paragraph(f'<font size="22"><b>{avg}</b></font><br/>'
                   f'<font size="8.5" color="#6c6470">average score / 100</font>', body),
         Paragraph(f'<font size="22" color="#854F0B"><b>{counts.get("issues", 0)}</b></font><br/>'
@@ -863,10 +888,10 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
 
     # ── Remediation outcomes — what the platform already cleared ─────────────
     if resolved_total:
-        el.append(Paragraph("Remediation outcomes · findings cleared before certification", h2))
+        el.append(Paragraph("Remediation outcomes · findings ACP cleared and re-verified", h2))
         el.append(Paragraph(
             f'<font color="#3B6D11"><b>✓ {resolved_total} finding(s) cleared</b></font> across '
-            f'{remediated_docs or cert} certifiable document(s), by criterion:', body))
+            f'{remediated_docs or cert} document(s) with no blocking findings, by criterion:', body))
         rows = [["Criterion", "Level", "Findings cleared"]] + [
             [_crit_name(c), WCAG_META.get(c, ("", "", ""))[1] or "—", n]
             for c, n in sorted(resolved_crit.items(), key=lambda x: -x[1])]
@@ -899,8 +924,9 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
         el.append(ct)
     else:
         el.append(Paragraph(
-            '<font color="#3B6D11"><b>✓ No open findings.</b></font> Every analysed document is '
-            "certifiable at the target level; there are no unresolved WCAG failures to address.", body))
+            '<font color="#3B6D11"><b>✓ No open findings.</b></font> Every analysed document '
+            "came back clear at the target level: no unresolved failure remains among the "
+            "criteria ACP checked.", body))
 
     # ── Triage & remediation decisions (time-travel snapshot) ────────────────
     if decisions:
@@ -995,20 +1021,24 @@ def build_report(run: dict, files: list, meta: dict, decisions: dict | None = No
 
     # ── Conformance statement & how to read this report ──────────────────────
     el.append(Spacer(1, 14))
-    el.append(Paragraph("Conformance statement &amp; notes", h2))
+    el.append(Paragraph("What this report is, and is not", h2))
     el.append(Paragraph(
-        f"Based on this scan, <b>{cert} of {total}</b> document(s) conform to {std} with no "
-        "open blocking findings and may be certified. This is machine-generated audit evidence produced by "
-        "an automated + AI-assisted pipeline; it supports, but does not by itself constitute, a legal "
-        "conformance guarantee or a signed VPAT. A qualified reviewer should confirm AI-assisted judgements "
-        "before external attestation.", body))
+        f"Based on this scan, <b>{cert} of {total}</b> document(s) came back with no open "
+        f"blocking findings among the {std} criteria ACP checked. This is a record of what was "
+        "detected, what was changed and what was re-verified afterwards — machine-generated audit "
+        "evidence produced by an automated + AI-assisted pipeline. It is not a conformance "
+        "determination: ACP does not assert that a document satisfies WCAG, and this report does "
+        "not constitute a legal conformance guarantee or a signed VPAT. A qualified reviewer "
+        "should confirm AI-assisted judgements before any external attestation.", body))
     el.append(Spacer(1, 8))
     el.append(Paragraph(
-        "<b>Reading this report.</b> <b>Certifiable</b> = zero open blocking findings at the target level. "
-        "<b>Open findings</b> = unresolved WCAG failures on a non-certifiable document. "
-        "<b>Remediated</b> = the platform wrote a corrected copy and the file re-passed. "
-        "<b>Uncertain</b> = a rule could not evaluate, so the score is an upper bound; "
-        "<b>could not analyse</b> = the file could not be opened. Neither of the last two is certified conformant. "
+        "<b>Reading this report.</b> <b>No blocking findings</b> = nothing blocking fired among "
+        "the criteria ACP checked at the target level — not a statement that the document "
+        "conforms. <b>Open findings</b> = unresolved failures ACP detected and did not clear. "
+        "<b>Remediated</b> = the platform wrote a corrected copy and re-checked it, and the "
+        "finding no longer fires. <b>Uncertain</b> = a rule could not evaluate, so the score is "
+        "an upper bound; <b>could not analyse</b> = the file could not be opened. ACP asserts "
+        "nothing about either of the last two. "
         "Severity follows the axe-core impact model (user impact × reach × WCAG level). "
         "Results are reproducible from the stamped rubric hash above.", note))
 

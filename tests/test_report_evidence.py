@@ -183,7 +183,12 @@ def test_report_attributes_the_signoff_to_the_authenticated_reviewer(isolated_st
     assert "approved by ada@movate.com" in _pdf_text(build_report(_RUN, _FILES, _META, evidence=ev))
 
 
-# ── Certification decision / scope of assertion (R2 / R3 / R6 / R-A) ──────────
+# ── Outcome decision / what the report covers (R2 / R3 / R6 / R-A) ────────────
+#
+# The vocabulary here changed with the report's: ACP reports what it detected, changed and
+# re-verified, and does not assert that a document conforms. The INVARIANTS these guards hold
+# are unchanged — an estate with open findings must never render as clear, and the report must
+# always bound what it covers. Only the words being matched moved.
 
 def _seed_traces(s, sid="s3", f="deck.pptx"):
     issues = [{"ruleId": "A", "wcag": "SC_1_1_1", "severity": "SERIOUS", "detail": "d"},
@@ -298,11 +303,14 @@ def test_decision_block_and_scope_of_assertion_are_honest(isolated_store):
     sid, _, issues = _seed_traces(s)
     files = [{"file": "deck.pptx", "compliant": 0, "score": 72, "status": "pass", "issues": issues}]
     t = _flat(build_report(_RUN, files, _META, facts=s.get_certification_facts(sid)))
-    assert "Certification decision" in t
-    assert "NOT CERTIFIABLE" in t                               # a failing estate is NOT certifiable
-    assert "Scope of assertion" in t
-    # R-A: the guard against reading 100/100 as full conformance
-    assert "does not mean the document is fully WCAG 2.1 AA conformant" in t
+    assert "What ACP checked, fixed and verified" in t
+    assert "OPEN FINDINGS" in t                                 # a failing estate says so
+    assert "What this report covers" in t
+    # R-A: the guard against reading 100/100 as full conformance. The wording moved with the
+    # vocabulary change; the INVARIANT did not — the report must always disclaim the conformance
+    # reading in the same breath as the score, not leave it to be inferred.
+    assert "not a statement that the document conforms to WCAG 2.1 AA" in t
+    assert "must not be represented as such" in t
     assert "This report makes no assertion about" in t
     # The not-evaluated criteria are actually LISTED, and framed as "we didn't check", never
     # "doesn't apply" — a pptx has no reflow validator, but the report must not assert reflow
@@ -319,21 +327,26 @@ def test_decision_block_and_scope_of_assertion_are_honest(isolated_store):
     assert "automated validator for 38 success criteria" in t   # +2.1.2 No Keyboard Trap (#187)
 
 
-def test_a_fully_conformant_estate_reads_certifiable(isolated_store):
+def test_a_clean_estate_reads_no_blocking_findings(isolated_store):
     """The decision card's status is three-valued; a clean estate is the green one. The
     plain-language WHY lives in the executive verdict below the card, not in the card."""
     from report import build_report
     s = isolated_store
     files = [{"file": "ok.docx", "compliant": 1, "score": 100, "status": "pass", "issues": []}]
     t = _flat(build_report(_RUN, files, _META, facts=s.get_certification_facts("none")))
-    assert "CERTIFIABLE" in t
-    assert "NOT CERTIFIABLE" not in t and "PARTIALLY CERTIFIABLE" not in t
-    assert "certifiable" in t                                # the executive verdict's WHY
+    assert "NO BLOCKING FINDINGS" in t
+    assert "OPEN FINDINGS" not in t and "PARTIALLY CLEARED" not in t
+    assert "no blocking findings" in t                       # the executive verdict's WHY
+    # The claim ACP must never make, even on a spotless estate. This is the assertion the
+    # whole vocabulary change exists for: a clean scan is a record of what was checked, not a
+    # conformance determination, and the report must not read as one.
+    assert "may be certified" not in t
+    assert "conform to" not in t
 
 
 def test_inventory_never_reads_clear_while_findings_remain(isolated_store):
     """R6: a document with findings still failing must never be presented as done. The
-    inventory shows its open findings and its status, and never labels it certifiable."""
+    inventory shows its open findings and its status, and never labels it clear."""
     from report import build_report
     s = isolated_store
     sid, _, issues = _seed_traces(s)
@@ -342,7 +355,7 @@ def test_inventory_never_reads_clear_while_findings_remain(isolated_store):
     assert facts["documents"][0]["remaining"] == 1           # one criterion still failing
     t = _flat(build_report(_RUN, files, _META, facts=facts))
     assert "open finding(s)" in t                            # main's Findings cell
-    assert "NOT CERTIFIABLE" in t                            # and the decision reflects it
+    assert "OPEN FINDINGS" in t                              # and the decision reflects it
 
 
 def test_undecodable_thumbnail_never_breaks_the_report():
@@ -355,3 +368,62 @@ def test_undecodable_thumbnail_never_breaks_the_report():
     pdf = build_report(_RUN, _FILES, _META, evidence=ev)
     assert pdf[:4] == b"%PDF"
     assert "Non-text Content" in _pdf_text(pdf)
+
+
+# ── the vocabulary itself (2026-08-09) ────────────────────────────────────────
+#
+# ACP reports what it detected, what it changed and what it re-verified. It does not determine
+# conformance. That was already true of the BEHAVIOUR and already argued at length in the scope
+# section — but the report's own words said otherwise: it was titled a Conformance Report, its
+# headline verdict was CERTIFIABLE, and its closing section was a "Conformance statement". Each
+# of those was a claim the paragraphs underneath spent their length walking back.
+#
+# These guard the words, because the words are what a customer quotes. A phrase-by-phrase rename
+# is exactly the kind of change that leaves half a document in the old register, and nothing else
+# in this suite would notice.
+
+def _clean_estate_report(isolated_store):
+    import core
+    from report import build_report
+    files = [{"file": f, "engine": ".net/office", "status": "analysed", "score": 100,
+              "compliant": 1, "skipped_rules": 0, "issues": []}
+             for f in ("benefits.docx", "policy.docx")]
+    core.store = isolated_store
+    return _flat(build_report(
+        {"id": "s-vocab", "completed_at": "2026-08-09T09:00:00", "avg_score": 100,
+         "owner_email": None},
+        files, {"target": "WCAG 2.1 AA", "version": "1.2", "hash": "deadbeef"}))
+
+
+def test_the_scan_report_does_not_call_itself_a_conformance_report(isolated_store):
+    """The title was the largest claim in the document. ACP's OWN VPAT-style ACR keeps that name
+    — it is a real conformance report about the mova.io product — but a report about a customer's
+    documents is a record of work, not a determination about their estate."""
+    t = _clean_estate_report(isolated_store)
+    assert "Accessibility Assessment Report" in t
+    assert "Accessibility Conformance Report" not in t
+
+
+def test_a_spotless_estate_never_claims_conformance(isolated_store):
+    """The case where the temptation is greatest and the claim is least checked: two documents,
+    zero findings, and the report must still say only what it measured."""
+    t = _clean_estate_report(isolated_store)
+    for forbidden in ("CERTIFIABLE", "may be certified", "conform to", "Conformance statement"):
+        assert forbidden not in t, f"a clean report still says {forbidden!r}"
+
+
+def test_the_verdict_names_what_was_checked_rather_than_asserting_a_standard(isolated_store):
+    """"meets WCAG 2.1 AA" asserts a property of the DOCUMENT. "came back with zero open blocking
+    findings among the criteria ACP checked" asserts a property of the SCAN, which is the only
+    one ACP can support."""
+    t = _clean_estate_report(isolated_store)
+    assert "criteria ACP checked" in t
+    assert "document(s) meet" not in t
+
+
+def test_the_disclaimer_is_stated_not_implied(isolated_store):
+    """The scope section has always argued this; now the headline sentence says it too, so a
+    reader who stops after the first card still gets it."""
+    t = _clean_estate_report(isolated_store)
+    assert "not a statement that the document conforms to WCAG" in t
+    assert "not a conformance determination" in t
