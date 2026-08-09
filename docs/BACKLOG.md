@@ -94,6 +94,109 @@ third is the correctness fix with the widest blast radius.
 
 ---
 
+## Phase 4 — the local-model programme
+
+From the ACP Local Model Evaluation PRD, filtered to what the 2026-08-08 measurements support.
+Items the PRD proposes that are **not** here are listed at the end with the reason — a backlog
+that silently drops half a proposal is worse than one that argues with it.
+
+**Read P4.0 first. It is the prerequisite for every other item in this phase**, and it is the one
+thing the PRD does not mention.
+
+- [ ] **P4.0 — Decide whether an AI-assessed lane may auto-apply, and under what evidence gate.**
+  Measured, not predicted: `score_remediation.py` scored `qwen2.5vl` **3B, 7B and 32B and
+  `moondream` at an identical 50% VRR / 0% regression / 0% damage**. That is structural. No
+  ungrounded vision draft is ever auto-applied — the honesty split routes all of them to
+  `proposals` — so the model changes what a reviewer *sees*, never what the document *gets*.
+  **Until this gate moves, every model, prompt, evidence-mode and routing experiment below
+  returns the same table**, and a sweep across four models will read as "parameter count does not
+  matter" when it actually means "no model output reached a document."
+  The precedent already ships: grounded (OCR-anchored) alt auto-applies today, ungrounded does
+  not. Generalising *that* mechanism is the decision, not inventing one.
+  *Effort: a decision plus an ADR. `[?]` — needs a decision, not code.*
+
+- [ ] **P4.1 — Split the eight review-lane SCs by whether the negative is deterministically
+  provable.** The PRD treats all eight as one problem. They are two.
+  **Group A — provable** (1.1.1, 2.4.4, 3.1.2, 4.1.2): "does every image carry a non-junk
+  `descr` or a decorative marker?" is a yes/no over the OOXML, and ACP answers it at **1.00
+  recall / 1.00 precision** today with no model involved. An LLM cannot improve the PASS decision
+  here; it can only add a semantic-quality opinion, which is a different and less verifiable
+  claim. Group A needs an ADR, not an experiment.
+  **Group B — judgement** (1.3.2, 1.3.3, 1.4.5, 2.4.6, and the hard half of 1.1.1): is the
+  reading order *meaningful*, is this image of text *essential*, is this heading *descriptive*,
+  is this alt text *correct*. Only here does model quality decide the answer, and only here do
+  the PRD's experiments earn their cost.
+
+- [ ] **P4.2 — Corpus density: the 99% PASS-precision gate needs ~300 observations per SC, not
+  20–30.** By the rule of three, *n* trials with zero observed failures bound the true rate at
+  roughly `3/n` at 95% confidence. The PRD's proposed 20–30 fixtures per SC licenses a claim of
+  **≤10%**, an order of magnitude weaker than the gate it is meant to clear — and it would read
+  as validated. `score_assessment.py` prints this ceiling on every run for exactly that reason.
+  Not a blocker: the fixtures are generated, so this is parameterising `gen_sc_corpus.py`'s
+  builders to sample densely around each decision boundary rather than hand-writing 300 files.
+
+- [ ] **P4.3 — Evidence modes A–E; find the minimum viable evidence package.** (PRD §11.) The
+  highest-value experiment in the document and the cheapest, because ACP already emits most of
+  the package — findings carry `locator`/`location`, OCR text in `detail`, and the OOXML walk is
+  `formats.office.images`. Compare full-page render / object crop / crop + context / crop +
+  deterministic evidence / all of it. Blocked on nothing.
+
+- [ ] **P4.4 — Independent verification: the generator must not approve its own remediation.**
+  (PRD §20.) Cheap, high safety value, and needs no policy change to *measure*. Prefer
+  deterministic verification wherever it is complete — 3.1.2 is fully closable today (set
+  `w:lang`, re-run langdetect on the span, no model prose trusted), 2.4.4 is partial (uniqueness
+  yes, accuracy-to-target no), and 1.1.1 is not verifiable at all, which is the asymmetry that
+  matters: **a wrong alt does not merely fail, it silences the detector.**
+
+- [ ] **P4.5 — Extend the adversarial fixtures.** (PRD §13/§14.) Partially built:
+  `gen_sc_corpus.py` already carries decorative-that-looks-informative, logo-vs-image-of-text,
+  descriptive-link, correctly-marked-`fr-FR`, sub-floor language segments and both sides of the
+  contrast boundary. Missing from the PRD's list and worth adding: product names that scan as
+  foreign language, misleading captions, and surrounding text that partially duplicates an image.
+  Correct abstention is scored as correct, not as a miss.
+
+- [ ] **P4.6 — Confidence calibration, with the sample-size caveat from P4.2.** (PRD §17.) A
+  local model's self-reported `"confidence": 0.97` in a JSON blob is not a calibrated
+  probability and must never be used as one. Measure empirical precision per bucket, keep PASS
+  and FAIL thresholds asymmetric, and note that each bucket needs its own *n* before it means
+  anything.
+
+- [ ] **P4.7 — Reproducibility metadata on every recorded result.** (PRD §26.) Model, revision,
+  quantisation, runtime, prompt version, fixture version, hardware, temperature, seed.
+  `judge_drafts.py` already records its shuffle seed; nothing else records anything. Cheap now,
+  impossible to backfill.
+
+- [ ] **P4.8 — Reviewer hand-off payload.** (PRD §36, and the one item with value *independent*
+  of every policy question above.) When ACP escalates, give the reviewer the SC, the object, the
+  crop, the deterministic evidence, the model's interpretation, the reason for uncertainty and
+  the proposed fix — so a human resolves the remaining ambiguity instead of repeating the whole
+  assessment. Pairs with the requested per-file/per-rule progress line during assessment and
+  remediation. **Not blocked on P4.0.**
+
+- [x] **P4.9 — Regression detection across all Core-17, not just the target SC.** (PRD §22.)
+  Built: `score_remediation.py` computes fixed / unresolved / regressed over every criterion, and
+  disqualifies a fix that loses a paragraph, table, section or media part regardless of what the
+  re-scan says. Media parts are counted from the zip because `Document.inline_shapes` misses
+  header, footer and floating images — the consent fixture's only image is in `word/header1.xml`.
+
+### From the PRD, deliberately not scheduled
+
+- **North-star framing.** "Maximise AVRR while minimising HER" puts autonomy in the numerator and
+  safety in a footnote. Invert it: the target is *the highest autonomy achievable subject to a
+  false-PASS bound*, so the constraint cannot be traded away by a good week on the other metrics.
+- **§9 model-discovery CLI, §7/§8 registry across ONNX/vLLM/GGUF.** Model *availability* is not
+  the bottleneck — P4.0 is. Ollama already covers everything testable today. Revisit if a
+  specific model is wanted that Ollama cannot serve.
+- **§29/§30 fine-tuning and holdout splits.** The PRD defers these itself and is right to. Worth
+  stating the bar plainly: the baseline to beat is a deterministic engine at **macro-F1 1.00
+  (deterministic lane) / 0.96 (review lane)**, not a naive-prompt LLM.
+- **§31 CLI, §32 dashboard, §33 Pareto frontier.** Reporting infrastructure ahead of a result to
+  report. `score_assessment.py` and `score_remediation.py` already print the decision surface.
+- **§25 hardware profiles.** Mostly moot for now — Azure has zero GPU quota on a CSP-managed
+  subscription, so "local Apple Silicon" is the only profile that exists. Revisit with I.1.
+
+---
+
 ## Infrastructure — parallel track
 
 - [ ] **I.1 — Azure agent pool.** Blocked on an admin granting it. All 14 merges on 2026-08-08
