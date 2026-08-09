@@ -1391,3 +1391,114 @@ def heading_level_sequence(sizes) -> list[int]:
             stack.append(sz)
         out.append(min(len(stack), 6))
     return out
+
+
+def propose_underline_restore(path, ext: str) -> list[dict]:
+    """docx 1.4.1 — one card offering to put the underline back on hyperlinks that had it
+    explicitly removed. Deterministic (no model); mirrors the detector's own condition.
+
+    WHY THIS CRITERION GETS A PREFILLED CARD AT ALL. 1.4.1 in general is editorial: choosing how
+    a document should signal meaning without relying on colour is the author's decision, and
+    nothing can guess it. But the SIGNAL ACP detects is narrower than the criterion — it is
+    specifically `<w:u w:val="none"/>` on a hyperlink, i.e. the underline was deliberately taken
+    off, leaving colour alone to mark the link. For that signal the canonical remedy is exact,
+    named by WCAG's own technique, and needs no judgement: put the underline back.
+
+    So the card states one change rather than asking a question. A reviewer who has another
+    non-colour cue in mind (a leading icon, bold weight, a "(link)" suffix) declines it — which
+    is why this is an election and not an automatic write.
+    """
+    if (ext or "").lower().lstrip(".") != "docx":
+        return []
+    import zipfile
+
+    import office_structure as _os
+    try:
+        with zipfile.ZipFile(path) as zf:
+            doc = _os._read(zf, "word/document.xml") or ""
+    except Exception:
+        return []
+    n = sum(1 for _rid, inner in _os._HYPERLINK.findall(doc) if _os._W_U_NONE.search(inner))
+    if not n:
+        return []
+    return [proposal(
+        locator=f"{n} hyperlink(s) with the underline removed",
+        before='hyperlinks carry <w:u w:val="none"/> — with the underline gone, colour is the '
+               "only thing marking them as links, which fails for a reader who cannot "
+               "distinguish that colour",
+        proposed_value='Restore the underline on those hyperlinks (remove <w:u w:val="none"/>)',
+        rationale="The underline is WCAG's own worked example of a non-colour cue for links, and "
+                  "restoring it is exact — but any other non-colour cue also satisfies 1.4.1, so "
+                  "decline this if the document marks links some other way",
+        source="deterministic (detector-mirrored) — human election required",
+        sc="1.4.1")]
+
+
+def _outline_reaching_3to1(border_hex: str, fill_hex: str) -> str | None:
+    """The nearest shade of `border_hex` that reaches 3:1 against `fill_hex`, or None.
+
+    Walks the outline toward black and toward white in parallel and takes whichever arrives
+    first, so the suggestion stays as close to the author's chosen colour as the threshold
+    allows — a card that proposed pure black on every faint outline would be correct and
+    ignored.
+
+    Returns None only on malformed input. The SEARCH cannot fail: for every fill, either black
+    or white clears 3:1 — checked exhaustively over the greyscale range, and it follows from the
+    formula, since both failing would need the fill's luminance to be simultaneously below 0.10
+    and above 0.30. An earlier version of this docstring claimed mid-tone fills could defeat it;
+    a test written to prove that claim failed, and the claim was wrong rather than the code.
+    """
+    import office_structure as _os
+    try:
+        r, g, b = (int(border_hex[i:i + 2], 16) for i in (0, 2, 4))
+    except (ValueError, IndexError):
+        return None
+    for step in range(1, 256):
+        for cand in ((max(0, r - step), max(0, g - step), max(0, b - step)),
+                     (min(255, r + step), min(255, g + step), min(255, b + step))):
+            hexed = "%02X%02X%02X" % cand
+            if _os._contrast_ratio(hexed, fill_hex) >= 3.0:
+                return hexed
+    return None
+
+
+def propose_outline_contrast(path, ext: str) -> list[dict]:
+    """docx 1.4.11 — one card naming the shade that would bring a faint shape outline to 3:1.
+
+    THE MEASUREMENT TRAVELS WITH THE CARD, and that is the point of this proposer. The detector
+    already computed the ratio and knows the target; without carrying them, a reviewer opens the
+    document, finds the shape, samples two colours and recomputes a number ACP had. The card
+    states the measured ratio, the 3:1 it needed, and a specific colour that would reach it.
+
+    An ELECTION, not a write. Whether the outline may change at all is a question about the
+    document's visual design, and a faint outline that is purely decorative needs no fix — which
+    is the other thing only a human can settle.
+    """
+    if (ext or "").lower().lstrip(".") != "docx":
+        return []
+    import re as _re
+
+    import office_structure as _os
+    found = _os.docx_nontext_contrast_checks(path)
+    if not found:
+        return []
+    f = found[0]
+    ratio = (f.get("evidence") or {}).get("value")
+    m = _re.search(r"outline #([0-9A-Fa-f]{6}) on its #([0-9A-Fa-f]{6}) fill", f.get("detail", ""))
+    if not m:
+        return []
+    border_hex, fill_hex = m.group(1).upper(), m.group(2).upper()
+    suggestion = _outline_reaching_3to1(border_hex, fill_hex)
+    if not suggestion:
+        return []
+    return [proposal(
+        locator=f"shape outline #{border_hex} on #{fill_hex}",
+        before=f"the outline is {ratio}:1 against its own fill, below the 3:1 WCAG requires for "
+               "a shape boundary that carries meaning",
+        proposed_value=f"Change the outline to #{suggestion} "
+                       f"({_os._contrast_ratio(suggestion, fill_hex):.1f}:1 against the same fill)",
+        rationale="The colour above is the nearest shade of your own outline colour that reaches "
+                  "3:1 — but if the shape is decorative rather than meaningful, no change is "
+                  "needed and this card should be declined",
+        source="deterministic (measured) — human election required",
+        sc="1.4.11")]

@@ -244,6 +244,11 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
             # One-click deterministic layout cards (no AI): docx 1.4.8 + pptx 1.4.2.
             one_clicks = (_prop.propose_justified_fix(p, p.suffix)
                           + _prop.propose_autoplay_fix(p, p.suffix))
+            # docx 1.4.1 / 1.4.11 — same shape, own criteria. Kept out of `one_clicks` above
+            # because that list is enqueued under ONE criterion per format, and a colour card
+            # filed under 1.4.8 would tell a reviewer they are fixing visual presentation.
+            colour_cards = _prop.propose_underline_restore(p, p.suffix)
+            contrast_cards = _prop.propose_outline_contrast(p, p.suffix)
             # 1.1.1 native-chart datasheets (docx/pptx/xlsx) — grounded alt from the chart's data.
             chart_sheets = _prop.propose_chart_datasheet(p, p.suffix)
             # 1.1.1 image alt — enumerate every unlabelled image and PRE-DRAFT it (vision when
@@ -297,6 +302,8 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
     try:
         if filename.lower().endswith(".docx"):
             _enqueue_proposals(scan_id, filename, "1.4.8", "Visual Presentation", one_clicks)
+            _enqueue_proposals(scan_id, filename, "1.4.1", "Use of Color", colour_cards)
+            _enqueue_proposals(scan_id, filename, "1.4.11", "Non-text Contrast", contrast_cards)
         else:
             _enqueue_proposals(scan_id, filename, "1.4.2", "Audio Control", one_clicks)
     except Exception:

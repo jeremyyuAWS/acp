@@ -136,12 +136,12 @@ REMEDIATION: dict[str, dict[str, str]] = {
         # finding states the ratio it measured and the 3:1 it needed; the 1.4.1 finding states
         # how many links had their underline removed. Guidance with the numbers already in it is
         # the ceiling for both, and it is a real lane rather than an absence.
-        "1.4.1": HUMAN,      # colour-only cue — the replacement is an editorial call
+        "1.4.1": ASSISTED,   # restore the removed underline — exact card, human elects it
         "1.4.3": AUTO,       # low-contrast run recolour
         "1.4.5": ASSISTED,   # images-of-text — OCR the text back out for a human to paste
         "1.4.8": ASSISTED,   # justified text — exact one-click left-align card, human elects
         "1.4.9": ASSISTED,   # images-of-text (AAA, no exception) — same OCR proposer as 1.4.5
-        "1.4.11": HUMAN,     # faint shape outline — recolouring is a design decision (see 1.4.1)
+        "1.4.11": ASSISTED,  # the shade that reaches 3:1, measured — exact card, human elects
         "2.4.2": AUTO,       # document title (docProps/core.xml)
         "2.4.4": ASSISTED,   # link purpose — derived/AI-drafted link-text proposal (propose_link_texts)
         "2.4.6": AUTO,       # heading-skip closure after the 1.3.1 outline fix

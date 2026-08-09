@@ -6,16 +6,16 @@ entry, so the capability matrix could not say what technique reached them, and n
 `remediation_capability` lane, so the fix axis read "No Remediation" — an absence, when what
 actually existed was work with nowhere to record it.
 
-THE LANE IS `human`, NOT `assisted`, AND THAT IS THE LOAD-BEARING CHOICE. An assisted lane emits
-a PREFILLED value a reviewer confirms with one click. Neither of these has a value to prefill:
-the replacement for a colour-only cue is an editorial decision about how the document
-communicates, and recolouring a shape outline changes its visual design. A tool that guessed
-either would overwrite the author's intent with its own — and the re-scan could not tell, because
-the finding clears whichever colour is written.
+THE LANE IS `assisted`, AND GETTING THERE TOOK A CORRECTION. It shipped first as `human`, on the
+reasoning that neither criterion has a value to prefill — 1.4.1 is editorial and recolouring a
+shape is a design decision. That was too conservative, and the distinction it missed is between
+the CRITERION and the SIGNAL: 1.4.1 in general is editorial, but what ACP detects is specifically
+an explicitly removed underline, and putting it back is exact. Likewise the shade that brings an
+outline to 3:1 against a known fill is computed, not guessed.
 
-So the ceiling is guidance, and what makes it worth having is that the guidance carries the
-MEASUREMENT: 1.4.11 states the ratio it measured and the 3:1 it needed; 1.4.1 states how many
-links lost their underline. A reviewer decides without re-measuring.
+So both emit a prefilled card the human ELECTS — the 1.4.8 shape, where the change is exact and
+the judgement is whether to make it. The card carries the measurement so nobody re-measures:
+1.4.11 states the ratio found, the 3:1 needed, and a specific colour that reaches it.
 """
 import io
 import re
@@ -61,11 +61,11 @@ def test_the_reason_names_what_is_NOT_examined(sc):
 
 
 @pytest.mark.parametrize("sc", ["1.4.1", "1.4.11"])
-def test_the_lane_is_human_not_assisted(sc):
-    """The distinction this whole change turns on. `assisted` promises a prefilled value; there
-    is none to prefill for either criterion, and promising one would be the overstatement the
-    capability table exists to prevent."""
-    assert cap.REMEDIATION["docx"][sc] == "human"
+def test_the_lane_is_assisted(sc):
+    """`assisted` promises a prefilled card a human elects. Both criteria now have one, and the
+    drift guard (test_remediation_capability) re-derives that against the real proposer — so
+    this asserts the declaration and that one asserts it is true."""
+    assert cap.REMEDIATION["docx"][sc] == "assisted"
 
 
 @pytest.mark.parametrize("sc", ["1.4.1", "1.4.11"])
@@ -150,3 +150,90 @@ def test_the_1411_finding_carries_the_ratio_and_the_target():
     assert '"required": 3.0' in src, "the 3:1 target must travel with the finding"
     assert "needs 3:1" in src, "the detail must state the target a reviewer is judging against"
     assert '"metric": "Contrast"' in src
+
+
+# ── the proposers that make the lane `assisted` ───────────────────────────────
+#
+# `assisted` in this codebase means a proposer emits a PREFILLED card a human elects with one
+# click — the 1.4.8 shape, where the change is exact and the judgement is whether to make it.
+# The first version of this change shipped both criteria as `human` on the reasoning that
+# neither had a value to prefill. That was too conservative, and the distinction is worth
+# stating: 1.4.1 in GENERAL is editorial, but the SIGNAL detected is specifically an explicitly
+# removed underline, and putting it back is exact. Same for 1.4.11: the shade that reaches 3:1
+# against a known fill is computed, not guessed.
+
+def test_the_141_proposer_emits_a_prefilled_card(tmp_path):
+    import proposals
+    out = proposals.propose_underline_restore(
+        _docx_with_underlineless_link(tmp_path / "c.docx"), ".docx")
+    assert len(out) == 1
+    assert out[0]["sc"] == "1.4.1"
+    assert "Restore the underline" in out[0]["proposed_value"]
+
+
+def test_the_141_card_says_declining_it_is_legitimate(tmp_path):
+    """Any non-colour cue satisfies 1.4.1 — an icon, bold weight, a "(link)" suffix. A card that
+    presented the underline as THE fix would be overstating a worked example as a requirement."""
+    import proposals
+    out = proposals.propose_underline_restore(
+        _docx_with_underlineless_link(tmp_path / "c.docx"), ".docx")
+    assert "decline" in out[0]["rationale"].lower()
+
+
+def test_the_141_proposer_is_silent_on_a_clean_document(tmp_path):
+    import gen_demo_fixtures as gen
+    import proposals
+    from docx import Document
+    d = Document()
+    d.core_properties.title = "Fine"
+    p = d.add_paragraph("Read the ")
+    gen._add_hyperlink(p, "https://example.org/policy", "accessibility policy")
+    path = tmp_path / "ok.docx"
+    d.save(path)
+    assert proposals.propose_underline_restore(path, ".docx") == []
+
+
+def test_the_1411_proposer_names_a_shade_that_actually_reaches_3to1():
+    """The whole value of the card. A suggestion that does not clear the threshold would send a
+    reviewer to make a change that leaves the finding standing."""
+    import office_structure as osx
+    import proposals
+    # Mid-grey outline on a light fill: below 3:1, and darkening reaches it.
+    got = proposals._outline_reaching_3to1("BBBBBB", "FFFFFF")
+    assert got is not None
+    assert osx._contrast_ratio(got, "FFFFFF") >= 3.0
+
+
+def test_the_1411_suggestion_stays_near_the_authors_colour():
+    """It walks outward from the author's own colour and stops at the first shade that clears —
+    a card proposing pure black on every faint outline would be correct and ignored."""
+    import proposals
+    got = proposals._outline_reaching_3to1("BBBBBB", "FFFFFF")
+    assert got != "000000", "jumped straight to black instead of the nearest passing shade"
+
+
+def test_the_search_always_finds_a_shade():
+    """Written to prove the opposite, and the code was right. There is NO fill where neither
+    black nor white reaches 3:1 — both failing would need its luminance below 0.10 and above
+    0.30 at once — so the search cannot come back empty on well-formed input. Checked
+    exhaustively across the greyscale range rather than argued."""
+    import proposals
+    for v in range(0, 256, 8):
+        fill = f"{v:02X}" * 3
+        assert proposals._outline_reaching_3to1("808080", fill) is not None, fill
+
+
+def test_malformed_input_returns_nothing_rather_than_raising():
+    """The only way None is reachable. A proposer that raised here would take down the whole
+    scan's proposal pass for one unparseable colour."""
+    import proposals
+    assert proposals._outline_reaching_3to1("zzz", "FFFFFF") is None
+    assert proposals._outline_reaching_3to1("", "FFFFFF") is None
+
+
+@pytest.mark.parametrize("fn", ["propose_underline_restore", "propose_outline_contrast"])
+def test_the_proposers_ignore_other_formats(fn, tmp_path):
+    import proposals
+    path = tmp_path / "x.pptx"
+    path.write_bytes(b"not a docx")
+    assert getattr(proposals, fn)(path, ".pptx") == []
