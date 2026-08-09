@@ -78,6 +78,18 @@ steps:
     # path the tests' capability gates probe. bin/ stays gitignored; this is built, not
     # committed.
 
+  - script: sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr
+    displayName: Install tesseract (OCR)
+    # Kept in step with ci.yml, and this is the pipeline that proved why. The corpus
+    # regression gate landed with tesseract added to ci.yml only; THIS pipeline runs the same
+    # suite without it, ocr.is_available() went false, and 1.4.5 reported "found 0 of 1" —
+    # a red build describing an environment gap as a product regression.
+    #
+    # Two CI pipelines running one suite need the same dependencies or the suite means
+    # different things in each. The gate degrades honestly without OCR (see
+    # tests/test_docx_corpus_regression_gate.py), but degrading is a fallback, not the plan:
+    # 1.4.5 and 1.4.9 are only actually exercised where tesseract exists.
+
   - script: python -m pip install --quiet -r api/requirements.txt -r tests/requirements.txt
     displayName: Install API + test dependencies
     # tests/requirements.txt carries the OOXML authoring libs (python-docx/pptx/openpyxl)
