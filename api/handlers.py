@@ -900,6 +900,34 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
             reused_from_scan = dedup.pop("reused_from_scan", None)
             pinfo = dedup.pop("pii")
             fdict = {"file": name, **dedup}
+            # RE-SCORE UNDER THE CURRENT SCOPE. The findings are reused; the SCORE is not.
+            #
+            # `score`, `compliant` and `skipped_rules` are scope-dependent — `_scoped_for_scoring`
+            # decides which findings `Rubric.assess` ever sees — but `find_prior_analysis` gates
+            # reuse on rubric_hash alone. So narrowing the operator's scope and re-scanning
+            # returned the score computed under the OLD scope: one measured .docx with a 1.1.1 and
+            # a 1.3.1 finding scores 60 unscoped and 75 with only 1.1.1 in scope, and the reuse
+            # handed back 60. Silently, and looking exactly like the scope had done nothing.
+            #
+            # That is the same class of staleness rubric_hash already guards ("a stale analysis
+            # under an old rubric is not valid evidence once the rule set has changed") — a stale
+            # score under an old SCOPE is not valid evidence either.
+            #
+            # Re-scored rather than invalidated, which is the cheaper and more faithful fix: the
+            # full issue list comes back with the reuse, and scoring is a pure function over it.
+            # No download, no engine, no OCR — the entire point of ADR 0011 survives. This is
+            # what `_scoped_for_scoring`'s own note already promises: "Every finding stays on the
+            # record, so re-reporting the same scan under a different scope needs no re-scan."
+            try:
+                from scanner import rescore_reused
+                fdict.update(rescore_reused(fdict.get("issues") or [], name,
+                                            fdict.get("status")))
+            except Exception:
+                # Deliberately narrow: a rescore failure leaves the reused score in place rather
+                # than failing the file. Logged, because a silent fallback here is how the stale
+                # score came back unnoticed the first time.
+                print(f"[scan] {name}: could not re-score reused analysis — "
+                      "keeping the prior score", flush=True)
             if reused_from_scan and pinfo and pinfo.get("total"):
                 # PII carries more sensitivity than a WCAG score -- copying it forward
                 # gets its own audit entry rather than a silent inherit (ADR 0011).

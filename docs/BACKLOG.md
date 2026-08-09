@@ -43,9 +43,30 @@ third is the correctness fix with the widest blast radius.
   *Verified by disabling the gate and re-running: 4 of 12 tests fail without it, including the
   load-bearing one, which asserts on the FETCH rather than the file list — a list-only assertion
   passes against the old behaviour too, since the old list was filtered downstream anyway.*
-  **Still open from the proposal's "consequences" section, all three decisions rather than code:**
-  scan diffs across differing scopes (ADR 0009), incremental-cache invalidation on a scope change
-  (ADR 0011), and naming the unread formats in the PDF report's `_scope_section`.
+  **Still open from the proposal's "consequences" section:** scan diffs across differing scopes
+  (ADR 0009) and naming the unread formats in the PDF report's `_scope_section`. Both decisions
+  rather than code.
+
+- [x] **P0.4 — An incrementally-reused analysis is re-scored under the current scope.** Done, and
+  **the diagnosis in the proposal was wrong**, which is worth recording because the wrong version
+  reads as plausible. It said incremental fingerprinting "caches file lists" and that a scope
+  change would make the first narrowed scan "return the old population". There is no file-list
+  cache — `_list` runs fresh on every scan, so P0.3 already governs the population.
+  The real defect was one level down and quieter. `find_prior_analysis` (ADR 0011) reuses a
+  file's analysis across scans gated on owner + `drive_file_id` + checksum + `rubric_hash`, and
+  returns the stored `score` / `compliant` / `skipped_rules` — all of which are **scope**-
+  dependent, since `_scoped_for_scoring` decides what `Rubric.assess` ever sees. Nothing gated on
+  scope. Measured: one `.docx` with a 1.1.1 and a 1.3.1 finding scores **60** unscoped and **75**
+  with only 1.1.1 in scope, and the reuse handed back 60 — fifteen points wrong, silently, and
+  looking exactly like the scope had done nothing.
+  Same class of staleness `rubric_hash` already guards, in its own words: *"a stale analysis under
+  an old rubric is not valid evidence once the rule set has changed."* A stale score under an old
+  scope is not valid evidence either.
+  **Re-scored, not invalidated.** Invalidating would discard the reuse for every file in the
+  estate and re-run the engine over documents that have not moved. The full issue list comes back
+  *with* the reuse and scoring is a pure function over it, so the score is recomputed for free
+  while the download, engine and OCR stay skipped — which is what `_scoped_for_scoring` already
+  promised: *"re-reporting the same scan under a different scope needs no re-scan."*
 
 ---
 

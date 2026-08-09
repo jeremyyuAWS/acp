@@ -1844,6 +1844,28 @@ def _scoped_for_scoring(issues: list[dict], filename: str) -> list[dict]:
     return filter_issues_to_scope(issues, _file_format(filename), scope)
 
 
+def rescore_reused(issues: list[dict], filename: str, status: str | None = None) -> dict:
+    """Score for a REUSED analysis, computed under the scope in force now (ADR 0011).
+
+    Incremental reuse skips the download, the engine and the OCR — the expensive parts, and the
+    whole point of ADR 0011. It must not also skip the SCORE, because a score is a function of
+    the operator's scope and the scope can change between scans while the file's bytes do not.
+    `find_prior_analysis` gates reuse on `rubric_hash` and nothing else, so before this the
+    reused row carried whatever score was right the last time somebody scanned.
+
+    Deliberately goes through `_scoped_for_scoring` and `Rubric.assess` — the same two calls the
+    fresh path uses — rather than re-deriving a score here. A second expression of "what a score
+    counts" is exactly how the single-file and batch paths diverged once already (see
+    `_scoped_for_scoring`'s note), and this is a third caller.
+
+    Returns only the keys a reused fdict should overwrite, so the caller's `issues`, `engine`,
+    `acp_stamped` and every other reused field pass through untouched.
+    """
+    rb = Rubric.load_active(ACP / "config")
+    assessed = rb.assess(status != "error", _scoped_for_scoring(issues, filename), [])
+    return {k: assessed[k] for k in ("score", "compliant", "skipped_rules") if k in assessed}
+
+
 def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
                        scan_id: str | None = None):
     """Analyse + rubric-assess ONE already-downloaded file (fan-out path, ADR 0007).
