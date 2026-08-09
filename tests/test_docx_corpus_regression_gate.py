@@ -45,6 +45,26 @@ pytestmark = pytest.mark.skipif(
            "one would assert that a silent engine is correct")
 
 
+def _ocr_ok() -> bool:
+    import ocr
+    return ocr.is_available()
+
+
+# Criteria that CANNOT be detected without tesseract, so a run without it must not score them as
+# missed. 1.4.5 (images of text) is OCR by definition — the detector reads text out of the image.
+#
+# This is not a hypothetical accommodation. The gate shipped assuming tesseract, because the
+# machine it was written on had it; the repo's OTHER pipeline (azure-pipelines.yml) ran the same
+# suite without it and reported "1.4.5: found 0 of 1" — a red build describing an environment gap
+# as a product regression. Both pipelines now install it, and this is the belt to that braces: a
+# fresh clone, a dev box, or a third pipeline should get an honest partial answer rather than a
+# false accusation.
+#
+# Narrowing coverage silently would be the worse failure, so `test_ocr_criteria_are_covered_in_ci`
+# fails when the exclusion is in force somewhere it should not be.
+_NEEDS_OCR = frozenset({"1.4.5"})
+
+
 @pytest.fixture(scope="module")
 def scored(tmp_path_factory):
     """Build the corpus into a temp directory and score it, once for the whole module.
@@ -138,12 +158,36 @@ def test_every_seeded_violation_is_detected(scored):
     what a customer asks. Reported as a list so a failure names every affected SC at once rather
     than one per re-run.
     """
+    skip = set() if _ocr_ok() else _NEEDS_OCR
     missed = []
     for sc, t in scored["per_sc"].items():
+        if sc in skip:
+            continue
         positives = t["tp"] + t["fn_pass"] + t["abstain_on_fail"]
         if positives and t["tp"] < positives:
             missed.append(f"{sc}: found {t['tp']} of {positives}")
     assert not missed, "criteria that missed a seeded violation — " + "; ".join(missed)
+
+
+def test_ocr_criteria_are_covered_in_ci():
+    """The exclusion above must be a fallback, never the normal state.
+
+    An environment-conditional skip is one edit away from being how a criterion stops being
+    tested at all: it goes quiet, nothing fails, and the coverage loss is visible only to
+    somebody reading the skip logic. So on CI — where both pipelines now install tesseract —
+    the absence of OCR is itself the failure, and the message says which pipeline to fix.
+
+    Off CI this passes regardless: a dev box without tesseract should get an honest partial
+    answer, not a red suite about a dependency it never agreed to install.
+    """
+    import os
+    on_ci = os.environ.get("CI") or os.environ.get("TF_BUILD")     # GitHub Actions | Azure
+    if not on_ci:
+        pytest.skip("not CI — a local run may legitimately lack tesseract")
+    assert _ocr_ok(), (
+        "tesseract is missing on CI, so " + ", ".join(sorted(_NEEDS_OCR)) + " went unexercised. "
+        "Both .github/workflows/ci.yml and azure-pipelines.yml install it; whichever runner "
+        "this is, its install step is missing or failed.")
 
 
 def test_the_deterministic_lane_still_certifies(scored):
