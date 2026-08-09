@@ -142,6 +142,18 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "1.4.8": ASSISTED,   # justified text — exact one-click left-align card, human elects
         "1.4.9": ASSISTED,   # images-of-text (AAA, no exception) — same OCR proposer as 1.4.5
         "1.4.11": ASSISTED,  # the shade that reaches 3:1, measured — exact card, human elects
+        # HUMAN, and unlike 1.4.1 and 1.4.11 above this one is not a conservative call that a
+        # later proposer will overturn. Those two looked unprefillable and turned out to have an
+        # exact remedy hiding in the detected SIGNAL — restore the underline, use this shade.
+        # 2.1.2 has no such signal. Whether keyboard focus can move away from a control is
+        # runtime behaviour, so ACP cannot know a trap exists, cannot name which control traps,
+        # and cannot verify a fix if one were written. Anything prefilled here would be a guess
+        # that the re-scan could not check.
+        #
+        # The lane is still worth having rather than an absence: the finding names every
+        # interactive control in the document, so a reviewer knows exactly where to press Tab
+        # instead of reading forty pages looking for something to try.
+        "2.1.2": HUMAN,      # keyboard trap — runtime behaviour, not in the file
         "2.4.2": AUTO,       # document title (docProps/core.xml)
         "2.4.4": ASSISTED,   # link purpose — derived/AI-drafted link-text proposal (propose_link_texts)
         "2.4.6": AUTO,       # heading-skip closure after the 1.3.1 outline fix
