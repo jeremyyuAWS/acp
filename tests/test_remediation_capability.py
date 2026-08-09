@@ -612,6 +612,13 @@ def _proposer_key(sc: str) -> str:
         "2.4.10": "section_headings",      # docx only — AI names the document's own sections
         "2.4.6": "slide_titles",           # pptx only — AI names the slide from its own content
         "1.4.8": "one_click_left_align",   # docx only — deterministic, human elects
+        "1.4.1": "one_click_underline",    # docx only — the detected signal is specifically an
+                                           # explicitly removed underline, so the remedy is exact
+                                           # (put it back) even though 1.4.1 in general is
+                                           # editorial; propose_underline_restore, human elects
+        "1.4.11": "one_click_outline_shade",  # docx only — propose_outline_contrast names the
+                                           # nearest shade of the author's own outline colour
+                                           # that reaches 3:1, measured not guessed
         "1.4.2": "one_click_play_on_click",  # pptx only — deterministic, human elects
         "4.1.2": "form_field_name",        # docx only — propose_forms drafts the w:alias title
                                            # (adjacent prompt text, else a local model), and
