@@ -2231,12 +2231,27 @@ class Store:
                     (now, drive_write_url, scan_id, file))
         return now
 
-    def get_remediation_urls(self, scan_id: str, file: str) -> dict | None:
-        """blob_url + drive_write_url for a remediated file's download route."""
+    def get_remediation_urls(self, scan_id: str, file: str,
+                             owner: str | None = None) -> dict | None:
+        """blob_url + drive_write_url for a remediated file's download route.
+
+        `owner` filters IN SQL, so a foreign row is never read into memory rather than being
+        read and then rejected. It is optional only so a caller with no user context (the
+        worker tier, a migration) is not forced to invent one; every request path must pass it.
+
+        THE ROW THIS RETURNS IS A CAPABILITY, not a description. `drive_write_url` is a live
+        link to a remediated document, and the download route redirects to it — so an unscoped
+        lookup here was sufficient on its own to disclose another user's PHI, even though the
+        blob read beside it was correctly scoped and returned nothing. Defence in depth is the
+        point: the route now checks ownership too, and either check alone would have stopped it.
+        """
+        sql = "SELECT blob_url, drive_write_url FROM file_records WHERE scan_id=%s AND file=%s"
+        params: tuple = (scan_id, file)
+        if owner is not None:
+            sql += " AND scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)"
+            params += (owner,)
         with self._db.cursor() as cur:
-            self._db.execute(cur,
-                "SELECT blob_url, drive_write_url FROM file_records WHERE scan_id=%s AND file=%s",
-                (scan_id, file))
+            self._db.execute(cur, sql, params)
             return self._db.fetchone(cur)
 
     def find_remediation_for_file(self, owner: str | None, scan_id: str, file: str) -> dict | None:

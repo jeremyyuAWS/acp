@@ -82,11 +82,45 @@ def _start_job_workers():
     on some route. reload_scheduler() reads the schedule out of that store, so it must follow
     it; the scheduler thread then starts with its jobs already pending."""
     core.get_store()
+    _announce_isolation_mode()
     core.reload_scheduler()
     core.start_scheduler()
     n = core.start_workers()
     if n:
         print(f"[acp] started {n} async job worker(s)", flush=True)
+
+
+def _announce_isolation_mode() -> None:
+    """Say out loud whether per-user data isolation is ON. It is the right behaviour in a demo
+    and a serious misconfiguration for a tenant, and until now the two were indistinguishable.
+
+    `_owner()` reads request.state.user_email, which only the `elif GOOGLE_CLIENT_ID` branch of
+    the access gate sets. So with ACCESS_CODE set — or with neither configured — every user
+    resolves to the single owner 'demo' and shares one estate: one person's remediated documents
+    are readable by anyone else who can sign in. For a hospital that is patient-record
+    disclosure, not a preference.
+
+    Two ways to arrive here without meaning to, both silent before this:
+      * ACCESS_CODE and GOOGLE_CLIENT_ID are an if/ELIF. Setting an access code on a deployment
+        that HAS Google configured does not add a second factor — it takes the first branch and
+        stops user_email being stamped at all, turning isolation off as a side effect.
+      * deploy/compose/docker-compose.yml defaults ACP_GOOGLE_CLIENT_ID to empty, so a
+        customer-VPC install from that file runs shared-estate unless someone supplies it.
+
+    Printed, not raised. Refusing to boot would be the fail-closed choice for production and is
+    worth considering, but it can lock out a running deployment, so that stays a deliberate
+    decision rather than a side effect of this change.
+    """
+    isolated = bool(core.GOOGLE_CLIENT_ID) and not core.ACCESS_CODE
+    if isolated:
+        print("[acp] per-user data isolation: ON (owner = verified sign-in email)", flush=True)
+        return
+    why = ("ACP_ACCESS_CODE is set, so the gate never stamps a user email"
+           if core.ACCESS_CODE else "no ACP_GOOGLE_CLIENT_ID is configured")
+    print(f"[acp] *** per-user data isolation is OFF — {why}. Every user shares the 'demo' "
+          f"estate and can read every other user's scans and remediated files. Correct for a "
+          f"demo; NOT safe for multi-user or PHI data.{' PRODUCTION.' if core.IS_PROD else ''} "
+          f"***", flush=True)
 
 
 @app.on_event("shutdown")

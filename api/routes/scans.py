@@ -761,7 +761,23 @@ def get_remediated_file(scan_id: str, filename: str, request: Request):
     remediation that only ever wrote there. 404 if neither exists."""
     import blob as _blob
     owner = _owner(request)
-    urls = core.store.get_remediation_urls(scan_id, filename)
+    # OWNERSHIP FIRST, like every other per-scan route. This endpoint was the one that did not,
+    # and it was exploitable: `get_remediation_urls` has no owner predicate, the blob read below
+    # is correctly scoped and so returns None for a foreign document, and the Drive fall-through
+    # then handed the caller a link to somebody else's remediated file. Measured, not theorised —
+    # tests/test_remediated_download_isolation.py redirected an allow-listed non-owner (307) to
+    # the owner's Drive URL before this line existed.
+    #
+    # 404 rather than 403, matching tests/test_foreign_scan_404.py: a non-owner must not be able
+    # to confirm the scan exists. That also closes the oracle — "wrong filename" and "not your
+    # scan" were distinguishable (404 vs 307), which leaks which documents a scan contains.
+    # "scan not found" verbatim: tests/test_scan_not_found_detail.py pins every owner-check 404
+    # in this router to that exact string, because the SPA only recovers from that one. It also
+    # gives the property this check needs — a non-owner gets the same answer for a foreign scan
+    # as for one that never existed, so the response tells them nothing either way.
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    urls = core.store.get_remediation_urls(scan_id, filename, owner=owner)
     src_scan_id, src_file = scan_id, filename
     if not urls or not (urls.get("blob_url") or urls.get("drive_write_url")):
         # ADR 0011: an incremental re-scan mints a new scan_id and, for an unchanged file,
