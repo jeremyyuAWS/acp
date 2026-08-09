@@ -45,6 +45,23 @@ third is the correctness fix with the widest blast radius.
   passes against the old behaviour too, since the old list was filtered downstream anyway.*
   All three of the proposal's "consequences" are now closed — see P0.4, P0.5 and P0.6.
 
+- [x] **P0.7 — Exceeding the OCR image cap is reported, not silent.** Done. `_MAX_IMAGES`
+  (`ACP_OCR_MAX_IMAGES`, default 30) bounds how many embedded images are OCR'd per document, and
+  exceeding it produced no signal: a 35-image document returned exactly 30 image-of-text findings
+  and nothing said the other five were never looked at — output indistinguishable from a document
+  whose last five images are clean.
+  **The cap was not raised, deliberately.** Measured at ~0.1s per image on a synthetic fixture
+  (30 ≈ 3s, 500 ≈ 51s), so 30 is conservative — but a higher number still truncates *silently* at
+  the new number, and picking a new default is a scan-time decision for every customer taken on
+  evidence from synthetic images that are easier than a real scanned page. The knob already
+  existed; what was missing was any way for an operator to know they needed it, so the finding
+  names it.
+  Advisory (`REVIEW`), not blocking: the honest claim is not "these images fail" — nobody read
+  them — it is "this criterion was not fully checked here". Emitted from the 1.4.5 pass only, since
+  both rules walk the same capped list and 1.4.9 is AAA, dropped at the AA target most scans use.
+  *The load-bearing test is a CLEAN over-cap document: with textless images the scan finds nothing
+  at all, so before this its output was empty and identical to a fully-checked clean file.*
+
 - [x] **P0.6 — The report's scope-of-assertion names the documents it never opened.** Done.
   `_scope_section` is the report's guard against its own headline number, and every narrowing it
   stated was by CRITERION ("no check was run for 2.4.3 on a PDF"). None was by DOCUMENT — so once

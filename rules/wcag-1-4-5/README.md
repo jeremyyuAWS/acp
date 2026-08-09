@@ -13,6 +13,7 @@
 | Rule ID | Formats | Source |
 |---------|---------|--------|
 | `HTML_IMAGE_OF_TEXT` | html | `api/scanner.py:_analyse_html` |
+| `OCR_IMAGE_CAP_REACHED` | docx, pdf, pptx, xlsx | `api/ocr.py` |
 | `OCR_IMAGE_OF_TEXT` | docx, pdf, pptx, xlsx | `api/ocr.py` |
 | `PDF_LIKELY_SCANNED` | pdf | `api/office_structure.py:pdf_scanned_page_checks` |
 
