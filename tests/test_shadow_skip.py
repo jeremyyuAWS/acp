@@ -25,7 +25,11 @@ def test_stamp_check_precedes_analyse_and_assess():
     src = HANDLERS.read_text()
     dl = src.index("_download(it, tmp, svc, sp_token=toks.get(\"sp\"))")
     stamp = src.index("detect_acp_stamp(tmp / name", dl)
-    analyse = src.index("analyse_and_assess(tmp, name, detect_pii=pii)", dl)
+    # Matched on the call PREFIX, not the full argument list. This pinned the whole literal
+    # `analyse_and_assess(tmp, name, detect_pii=pii)` and broke when the call gained a
+    # `scan_id=` kwarg — an ordering invariant reported as violated because an unrelated
+    # argument was added. The prefix identifies the call just as uniquely and survives that.
+    analyse = src.index("analyse_and_assess(tmp, name", dl)
     assert dl < stamp < analyse, "the stamp check must sit between download and analysis"
 
 

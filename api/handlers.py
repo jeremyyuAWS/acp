@@ -948,7 +948,10 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                                  "issues": [], "acp_stamped": stamp}
                         pinfo = None
                 if fdict is None:
-                    fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii)
+                    # scan_id threads the per-rule progress line through. This is the PRODUCTION
+                    # fan-out path (ADR 0007) — run_scan's in-process pool is the local one — so
+                    # without it the line works in development and is silent where users are.
+                    fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii, scan_id=scan_id)
             except Exception as e:
                 # A credential failure is true of the whole scan, so it is named once, acted on
                 # once, and every remaining file skips its doomed download (drive_auth_failure).

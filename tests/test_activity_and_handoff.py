@@ -135,6 +135,105 @@ def test_record_then_current_round_trips(monkeypatch):
     assert "activity:s1" in store
 
 
+# ── concurrent assessment ─────────────────────────────────────────────────────
+#
+# Remediation is one document at a time; ASSESSMENT fans out over scanner._SCAN_WORKERS (up to 8).
+# A single last-writer-wins line under eight threads flips several times a second and tells the
+# user less than the file count already did, so the headline is rendered from the in-flight set.
+
+@pytest.fixture
+def writes(monkeypatch):
+    out: list = []
+    import core
+    monkeypatch.setattr(core, "set_job", lambda k, v: out.append(v))
+    activity._inflight.clear()
+    activity._last.clear()
+    return out
+
+
+def test_the_headline_names_the_OLDEST_document_not_the_newest(writes):
+    """The question is 'is it stuck?', and the document running longest is what answers it.
+
+    The newest is by definition the one that just started — the least informative thing on the
+    screen, and what a naive last-writer-wins implementation would show.
+    """
+    activity.record_file("s", "first.docx", sc="1.1.1", action="engine", force=True)
+    activity.record_file("s", "second.docx", sc="1.4.5", action="ocr", force=True)
+    activity.record_file("s", "third.docx", sc="1.3.3", action="text", force=True)
+    assert writes[-1]["file"] == "first.docx"
+    assert writes[-1]["in_flight"] == 3
+
+
+def test_the_headline_says_how_many_others_are_running(writes):
+    """Counted as well as named: without it a user whose document is not the headline concludes
+    theirs was skipped."""
+    activity.record_file("s", "a.docx", sc="1.1.1", action="engine", force=True)
+    assert "more in progress" not in writes[-1]["text"]
+    activity.record_file("s", "b.docx", sc="1.1.1", action="engine", force=True)
+    assert "(+1 more in progress)" in writes[-1]["text"]
+
+
+def test_a_documents_start_time_survives_its_rule_changing(writes):
+    """Oldest-first is only meaningful if `at` tracks when the DOCUMENT started, not when its
+    latest rule did — otherwise every update reshuffles the ordering and the headline hops."""
+    activity.record_file("s", "slow.docx", sc="1.1.1", action="engine", force=True)
+    activity.record_file("s", "fast.docx", sc="1.1.1", action="engine", force=True)
+    for sc in ("1.4.5", "1.3.3", "1.4.3"):          # slow.docx advances through its rules
+        activity.record_file("s", "slow.docx", sc=sc, action="checking", force=True)
+    assert writes[-1]["file"] == "slow.docx"
+    assert writes[-1]["sc"] == "1.4.3", "the headline must show its CURRENT rule"
+
+
+def test_finish_file_removes_it_and_is_never_rate_limited(writes):
+    """A dropped removal names a FINISHED document while another is running — the one way this
+    line states something false rather than merely lagging."""
+    activity.record_file("s", "a.docx", sc="1.1.1", action="engine", force=True)
+    activity.record_file("s", "b.docx", sc="1.1.1", action="engine", force=True)
+    n = len(writes)
+    activity.finish_file("s", "a.docx")             # immediately after, so the limiter is armed
+    assert len(writes) > n, "finish_file must bypass the rate limit"
+    assert writes[-1]["file"] == "b.docx"
+    assert writes[-1]["in_flight"] == 1
+
+
+def test_the_headline_empties_when_every_document_is_done(writes):
+    activity.record_file("s", "a.docx", sc="1.1.1", action="engine", force=True)
+    activity.finish_file("s", "a.docx")
+    assert writes[-1]["text"] is None
+    assert writes[-1]["in_flight"] == 0
+
+
+def test_an_abandoned_document_is_pruned(writes, monkeypatch):
+    """Self-healing. If a worker dies between record_file and finish_file the entry would
+    otherwise pin the headline to a document that stopped running, permanently."""
+    monkeypatch.setattr(activity, "_STALE", 0.0)
+    activity.record_file("s", "crashed.docx", sc="1.1.1", action="engine", force=True)
+    activity.record_file("s", "live.docx", sc="1.4.5", action="ocr", force=True)
+    assert writes[-1]["file"] == "live.docx"
+    assert writes[-1]["in_flight"] == 1
+
+
+def test_concurrent_workers_do_not_corrupt_the_set(writes):
+    """The reason the map is in-process under a lock rather than read-modify-write on one Redis
+    key: eight threads racing on that key lose updates, and a lost REMOVAL is permanent."""
+    import threading
+
+    def work(i):
+        f = f"doc{i}.docx"
+        activity.record_file("s", f, sc="1.1.1", action="engine", force=True)
+        for sc in ("1.4.5", "1.3.3", "1.4.3"):
+            activity.record_file("s", f, sc=sc, action="checking")
+        activity.finish_file("s", f)
+
+    ts = [threading.Thread(target=work, args=(i,)) for i in range(8)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert activity._inflight.get("s") == {}, "every worker must have removed its own entry"
+    assert writes[-1]["in_flight"] == 0
+
+
 # ── the reviewer hand-off ─────────────────────────────────────────────────────
 
 def test_proposal_carries_why_review_and_context():

@@ -174,8 +174,13 @@ def _fan_out(store, monkeypatch, files, downloader):
     monkeypatch.setattr(handlers.core, "store", store)
     monkeypatch.setattr(scanner, "_download", _dl)
     monkeypatch.setattr(scanner, "cache_source_bytes", lambda *a, **k: None)
+    # **kw, not a fixed signature. This stub took (tmp, name, detect_pii) and the caller gained a
+    # `scan_id=` kwarg for the progress line; the resulting TypeError was swallowed by handlers'
+    # per-file `except Exception` and every document came back status="error". A stub that is
+    # narrower than the real function turns an unrelated signature change into a fake
+    # product failure, which is exactly what this test then reported.
     monkeypatch.setattr(scanner, "analyse_and_assess",
-                        lambda tmp, name, detect_pii=False: ({
+                        lambda tmp, name, **kw: ({
                             "file": name, "engine": "python/pdf", "status": "analysed",
                             "score": 90, "compliant": 1, "skipped_rules": 0, "issues": []}, None))
 

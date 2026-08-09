@@ -1793,11 +1793,17 @@ def _scoped_for_scoring(issues: list[dict], filename: str) -> list[dict]:
     return filter_issues_to_scope(issues, _file_format(filename), scope)
 
 
-def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
+def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
+                       scan_id: str | None = None):
     """Analyse + rubric-assess ONE already-downloaded file (fan-out path, ADR 0007).
     `tmp` is a directory containing `name`. Returns (assessed_file_dict, pii_info),
     or (None, None) for an unsupported extension. Engines catch their own errors and
-    return an error result rather than raising."""
+    return an error result rather than raising.
+
+    `scan_id` is optional and only publishes the progress line; every existing caller works
+    unchanged without it, and the benchmark harnesses deliberately pass nothing so they do not
+    write progress for a scan that does not exist.
+    """
     rb = Rubric.load_active(ACP / "config")
     ext = Path(name).suffix.lower()
     # Per-file progress logging (the fan-out path was silent — no way to tell a slow file from a
@@ -1806,6 +1812,9 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
     # single image-heavy deck can't hang its worker indefinitely.
     _t0 = time.monotonic()
     print(f"[scan] analysing {name} ({ext or '?'}) …", flush=True)
+    import activity as _act
+    _act.record_file(scan_id, name, phase="analysing",
+                     action="running the accessibility engine", force=True)
     if ext == ".pdf":
         raw = {"engine": "python/pdf", **_analyse_pdf(tmp / name)}
     elif ext in OFFICE:
@@ -1817,6 +1826,8 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
     else:
         return None, None
     # 1.4.5 / 1.4.9 Images of Text — OCR embedded images; self-gates + never raises.
+    _act.record_file(scan_id, name, sc="1.4.5", phase="analysing",
+                     action="reading text baked into images")
     try:
         import ocr as _ocr_mod
         raw["issues"] = (list(raw.get("issues", []))
@@ -1825,6 +1836,8 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
     except Exception:
         pass
     # 1.3.3 Sensory Characteristics + 3.1.2 Language of Parts — text-content checks.
+    _act.record_file(scan_id, name, sc="1.3.3", phase="analysing",
+                     action="checking wording and language changes")
     try:
         import pii as _pii_mod2
         import textchecks as _txt_mod
@@ -1837,6 +1850,8 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
     # 2.4.6 / 2.4.9 / 1.4.3 / 1.4.6 — first-party OOXML/PDF structural checks
     # (docx/pptx headings + link-purpose, PDF contrast); partner engine doesn't
     # reach these for these formats. Self-contained; never raises.
+    _act.record_file(scan_id, name, sc="1.4.3", phase="analysing",
+                     action="checking headings, links and contrast")
     try:
         import office_structure as _off_mod
         raw["issues"] = list(raw.get("issues", [])) + _off_mod.checks_for(tmp / name, ext)
@@ -1870,6 +1885,7 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
         import pii as _pii_mod
         pinfo = _pii_mod.detect_file(tmp / name)
     print(f"[scan] {name}: {len(raw.get('issues', []))} finding(s) in {time.monotonic() - _t0:.1f}s", flush=True)
+    _act.finish_file(scan_id, name)
     return fdict, pinfo
 
 
@@ -1900,15 +1916,31 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
     # DOING? Wrapping means a new phase cannot ship with counters that update and a line that
     # does not, which is how the two drift apart.
     _inner_progress = progress
+    import activity as _act          # also used by _analyse_one, defined further down
+
+    _seen_phase: list[str | None] = [None]
 
     def progress(d: dict) -> None:                            # noqa: F811 — deliberate shadow
         try:
-            import activity as _act
             phase = d.get("phase")
             d = dict(d, activity=_act.line(file=d.get("current"),
                                            action=_SCAN_ACTIONS.get(phase, phase or "")))
-            _act.record(scan_id, file=d.get("current"), action=_SCAN_ACTIONS.get(phase, phase),
-                        phase=phase)
+            # TWO WRITERS, ONE KEY — so they must not fight over it. During `analysing` the
+            # per-file channel (record_file, from _analyse_one) is active and strictly better:
+            # it names the criterion and how many documents are in flight. This coarse line fires
+            # once per completed file in the same phase, and left unguarded it overwrote the
+            # richer headline a fraction of a second later, so the line flickered between
+            # "Onboarding.html · 1.3.3 Sensory Characteristics · …" and a bare
+            # "checking against the WCAG criteria". Measured, on a 13-document scan.
+            if phase != "analysing":
+                # Forced on a phase CHANGE. The rate limit is right for repeats within a phase
+                # and wrong for transitions: the last thing published before `scoring` began was
+                # a finish_file with an empty headline, so the bar went blank for the whole
+                # scoring pass rather than saying "scoring findings".
+                changed = phase != _seen_phase[0]
+                _seen_phase[0] = phase
+                _act.record(scan_id, file=d.get("current"),
+                            action=_SCAN_ACTIONS.get(phase, phase), phase=phase, force=changed)
         except Exception:
             pass          # a progress line must never be able to fail the scan it describes
         _inner_progress(d)
@@ -1946,6 +1978,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         # Opt-out (detect_pii=False) skips PII text extraction — faster on PDF estates.
         def _analyse_one(it):
             name, ext = it["name"], Path(it["name"]).suffix.lower()
+            _act.record_file(scan_id, name, phase="analysing",
+                             action="running the accessibility engine", force=True)
             if ext == ".pdf":
                 r = {"engine": "python/pdf", **_analyse_pdf(tmp / name)}
             elif ext in OFFICE:
@@ -1955,6 +1989,16 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                 r = {"engine": "python/html", **_analyse_html(tmp / name)}
             else:
                 return None
+            # Per-RULE-GROUP progress, in the order the groups actually run. These are the
+            # finest boundaries that exist: inside the .NET engine call there is one process
+            # invocation and no callback, so a line claiming to be on a specific rule within it
+            # would be invented. Each group below names the criteria it really evaluates.
+            #
+            # record_file, not record: up to _SCAN_WORKERS documents are in flight here, and a
+            # single last-writer-wins line under eight threads flips several times a second and
+            # reads as thrashing. See activity.record_file.
+            _act.record_file(scan_id, name, sc="1.4.5", phase="analysing",
+                             action="reading text baked into images")
             # 1.4.5 / 1.4.9 Images of Text — OCR embedded images; self-gates + never raises.
             try:
                 r["issues"] = (list(r.get("issues", []))
@@ -1963,6 +2007,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             except Exception:
                 pass
             # 1.3.3 Sensory Characteristics + 3.1.2 Language of Parts — text-content checks.
+            _act.record_file(scan_id, name, sc="1.3.3", phase="analysing",
+                             action="checking wording and language changes")
             try:
                 r["issues"] = list(r.get("issues", [])) + _txt_mod.content_findings(
                     _pii_mod.extract_text(tmp / name),
@@ -1970,6 +2016,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             except Exception:
                 pass
             # 2.4.6 / 2.4.9 / 1.4.3 / 1.4.6 — first-party OOXML/PDF structural checks.
+            _act.record_file(scan_id, name, sc="1.4.3", phase="analysing",
+                             action="checking headings, links and contrast")
             try:
                 r["issues"] = list(r.get("issues", [])) + _off_mod.checks_for(tmp / name, ext)
             except Exception:
@@ -1981,6 +2029,10 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             except Exception:
                 pass
             pinfo = _pii_mod.detect_file(tmp / name) if detect_pii else None
+            # Drop it from the headline. Forced inside finish_file, because a stale entry here
+            # names a document that has FINISHED while others are still running — the one way
+            # this line can say something false rather than merely lag.
+            _act.finish_file(scan_id, name)
             return (name, r, pinfo)
 
         progress({"phase": "analysing", "files_found": n, "files_done": 0, "current": None})
