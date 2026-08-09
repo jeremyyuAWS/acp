@@ -57,10 +57,12 @@ Regenerate with `python scripts/gen_todo_status.py`; CI fails if this block is s
 
 This is a behaviour change, not bookkeeping: several detectors compute the AA and AAA thresholds in one pass, so AAA findings were previously scored against AA-target files.
 
-**Capability registry — 5 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
+**Capability registry — 7 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
 
 | Criterion | Format | Coverage | Confidence | Not covered |
 |---|---|---|---|---|
+| `1.4.1` | docx | **partial** | high | colour used as the sole carrier of meaning anywhere else — shaded table rows, coloured glyphs, chart series ke |
+| `1.4.11` | docx | **partial** | high | gradient or image fills, theme-colour indirection, and non-shape non-text elements such as focus indicators an |
 | `1.4.11` | xlsx | **partial** | medium | theme-coloured shapes, gradients, images and control affordances are not examined, and whether a shape conveys |
 | `2.4.3` | pdf | **heuristic** | medium | actually comparing the widget order to the structure order needs a /StructTreeRoot walk that is not built |
 | `3.1.1` | html | **full** | high | whether the declared language is the CORRECT one is a content question 3.1.1 does not ask |
@@ -71,7 +73,7 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 
 | Criterion | HTML | DOCX | XLSX | PPTX | PDF |
 |---|---|---|---|---|---|
-| `1.4.1` | pass/fail | review | review | — | review |
+| `1.4.1` | pass/fail | partial | review | — | review |
 | `1.3.5` | pass/fail | — | — | — | — |
 | `2.5.3` | pass/fail | — | — | — | — |
 | `4.1.2` | pass/fail | partial | review | review | partial |
@@ -80,7 +82,7 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 
 **Undeclared coverage** — detectors emitting for a (criterion, format) that no scope table admits. `scripts/gen_matrix_coverage.py` reports these; all known instances (`1.4.11` xlsx, `2.4.3` pdf, `4.1.2` pdf) are now declared in the registry.
 
-**Undeclared remediation (20)** — a pair ACP assesses (a detector emits it, a review lane admits it, or the registry declares it) with no entry in `api/remediation_capability.REMEDIATION`. Registration says what the DETECTOR examines and nothing about whether a FIXER writes, so the two go stale separately. `scripts/gen_matrix_coverage.py` reports each as an explicit gap with an unknown (null) remediation ceiling rather than inferring "no remediation" from the assessment axis — the inference that hid a working PDF form-field fixer behind "No Remediation" until `4.1.2` pdf got its lane. Open: `1.4.1` docx, `1.4.1` xlsx, `1.4.1` pdf, `1.4.4` pptx, `1.4.10` docx, `1.4.10` pptx, `1.4.11` docx, `1.4.11` xlsx, `1.4.11` pptx, `1.4.11` pdf, `1.4.12` docx, `1.4.12` pptx, `1.4.12` pdf, `2.1.2` docx, `2.1.2` xlsx, `2.1.2` pptx, `2.4.3` pptx, `2.4.3` pdf, `4.1.2` xlsx, `4.1.2` pptx.
+**Undeclared remediation (18)** — a pair ACP assesses (a detector emits it, a review lane admits it, or the registry declares it) with no entry in `api/remediation_capability.REMEDIATION`. Registration says what the DETECTOR examines and nothing about whether a FIXER writes, so the two go stale separately. `scripts/gen_matrix_coverage.py` reports each as an explicit gap with an unknown (null) remediation ceiling rather than inferring "no remediation" from the assessment axis — the inference that hid a working PDF form-field fixer behind "No Remediation" until `4.1.2` pdf got its lane. Open: `1.4.1` xlsx, `1.4.1` pdf, `1.4.4` pptx, `1.4.10` docx, `1.4.10` pptx, `1.4.11` xlsx, `1.4.11` pptx, `1.4.11` pdf, `1.4.12` docx, `1.4.12` pptx, `1.4.12` pdf, `2.1.2` docx, `2.1.2` xlsx, `2.1.2` pptx, `2.4.3` pptx, `2.4.3` pdf, `4.1.2` xlsx, `4.1.2` pptx.
 
 <!-- END GENERATED: coverage-status -->
 

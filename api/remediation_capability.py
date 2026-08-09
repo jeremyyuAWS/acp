@@ -124,10 +124,24 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "1.3.1": AUTO,       # pseudo-heading promotion, table header rows, single H1
         "1.3.2": ASSISTED,   # floating-text reading order → per-box "move it inline here" proposal (propose_reading_order)
         "1.3.3": ASSISTED,   # sensory rewrite (local text model)
+        # Colour used as the sole carrier of meaning, and a shape outline too faint against its
+        # own fill. Both detect today; both are HUMAN, not assisted, and that distinction is the
+        # point: an assisted lane emits a PREFILLED value a reviewer confirms, and neither of
+        # these has a value to prefill. The replacement for a colour-only cue is an editorial
+        # choice about how the document communicates; recolouring an outline changes its visual
+        # design. A tool guessing either would overwrite the author's intent with its own, and
+        # the re-scan could not tell it had gone wrong — the finding would clear either way.
+        #
+        # What the lane DOES carry is the measurement, so a reviewer never repeats it: the 1.4.11
+        # finding states the ratio it measured and the 3:1 it needed; the 1.4.1 finding states
+        # how many links had their underline removed. Guidance with the numbers already in it is
+        # the ceiling for both, and it is a real lane rather than an absence.
+        "1.4.1": HUMAN,      # colour-only cue — the replacement is an editorial call
         "1.4.3": AUTO,       # low-contrast run recolour
         "1.4.5": ASSISTED,   # images-of-text — OCR the text back out for a human to paste
         "1.4.8": ASSISTED,   # justified text — exact one-click left-align card, human elects
         "1.4.9": ASSISTED,   # images-of-text (AAA, no exception) — same OCR proposer as 1.4.5
+        "1.4.11": HUMAN,     # faint shape outline — recolouring is a design decision (see 1.4.1)
         "2.4.2": AUTO,       # document title (docProps/core.xml)
         "2.4.4": ASSISTED,   # link purpose — derived/AI-drafted link-text proposal (propose_link_texts)
         "2.4.6": AUTO,       # heading-skip closure after the 1.3.1 outline fix
