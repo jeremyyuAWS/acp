@@ -10,7 +10,8 @@ from assessment import Confidence, Coverage
 from capabilities import Capability
 from rule_registry import register
 
-from formats.docx.detectors import name_role_value, nontext_contrast, use_of_color
+from formats.docx.detectors import (name_role_value, no_keyboard_trap, nontext_contrast,
+                                    use_of_color)
 
 # ── 4.1.2 Name, Role, Value ───────────────────────────────────────────────────────────
 # PARTIAL, not FULL: sound over interactive content controls, silent on ActiveX, embedded OLE
@@ -108,4 +109,37 @@ register(
             "WCAG contrast formula used for text; gradient or image fills, theme-colour "
             "indirection, and non-shape non-text elements such as focus indicators and control "
             "borders are not examined"),
+)
+
+
+# ── 2.1.2 No Keyboard Trap ────────────────────────────────────────────────────────────
+# The last Core-17 criterion with no .docx declaration, and the one where the limit is a fact
+# about DOCUMENTS rather than about ACP. Whether focus can move away from a control is runtime
+# behaviour — it depends on the control's own implementation and on Word's handling — and no
+# static read settles it. Better parsing would not help; the answer is not in the file.
+#
+# So the detector answers what it can (does this document embed interactive controls, and which)
+# and hands the list to a reviewer. That is a real contribution: a 40-page consent pack with two
+# content controls tells a reviewer exactly where to press Tab, instead of leaving them to read
+# the whole document looking for something to try.
+#
+# PARTIAL because of that boundary, and the reason says so plainly. HIGH confidence within it:
+# the control inventory is read straight from the package, not inferred.
+#
+# It CANNOT become a pass, and this is the clearest case of that in the whole registry. A clean
+# document here means "no controls, so nothing to trap" — the criterion never arises rather than
+# being satisfied — and _rule_outcome resolves that to NOT_EVALUATED, which is the honest answer.
+# Unlike 1.1.1 or 2.4.6, no future detector moves this to FULL: the evidence does not exist
+# statically, and the ceiling is a property of the format, not of the effort spent.
+register(
+    rule="2.1.2",
+    fmt="docx",
+    detector=no_keyboard_trap.detect,
+    requires={Capability.FORMS},
+    coverage=Coverage.PARTIAL,
+    confidence=Confidence.HIGH,
+    reason=("the document is read for embedded interactive controls and each one is named for a "
+            "reviewer to try with a keyboard; whether focus can actually move away from a "
+            "control is runtime behaviour that depends on the control's own implementation and "
+            "is not examined, because it is not recorded in the file"),
 )
