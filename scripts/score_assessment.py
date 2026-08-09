@@ -260,12 +260,40 @@ def _score_and_report(corpus: Path) -> dict:
     # observations and zero failures, the 95% upper bound on the true rate is about 3/n. Stating
     # it here stops "0 false PASSes" from being read as "0% false PASS rate" — with a corpus this
     # size those are very different claims, and only the second one clears a 99% gate.
+    # PER CRITERION, because that is the only scope the claim survives at. The corpus-wide bound
+    # this used to print was the more flattering number and the wrong one: pooling 49 violations
+    # across six criteria buys 1.4.3 nothing, since a detector that mishandles a grey is not
+    # vindicated by fixtures that exercise langdetect. Worse, the line itself said "per criterion,
+    # not per corpus" while reporting per corpus — advice contradicted by the number beside it.
     if tot_pos:
-        bound = 3.0 / tot_pos * 100
-        print(f"\n  CEILING ON THE CLAIM: {tot_pos} seeded violations. Even at zero observed "
-              f"false passes,\n  the 95% upper bound on the true rate is ~{bound:.1f}% "
-              f"(rule of three). Defending <=1% needs ~300\n  observations per criterion, not "
-              f"per corpus — see docs on the AI-assessed lane proposal.")
+        print(f"\n  CEILING ON THE CLAIM (rule of three: n trials, zero failures -> true rate "
+              f"<= ~3/n at 95%).\n  Each criterion is bounded only by ITS OWN observations. "
+              f"Pooling them would overstate every one.")
+        print(f"    {'SC':8}{'seeded':>7}{'falsePASS':>10}{'95% bound':>11}   supports a claim of")
+        densest = 0
+        for sc in sorted(tally):
+            t = tally[sc]
+            pos = t["tp"] + t["fn_pass"] + t["abstain_on_fail"]
+            if not pos:
+                continue
+            densest = max(densest, pos)
+            if t["fn_pass"]:
+                # The rule of three applies ONLY at zero observed failures. With one or more,
+                # the observed rate is already the floor, not the ceiling — say so rather than
+                # printing 3/n beside a number that contradicts it.
+                b = t["fn_pass"] / pos * 100
+                print(f"    {sc:8}{pos:>7}{t['fn_pass']:>10}{'—':>11}   "
+                      f"observed {b:.1f}% — a floor, not a bound")
+            else:
+                b = 3.0 / pos * 100
+                gate = ("a >=99% PASS-precision gate" if b <= 1.0
+                        else f"at best {100 - b:.0f}% — n is the limit, not the detector")
+                print(f"    {sc:8}{pos:>7}{0:>10}{b:>10.1f}%   {gate}")
+        print(f"  A <=1% claim needs ~300 observations on the criterion making it; the densest "
+              f"here has {densest}.")
+        print(f"  And these samples are NOT independent — consecutive greys differ by one step — "
+              f"so even\n  a criterion that reached n=300 would bound 'wrong somewhere in this "
+              f"band', not 'wrong on\n  an arbitrary document'. See the AI-assessed lane proposal.")
 
     if attribution:
         print("\n=== ATTRIBUTION ERRORS (detected, blamed the wrong SC) ===")
