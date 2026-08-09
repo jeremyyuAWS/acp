@@ -601,6 +601,32 @@ def formats_in_scope(scope: dict | None = None) -> frozenset[str] | None:
     return frozenset(out) or None
 
 
+def scope_as_json(scope: dict | None) -> dict[str, list[str]] | None:
+    """The scope map in a JSON-serialisable, canonically-ordered shape, or None.
+
+    Sorted at both levels so two equal scopes always serialise identically — the diff compares
+    these by value, and a set's iteration order would make an unchanged scope look changed.
+    """
+    if not scope:
+        return None
+    return {sc: sorted(fmts or ()) for sc, fmts in sorted(scope.items())}
+
+
+def criteria_for_format(scope: dict | None, fmt: str | None) -> frozenset[str] | None:
+    """Which criteria are in scope FOR ONE FORMAT, or None for no restriction.
+
+    Finer than `formats_in_scope`, and the difference decides whether two scans' scores can be
+    compared. A scope change that only removed PDF criteria leaves every .docx score computed
+    over exactly the same criteria as before, so those deltas are still real; treating any scope
+    change as poisoning the whole diff would discard the comparison an operator most often wants.
+    """
+    if not scope:
+        return None
+    if fmt is None:
+        return None
+    return frozenset(sc for sc, fmts in scope.items() if fmt in (fmts or ()))
+
+
 def file_in_scope(filename: str, scope: dict | None = None) -> bool:
     """Should this file be READ at all under the current scope?
 

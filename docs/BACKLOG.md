@@ -43,9 +43,28 @@ third is the correctness fix with the widest blast radius.
   *Verified by disabling the gate and re-running: 4 of 12 tests fail without it, including the
   load-bearing one, which asserts on the FETCH rather than the file list — a list-only assertion
   passes against the old behaviour too, since the old list was filtered downstream anyway.*
-  **Still open from the proposal's "consequences" section:** scan diffs across differing scopes
-  (ADR 0009) and naming the unread formats in the PDF report's `_scope_section`. Both decisions
-  rather than code.
+  **Still open from the proposal's "consequences" section:** naming the unread formats in the PDF
+  report's `_scope_section`, which currently names only the criteria not evaluated.
+
+- [x] **P0.5 — Scan diffs are scope-aware (ADR 0009).** Done. Two failures, one cause: a score is
+  computed over the in-scope findings, so the same unchanged document scores **60** under a wide
+  scope and **75** with one criterion in scope. Diffing across a scope change therefore reported
+  every document as **improved** — an operator who narrowed the scope was congratulated on
+  progress that did not happen — and every file the new scope excluded, never read and so absent
+  from `file_records`, landed in `removed` as *"45 documents disappeared"*.
+  `scan_runs.scope` now carries the criteria scope alongside the discovery boundary (no
+  migration — it rides in the existing JSON), and `get_scan_diff` compares what each scan
+  actually measured.
+  **Compared per format, not globally.** A scope change that only touched PDF criteria leaves
+  every `.docx` score computed over exactly the same criteria, so those deltas are still real —
+  treating any scope change as poisoning the whole diff is the obvious fix and it discards the
+  comparison an operator most often wants.
+  Incomparable files are **reported, not dropped** (`incomparable`), files the scope excluded are
+  `not_read` rather than `removed`, and the radar says the scope changed — suppressing the
+  numbers silently leaves a reader concluding nothing changed, which is the same wrong answer
+  from the other side. "Nothing got worse" is downgraded to "nothing got worse among the
+  documents that could be compared" when anything was excluded.
+  *Verified by disabling the scope-awareness and re-running: the two headline tests fail.*
 
 - [x] **P0.4 — An incrementally-reused analysis is re-scored under the current scope.** Done, and
   **the diagnosis in the proposal was wrong**, which is worth recording because the wrong version

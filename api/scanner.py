@@ -941,6 +941,21 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
     #
     # Placed before `_dedupe_names` so `kept` — set by each branch above — is corrected here
     # rather than left describing a population the caller will never receive.
+    if scope_out is not None:
+        # The CRITERIA scope, recorded on the scan alongside the discovery boundary.
+        #
+        # `scope_out` is persisted to scan_runs.scope, so this rides along with no migration —
+        # and the two belong together: "what this scan covered" is a folder AND a set of
+        # criteria, and a reader given one without the other cannot reconstruct what was
+        # measured. get_scan_diff needs it because a score is computed over the in-scope
+        # findings: without it, a diff cannot tell a document that got worse from a document
+        # measured against fewer criteria, and reports the second as the first.
+        #
+        # Recorded even when None (no restriction), because "unset" is a fact about the scan
+        # worth keeping — absent, a reader cannot distinguish an unrestricted scan from one that
+        # predates this field.
+        from store import scope_as_json
+        scope_out["scan_scope"] = scope_as_json(scope_files)
     if scope_files is not None:
         from store import file_in_scope       # module-level idiom here: avoids a circular import
         _before = len(result)

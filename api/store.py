@@ -403,7 +403,7 @@ from assessment_policy import (  # noqa: F401,E402  (re-export)
     _LEGACY_NOT_EVALUATED, _SUPERSEDING_OUTCOMES, _SC_LEVEL, _ALL_FORMATS,
     active_scope, scope_problem, parse_scope_setting,
     in_scope, in_target, parse_target, config_target,
-    formats_in_scope, file_in_scope,
+    formats_in_scope, file_in_scope, scope_as_json, criteria_for_format,
     filter_issues_to_target, filter_issues_to_scope, _rule_outcome, _certify, _registry_for,
     _split_sc_counts, _file_format, _extract_sc, _pages_csv,
 )
@@ -1426,9 +1426,34 @@ class Store:
 
     def get_scan_diff(self, cur_id: str, prev_id: str, owner: str | None = None) -> dict | None:
         """Diff two scans (ADR 0009) → per-file score regressions / improvements + the WCAG
-        criteria that flipped pass→fail. Owner-scoped: both scans must belong to the caller."""
+        criteria that flipped pass→fail. Owner-scoped: both scans must belong to the caller.
+
+        SCOPE-AWARE, BECAUSE A SCORE IS ONLY MEANINGFUL AGAINST THE CRITERIA IT WAS COMPUTED
+        OVER. `scan_scope` decides which findings reach `Rubric.assess`, so the same unchanged
+        document scores 60 under a wide scope and 75 with one criterion in scope. Diffing those
+        two scans reported every document as IMPROVED — an operator who narrowed the scope was
+        congratulated on progress that did not happen, which is worse than a missing feature
+        because it is believed.
+
+        The same change also emptied the estate: files whose format the new scope excludes were
+        never read, so they are absent from `file_records` and landed in `removed`, reading as
+        "45 documents disappeared".
+
+        Both are handled by comparing what each scan actually measured:
+
+          - per file, the criteria in scope FOR ITS FORMAT. Compared per format, not globally,
+            so a scope change that only touched PDF criteria leaves every .docx delta valid —
+            treating any scope change as poisoning the whole diff would throw away the
+            comparison an operator most often wants.
+          - files missing because their format was out of scope are reported as `not_read`,
+            never as `removed`. "We did not look" and "it is gone" are different facts and only
+            one of them is about the estate.
+
+        Scans predating the `scan_scope` field have None recorded, which is treated as "no
+        restriction" — the same reading `formats_in_scope` gives, and the only one available.
+        """
         with self._db.cursor() as cur:
-            self._db.execute(cur, "SELECT id, owner_email, completed_at FROM scan_runs WHERE id IN (%s,%s)", (cur_id, prev_id))
+            self._db.execute(cur, "SELECT id, owner_email, completed_at, scope FROM scan_runs WHERE id IN (%s,%s)", (cur_id, prev_id))
             runs = {r["id"]: r for r in self._db.fetchall(cur)}
             if cur_id not in runs or prev_id not in runs:
                 return None
@@ -1468,12 +1493,43 @@ class Store:
             tp, tc = _traces(prev_id), _traces(cur_id)
             sevs = _severities(cur_id)
 
-        regressed, improved, new, removed = [], [], [], []
+        def _scan_scope(sid):
+            import json as _json
+            raw = runs[sid].get("scope")
+            if not raw:
+                return None
+            try:
+                return (_json.loads(raw) if isinstance(raw, str) else raw).get("scan_scope")
+            except (ValueError, AttributeError):
+                return None
+
+        prev_scope, cur_scope = _scan_scope(prev_id), _scan_scope(cur_id)
+        scope_changed = prev_scope != cur_scope
+
+        def _comparable(filename: str) -> bool:
+            """Were this file's two scores computed over the same criteria?
+
+            Per FORMAT, deliberately. A global "did the scope change" test would discard every
+            .docx delta because somebody stopped scanning PDFs, and those deltas are real.
+            """
+            if not scope_changed:
+                return True
+            fmt = _file_format(filename)
+            return (criteria_for_format(prev_scope, fmt)
+                    == criteria_for_format(cur_scope, fmt))
+
+        regressed, improved, new, removed, incomparable = [], [], [], [], []
         for f, cs in fc.items():
             if f not in fp:
                 new.append({"file": f, "score": cs}); continue
             ps = fp[f]
             if ps is None or cs is None:
+                continue
+            if not _comparable(f):
+                # Reported, not dropped. A file that silently vanishes from a diff is the same
+                # failure as a count without its boundary: the reader concludes nothing changed.
+                incomparable.append({"file": f, "prev": ps, "cur": cs,
+                                     "reason": "assessed against a different set of criteria"})
                 continue
             delta = cs - ps
             if delta < 0:
@@ -1484,14 +1540,34 @@ class Store:
                 regressed.append({"file": f, "prev": ps, "cur": cs, "delta": delta, "broke": broke[:6]})
             elif delta > 0:
                 improved.append({"file": f, "prev": ps, "cur": cs, "delta": delta})
-        removed = [{"file": f, "score": fp[f]} for f in fp if f not in fc]
+        # A file absent from the current scan is either GONE from the estate or simply NOT READ
+        # because the current scope excludes its format. Those are different facts and only the
+        # first is about the estate; conflating them turns "we assess only Word documents" into
+        # "45 documents disappeared", which is a support ticket rather than a diff.
+        not_read = []
+        removed = []
+        for f in fp:
+            if f in fc:
+                continue
+            row = {"file": f, "score": fp[f]}
+            if cur_scope is not None and not file_in_scope(f, {k: frozenset(v) for k, v in cur_scope.items()}):
+                not_read.append(row)
+            else:
+                removed.append(row)
         regressed.sort(key=lambda x: x["delta"])          # worst (most negative) first
         improved.sort(key=lambda x: -x["delta"])
         return {
             "cur_id": cur_id, "prev_id": prev_id,
             "cur_at": runs[cur_id].get("completed_at"), "prev_at": runs[prev_id].get("completed_at"),
-            "summary": {"regressed": len(regressed), "improved": len(improved), "new": len(new), "removed": len(removed)},
-            "regressed": regressed[:50], "improved": improved[:50], "new": new[:50], "removed": removed[:50],
+            # Carried so the UI can SAY the scope changed rather than leaving a reader to infer
+            # it from a diff that is quieter than they expected.
+            "scope_changed": scope_changed,
+            "prev_scope": prev_scope, "cur_scope": cur_scope,
+            "summary": {"regressed": len(regressed), "improved": len(improved),
+                        "new": len(new), "removed": len(removed),
+                        "not_read": len(not_read), "incomparable": len(incomparable)},
+            "regressed": regressed[:50], "improved": improved[:50], "new": new[:50],
+            "removed": removed[:50], "not_read": not_read[:50], "incomparable": incomparable[:50],
         }
 
     def inventory(self) -> list[dict]:
