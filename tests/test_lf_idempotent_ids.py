@@ -96,5 +96,14 @@ def test_file_score_passes_deterministic_id(monkeypatch):
     lf.file_score("scan1", "a.docx", 85.0)
     assert len(calls) == 2
     assert calls[0]["id"] == calls[1]["id"]
-    assert calls[0]["trace_id"] == "scan1::a.docx"
+    # The trace id no longer embeds the raw filename — it carries the redacted document label
+    # (docs/audit-langfuse-phi.md P0.10), since a filename in a hospital estate names a patient.
+    # What this test is FOR is unchanged and still asserted above and below: the id is stable
+    # across re-emission, so Langfuse upserts the score instead of appending a second row.
+    # Pinned as a property rather than a literal, because the literal now depends on a
+    # per-deployment salt and would make this a test of the salt.
+    assert calls[0]["trace_id"] == calls[1]["trace_id"]
+    assert calls[0]["trace_id"].startswith("scan1::")
+    assert "a.docx" not in calls[0]["trace_id"]
+    assert calls[0]["trace_id"].endswith(".docx")     # the type survives; the name does not
     assert calls[0]["value"] == 85.0

@@ -78,11 +78,39 @@ disabled. Absent credentials means no tracing at all, not degraded tracing.
 
 ## Recommendations
 
-1. **Decide the filename question first.** It is the only field that flows on every scan, and the
-   only one whose sensitivity comes from the customer's naming convention rather than from
-   ACP. Options, cheapest first: hash the filename into the trace and keep the plaintext only in
-   the app's own database; or keep the extension and a per-scan index (`file 3 of 12 (.docx)`).
-   Either keeps traces navigable while removing the patient identifier.
+1. ~~**Decide the filename question first.**~~ **Done, 2026-08-09 — redacted by default.**
+   A document now appears as `doc-3f9a2c.docx`: a keyed HMAC of the filename, truncated, plus the
+   extension.
+
+   **What it keeps.** The label is stable per (deployment, filename), so every span for a document
+   still collapses onto one trace, a document is still followable across scans, and the extension
+   still says what kind of file it is — most of what a filename was doing in a trace. What it
+   stops is a trace reader learning a patient's name, and trace access is a wider circle than
+   document access.
+
+   **Keyed, not a bare digest.** An unkeyed hash is a dictionary: anyone who suspects a patient is
+   in the estate could hash the likely filename and confirm it. `ACP_TRACE_SALT`, falling back to
+   `LANGFUSE_SECRET_KEY` — already required for tracing to run at all, so a traced deployment
+   always has one.
+
+   **The trace ID was the real work.** It is `{scan_id}::{file}` and joins a file's spans, its AI
+   calls, its HITL decisions and its score into one trace — built by string interpolation at four
+   separate call sites. Redacting the display while leaving that would have looked fixed and
+   leaked exactly as before, so every site now goes through one `_trace_id` helper. Nine call
+   sites across four kinds of field (span name, id, tag, metadata) were involved;
+   `tests/test_langfuse_redacts_filenames.py` drives each public entry point and asserts the
+   patient's name appears nowhere in the captured payload. Mutation-checked: reverting the single
+   tag site fails three tests.
+
+   **Redaction is the DEFAULT, and the demo opts out** (`ACP_TRACE_FILENAMES=plain`, set in
+   `deploy/public/deploy.sh`). The cost of the wrong default is asymmetric — an inconvenient demo
+   versus patient names in an observability store — so it fails safe, the same shape as the E2E
+   bypass in `core.py`. An unrecognised value also fails safe rather than falling through to
+   plain.
+
+   *Not addressed by this:* the `user:` tag and `user_id` still carry the signed-in operator's
+   email. That is deliberate — it is the person running the scan, not a patient, and grouping
+   traces by user is the point of it.
 2. ~~**Bound the reviewer note.**~~ **Done, 2026-08-09 — as a length, not a truncation.**
    `trace_hitl_decision` now sends `note_chars` and never the text.
 
