@@ -459,6 +459,37 @@ def docx_checks(path: Path) -> list[dict]:
                     findings.append(f)
                 prev_level = level
 
+            # 2.4.6 — a heading with NO TEXT. The outline walk above reads pStyle refs and never
+            # the heading's content, so an empty Heading paragraph passed through every check
+            # ACP has: it is in the outline (so no pseudo-heading finding), it breaks no level
+            # sequence (so no skip finding), and it has no runs to fail contrast on.
+            #
+            # It is a real defect and a specifically nasty one. Screen readers offer a heading
+            # list as the primary way to navigate a long document; an empty entry is an
+            # announcement of nothing — the user is told a section exists, cannot tell what it
+            # is, and cannot tell whether they have missed content. On a 25-page benefits
+            # handbook that is a navigation dead end, not a cosmetic slip.
+            #
+            # Deliberately narrow. Only a heading-styled paragraph whose text is empty or
+            # whitespace, and only when it holds no drawing — a heading whose content is an image
+            # has a different problem (1.1.1's, if the image lacks alt text), and reporting it
+            # here would report one defect twice under two criteria.
+            for ordinal, p in enumerate(_PARA.findall(doc), start=1):
+                if not _HEADING_ANY.search(p):
+                    continue
+                if "<w:drawing" in p or "<w:pict" in p:
+                    continue
+                if "".join(_WT.findall(p)).strip():
+                    continue
+                f = _finding("DOCX_HEADING_EMPTY", "2.4.6 Headings and Labels", "MODERATE")
+                lvl = _HEADING_STYLE.search(p)
+                f["detail"] = (
+                    f"Heading {ordinal}"
+                    + (f" (H{lvl.group(1)})" if lvl else "")
+                    + " has no text — a screen reader announces it in the heading list with "
+                      "nothing to announce, so the section cannot be identified or skipped")
+                findings.append(f)
+
             # 1.3.1 — a paragraph visually styled as a heading (large/bold) but left in a
             # body style, so it isn't in the heading outline AT navigates by. One per doc.
             for p in _PARA.findall(doc):

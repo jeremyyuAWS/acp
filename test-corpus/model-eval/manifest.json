@@ -1,0 +1,111 @@
+[
+  {
+    "file": "clean.docx",
+    "expect_criteria": [],
+    "kb": 35.8
+  },
+  {
+    "file": "alt-photo.docx",
+    "expect_criteria": [
+      "1.1.1"
+    ],
+    "kb": 36.3
+  },
+  {
+    "file": "alt-text-image.docx",
+    "expect_criteria": [
+      "1.1.1",
+      "1.4.5"
+    ],
+    "kb": 64.4
+  },
+  {
+    "file": "link-generic.docx",
+    "expect_criteria": [
+      "2.4.4"
+    ],
+    "kb": 35.9
+  },
+  {
+    "file": "link-raw-url.docx",
+    "expect_criteria": [
+      "2.4.4"
+    ],
+    "kb": 35.9
+  },
+  {
+    "file": "sensory.docx",
+    "expect_criteria": [
+      "1.3.3"
+    ],
+    "kb": 35.8
+  },
+  {
+    "file": "lang-parts.docx",
+    "expect_criteria": [
+      "3.1.2"
+    ],
+    "kb": 35.8
+  },
+  {
+    "file": "form-unlabeled.docx",
+    "expect_criteria": [
+      "3.3.2"
+    ],
+    "kb": 35.8
+  },
+  {
+    "file": "reading-order.docx",
+    "expect_criteria": [
+      "1.3.2"
+    ],
+    "kb": 35.8
+  },
+  {
+    "file": "pseudo-heading.docx",
+    "expect_criteria": [
+      "1.3.1"
+    ],
+    "kb": 35.8
+  },
+  {
+    "file": "table-no-header.docx",
+    "expect_criteria": [
+      "1.3.1"
+    ],
+    "kb": 35.9
+  },
+  {
+    "file": "low-contrast.docx",
+    "expect_criteria": [
+      "1.4.3"
+    ],
+    "kb": 35.8
+  },
+  {
+    "file": "no-title-lang.docx",
+    "expect_criteria": [
+      "2.4.2",
+      "3.1.1"
+    ],
+    "kb": 35.7
+  },
+  {
+    "file": "heading-skip.docx",
+    "expect_criteria": [
+      "2.4.6"
+    ],
+    "kb": 35.8
+  },
+  {
+    "file": "mixed.docx",
+    "expect_criteria": [
+      "1.1.1",
+      "1.4.5",
+      "2.4.4",
+      "1.3.3",
+      "3.1.2"
+    ],
+    "kb": 64.6
+  }
+]

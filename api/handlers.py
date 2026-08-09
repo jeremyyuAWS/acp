@@ -553,7 +553,25 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 # surfaced for one-click approval rather than silently written (WCAG 1.1.1
                 # intent stays human). Attach the prefilled drafts to the file's 1.1.1 HITL
                 # row — before the no-fixes early return, or they die inside the job result.
-                _enqueue_proposals(scan_id, filename, "1.1.1", "Non-text Content", _proposals)
+                # Route each proposal to ITS criterion. remediate_office used to return only
+                # vision alt, so hard-coding 1.1.1 here was correct; it now also drafts 2.4.4,
+                # 1.3.3 and 3.1.2 (see _draft_docx_assisted), and a link-text draft filed under
+                # 1.1.1 would ask a reviewer to approve alt text that is not alt text — and
+                # would clear the wrong finding when they did.
+                #
+                # Untagged proposals default to 1.1.1: every proposer that predates the `sc`
+                # field emits vision alt, so the default preserves their behaviour exactly
+                # rather than silently dropping them into a bucket nobody reads.
+                _PROP_RULE_NAMES = {
+                    "1.1.1": "Non-text Content", "2.4.4": "Link Purpose (In Context)",
+                    "1.3.3": "Sensory Characteristics", "3.1.2": "Language of Parts",
+                }
+                _by_sc: dict[str, list] = {}
+                for _p in _proposals:
+                    _by_sc.setdefault((_p or {}).get("sc") or "1.1.1", []).append(_p)
+                for _sc, _group in _by_sc.items():
+                    _enqueue_proposals(scan_id, filename, _sc,
+                                       _PROP_RULE_NAMES.get(_sc, _sc), _group)
                 # Deferred alt text (no faithful source — see remediate_office) must
                 # reach a human: those findings are fix_mode 'auto', so the ai-assisted
                 # HITL pull never sees them. Queue here — before the no-fixes early
@@ -768,7 +786,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
     scan_file job per file. Each file's Langfuse trace is opened later, per file, by
     _analyse_and_persist_one — not here."""
     from rubric import Rubric
-    from scanner import _list, _drive_service, ACP, FANOUT_MAX_FILES
+    from scanner import _list, _drive_service, ACP, FANOUT_MAX_FILES, _scope_for_listing
     scan_id = payload.get("scan_id") or job.get("scan_id")
     source = payload.get("source", "drive")
     ai = bool(payload.get("ai", True)) and core.store.get_ai_enabled()
@@ -780,10 +798,13 @@ def _scan_discover(payload: dict, job: dict) -> None:
     svc = None if source in ("local", "sharepoint") else _drive_service(toks.get("drive"))
     effective_folder = folder if folder else ("root" if toks.get("drive") else None)
     scope: dict = {}
+    # scope_files gates what is READ, not what is scored. This is the PRODUCTION listing path
+    # (ADR 0007 fan-out); run_scan's is the local one, and wiring only that would leave a
+    # hospital's PDFs being downloaded and OCR'd in the deployment that matters.
     items = _list(source, svc, folder=effective_folder, sp_token=toks.get("sp"),
                   max_files=FANOUT_MAX_FILES,
                   exclude_remediated=bool(payload.get("exclude_remediated", False)),
-                  scope_out=scope)
+                  scope_out=scope, scope_files=_scope_for_listing())
     # shadow_candidate (a file sharing a logical name with another — possibly ACP's own output
     # shadowing its source) is computed inside _enqueue_analysis from the item list, so the same
     # rule applies whether the fan-out runs now or later at Assess.
@@ -879,6 +900,34 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
             reused_from_scan = dedup.pop("reused_from_scan", None)
             pinfo = dedup.pop("pii")
             fdict = {"file": name, **dedup}
+            # RE-SCORE UNDER THE CURRENT SCOPE. The findings are reused; the SCORE is not.
+            #
+            # `score`, `compliant` and `skipped_rules` are scope-dependent — `_scoped_for_scoring`
+            # decides which findings `Rubric.assess` ever sees — but `find_prior_analysis` gates
+            # reuse on rubric_hash alone. So narrowing the operator's scope and re-scanning
+            # returned the score computed under the OLD scope: one measured .docx with a 1.1.1 and
+            # a 1.3.1 finding scores 60 unscoped and 75 with only 1.1.1 in scope, and the reuse
+            # handed back 60. Silently, and looking exactly like the scope had done nothing.
+            #
+            # That is the same class of staleness rubric_hash already guards ("a stale analysis
+            # under an old rubric is not valid evidence once the rule set has changed") — a stale
+            # score under an old SCOPE is not valid evidence either.
+            #
+            # Re-scored rather than invalidated, which is the cheaper and more faithful fix: the
+            # full issue list comes back with the reuse, and scoring is a pure function over it.
+            # No download, no engine, no OCR — the entire point of ADR 0011 survives. This is
+            # what `_scoped_for_scoring`'s own note already promises: "Every finding stays on the
+            # record, so re-reporting the same scan under a different scope needs no re-scan."
+            try:
+                from scanner import rescore_reused
+                fdict.update(rescore_reused(fdict.get("issues") or [], name,
+                                            fdict.get("status")))
+            except Exception:
+                # Deliberately narrow: a rescore failure leaves the reused score in place rather
+                # than failing the file. Logged, because a silent fallback here is how the stale
+                # score came back unnoticed the first time.
+                print(f"[scan] {name}: could not re-score reused analysis — "
+                      "keeping the prior score", flush=True)
             if reused_from_scan and pinfo and pinfo.get("total"):
                 # PII carries more sensitivity than a WCAG score -- copying it forward
                 # gets its own audit entry rather than a silent inherit (ADR 0011).
@@ -930,7 +979,10 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                                  "issues": [], "acp_stamped": stamp}
                         pinfo = None
                 if fdict is None:
-                    fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii)
+                    # scan_id threads the per-rule progress line through. This is the PRODUCTION
+                    # fan-out path (ADR 0007) — run_scan's in-process pool is the local one — so
+                    # without it the line works in development and is silent where users are.
+                    fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii, scan_id=scan_id)
             except Exception as e:
                 # A credential failure is true of the whole scan, so it is named once, acted on
                 # once, and every remaining file skips its doomed download (drive_auth_failure).

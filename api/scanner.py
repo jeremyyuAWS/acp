@@ -845,8 +845,13 @@ def _dedupe_names(items: list[dict]) -> list[dict]:
 
 def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None = None,
           max_files: int | None = None, exclude_remediated: bool = False,
-          scope_out: dict | None = None) -> list[dict]:
+          scope_out: dict | None = None, scope_files: dict | None = None) -> list[dict]:
     """List the source. `scope_out`, when given, is filled in with WHAT WAS COVERED.
+
+    `scope_files` is the operator's resolved `scan_scope` map. Given, files whose format no
+    in-scope criterion applies to are dropped from the listing and never read — see the block at
+    the end of this function. None means no restriction, which is NOT the same as the full set of
+    formats and must not be collapsed into one.
 
     A file count on its own is not a fact about an estate — it is a fact about a boundary the
     caller chose, and the two are only the same number when the boundary is "everything". On
@@ -921,6 +926,49 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
                               "folder_name": _folder_name(svc, _DEMO_FOLDER),
                               "folders_walked": 1, "listed": len(batch), "kept": len(result),
                               "truncated": False})
+    # ── the operator's file-type scope, applied to what gets READ ───────────────────────────
+    #
+    # ONE PLACE, NOT FOUR. The proposal for this listed four enumeration sites (local, SharePoint,
+    # Drive's mimeType allow-list, upload) and warned that missing one is how the feature
+    # half-works. Every branch above converges here, so filtering at the dispatcher covers all of
+    # them and any source added later — a stronger guarantee than four call sites that must be
+    # kept in step.
+    #
+    # WHAT THIS DOES AND DOES NOT CLAIM. The out-of-scope file is still LISTED (its name and size
+    # come back from a source the operator connected on purpose); it is never DOWNLOADED, opened,
+    # rasterised, OCR'd, cached to blob or traced. That is the distinction that matters for PHI:
+    # the content is what was being read, and `_download` runs over this list.
+    #
+    # Placed before `_dedupe_names` so `kept` — set by each branch above — is corrected here
+    # rather than left describing a population the caller will never receive.
+    if scope_out is not None:
+        # The CRITERIA scope, recorded on the scan alongside the discovery boundary.
+        #
+        # `scope_out` is persisted to scan_runs.scope, so this rides along with no migration —
+        # and the two belong together: "what this scan covered" is a folder AND a set of
+        # criteria, and a reader given one without the other cannot reconstruct what was
+        # measured. get_scan_diff needs it because a score is computed over the in-scope
+        # findings: without it, a diff cannot tell a document that got worse from a document
+        # measured against fewer criteria, and reports the second as the first.
+        #
+        # Recorded even when None (no restriction), because "unset" is a fact about the scan
+        # worth keeping — absent, a reader cannot distinguish an unrestricted scan from one that
+        # predates this field.
+        from store import scope_as_json
+        scope_out["scan_scope"] = scope_as_json(scope_files)
+    if scope_files is not None:
+        from store import file_in_scope       # module-level idiom here: avoids a circular import
+        _before = len(result)
+        result = [it for it in result if file_in_scope(it.get("name") or "", scope_files)]
+        _skipped = _before - len(result)
+        if scope_out is not None:
+            # REPORTED, NEVER SILENT. Narrowing the scope makes the estate smaller, and an
+            # operator who cannot see why cannot tell a scoped scan from a source that lost
+            # files. This codebase has been bitten repeatedly by a number that changed for a
+            # reason nobody could see; it is also the line that answers "did you look at
+            # everything?" in an audit.
+            scope_out["skipped_out_of_scope"] = _skipped
+            scope_out["kept"] = len(result)
     # `kept` is set by each branch above, BEFORE this pass, and stays correct because
     # _dedupe_names renames colliding names without ever dropping an item — so the count the UI
     # states beside the scope is the number of rows the UI will show. That is an invariant of
@@ -1767,6 +1815,24 @@ def _collapse_duplicate_alt(issues: list[dict]) -> list[dict]:
     return [i for i in issues if i.get("ruleId") not in _FIRST_PARTY_ALT_RULES]
 
 
+def _scope_for_listing() -> dict | None:
+    """The operator's `scan_scope` map, for gating what gets READ. None = no restriction.
+
+    Deliberately the same resolution `_scoped_for_scoring` uses — the Store, not `in_scope`'s
+    storeless fallback, which cannot see the `scan_scope` setting and answers "everything is in
+    scope" to every question. That fallback is precisely how this feature came to gate scoring
+    and nothing else.
+
+    NOT wrapped in a bare try/except, for the reason spelled out in `_scoped_for_scoring`: a gate
+    that fails open and says nothing is indistinguishable from a gate that was never wired up,
+    and here failing open means reading a hospital's PDFs after the operator asked for Word
+    documents only. That must surface as a defect, not as a quietly wider scan.
+    """
+    import core
+    from store import active_scope
+    return active_scope(core.store)
+
+
 def _scoped_for_scoring(issues: list[dict], filename: str) -> list[dict]:
     """The findings a SCORE may be computed from, for one file — the operator scope applied.
 
@@ -1793,11 +1859,39 @@ def _scoped_for_scoring(issues: list[dict], filename: str) -> list[dict]:
     return filter_issues_to_scope(issues, _file_format(filename), scope)
 
 
-def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
+def rescore_reused(issues: list[dict], filename: str, status: str | None = None) -> dict:
+    """Score for a REUSED analysis, computed under the scope in force now (ADR 0011).
+
+    Incremental reuse skips the download, the engine and the OCR — the expensive parts, and the
+    whole point of ADR 0011. It must not also skip the SCORE, because a score is a function of
+    the operator's scope and the scope can change between scans while the file's bytes do not.
+    `find_prior_analysis` gates reuse on `rubric_hash` and nothing else, so before this the
+    reused row carried whatever score was right the last time somebody scanned.
+
+    Deliberately goes through `_scoped_for_scoring` and `Rubric.assess` — the same two calls the
+    fresh path uses — rather than re-deriving a score here. A second expression of "what a score
+    counts" is exactly how the single-file and batch paths diverged once already (see
+    `_scoped_for_scoring`'s note), and this is a third caller.
+
+    Returns only the keys a reused fdict should overwrite, so the caller's `issues`, `engine`,
+    `acp_stamped` and every other reused field pass through untouched.
+    """
+    rb = Rubric.load_active(ACP / "config")
+    assessed = rb.assess(status != "error", _scoped_for_scoring(issues, filename), [])
+    return {k: assessed[k] for k in ("score", "compliant", "skipped_rules") if k in assessed}
+
+
+def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
+                       scan_id: str | None = None):
     """Analyse + rubric-assess ONE already-downloaded file (fan-out path, ADR 0007).
     `tmp` is a directory containing `name`. Returns (assessed_file_dict, pii_info),
     or (None, None) for an unsupported extension. Engines catch their own errors and
-    return an error result rather than raising."""
+    return an error result rather than raising.
+
+    `scan_id` is optional and only publishes the progress line; every existing caller works
+    unchanged without it, and the benchmark harnesses deliberately pass nothing so they do not
+    write progress for a scan that does not exist.
+    """
     rb = Rubric.load_active(ACP / "config")
     ext = Path(name).suffix.lower()
     # Per-file progress logging (the fan-out path was silent — no way to tell a slow file from a
@@ -1806,6 +1900,9 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
     # single image-heavy deck can't hang its worker indefinitely.
     _t0 = time.monotonic()
     print(f"[scan] analysing {name} ({ext or '?'}) …", flush=True)
+    import activity as _act
+    _act.record_file(scan_id, name, phase="analysing",
+                     action="running the accessibility engine", force=True)
     if ext == ".pdf":
         raw = {"engine": "python/pdf", **_analyse_pdf(tmp / name)}
     elif ext in OFFICE:
@@ -1817,6 +1914,8 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
     else:
         return None, None
     # 1.4.5 / 1.4.9 Images of Text — OCR embedded images; self-gates + never raises.
+    _act.record_file(scan_id, name, sc="1.4.5", phase="analysing",
+                     action="reading text baked into images")
     try:
         import ocr as _ocr_mod
         raw["issues"] = (list(raw.get("issues", []))
@@ -1825,6 +1924,8 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
     except Exception:
         pass
     # 1.3.3 Sensory Characteristics + 3.1.2 Language of Parts — text-content checks.
+    _act.record_file(scan_id, name, sc="1.3.3", phase="analysing",
+                     action="checking wording and language changes")
     try:
         import pii as _pii_mod2
         import textchecks as _txt_mod
@@ -1837,6 +1938,8 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
     # 2.4.6 / 2.4.9 / 1.4.3 / 1.4.6 — first-party OOXML/PDF structural checks
     # (docx/pptx headings + link-purpose, PDF contrast); partner engine doesn't
     # reach these for these formats. Self-contained; never raises.
+    _act.record_file(scan_id, name, sc="1.4.3", phase="analysing",
+                     action="checking headings, links and contrast")
     try:
         import office_structure as _off_mod
         raw["issues"] = list(raw.get("issues", [])) + _off_mod.checks_for(tmp / name, ext)
@@ -1870,7 +1973,19 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
         import pii as _pii_mod
         pinfo = _pii_mod.detect_file(tmp / name)
     print(f"[scan] {name}: {len(raw.get('issues', []))} finding(s) in {time.monotonic() - _t0:.1f}s", flush=True)
+    _act.finish_file(scan_id, name)
     return fdict, pinfo
+
+
+# Phase → what a person would say is happening. The phase names are internal state ("scoring"),
+# and showing them raw asks the user to learn ACP's pipeline vocabulary to read a status bar.
+_SCAN_ACTIONS = {
+    "connecting": "connecting to the document source",
+    "discovering": "finding documents in scope",
+    "reading": "downloading",
+    "analysing": "checking against the WCAG criteria",
+    "scoring": "scoring findings",
+}
 
 
 def run_scan(source: str = "local", progress=_noop, drive_token: str | None = None,
@@ -1882,6 +1997,42 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
     rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
     scan_id = scan_id or uuid.uuid4().hex[:12]
+
+    # Every progress payload gains a readable `activity` line, once, here — rather than at the
+    # seven call sites below. The counters answer "how far along", and a user watching a 25-page
+    # document sit at "analysing" for forty seconds is asking a different question: what is it
+    # DOING? Wrapping means a new phase cannot ship with counters that update and a line that
+    # does not, which is how the two drift apart.
+    _inner_progress = progress
+    import activity as _act          # also used by _analyse_one, defined further down
+
+    _seen_phase: list[str | None] = [None]
+
+    def progress(d: dict) -> None:                            # noqa: F811 — deliberate shadow
+        try:
+            phase = d.get("phase")
+            d = dict(d, activity=_act.line(file=d.get("current"),
+                                           action=_SCAN_ACTIONS.get(phase, phase or "")))
+            # TWO WRITERS, ONE KEY — so they must not fight over it. During `analysing` the
+            # per-file channel (record_file, from _analyse_one) is active and strictly better:
+            # it names the criterion and how many documents are in flight. This coarse line fires
+            # once per completed file in the same phase, and left unguarded it overwrote the
+            # richer headline a fraction of a second later, so the line flickered between
+            # "Onboarding.html · 1.3.3 Sensory Characteristics · …" and a bare
+            # "checking against the WCAG criteria". Measured, on a 13-document scan.
+            if phase != "analysing":
+                # Forced on a phase CHANGE. The rate limit is right for repeats within a phase
+                # and wrong for transitions: the last thing published before `scoring` began was
+                # a finish_file with an empty headline, so the bar went blank for the whole
+                # scoring pass rather than saying "scoring findings".
+                changed = phase != _seen_phase[0]
+                _seen_phase[0] = phase
+                _act.record(scan_id, file=d.get("current"),
+                            action=_SCAN_ACTIONS.get(phase, phase), phase=phase, force=changed)
+        except Exception:
+            pass          # a progress line must never be able to fail the scan it describes
+        _inner_progress(d)
+
     tmp = Path(tempfile.mkdtemp(prefix="acp-api-scan-"))
     # Per-user token: default to whole-Drive search. ADC/demo: pinned demo folder.
     effective_folder = folder if folder else ("root" if drive_token else None)
@@ -1890,7 +2041,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         svc = None if source in ("local", "sharepoint") else _drive_service(drive_token)
         scope: dict = {}
         items = _list(source, svc, folder=effective_folder, sp_token=sp_token,
-                     exclude_remediated=exclude_remediated, scope_out=scope)
+                     exclude_remediated=exclude_remediated, scope_out=scope,
+                     scope_files=_scope_for_listing())
         n = len(items)
         progress({"phase": "discovering", "files_found": n, "files_done": 0, "current": None})
 
@@ -1915,6 +2067,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         # Opt-out (detect_pii=False) skips PII text extraction — faster on PDF estates.
         def _analyse_one(it):
             name, ext = it["name"], Path(it["name"]).suffix.lower()
+            _act.record_file(scan_id, name, phase="analysing",
+                             action="running the accessibility engine", force=True)
             if ext == ".pdf":
                 r = {"engine": "python/pdf", **_analyse_pdf(tmp / name)}
             elif ext in OFFICE:
@@ -1924,6 +2078,16 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                 r = {"engine": "python/html", **_analyse_html(tmp / name)}
             else:
                 return None
+            # Per-RULE-GROUP progress, in the order the groups actually run. These are the
+            # finest boundaries that exist: inside the .NET engine call there is one process
+            # invocation and no callback, so a line claiming to be on a specific rule within it
+            # would be invented. Each group below names the criteria it really evaluates.
+            #
+            # record_file, not record: up to _SCAN_WORKERS documents are in flight here, and a
+            # single last-writer-wins line under eight threads flips several times a second and
+            # reads as thrashing. See activity.record_file.
+            _act.record_file(scan_id, name, sc="1.4.5", phase="analysing",
+                             action="reading text baked into images")
             # 1.4.5 / 1.4.9 Images of Text — OCR embedded images; self-gates + never raises.
             try:
                 r["issues"] = (list(r.get("issues", []))
@@ -1932,6 +2096,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             except Exception:
                 pass
             # 1.3.3 Sensory Characteristics + 3.1.2 Language of Parts — text-content checks.
+            _act.record_file(scan_id, name, sc="1.3.3", phase="analysing",
+                             action="checking wording and language changes")
             try:
                 r["issues"] = list(r.get("issues", [])) + _txt_mod.content_findings(
                     _pii_mod.extract_text(tmp / name),
@@ -1939,6 +2105,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             except Exception:
                 pass
             # 2.4.6 / 2.4.9 / 1.4.3 / 1.4.6 — first-party OOXML/PDF structural checks.
+            _act.record_file(scan_id, name, sc="1.4.3", phase="analysing",
+                             action="checking headings, links and contrast")
             try:
                 r["issues"] = list(r.get("issues", [])) + _off_mod.checks_for(tmp / name, ext)
             except Exception:
@@ -1950,6 +2118,10 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             except Exception:
                 pass
             pinfo = _pii_mod.detect_file(tmp / name) if detect_pii else None
+            # Drop it from the headline. Forced inside finish_file, because a stale entry here
+            # names a document that has FINISHED while others are still running — the one way
+            # this line can say something false rather than merely lag.
+            _act.finish_file(scan_id, name)
             return (name, r, pinfo)
 
         progress({"phase": "analysing", "files_found": n, "files_done": 0, "current": None})

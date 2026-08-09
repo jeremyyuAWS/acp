@@ -81,15 +81,48 @@ from urllib.parse import unquote, urlparse
 
 
 def proposal(locator, before, proposed_value, rationale, source, thumb=None, kind=None,
-             explain_only=False) -> dict:
+             explain_only=False, sc=None, why_review=None, context=None) -> dict:
+    """One review card's worth of state.
+
+    `why_review` and `context` exist because of what a reviewer was previously NOT told. A card
+    arrived with a draft, a model name and a picture, and no answer to the first question a
+    reviewer actually asks: *why is this one mine?* ACP knows — the split between an auto-applied
+    fix and a proposal is not arbitrary, it is whether the draft is GROUNDED in something the
+    document itself contains (the image's own OCR text, a caption, a native chart's series). An
+    ungrounded draft is a guess, and saying so converts the card from "approve this alt text"
+    into "this is a guess, and here is why we could not check it" — which is a different and much
+    faster judgement to make.
+
+    Without it the reviewer has to re-derive the whole assessment to decide whether to trust the
+    draft, which is precisely the low-value human work the review lane is supposed to remove.
+    """
     p = {"locator": locator, "before": before, "proposed_value": proposed_value,
          "rationale": rationale, "source": source}
+    if why_review:
+        p["why_review"] = why_review
+    if context:
+        # What surrounds the thing being judged — a caption, the sentence a link sits in, the
+        # paragraph before an image. A reviewer deciding whether alt text is right needs the same
+        # context a reader would have; a card showing an image with no surrounding text asks them
+        # to judge it more blindly than the screen-reader user they are judging it for.
+        p["context"] = context
     if thumb:
         p["thumb"] = thumb
     if kind:
         p["kind"] = kind   # e.g. 'decorative' → the card offers "Mark decorative", not an alt field
     if explain_only:
         p["explain_only"] = True
+    if sc:
+        # WHICH criterion this proposal answers. Optional, and absent means 1.1.1 — every
+        # proposal remediate_office produced before this was a vision alt, and the caller
+        # (handlers._enqueue_proposals) hard-coded that SC. Once one function returns proposals
+        # for several criteria the label has to travel WITH the proposal, or a link-text draft
+        # lands on a 1.1.1 review card and the reviewer is asked to approve alt text that is not
+        # alt text.
+        #
+        # Left optional rather than required so the existing callers keep working unchanged; the
+        # default lives in the consumer, next to the routing decision it feeds.
+        p["sc"] = sc
     return p
 
 

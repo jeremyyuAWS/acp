@@ -155,23 +155,42 @@ def _pdf_images(path: Path):
         return
 
 
-def _embedded_images(path: Path, ext: str) -> list[bytes]:
-    """Materialize this document's embedded raster images once (bounded by
-    _MAX_IMAGES) so 1.4.5 and 1.4.9 can both scan them without re-parsing the
-    zip/PDF twice."""
+def _embedded_images_and_total(path: Path, ext: str) -> tuple[list[bytes], int]:
+    """(images examined, images present). The second number is why this exists.
+
+    The cap is right — OCR costs ~0.1s per image on a synthetic fixture and more on a real
+    scanned page, so an unbounded pass over a 500-image deck is a scan nobody waits for. What was
+    wrong is that exceeding it was SILENT: a 35-image document produced exactly 30 image-of-text
+    findings and no indication that five images were never looked at. The output is
+    indistinguishable from a document whose last five images are clean, which is the shape of
+    every defect this codebase keeps rediscovering — a number that is smaller for a reason nobody
+    can see.
+
+    Counting the whole source costs nothing extra: both generators are already walked lazily and
+    the remainder is only counted, never decoded or OCR'd, so the cap still bounds the expensive
+    work exactly as before.
+    """
     ext = ext.lower()
     if ext in (".docx", ".pptx", ".xlsx"):
         source = _ooxml_images(path)
     elif ext == ".pdf":
         source = _pdf_images(path)
     else:
-        return []
-    out = []
-    for i, img in enumerate(source):
-        if i >= _MAX_IMAGES:
-            break
-        out.append(img)
-    return out
+        return [], 0
+    out: list[bytes] = []
+    total = 0
+    for img in source:
+        total += 1
+        if len(out) < _MAX_IMAGES:
+            out.append(img)
+    return out, total
+
+
+def _embedded_images(path: Path, ext: str) -> list[bytes]:
+    """Materialize this document's embedded raster images once (bounded by
+    _MAX_IMAGES) so 1.4.5 and 1.4.9 can both scan them without re-parsing the
+    zip/PDF twice."""
+    return _embedded_images_and_total(path, ext)[0]
 
 
 # Chart/graph recognition for 1.4.5's Essential exception, from the OCR text itself. A chart's
@@ -217,7 +236,8 @@ def images_of_text(path: Path, ext: str) -> list[dict]:
     if not is_available():
         return []
     findings: list[dict] = []
-    for i, img in enumerate(_embedded_images(path, ext)):
+    images, total = _embedded_images_and_total(path, ext)
+    for i, img in enumerate(images):
         text = " ".join(ocr_text(img, min_pixels=_MIN_PIXELS).split())
         if len(_WORD_RE.findall(text)) >= _MIN_WORDS:
             if _looks_like_chart(text):
@@ -228,6 +248,27 @@ def images_of_text(path: Path, ext: str) -> list[dict]:
                 "severity": "SERIOUS",
                 "detail": f"embedded image {i + 1} contains readable text (OCR): “{text[:160]}”",
             })
+    # SAY WHAT WE DID NOT LOOK AT. Advisory (REVIEW), because the honest claim is not "these
+    # images fail" — nobody read them — it is "this criterion was not fully checked on this
+    # document". A blocking finding would assert a defect we have no evidence for; silence
+    # asserts conformance we have no evidence for either.
+    #
+    # Emitted from the 1.4.5 pass ONLY, not from images_of_text_no_exception as well. Both walk
+    # the same capped list, so reporting from each would show the reviewer the same truncation
+    # twice under two criteria — and 1.4.9 is AAA, dropped at an AA target, so putting it there
+    # alone would hide the notice on exactly the scans most people run.
+    #
+    # Names the knob. An operator who cannot act on a limit is only being made anxious by it.
+    if total > len(images):
+        findings.append({
+            "ruleId": "OCR_IMAGE_CAP_REACHED",
+            "wcag": "1.4.5 Images of Text",
+            "severity": "REVIEW",
+            "detail": (f"this document holds {total} images and only the first {len(images)} "
+                       f"were checked for text — {total - len(images)} were not examined. "
+                       "Raise ACP_OCR_MAX_IMAGES to cover them, or review them by hand; no "
+                       "conclusion about those images is asserted either way."),
+        })
     return findings
 
 

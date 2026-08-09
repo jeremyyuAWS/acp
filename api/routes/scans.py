@@ -467,10 +467,19 @@ def put_decision(sid: str, filename: str, request: Request, body: dict,
 @router.get("/scans/{sid}/remediation-status")
 def remediation_status(sid: str, request: Request):
     """Live remediation progress (in-flight jobs + latest fixed file) for the bar.
-    Owner-scoped — latest_file could otherwise leak another user's filename by scan id."""
+    Owner-scoped — latest_file could otherwise leak another user's filename by scan id.
+
+    Also carries `activity`: the one line naming the file, the criterion and the action currently
+    in flight. The counts answer "how much is left"; a queue depth of 3 tells a user nothing about
+    whether their document is being OCR'd, waiting on a vision model, or stuck. Served from the
+    same poll rather than a new endpoint, so the bar that already exists gains a line without the
+    UI gaining a second timer."""
     if core.store.get_scan(sid, owner=_owner(request)) is None:
         raise HTTPException(404, "scan not found")
-    return core.store.remediation_status(sid)
+    import activity
+    out = core.store.remediation_status(sid)
+    out["activity"] = activity.current(sid)
+    return out
 
 
 @router.get("/scans/{sid}/files/{filename:path}/remediation-state")

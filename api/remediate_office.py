@@ -40,6 +40,8 @@ from xml.etree import ElementTree as ET
 # 1.1.1 detector (formats/office/images.py) so the detector and this remediator can never
 # disagree about which elements carry alt text.
 from formats.office.images import ALT_TARGETS as _ALT_TARGETS
+from formats.office.images import is_decorative as _images_is_decorative
+from activity import record as _act_record
 
 _CORE = "docProps/core.xml"
 _CUSTOM = "docProps/custom.xml"
@@ -353,12 +355,27 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
             rf"<{pic_only_within}[ >].*?</{pic_only_within}>", xml, re.S)]
 
     out, last = [], 0
+    # Total candidates, counted before the walk so the line can say "3 of 35" rather than a bare
+    # ordinal. "image 3" answers nothing on a document whose length the user cannot see; "3 of 35"
+    # is the difference between "it is working" and "it is stuck", which is the entire question
+    # this line exists to answer.
+    _n_images = sum(1 for _mm in re.finditer(rf"<{tag}\b([^>]*?)(/?)>", xml)
+                    if pic_spans is None or any(a <= _mm.start() < b for a, b in pic_spans))
+    _img_i = 0
     for m in re.finditer(rf"<{tag}\b([^>]*?)(/?)>", xml):
         attrs, selfclose = m.group(1), m.group(2)
         out.append(xml[last:m.start()]); last = m.end()
         keep = m.group(0)
         inside_pic = pic_spans is None or any(a <= m.start() < b for a, b in pic_spans)
         if inside_pic and _is_junk_descr(_ATTR(attrs, "descr")):
+            _img_i += 1
+            # Published BEFORE the work, not after: the vision call below is the slow step, and a
+            # line written afterwards names an image that has already finished while the user
+            # waits on the next one. Rate-limited inside activity.record — a vision call takes
+            # seconds and deserves its own line, a junk-descr skip takes microseconds and does not.
+            _act_record(scan_id, file=context_file, sc="1.1.1",
+                        action=f"describing image {_img_i} of {_n_images}",
+                        phase="remediating")
             # decorative? the marker lives in the element's extLst children
             # `tag` may be a regex alternation (e.g. `(?:xdr:)?cNvPr`), so match the closing tag
             # with a regex, not a literal find. Only reached for a non-self-closing element.
@@ -368,7 +385,15 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
                 _cm = re.compile(rf"</{tag}>").search(xml, m.end())
                 block_end = _cm.start() if _cm else -1
             block = xml[m.start():block_end if block_end != -1 else m.end()]
-            if 'decorative val="1"' in block or "decorative val='1'" in block:
+            # THE SHARED PREDICATE, not a third copy of it. This was its own inline substring
+            # test for `decorative val="1"`, and the marker apply_alt writes declares its
+            # namespace INLINE — `<adec:decorative xmlns:adec="…" val="1"/>` — so the xmlns sits
+            # between the two tokens and the substring never matched. Measured, not inferred: an
+            # image carrying ACP's own marker came back `deferred=1` from this function, so a
+            # reviewer who marked an image decorative was asked to describe it again on the next
+            # scan, and on every scan after that. Same root cause as the detector-side bug, same
+            # fix: one expression, imported.
+            if _images_is_decorative(block):
                 out.append(keep); continue
             caption = None
             if captions:
@@ -584,7 +609,18 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
             proposed_value=res["alt"],
             rationale=res.get("evidence") or "AI vision description — confirm it matches the intent",
             source=f"AI vision model ({res['model']})",
-            thumb=_thumb_b64(img))
+            thumb=_thumb_b64(img),
+            sc="1.1.1",
+            # The reason this is a proposal and not an applied fix, stated rather than implied.
+            # Every branch above this one auto-applied because it had an anchor — the image's own
+            # OCR text, or an independent second reading that agreed. This branch has neither, so
+            # the draft describes what the model believes it saw and nothing in the document
+            # corroborates it. That is exactly what a reviewer needs to know before trusting it.
+            why_review=("The image contains no readable text, so nothing in the document can "
+                        "corroborate this description — it is the model's reading of the picture "
+                        "and cannot be checked automatically. Confirm it conveys what the image "
+                        "is FOR, not merely what it shows."),
+            context=caption or None)
         if agreement:
             p["agreement"] = agreement          # {verdict, second_opinion, validator_model}
         proposals.append(p)
@@ -1262,6 +1298,185 @@ def alt_proposals_for_office(doc_bytes: bytes, ext: str, *, ai_enabled: bool = T
     return proposals, evidence
 
 
+# How many assisted findings one document may draft. A bound, not a quality judgement: each
+# draft is a model call, and a policy manual with 200 "click here" links would otherwise turn a
+# remediation job into a several-minute stall with no signal that it was drafting rather than
+# hung. Mirrors _VISION_MAX_IMAGES, and like it, the overflow is REPORTED rather than silent.
+_ASSISTED_MAX_DRAFTS = 12
+
+
+def _draft_docx_assisted(entries: dict, path: Path, proposals: list | None, *,
+                         scan_id: str | None = None, in_scope=None) -> int:
+    """Draft — never write — fixes for the .docx criteria ACP assesses but cannot auto-apply.
+
+    2.4.4 vague link text · 1.3.3 sensory-only instructions · 3.1.2 unmarked foreign passages.
+
+    WHY THIS EXISTS. These three are `assisted` on .docx: detected during assessment, and until
+    now producing nothing at all during remediation. The appliers exist (apply_link_text,
+    apply_text_values) but run only from handlers._apply_one_value_kind on values a human has
+    ALREADY approved — so a bulk remediation left them untouched even when the model would have
+    drafted something good, and the reviewer got an empty card to fill by hand. Measured across
+    15 documents and 3 text models: zero drafts, zero proposals, identical for every model.
+
+    WHY PROPOSALS AND NOT FIXES. The posture is unchanged and deliberate — draft, approve, apply,
+    never auto-write. Rewriting a link's visible text or a clinical instruction is a change to
+    what the document SAYS, not to how it is marked up, and on a hospital's document that is a
+    human's call. This closes the gap between "detected" and "a reviewer has something to
+    approve", which is the whole distance the assisted lane was missing.
+
+    Detection is the SAME code assessment uses (office_structure._is_vague_link_text,
+    textchecks.detect_sensory / detect_language_parts) rather than a second implementation, so a
+    proposal cannot be offered for something the scan does not report — the failure that would
+    make a reviewer approve a fix for a finding they never saw.
+
+    Returns the number of drafts produced. Best-effort throughout: no draft is worth failing a
+    remediation job for.
+    """
+    if proposals is None:
+        return 0
+    import ai as _ai
+    import proposals as _prop
+    # model_is_available(), NOT is_available(). The latter only proves /api/tags answered — a
+    # text-only or wrong-model Ollama passes it and every draft then comes back empty, which
+    # reads as a model that cannot do the task. tests/test_textmodel_gate.py enforces this as a
+    # drift guard across the proposal modules, and caught this exact line.
+    if not _ai.model_is_available():
+        return 0
+
+    doc = entries.get("word/document.xml")
+    if not doc:
+        return 0
+    try:
+        xml = doc.decode("utf-8")
+    except (UnicodeDecodeError, AttributeError):
+        return 0
+
+    import office_structure as _os
+    import textchecks as _tc
+
+    made = 0
+
+    def _draft(sc: str, rule_name: str, detail: str, before: str, locator: str, source: str):
+        nonlocal made
+        if made >= _ASSISTED_MAX_DRAFTS or not _sc_ok(in_scope, sc):
+            return
+        # The single funnel for every assisted draft, so one line here covers 2.4.4, 1.3.3 and
+        # 3.1.2 rather than three that can drift. Published before suggest_fix, which is the
+        # slow call — a line written after it names work already finished.
+        _act_record(scan_id, file=path.name, sc=sc,
+                    action=f"drafting a fix for {rule_name}",
+                    detail="draft only — nothing is written without approval",
+                    phase="remediating")
+        out = _ai.suggest_fix(sc, rule_name, "A", path.name, detail=detail)
+        value = (out or {}).get("suggestion")
+        if not value:
+            return
+        proposals.append(_prop.proposal(
+            locator=locator, before=before, proposed_value=value,
+            rationale=f"drafted from the surrounding text by {out.get('model', 'the local model')}",
+            source=source, sc=sc,
+            # Why a human, stated rather than implied — the same gap the 1.1.1 cards had. These
+            # criteria are assessed but never auto-applied: the draft rewrites the AUTHOR'S prose,
+            # and only the author knows what the sentence was for. That is a different reason from
+            # 1.1.1's ("nothing corroborates it") and the card should say which one applies.
+            why_review=(f"ACP can detect this {rule_name} problem but cannot fix it "
+                        "automatically — the correction rewrites your own wording, and only "
+                        "you know what the original was meant to say. The draft below is a "
+                        "starting point, not a decision."),
+            context=detail))
+        made += 1
+
+    # 2.4.4 — vague link text. Resolved through the relationship so the draft can name the
+    # DESTINATION, which is the whole point of the criterion; a rewrite that cannot see the
+    # target is guessing from the same words the reader already found unhelpful.
+    rels_xml = (entries.get("word/_rels/document.xml.rels") or b"").decode("utf-8", "ignore")
+    hrefs = dict(re.findall(r'Id="(rId\w+)"[^>]*Target="([^"]+)"', rels_xml))
+    for rid, inner in _os._HYPERLINK.findall(xml):          # noqa: SLF001 — the assessment regex
+        text = "".join(_os._WT.findall(inner)).strip()      # noqa: SLF001
+        if not text or not _os._is_vague_link_text(text):   # noqa: SLF001
+            continue
+        href = hrefs.get(rid, "")
+        _draft("2.4.4", "Link Purpose (In Context)",
+               f'link text is "{text}"' + (f'; it points to {href}' if href else ""),
+               before=text, locator=f"word/document.xml#{rid}",
+               source="AI draft from the link's destination and surrounding text")
+
+    # 1.3.3 and 3.1.2 read the document's visible text, which is what their detectors take.
+    body = " ".join(_os._WT.findall(xml)).strip()           # noqa: SLF001
+    if body:
+        # `detail` ALREADY reads "instruction relies on shape/position alone: “…”" — the
+        # detector writes the framing, not just the sentence. Prefixing it again handed the
+        # model that phrase twice and produced a draft that echoed the document instead of
+        # rewriting the instruction. Pass it through, and quote out the offending sentence for
+        # the `before` the reviewer sees.
+        for f in (_tc.detect_sensory(body) or [])[:_ASSISTED_MAX_DRAFTS]:
+            detail = str(f.get("detail") or "")[:300]
+            quoted = re.search(r"[“\"']([^”\"']{4,200})[”\"']", detail)
+            _draft("1.3.3", "Sensory Characteristics", detail,
+                   before=quoted.group(1) if quoted else detail,
+                   locator="word/document.xml#sensory",
+                   source="AI draft replacing the sensory-only reference")
+        for f in (_tc.detect_language_parts(body) or [])[:_ASSISTED_MAX_DRAFTS]:
+            detail = str(f.get("detail") or "")[:300]
+            _draft("3.1.2", "Language of Parts", detail,
+                   before=detail, locator="word/document.xml#lang-part",
+                   source="AI draft marking the passage's language")
+
+        # 1.3.2 — floating text boxes and frames, read at their anchor rather than their visual
+        # position. EXPLAIN-ONLY, and that is the honest shape: the fix is to re-flow the
+        # document so the anchor order matches the visual order, which cannot be proposed as a
+        # VALUE — there is no string to approve. A card offering a fill-in field here would be
+        # asking a reviewer to type something that has nowhere to go.
+        #
+        # No model call: the finding already names what is wrong and how many, and a model asked
+        # to "fix reading order" from text alone would invent a layout it cannot see.
+        floating = sum(1 for inner in _os._TXBX_CONTENT.findall(xml)         # noqa: SLF001
+                       if "".join(_os._WT.findall(inner)).strip())          # noqa: SLF001
+        floating += len(_os._FRAMEPR.findall(xml))                          # noqa: SLF001
+        if floating and _sc_ok(in_scope, "1.3.2") and made < _ASSISTED_MAX_DRAFTS:
+            proposals.append(_prop.proposal(
+                locator="word/document.xml#floating-text",
+                before=f"{floating} floating text box(es)/frame(s)",
+                proposed_value=(
+                    "Move this content into the main document flow, in the order it should be "
+                    "read. A screen reader announces a floating box at its ANCHOR point, which "
+                    "need not match where it appears on the page."),
+                rationale="the anchor order and the visual order can differ; only a person "
+                          "reading the layout can say what the intended sequence is",
+                source="structural finding (no model — the layout is not in the text)",
+                explain_only=True, sc="1.3.2"))
+            made += 1
+
+    # 1.4.5 — images of text. The draft IS the OCR'd text, not a model's description of it: the
+    # remediation for an image of text is to re-author it AS text, so the thing a reviewer needs
+    # is the words themselves, ready to paste. Transcribed, never generated — nothing here can
+    # confabulate, which is why it is offered even though 1.4.5's fix is human work.
+    #
+    # Charts are excluded upstream by images_of_text (WCAG's Essential exception), so a bar chart
+    # does not arrive here asking to be retyped.
+    try:
+        import ocr as _ocr
+        for f in (_ocr.images_of_text(path, path.suffix.lower()) or [])[:_ASSISTED_MAX_DRAFTS]:
+            if made >= _ASSISTED_MAX_DRAFTS or not _sc_ok(in_scope, "1.4.5"):
+                break
+            detail = str(f.get("detail") or "")
+            quoted = re.search(r"[“\"']([^”\"']{4,})[”\"']", detail)
+            text = quoted.group(1).strip() if quoted else ""
+            if not text:
+                continue
+            proposals.append(_prop.proposal(
+                locator="word/media#image-of-text", before="(text baked into an image)",
+                proposed_value=text,
+                rationale="transcribed from the image by OCR — re-author this as real text so it "
+                          "can be resized, restyled and read by assistive technology",
+                source="OCR transcription (no model)", sc="1.4.5"))
+            made += 1
+    except Exception:
+        pass
+
+    return made
+
+
 def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True,
                      scan_id: str | None = None, applied_fixes: list | None = None,
                      proposals: list | None = None, evidence: list | None = None, diffs=None,
@@ -1329,6 +1544,12 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
         except Exception:
             vision_enabled = False
     skipped: list[str] = list(_core_skip)
+    # One line, per stage, naming the file and the criterion being worked. `scan_id` is None for
+    # every offline caller (benchmarks, CLI, tests), and activity.record no-ops on that — so this
+    # costs nothing outside a real scan and cannot fail one inside it.
+    import activity as _act
+    _act.record(scan_id, file=path.name, sc="1.1.1", action="describing images",
+                phase="remediating")
     # Native charts (1.1.1) FIRST — before _fix_image_alt (which would otherwise put a weak
     # name-based descr on the chart shape, which we then wouldn't overwrite) and before any structural
     # pass re-encodes the XML. A native chart has NO image bytes, so vision can't help it; its data is
@@ -1361,10 +1582,26 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
 
     # docx structural fixes (table header rows + heading outline) — WCAG 1.3.1.
     if path.suffix.lower() == ".docx":
+        _act.record(scan_id, file=path.name, sc="1.3.1",
+                    action="marking table headers and the heading outline", phase="remediating")
         try:
             applied.extend(_remediate_docx_structure(entries, diffs, skipped, in_scope))
         except Exception:
             skipped.append("docx structural fixes (table headers / heading outline) could not be applied")
+        # Assisted criteria — DRAFTED for review, never written. See the function's docstring.
+        if ai_enabled:
+            _act.record(scan_id, file=path.name, sc="2.4.4",
+                        action="drafting link, sensory and language fixes for review",
+                        detail="drafts only — nothing is written without approval",
+                        phase="remediating")
+            try:
+                n = _draft_docx_assisted(entries, path, proposals, scan_id=scan_id,
+                                         in_scope=in_scope)
+                if n:
+                    skipped.append(f"{n} link/sensory/language finding(s) drafted for review "
+                                   "(2.4.4 / 1.3.3 / 3.1.2)")
+            except Exception:
+                skipped.append("assisted-criteria drafts could not be produced")
 
     # pptx-only structural fixes that need the slide XML (title / contrast / reading order).
     if path.suffix.lower() == ".pptx":

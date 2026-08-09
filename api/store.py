@@ -32,6 +32,33 @@ _PII_SEV_RANK = {"critical": 3, "moderate": 2, "low": 1}
 # get_scan_diff to pick the worst severity when a SC's findings are mixed.
 _ISSUE_SEV_RANK = {"CRITICAL": 4, "SERIOUS": 3, "MODERATE": 2, "MINOR": 1}
 
+
+def _issue_location(i: dict) -> str | None:
+    """Where a finding is, from either of the two keys detectors use for it.
+
+    TWO NAMES FOR ONE COLUMN, AND ONE OF THEM WAS BEING DROPPED. The vendored .NET rules write
+    `location` ("docx:hyperlink:paragraph:115:url:…"). Several first-party Python detectors write
+    `locator` ("word/header1.xml#Picture 1") — see formats/docx/detectors/non_text_content.py.
+    Both INSERTs below persisted `i.get("location")` only, so every Python-detected finding was
+    stored with location NULL and its position was lost at the database boundary. The finding
+    survived; the ability to point at the thing it is about did not, which is what a review card
+    reads.
+
+    Measured, not inferred: saving one .NET finding and one Python finding through
+    save_file_result stored "docx:image:3" for the first and NULL for the second.
+
+    NOT a rename, and that distinction is why this is a fallback rather than a merge. The two
+    keys are not synonyms elsewhere: a `locator` is a RESOLVABLE WRITE TARGET that
+    apply_alt.parse_locator turns back into an element, while `location` is a position string for
+    a human. On a FINDING they answer the same question, and the locator is the better answer
+    because it is resolvable — so it is used when `location` is absent, and nothing that consumes
+    `locator` as a write target is touched.
+
+    One accessor, used by both INSERT sites, so the fallback cannot be applied at one and
+    forgotten at the other — which is the shape of the bug it fixes.
+    """
+    return i.get("location") or i.get("locator")
+
 # Schema is identical between SQLite and Postgres (UPSERT syntax is the same).
 _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS scan_runs (
@@ -403,6 +430,7 @@ from assessment_policy import (  # noqa: F401,E402  (re-export)
     _LEGACY_NOT_EVALUATED, _SUPERSEDING_OUTCOMES, _SC_LEVEL, _ALL_FORMATS,
     active_scope, scope_problem, parse_scope_setting,
     in_scope, in_target, parse_target, config_target,
+    formats_in_scope, file_in_scope, scope_as_json, criteria_for_format,
     filter_issues_to_target, filter_issues_to_scope, _rule_outcome, _certify, _registry_for,
     _split_sc_counts, _file_format, _extract_sc, _pages_csv,
 )
@@ -725,7 +753,7 @@ class Store:
                         "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location) "
                         "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
                         (sid, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
-                         i.get("page"), i.get("location")))
+                         i.get("page"), _issue_location(i)))
                 # Per-rule trace: one row per catalog rule per file — PASS/FAIL/REVIEW/NOT_EVALUATED.
                 # Counts feed the per-rule trace, so they must reflect the conformance target:
                 # an AAA finding picked up as a by-product of an AA check is not this scan's
@@ -870,7 +898,7 @@ class Store:
                     "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location) "
                     "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
                     (scan_id, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
-                     i.get("page"), i.get("location")))
+                     i.get("page"), _issue_location(i)))
             fail_counts, review_counts = _split_sc_counts(
                 filter_issues_to_target(f.get("issues", []), target))
             fmt = _file_format(f["file"])
@@ -1425,9 +1453,34 @@ class Store:
 
     def get_scan_diff(self, cur_id: str, prev_id: str, owner: str | None = None) -> dict | None:
         """Diff two scans (ADR 0009) → per-file score regressions / improvements + the WCAG
-        criteria that flipped pass→fail. Owner-scoped: both scans must belong to the caller."""
+        criteria that flipped pass→fail. Owner-scoped: both scans must belong to the caller.
+
+        SCOPE-AWARE, BECAUSE A SCORE IS ONLY MEANINGFUL AGAINST THE CRITERIA IT WAS COMPUTED
+        OVER. `scan_scope` decides which findings reach `Rubric.assess`, so the same unchanged
+        document scores 60 under a wide scope and 75 with one criterion in scope. Diffing those
+        two scans reported every document as IMPROVED — an operator who narrowed the scope was
+        congratulated on progress that did not happen, which is worse than a missing feature
+        because it is believed.
+
+        The same change also emptied the estate: files whose format the new scope excludes were
+        never read, so they are absent from `file_records` and landed in `removed`, reading as
+        "45 documents disappeared".
+
+        Both are handled by comparing what each scan actually measured:
+
+          - per file, the criteria in scope FOR ITS FORMAT. Compared per format, not globally,
+            so a scope change that only touched PDF criteria leaves every .docx delta valid —
+            treating any scope change as poisoning the whole diff would throw away the
+            comparison an operator most often wants.
+          - files missing because their format was out of scope are reported as `not_read`,
+            never as `removed`. "We did not look" and "it is gone" are different facts and only
+            one of them is about the estate.
+
+        Scans predating the `scan_scope` field have None recorded, which is treated as "no
+        restriction" — the same reading `formats_in_scope` gives, and the only one available.
+        """
         with self._db.cursor() as cur:
-            self._db.execute(cur, "SELECT id, owner_email, completed_at FROM scan_runs WHERE id IN (%s,%s)", (cur_id, prev_id))
+            self._db.execute(cur, "SELECT id, owner_email, completed_at, scope FROM scan_runs WHERE id IN (%s,%s)", (cur_id, prev_id))
             runs = {r["id"]: r for r in self._db.fetchall(cur)}
             if cur_id not in runs or prev_id not in runs:
                 return None
@@ -1467,12 +1520,43 @@ class Store:
             tp, tc = _traces(prev_id), _traces(cur_id)
             sevs = _severities(cur_id)
 
-        regressed, improved, new, removed = [], [], [], []
+        def _scan_scope(sid):
+            import json as _json
+            raw = runs[sid].get("scope")
+            if not raw:
+                return None
+            try:
+                return (_json.loads(raw) if isinstance(raw, str) else raw).get("scan_scope")
+            except (ValueError, AttributeError):
+                return None
+
+        prev_scope, cur_scope = _scan_scope(prev_id), _scan_scope(cur_id)
+        scope_changed = prev_scope != cur_scope
+
+        def _comparable(filename: str) -> bool:
+            """Were this file's two scores computed over the same criteria?
+
+            Per FORMAT, deliberately. A global "did the scope change" test would discard every
+            .docx delta because somebody stopped scanning PDFs, and those deltas are real.
+            """
+            if not scope_changed:
+                return True
+            fmt = _file_format(filename)
+            return (criteria_for_format(prev_scope, fmt)
+                    == criteria_for_format(cur_scope, fmt))
+
+        regressed, improved, new, removed, incomparable = [], [], [], [], []
         for f, cs in fc.items():
             if f not in fp:
                 new.append({"file": f, "score": cs}); continue
             ps = fp[f]
             if ps is None or cs is None:
+                continue
+            if not _comparable(f):
+                # Reported, not dropped. A file that silently vanishes from a diff is the same
+                # failure as a count without its boundary: the reader concludes nothing changed.
+                incomparable.append({"file": f, "prev": ps, "cur": cs,
+                                     "reason": "assessed against a different set of criteria"})
                 continue
             delta = cs - ps
             if delta < 0:
@@ -1483,14 +1567,34 @@ class Store:
                 regressed.append({"file": f, "prev": ps, "cur": cs, "delta": delta, "broke": broke[:6]})
             elif delta > 0:
                 improved.append({"file": f, "prev": ps, "cur": cs, "delta": delta})
-        removed = [{"file": f, "score": fp[f]} for f in fp if f not in fc]
+        # A file absent from the current scan is either GONE from the estate or simply NOT READ
+        # because the current scope excludes its format. Those are different facts and only the
+        # first is about the estate; conflating them turns "we assess only Word documents" into
+        # "45 documents disappeared", which is a support ticket rather than a diff.
+        not_read = []
+        removed = []
+        for f in fp:
+            if f in fc:
+                continue
+            row = {"file": f, "score": fp[f]}
+            if cur_scope is not None and not file_in_scope(f, {k: frozenset(v) for k, v in cur_scope.items()}):
+                not_read.append(row)
+            else:
+                removed.append(row)
         regressed.sort(key=lambda x: x["delta"])          # worst (most negative) first
         improved.sort(key=lambda x: -x["delta"])
         return {
             "cur_id": cur_id, "prev_id": prev_id,
             "cur_at": runs[cur_id].get("completed_at"), "prev_at": runs[prev_id].get("completed_at"),
-            "summary": {"regressed": len(regressed), "improved": len(improved), "new": len(new), "removed": len(removed)},
-            "regressed": regressed[:50], "improved": improved[:50], "new": new[:50], "removed": removed[:50],
+            # Carried so the UI can SAY the scope changed rather than leaving a reader to infer
+            # it from a diff that is quieter than they expected.
+            "scope_changed": scope_changed,
+            "prev_scope": prev_scope, "cur_scope": cur_scope,
+            "summary": {"regressed": len(regressed), "improved": len(improved),
+                        "new": len(new), "removed": len(removed),
+                        "not_read": len(not_read), "incomparable": len(incomparable)},
+            "regressed": regressed[:50], "improved": improved[:50], "new": new[:50],
+            "removed": removed[:50], "not_read": not_read[:50], "incomparable": incomparable[:50],
         }
 
     def inventory(self) -> list[dict]:
@@ -1873,6 +1977,32 @@ class Store:
                             "proposed": sorted(proposed, key=lambda p: p["sc"])})
         return out
 
+    def _unread_scope_facts(self, scan_id: str) -> dict:
+        """What the file-type scope kept this scan from reading, for the scope-of-assertion text.
+
+        Read off the scan's OWN recorded scope rather than the live setting: a report is a
+        statement about what happened, and the operator may well have changed the scope since.
+        Reading the current setting would let a report re-describe its own past.
+
+        Returns {} when nothing was excluded or the scan predates the field, so the report adds
+        no sentence rather than an empty or speculative one.
+        """
+        import json as _json
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur, "SELECT scope FROM scan_runs WHERE id=%s", (scan_id,))
+                row = self._db.fetchone(cur)
+            raw = (row or {}).get("scope")
+            sc = (_json.loads(raw) if isinstance(raw, str) else raw) or {}
+        except Exception:
+            return {}
+        skipped = int(sc.get("skipped_out_of_scope") or 0)
+        scan_scope = sc.get("scan_scope")
+        if not skipped and not scan_scope:
+            return {}
+        fmts = sorted({f for v in (scan_scope or {}).values() for f in (v or ())})
+        return {"unread_documents": skipped, "formats_read": fmts}
+
     def get_certification_facts(self, scan_id: str) -> dict:
         """Facts backing the certification-decision block, the richer file inventory, and the
         scope-of-assertion statement (backlog R2 / R6 / R-A). Every number is COUNTED from
@@ -1979,6 +2109,19 @@ class Store:
                 "human_only_criteria": [
                     {"sc": r["id"], "name": r["name"]} for r in RULE_CATALOG
                     if r["fix_mode"] == "human-only"],
+                # FILE TYPES NEVER OPENED — the other half of the negative assurance.
+                #
+                # Everything above narrows the assertion by CRITERION: "we ran no check for
+                # 2.4.3 on a PDF." None of it narrows the assertion by DOCUMENT, and once the
+                # file-type scope gates what is read, a whole class of files is absent from this
+                # report entirely — not failing, not passing, not evaluated, just never opened.
+                #
+                # A conformance report that lists the criteria it skipped but not the documents
+                # it never saw understates its own boundary in the direction that flatters it,
+                # which is precisely the failure the rest of this section exists to prevent. It
+                # matters most for the reader this section is written for: an auditor asking
+                # "does this cover the estate?" gets "yes" from silence.
+                **self._unread_scope_facts(scan_id),
             },
             "approvals_total": sum(approvals.values()),
             "remediated_total": sum(d["remediated"] for d in docs),
