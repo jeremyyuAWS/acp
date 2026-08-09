@@ -86,7 +86,14 @@ DECORATIVE_AFTER = "(marked decorative — no alt text needed)"
 
 # Is this element ALREADY decorative? Prefix-agnostic and tolerant of `val="true"`, because the
 # marker we are looking for may have been written by Word, not by us.
-_HAS_MARKER = re.compile(r'decorative[^>]*\bval=["\'](?:1|true)["\']')
+#
+# IMPORTED, not redeclared. This module and the 1.1.1 detector must answer "is this decorative?"
+# identically — a disagreement means either a conforming image is flagged forever (detector says
+# no, remediator says yes, so nothing is ever written to clear it) or an undescribed one
+# certifies. They were separate expressions until one of them turned out to be a substring test
+# that could not match the marker THIS module writes, and the first failure mode duly happened.
+# One expression, one import; drift is now a syntax error rather than a silent policy change.
+from formats.office.images import _DECORATIVE_MARKER as _HAS_MARKER  # noqa: E402
 
 # The relationship reference on a drawing's blip — how a bytes-reading proposer identified the
 # image, and so what its locator says. Kept loose (any id, not just `rId\d+`) because the value

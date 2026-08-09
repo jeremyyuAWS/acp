@@ -16,12 +16,21 @@ TWO JUDGES, and not for redundancy. Anthropic and OpenAI are independent; their 
 unmeasurable items is a second axis. A single judge gives a number, two give a number with an
 error bar. Either alone still runs — the calibration axis works with one.
 
-THE RUBRIC EXISTS BECAUSE A NAIVE JUDGE WOULD INVERT OUR RECOMMENDATION. Asked to "rate this alt
-text 1-10", both judges reliably prefer the longer, more thorough description — a documented
-verbosity bias. But WCAG 1.1.1 asks for a CONCISE equivalent: a 33-word alt naming a portal and a
-fallback rule is an excellent long description and a poor `alt`. So conciseness is scored as its
-own dimension, and over-length is penalised rather than rewarded. Left implicit, the judge would
-confidently recommend the 21GB model we measured as the worse choice.
+THE RUBRIC JUDGES LENGTH AGAINST THE IMAGE, NOT AGAINST A WORD COUNT — and the first version of
+it did not. It scored `conciseness` and penalised over-length outright, on the reasoning that
+WCAG 1.1.1 asks for a concise equivalent and a naive judge has a documented verbosity bias. Two
+things were wrong with that. First, WCAG's own rule for an image OF TEXT is that the alt IS the
+text, which the same product enforces elsewhere — so on a medication label or an enrolment
+notice, length is the requirement, and a missing dose or deadline is a safety failure rather than
+a style one. Second, it did not discriminate: every vision model landed between 2.45 and 3.18, a
+flat penalty on all of them, so the dimension cost information and bought none.
+
+It is now `completeness`, judged against what the source contains: transcripts should carry their
+facts, textless images should not be padded with invented ones, and BOTH truncation and filler
+are penalised. The verbosity bias the old wording guarded against is still real, so the rubric
+says explicitly not to reward the longest draft — it just no longer treats brevity as the goal.
+If this changes the model ranking, that is a finding about the first rubric and should be
+reported as one.
 
 BLIND AND SHUFFLED. Model names are stripped and candidate order is randomised per item. Judges
 show position bias, and a judge that can see "moondream" versus "qwen2.5vl:32b" is scoring a
@@ -56,23 +65,39 @@ from pathlib import Path
 EVAL_ROOT = (Path.home() / "Downloads" / "acp-docx-eval").resolve()
 
 RUBRIC = """You are grading a single draft produced by an accessibility remediation tool.
+The reader is a hospital: these documents carry clinical and benefits information, and a
+patient using a screen reader hears ONLY this text in place of the image.
 
 Score each dimension 0-5. Reply with ONLY a JSON object, no prose:
-{"accuracy": n, "conciseness": n, "usefulness": n, "note": "one short sentence"}
+{"accuracy": n, "completeness": n, "usefulness": n, "note": "one short sentence"}
 
-accuracy     Does it state only what is supported by the source? A confident wrong fact
-             (a wrong date, an invented label) scores 0. Omission is not inaccuracy.
-conciseness  Is the length RIGHT FOR ITS PURPOSE, not merely short?
-             - For alt text (WCAG 1.1.1): a concise equivalent. Roughly 5-20 words. A
-               longer, more thorough description is WORSE as alt text, not better — it
-               belongs in a long description. Penalise over-length.
-             - For link text (2.4.4): names the destination, a few words.
-             - For a rewritten instruction (1.3.3): about as long as what it replaces.
-usefulness   Could a reviewer accept this as-is? A placeholder like "[button label]" is
-             honest but not usable: score it low here and high on accuracy.
+accuracy      Does it state only what the source supports? A confident wrong fact — a wrong
+              date, an invented dosage, a made-up label — scores 0. Omission is judged under
+              completeness, not here.
 
-Judge the DRAFT against the SOURCE only. You are not being asked which is longest or
-most impressive."""
+completeness  Does it carry the information a reader needs, at a length suited to WHAT THE
+              IMAGE CONTAINS? Judge against the source, not against a word count.
+              - If the SOURCE is a transcript of text in the image (a notice, a label, a
+                form, a lab result), the alt text SHOULD carry that information. WCAG's rule
+                for an image of text is that the alt IS the text. Missing a dose, a deadline,
+                a phone number or a warning is a REAL FAILURE — on a medication label an
+                incomplete alt is a safety problem, not a style problem. Length that serves
+                completeness is CORRECT, not verbose.
+              - If the SOURCE says the image has no readable text (a photo, a chart), there
+                is less to convey: a brief description that names the subject is right, and
+                padding it with invented specifics is wrong.
+              - For link text (2.4.4) and rewritten instructions (1.3.3), the draft replaces
+                a phrase in running prose; it should say what the original failed to say
+                without becoming a paragraph.
+              Score 5 for "carries what a reader needs and no filler". Penalise BOTH
+              truncation and padding. Do not penalise length by itself.
+
+usefulness    Could a reviewer accept this as-is, unchanged? A placeholder such as
+              "[button label]" is honest but unusable — score it low here even when accuracy
+              is high.
+
+Judge the DRAFT against the SOURCE only. Do not reward whichever is longest, and do not
+reward brevity for its own sake."""
 
 
 def _guard(path: Path) -> Path:
@@ -130,7 +155,7 @@ def _parse(raw: str | None) -> dict | None:
     try:
         s = raw[raw.index("{"):raw.rindex("}") + 1]
         d = json.loads(s)
-        return {k: float(d.get(k, 0)) for k in ("accuracy", "conciseness", "usefulness")} | {
+        return {k: float(d.get(k, 0)) for k in ("accuracy", "completeness", "usefulness")} | {
             "note": str(d.get("note", ""))[:200]}
     except (ValueError, KeyError, TypeError):
         return None
@@ -200,7 +225,7 @@ def main() -> int:
         both = [it for it in items if all(it["scores"].get(j) for j in judges)]
         if both:
             print("\n=== INTER-JUDGE AGREEMENT ===")
-            for dim in ("accuracy", "conciseness", "usefulness"):
+            for dim in ("accuracy", "completeness", "usefulness"):
                 a = [it["scores"][judges[0]][dim] for it in both]
                 b = [it["scores"][judges[1]][dim] for it in both]
                 diff = statistics.mean(abs(x - y) for x, y in zip(a, b))
@@ -213,10 +238,10 @@ def main() -> int:
         for s in it["scores"].values():
             if s:
                 by.setdefault(it.get("model", "?"), []).append(s)
-    print(f"{'model':18}{'accuracy':>10}{'concise':>10}{'useful':>9}{'n':>5}")
+    print(f"{'model':18}{'accuracy':>10}{'complete':>10}{'useful':>9}{'n':>5}")
     for m, ss in sorted(by.items()):
         print(f"{m:18}{statistics.mean(s['accuracy'] for s in ss):>10.2f}"
-              f"{statistics.mean(s['conciseness'] for s in ss):>10.2f}"
+              f"{statistics.mean(s['completeness'] for s in ss):>10.2f}"
               f"{statistics.mean(s['usefulness'] for s in ss):>9.2f}{len(ss):>5}")
 
     if args.out:

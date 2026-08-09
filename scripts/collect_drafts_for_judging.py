@@ -38,19 +38,20 @@ VISION_MODELS = ["moondream", "granite3.2-vision", "qwen2.5vl:3b", "llava:7b",
                  "minicpm-v", "qwen2.5vl:7b", "qwen2.5vl:32b"]
 TEXT_MODELS = ["llama3.1:8b", "qwen3:14b", "qwen3:32b"]
 
-IMAGE_OF_TEXT = ROOT / "frontend" / "public" / "samples" / "enrollment-notice.png"
+CALIBRATION_DIR = EVAL_ROOT / "calibration"      # gen_calibration_images.py writes here
 PHOTO = ROOT / "frontend" / "public" / "samples" / "sample-image.png"
 
-# The same six facts measure_alt_fact_coverage.py scores, so the calibration number the judge is
-# checked against is the one already published rather than a second, differently-derived figure.
-FACTS = {
-    "title": [r"(?=.*open enrollment)(?=.*2026)"],
-    "window": [r"march\s*1\b.*march\s*31", r"march\s*1\s*[-–]\s*31"],
-    "coverage": [r"medical.*dental.*vision"],
-    "portal": [r"ut\s*southwestern"],
-    "consequence": [r"(?=.*default)(?=.*prior year)"],
-    "contact": [r"214[-\s]?648[-\s]?9999"],
-}
+# Facts come from calibration/manifest.json, one set per image, each verified OCR-legible at
+# generation time. Hard-coding one image's facts here is what limited the first calibration run
+# to seven points — the answer key has to scale with the corpus or the correlation never does.
+def load_calibration() -> list[dict]:
+    mf = CALIBRATION_DIR / "manifest.json"
+    if not mf.exists():
+        print("no calibration corpus — run scripts/gen_calibration_images.py first",
+              file=sys.stderr)
+        return []
+    return json.loads(mf.read_text())
+
 
 TEXT_CASES = [
     ("2.4.4", "Link Purpose (In Context)",
@@ -70,9 +71,10 @@ def _ai(model_env: str, model: str):
     return ai
 
 
-def fact_count(text: str) -> int:
+def fact_count(text: str, facts: dict[str, str]) -> int:
+    """How many of THIS image's verified facts the draft conveys."""
     t = (text or "").lower()
-    return sum(1 for pats in FACTS.values() if any(re.search(p, t, re.S) for p in pats))
+    return sum(1 for pat in facts.values() if re.search(pat, t, re.S))
 
 
 def main() -> int:
@@ -82,28 +84,30 @@ def main() -> int:
     args = ap.parse_args()
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
-    ocr_truth = ""
-    try:
-        from PIL import Image
-        import pytesseract
-        ocr_truth = pytesseract.image_to_string(Image.open(IMAGE_OF_TEXT)).strip()
-    except Exception:
-        print("warning: no OCR — calibration items will carry no source text", file=sys.stderr)
+    calib = load_calibration()
+    if not calib:
+        return 1
+    print(f"calibration corpus: {len(calib)} images, "
+          f"{sum(len(c['facts']) for c in calib)} verified facts")
 
     items: list[dict] = []
-    img_text = IMAGE_OF_TEXT.read_bytes()
     photo = PHOTO.read_bytes() if PHOTO.exists() else None
 
     for m in VISION_MODELS:
         ai = _ai("OLLAMA_VISION_MODEL", m)
-        # CALIBRATION — ground truth is the OCR above.
-        out = ai.describe_image(img_text, filename=IMAGE_OF_TEXT.name)
-        alt = (out or {}).get("alt") or ""
-        if alt:
-            items.append({"model": m, "criterion": "1.1.1", "draft": alt,
-                          "source": ocr_truth or "(OCR unavailable)",
-                          "truth_facts": fact_count(alt)})
-        # UNMEASURABLE — a textless image; no answer key by construction.
+        n0 = len(items)
+        # CALIBRATION — every image, so the judge is checked over a real sample rather than a
+        # single document. `truth_facts` is the objective score judge_drafts.py correlates against.
+        for c in calib:
+            img = (CALIBRATION_DIR / c["file"]).read_bytes()
+            out = ai.describe_image(img, filename=c["file"])
+            alt = (out or {}).get("alt") or ""
+            if alt:
+                items.append({"model": m, "criterion": "1.1.1", "draft": alt,
+                              "source": c["ocr"] or c["source_text"], "image": c["file"],
+                              "truth_facts": fact_count(alt, c["facts"])})
+        # UNMEASURABLE — a textless image; no answer key by construction, which is the case the
+        # judge exists to cover.
         if photo:
             out = ai.describe_image(photo, filename=PHOTO.name)
             alt = (out or {}).get("alt") or ""
@@ -112,7 +116,7 @@ def main() -> int:
                               "source": "A chart image containing no readable text. There is no "
                                         "transcript; judge whether the description is plausible, "
                                         "specific and appropriately brief for an alt attribute."})
-        print(f"  vision {m:18} -> {sum(1 for i in items if i['model'] == m)} item(s)", flush=True)
+        print(f"  vision {m:18} -> {len(items) - n0} item(s)", flush=True)
 
     for m in TEXT_MODELS:
         ai = _ai("OLLAMA_MODEL", m)

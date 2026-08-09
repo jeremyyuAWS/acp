@@ -57,14 +57,37 @@ def is_junk_descr(descr: str) -> bool:
     return bool(_IMG_FILENAME.match(trimmed))
 
 
+# Tolerant of anything between the element name and `val` — which in practice means a namespace
+# declaration. See is_decorative for why that is not a hypothetical.
+_DECORATIVE_MARKER = re.compile(r"decorative[^>]*\bval=[\"'](?:1|true)[\"']")
+
+
 def is_decorative(block: str) -> bool:
     """True when the element carries the explicit decorative marker in its extLst children.
 
     A decorative image is CONFORMING with no alt text (WCAG 1.1.1 permits it), so flagging one
     would be a false positive — and, worse, the remediator already skips it, so the criterion
     could never be cleared on a document containing one.
+
+    THAT IS NOT HYPOTHETICAL, AND IT IS WHY THIS IS A REGEX RATHER THAN A SUBSTRING TEST. This
+    matched the literal text `decorative val="1"`, and the marker ACP ITSELF writes is
+
+        <adec:decorative xmlns:adec="…/2017/decorative" val="1"/>
+
+    with the namespace declared inline, because apply_alt._DECORATIVE_MARK is inserted as a
+    standalone fragment and has nowhere else to declare it. The xmlns sits BETWEEN the two
+    tokens, so the substring never matched and this returned False on ACP's own output. The
+    remediator's own predicate (apply_alt._HAS_MARKER) is a regex and matched correctly, so it
+    skipped the image — producing exactly the second failure this docstring warns about: mark an
+    image decorative, re-scan, and 1.1.1 is still reported, forever, on a conforming document.
+
+    Word escapes it by declaring xmlns:adec on the document root and emitting a bare
+    `<adec:decorative val="1"/>`, which is why the bug survived: it is invisible on
+    Word-authored files and only appears on files ACP has already remediated.
+
+    The two predicates are now the same expression. tests/test_office_alt_parity.py pins them.
     """
-    return 'decorative val="1"' in block or "decorative val='1'" in block
+    return bool(_DECORATIVE_MARKER.search(block))
 
 
 def _element_block(xml: str, tag: str, m: re.Match) -> str:

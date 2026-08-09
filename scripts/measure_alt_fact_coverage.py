@@ -33,7 +33,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-MODELS = ["moondream", "llava:7b", "qwen2.5vl:7b", "qwen2.5vl:32b"]
+# Ordered by size. The document-specialised small models (granite3.2-vision, minicpm-v) are the
+# interesting entries: production runs CPU-only, where a 7B costs 79s per image against a 1.8B's
+# 8s. A SMALL model that understands documents would beat a large general one on both axes, so
+# size is reported alongside the score rather than treated as a proxy for quality.
+MODELS = ["moondream", "granite3.2-vision", "qwen2.5vl:3b", "llava:7b",
+          "minicpm-v", "qwen2.5vl:7b", "qwen2.5vl:32b"]
 IMAGE = ROOT / "frontend" / "public" / "samples" / "enrollment-notice.png"
 
 # The six facts in that notice. Ground truth is the image's OCR, not a hand-written summary.
