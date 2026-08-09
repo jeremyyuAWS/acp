@@ -155,11 +155,14 @@ def test_the_certification_pdf_makes_no_conformance_claim_about_unassessed_docum
     t = _flat(build_report(run, _REPORTED_ESTATE, {"target": "WCAG 2.1 AA", "version": "1.2",
                                                   "hash": "deadbeef"}))
 
-    # The sentence that used to be printed, verbatim in shape: an "All N … are certifiable"
-    # claim over documents nobody opened.
+    # The sentence that used to be printed, verbatim in shape: a blanket claim over documents
+    # nobody opened. Both phrasings are matched — the pre-2026-08-09 "…document(s) meet <std>"
+    # and the wording that replaced it — so this keeps guarding the defect rather than passing
+    # because the sentence it hunted for was reworded out from under it.
     assert not re.search(r"All\s*2\s*(analysed|assessed) document\(s\) meet", t)
+    assert not re.search(r"All\s*2\s*assessed document\(s\) came back", t)
     # The decision card is three-valued and must not read green here.
-    assert "NOT CERTIFIABLE" in t
+    assert "OPEN FINDINGS" in t
     assert "0 of 2" in t
     # And the gap is stated rather than left for the reader to infer from a blank score column.
     assert "never assessed" in t
