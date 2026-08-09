@@ -163,10 +163,25 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "3.1.2": ASSISTED,   # language-of-parts (langdetect proposal)
         "3.1.5": ASSISTED,      # reading level — re-writing prose
         "3.3.2": AUTO,       # form-field labels from adjacent text
-        "4.1.2": ASSISTED,   # content-control accessible name — propose_forms drafts w:alias
-                             # (derived from adjacent prompt text, or a local model where there
-                             # is none), a human approves, apply_field_name writes it. Same
-                             # w:alias that clears 3.3.2, so one approval settles both.
+        "4.1.2": AUTO,       # content-control accessible name — the SAME w:alias write that
+                             # clears 3.3.2 above, borrowed deterministically from adjacent
+                             # visible text by form_labels.adjacent_label. No model, no
+                             # approval, and the real detector goes silent on the re-scan
+                             # (measured, not assumed — tests/test_docx_412_auto_lane.py).
+                             #
+                             # This was ASSISTED, which understated a lane that already
+                             # existed: the fixer ran, but was gated on 3.3.2's scope alone
+                             # and credited only to 3.3.2, so 4.1.2 looked like it needed a
+                             # human when the bytes had already been fixed.
+                             #
+                             # Honest-partial in exactly pdf 4.1.2's shape, and it earns the
+                             # ⚡ the same way: a field with NO adjacent text to borrow is
+                             # never named by guesswork — it stays a finding and routes to
+                             # the per-field review card apply_field_name writes back on
+                             # approval, the docx twin of refusing a generic /T. Note the
+                             # ASSESSMENT axis deliberately does not follow to 🟢; the
+                             # override below keeps it 🟡 because the detector reads content
+                             # controls and nothing else.
     },
     # Excel — every structural/visual finding is actioned. Two human lanes, both because the
     # FORMAT cannot carry the answer rather than because nothing was built: reading level
@@ -325,8 +340,11 @@ FORMATS: tuple[str, ...] = ("html", "docx", "pptx", "xlsx", "pdf")
 #   • 🟡 review — auto-REMEDIABLE but not certifiable, the reverse exception. docx 2.4.6 is the
 #     case: ⚡ auto is correct on the remediation axis (the heading-skip closure is deterministic
 #     and round-trip proven), but the derivation must not read that as a certified pass.
-# Control-gated 🟡 criteria (2.1.2/4.1.2 with no controls) are NOT listed here — they resolve
-# per-file to a grey ⚪ N/A when their detector finds nothing (a per-document outcome, not a lane).
+# Control-gated 🟡 criteria (2.1.2/4.1.2 with no controls) are NOT listed here FOR THAT REASON —
+# they resolve per-file to a grey ⚪ N/A when their detector finds nothing (a per-document
+# outcome, not a lane). docx 4.1.2 does appear below, on unrelated grounds: its remediation lane
+# is ⚡, so the derivation would otherwise make it certifiable. Being control-gated is why a cell
+# may be absent from this list; it is not a bar to being present for a different reason.
 ASSESSMENT_OVERRIDES: dict[tuple[str, str], str] = {
     ("pptx", "2.1.1"): A_HUMAN,   # keyboard operability of a static deck — nothing to assess
     ("docx", "1.4.8"): A_AUTO,    # justified-text detection is deterministic; fix is opt-in (🤖)
@@ -358,6 +376,18 @@ ASSESSMENT_OVERRIDES: dict[tuple[str, str], str] = {
     # to REVIEW; this override is what keeps the two from disagreeing. When a tag-tree detector
     # lands and coverage moves to FULL, delete this line.
     ("pdf", "4.1.2"): A_REVIEW,   # AcroForm-only detector — can't certify the whole criterion
+    # docx 4.1.2 is the same shape and needed the same brake THE MOMENT its remediation lane
+    # moved to ⚡. _assessment() derives 🟢 from AUTO, so flipping the lane without this line
+    # would have silently started certifying the criterion — the false-PASS direction, and the
+    # one ADR 0016 exists to prevent. The lane flip is sound (w:alias is written deterministically
+    # and the detector goes silent), but a clean re-scan proves the CONTENT CONTROLS are named,
+    # not that 4.1.2 is met: formats/docx/detectors/name_role_value.py reads w:sdt and nothing
+    # else, and stays silent on ActiveX controls and embedded OLE objects whose name and role
+    # live in code no static read can see. office_structure.office_control_review_checks keeps
+    # emitting the REVIEW advisory for exactly those kinds, which is the other half of this.
+    # The registry already says coverage=PARTIAL on its own axis; this keeps the two agreeing.
+    # When a detector for opaque controls lands and coverage moves to FULL, delete this line.
+    ("docx", "4.1.2"): A_REVIEW,  # content-control-only detector — can't certify the criterion
 }
 
 

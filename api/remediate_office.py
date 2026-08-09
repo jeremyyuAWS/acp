@@ -1154,16 +1154,38 @@ def _remediate_docx_structure(entries: dict, diffs=None, skipped=None, in_scope=
     # Borrow that text deterministically into the control's <w:alias> so a screen reader
     # announces it; a genuinely BARE field (no adjacent text) is never labelled here — it
     # stays a finding and routes to review.
+    #
+    # THE SAME WRITE CLEARS 4.1.2, and until now only 3.3.2 was gated on and credited for it.
+    # w:alias is simultaneously the visible prompt 3.3.2 asks for and the accessible NAME Word
+    # exposes to assistive technology, which is 4.1.2's Name half — one attribute, two criteria,
+    # as formats/docx/detectors/name_role_value.py says in its own docstring. Two consequences
+    # were live before this change:
+    #
+    #   * A scan scoped to 4.1.2 but not 3.3.2 skipped the fixer entirely. The criterion was in
+    #     scope, the fix was deterministic and available, and ACP left the bytes alone.
+    #   * Nothing recorded the 4.1.2 clearance, so the report credited a criterion it had in
+    #     fact fixed to the review lane instead.
+    #
+    # Verified rather than reasoned: running formats/docx/detectors/name_role_value.detect over
+    # the same tree before and after this write takes an inline-caption field and a table-cell
+    # field from 1 finding to 0, and leaves a bare field at 1. tests/test_docx_412_auto_lane.py
+    # pins all three against the real detector, so a future change to either side breaks loudly.
     import form_labels as _fl
-    labelled, bare = _fl.plan_labels(root) if _sc_ok(in_scope, "3.3.2") else ([], [])
+    _labels_in_scope = _sc_ok(in_scope, "3.3.2") or _sc_ok(in_scope, "4.1.2")
+    labelled, bare = _fl.plan_labels(root) if _labels_in_scope else ([], 0)
     for sdt, label in labelled:
         _fl.set_alias(sdt, label)
-        _rec(diffs, "3.3.2",
-             "form field had no label a screen reader could announce (content control with no title/alias)",
-             f'labelled “{label}” from the adjacent text',
-             "so assistive tech names the field when the user tabs into it")
+        for _sc, _after in (
+            ("3.3.2", f'labelled “{label}” from the adjacent text'),
+            ("4.1.2", f'accessible name “{label}” borrowed from the adjacent text'),
+        ):
+            _rec(diffs, _sc,
+                 "form field had no label a screen reader could announce "
+                 "(content control with no title/alias)",
+                 _after,
+                 "so assistive tech names the field when the user tabs into it")
     if labelled:
-        applied.append(f"Labelled {len(labelled)} form field(s) from adjacent text · 3.3.2")
+        applied.append(f"Labelled {len(labelled)} form field(s) from adjacent text · 3.3.2, 4.1.2")
     if bare and skipped is not None:
         skipped.append(f"{bare} form field(s) have no adjacent label text to borrow — "
                        "needs a human/AI-supplied label (routed to review)")

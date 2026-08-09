@@ -746,7 +746,14 @@ def test_reconciliation_corrected_calls_are_pinned():
 
 def test_reconciliation_docx_auto_set_is_the_corrected_superset():
     # The sparse version's docx auto set omitted 3.1.1 (and 3.3.2). The corrected, proven set:
-    assert cap.auto_scs("docx") == {"1.3.1", "1.4.3", "2.4.2", "2.4.6", "3.1.1", "3.3.2"}
+    #
+    # 4.1.2 joined it without any new fixer being written. form_labels borrows a form field's
+    # label from adjacent visible text and writes <w:alias> — which is at once the visible prompt
+    # 3.3.2 wants and the accessible name 4.1.2 wants. The write always cleared both; only 3.3.2
+    # was gated on and credited for it, so the lane understated itself. Verified on the real
+    # detector rather than inferred (tests/test_docx_412_auto_lane.py), and paired with an
+    # ASSESSMENT_OVERRIDES entry so the ⚡ lane does not derive a certifiable 🟢 cell.
+    assert cap.auto_scs("docx") == {"1.3.1", "1.4.3", "2.4.2", "2.4.6", "3.1.1", "3.3.2", "4.1.2"}
 
 
 def test_reconciliation_alt_text_assisted_where_a_proposer_backs_it():

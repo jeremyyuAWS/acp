@@ -154,11 +154,22 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     // trap exists, cannot say which control traps, and could not verify a fix. There is no
     // signal to prefill from, and no future detector supplies one.
     //
-    // These three numbers have moved four times in one day, once per capability change, and each
-    // move was caught HERE rather than by the backend suite — this file is the only place the
+    // 6⚡ 8🤖, not 5/9: docx 4.1.2 moved ASSISTED -> AUTO. Unlike the changes above it declared
+    // no new capability at all — the deterministic fixer already ran. form_labels borrows a
+    // field's label from adjacent visible text and writes it into <w:alias>, which is BOTH the
+    // visible prompt 3.3.2 wants and the accessible name 4.1.2 wants. One write, two criteria;
+    // only 3.3.2 was gated on and credited for it, so 4.1.2 read as needing a human while the
+    // bytes were already being fixed. A lane can understate as well as overstate.
+    //
+    // The ASSESSMENT axis deliberately does NOT follow to 🟢 — an explicit override keeps docx
+    // 4.1.2 at 🟡, because the detector reads content controls and stays silent on ActiveX and
+    // embedded OLE. A clean re-scan proves the fields are named, not that the criterion is met.
+    //
+    // These three numbers have now moved five times, once per capability change, and each move
+    // was caught HERE rather than by the backend suite — this file is the only place the
     // per-lane totals are asserted. Worth knowing before assuming a green backend means the
     // capability tables are consistent.
-    expect({ remAuto: s.remAuto, remAi: s.remAi, remHuman: s.remHuman }).toEqual({ remAuto: 5, remAi: 9, remHuman: 1 })
+    expect({ remAuto: s.remAuto, remAi: s.remAi, remHuman: s.remHuman }).toEqual({ remAuto: 6, remAi: 8, remHuman: 1 })
   })
 
   it('union prefers the best assessment lane; a distinct remediation resolver is honored', () => {
