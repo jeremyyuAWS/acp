@@ -83,9 +83,30 @@ disabled. Absent credentials means no tracing at all, not degraded tracing.
    ACP. Options, cheapest first: hash the filename into the trace and keep the plaintext only in
    the app's own database; or keep the extension and a per-scan index (`file 3 of 12 (.docx)`).
    Either keeps traces navigable while removing the patient identifier.
-2. **Bound the reviewer note.** It is the one field with no truncation and no shape, so it is the
-   one most likely to contain a sentence about a patient. Truncate as the neighbouring
-   `approved_value` already does, or drop it from the trace and keep it in the HITL record.
+2. ~~**Bound the reviewer note.**~~ **Done, 2026-08-09 — as a length, not a truncation.**
+   `trace_hitl_decision` now sends `note_chars` and never the text.
+
+   **Truncating would have been theatre**, and the recommendation above was weaker than it should
+   have been for suggesting it. PHI in a reviewer's note sits at the FRONT: *"Patient John Smith
+   MRN 0114233 disputes…"* is forty-odd characters, so any cap that leaves the note readable
+   leaves the identifier intact. A cap bounds volume, and volume was never the risk.
+
+   Nothing is lost. The note is already persisted in `hitl_queue.reviewer_note`, the span still
+   carries scan_id / file / rule_id / status, and the weak-rule rollup reads the structured
+   `resolution` field rather than this free text — so the trace answers every question it did
+   before, minus one it should not have been asked. It also brings the field into line with what
+   the module already did for prompts (`prompt_chars`), which was the precedent rather than an
+   invention.
+
+   `approved_value` is deliberately left as a 500-char capped string: it is the text ACP writes
+   INTO the document, authored to be published there, and seeing it is the point of tracing the
+   decision at all.
+
+   Pinned by `tests/test_langfuse_carries_no_free_text.py`, which asserts on the captured payload
+   rather than the call shape — a test for "the key is now `note_chars`" would pass against a
+   future version that helpfully added a `note_preview` beside it. Mutation-checked: reverting the
+   one-line change fails three of the six tests. The file also pins the `prompt_chars` invariant
+   this whole audit turned on, which nothing tested before.
 3. **Make the Langfuse target explicit at deploy time** rather than defaulting to the shared demo
    project's host and public key.
 4. **Record the retention period.** Self-hosted or not, this is a second copy of derived data;
