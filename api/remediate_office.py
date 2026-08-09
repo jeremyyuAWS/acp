@@ -1370,6 +1370,58 @@ def _draft_docx_assisted(entries: dict, path: Path, proposals: list | None, *,
                    before=detail, locator="word/document.xml#lang-part",
                    source="AI draft marking the passage's language")
 
+        # 1.3.2 — floating text boxes and frames, read at their anchor rather than their visual
+        # position. EXPLAIN-ONLY, and that is the honest shape: the fix is to re-flow the
+        # document so the anchor order matches the visual order, which cannot be proposed as a
+        # VALUE — there is no string to approve. A card offering a fill-in field here would be
+        # asking a reviewer to type something that has nowhere to go.
+        #
+        # No model call: the finding already names what is wrong and how many, and a model asked
+        # to "fix reading order" from text alone would invent a layout it cannot see.
+        floating = sum(1 for inner in _os._TXBX_CONTENT.findall(xml)         # noqa: SLF001
+                       if "".join(_os._WT.findall(inner)).strip())          # noqa: SLF001
+        floating += len(_os._FRAMEPR.findall(xml))                          # noqa: SLF001
+        if floating and _sc_ok(in_scope, "1.3.2") and made < _ASSISTED_MAX_DRAFTS:
+            proposals.append(_prop.proposal(
+                locator="word/document.xml#floating-text",
+                before=f"{floating} floating text box(es)/frame(s)",
+                proposed_value=(
+                    "Move this content into the main document flow, in the order it should be "
+                    "read. A screen reader announces a floating box at its ANCHOR point, which "
+                    "need not match where it appears on the page."),
+                rationale="the anchor order and the visual order can differ; only a person "
+                          "reading the layout can say what the intended sequence is",
+                source="structural finding (no model — the layout is not in the text)",
+                explain_only=True, sc="1.3.2"))
+            made += 1
+
+    # 1.4.5 — images of text. The draft IS the OCR'd text, not a model's description of it: the
+    # remediation for an image of text is to re-author it AS text, so the thing a reviewer needs
+    # is the words themselves, ready to paste. Transcribed, never generated — nothing here can
+    # confabulate, which is why it is offered even though 1.4.5's fix is human work.
+    #
+    # Charts are excluded upstream by images_of_text (WCAG's Essential exception), so a bar chart
+    # does not arrive here asking to be retyped.
+    try:
+        import ocr as _ocr
+        for f in (_ocr.images_of_text(path, path.suffix.lower()) or [])[:_ASSISTED_MAX_DRAFTS]:
+            if made >= _ASSISTED_MAX_DRAFTS or not _sc_ok(in_scope, "1.4.5"):
+                break
+            detail = str(f.get("detail") or "")
+            quoted = re.search(r"[“\"']([^”\"']{4,})[”\"']", detail)
+            text = quoted.group(1).strip() if quoted else ""
+            if not text:
+                continue
+            proposals.append(_prop.proposal(
+                locator="word/media#image-of-text", before="(text baked into an image)",
+                proposed_value=text,
+                rationale="transcribed from the image by OCR — re-author this as real text so it "
+                          "can be resized, restyled and read by assistive technology",
+                source="OCR transcription (no model)", sc="1.4.5"))
+            made += 1
+    except Exception:
+        pass
+
     return made
 
 
