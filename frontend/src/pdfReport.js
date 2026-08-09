@@ -320,7 +320,7 @@ export async function exportGovernanceReport(d) {
     { label: 'Documents', value: Number(d.total).toLocaleString() },
     // '—' for an unmeasured estate: `null + '%'` printed a literal "null%" into a report a
     // customer hands to an auditor, and `0%` would have been a claim nothing supports.
-    { label: 'Certifiable', value: d.certifiable ?? '—', color: GREEN },
+    { label: 'No blocking findings', value: d.certifiable ?? '—', color: GREEN },
     { label: 'Remediation backlog', value: d.needFix, color: AMBER },
     { label: 'Audit-ready', value: d.auditReady == null ? '—' : d.auditReady + '%' },
   ])
@@ -418,10 +418,10 @@ export async function exportDocumentReport(d) {
   const before = d.score ?? 0
   const after = d.finalScore ?? (d.status && /pending/i.test(d.status) ? before : 100)
   const findings = d.findings || []
-  const p = await makeDoc({ title: `Accessibility Conformance Report — ${d.file}` })
+  const p = await makeDoc({ title: `Accessibility Assessment Report — ${d.file}` })
   p.ring(after, after >= 90 ? GREEN : AMBER)
   p.cover({
-    title: 'Accessibility Conformance Report',
+    title: 'Accessibility Assessment Report',
     subtitle: d.file,
     meta: [`Assessed ${d.date}${d.engine ? ` · ${d.engine}` : ''}${d.assignee ? ` · Assigned to ${d.assignee}` : ''}`, `WCAG ${d.wcagVersion || '2.1'} AA · ${d.status || 'Remediated'}`],
   })
@@ -594,9 +594,10 @@ export async function exportFileCertification(d) {
 // failing criteria, and a per-document appendix. Built ONLY from real scan data
 // (per-rule traces + the file list + the HITL queue) — no fabricated confidence %.
 // Aggregation happens in scanReport.js (the same client-side rollup RuleBreakdown
-// does); this function only renders. "Conformant" always means certifiable: zero
-// open WCAG findings at the assessed target level — a real count, never estimated.
-const STATUS_TXT = { certifiable: 'Certifiable', issues: 'Open findings', uncertain: 'Uncertain', unanalysable: 'Unanalysable' }
+// does); this function only renders. "No blocking findings" means exactly that: zero open
+// WCAG findings among the criteria checked at the assessed target level — a real count, never
+// estimated, and never a claim that the document conforms.
+const STATUS_TXT = { certifiable: 'No blocking findings', issues: 'Open findings', uncertain: 'Uncertain', unanalysable: 'Unanalysable' }
 
 export async function exportScanReport(d) {
   const pct = d.conformantPct ?? 0
@@ -620,27 +621,27 @@ export async function exportScanReport(d) {
 
   p.heading('Executive summary')
   p.callout(
-    `${d.conformantN} of ${Number(d.totalFiles).toLocaleString()} documents (${pct}%) conform to WCAG 2.1 Level ${d.targetLevel}. Estate average score ${d.avgScore ?? 'n/a'}/100. ${d.criteriaAutomated} of ${d.inScopeCount} in-scope success criteria are automatically evaluated across the estate.`,
+    `${d.conformantN} of ${Number(d.totalFiles).toLocaleString()} documents (${pct}%) came back with no blocking findings among the WCAG 2.1 Level ${d.targetLevel} criteria ACP checked. Estate average score ${d.avgScore ?? 'n/a'}/100. ${d.criteriaAutomated} of ${d.inScopeCount} in-scope success criteria are automatically evaluated across the estate.`,
     { color: good ? GREEN : AMBER, bg: good ? '#EEF5E8' : '#FBF1DF' }
   )
   p.metricGrid([
     { label: 'Documents', value: Number(d.totalFiles).toLocaleString() },
-    { label: 'Conformant', value: `${pct}%`, color: good ? GREEN : AMBER },
+    { label: 'No blocking findings', value: `${pct}%`, color: good ? GREEN : AMBER },
     { label: 'Avg score', value: d.avgScore != null ? `${d.avgScore}/100` : 'n/a' },
     { label: 'Target', value: `Level ${d.targetLevel}` },
   ])
   const sc = d.statusCounts || {}
   p.bullets([
-    `${sc.certifiable || 0} document(s) certifiable now — zero open findings at Level ${d.targetLevel}`,
+    `${sc.certifiable || 0} document(s) came back with no blocking findings at Level ${d.targetLevel}`,
     sc.issues ? `${sc.issues} document(s) with open findings to remediate` : null,
     sc.uncertain ? `${sc.uncertain} document(s) need review before a verdict` : null,
     sc.unanalysable ? `${sc.unanalysable} document(s) could not be analysed (unreadable source)` : null,
   ].filter(Boolean))
-  p.text(`Conformance is measured against the assessed target (Level ${d.targetLevel}). Every figure in this report is a real count from this scan — no confidence percentages are fabricated.`, { size: 8.5, color: MUTED, lh: 12 })
+  p.text(`Measured against the assessed target (Level ${d.targetLevel}). This is a record of what ACP checked, changed and re-verified — not a determination that these documents conform to WCAG. Every figure is a real count from this scan; no confidence percentages are fabricated.`, { size: 8.5, color: MUTED, lh: 12 })
 
-  p.heading('Conformance status')
+  p.heading('Outcome by document')
   p.donut([
-    { label: 'Certifiable', value: sc.certifiable || 0, color: GREEN },
+    { label: 'No blocking findings', value: sc.certifiable || 0, color: GREEN },
     { label: 'Open findings', value: sc.issues || 0, color: '#A32D2D' },
     { label: 'Uncertain', value: sc.uncertain || 0, color: AMBER },
     { label: 'Unanalysable', value: sc.unanalysable || 0, color: '#B6B0BC' },
