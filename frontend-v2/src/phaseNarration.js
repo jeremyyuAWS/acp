@@ -137,6 +137,32 @@ export function scanPhaseLine(phase, { deepScan = false, step = null } = {}) {
   return SCAN_PHASE_LINES[phase] ?? null   // an unknown phase narrates nothing, never a guess
 }
 
+// The CONCRETE line, under the narration: which document, which criterion, what action.
+//
+// scanPhaseLine narrates the PHASE — true, general, and identical for the whole forty seconds a
+// long document spends in `analysing`. The complaint it does not answer is "is it on MY file
+// yet?", and neither does a percentage. `api/activity.py` builds the specific line
+// ("benefits.docx · 1.1.1 Non-text Content · describing images") and both the scan progress
+// payload and the remediation-status poll now carry it.
+//
+// SAME RULE AS THE NARRATION: never fabricate. This renders what the backend reported and
+// nothing else — no interpolation, no elapsed-time cycling, no "probably still on file 3 of 9".
+// A payload with no activity renders no line, which is the honest state and is why every branch
+// here ends in null rather than in a plausible sentence.
+//
+// The backend string is preferred over reassembling the parts in the browser, so the phrasing
+// lives in one place; `current` is the fallback for a payload predating the activity field,
+// where the filename alone is still more use than the phase alone.
+export function activityLine(progress) {
+  if (!progress || typeof progress !== 'object') return null
+  const a = progress.activity
+  if (typeof a === 'string' && a.trim()) return a.trim()
+  // remediation-status nests it as an object; the scan payload sends the flat string.
+  if (a && typeof a === 'object' && typeof a.text === 'string' && a.text.trim()) return a.text.trim()
+  const cur = progress.current
+  return typeof cur === 'string' && cur.trim() ? cur.trim() : null
+}
+
 export const ASSESS_LINES = [
   'Selecting the findings that block this conformance level…',
   'Counting blocking failures per document…',

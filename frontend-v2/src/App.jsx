@@ -34,7 +34,7 @@ import EmptyState, { Loading } from './EmptyState.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
 import { applyScopeConfig } from './activeScope.js'
 import A11ySelfCheck from './A11ySelfCheck.jsx'
-import { scanPhaseLine, NARRATION_STEPS } from './phaseNarration.js'
+import { scanPhaseLine, NARRATION_STEPS, activityLine } from './phaseNarration.js'
 import { useScanRefetch } from './scanRefetch.js'
 
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
@@ -801,6 +801,18 @@ export default function App() {
           {scanPhaseLine(progress.phase, { deepScan, step: narrationStep }) && (
             <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
               {scanPhaseLine(progress.phase, { deepScan, step: narrationStep })}
+            </div>
+          )}
+          {/* Under the narration, not instead of it. The line above says what the PHASE is doing
+              and is identical for the whole time a long document sits in `analysing`; this one
+              names the document and the criterion, which is the question someone watching a
+              spinner is actually asking. Rendered only when the backend reported one — see
+              activityLine, which returns null rather than inventing a plausible sentence. */}
+          {activityLine(progress) && (
+            <div className="muted" data-testid="scan-activity"
+                 style={{ marginTop: 4, fontSize: 12, opacity: 0.85,
+                          fontVariantNumeric: 'tabular-nums' }}>
+              {activityLine(progress)}
             </div>
           )}
         </div>

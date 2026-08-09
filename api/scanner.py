@@ -1873,6 +1873,17 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False):
     return fdict, pinfo
 
 
+# Phase → what a person would say is happening. The phase names are internal state ("scoring"),
+# and showing them raw asks the user to learn ACP's pipeline vocabulary to read a status bar.
+_SCAN_ACTIONS = {
+    "connecting": "connecting to the document source",
+    "discovering": "finding documents in scope",
+    "reading": "downloading",
+    "analysing": "checking against the WCAG criteria",
+    "scoring": "scoring findings",
+}
+
+
 def run_scan(source: str = "local", progress=_noop, drive_token: str | None = None,
              folder: str | None = None, sp_token: str | None = None,
              ai_enabled: bool = True, scan_id: str | None = None,
@@ -1882,6 +1893,26 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
     rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
     scan_id = scan_id or uuid.uuid4().hex[:12]
+
+    # Every progress payload gains a readable `activity` line, once, here — rather than at the
+    # seven call sites below. The counters answer "how far along", and a user watching a 25-page
+    # document sit at "analysing" for forty seconds is asking a different question: what is it
+    # DOING? Wrapping means a new phase cannot ship with counters that update and a line that
+    # does not, which is how the two drift apart.
+    _inner_progress = progress
+
+    def progress(d: dict) -> None:                            # noqa: F811 — deliberate shadow
+        try:
+            import activity as _act
+            phase = d.get("phase")
+            d = dict(d, activity=_act.line(file=d.get("current"),
+                                           action=_SCAN_ACTIONS.get(phase, phase or "")))
+            _act.record(scan_id, file=d.get("current"), action=_SCAN_ACTIONS.get(phase, phase),
+                        phase=phase)
+        except Exception:
+            pass          # a progress line must never be able to fail the scan it describes
+        _inner_progress(d)
+
     tmp = Path(tempfile.mkdtemp(prefix="acp-api-scan-"))
     # Per-user token: default to whole-Drive search. ADC/demo: pinned demo folder.
     effective_folder = folder if folder else ("root" if drive_token else None)

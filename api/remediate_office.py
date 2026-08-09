@@ -584,7 +584,18 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
             proposed_value=res["alt"],
             rationale=res.get("evidence") or "AI vision description — confirm it matches the intent",
             source=f"AI vision model ({res['model']})",
-            thumb=_thumb_b64(img))
+            thumb=_thumb_b64(img),
+            sc="1.1.1",
+            # The reason this is a proposal and not an applied fix, stated rather than implied.
+            # Every branch above this one auto-applied because it had an anchor — the image's own
+            # OCR text, or an independent second reading that agreed. This branch has neither, so
+            # the draft describes what the model believes it saw and nothing in the document
+            # corroborates it. That is exactly what a reviewer needs to know before trusting it.
+            why_review=("The image contains no readable text, so nothing in the document can "
+                        "corroborate this description — it is the model's reading of the picture "
+                        "and cannot be checked automatically. Confirm it conveys what the image "
+                        "is FOR, not merely what it shows."),
+            context=caption or None)
         if agreement:
             p["agreement"] = agreement          # {verdict, second_opinion, validator_model}
         proposals.append(p)
@@ -1492,6 +1503,12 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
         except Exception:
             vision_enabled = False
     skipped: list[str] = list(_core_skip)
+    # One line, per stage, naming the file and the criterion being worked. `scan_id` is None for
+    # every offline caller (benchmarks, CLI, tests), and activity.record no-ops on that — so this
+    # costs nothing outside a real scan and cannot fail one inside it.
+    import activity as _act
+    _act.record(scan_id, file=path.name, sc="1.1.1", action="describing images",
+                phase="remediating")
     # Native charts (1.1.1) FIRST — before _fix_image_alt (which would otherwise put a weak
     # name-based descr on the chart shape, which we then wouldn't overwrite) and before any structural
     # pass re-encodes the XML. A native chart has NO image bytes, so vision can't help it; its data is
@@ -1524,12 +1541,18 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
 
     # docx structural fixes (table header rows + heading outline) — WCAG 1.3.1.
     if path.suffix.lower() == ".docx":
+        _act.record(scan_id, file=path.name, sc="1.3.1",
+                    action="marking table headers and the heading outline", phase="remediating")
         try:
             applied.extend(_remediate_docx_structure(entries, diffs, skipped, in_scope))
         except Exception:
             skipped.append("docx structural fixes (table headers / heading outline) could not be applied")
         # Assisted criteria — DRAFTED for review, never written. See the function's docstring.
         if ai_enabled:
+            _act.record(scan_id, file=path.name, sc="2.4.4",
+                        action="drafting link, sensory and language fixes for review",
+                        detail="drafts only — nothing is written without approval",
+                        phase="remediating")
             try:
                 n = _draft_docx_assisted(entries, path, proposals, scan_id=scan_id,
                                          in_scope=in_scope)
