@@ -403,6 +403,7 @@ from assessment_policy import (  # noqa: F401,E402  (re-export)
     _LEGACY_NOT_EVALUATED, _SUPERSEDING_OUTCOMES, _SC_LEVEL, _ALL_FORMATS,
     active_scope, scope_problem, parse_scope_setting,
     in_scope, in_target, parse_target, config_target,
+    formats_in_scope, file_in_scope,
     filter_issues_to_target, filter_issues_to_scope, _rule_outcome, _certify, _registry_for,
     _split_sc_counts, _file_format, _extract_sc, _pages_csv,
 )

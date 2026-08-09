@@ -575,6 +575,55 @@ def in_scope(rule_id: str, fmt: str | None, scope: dict | None = None) -> bool:
     return bool(fmts) and fmt in fmts
 
 
+def formats_in_scope(scope: dict | None = None) -> frozenset[str] | None:
+    """Every format any in-scope criterion applies to, or None for "no restriction".
+
+    THE POINT OF THIS HELPER IS THAT SCOPE SHOULD GATE WHAT IS READ, NOT ONLY WHAT IS SCORED.
+    `in_scope` and `filter_issues_to_scope` both run AFTER a file has been downloaded, opened,
+    rasterised, OCR'd and cached — they trim findings from a document ACP has already read in
+    full. For a hospital that is the wrong shape entirely: "we read every PDF and discarded the
+    findings" is an accurate description of the old behaviour and not one a security review
+    accepts. This is the predicate that lets enumeration skip the file instead.
+
+    RETURNS None, NEVER THE FULL SET, for an unset scope. Callers must be able to tell "the
+    operator restricted nothing" from "the operator selected all four", because the first means
+    *do not filter* and the second is a deliberate choice that should still exclude anything
+    outside those four. Collapsing them is how an empty scope comes to mean "scan nothing", which
+    is the inverse of the operator's intent (see #187).
+    """
+    if scope is None:
+        scope = active_scope()
+    if not scope:
+        return None
+    out: set[str] = set()
+    for fmts in scope.values():
+        out.update(fmts or ())
+    return frozenset(out) or None
+
+
+def file_in_scope(filename: str, scope: dict | None = None) -> bool:
+    """Should this file be READ at all under the current scope?
+
+    HTML IS ALWAYS TRUE, AND REMOVING THAT IS THE MISTAKE THIS COMMENT EXISTS TO PREVENT.
+    `scan_scope`'s format axis is the four DOCUMENT formats — gen_scope_presets._DOC_FORMATS
+    excludes html deliberately — so html can never appear in a scope map. A naive "keep files
+    whose format is in scope" therefore stops scanning HTML the moment anyone scopes to .docx,
+    silently, and it looks like a consistent rule rather than a bug. The exemption is not an
+    inconsistency to tidy up; it is the consequence of html living outside the axis.
+
+    An unrecognised format is also kept, on the same principle as `in_scope`: the gate's job is
+    to honour a deliberate choice, not to invent one from a filename it could not parse. Skipping
+    a file we cannot classify would silently shrink the estate on the strength of a guess.
+    """
+    fmts = formats_in_scope(scope)
+    if fmts is None:
+        return True
+    fmt = _file_format(filename)
+    if fmt is None or fmt == "html":
+        return True
+    return fmt in fmts
+
+
 def filter_issues_to_scope(issues: list[dict], fmt: str | None,
                            scope: dict | None = None) -> list[dict]:
     """Drop findings whose (criterion, format) pair the operator left out of scope.

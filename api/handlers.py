@@ -786,7 +786,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
     scan_file job per file. Each file's Langfuse trace is opened later, per file, by
     _analyse_and_persist_one — not here."""
     from rubric import Rubric
-    from scanner import _list, _drive_service, ACP, FANOUT_MAX_FILES
+    from scanner import _list, _drive_service, ACP, FANOUT_MAX_FILES, _scope_for_listing
     scan_id = payload.get("scan_id") or job.get("scan_id")
     source = payload.get("source", "drive")
     ai = bool(payload.get("ai", True)) and core.store.get_ai_enabled()
@@ -798,10 +798,13 @@ def _scan_discover(payload: dict, job: dict) -> None:
     svc = None if source in ("local", "sharepoint") else _drive_service(toks.get("drive"))
     effective_folder = folder if folder else ("root" if toks.get("drive") else None)
     scope: dict = {}
+    # scope_files gates what is READ, not what is scored. This is the PRODUCTION listing path
+    # (ADR 0007 fan-out); run_scan's is the local one, and wiring only that would leave a
+    # hospital's PDFs being downloaded and OCR'd in the deployment that matters.
     items = _list(source, svc, folder=effective_folder, sp_token=toks.get("sp"),
                   max_files=FANOUT_MAX_FILES,
                   exclude_remediated=bool(payload.get("exclude_remediated", False)),
-                  scope_out=scope)
+                  scope_out=scope, scope_files=_scope_for_listing())
     # shadow_candidate (a file sharing a logical name with another — possibly ACP's own output
     # shadowing its source) is computed inside _enqueue_analysis from the item list, so the same
     # rule applies whether the fan-out runs now or later at Assess.

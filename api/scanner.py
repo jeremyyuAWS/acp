@@ -845,8 +845,13 @@ def _dedupe_names(items: list[dict]) -> list[dict]:
 
 def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None = None,
           max_files: int | None = None, exclude_remediated: bool = False,
-          scope_out: dict | None = None) -> list[dict]:
+          scope_out: dict | None = None, scope_files: dict | None = None) -> list[dict]:
     """List the source. `scope_out`, when given, is filled in with WHAT WAS COVERED.
+
+    `scope_files` is the operator's resolved `scan_scope` map. Given, files whose format no
+    in-scope criterion applies to are dropped from the listing and never read — see the block at
+    the end of this function. None means no restriction, which is NOT the same as the full set of
+    formats and must not be collapsed into one.
 
     A file count on its own is not a fact about an estate — it is a fact about a boundary the
     caller chose, and the two are only the same number when the boundary is "everything". On
@@ -921,6 +926,34 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
                               "folder_name": _folder_name(svc, _DEMO_FOLDER),
                               "folders_walked": 1, "listed": len(batch), "kept": len(result),
                               "truncated": False})
+    # ── the operator's file-type scope, applied to what gets READ ───────────────────────────
+    #
+    # ONE PLACE, NOT FOUR. The proposal for this listed four enumeration sites (local, SharePoint,
+    # Drive's mimeType allow-list, upload) and warned that missing one is how the feature
+    # half-works. Every branch above converges here, so filtering at the dispatcher covers all of
+    # them and any source added later — a stronger guarantee than four call sites that must be
+    # kept in step.
+    #
+    # WHAT THIS DOES AND DOES NOT CLAIM. The out-of-scope file is still LISTED (its name and size
+    # come back from a source the operator connected on purpose); it is never DOWNLOADED, opened,
+    # rasterised, OCR'd, cached to blob or traced. That is the distinction that matters for PHI:
+    # the content is what was being read, and `_download` runs over this list.
+    #
+    # Placed before `_dedupe_names` so `kept` — set by each branch above — is corrected here
+    # rather than left describing a population the caller will never receive.
+    if scope_files is not None:
+        from store import file_in_scope       # module-level idiom here: avoids a circular import
+        _before = len(result)
+        result = [it for it in result if file_in_scope(it.get("name") or "", scope_files)]
+        _skipped = _before - len(result)
+        if scope_out is not None:
+            # REPORTED, NEVER SILENT. Narrowing the scope makes the estate smaller, and an
+            # operator who cannot see why cannot tell a scoped scan from a source that lost
+            # files. This codebase has been bitten repeatedly by a number that changed for a
+            # reason nobody could see; it is also the line that answers "did you look at
+            # everything?" in an audit.
+            scope_out["skipped_out_of_scope"] = _skipped
+            scope_out["kept"] = len(result)
     # `kept` is set by each branch above, BEFORE this pass, and stays correct because
     # _dedupe_names renames colliding names without ever dropping an item — so the count the UI
     # states beside the scope is the number of rows the UI will show. That is an invariant of
@@ -1767,6 +1800,24 @@ def _collapse_duplicate_alt(issues: list[dict]) -> list[dict]:
     return [i for i in issues if i.get("ruleId") not in _FIRST_PARTY_ALT_RULES]
 
 
+def _scope_for_listing() -> dict | None:
+    """The operator's `scan_scope` map, for gating what gets READ. None = no restriction.
+
+    Deliberately the same resolution `_scoped_for_scoring` uses — the Store, not `in_scope`'s
+    storeless fallback, which cannot see the `scan_scope` setting and answers "everything is in
+    scope" to every question. That fallback is precisely how this feature came to gate scoring
+    and nothing else.
+
+    NOT wrapped in a bare try/except, for the reason spelled out in `_scoped_for_scoring`: a gate
+    that fails open and says nothing is indistinguishable from a gate that was never wired up,
+    and here failing open means reading a hospital's PDFs after the operator asked for Word
+    documents only. That must surface as a defect, not as a quietly wider scan.
+    """
+    import core
+    from store import active_scope
+    return active_scope(core.store)
+
+
 def _scoped_for_scoring(issues: list[dict], filename: str) -> list[dict]:
     """The findings a SCORE may be computed from, for one file — the operator scope applied.
 
@@ -1953,7 +2004,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         svc = None if source in ("local", "sharepoint") else _drive_service(drive_token)
         scope: dict = {}
         items = _list(source, svc, folder=effective_folder, sp_token=sp_token,
-                     exclude_remediated=exclude_remediated, scope_out=scope)
+                     exclude_remediated=exclude_remediated, scope_out=scope,
+                     scope_files=_scope_for_listing())
         n = len(items)
         progress({"phase": "discovering", "files_found": n, "files_done": 0, "current": None})
 

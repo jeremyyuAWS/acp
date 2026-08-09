@@ -27,13 +27,25 @@ third is the correctness fix with the widest blast radius.
   party, and a BAA question. Check what is sent, and whether it can be disabled per-field.
   *Effort: ~1h.*
 
-- [ ] **P0.3 — Make the file-type filter reach the scanner.**
-  Full scope in `docs/scope-reaches-the-scanner.md`. `scan_scope` gates criteria, never file
-  reads: `routes/scans.py` has zero references to it, and enumeration is extension-only
-  (`scanner.py:512`, `:876`). A `.docx` scan still downloads, OCRs and caches every PDF.
-  Simultaneously a correctness fix, a data-minimisation fix, and a speed win — the only item that
-  is all three.
-  *Effort: 2–3h. Watch the HTML exemption and the `skipped_out_of_scope` counter.*
+- [x] **P0.3 — Make the file-type filter reach the scanner.** Done. `scan_scope` now gates what
+  is READ, not only what is scored: `assessment_policy.file_in_scope` decides per file and
+  `scanner._list` drops the rest before `_download` ever sees them.
+  **Applied at the dispatcher, not the four enumeration sites the proposal listed.** Local,
+  SharePoint, Drive-folder and whole-Drive all converge on `_list`, so one gate covers every
+  source and any source added later — a stronger guarantee than four call sites kept in step.
+  What it claims is narrower than "not listed": an out-of-scope file's *name* still comes back
+  from a source the operator connected on purpose; its *content* is never downloaded, opened,
+  rasterised, OCR'd, cached or traced. Content was what was being read, so content is what
+  stopped.
+  The HTML exemption and `skipped_out_of_scope` are both in, the latter surfaced in the Discover
+  sentence and feeding `isNarrowScope` — gated on the count, not the setting, so a `.docx` scope
+  over an all-Word estate raises no warning about nothing.
+  *Verified by disabling the gate and re-running: 4 of 12 tests fail without it, including the
+  load-bearing one, which asserts on the FETCH rather than the file list — a list-only assertion
+  passes against the old behaviour too, since the old list was filtered downstream anyway.*
+  **Still open from the proposal's "consequences" section, all three decisions rather than code:**
+  scan diffs across differing scopes (ADR 0009), incremental-cache invalidation on a scope change
+  (ADR 0011), and naming the unread formats in the PDF report's `_scope_section`.
 
 ---
 
