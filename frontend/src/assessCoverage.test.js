@@ -131,12 +131,20 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     expect(s.auto + s.review + s.human + s.gap + s.at + s.na).toBe(20)
   })
 
-  it('remediation axis is counted independently (docx: 5⚡ 7🤖 0👤)', () => {
+  it('remediation axis is counted independently (docx: 5⚡ 7🤖 2👤)', () => {
     const s = coverageSummary(filesOf('docx'), { documents: true })
     // 7🤖, not 6: docx 4.1.2 gained an assisted lane when the form-field name became writable
     // (propose_forms drafts the w:alias Title, apply_field_name writes it on approval). The
     // criterion was previously review-only on docx, so it contributed no remediation cell.
-    expect({ remAuto: s.remAuto, remAi: s.remAi, remHuman: s.remHuman }).toEqual({ remAuto: 5, remAi: 7, remHuman: 0 })
+    //
+    // 2👤, not 0: docx 1.4.1 and 1.4.11 gained HUMAN lanes. Both detectors had shipped since
+    // ADR 0023 Phase 1b and their findings already reached users, but neither pair was declared,
+    // so the fix axis read "No Remediation" — an absence of records rather than of work.
+    // Human and not assisted deliberately: an assisted lane emits a prefilled value a reviewer
+    // confirms, and neither has one to prefill. Replacing a colour-only cue is an editorial
+    // choice; recolouring a shape outline changes the visual design. What the lane carries is
+    // the MEASUREMENT — 1.4.11's finding states the ratio it found and the 3:1 it needed.
+    expect({ remAuto: s.remAuto, remAi: s.remAi, remHuman: s.remHuman }).toEqual({ remAuto: 5, remAi: 7, remHuman: 2 })
   })
 
   it('union prefers the best assessment lane; a distinct remediation resolver is honored', () => {
