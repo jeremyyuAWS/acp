@@ -65,7 +65,12 @@ import zipfile
 from collections import Counter
 from pathlib import Path
 
-_HEADING_STYLE = re.compile(r'<w:pStyle\s+w:val="Heading(\d)"\s*/>')
+# `/?>` so the PAIRED spelling `<w:pStyle w:val="Heading1"></w:pStyle>` matches too. Both are
+# valid OOXML; only Word consistently self-closes. A document from another producer had no
+# outline at all as far as this pattern was concerned, which silences the heading-skip check,
+# the empty-heading check and the 1.3.1 structure pass — none of which would error, all of
+# which would report the file as clean. Found by tests/test_docx_producer_dialects.py.
+_HEADING_STYLE = re.compile(r'<w:pStyle\s+w:val="Heading(\d)"\s*/?>')
 _PARA = re.compile(r"<w:p[ >].*?</w:p>", re.S)
 # A body with this many text-bearing paragraphs and zero headings is long enough
 # that the lack of section structure is a real 2.4.10 problem (a short letter/memo
@@ -75,11 +80,19 @@ _MIN_PARAS_FOR_HEADINGS = 15
 # text-bearing justified paragraphs so a single incidental justified line (e.g. a
 # banner) doesn't trip it — the SC is about blocks of body text. "distribute" is
 # East-Asian full-justify, likewise a both-margins failure.
-_JC_BOTH = re.compile(r'<w:jc\s+w:val="(?:both|distribute)"\s*/>')
+# `/?>` for the same reason as _HEADING_STYLE above: the paired spelling is legal and a
+# justified document written that way reported no 1.4.8 finding.
+_JC_BOTH = re.compile(r'<w:jc\s+w:val="(?:both|distribute)"\s*/?>')
 _MIN_JUSTIFIED_PARAS = 3
 # rIds are XML "ID" type, not necessarily numeric — Word/PowerPoint always emit
 # pure digits (rId4), but any tool producing valid OOXML can use rIdFoo.
-_HYPERLINK = re.compile(r'<w:hyperlink[^>]*r:id="(rId\w+)"[^>]*>(.*?)</w:hyperlink>', re.S)
+# ANY relationship id, not just Word's "rId7" convention. A relationship id is an opaque
+# string in the standard, and the captured value is only ever used as a key into the .rels
+# map — so a narrower pattern cannot reject a wrong id, only a correctly-formed one from a
+# different producer. That is the exact reasoning apply_alt._R_EMBED already carries, arrived
+# at the same way; this pattern kept the tight form and silenced 2.4.4, 2.4.9 and 1.4.1 on
+# any document whose producer names ids differently.
+_HYPERLINK = re.compile(r'<w:hyperlink[^>]*r:id="([^"]+)"[^>]*>(.*?)</w:hyperlink>', re.S)
 _WT = re.compile(r"<w:t[^>]*>([^<]*)</w:t>")
 # XML attributes are unordered, and .rels writers disagree: Word/PowerPoint emit
 # Id first, openpyxl emits it LAST (Type/Target/TargetMode/Id). Grab the whole
