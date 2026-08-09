@@ -3,6 +3,15 @@
 Every item below is a gap **observed** on 2026-08-08, not a speculative improvement. Each names
 the evidence, so anyone can re-check it rather than trust this file.
 
+**Synced 2026-08-09.** Six entries had gone stale in two days — Phase 0 was fully closed, P2.4,
+P2.5 and P4.8 were done, and P4.2 was half done — while the file still listed all of them as open.
+That is worth a warning rather than just a fix: **this file goes out of date faster than anything
+else in the repo, and it is the one artifact people read INSTEAD of checking.** Where it and the
+code disagree, the code wins; each item now names what to re-run. The measured claims here
+(lane counts, undeclared pairs, per-SC bounds) came from
+`remediation_capability.CAPABILITY`, `store.RULE_FORMATS` and `scripts/score_assessment.py` on the
+day of the sync, not from the previous version of this file.
+
 Context: the customer is a **hospital**, the documents are **PHI**, and the near-term scope is
 **.docx only**. Those three facts set the priority order more than anything else here.
 
@@ -10,22 +19,67 @@ Context: the customer is a **hospital**, the documents are **PHI**, and the near
 
 ---
 
-## Phase 0 — tonight (target: done by tomorrow morning)
+## Phase 0 — CLOSED 2026-08-09 (all ten; P0.10 is a decision, not code)
+
+All nine build items are done. The two investigations that headed the list — P0.1 and P0.2, the
+ones whose wrong answer is a patient-data incident rather than a missed finding — are answered in
+writing, in `audit-owner-isolation.md` and `audit-langfuse-phi.md`. Both are worth reading for the
+same reason: **each found the opposite of what the item predicted.** P0.1 expected an IDOR via a
+request parameter and found the parameter path clean and a different, real disclosure beside it;
+P0.2 expected prompts full of PHI going to a third party and found prompts reduced to a count and
+Langfuse self-hosted. An investigation that confirms its own premise is the one to distrust.
 
 Three items. The first two are investigations that could change what you tell the customer; the
 third is the correctness fix with the widest blast radius.
 
-- [ ] **P0.1 — Is `owner` derived from the session or the request?**
-  `download_remediated(owner, scan_id, filename)` streams remediated files (`routes/scans.py:766,
-  833`). If `owner` can come from a request parameter anywhere, that is a direct IDOR on patient
-  documents. Everything else in this file is defence in depth; this one is exposure.
-  *Effort: ~1h. Outcome: a yes/no you can put in writing.*
+- [x] **P0.1 — Is `owner` derived from the session or the request?** **The session** — and asking
+  the question found a real hole next to it. `_owner()` reads `request.state.user_email`, written
+  in exactly one place from a verified GIS token; no query parameter, path segment, header or body
+  field reaches it. That much the 2026-08-08 audit had already established.
+  **But the remediated-download route was not in any foreign-access test, and it was exploitable
+  (#209).** `get_remediation_urls` had no owner predicate; the blob read beside it *was* scoped, so
+  a foreign document came back `None` and fell through to a Drive mirror URL from a row the caller
+  had no right to. A correct control created the path to an incorrect one. Measured with the real
+  gate: an allow-listed non-owner got `307 -> the owner's Drive link`, with the owner's own request
+  succeeding in the same run. The same fall-through was also an oracle — `307` vs `404` revealed
+  which documents a scan contained.
+  Fixed in two independent places, each sufficient alone and each with its own test: ownership
+  resolved at the route (404 as `"scan not found"` verbatim), and an owner predicate filtering **in
+  SQL** so a foreign row is never read into memory.
+  *Path traversal — the other thing that audit left uncovered — was checked and is safe:* `..`
+  reaches the blob key, but Azure blob names are flat strings and never resolve it. Pinned anyway,
+  since that is a property of the storage backend rather than of this code.
+  *Isolation-off is now loud at startup.* The trap worth knowing: `ACCESS_CODE` and
+  `GOOGLE_CLIENT_ID` are an `if`/**`elif`**, so setting an access code on a deployment that HAS
+  Google configured does not add a second factor — it stops `user_email` being stamped at all.
+  See [audit-owner-isolation.md](audit-owner-isolation.md).
 
-- [ ] **P0.2 — What does Langfuse capture in production?**
-  Tracing records prompts by default, and ACP's prompts carry document text and OCR output. If
-  tracing is on with PHI flowing through it, that is a second copy of patient data in a third
-  party, and a BAA question. Check what is sent, and whether it can be disabled per-field.
-  *Effort: ~1h.*
+- [x] **P0.2 — What does Langfuse capture in production?** **Not prompts — the premise was wrong,
+  in our favour.** ACP does not use Langfuse auto-instrumentation; `api/lf.py` hand-builds every
+  span and sends `prompt_chars`, a count. Document text and OCR output never leave. PII spans send
+  types and counts, never matched values.
+  Four content-derived fields did leave: **filename** (every trace, unbounded), model completion
+  (1500 chars), approved value (500), and the reviewer's free-text note (unbounded). The note is
+  fixed (#210) — sent as `note_chars`, because truncation would have been theatre: PHI in a note
+  sits at the front, so any cap that leaves it readable leaves the identifier intact.
+  **And Langfuse is self-hosted in both deployment shapes** — a compose container or an
+  ACP-operated Azure Container App, never Langfuse Cloud. So there is no third-party disclosure and
+  the BAA question is much narrower than assumed; what remains is retention inside our own
+  boundary. See [audit-langfuse-phi.md](audit-langfuse-phi.md).
+  **Two decisions left, both in P0.10 below.**
+
+- [?] **P0.10 — The two Langfuse decisions P0.2 surfaced, plus one from P0.1.** Not code, and not
+  closeable by anyone but you.
+  * **Filenames in traces.** The only field flowing on every scan, and the largest remaining
+    exposure by volume — in a hospital estate the filename carries the patient
+    (`Smith_John_MRN0114233_intake.docx`). Hashing it, or keeping extension plus a per-scan index,
+    removes the identifier; both make a trace harder for a human to skim. That trade is the
+    decision.
+  * **`deploy.sh` defaults to the shared demo project's Langfuse host and public key.** A
+    deployment that does not override them traces into the project the demo views.
+  * **Should production refuse to boot in Basic-auth mode?** The right fail-closed default for
+    PHI, and it can lock out a running deployment — which is why #209 made it loud rather than
+    fatal.
 
 - [x] **P0.3 — Make the file-type filter reach the scanner.** Done. `scan_scope` now gates what
   is READ, not only what is scored: `assessment_policy.file_in_scope` decides per file and
@@ -155,9 +209,16 @@ third is the correctness fix with the widest blast radius.
   Assess/Remediate/Overview agreeing. Everything verified so far has been static (bundle
   contents, minified strings, traffic weights). localStorage must be cleared first or the old
   config masks the change.
-- [ ] **P1.2 — Rehearse the DOCX numbers.** 15 of 17 criteria have a docx lane · **4 can certify
-  a PASS** (1.3.1, 1.4.3, 2.4.2, 3.1.1) · 9 fixes apply across 7 criteria · **3 are not assessed
-  at all** (1.4.1, 1.4.11, 2.1.2). Source: `docs/capability-report.md`.
+- [ ] **P1.2 — Rehearse the DOCX numbers.** Still open (it is a rehearsal, not a build) but the
+  figures moved — **rehearse these, not the ones this line used to carry**:
+  **15 of 15** Core-17 criteria in scope for docx have a lane; none returns `NOT_EVALUATED` (the
+  "3 are not assessed at all" clause is gone — see P2.4) · **4 can certify a PASS** (1.3.1, 1.4.3,
+  2.4.2, 3.1.1) — unchanged, and the number most worth saying precisely · remediation lanes over
+  those 15: **6 ⚡ auto · 8 🤖 assisted · 1 👤 human**.
+  The honest sentence pairing them: *every criterion is assessed, most are fixed or drafted for
+  you, and four are ones a clean scan can certify* — the other eleven are reported as reviewed,
+  not passed. Source: `docs/capability-report.md`, and `remediation_capability.CAPABILITY["docx"]`
+  is the authority if the two disagree.
 - [ ] **P1.3 — Say the Ontology gap out loud.** Custom labels and hierarchical taxonomy have no
   v2 equivalent (`Ontology.jsx` is v1-only; `ontology.js` data layer survives). Decide whether to
   port, defer, or drop before someone reaches for it in the room.
@@ -181,10 +242,21 @@ third is the correctness fix with the widest blast radius.
 - [ ] **P2.3 — Document-type scoping.** Discover *groups* by classification (HR, Legal,
   public-facing, legal-hold) but a scan cannot be *scoped* by it. For a hospital, "assess only
   legal-hold" is a more natural ask than file type, and the ontology data already exists.
-- [ ] **P2.4 — The three unassessed DOCX criteria.** 1.4.1, 1.4.11, 2.1.2 have no lane and return
-  `NOT_EVALUATED`. Decide: build, or state plainly that ACP does not assess them.
-- [ ] **P2.5 — The 14 pairs with no recorded remediation decision.** `mode_for()` defaults them to
-  `human`, so behaviour is consistent; what is missing is the decision. Confirm each was intended.
+- [x] **P2.4 — The three unassessed DOCX criteria.** Done — all three built rather than disclaimed.
+  1.4.1 and 1.4.11 landed as declarations with guided lanes (#202) and then prefilled proposers
+  (#203), which moved both from `human` to `assisted`: the criterion is editorial, but the SIGNAL
+  ACP detects is exact — restore the removed underline; use this computed shade. 2.1.2 landed
+  (#206) as `human`, and there it is a conclusion rather than a staging post: keyboard-trap
+  behaviour is runtime and absent from the file, so there is no signal to prefill from.
+  **Every one of the 15 Core-17 criteria in scope for docx now has a lane; none returns
+  `NOT_EVALUATED`.** 4 can certify a PASS (1.3.1, 1.4.3, 2.4.2, 3.1.1) — unchanged, and the honest
+  number to rehearse in P1.2.
+- [x] **P2.5 — The 14 pairs with no recorded remediation decision.** Done — **0 remain.** Measured
+  over the 96 detectable pairs in `store.RULE_FORMATS`: every one now carries an explicit
+  remediation lane, so `mode_for()`'s `human` default is no longer standing in for an absent
+  decision anywhere. The last of them was docx 4.1.2 (#208), which turned out to be understating
+  rather than missing — the deterministic fixer already ran, gated on 3.3.2's scope alone and
+  credited only to 3.3.2.
 
 ---
 
@@ -247,6 +319,26 @@ thing the PRD does not mention.
   Not a blocker: the fixtures are generated, so this is parameterising `gen_sc_corpus.py`'s
   builders to sample densely around each decision boundary rather than hand-writing 300 files.
 
+  **[~] Half done (#207), and the half that landed shows why the other half may not be reachable
+  this way.** `scripts/gen_sc_sweeps.py` samples densely where the input space is genuinely rich —
+  40 greys across 4.5:1 for 1.4.3, 19 passage lengths across the 12-word floor for 3.1.2, 16
+  junk-alt strings for 1.1.1. All six exercised SCs score F1 1.00 with zero false passes, and
+  1.4.3 is exact at every one of the 40 greys. 2.4.2 and 3.1.1 are deliberately NOT swept: their
+  input space is two or three discrete states, so copies would inflate the denominator and prove
+  nothing.
+  `score_assessment.py` now reports the ceiling **per criterion**, which is the less flattering
+  number and the only honest one — pooling bought 1.4.3 nothing, since a detector that mishandles
+  a grey is not vindicated by fixtures exercising langdetect. Per SC: **13.0% / 23.1% / 23.1%**,
+  densest n=23 against the ~300 a 1% claim needs.
+  **Two cautions the work itself produced.** More fixtures are not automatically more
+  observations: the first version asked for 40 samples across a 21-value range and emitted 21
+  files with 40 manifest rows — an inflated denominator, generated by the module whose docstring
+  warns about inflated denominators. And consecutive samples share almost everything (one grey
+  step apart), so even at n=300 a swept criterion would bound *"the detector mishandles some input
+  in this band"*, not *"ACP is wrong about an arbitrary document"*. **Closing the remaining gap
+  needs many genuinely distinct documents per criterion, or a narrower claim scoped to the band
+  actually sampled — not more of the same shape.**
+
 - [ ] **P4.3 — Evidence modes A–E; find the minimum viable evidence package.** (PRD §11.) The
   highest-value experiment in the document and the cheapest, because ACP already emits most of
   the package — findings carry `locator`/`location`, OCR text in `detail`, and the OOXML walk is
@@ -278,12 +370,14 @@ thing the PRD does not mention.
   `judge_drafts.py` already records its shuffle seed; nothing else records anything. Cheap now,
   impossible to backfill.
 
-- [ ] **P4.8 — Reviewer hand-off payload.** (PRD §36, and the one item with value *independent*
-  of every policy question above.) When ACP escalates, give the reviewer the SC, the object, the
-  crop, the deterministic evidence, the model's interpretation, the reason for uncertainty and
-  the proposed fix — so a human resolves the remaining ambiguity instead of repeating the whole
-  assessment. Pairs with the requested per-file/per-rule progress line during assessment and
-  remediation. **Not blocked on P4.0.**
+- [x] **P4.8 — Reviewer hand-off payload.** Done. When ACP escalates it now hands the reviewer the
+  SC, the object, the deterministic evidence, the reason for uncertainty (`why_review`) and the
+  proposed fix, so a human resolves the remaining ambiguity instead of repeating the assessment.
+  The per-file and per-rule progress line landed with it (`api/activity.py`), including the
+  concurrent case — the channel renders the oldest in-flight entry plus "(+N more in progress)"
+  rather than interleaving them. **It was never blocked on P4.0**, which is why it was worth
+  doing first: it is the one item on this list whose value does not depend on any policy question
+  being settled.
 
 - [x] **P4.9 — Regression detection across all Core-17, not just the target SC.** (PRD §22.)
   Built: `score_remediation.py` computes fixed / unresolved / regressed over every criterion, and
@@ -308,6 +402,35 @@ thing the PRD does not mention.
   subscription, so "local Apple Silicon" is the only profile that exists. Revisit with I.1.
 
 ---
+
+## Phase 5 — silent under-reporting, found while building elsewhere
+
+Added 2026-08-09. None of these was on the original list, and they share a shape worth naming:
+**each is a place ACP reports nothing and looks clean.** A detector that over-reports gets fixed
+because somebody complains; one that under-reports is indistinguishable from a compliant document.
+That is the failure mode the 2026-07-30 capability-grid exercise found nine of, and these are the
+ones currently visible.
+
+- [ ] **P5.1 — Header, footer and footnote parity for 1.3.1 / 2.4.4 / 1.4.3.** `word/footnotes.xml`
+  is not in `ALT_TARGETS`, and the header/footer parts are not walked by every detector that walks
+  the body. A document whose only defect lives in a running header would score clean. Untested in
+  either direction — the risk is asserted from the part list, not measured, so **step one is a
+  fixture, not a fix.**
+- [ ] **P5.2 — Tracked changes (`<w:ins>` / `<w:del>`).** Unhandled. A document under revision may
+  present text to a detector that no reader will ever see, or hide text every reader will. Both
+  directions are wrong and neither raises.
+- [ ] **P5.3 — Word round-trip via LibreOffice.** Every remediation is verified by re-running our
+  own detectors over our own writes. That proves self-consistency, not that Word opens the file or
+  that a screen reader announces what we wrote. A round-trip through an independent implementation
+  is the cheapest external check available.
+- [ ] **P5.4 — Mutation testing on the detector modules.** The corpus scores F1 1.00, which bounds
+  false negatives on the fixtures we thought to write and says nothing about the ones we did not.
+  Mutating the detectors and checking the suite notices is the standard answer to "is the test
+  suite actually load-bearing", and this repo has now been bitten twice by tests that could not
+  fail (the vacuous anti-vacuity guard; the pipeline that reported `tail`'s exit status).
+- [ ] **P5.5 — `frontend-v2/src/capability.js` has no docx 4.1.2 row.** It is guarded separately
+  from v1 (`test_capability_frontend_sync.py` covers v1 only), so the two can drift silently. Small
+  fix; its own lane-total updates.
 
 ## Infrastructure — parallel track
 
