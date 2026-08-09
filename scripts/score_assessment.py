@@ -84,15 +84,16 @@ def verdicts(issues: list[dict], scs: list[str]) -> dict[str, str]:
             for sc in scs}
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--corpus", type=Path,
-                    default=Path.home() / "Downloads" / "acp-docx-eval" / "sc-corpus")
-    ap.add_argument("--out", type=Path)
-    args = ap.parse_args()
+def _score_and_report(corpus: Path) -> dict:
+    """Scan every fixture and tally the outcomes. The measurement, with no reporting in it.
 
-    man = json.loads((args.corpus / "manifest.json").read_text())
+    Split out of `main` so the CI regression gate and this CLI score identically — a gate that
+    reimplements "correct" is a second opinion, not a guard, and the two drift the first time
+    one of them is edited.
+
+    Returns {tally, rows, attribution, latencies, scs, can_pass, macro_det, macro_rev, ...}.
+    """
+    man = json.loads((corpus / "manifest.json").read_text())
     scs = sorted(man["lanes"])
     can_pass = {sc for sc in scs if man["lanes"][sc]["can_pass"]}
 
@@ -105,7 +106,7 @@ def main() -> int:
     rows = []
 
     for fx in man["fixtures"]:
-        path = args.corpus / fx["file"]
+        path = corpus / fx["file"]
         issues, secs = scan(path)
         latencies.append(secs)
         got = verdicts(issues, scs)
@@ -277,10 +278,39 @@ def main() -> int:
         print(f"\nlatency  p50 {statistics.median(ls):.2f}s   p95 {p95:.2f}s   "
               f"n={len(ls)}   ({len(ls) / sum(ls) * 3600:.0f} docs/hour single-threaded)")
 
+    return {"per_sc": tally, "fixtures": rows, "attribution": attribution,
+            "false_pass": tot_fnp, "false_positive": tot_fp, "seeded": tot_pos,
+            "abstained_on_fail": tot_abs, "certified_clean": tot_tn,
+            "macro_f1_deterministic": _macro(f1s_det), "macro_f1_review": _macro(f1s_rev),
+            "micro_recall": micro_r, "micro_precision": micro_p,
+            "scs": scs, "can_pass": sorted(can_pass)}
+
+
+def score_corpus(corpus: Path, *, verbose: bool = True) -> dict:
+    """`_score_and_report`, with its output silenced when a caller only wants the numbers.
+
+    The regression gate imports this and asserts on the returned dict. It deliberately runs the
+    SAME function the CLI does rather than a slimmed-down copy: a gate that reimplements what
+    "correct" means is a second opinion, and the two drift the first time either is edited.
+    """
+    if verbose:
+        return _score_and_report(corpus)
+    import contextlib
+    import io
+    with contextlib.redirect_stdout(io.StringIO()):
+        return _score_and_report(corpus)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--corpus", type=Path,
+                    default=Path.home() / "Downloads" / "acp-docx-eval" / "sc-corpus")
+    ap.add_argument("--out", type=Path)
+    args = ap.parse_args()
+    summary = score_corpus(args.corpus, verbose=True)
     if args.out:
-        args.out.write_text(json.dumps(
-            {"per_sc": tally, "fixtures": rows, "attribution": attribution,
-             "false_pass": tot_fnp, "seeded": tot_pos}, indent=2) + "\n")
+        args.out.write_text(json.dumps(summary, indent=2, default=str) + "\n")
         print(f"\nwrote {args.out}")
     return 0
 

@@ -84,6 +84,17 @@ jobs:
         # Lands the DLL at spike/dotnet/AcpScan.Cli/bin/Release/net10.0/AcpScan.Cli.dll —
         # the exact path tests/engines.py probes. bin/ stays gitignored: built, not committed.
 
+      - name: Install tesseract (OCR)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr
+        # Turns ON coverage rather than merely adding a dependency. ocr.is_available() gates
+        # 1.4.5 / 1.4.9 (images of text) and every test that drives them self-skips without it —
+        # so the OCR criteria were never exercised in CI at all, and the skips said so quietly
+        # in a log nobody reads. That includes the corpus regression gate below, whose whole
+        # value is asserting the WHOLE surface at once; a gate silently missing two criteria is
+        # the shape of check this repo has been bitten by twice.
+        #
+        # ~3s to install, and OCR itself measured ~0.1s per image on a synthetic fixture.
+
       - name: Install API + test dependencies
         run: python -m pip install --quiet -r api/requirements.txt -r tests/requirements.txt
         # tests/requirements.txt carries the OOXML authoring libs (python-docx/pptx/openpyxl)
