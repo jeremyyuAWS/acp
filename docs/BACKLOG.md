@@ -45,6 +45,22 @@ third is the correctness fix with the widest blast radius.
   passes against the old behaviour too, since the old list was filtered downstream anyway.*
   All three of the proposal's "consequences" are now closed — see P0.4, P0.5 and P0.6.
 
+- [x] **P0.9 — A finding's position survives persistence whichever key the detector used.** Done.
+  `issue_records.location` was written from `i.get("location")` at both INSERT sites. The vendored
+  .NET rules write `location`; several first-party Python detectors write `locator` — so **every
+  Python-detected finding was stored with `location` NULL**. The finding survived; the ability to
+  point at the thing it is about did not, and that column is what a review card reads. Measured:
+  saving one of each stored `"docx:image:3"` for the .NET finding and NULL for the Python one.
+  **A fallback, not a rename** — the keys are not synonyms elsewhere. A `locator` is a resolvable
+  write target (`apply_alt.parse_locator` turns it back into an element); `location` is a position
+  string for a human. On a *finding* they answer the same question and the locator is the better
+  answer, so it is used only when `location` is absent, and nothing consuming `locator` as a write
+  target is touched. One accessor serves both INSERT sites, so it cannot be applied at one and
+  forgotten at the other — which is the shape of the bug it fixes.
+  *Noted while testing, deliberately not folded in:* findings are written as `ruleId` and read
+  back as `rule_id`. A second instance of the same split, but load-bearing — the read shape is the
+  row shape and every consumer expects it, so renaming is its own change with its own blast radius.
+
 - [x] **P0.8 — An empty heading is detected (2.4.6).** Done. The outline walk read `pStyle` refs
   and never the heading's text, so an empty `Heading` paragraph passed every check ACP had: in
   the outline (no pseudo-heading finding), breaking no level sequence (no skip finding), and with

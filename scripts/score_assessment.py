@@ -170,11 +170,16 @@ def main() -> int:
                                        "headerless_tables": set()}
             for i in issues:
                 rid = str(i.get("ruleId") or "").upper()
-                # BOTH keys. The vendored .NET rules write `location`
+                # BOTH keys, still. The vendored .NET rules write `location`
                 # ("docx:hyperlink:paragraph:115:url:…"); the Python detectors write `locator`
-                # ("word/header1.xml#Picture 1"). Reading one of them silently drops every
-                # finding from the other engine — which showed up here as the header-image
-                # fixture scoring 0 of 1 on a defect the scan had in fact reported.
+                # ("word/header1.xml#Picture 1"). Reading one silently drops every finding from
+                # the other engine — which showed up here as the header-image fixture scoring
+                # 0 of 1 on a defect the scan had in fact reported.
+                #
+                # store._issue_location now applies the same fallback when findings are
+                # PERSISTED, so anything read back from the database carries `location`. This
+                # harness reads the IN-MEMORY result of analyse_and_assess, upstream of that,
+                # so it still meets both spellings and still needs to know about them.
                 loc = i.get("location") or i.get("locator")
                 if not loc:
                     continue                  # a rollup — already counted via its members

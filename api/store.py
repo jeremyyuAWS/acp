@@ -32,6 +32,33 @@ _PII_SEV_RANK = {"critical": 3, "moderate": 2, "low": 1}
 # get_scan_diff to pick the worst severity when a SC's findings are mixed.
 _ISSUE_SEV_RANK = {"CRITICAL": 4, "SERIOUS": 3, "MODERATE": 2, "MINOR": 1}
 
+
+def _issue_location(i: dict) -> str | None:
+    """Where a finding is, from either of the two keys detectors use for it.
+
+    TWO NAMES FOR ONE COLUMN, AND ONE OF THEM WAS BEING DROPPED. The vendored .NET rules write
+    `location` ("docx:hyperlink:paragraph:115:url:…"). Several first-party Python detectors write
+    `locator` ("word/header1.xml#Picture 1") — see formats/docx/detectors/non_text_content.py.
+    Both INSERTs below persisted `i.get("location")` only, so every Python-detected finding was
+    stored with location NULL and its position was lost at the database boundary. The finding
+    survived; the ability to point at the thing it is about did not, which is what a review card
+    reads.
+
+    Measured, not inferred: saving one .NET finding and one Python finding through
+    save_file_result stored "docx:image:3" for the first and NULL for the second.
+
+    NOT a rename, and that distinction is why this is a fallback rather than a merge. The two
+    keys are not synonyms elsewhere: a `locator` is a RESOLVABLE WRITE TARGET that
+    apply_alt.parse_locator turns back into an element, while `location` is a position string for
+    a human. On a FINDING they answer the same question, and the locator is the better answer
+    because it is resolvable — so it is used when `location` is absent, and nothing that consumes
+    `locator` as a write target is touched.
+
+    One accessor, used by both INSERT sites, so the fallback cannot be applied at one and
+    forgotten at the other — which is the shape of the bug it fixes.
+    """
+    return i.get("location") or i.get("locator")
+
 # Schema is identical between SQLite and Postgres (UPSERT syntax is the same).
 _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS scan_runs (
@@ -726,7 +753,7 @@ class Store:
                         "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location) "
                         "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
                         (sid, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
-                         i.get("page"), i.get("location")))
+                         i.get("page"), _issue_location(i)))
                 # Per-rule trace: one row per catalog rule per file — PASS/FAIL/REVIEW/NOT_EVALUATED.
                 # Counts feed the per-rule trace, so they must reflect the conformance target:
                 # an AAA finding picked up as a by-product of an AA check is not this scan's
@@ -871,7 +898,7 @@ class Store:
                     "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location) "
                     "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
                     (scan_id, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
-                     i.get("page"), i.get("location")))
+                     i.get("page"), _issue_location(i)))
             fail_counts, review_counts = _split_sc_counts(
                 filter_issues_to_target(f.get("issues", []), target))
             fmt = _file_format(f["file"])
