@@ -81,7 +81,7 @@ from urllib.parse import unquote, urlparse
 
 
 def proposal(locator, before, proposed_value, rationale, source, thumb=None, kind=None,
-             explain_only=False) -> dict:
+             explain_only=False, sc=None) -> dict:
     p = {"locator": locator, "before": before, "proposed_value": proposed_value,
          "rationale": rationale, "source": source}
     if thumb:
@@ -90,6 +90,17 @@ def proposal(locator, before, proposed_value, rationale, source, thumb=None, kin
         p["kind"] = kind   # e.g. 'decorative' → the card offers "Mark decorative", not an alt field
     if explain_only:
         p["explain_only"] = True
+    if sc:
+        # WHICH criterion this proposal answers. Optional, and absent means 1.1.1 — every
+        # proposal remediate_office produced before this was a vision alt, and the caller
+        # (handlers._enqueue_proposals) hard-coded that SC. Once one function returns proposals
+        # for several criteria the label has to travel WITH the proposal, or a link-text draft
+        # lands on a 1.1.1 review card and the reviewer is asked to approve alt text that is not
+        # alt text.
+        #
+        # Left optional rather than required so the existing callers keep working unchanged; the
+        # default lives in the consumer, next to the routing decision it feeds.
+        p["sc"] = sc
     return p
 
 

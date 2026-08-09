@@ -102,8 +102,18 @@ def f_sensory(doc):
 
 def f_lang_parts(doc):
     _titled(doc)
-    doc.add_paragraph("Please review the policy.")
-    doc.add_paragraph("Veuillez consulter la politique d’accessibilité avant le 31 mars.")
+    # BOTH sentences must clear 12 words on their own — _SEG_SPLIT splits on sentence
+    # boundaries, so a 20-word paragraph made of two 10-word sentences contributes nothing.
+    # An 11-word English sentence here left French as the only qualifying segment, and the
+    # detector needs TWO in different languages before it reports anything.
+    doc.add_paragraph("Employees may review their medical, dental, and vision coverage options "
+                      "during the annual enrollment window each year without exception.")
+    # >= 12 words: textchecks._MIN_SEG_WORDS is 12 because langdetect is unreliable below
+    # that, and the detector needs TWO confident segments in different languages. The
+    # earlier 10-word passage was never seen, and the fixture scored a working check as a
+    # miss on every model.
+    doc.add_paragraph("Veuillez consulter la politique d’accessibilité avant le 31 mars 2026 "
+                      "pour confirmer votre choix de couverture médicale et dentaire.")
     return ["3.1.2"]
 
 
@@ -177,7 +187,8 @@ def f_mixed(doc):
     p = doc.add_paragraph("Full policy: ")
     _add_hyperlink(p, "https://example.com/policy", "click here")
     doc.add_paragraph("Press the square button at the top to enrol.")
-    doc.add_paragraph("Veuillez consulter la politique d’accessibilité.")
+    doc.add_paragraph("Veuillez consulter la politique d’accessibilité avant le 31 mars 2026 "
+                      "pour confirmer votre choix de couverture médicale et dentaire.")
     doc.add_picture(io.BytesIO(_png_of_text()))
     return ["1.1.1", "1.4.5", "2.4.4", "1.3.3", "3.1.2"]
 

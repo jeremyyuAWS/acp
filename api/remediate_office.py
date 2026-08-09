@@ -1262,6 +1262,117 @@ def alt_proposals_for_office(doc_bytes: bytes, ext: str, *, ai_enabled: bool = T
     return proposals, evidence
 
 
+# How many assisted findings one document may draft. A bound, not a quality judgement: each
+# draft is a model call, and a policy manual with 200 "click here" links would otherwise turn a
+# remediation job into a several-minute stall with no signal that it was drafting rather than
+# hung. Mirrors _VISION_MAX_IMAGES, and like it, the overflow is REPORTED rather than silent.
+_ASSISTED_MAX_DRAFTS = 12
+
+
+def _draft_docx_assisted(entries: dict, path: Path, proposals: list | None, *,
+                         scan_id: str | None = None, in_scope=None) -> int:
+    """Draft — never write — fixes for the .docx criteria ACP assesses but cannot auto-apply.
+
+    2.4.4 vague link text · 1.3.3 sensory-only instructions · 3.1.2 unmarked foreign passages.
+
+    WHY THIS EXISTS. These three are `assisted` on .docx: detected during assessment, and until
+    now producing nothing at all during remediation. The appliers exist (apply_link_text,
+    apply_text_values) but run only from handlers._apply_one_value_kind on values a human has
+    ALREADY approved — so a bulk remediation left them untouched even when the model would have
+    drafted something good, and the reviewer got an empty card to fill by hand. Measured across
+    15 documents and 3 text models: zero drafts, zero proposals, identical for every model.
+
+    WHY PROPOSALS AND NOT FIXES. The posture is unchanged and deliberate — draft, approve, apply,
+    never auto-write. Rewriting a link's visible text or a clinical instruction is a change to
+    what the document SAYS, not to how it is marked up, and on a hospital's document that is a
+    human's call. This closes the gap between "detected" and "a reviewer has something to
+    approve", which is the whole distance the assisted lane was missing.
+
+    Detection is the SAME code assessment uses (office_structure._is_vague_link_text,
+    textchecks.detect_sensory / detect_language_parts) rather than a second implementation, so a
+    proposal cannot be offered for something the scan does not report — the failure that would
+    make a reviewer approve a fix for a finding they never saw.
+
+    Returns the number of drafts produced. Best-effort throughout: no draft is worth failing a
+    remediation job for.
+    """
+    if proposals is None:
+        return 0
+    import ai as _ai
+    import proposals as _prop
+    # model_is_available(), NOT is_available(). The latter only proves /api/tags answered — a
+    # text-only or wrong-model Ollama passes it and every draft then comes back empty, which
+    # reads as a model that cannot do the task. tests/test_textmodel_gate.py enforces this as a
+    # drift guard across the proposal modules, and caught this exact line.
+    if not _ai.model_is_available():
+        return 0
+
+    doc = entries.get("word/document.xml")
+    if not doc:
+        return 0
+    try:
+        xml = doc.decode("utf-8")
+    except (UnicodeDecodeError, AttributeError):
+        return 0
+
+    import office_structure as _os
+    import textchecks as _tc
+
+    made = 0
+
+    def _draft(sc: str, rule_name: str, detail: str, before: str, locator: str, source: str):
+        nonlocal made
+        if made >= _ASSISTED_MAX_DRAFTS or not _sc_ok(in_scope, sc):
+            return
+        out = _ai.suggest_fix(sc, rule_name, "A", path.name, detail=detail)
+        value = (out or {}).get("suggestion")
+        if not value:
+            return
+        proposals.append(_prop.proposal(
+            locator=locator, before=before, proposed_value=value,
+            rationale=f"drafted from the surrounding text by {out.get('model', 'the local model')}",
+            source=source, sc=sc))
+        made += 1
+
+    # 2.4.4 — vague link text. Resolved through the relationship so the draft can name the
+    # DESTINATION, which is the whole point of the criterion; a rewrite that cannot see the
+    # target is guessing from the same words the reader already found unhelpful.
+    rels_xml = (entries.get("word/_rels/document.xml.rels") or b"").decode("utf-8", "ignore")
+    hrefs = dict(re.findall(r'Id="(rId\w+)"[^>]*Target="([^"]+)"', rels_xml))
+    for rid, inner in _os._HYPERLINK.findall(xml):          # noqa: SLF001 — the assessment regex
+        text = "".join(_os._WT.findall(inner)).strip()      # noqa: SLF001
+        if not text or not _os._is_vague_link_text(text):   # noqa: SLF001
+            continue
+        href = hrefs.get(rid, "")
+        _draft("2.4.4", "Link Purpose (In Context)",
+               f'link text is "{text}"' + (f'; it points to {href}' if href else ""),
+               before=text, locator=f"word/document.xml#{rid}",
+               source="AI draft from the link's destination and surrounding text")
+
+    # 1.3.3 and 3.1.2 read the document's visible text, which is what their detectors take.
+    body = " ".join(_os._WT.findall(xml)).strip()           # noqa: SLF001
+    if body:
+        # `detail` ALREADY reads "instruction relies on shape/position alone: “…”" — the
+        # detector writes the framing, not just the sentence. Prefixing it again handed the
+        # model that phrase twice and produced a draft that echoed the document instead of
+        # rewriting the instruction. Pass it through, and quote out the offending sentence for
+        # the `before` the reviewer sees.
+        for f in (_tc.detect_sensory(body) or [])[:_ASSISTED_MAX_DRAFTS]:
+            detail = str(f.get("detail") or "")[:300]
+            quoted = re.search(r"[“\"']([^”\"']{4,200})[”\"']", detail)
+            _draft("1.3.3", "Sensory Characteristics", detail,
+                   before=quoted.group(1) if quoted else detail,
+                   locator="word/document.xml#sensory",
+                   source="AI draft replacing the sensory-only reference")
+        for f in (_tc.detect_language_parts(body) or [])[:_ASSISTED_MAX_DRAFTS]:
+            detail = str(f.get("detail") or "")[:300]
+            _draft("3.1.2", "Language of Parts", detail,
+                   before=detail, locator="word/document.xml#lang-part",
+                   source="AI draft marking the passage's language")
+
+    return made
+
+
 def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True,
                      scan_id: str | None = None, applied_fixes: list | None = None,
                      proposals: list | None = None, evidence: list | None = None, diffs=None,
@@ -1365,6 +1476,16 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
             applied.extend(_remediate_docx_structure(entries, diffs, skipped, in_scope))
         except Exception:
             skipped.append("docx structural fixes (table headers / heading outline) could not be applied")
+        # Assisted criteria — DRAFTED for review, never written. See the function's docstring.
+        if ai_enabled:
+            try:
+                n = _draft_docx_assisted(entries, path, proposals, scan_id=scan_id,
+                                         in_scope=in_scope)
+                if n:
+                    skipped.append(f"{n} link/sensory/language finding(s) drafted for review "
+                                   "(2.4.4 / 1.3.3 / 3.1.2)")
+            except Exception:
+                skipped.append("assisted-criteria drafts could not be produced")
 
     # pptx-only structural fixes that need the slide XML (title / contrast / reading order).
     if path.suffix.lower() == ".pptx":

@@ -553,7 +553,25 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 # surfaced for one-click approval rather than silently written (WCAG 1.1.1
                 # intent stays human). Attach the prefilled drafts to the file's 1.1.1 HITL
                 # row — before the no-fixes early return, or they die inside the job result.
-                _enqueue_proposals(scan_id, filename, "1.1.1", "Non-text Content", _proposals)
+                # Route each proposal to ITS criterion. remediate_office used to return only
+                # vision alt, so hard-coding 1.1.1 here was correct; it now also drafts 2.4.4,
+                # 1.3.3 and 3.1.2 (see _draft_docx_assisted), and a link-text draft filed under
+                # 1.1.1 would ask a reviewer to approve alt text that is not alt text — and
+                # would clear the wrong finding when they did.
+                #
+                # Untagged proposals default to 1.1.1: every proposer that predates the `sc`
+                # field emits vision alt, so the default preserves their behaviour exactly
+                # rather than silently dropping them into a bucket nobody reads.
+                _PROP_RULE_NAMES = {
+                    "1.1.1": "Non-text Content", "2.4.4": "Link Purpose (In Context)",
+                    "1.3.3": "Sensory Characteristics", "3.1.2": "Language of Parts",
+                }
+                _by_sc: dict[str, list] = {}
+                for _p in _proposals:
+                    _by_sc.setdefault((_p or {}).get("sc") or "1.1.1", []).append(_p)
+                for _sc, _group in _by_sc.items():
+                    _enqueue_proposals(scan_id, filename, _sc,
+                                       _PROP_RULE_NAMES.get(_sc, _sc), _group)
                 # Deferred alt text (no faithful source — see remediate_office) must
                 # reach a human: those findings are fix_mode 'auto', so the ai-assisted
                 # HITL pull never sees them. Queue here — before the no-fixes early
