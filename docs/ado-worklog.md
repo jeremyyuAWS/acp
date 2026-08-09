@@ -63,6 +63,76 @@ is not covered here. The `(#NNN)` references are GitHub PRs, not ADO work items.
   grid offer those 17 rather than all 29 (#168).
 - Said what the numbers are counting, on Remediate and Publish (#164).
 - Made the file-type toggles do what the panel already said they did (#166).
+- **Shipped the scan-scope editor, which had been merged but never deployed** (#191). The
+  file-type and criterion selectors live in `frontend-v2/src/ScanSetup.jsx`, but
+  `deploy/public/Dockerfile` copied `frontend/` — v1 — which has neither. The feature was
+  merged, wired and covered by rendered-DOM tests while the deployed app still opened on
+  "Start here — connect a source & scan". It read as a backlog gap and was a packaging one;
+  three separate places name the SPA tree and all three have to agree.
+- **Made the scan scope reachable after the first scan** (#192). `ScanSetup` was rendered only
+  by `EmptyState`, which appears only before a workspace's first run — so the controls that
+  shape every number on the dashboard were reachable exactly once per workspace, and every
+  session afterwards opened with no route back to them. This is the gap behind "I still don't
+  see where to select the SCs".
+- **Stopped a scan running when its scope could not be saved** (#187). `scanAndSave` awaited
+  `save()` then called `onScan` unconditionally, and `save()` reports failure into a status
+  message rather than throwing — so a rejected write (expired session, 500) started a scan
+  against the *previously* stored scope while the screen displayed the operator's new
+  selection. Worse than not scanning: the result looks scoped, is not, and nothing on the page
+  contradicts it. Found by writing the missing tests rather than by reading the code.
+- **Made the file-type filter apply to every tab** (#195, #196). It lived inside Discover as an
+  inline `files.filter(...)`, so it applied to the inventory and nothing after it — App handed
+  the unfiltered list to Assess, Remediate, Publish, Overview, Monitor and the Knowledge Graph.
+  An operator who scoped to .docx got a docx-only inventory and then a full estate on every
+  screen that followed: PDFs scored, queued for remediation, counted in totals, and certified
+  against. Found by watching a live estate scoped to .docx and finding PDFs in the inventory.
+  .docx is now the default.
+- Added a launch config for frontend-v2 (#193).
+
+## Feature: Dependency security
+
+- **Upgraded pdfjs-dist to 6.2.108, closing arbitrary JavaScript execution on opening a
+  malicious PDF** (#194, GHSA-hq66-cqwq-w95j, HIGH). Also dompurify ≤3.4.12, where
+  `CUSTOM_ELEMENT_HANDLING` bypasses `afterSanitizeElements` and `IN_PLACE` hook removal leaves
+  a detached subtree executable (GHSA-c2j3-45gr-mqc4, GHSA-55q2-fjhq-7xh7). Found by
+  `npm audit --omit=dev` on both SPAs — **`--omit=dev` is the part that matters**, because these
+  are not build tooling: they ship to the browser. A platform whose entire purpose is ingesting
+  untrusted documents cannot carry a parse-a-PDF-and-run-JS bug.
+
+## Feature: Alt-text generation and grounding
+
+- **Made a missing OCR binary say so instead of quietly degrading** (#190). `requirements.txt`
+  installs `pytesseract`, which is a *wrapper*; the tesseract binary comes from the Dockerfile,
+  so a developer who pip-installs locally has the import and not the engine — and nothing
+  errors. What happens instead is worse than an error: an alt is only written inline when it is
+  grounded in text read from the image, so with no OCR nothing can be and every 1.1.1 draft
+  routes to `proposals` for human approval. That is exactly correct behaviour for an ungrounded
+  guess, and indistinguishable from the model being bad. It cost most of 2026-08-08 — DOCX
+  remediation was diagnosed as broken, then as a wiring bug, then as model quality, three wrong
+  answers in a row, each plausible.
+- Added "presents" to `_ALT_LEAD` (#185). The list strips caption-shaped openings from a vision
+  draft — "The image shows", "a photo of" — because by the time alt text is read aloud the
+  screen reader has already announced it is an image. It held nine verbs and not this one, so
+  "The image presents a bar graph…" reached the alt attribute intact. Found by diffing raw model
+  output against cleaned output rather than by reading the pattern list.
+
+## Feature: Test corpus and CI
+
+- **Gave the corpus manifest actual expectations** (#188). `test-corpus/manifest.json` now
+  carries `expected_rule_ids` from the generator that calls itself an oracle; the file it
+  replaced was a descriptive index (file/size_kb/desc) with no expectations in it at all, so
+  nothing measured whether any detector is correct.
+- Reconciled two generators that write that file and disagree about field names — one emits
+  `desc`, the other `notes`, and the reader accepted only `desc`, in two places, while sitting
+  in neither CI workflow. Regenerating the oracle would therefore have matched zero fixtures and
+  rendered every `rules/*/README.md` without its fixture list, **silently**. Both readers now
+  accept either; making one generator authoritative is left as a decision.
+- **Parallelised the backend suite, cutting 77s of a 118s job** (#189) — measured at 47.9s
+  serial against 15.5s with `-n auto`. The backend job was the entire critical path; the two
+  frontend jobs run alongside it and finish sooner, so nothing else was worth touching.
+  `--dist loadfile` is a correctness requirement rather than a tuning knob: one test deliberately
+  corrupts the real generated `scopePresets.js` and restores it in a `finally`, which is the
+  right test to have but is flaky under plain `-n` without file-level distribution.
 
 ## Feature: Remediation reaching the file
 
@@ -132,6 +202,14 @@ is not covered here. The `(#NNN)` references are GitHub PRs, not ADO work items.
 
 - PRD for the v2 redesign, written from the requirements list (#163).
 - Recorded that pytest is not the backend CI job — three guards run after it (#142).
+- **A capability report stating what a green scan actually certifies** (#186). Every fact was
+  derivable already and none were readable in one place: `assessment_policy` knows which pairs
+  are in the Core 17 and what a clean file resolves to, `remediation_capability` knows the lane,
+  `corpus_expectations` knows which verdicts a pair is allowed to reach. Answering the question
+  meant joining three tables by hand, which is how it ends up stated as a percentage nobody can
+  defend. Two findings fell out of the data rather than review — **17 of 61 pairs can certify a
+  PASS and 44 cannot, by design**, a `REVIEW_FORMATS` pair resolving to REVIEW when its detector
+  fires and NOT_EVALUATED when it does not.
 - Regenerated the capability matrix, and guarded the page that claimed it was guarded (#136).
 
 ---
@@ -148,7 +226,13 @@ is not covered here. The `(#NNN)` references are GitHub PRs, not ADO work items.
   to finish it or drop it.
 - **`#UTSW` is used as a customer tag in commit subjects**, not a PR number. If UT Southwestern
   work is tracked in ADO, that is a candidate linkage.
-- **Uncommitted worktree state** — `.claude/worktrees/` is untracked in the working tree.
+- **Uncommitted worktree state** — `.claude/worktrees/`, `ACP_DOCX_WCAG_Fixtures/` and its zip
+  are untracked in the working tree.
+- **Two corpus generators disagree about field names** (#188) — both readers now tolerate either,
+  but which generator is authoritative is an open decision, not a resolved one.
+- **This log was lost once already.** It was committed locally on 2026-08-08 and discarded by a
+  `git reset --hard origin/main` in a parallel session, because it had never been pushed. It was
+  recovered from the dangling object. Push it, or it will happen again.
 
 ---
 
@@ -157,3 +241,7 @@ is not covered here. The `(#NNN)` references are GitHub PRs, not ADO work items.
 - **2026-08-08** — Log created, covering 2026-08-01 onward (38 commits). Seven Features
   written: SharePoint source, operator scan scope, v2 redesign, remediation write-back,
   assessment correctness, multi-tenancy/control plane, and local model benchmarking.
+- **2026-08-08 (later)** — Recovered this file after a parallel session's
+  `git reset --hard origin/main` discarded the unpushed commit that introduced it, then added
+  12 commits (#185–#196). Three new Features: Dependency security, Alt-text generation and
+  grounding, and Test corpus and CI. Six Tasks appended to the v2 redesign.
