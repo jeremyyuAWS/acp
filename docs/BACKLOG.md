@@ -43,8 +43,20 @@ third is the correctness fix with the widest blast radius.
   *Verified by disabling the gate and re-running: 4 of 12 tests fail without it, including the
   load-bearing one, which asserts on the FETCH rather than the file list — a list-only assertion
   passes against the old behaviour too, since the old list was filtered downstream anyway.*
-  **Still open from the proposal's "consequences" section:** naming the unread formats in the PDF
-  report's `_scope_section`, which currently names only the criteria not evaluated.
+  All three of the proposal's "consequences" are now closed — see P0.4, P0.5 and P0.6.
+
+- [x] **P0.6 — The report's scope-of-assertion names the documents it never opened.** Done.
+  `_scope_section` is the report's guard against its own headline number, and every narrowing it
+  stated was by CRITERION ("no check was run for 2.4.3 on a PDF"). None was by DOCUMENT — so once
+  the file-type scope gates what is read, a whole class of files is absent from the report
+  entirely: not failing, not passing, not evaluated, never opened, and unmentioned.
+  A conformance report that lists the criteria it skipped but not the documents it never saw
+  understates its own boundary in the flattering direction, which is the exact failure the rest
+  of that section exists to prevent — the auditor asking "does this cover the estate?" gets
+  "yes" from silence.
+  The facts come from the **scan's own recorded scope**, not the live setting: a report is a
+  statement about what happened, and reading the current setting would let an already-issued
+  report re-describe its own past when someone changes the scope.
 
 - [x] **P0.5 — Scan diffs are scope-aware (ADR 0009).** Done. Two failures, one cause: a score is
   computed over the in-scope findings, so the same unchanged document scores **60** under a wide

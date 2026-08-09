@@ -1950,6 +1950,32 @@ class Store:
                             "proposed": sorted(proposed, key=lambda p: p["sc"])})
         return out
 
+    def _unread_scope_facts(self, scan_id: str) -> dict:
+        """What the file-type scope kept this scan from reading, for the scope-of-assertion text.
+
+        Read off the scan's OWN recorded scope rather than the live setting: a report is a
+        statement about what happened, and the operator may well have changed the scope since.
+        Reading the current setting would let a report re-describe its own past.
+
+        Returns {} when nothing was excluded or the scan predates the field, so the report adds
+        no sentence rather than an empty or speculative one.
+        """
+        import json as _json
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur, "SELECT scope FROM scan_runs WHERE id=%s", (scan_id,))
+                row = self._db.fetchone(cur)
+            raw = (row or {}).get("scope")
+            sc = (_json.loads(raw) if isinstance(raw, str) else raw) or {}
+        except Exception:
+            return {}
+        skipped = int(sc.get("skipped_out_of_scope") or 0)
+        scan_scope = sc.get("scan_scope")
+        if not skipped and not scan_scope:
+            return {}
+        fmts = sorted({f for v in (scan_scope or {}).values() for f in (v or ())})
+        return {"unread_documents": skipped, "formats_read": fmts}
+
     def get_certification_facts(self, scan_id: str) -> dict:
         """Facts backing the certification-decision block, the richer file inventory, and the
         scope-of-assertion statement (backlog R2 / R6 / R-A). Every number is COUNTED from
@@ -2056,6 +2082,19 @@ class Store:
                 "human_only_criteria": [
                     {"sc": r["id"], "name": r["name"]} for r in RULE_CATALOG
                     if r["fix_mode"] == "human-only"],
+                # FILE TYPES NEVER OPENED — the other half of the negative assurance.
+                #
+                # Everything above narrows the assertion by CRITERION: "we ran no check for
+                # 2.4.3 on a PDF." None of it narrows the assertion by DOCUMENT, and once the
+                # file-type scope gates what is read, a whole class of files is absent from this
+                # report entirely — not failing, not passing, not evaluated, just never opened.
+                #
+                # A conformance report that lists the criteria it skipped but not the documents
+                # it never saw understates its own boundary in the direction that flatters it,
+                # which is precisely the failure the rest of this section exists to prevent. It
+                # matters most for the reader this section is written for: an auditor asking
+                # "does this cover the estate?" gets "yes" from silence.
+                **self._unread_scope_facts(scan_id),
             },
             "approvals_total": sum(approvals.values()),
             "remediated_total": sum(d["remediated"] for d in docs),

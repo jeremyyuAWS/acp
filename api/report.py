@@ -308,6 +308,27 @@ def _scope_section(files, facts, h2, body, cell, muted) -> list:
         el.append(Paragraph(
             "<b>Requires human or assistive-technology judgement</b> (routed to review, never "
             "auto-certified) — " + _esc(", ".join(f"{c['sc']} {c['name']}" for c in hu)) + ".", muted))
+    # DOCUMENTS NEVER OPENED, not merely criteria never run.
+    #
+    # Everything above narrows the assertion by CRITERION. None of it narrows it by DOCUMENT,
+    # and the file-type scope excludes whole files from the scan — absent from this report
+    # entirely: not failing, not passing, not evaluated, never read. A conformance report that
+    # lists the criteria it skipped but not the documents it never saw understates its own
+    # boundary in the flattering direction, which is the exact failure the rest of this section
+    # exists to prevent. The auditor asking "does this cover the estate?" otherwise gets "yes"
+    # from silence.
+    unread = scope.get("unread_documents") or 0
+    fmts = scope.get("formats_read") or []
+    if unread or fmts:
+        _fmt_txt = (", ".join(f".{f}" for f in fmts) if fmts else "the selected file types")
+        _n = (f"<b>{unread}</b> document{'' if unread == 1 else 's'} of other file types "
+              f"{'was' if unread == 1 else 'were'} not read at all"
+              if unread else "Documents of other file types were not read at all")
+        el.append(Paragraph(
+            f"<b>Documents this scan did not open</b> — the scan was scoped to {_esc(_fmt_txt)}, "
+            f"so {_n}. They were not downloaded, opened or checked, and this report makes no "
+            "statement about them whatsoever — neither conformant nor failing. Anything outside "
+            f"{_esc(_fmt_txt)} is outside this assertion.", muted))
     el.append(Spacer(1, 4))
     el.append(Paragraph(
         "<b>A score of 100 therefore means: no blocking findings among the criteria evaluated for that "
