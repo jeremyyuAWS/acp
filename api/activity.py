@@ -67,22 +67,43 @@ def line(*, file: str | None = None, sc: str | None = None, action: str = "",
     return out
 
 
+# Minimum seconds between published lines for one scan. Per-FINDING publishing is what makes
+# the line useful — "image 12 of 35" is the answer to "is it stuck?" that a stage name cannot
+# give — but a finding is not always slow. A vision call takes seconds and a table-header fix
+# takes microseconds, so the same loop that publishes 35 useful lines over two minutes can
+# publish 400 useless ones over 40ms, each a Redis round-trip on the remediation hot path.
+#
+# 0.2s caps it at five writes a second. Nothing is lost that anyone could have read: the UI polls
+# on the order of a second, so lines dropped here were never going to reach a screen. Stage
+# boundaries pass force=True and are never dropped, because those are the transitions a user
+# reads as "it moved on" and skipping one leaves the line stale on the wrong criterion.
+_MIN_INTERVAL = 0.2
+_last: dict[str, float] = {}
+
+
 def record(scan_id: str | None, *, file: str | None = None, sc: str | None = None,
-           action: str = "", detail: str | None = None, phase: str | None = None) -> None:
+           action: str = "", detail: str | None = None, phase: str | None = None,
+           force: bool = False) -> None:
     """Publish the current activity for a scan. Never raises.
 
     A no-op without a scan_id, which is the case for every offline caller — the benchmark
     harnesses, the CLI, and the tests all drive remediation with `scan_id=None`, and none of
     them should pay for a store round-trip or fail because a store is absent.
+
+    `force` bypasses the rate limit. Use it for stage transitions, never for per-item updates.
     """
     if not scan_id:
         return
+    now = time.time()
+    if not force and now - _last.get(scan_id, 0.0) < _MIN_INTERVAL:
+        return
+    _last[scan_id] = now
     try:
         import core
         core.set_job(f"activity:{scan_id}", {
             "text": line(file=file, sc=sc, action=action, detail=detail),
             "file": file, "sc": sc, "sc_name": sc_name(sc) if sc else None,
-            "action": action, "detail": detail, "phase": phase, "at": time.time(),
+            "action": action, "detail": detail, "phase": phase, "at": now,
         })
     except Exception:
         pass          # a progress line must never be able to fail the work it describes

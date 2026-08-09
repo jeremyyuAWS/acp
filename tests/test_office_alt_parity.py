@@ -73,6 +73,31 @@ def test_an_undecorated_image_is_not_decorative():
     assert images.is_decorative(_docpr(_extlst('<adec:decorative val="0"/>'))) is False
 
 
+@pytest.mark.parametrize("mark", DECORATIVE)
+def test_the_remediator_skips_an_image_marked_decorative(mark):
+    """The THIRD site, and the one with the worst symptom.
+
+    `_inject_descr` kept its own inline substring test alongside the detector's and the
+    applier's. It did not recognise ACP's own inline-namespace marker, so a decorative image
+    came back `deferred=1` — routed to a human as "needs alt text". A reviewer marked the image
+    decorative, and the next scan asked them to describe it again. And the next one.
+
+    Measured before the fix (deferred=1) and after (deferred=0), not reasoned about.
+    """
+    import remediate_office
+
+    xml = ('<w:document xmlns:w="w" xmlns:wp="wp"><w:drawing>'
+           + _docpr(_extlst(mark))
+           + '<a:blip r:embed="rId4"/></w:drawing></w:document>')
+    _new, fixed, deferred = remediate_office._inject_descr(
+        xml, "wp:docPr", pic_only_within=None, captions=False, entries={},
+        part_name="word/document.xml", vision_enabled=False, context_file="doc.docx",
+        applied_fixes=[], proposals=[], evidence=[])
+
+    assert deferred == 0, "a decorative image must not be sent to a human for alt text"
+    assert fixed == [], "a decorative image must not have alt text written into it"
+
+
 def test_acp_marked_decorative_image_is_not_reported_as_undescribed():
     """The round trip, at the level the detector actually runs: mark it, then re-detect.
 

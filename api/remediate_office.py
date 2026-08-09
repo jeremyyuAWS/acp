@@ -40,6 +40,8 @@ from xml.etree import ElementTree as ET
 # 1.1.1 detector (formats/office/images.py) so the detector and this remediator can never
 # disagree about which elements carry alt text.
 from formats.office.images import ALT_TARGETS as _ALT_TARGETS
+from formats.office.images import is_decorative as _images_is_decorative
+from activity import record as _act_record
 
 _CORE = "docProps/core.xml"
 _CUSTOM = "docProps/custom.xml"
@@ -353,12 +355,27 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
             rf"<{pic_only_within}[ >].*?</{pic_only_within}>", xml, re.S)]
 
     out, last = [], 0
+    # Total candidates, counted before the walk so the line can say "3 of 35" rather than a bare
+    # ordinal. "image 3" answers nothing on a document whose length the user cannot see; "3 of 35"
+    # is the difference between "it is working" and "it is stuck", which is the entire question
+    # this line exists to answer.
+    _n_images = sum(1 for _mm in re.finditer(rf"<{tag}\b([^>]*?)(/?)>", xml)
+                    if pic_spans is None or any(a <= _mm.start() < b for a, b in pic_spans))
+    _img_i = 0
     for m in re.finditer(rf"<{tag}\b([^>]*?)(/?)>", xml):
         attrs, selfclose = m.group(1), m.group(2)
         out.append(xml[last:m.start()]); last = m.end()
         keep = m.group(0)
         inside_pic = pic_spans is None or any(a <= m.start() < b for a, b in pic_spans)
         if inside_pic and _is_junk_descr(_ATTR(attrs, "descr")):
+            _img_i += 1
+            # Published BEFORE the work, not after: the vision call below is the slow step, and a
+            # line written afterwards names an image that has already finished while the user
+            # waits on the next one. Rate-limited inside activity.record — a vision call takes
+            # seconds and deserves its own line, a junk-descr skip takes microseconds and does not.
+            _act_record(scan_id, file=context_file, sc="1.1.1",
+                        action=f"describing image {_img_i} of {_n_images}",
+                        phase="remediating")
             # decorative? the marker lives in the element's extLst children
             # `tag` may be a regex alternation (e.g. `(?:xdr:)?cNvPr`), so match the closing tag
             # with a regex, not a literal find. Only reached for a non-self-closing element.
@@ -368,7 +385,15 @@ def _inject_descr(xml: str, tag: str, *, pic_only_within: str | None = None,
                 _cm = re.compile(rf"</{tag}>").search(xml, m.end())
                 block_end = _cm.start() if _cm else -1
             block = xml[m.start():block_end if block_end != -1 else m.end()]
-            if 'decorative val="1"' in block or "decorative val='1'" in block:
+            # THE SHARED PREDICATE, not a third copy of it. This was its own inline substring
+            # test for `decorative val="1"`, and the marker apply_alt writes declares its
+            # namespace INLINE — `<adec:decorative xmlns:adec="…" val="1"/>` — so the xmlns sits
+            # between the two tokens and the substring never matched. Measured, not inferred: an
+            # image carrying ACP's own marker came back `deferred=1` from this function, so a
+            # reviewer who marked an image decorative was asked to describe it again on the next
+            # scan, and on every scan after that. Same root cause as the detector-side bug, same
+            # fix: one expression, imported.
+            if _images_is_decorative(block):
                 out.append(keep); continue
             caption = None
             if captions:
@@ -1335,6 +1360,13 @@ def _draft_docx_assisted(entries: dict, path: Path, proposals: list | None, *,
         nonlocal made
         if made >= _ASSISTED_MAX_DRAFTS or not _sc_ok(in_scope, sc):
             return
+        # The single funnel for every assisted draft, so one line here covers 2.4.4, 1.3.3 and
+        # 3.1.2 rather than three that can drift. Published before suggest_fix, which is the
+        # slow call — a line written after it names work already finished.
+        _act_record(scan_id, file=path.name, sc=sc,
+                    action=f"drafting a fix for {rule_name}",
+                    detail="draft only — nothing is written without approval",
+                    phase="remediating")
         out = _ai.suggest_fix(sc, rule_name, "A", path.name, detail=detail)
         value = (out or {}).get("suggestion")
         if not value:
@@ -1342,7 +1374,16 @@ def _draft_docx_assisted(entries: dict, path: Path, proposals: list | None, *,
         proposals.append(_prop.proposal(
             locator=locator, before=before, proposed_value=value,
             rationale=f"drafted from the surrounding text by {out.get('model', 'the local model')}",
-            source=source, sc=sc))
+            source=source, sc=sc,
+            # Why a human, stated rather than implied — the same gap the 1.1.1 cards had. These
+            # criteria are assessed but never auto-applied: the draft rewrites the AUTHOR'S prose,
+            # and only the author knows what the sentence was for. That is a different reason from
+            # 1.1.1's ("nothing corroborates it") and the card should say which one applies.
+            why_review=(f"ACP can detect this {rule_name} problem but cannot fix it "
+                        "automatically — the correction rewrites your own wording, and only "
+                        "you know what the original was meant to say. The draft below is a "
+                        "starting point, not a decision."),
+            context=detail))
         made += 1
 
     # 2.4.4 — vague link text. Resolved through the relationship so the draft can name the

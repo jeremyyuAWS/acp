@@ -76,6 +76,46 @@ def test_current_returns_none_when_the_store_is_broken(monkeypatch):
     assert activity.current("scan123") is None
 
 
+def test_rapid_calls_are_rate_limited(monkeypatch):
+    """Per-finding publishing is the point; per-finding Redis round-trips are not.
+
+    A vision call takes seconds and deserves a line. A junk-descr skip takes microseconds, and
+    the same loop that publishes 35 useful lines over two minutes would publish 400 useless ones
+    over 40ms — each a store write on the remediation hot path.
+    """
+    writes: list = []
+    import core
+    monkeypatch.setattr(core, "set_job", lambda k, v: writes.append(v))
+    activity._last.clear()
+    for i in range(200):
+        activity.record("s-fast", file="a.docx", sc="1.1.1", action=f"describing image {i}")
+    assert len(writes) == 1, f"expected the rate limit to collapse 200 calls, got {len(writes)}"
+
+
+def test_force_bypasses_the_rate_limit(monkeypatch):
+    """Stage transitions must never be dropped — a skipped one leaves the line stale on a
+    criterion the run has already moved past, which is worse than no line at all."""
+    writes: list = []
+    import core
+    monkeypatch.setattr(core, "set_job", lambda k, v: writes.append(v))
+    activity._last.clear()
+    activity.record("s-force", file="a.docx", sc="1.1.1", action="describing images")
+    for sc in ("1.3.1", "2.4.4", "3.1.2"):
+        activity.record("s-force", file="a.docx", sc=sc, action="stage", force=True)
+    assert [w["sc"] for w in writes] == ["1.1.1", "1.3.1", "2.4.4", "3.1.2"]
+
+
+def test_the_rate_limit_is_per_scan(monkeypatch):
+    """Two documents remediating concurrently must not silence each other's line."""
+    writes: list = []
+    import core
+    monkeypatch.setattr(core, "set_job", lambda k, v: writes.append(v))
+    activity._last.clear()
+    activity.record("scan-a", file="a.docx", action="x")
+    activity.record("scan-b", file="b.docx", action="x")
+    assert [w["file"] for w in writes] == ["a.docx", "b.docx"]
+
+
 def test_record_then_current_round_trips(monkeypatch):
     store: dict = {}
     import core
