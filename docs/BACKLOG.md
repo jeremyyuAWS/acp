@@ -45,6 +45,21 @@ third is the correctness fix with the widest blast radius.
   passes against the old behaviour too, since the old list was filtered downstream anyway.*
   All three of the proposal's "consequences" are now closed — see P0.4, P0.5 and P0.6.
 
+- [x] **P0.8 — An empty heading is detected (2.4.6).** Done. The outline walk read `pStyle` refs
+  and never the heading's text, so an empty `Heading` paragraph passed every check ACP had: in
+  the outline (no pseudo-heading finding), breaking no level sequence (no skip finding), and with
+  no runs to fail contrast on. It produced **zero** findings.
+  Screen readers offer a heading list as the primary way to navigate a long document; an empty
+  entry announces nothing, so the reader is told a section exists and can neither identify it nor
+  tell whether they have missed content.
+  Exempt: a heading whose content is an **image**. Its problem, if any, is 1.1.1's, and reporting
+  it here would report one defect twice — the same reasoning `_link_purpose_finding` already
+  applies to a hyperlink wrapping a drawing. Empty **body** paragraphs are untouched; blank
+  spacers are everywhere in real documents and flagging them would bury the real finding.
+  *With this in, the labelled corpus reaches macro-F1 **1.00 on both lanes**, micro recall 1.00,
+  precision 1.00, zero false passes and zero false positives — and the five long clinical
+  documents add no false positives either.*
+
 - [x] **P0.7 — Exceeding the OCR image cap is reported, not silent.** Done. `_MAX_IMAGES`
   (`ACP_OCR_MAX_IMAGES`, default 30) bounds how many embedded images are OCR'd per document, and
   exceeding it produced no signal: a 35-image document returned exactly 30 image-of-text findings

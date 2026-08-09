@@ -25,6 +25,7 @@
 
 | Rule ID | Formats | Source |
 |---------|---------|--------|
+| `DOCX_HEADING_EMPTY` | docx | `api/office_structure.py:docx_checks` |
 | `DOCX_HEADING_SKIP` | docx | `api/office_structure.py:docx_checks` |
 | `HTML_HEADING_SKIP` | html | `api/scanner.py:_analyse_html` |
 | `PDF_NO_HEADINGS` | pdf | `api/office_structure.py:pdf_headings_labels_check` |

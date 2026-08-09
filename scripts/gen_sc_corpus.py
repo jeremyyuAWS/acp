@@ -503,12 +503,11 @@ def f_heading_empty(d):
     d.add_heading("", level=2)
     d.add_paragraph("Your coverage begins on March 1.")
     return {"2.4.6": ce.FAIL}, \
-        ("KNOWN GAP, kept failing deliberately. The XML really does carry a Heading2 paragraph "
-         "with no text (verified by reading word/document.xml) and ACP produces ZERO findings. "
-         "A screen-reader user navigating by heading lands on an announcement of nothing. This "
-         "is the one miss in this corpus that is the product's and not the fixture's — it stays "
-         "red until a detector exists, because a fixture quietly relaxed to green is how a gap "
-         "becomes permanent.")
+        ("EDGE: an EMPTY H2. This was the one miss in this corpus that belonged to the product "
+         "rather than the fixture — the outline walk read pStyle refs and never the heading's "
+         "text, so an empty heading was in the outline, broke no level sequence and had no runs "
+         "to fail contrast on, and produced ZERO findings. Kept red until DOCX_HEADING_EMPTY "
+         "existed rather than relaxed to green, which is how a gap becomes permanent.")
 
 
 def f_heading_skip(d):
