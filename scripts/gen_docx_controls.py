@@ -143,7 +143,14 @@ def build_assisted(doc):
     _add_hyperlink(p3, "https://example.com/benefits/2026/enrollment/details",
                    "https://example.com/benefits/2026/enrollment/details")
     doc.add_paragraph("Click the round green button on the right to continue.")
-    doc.add_paragraph("Veuillez consulter la politique d’accessibilité avant le 31 mars.")
+    # BOTH sentences must clear 12 words alone — textchecks._MIN_SEG_WORDS, because langdetect
+    # is unreliable below that and the detector needs TWO confident segments in different
+    # languages. The original 10-word French line was never seen, so this control reported
+    # 3.1.2 as missed on every run and the miss was the fixture's.
+    doc.add_paragraph("Employees may review their medical, dental, and vision coverage options "
+                      "during the annual enrollment window each year without exception.")
+    doc.add_paragraph("Veuillez consulter la politique d’accessibilité avant le 31 mars 2026 "
+                      "pour confirmer votre choix de couverture médicale et dentaire.")
     return [
         {"id": "v001", "criterion": "2.4.4", "location": "body.p2.hyperlink1",
          "expected_assessment": "detected", "expected_remediation": "none"},
