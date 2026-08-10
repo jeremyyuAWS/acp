@@ -11,7 +11,8 @@ from capabilities import Capability
 from rule_registry import register
 
 from formats.docx.detectors import (language_parts, link_purpose, name_role_value,
-                                    no_keyboard_trap, nontext_contrast, use_of_color)
+                                    no_keyboard_trap, non_text_content, nontext_contrast,
+                                    use_of_color)
 
 # ── 4.1.2 Name, Role, Value ───────────────────────────────────────────────────────────
 # PARTIAL, not FULL: sound over interactive content controls, silent on ActiveX, embedded OLE
@@ -196,4 +197,37 @@ register(
             "flagged when they carry no w:lang mark; a shorter foreign phrase or a single "
             "borrowed word is under the length floor langdetect needs to be trusted, and is not "
             "flagged"),
+)
+
+
+# ── 1.1.1 Non-text Content ─────────────────────────────────────────────────────────────
+# The last of the three ADR 0031 named, and the one that needed a capability the enum did not
+# carry: IMAGES. Word documents hold embedded pictures/drawings whose alt text ACP reads
+# (formats/office/images.py), so the substrate was always there and simply undeclared — the same
+# gap FORMS had before 4.1.2. With IMAGES declared for docx (see capabilities.BASELINE), this pair
+# joins its two siblings on the coverage gate. Verdict unchanged: an image with no descr and no
+# decorative marker fails, a clean file reviews.
+#
+# PARTIAL because the technique reaches embedded IMAGES — inline and floating, in the body and the
+# running header/footer — and reports each one carrying no usable descr and not marked decorative.
+# It does NOT reach the rest of what "non-text content" spans: charts (c:chart), SmartArt, grouped
+# shapes, embedded OLE objects, and images referenced through paths the walk does not follow. A
+# clean result means "every embedded image is described or marked decorative", a real check over a
+# strict subset — which is why it reviews rather than certifies.
+#
+# HIGH confidence within that subset: the descr is present and non-junk or it is not, read from the
+# drawing's own properties. And it does NOT become a pass even at FULL coverage — whether a descr
+# that IS present actually DESCRIBES its image is a judgement no static read settles (ADR 0031,
+# Group B), which is the deeper reason 1.1.1 sits in review on every format.
+register(
+    rule="1.1.1",
+    fmt="docx",
+    detector=non_text_content.detect,
+    requires={Capability.IMAGES},
+    coverage=Coverage.PARTIAL,
+    confidence=Confidence.HIGH,
+    reason=("embedded images (inline and floating, body and running header/footer) are checked "
+            "for a non-junk descr or a decorative marker; charts, SmartArt, grouped shapes and "
+            "embedded OLE objects are non-text content this walk does not reach, and whether a "
+            "descr that is present actually describes its image is a judgement not made"),
 )

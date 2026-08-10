@@ -5,11 +5,11 @@ ADR 0031 asked for one certification mechanism, not two. Before this, docx 4.1.2
 REVIEW through the older `store.RULE_FORMATS` + `_certify` path — two mechanisms agreeing by
 coincidence of values, which is the "disagreeing tables" hazard the registry exists to end.
 
-This pins the migration of 2.4.4 and 3.1.2 (1.1.1 waits on a capability the enum does not yet
-carry — see the module note). The load-bearing property is that it changed NO verdict: a clean
-docx still reviews, a defect still fails. If a future edit makes the migration alter an outcome,
-this file fails rather than the change shipping a silent reclassification on the most consequential
-path ACP has.
+This pins the migration of all three — 1.1.1, 2.4.4 and 3.1.2. 1.1.1 needed a capability the enum
+did not carry (IMAGES, added in capabilities.py alongside this), which is why it moved last. The
+load-bearing property is that it changed NO verdict: a clean docx still reviews, a defect still
+fails. If a future edit makes the migration alter an outcome, this file fails rather than the
+change shipping a silent reclassification on the most consequential path ACP has.
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ import rule_registry as reg  # noqa: E402
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
-MIGRATED = ["2.4.4", "3.1.2"]
+MIGRATED = ["1.1.1", "2.4.4", "3.1.2"]
 
 
 @pytest.mark.parametrize("sc", MIGRATED)
@@ -52,13 +52,13 @@ def test_verdict_is_unchanged_by_the_migration(sc):
     assert ap._rule_outcome(sc, "docx", 0, 1, target="AA") == "REVIEW"
 
 
-def test_1_1_1_is_deliberately_not_migrated_yet():
-    """Left on the legacy path on purpose: the capability enum has no IMAGES/non-text substrate to
-    require, so registering it honestly needs a model change wider than this one. Pinned so the
-    partial migration is a recorded decision, not a forgotten third."""
-    assert reg.coverage_for("1.1.1", "docx") is None
-    assert "docx" in ap.RULE_FORMATS.get("1.1.1", frozenset())
-    assert ap._rule_outcome("1.1.1", "docx", 0, 0, target="AA") == "REVIEW"   # unchanged
+def test_1_1_1_required_capability_is_in_the_docx_baseline():
+    """1.1.1 required a substrate the enum did not carry. IMAGES was added for it, and a
+    registration may only require a capability the format's baseline declares (test_rule_registry
+    pins that generally); this states the specific reachability the migration depended on."""
+    import capabilities
+    assert reg.coverage_for("1.1.1", "docx") is reg.Coverage.PARTIAL
+    assert capabilities.Capability.IMAGES in capabilities.BASELINE["docx"]
 
 
 def _docx(tmp_path, body_xml, rels_xml=None):
@@ -88,3 +88,13 @@ def test_the_registered_detector_actually_fires_3_1_2(tmp_path):
     doc = _docx(tmp_path, f'<w:p><w:r><w:t>{en}</w:t></w:r></w:p><w:p><w:r><w:t>{fr}</w:t></w:r></w:p>')
     found = language_parts.detect(doc)
     assert any(f["wcag"].startswith("3.1.2") for f in found), "the 3.1.2 detector found nothing"
+
+
+def test_the_registered_detector_actually_fires_1_1_1(tmp_path):
+    from formats.docx.detectors import non_text_content
+    WP = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+    # an inline image whose wp:docPr carries no descr and no decorative marker -> 1.1.1
+    body = (f'<w:p><w:r><w:drawing><wp:inline xmlns:wp="{WP}">'
+            f'<wp:docPr id="1" name="Picture 1"/></wp:inline></w:drawing></w:r></w:p>')
+    found = non_text_content.detect(_docx(tmp_path, body))
+    assert any(f["wcag"].startswith("1.1.1") for f in found), "the 1.1.1 detector found nothing"

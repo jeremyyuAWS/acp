@@ -52,6 +52,7 @@ class Capability(str, Enum):
     DOM = "dom"                      # a live element tree with computed relationships
     ARIA = "aria"                    # explicit role/name/state annotations
     CSS = "css"                      # computed presentation, incl. responsive behaviour
+    IMAGES = "images"                # embedded pictures/drawings carrying alt-text metadata
 
 
 # Baseline per format — what the CURRENT parsers reliably reach for a typical document of
@@ -78,10 +79,17 @@ BASELINE: dict[str, frozenset[Capability]] = {
     #
     # Same discipline as TAG_TREE's absence from pdf, noted above: a capability appears here
     # when something in this codebase actually reads it, never to make a rule look supported.
+    # IMAGES added when docx 1.1.1 was migrated to the registry. Word documents carry embedded
+    # pictures/drawings whose alt text (wp:docPr @descr / a decorative marker) ACP reads through
+    # formats/office/images.py — the capability was always present and simply undeclared, exactly
+    # as FORMS was before 4.1.2's migration. It is listed for docx alone for now because only
+    # docx 1.1.1 has been migrated; pptx/xlsx/pdf/html read images too (the same walk, plus their
+    # own paths) and gain IMAGES here on the day their 1.1.1 moves to the registry — never sooner,
+    # so the declaration tracks a real detector rather than an intention.
     "docx": frozenset({
         Capability.TEXT, Capability.STRUCTURE, Capability.LINKS, Capability.TABLES,
         Capability.METADATA, Capability.COLOR, Capability.FONTS, Capability.READING_ORDER,
-        Capability.FORMS,
+        Capability.FORMS, Capability.IMAGES,
     }),
     "pptx": frozenset({
         Capability.TEXT, Capability.STRUCTURE, Capability.LINKS, Capability.TABLES,
