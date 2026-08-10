@@ -6,8 +6,10 @@
 #   ACP_ACCESS_CODE=hunter2 bash deploy/public/deploy.sh   # pin the gate passcode
 #
 # Reuses the Temporal standup's RG/ACR (override via ACP_RG / ACP_ACR). The demo
-# scans the test account's Drive via its ADC creds, passed as an ACA secret.
-# Per-user "Sign in with Google" replaces the passcode once a Web OAuth client exists.
+# scans the test account's Drive via its ADC creds, passed as an ACA secret — REQUIRED only
+# when there is no per-user "Sign in with Google" (ACP_GOOGLE_CLIENT_ID). With GIS configured,
+# each user brings their own Drive token, so the ADC is optional and a missing one no longer
+# blocks the deploy (see the preflight ADC branch).
 set -euo pipefail
 ACP="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ACP"
@@ -92,7 +94,22 @@ if [ -z "$CLIENT_ID" ] && az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" -o 
     -o tsv 2>/dev/null || echo "")"
   [ -n "$CLIENT_ID" ] && echo "   client_id = inherited from existing deployment ($CLIENT_ID)"
 fi
-[ -f "$ADC_FILE" ] || { echo "no Drive ADC at $ADC_FILE — run: gcloud auth application-default login ..."; exit 1; }
+# Google ADC is REQUIRED only when there is no other way into Drive. It powers the server-side
+# ADC scan (the demo/E2E path); with per-user GIS sign-in configured, every user brings their own
+# Drive token and the ADC is optional — so a GIS deployment should not stall on a credential it
+# does not use. When CLIENT_ID is set and the ADC is absent, deploy WITHOUT it (the demo Drive
+# scan is simply unavailable); when there is neither, refuse, because then nothing can reach Drive.
+if [ ! -f "$ADC_FILE" ]; then
+  if [ -n "$CLIENT_ID" ]; then
+    echo "   drive ADC = none — per-user GIS sign-in is configured, so it is not required (the server-side demo Drive scan will be unavailable)"
+    ADC_FILE=""
+  else
+    echo "no Drive ADC at $ADC_FILE, and no GIS client_id is set — one of the two is needed for any Drive access." >&2
+    echo "  either: gcloud auth application-default login    (server-side ADC scan)" >&2
+    echo "  or set: ACP_GOOGLE_CLIENT_ID=<web-oauth-client>  (per-user sign-in)" >&2
+    exit 1
+  fi
+fi
 RELEASE="spike/dotnet/AcpScan.Cli/bin/Release/net10.0/AcpScan.Cli.dll"
 [ -f "$RELEASE" ] || { echo "missing .NET Office CLI at $RELEASE — build it first (dotnet build -c Release)"; exit 1; }
 # The Container Apps environment NAME, from $ACP_ACA_ENV (see the ACP_ENV guard in preflight).
@@ -209,7 +226,17 @@ ACRUSER="$(az acr credential show "${AZ[@]}" -n "$ACR" --query username -o tsv)"
 ACRPW="$(az acr credential show "${AZ[@]}" -n "$ACR" --query 'passwords[0].value' -o tsv)"
 
 echo "== 4/5 (re)deploy Container App with external ingress =="
-ADC_JSON="$(cat "$ADC_FILE")"
+# ADC_FILE is "" when a GIS deployment is running without a server-side ADC (see preflight). In
+# that case no google-adc secret is created and the ACP_GOOGLE_ADC env is omitted, so ADC_ENV
+# below is empty. `az ... update` does not remove env vars it is not given, so a redeploy that
+# once had an ADC keeps it; a fresh GIS deploy simply never sets it.
+if [ -n "$ADC_FILE" ]; then
+  ADC_JSON="$(cat "$ADC_FILE")"
+  ADC_ENV="ACP_GOOGLE_ADC=secretref:google-adc"
+else
+  ADC_JSON=""
+  ADC_ENV=""
+fi
 # Auth mode: per-user GIS (client id set, passcode off) vs demo (passcode gate on).
 if [ -n "$CLIENT_ID" ]; then
   MODE_ENV="ACP_GOOGLE_CLIENT_ID=$CLIENT_ID ACP_ACCESS_CODE="
@@ -221,7 +248,8 @@ fi
 # Build secrets array — always pass each secret as its own element so values
 # containing '=' or '?' (e.g. a Postgres URL with ?sslmode=require) are never
 # split or mangled by either the shell or the az CLI parser.
-SECRETS=("google-adc=$ADC_JSON" "access-code=$CODE")
+SECRETS=("access-code=$CODE")
+[ -n "$ADC_FILE" ] && SECRETS+=("google-adc=$ADC_JSON")
 # Database: Postgres secret (if DATABASE_URL set) or inherit the existing one.
 # IMPORTANT: a bare redeploy must NOT silently downgrade Postgres → SQLite (that
 # loses persistence + skips Grafana). So when ACP_DATABASE_URL isn't passed we
@@ -450,14 +478,14 @@ for s in json.loads(os.environ.get("APP_SECRETS_JSON") or "[]"):
       --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
     _az_scrubbed az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --image "$ACRSERVER/$IMAGE" \
       --command acp-worker \
-      --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV ACP_WORKERS=$WK_N -o none
+      --set-env-vars $ADC_ENV $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV ACP_WORKERS=$WK_N -o none
   else
     _az_scrubbed az containerapp create "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --environment "$ENVNAME" \
       --image "$ACRSERVER/$IMAGE" \
       --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
       --command acp-worker \
       --secrets "${WORKER_SECRETS[@]}" \
-      --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV ACP_WORKERS=$WK_N \
+      --env-vars $ADC_ENV $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV ACP_WORKERS=$WK_N \
       --system-assigned --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 3 -o none
     echo "   one-time: grant the worker's managed identity 'Storage Blob Data Contributor' on"
     echo "   the '$BLOB_ACCOUNT' account so its remediation Blob writes don't 403 — exact"
@@ -474,14 +502,14 @@ if az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" -o none 2>/dev/null; then
   _retry az containerapp registry set "${AZ[@]}" -g "$RG" -n "$APP" \
     --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
   _retry az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$ACRSERVER/$IMAGE" \
-    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV -o none
+    --set-env-vars $ADC_ENV $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV -o none
 else
   az containerapp create "${AZ[@]}" -g "$RG" -n "$APP" --environment "$ENVNAME" \
     --image "$ACRSERVER/$IMAGE" \
     --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
     --target-port 8077 --ingress external \
     --secrets "${SECRETS[@]}" \
-    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV \
+    --env-vars $ADC_ENV $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV \
     --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 1 -o none
 fi
 
