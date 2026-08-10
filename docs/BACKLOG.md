@@ -3,9 +3,12 @@
 Every item below is a gap **observed** on 2026-08-08, not a speculative improvement. Each names
 the evidence, so anyone can re-check it rather than trust this file.
 
-**Updated 2026-08-09 (evening).** Phase 5 worked: P5.1 (#214), P5.2 (#215) and P5.5 (#216) closed
-— each measured with a red fixture before any fix — and P5.3/P5.4 marked blocked on installs
-(LibreOffice, a mutation runner) rather than on design. See that section.
+**Updated 2026-08-09 (late).** 21 PRs landed today — deploy went automatic (Chain B fires on CI
+success), docx 1.1.1/2.4.4/3.1.2 consolidated onto the capability registry (ADR 0031), and Phase 5
+under-reporting closed. The full list is in **Closed on 2026-08-09** near the foot of this file;
+read the "Still open after today" note there before approving any deploy. Phase 5 itself: P5.1
+(#214), P5.2 (#215) and P5.5 (#216) closed — each measured with a red fixture before any fix — and
+P5.3/P5.4 marked blocked on installs (LibreOffice, a mutation runner) rather than on design.
 
 **Synced 2026-08-09.** Six entries had gone stale in two days — Phase 0 was fully closed, P2.4,
 P2.5 and P4.8 were done, and P4.2 was half done — while the file still listed all of them as open.
@@ -467,6 +470,46 @@ argued.
   nobody can approve.
 - [ ] **I.3 — Raise `num_predict` for 32B.** 400 fixed `qwen3:14b` and still truncates
   `qwen3:32b` (2 of 4 drafts empty). Only matters if a reasoning model is ever deployed.
+
+---
+
+## Closed on 2026-08-09 — 21 PRs (#202–#222)
+
+- [x] **Chain B is automatic (#220, #221, #222).** A merge to `main` now deploys itself: the
+  Google ADC became optional when GIS per-user sign-in is set (#220), the trigger fires on CI
+  *success* via `workflow_run` rather than racing the push (#222 fixed #221's own bootstrap), and
+  the SharePoint roadmap was synced to the code that already shipped it (#221). See
+  `docs/pipeline.md`. **In review, not yet merged:** the ingress traffic-routing fix (#223, the
+  root cause of every failed deploy since Aug-8 — a blue-green run left the app in Multiple
+  revision mode) and robustness tests for the migrated detectors (#224).
+- [x] **One certification mechanism, not two (ADR 0031 — #218, #219).** docx 1.1.1, 2.4.4 and
+  3.1.2 moved off the legacy `store.RULE_FORMATS` + `_certify` path onto the capability registry's
+  coverage gate, verdict-for-verdict unchanged — ending the "two tables that agree by coincidence"
+  hazard the registry exists to close. ADR 0031 records why coverage, not confidence, gates a
+  certified pass (#218).
+- [x] **docx lanes that existed in code but not in the index, declared (#202, #203, #206, #208)**
+  and **three detectors that were silently Word-only, fixed (#205).** 1.4.1 and 1.4.11 got the
+  guided cards that make both lanes assisted; 2.1.2 was the last Core-17 criterion with no `.docx`
+  lane; 4.1.2 was already remediated deterministically and only lacked the declaration.
+- [x] **Phase 5 — silent under-reporting closed (#214, #215, #216).** Link purpose is now judged
+  in headers, footers and notes rather than the body alone (#214); tracked deletions no longer
+  leak into extracted text (#215); the v2 capability table is synced to the backend and guarded so
+  it stays synced (#216). Each was measured with a red fixture first. P5.3/P5.4 remain blocked on
+  installs (LibreOffice, a mutation runner), not on design.
+- [x] **Security & privacy (#209, #210, #213).** A non-owner could be redirected to another user's
+  remediated document (#209); a reviewer's note left as text rather than a length (#210); a
+  filename that names a patient now travels as a label, not the name (#213).
+- [x] **Assessment honesty and the corpus gate (#204, #207).** The report now says what ACP
+  checked, changed and verified — it does not certify (#204); the labelled corpus samples each
+  criterion's boundary densely and bounds it by its own n (#207).
+- [x] **v2 scan setup leads with a profile (#212)** — Step 1 now drives Step 2.
+
+### Still open after today
+
+The **production approval gate** (I.2 below) is the one that bit again: the auto-triggered deploy
+waits on the `production` environment, and the UI approval has failed silently before. Until #223
+merges the app stays in Multiple revision mode, so the next approved deploy will still strand its
+new revision at 0% traffic — **merge #223 before approving any deploy.**
 
 ---
 
