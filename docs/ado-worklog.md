@@ -26,6 +26,17 @@ is not covered here. The `(#NNN)` references are GitHub PRs, not ADO work items.
 - Stopped re-ingesting remediated output as if it were new source material (#157).
 - Made a one-site scan name the site it scanned instead of reporting "across OneDrive" (#169).
 - Added frontend clients for the two SharePoint routes that had none (#167).
+- **Corrected the Graph scopes to read-only, single-tenant, and actually sufficient** (#231).
+  Sign-in requested `Files.Read` + `Files.ReadWrite` + `User.Read` from two places — wrong in
+  both directions for this customer: a **write** scope on a deployment meant to be read-only, and
+  no `Sites.Read.All`, so site enumeration (`/sharepoint/sites` → Graph `/sites?search=*`) 403'd
+  even though the roadmap claimed that scope was requested. Both entry points now import one set
+  from a new leaf `sharepointScopes.js` so they cannot drift: `['User.Read', 'Files.Read.All',
+  'Sites.Read.All']` — read-only, delegated, admin-consented, and enough to reach team-site
+  libraries rather than the user's OneDrive alone.
+- Synced the integration roadmap's SharePoint column to the code that already shipped (#221): site
+  enumeration, library listing, download, chunked >4 MB upload and original-archiving were marked
+  todo while the backend ships them all — the same doc-vs-code drift the backlog carried.
 
 ## Feature: Operator scan scope
 
@@ -88,6 +99,13 @@ is not covered here. The `(#NNN)` references are GitHub PRs, not ADO work items.
   against. Found by watching a live estate scoped to .docx and finding PDFs in the inventory.
   .docx is now the default.
 - Added a launch config for frontend-v2 (#193).
+- **Made scan setup lead with a profile, so Step 1 drives Step 2** (#212). The setup flow now
+  opens on a document profile and feeds it forward: the scope grid a user sees in Step 2 is shaped
+  by the answers in Step 1 rather than presented cold.
+- **Synced the v2 capability table to the backend and guarded it against re-drift** (#216). The
+  table the redesign renders is now generated from the same source the engine gates on, with a
+  CI guard that fails if the two disagree — the recurring "the panel claims capability the engine
+  doesn't have" hazard, closed structurally rather than by hand.
 
 ## Feature: Dependency security
 
@@ -115,6 +133,14 @@ is not covered here. The `(#NNN)` references are GitHub PRs, not ADO work items.
   screen reader has already announced it is an image. It held nine verbs and not this one, so
   "The image presents a bar graph…" reached the alt attribute intact. Found by diffing raw model
   output against cleaned output rather than by reading the pattern list.
+- **Raised the draft token budget that was silencing every reasoning model** (#198). `suggest_fix`
+  capped generation at `num_predict=60`, sized for the answer alone ("under 30 words"). A reasoning
+  model spends that budget on its thinking pass and never reaches the answer, so the response comes
+  back empty, `if not text: return None` fires, and the card reads "no draft" — indistinguishable
+  from a model that cannot do the task. Measured on qwen3:14b: `60` → 0 characters in 2.2s, `400`
+  → a correct rewrite in 14.0s. `num_predict` is a ceiling, so raising it costs a non-reasoning
+  model nothing (llama3.1:8b answers 2.4.4 in 0.3s). Every prior benchmark of a reasoning model
+  against the assisted lanes had been measuring the cap.
 
 ## Feature: Test corpus and CI
 
@@ -133,6 +159,13 @@ is not covered here. The `(#NNN)` references are GitHub PRs, not ADO work items.
   `--dist loadfile` is a correctness requirement rather than a tuning knob: one test deliberately
   corrupts the real generated `scopePresets.js` and restores it in a `finally`, which is the
   right test to have but is flaky under plain `-n` without file-level distribution.
+- **Turned the labelled corpus into a CI gate** (#200) — the oracle expectations from #188 now run
+  as a check on every push, rather than a script somebody remembered to run. Detector regressions
+  surface at PR time instead of on a customer document.
+- **Sampled each criterion's boundary densely, bounded by its own n** (#207). Fixtures now cluster
+  where a detector's decision flips (the pass/fail edge) and size the sample per criterion rather
+  than uniformly, so a criterion with a subtle boundary gets the coverage it needs and a simple one
+  is not padded.
 
 ## Feature: Remediation reaching the file
 
@@ -176,6 +209,10 @@ is not covered here. The `(#NNN)` references are GitHub PRs, not ADO work items.
   here. `/Lang` is a module constant because it describes the report's own English prose, not
   the language of the estate being reported on.
 - Fixed a simulated settings write reporting itself as a real save (#127).
+- **Stopped tracked deletions leaking into extracted text** (#215). Text extraction was reading
+  `<w:del>` runs — content the author had deleted under tracked changes — so struck-through text
+  fed the detectors and could be judged, counted and even quoted back in a finding. Extraction now
+  drops deleted runs, so the checks see the document as it reads, not as it was.
 
 ## Feature: Multi-tenancy and the control plane
 
@@ -211,10 +248,114 @@ is not covered here. The `(#NNN)` references are GitHub PRs, not ADO work items.
   PASS and 44 cannot, by design**, a `REVIEW_FORMATS` pair resolving to REVIEW when its detector
   fires and NOT_EVALUATED when it does not.
 - Regenerated the capability matrix, and guarded the page that claimed it was guarded (#136).
+- **ADR 0030 — the auto-apply gate, granted per criterion by verification completeness** (#201):
+  a fix writes itself into the document only where a re-scan can prove it landed, not everywhere a
+  proposal exists.
+- **ADR 0031 — certification is gated by coverage, not confidence** (#218): a criterion certifies
+  a PASS only on formats where the technique demonstrably reaches a verdict, which is what the
+  capability registry enforces.
+- **Restated what an ACP report is** (#204): it reports what it checked, changed and verified — it
+  does not certify. The wording matters to a hospital reading the export.
+- Synced the backlog to reality twice — six entries had gone stale in two days (#211), and Phase 5
+  marked P5.1/P5.2/P5.5 done with P5.3/P5.4 blocked on installs (#217).
+- Recorded that Chain B is automatic now, with the backlog capturing the 21 PRs that landed that
+  day (#225).
+
+## Feature: docx Core-17 criterion coverage
+
+Closing the last .docx accessibility criteria that had no lane, so a Word document can be judged on
+the full Core-17 rather than a subset. Each is declared with the honest lane it can support.
+
+- **Declared 1.4.1 (Use of Color) and 1.4.11 (Non-text Contrast), then made both assisted** (#202,
+  #203). They had detectors but no guided lane; #203 gives each a prefilled card a reviewer elects
+  with one click (the shade that reaches 3:1 is computed, not guessed), moving them from "human"
+  to "assisted".
+- **Declared 2.1.2 (No Keyboard Trap) — the last Core-17 criterion with no .docx lane** (#206).
+- **Declared docx 4.1.2 (Name, Role, Value), which was already being fixed deterministically** but
+  had no lane recording it (#208).
+- **Fixed 1.1.1 failing to read the decorative marker ACP itself writes**, and added a labelled
+  capability benchmark alongside (#199) — the detector could not see its own output, so a correctly
+  marked decorative image still flagged.
+- **Caught three detectors that were silently Word-only** (#205), by asking the suite the question
+  rather than reading the code — each ran on .docx and quietly did nothing on the other office
+  formats it was assumed to cover.
+
+## Feature: docx running header/footer parity
+
+The recurring blind spot that a content check reads `word/document.xml` alone while the same defect
+lives in a running header, footer or note — where clinical documents routinely put banners, rule
+lines and Patient-ID fields. Each fix walks the body plus the header/footer/note parts through the
+shared `_docx_story_xmls` helper, so the checks cannot drift on which parts count.
+
+- **2.4.4 Link Purpose** now judged in headers, footers and notes, not just the body (#214).
+- **3.1.2 Language of Parts** reads a header's language mark where the header's text is read (#226).
+- **1.4.1 Use of Color** sees a colour-only link in a footer, not only in the body (#227).
+- **2.1.2 / 3.3.2 / 4.1.2 — form controls in a header are judged like the body's** (#229). A
+  content control or legacy form field in a running header is as interactive, as trap-prone and as
+  label-dependent as one in the body; three checks missed every one. Consolidated onto one helper
+  so the 2.1.2, 3.3.2 and delegated 4.1.2 reads can never disagree about which controls count.
+- **1.4.11 Non-text Contrast — a faint-outline shape in a header/footer** now raises, not only in
+  the body (#230). Reproduced with a fixture first; the detector still reports only the single
+  worst shape, so widening the scan cannot multiply findings, and it stays a Review lane that
+  defers the decorative call to a human.
+
+## Feature: Capability registry (ADR 0031)
+
+- **Migrated docx 1.1.1, 2.4.4 and 3.1.2 onto the registry's coverage gate** (#219), retiring the
+  older `store.RULE_FORMATS` + `_certify` path they reached REVIEW through. The two mechanisms
+  agreed only by coincidence of values — the "disagreeing tables" hazard the registry exists to
+  end. **Verdict-neutral by construction**: measured before and after across every finding-state,
+  each criterion still resolves clean → REVIEW, blocking → FAIL, advisory → REVIEW; only the code
+  path producing REVIEW moved, pinned by a new migration test so a future edit cannot silently
+  reclassify on the most consequential path ACP has.
+- **Pinned the "a detector never fails a scan" contract** (#224, #228). `rule_registry.assess` calls
+  every detector as `reg.detector(path) or []` with no try/except, so a detector that raises on a
+  corrupt upload takes down the whole assessment of that file, not one criterion — and a hand-forged
+  or truncated .docx is exactly what a real user uploads. #224 fed the three migrated docx detectors
+  a battery of broken packages (not a zip, empty zip, document.xml truncated mid-tag, an rId with no
+  rels, a missing image Target); #228 widened it to the whole registry via `all_registrations()`, so
+  a detector added later is covered the day it registers, with a floor assertion (≥11 detectors)
+  guarding against the imports silently ceasing to register. All 11 pass as shipped — the value is
+  the ratchet, not a fix.
+
+## Feature: PHI privacy and document access control
+
+Work specific to a hospital deployment where the documents are patient health information — what
+leaks into a trace, and who can reach a remediated file.
+
+- **A reviewer's note now leaves the system as a length, not as text** (#210) — the note body was
+  reaching an observability trace verbatim; only its length does now.
+- **A filename that names a patient now travels as a label, not the raw name** (#213). Filenames in
+  this estate are PHI, so traces carry a stable label instead of the name itself.
+- **Closed a cross-owner disclosure on the remediated-file route** (#209). `GET
+  /scans/{scan_id}/files/{filename}/remediated` read the remediation URLs with no owner predicate;
+  the blob download was correctly owner-scoped and returned `None` for a foreign document, and that
+  `None` fell through to a Drive mirror URL taken from a row the caller had no right to — a correct
+  control creating the path to an incorrect one. Found by re-checking the two routes the
+  2026-08-08 owner-derivation audit had listed as not covered.
+
+## Feature: Continuous deployment to Azure
+
+The live app had sat on the 2026-08-08 build while `main` moved on; this makes a merge to `main`
+reach production, safely.
+
+- **Deploy on merge to `main`** (#221), gated by the production GitHub Environment (required
+  reviewers) rather than by keeping the trigger manual — a deliberate, eyes-open choice, with the
+  manual dispatch still available to pin a sha or run blue-green.
+- **Trigger after CI passes on `main`, not on the push that races it** (#222), so a deploy never
+  ships a commit its own checks haven't cleared.
+- **Restored single-revision mode so a normal deploy's new revision takes traffic** (#223).
+- **Made the Google ADC optional when GIS per-user sign-in is configured** (#220), so a
+  per-user-auth deployment doesn't require an application default credential it never uses.
 
 ---
 
 ## Open items (backlog candidates)
+
+- **The docx header/footer parity audit is complete.** All six body-only content checks now read
+  the header/footer/note parts: 2.4.4 (#214), 2.1.2/3.3.2/4.1.2 (#229), 1.4.11 (#230), 3.1.2 (#226)
+  and 1.4.1 (#227). The never-fail-a-scan contract that backs the registry detectors is pinned
+  registry-wide (#224, #228). No open siblings remain from this sweep.
 
 - **The v2 redesign is a fork** — `frontend-v2` was forked so it could move without risking
   the live SPA, and both are now being maintained. It needs a merge path before they diverge
@@ -245,3 +386,17 @@ is not covered here. The `(#NNN)` references are GitHub PRs, not ADO work items.
   `git reset --hard origin/main` discarded the unpushed commit that introduced it, then added
   12 commits (#185–#196). Three new Features: Dependency security, Alt-text generation and
   grounding, and Test corpus and CI. Six Tasks appended to the v2 redesign.
+- **2026-08-10** — Documented #198–#231 as landed on `origin/main` (head `2f1f692`). Five new
+  Features: docx Core-17 criterion coverage, docx running header/footer parity, Capability registry
+  (ADR 0031), PHI privacy and document access control, and Continuous deployment to Azure. Tasks
+  appended to SharePoint source, v2 redesign, Alt-text grounding, Assessment correctness, Test
+  corpus and CI, and Documentation. The delivery-log commits (#197, and the #196 extension) and the
+  never-fail-a-scan test PRs are excluded as non-feature work. Open item added for the two
+  still-open header/footer siblings (#226, #227). The header/footer parity Feature is work I did
+  this session (#229 merged, #230 authored+merged).
+- **2026-08-10 (reconcile)** — `origin/main` advanced to `3eb4883` while the above was being
+  written; #224–#228 landed. Folded them in: 3.1.2 (#226) and 1.4.1 (#227) appended to docx
+  header/footer parity — the audit is now complete across all six body-only checks; the
+  never-fail-a-scan contract (#224, #228) added to Capability registry; Chain-B docs (#225) to
+  Documentation. The "two siblings still open" Open item is replaced with an "audit complete" note.
+  Sync marker advanced from `2f1f692` to `3eb4883`.
