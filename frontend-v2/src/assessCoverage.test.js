@@ -131,9 +131,13 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     expect(s.auto + s.review + s.human + s.gap + s.at + s.na).toBe(20)
   })
 
-  it('remediation axis is counted independently (docx: 5⚡ 6🤖 0👤)', () => {
+  it('remediation axis is counted independently (docx: 6⚡ 8🤖 1👤)', () => {
     const s = coverageSummary(filesOf('docx'), { documents: true })
-    expect({ remAuto: s.remAuto, remAi: s.remAi, remHuman: s.remHuman }).toEqual({ remAuto: 5, remAi: 6, remHuman: 0 })
+    // Synced to the backend: the v2 capability table had drifted, missing the docx lanes added
+    // across #202/#203/#206/#208 (1.4.1/1.4.11 assisted, 2.1.2 human, 4.1.2 auto) — v1 was updated
+    // in each, v2 was not, because nothing made it fail. tests/test_capability_frontend_v2_sync.py
+    // is now the guard that would. These totals match v1's.
+    expect({ remAuto: s.remAuto, remAi: s.remAi, remHuman: s.remHuman }).toEqual({ remAuto: 6, remAi: 8, remHuman: 1 })
   })
 
   it('union prefers the best assessment lane; a distinct remediation resolver is honored', () => {
