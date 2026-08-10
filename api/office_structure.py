@@ -94,6 +94,12 @@ _MIN_JUSTIFIED_PARAS = 3
 # any document whose producer names ids differently.
 _HYPERLINK = re.compile(r'<w:hyperlink[^>]*r:id="([^"]+)"[^>]*>(.*?)</w:hyperlink>', re.S)
 _WT = re.compile(r"<w:t[^>]*>([^<]*)</w:t>")
+# The secondary story parts a Word document keeps its text in, BESIDES word/document.xml: one
+# part per running header and footer, and a single part each for foot- and endnotes. A link's
+# purpose fails 2.4.4 wherever it lives, but docx_checks read only the body — so a "click here"
+# in a page footer (a common home for one) produced no finding at all. Proven silent, then closed,
+# by tests/test_docx_header_footer_parity.py.
+_DOCX_STORY_PART = re.compile(r"^word/(?:header\d+|footer\d+|footnotes|endnotes)\.xml$")
 # XML attributes are unordered, and .rels writers disagree: Word/PowerPoint emit
 # Id first, openpyxl emits it LAST (Type/Target/TargetMode/Id). Grab the whole
 # <Relationship ...> tag and read its attributes by name — a fixed Id-then-Target
@@ -445,6 +451,32 @@ def _vague_link_findings(texts: list[str], rule_id: str, wcag: str) -> list[dict
     return [f]
 
 
+def _docx_hyperlinks(zf: zipfile.ZipFile, doc_xml: str) -> list[tuple[str, str]]:
+    """(display text, href) for every external hyperlink in the body AND the running
+    header/footer and foot/endnote parts.
+
+    Each part resolves its OWN relationships file — an rId is part-local, so the body's
+    word/_rels/document.xml.rels cannot answer a footer's link, and using it would silently map a
+    footer rId onto whatever the body happened to name the same. word/_rels/footer1.xml.rels is
+    the only correct source for word/footer1.xml, so the rels path is derived from each part's own
+    name. Missing parts and missing rels degrade to nothing, never to a wrong href."""
+    parts = [("word/document.xml", doc_xml)]
+    for n in zf.namelist():
+        if _DOCX_STORY_PART.match(n):
+            xml = _read(zf, n)
+            if xml:
+                parts.append((n, xml))
+    links: list[tuple[str, str]] = []
+    for name, xml in parts:
+        head, _, tail = name.rpartition("/")
+        rels = _relationships(zf, f"{head}/_rels/{tail}.rels")
+        for rid, inner in _HYPERLINK.findall(xml):
+            href = rels.get(rid)
+            if href:
+                links.append(("".join(_WT.findall(inner)), href))
+    return links
+
+
 def docx_checks(path: Path) -> list[dict]:
     findings: list[dict] = []
     try:
@@ -520,13 +552,10 @@ def docx_checks(path: Path) -> list[dict]:
             # mapped to 2.4.4 as well, but it only runs when the .NET analyser is reachable;
             # ACP's own re-scan is what credits an approved link-text fix (handlers
             # _apply_one_value_kind), so that criterion needs a check ACP always runs itself.
-            rels = _relationships(zf, "word/_rels/document.xml.rels")
-            links = []
-            for rid, inner in _HYPERLINK.findall(doc):
-                text = "".join(_WT.findall(inner))
-                href = rels.get(rid)
-                if href:
-                    links.append((text, href))
+            # Across the body AND the header/footer/foot-endnote parts (see _docx_hyperlinks):
+            # a vague or ambiguous link is a 2.4.4 / 2.4.9 failure wherever a reader meets it, and
+            # a page footer is a common home for a bare "click here".
+            links = _docx_hyperlinks(zf, doc)
             findings += _vague_link_findings([t for t, _ in links], "DOCX_LINK_PURPOSE_VAGUE",
                                              "2.4.4 Link Purpose (In Context)")
             findings += _duplicate_href_findings(links, "DOCX_LINK_PURPOSE_AMBIGUOUS", "2.4.9 Link Purpose (Link Only)")
