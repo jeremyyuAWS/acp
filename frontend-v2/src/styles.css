@@ -517,13 +517,28 @@ input:focus-visible, [role="tab"]:focus-visible {
 .setupchip.on { background: color-mix(in srgb, var(--plum) 12%, transparent); border-color: color-mix(in srgb, var(--plum) 45%, transparent); color: var(--plum); font-weight: 600; }
 .setupcount { font-size: 12px; margin-top: 8px; }
 .setupgroup { border: 1px solid var(--line); border-radius: 10px; margin-top: 8px; background: var(--surface); }
-.setupgroup > summary { cursor: pointer; padding: 9px 12px; font-size: 13px; list-style: revert; }
+.setupgroup > summary { cursor: pointer; padding: 9px 12px; font-size: 13px; display: flex; align-items: center; gap: 8px; list-style: revert; }
+.setupcatbox { width: 15px; height: 15px; cursor: pointer; flex-shrink: 0; }
 .setuprow { display: flex; align-items: center; gap: 9px; padding: 6px 12px 6px 26px; border-top: 1px solid var(--line); font-size: 12.5px; cursor: pointer; }
 .setuprow-sc { flex: 1; min-width: 0; }
 .setuprow-f { font-size: 11px; white-space: nowrap; }
 .setuplane { font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
 .setupsummary { margin: 16px 0 14px; padding: 10px 13px; border-radius: 9px; background: color-mix(in srgb, var(--plum) 7%, transparent); border: 1px solid color-mix(in srgb, var(--plum) 22%, transparent); font-size: 12.5px; color: var(--ink); }
 .setupmsg { font-size: 12.5px; margin-top: 10px; text-align: center; }
+.setuphint { font-weight: 400; font-size: 12px; }
+.setupdesc { font-size: 12px; margin: 8px 0 0; line-height: 1.5; }
+.setupcustom { margin-top: 10px; }
+.setupbulk { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.setupbulk-sel { display: flex; gap: 12px; }
+.setuplink { border: none; background: none; padding: 0; font: inherit; font-size: 12px; color: var(--plum); cursor: pointer; text-decoration: underline; }
+.setupfilter { display: flex; gap: 6px; flex-wrap: wrap; }
+.setupfchip { font-size: 11.5px; padding: 3px 9px; border-radius: 20px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); cursor: pointer; font: inherit; }
+.setupfchip.on { font-weight: 600; color: var(--ink); border-color: color-mix(in srgb, var(--plum) 45%, transparent); }
+.setuprun { margin-top: 12px; font-size: 12.5px; }
+.setupcount-sub { margin-top: 3px; }
+.setupsummary-grid { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 6px; }
+.setupsummary-grid > span { white-space: nowrap; }
+.setupsummary-grid .muted { margin-right: 5px; }
 .loadingbox { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); font-size: 14px; padding: 60px 0; }
 
 /* word cloud (top WCAG violations) */
