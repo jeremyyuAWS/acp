@@ -246,6 +246,15 @@ fi
 # passed) must NOT silently DISABLE Langfuse — that breaks every "View trace" link. So
 # when LANGFUSE_SECRET_KEY isn't provided we INHERIT the already-configured secretrefs +
 # host, mirroring the DATABASE_URL guard above. Only set fresh when LF_SK is passed.
+#
+# ACP_TRACE_FILENAMES=plain is THE DEMO OPTING OUT of filename redaction, and it belongs here
+# rather than in the app's defaults. api/lf.py redacts by default because a filename in a
+# hospital estate names a patient (`Smith_John_MRN0114233_intake.docx`) and it rode on every
+# trace. This public demo scans a synthetic corpus, has no PHI, and its whole point is a trace a
+# non-technical viewer can read — so it asks for readable names explicitly. Any deployment that
+# does NOT ask gets `doc-3f9a2c.docx`, which is the direction the wrong default should fail in.
+# Remove this line before pointing this script at a customer estate.
+TRACE_NAMES_ENV="ACP_TRACE_FILENAMES=${ACP_TRACE_FILENAMES:-plain}"
 if [ -n "$LF_SK" ]; then
   SECRETS+=("langfuse-pk=$LF_PK" "langfuse-sk=$LF_SK")
   LF_ENV="LANGFUSE_HOST=$LF_HOST LANGFUSE_PUBLIC_KEY=secretref:langfuse-pk LANGFUSE_SECRET_KEY=secretref:langfuse-sk"
@@ -441,14 +450,14 @@ for s in json.loads(os.environ.get("APP_SECRETS_JSON") or "[]"):
       --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
     _az_scrubbed az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --image "$ACRSERVER/$IMAGE" \
       --command acp-worker \
-      --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV ACP_WORKERS=$WK_N -o none
+      --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV ACP_WORKERS=$WK_N -o none
   else
     _az_scrubbed az containerapp create "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --environment "$ENVNAME" \
       --image "$ACRSERVER/$IMAGE" \
       --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
       --command acp-worker \
       --secrets "${WORKER_SECRETS[@]}" \
-      --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV ACP_WORKERS=$WK_N \
+      --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV ACP_WORKERS=$WK_N \
       --system-assigned --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 3 -o none
     echo "   one-time: grant the worker's managed identity 'Storage Blob Data Contributor' on"
     echo "   the '$BLOB_ACCOUNT' account so its remediation Blob writes don't 403 — exact"
@@ -465,14 +474,14 @@ if az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" -o none 2>/dev/null; then
   _retry az containerapp registry set "${AZ[@]}" -g "$RG" -n "$APP" \
     --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
   _retry az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$ACRSERVER/$IMAGE" \
-    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV -o none
+    --set-env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV -o none
 else
   az containerapp create "${AZ[@]}" -g "$RG" -n "$APP" --environment "$ENVNAME" \
     --image "$ACRSERVER/$IMAGE" \
     --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
     --target-port 8077 --ingress external \
     --secrets "${SECRETS[@]}" \
-    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV \
+    --env-vars ACP_GOOGLE_ADC=secretref:google-adc $DEPLOY_ENV_ENV $DEFER_ENV $MODE_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $HITL_ENV $DEMO_ENV $E2E_ENV $WORKERS_ENV $EMAILS_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV \
     --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 1 -o none
 fi
 

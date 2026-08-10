@@ -25,10 +25,78 @@ _client = None
 _SOURCE_LABEL = {"drive": "Google Drive", "sharepoint": "SharePoint / OneDrive", "local": "local corpus"}
 
 
+# ── document labels: the filename is PHI in a hospital estate ─────────────────
+# `Smith_John_MRN0114233_intake.docx` names a patient, and the filename was the one field that
+# rode on EVERY trace — name, id, tag and metadata — on every scan, whether or not a model ran.
+# docs/audit-langfuse-phi.md called it the largest exposure by volume and the least obvious.
+#
+# So by default a document appears as a stable opaque label plus its extension:
+#
+#     Smith_John_MRN0114233_intake.docx  ->  doc-3f9a2c.docx
+#
+# WHAT THAT KEEPS. The label is deterministic per (deployment, filename), so every span for one
+# document still collapses onto one trace, a document is still followable across scans, and the
+# extension still says what kind of file it is — which is most of what a filename was doing in a
+# trace. What it stops is a trace reader learning a patient's name, and trace access is a wider
+# circle than document access.
+#
+# WHY IT IS KEYED, not a bare hash. An unkeyed digest is a dictionary: anyone who suspects a
+# patient is in the estate can hash the likely filename and confirm it. HMAC with a per-deployment
+# secret removes that. `ACP_TRACE_SALT` if set, else LANGFUSE_SECRET_KEY — which is already
+# required for tracing to run at all, so a traced deployment always has one. Rotating it renames
+# labels, which is acceptable: the traces it would break correlation with live in the project that
+# key addressed.
+#
+# WHY THE DEFAULT IS REDACTED. This module's stated design goal is a trace a non-technical viewer
+# can read, and plain filenames serve that. But the cost of the wrong default is asymmetric — a
+# demo with opaque labels is inconvenient, a hospital deployment with patient names in an
+# observability store is an incident. So it is fail-safe by default and the DEMO opts out, the
+# same shape as the E2E bypass in core.py. Set ACP_TRACE_FILENAMES=plain for that.
+_TRACE_FILENAMES = os.environ.get("ACP_TRACE_FILENAMES", "").strip().lower()
+_PLAIN_FILENAMES = _TRACE_FILENAMES == "plain"
+
+
+def _doc_label(file: str | None) -> str | None:
+    """The document's trace-facing name: opaque + extension, or the filename when opted out.
+
+    None in, None out — several callers pass an optional filename and gate on it, and turning
+    that into the string "None" would put a fake document in the trace.
+    """
+    if not file:
+        return file
+    if _PLAIN_FILENAMES:
+        return file
+    import hashlib
+    import hmac
+    salt = (os.environ.get("ACP_TRACE_SALT") or _SK or "").encode()
+    digest = hmac.new(salt, str(file).encode("utf-8"), hashlib.sha256).hexdigest()[:6]
+    ext = ""
+    if "." in str(file):
+        candidate = str(file).rsplit(".", 1)[-1]
+        # An extension is a type, not an identifier — but only when it looks like one. A file
+        # named "Smith, John. Intake" would otherwise contribute " Intake" as its "extension".
+        if candidate.isalnum() and len(candidate) <= 5:
+            ext = "." + candidate.lower()
+    return f"doc-{digest}{ext}"
+
+
+def _trace_id(scan_id: str | None, file: str | None) -> str | None:
+    """The per-file trace id, `{scan_id}::{label}`.
+
+    EVERY site that builds this id must go through here. The id is what joins a file's spans,
+    its AI calls, its HITL decisions and its score into one trace, so the label inside it has to
+    match everywhere — and it used to interpolate the raw filename at five separate call sites,
+    which is both the leak and the reason a single helper is worth more than five careful edits.
+    """
+    if not scan_id or not file:
+        return None
+    return f"{scan_id}::{_doc_label(file)}"
+
+
 def _file_tags(file: str, user: str | None) -> list[str]:
     """Base tag set for a file's trace — shared so a later tag-only update (e.g.
     appending rule-fail tags after Assess) doesn't clobber the tags file_trace set."""
-    return ["accessibility-file", f"user:{user or 'demo'}", f"file:{file}"]
+    return ["accessibility-file", f"user:{user or 'demo'}", f"file:{_doc_label(file)}"]
 
 
 def _det_id(*parts) -> str:
@@ -107,8 +175,8 @@ def file_span(trace, filename: str, engine: str):
     if isinstance(trace, _Noop):
         return _Noop()
     return trace.span(
-        name=filename,
-        input={"document": filename, "checked_with": engine},
+        name=_doc_label(filename),
+        input={"document": _doc_label(filename), "checked_with": engine},
     )
 
 
@@ -155,21 +223,21 @@ def rule_spans(file_span_, sc_counts: dict[str, int], rule_catalog: list[dict],
             name=label,
             level=_level_for(outcome, severity),
             status_message=status,
-            input={"document": filename, "rule": f"{rid} {plain}"} if filename else None,
+            input={"document": _doc_label(filename), "rule": f"{rid} {plain}"} if filename else None,
             metadata={
-                "document": filename,
+                "document": _doc_label(filename),
                 "wcag": f"{rid} {plain}",
                 "wcag_level": rule.get("level"),
                 "severity": severity,
                 "how_its_fixed": rule.get("fix_mode"),
             },
         )
-        s.end(output={"document": filename, "result": status, "outcome": outcome, "issues": count})
+        s.end(output={"document": _doc_label(filename), "result": status, "outcome": outcome, "issues": count})
     if scan_id and filename and failing_ids:
         lf = _lf()
         if lf:
             try:
-                lf.trace(id=f"{scan_id}::{filename}").update(
+                lf.trace(id=_trace_id(scan_id, filename)).update(
                     tags=_file_tags(filename, user) + [f"rule-fail:{rid}" for rid in failing_ids])
             except Exception:
                 pass
@@ -200,8 +268,8 @@ def pii_span(file_span_, pinfo: dict, filename: str | None = None):
         name=f"🔒 Sensitive data — {summary}",
         level=level,
         status_message=f"This document exposes {pinfo.get('total', 0)} sensitive item(s)",
-        input={"document": filename} if filename else None,
-        metadata={"document": filename, "sensitive_data_types": pinfo.get("types", {})},
+        input={"document": _doc_label(filename)} if filename else None,
+        metadata={"document": _doc_label(filename), "sensitive_data_types": pinfo.get("types", {})},
     )
     s.end(output={"found": summary,
                   "examples_masked": {f["type"]: f["samples"] for f in findings}})
@@ -250,8 +318,8 @@ def file_span_for(scan_id: str, filename: str, engine: str):
     lf = _lf()
     if lf is None:
         return _Noop()
-    return lf.trace(id=scan_id).span(name=filename,
-                                     input={"document": filename, "checked_with": engine})
+    return lf.trace(id=scan_id).span(name=_doc_label(filename),
+                                     input={"document": _doc_label(filename), "checked_with": engine})
 
 
 def finish_scan_trace_by_id(scan_id: str, summary: dict, *, source: str, ai_enabled: bool,
@@ -359,7 +427,7 @@ def trace_ai_call(surface: str, model: str, latency_ms: int, *, ok: bool,
         return
     try:
         t = lf.trace(name=f"ai:{surface}", session_id=scan_id,
-                     metadata={"file": file, "model": model, "surface": surface})
+                     metadata={"file": _doc_label(file), "model": model, "surface": surface})
         s = t.span(name=surface,
                    input={"prompt_chars": prompt_chars, "model": model},
                    output={"completion": (completion or "")[:1500],
@@ -399,9 +467,9 @@ def trace_hitl_decision(scan_id, file, rule_id, status, *, note=None, approved_v
     if lf is None:
         return
     try:
-        tid = f"{scan_id}::{file}" if scan_id and file else None
+        tid = _trace_id(scan_id, file)
         t = lf.trace(id=tid, name="hitl:decision", session_id=scan_id,
-                     metadata={"file": file, "rule_id": rule_id})
+                     metadata={"file": _doc_label(file), "rule_id": rule_id})
         s = t.span(name=f"hitl.{status}",
                    input={"rule_id": rule_id},
                    output={"status": status, "note_chars": len(note or ""),
@@ -430,7 +498,7 @@ def session_deep_link(scan_id: str) -> str | None:
 
 
 # ── Per-file trace (file-centric tracing) ──────────────────────────────────────
-# One trace PER FILE per scan, id=f"{scan_id}::{file}", grouped into a Langfuse SESSION
+# One trace PER FILE per scan, id=_trace_id(scan_id, file), grouped into a Langfuse SESSION
 # keyed by scan_id (session_deep_link above) so "view this whole scan" = browse its
 # session instead of one giant trace. Discover / Assess / Remediate are SPANS within that
 # one file trace, written as each phase happens — potentially far apart in time (Discover
@@ -451,12 +519,12 @@ def file_trace(scan_id: str, file: str, user: str | None = None):
     try:
         who = user or "demo"
         return lf.trace(
-            id=f"{scan_id}::{file}",
+            id=_trace_id(scan_id, file),
             session_id=scan_id,
-            name=f"{who} · {file}",
+            name=f"{who} · {_doc_label(file)}",
             user_id=who,
             tags=_file_tags(file, who),
-            metadata={"scan_id": scan_id, "file": file},
+            metadata={"scan_id": scan_id, "file": _doc_label(file)},
         )
     except Exception:
         return _Noop()
@@ -515,7 +583,7 @@ def file_score(scan_id: str, file: str, score: float | None) -> None:
         # Deterministic score id — a re-assess updates the one score instead of
         # growing the trace's score list ("85.00, 85.00, 85.00, …").
         lf.score(id=_det_id(scan_id, file, "compliance_score"),
-                 trace_id=f"{scan_id}::{file}", name="compliance_score", value=float(score))
+                 trace_id=_trace_id(scan_id, file), name="compliance_score", value=float(score))
     except Exception:
         pass
 
