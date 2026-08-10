@@ -106,6 +106,15 @@ is not covered here. The `(#NNN)` references are GitHub PRs, not ADO work items.
   table the redesign renders is now generated from the same source the engine gates on, with a
   CI guard that fails if the two disagree — the recurring "the panel claims capability the engine
   doesn't have" hazard, closed structurally rather than by hand.
+- **Made the AI Work Inbox collapsible and searchable** (#232). The inbox stacks a rich
+  EvidenceCard per finding, and a real estate produces dozens — navigating them meant scrolling,
+  with no way to jump to a file or criterion. Added a search over each item's filename, WCAG
+  criterion (number AND name) and AI recommendation text (token-AND, case-insensitive, priority
+  order preserved), and per-card collapse plus a collapse-all so the queue reads as a list of
+  headers a reviewer opens one at a time. UI-only — nothing touches a decision, cards default to
+  expanded. Each card collapses via a native `<details>` (keyboard-operable, self-announcing, no
+  `aria-expanded` to drift), the same reasoning the RemSection helper follows — the search logic is
+  a pure function so it is unit-tested directly rather than through a mount.
 
 ## Feature: Dependency security
 
@@ -400,3 +409,7 @@ reach production, safely.
   never-fail-a-scan contract (#224, #228) added to Capability registry; Chain-B docs (#225) to
   Documentation. The "two siblings still open" Open item is replaced with an "audit complete" note.
   Sync marker advanced from `2f1f692` to `3eb4883`.
+- **2026-08-10 (later)** — Added #232 (AI Work Inbox collapsible + searchable) as a Task under the
+  v2 redesign; it merged as `39157ea`. #233 — the delivery log's own reconcile commit (`6484160`) —
+  is excluded as non-feature work, as the earlier log commits are. Sync marker advanced from
+  `3eb4883` to `6484160`.
