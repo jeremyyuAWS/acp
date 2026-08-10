@@ -3,6 +3,10 @@
 Every item below is a gap **observed** on 2026-08-08, not a speculative improvement. Each names
 the evidence, so anyone can re-check it rather than trust this file.
 
+**Updated 2026-08-09 (evening).** Phase 5 worked: P5.1 (#214), P5.2 (#215) and P5.5 (#216) closed
+— each measured with a red fixture before any fix — and P5.3/P5.4 marked blocked on installs
+(LibreOffice, a mutation runner) rather than on design. See that section.
+
 **Synced 2026-08-09.** Six entries had gone stale in two days — Phase 0 was fully closed, P2.4,
 P2.5 and P4.8 were done, and P4.2 was half done — while the file still listed all of them as open.
 That is worth a warning rather than just a fix: **this file goes out of date faster than anything
@@ -411,26 +415,47 @@ because somebody complains; one that under-reports is indistinguishable from a c
 That is the failure mode the 2026-07-30 capability-grid exercise found nine of, and these are the
 ones currently visible.
 
-- [ ] **P5.1 — Header, footer and footnote parity for 1.3.1 / 2.4.4 / 1.4.3.** `word/footnotes.xml`
-  is not in `ALT_TARGETS`, and the header/footer parts are not walked by every detector that walks
-  the body. A document whose only defect lives in a running header would score clean. Untested in
-  either direction — the risk is asserted from the part list, not measured, so **step one is a
-  fixture, not a fix.**
-- [ ] **P5.2 — Tracked changes (`<w:ins>` / `<w:del>`).** Unhandled. A document under revision may
-  present text to a detector that no reader will ever see, or hide text every reader will. Both
-  directions are wrong and neither raises.
-- [ ] **P5.3 — Word round-trip via LibreOffice.** Every remediation is verified by re-running our
-  own detectors over our own writes. That proves self-consistency, not that Word opens the file or
-  that a screen reader announces what we wrote. A round-trip through an independent implementation
-  is the cheapest external check available.
-- [ ] **P5.4 — Mutation testing on the detector modules.** The corpus scores F1 1.00, which bounds
-  false negatives on the fixtures we thought to write and says nothing about the ones we did not.
-  Mutating the detectors and checking the suite notices is the standard answer to "is the test
-  suite actually load-bearing", and this repo has now been bitten twice by tests that could not
-  fail (the vacuous anti-vacuity guard; the pipeline that reported `tail`'s exit status).
-- [ ] **P5.5 — `frontend-v2/src/capability.js` has no docx 4.1.2 row.** It is guarded separately
-  from v1 (`test_capability_frontend_sync.py` covers v1 only), so the two can drift silently. Small
-  fix; its own lane-total updates.
+Worked 2026-08-09 evening. Three of the five closed, two blocked on installs. Each was
+measured before it was touched — the fixture ran red on the old code, so the gap is proven, not
+argued.
+
+- [x] **P5.1 — Link purpose (2.4.4/2.4.9) is judged in headers, footers and notes.** Done (#214).
+  `office_structure.docx_checks` read `word/document.xml` alone, so a "click here" in a page footer
+  produced ZERO findings — measured with a clean-body control plus a vague link isolated in each of
+  header, footer, footnote and endnote (all four silent before, all caught after). Fixed by
+  `_docx_hyperlinks` walking every story part, each resolving its own `_rels`.
+  **Scope, stated honestly:** this closes LINK purpose across the parts. The heading walks (1.3.1
+  pseudo-heading, 2.4.6) stay body-only (a heading styled into a footer is rare and low-value), and
+  1.4.3 text contrast is out of reach here — its docx detector lives in the vendored .NET engine.
+  **Found while doing it:** 1.1.1 alt text was NOT a gap — `formats/office/images.py` already globs
+  `word/(document|header\d*|footer\d*).xml`, so header/footer logo images without alt were already
+  caught. The named "1.3.1 / 2.4.4 / 1.4.3" turned out to be really just 2.4.4 in Python.
+- [x] **P5.2 — Tracked deletions no longer leak into extracted text.** Done (#215). Only one of the
+  two feared directions was a live bug: `pii._ooxml_text` tag-strips the word parts, turning
+  `<w:delText>` (struck-out content a reader never sees) into words — so PII detection flagged
+  DELETED phone numbers and 3.1.2 scored deleted prose. Measured with a document carrying a kept
+  line, a tracked insertion and a tracked deletion; the deletion leaked. One surgical line removes
+  `<w:delText>` before flattening. Insertions correctly stay (ordinary `<w:t>`), and the regex
+  detectors were already safe (they read `<w:t>`, never `<w:delText>`). Stance: extract as
+  tracked changes ACCEPTED — insertions in, deletions out.
+- [?] **P5.3 — Word round-trip via LibreOffice.** BLOCKED on an install, not on design. LibreOffice
+  is not present on the build host (no `soffice`, no `/Applications/LibreOffice.app`), so the
+  independent round-trip cannot run here. Unblock: install LibreOffice (headless is enough), then
+  build the round-trip check. Still the cheapest external validation available — worth doing once
+  the binary is there.
+- [?] **P5.4 — Mutation testing on the detector modules.** BLOCKED on tooling. No mutation library
+  is installed in the venv (`mutmut` / `cosmic-ray` absent), and adding one plus running a campaign
+  is a dev-dependency + CI-time decision, not a quiet addition. Unblock: decide whether to vendor a
+  mutation runner and where it runs (it is slow), then point it at `office_structure` / the docx
+  detectors. The reasoning stands: F1 1.00 bounds only the fixtures we thought to write.
+- [x] **P5.5 — v2 capability table synced to the backend, and guarded.** Done (#216), and it was
+  bigger than filed. The item said "no docx 4.1.2 row"; measuring found FIVE drifted cells —
+  docx 1.4.1/1.4.11/2.1.2/4.1.2 missing on both axes, and xlsx 3.1.2 carrying a WRONG value
+  (`assisted`, should be `human`). The four docx rows are exactly this session's lane additions
+  (#202/#203/#206/#208): each updated v1's `capability.js` and none updated v2, because v1 has a
+  backend sync guard and v2 had none. The fix is that guard —
+  `tests/test_capability_frontend_v2_sync.py`, mirroring v1's — which failed on both axes first and
+  passes after the sync, so the drift cannot silently return. v2 lane totals now match v1 (6⚡8🤖1👤).
 
 ## Infrastructure — parallel track
 
