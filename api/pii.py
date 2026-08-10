@@ -79,9 +79,22 @@ def _html_text(path: Path) -> str:
     return lxml_html.fromstring(data).text_content()
 
 
+# Tracked-DELETION run text. Under change-tracking a removed run is stored as
+# <w:del><w:r><w:delText>…</w:delText></w:r></w:del> — text struck from the accepted document but
+# still present in the part. Tag-stripping below would flatten it into words the reader never
+# sees, so it is removed FIRST. Only the paired text element is targeted: the self-closing
+# <w:del .../> that marks a deleted paragraph-mark carries no text and is left to the tag strip,
+# and insertions use ordinary <w:t> and are kept (the accepted document contains them). delText is
+# a WordprocessingML element, so this never matches anything in a pptx/xlsx part.
+_DELTEXT = re.compile(r"<w:delText\b[^>]*>.*?</w:delText>", re.S)
+
+
 def _ooxml_text(path: Path) -> str:
     """Text from a docx/pptx/xlsx by stripping XML tags from its body parts.
-    Dependency-free (OOXML is a zip of XML) — good enough to find PII strings."""
+    Dependency-free (OOXML is a zip of XML) — good enough to find PII strings.
+
+    Tracked changes are read as ACCEPTED: insertions kept, deletions dropped (see _DELTEXT) — the
+    content a reader meets when the file is opened in its intended final state."""
     parts: list[str] = []
     with zipfile.ZipFile(path) as z:
         for name in z.namelist():
@@ -89,6 +102,7 @@ def _ooxml_text(path: Path) -> str:
                 continue
             if name.startswith(("word/", "ppt/slides/", "xl/sharedStrings", "xl/worksheets")):
                 xml = z.read(name).decode("utf-8", "ignore")
+                xml = _DELTEXT.sub(" ", xml)
                 parts.append(re.sub(r"<[^>]+>", " ", xml))
     return " ".join(parts)
 
