@@ -5,11 +5,13 @@ import { googleUserInfo } from './googleIdentity.js'
 import SourceDrawer from './SourceDrawer.jsx'
 import FileDrawer from './FileDrawer.jsx'
 import FolderPicker from './FolderPicker.jsx'
+// Single source of truth for the SharePoint/Graph scopes, so this sign-in path and SharePoint.jsx
+// can never request different permissions than IT consented to (read-only; see that module).
+import { SP_SCOPES } from './sharepointScopes.js'
 
 const AZURE_CLIENT_ID  = import.meta.env.VITE_AZURE_CLIENT_ID  || ''
 const AZURE_TENANT     = import.meta.env.VITE_AZURE_TENANT_ID  || 'common'
 const GD_SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file'
-const SP_SCOPES = ['Files.Read', 'Files.ReadWrite', 'User.Read']
 
 // iOS-style switch for the scan-time options (PII scan, Durable scan).
 function ScanSwitch({ on, onToggle, label, title }) {

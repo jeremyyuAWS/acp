@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { loadScores, saveDriveScore, uploadToDrive } from './GoogleDrive.jsx'
 import { uploadToSharePoint } from './api.js'
+import { SP_SCOPES, CAN_WRITE_BACK } from './sharepointScopes.js'
 
 const CLIENT_ID = import.meta.env.VITE_AZURE_CLIENT_ID || ''
 const TENANT   = import.meta.env.VITE_AZURE_TENANT_ID  || 'common'
-const SCOPES   = ['Files.Read', 'Files.ReadWrite', 'User.Read']
+const SCOPES   = SP_SCOPES   // read-only; see sharepointScopes.js
 const GRAPH    = 'https://graph.microsoft.com/v1.0'
 
 const SUPPORTED_EXT = ['.pdf', '.docx', '.pptx', '.xlsx', '.html', '.htm']
@@ -45,6 +46,11 @@ function fmtSize(bytes) {
 export function SpUploadButton({ itemId, driveId, blob, score, engine, scanId, file }) {
   const [phase, setPhase] = useState('idle') // idle|confirm|saving|done|error
   const [errMsg, setErrMsg] = useState('')
+  // Read-only build: no write scope was requested, so writing back would 403 at Graph. Hide the
+  // affordance rather than offer a button that cannot succeed. Gated on the scopes themselves, so
+  // it tracks CAN_WRITE_BACK automatically if write is ever re-enabled. After the hooks above so
+  // the call order stays constant (rules of hooks); CAN_WRITE_BACK is a module constant regardless.
+  if (!CAN_WRITE_BACK) return null
 
   const doSave = async () => {
     setPhase('saving')
