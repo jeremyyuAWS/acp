@@ -175,6 +175,16 @@ is not covered here. The `(#NNN)` references are GitHub PRs, not ADO work items.
   where a detector's decision flips (the pass/fail edge) and size the sample per criterion rather
   than uniformly, so a criterion with a subtle boundary gets the coverage it needs and a simple one
   is not padded.
+- **Retired the redundant Azure Pipelines CI's auto-triggers** (#235). `azure-pipelines.yml` is a
+  byte-for-byte mirror of `.github/workflows/ci.yml`, which GitHub Actions already runs on every PR
+  and push. The Azure org has one parallel job, and two pipelines fed by that file (`acp-ci-github`,
+  `jeremyyuAWS.acp`) both triggered on every PR/push, serialising through the single slot — runs sat
+  in `notStarted` ~50 minutes, so every PR read `UNSTABLE` on two checks that gate nothing (main is
+  not branch-protected). Set `trigger: none` / `pr: none` rather than deleting the blocks (an absent
+  trigger in Azure defaults to CI on every branch — the opposite of retiring it); the pipeline stays
+  runnable on demand. The repo change proved itself on its own PR: Azure read `pr: none` from the
+  branch and skipped it, so the PR merged `CLEAN`. Fully stopping the two pipelines needs an Azure
+  DevOps-side disable/delete, which a commit cannot reach — recorded as an open item.
 
 ## Feature: Remediation reaching the file
 
@@ -380,6 +390,15 @@ reach production, safely.
   are untracked in the working tree.
 - **Two corpus generators disagree about field names** (#188) — both readers now tolerate either,
   but which generator is authoritative is an open decision, not a resolved one.
+- **Azure DevOps still hosts the two now-silenced CI pipelines** (after #235). `trigger:/pr: none`
+  in the YAML stops auto-runs, but fully retiring `acp-ci-github` and `jeremyyuAWS.acp` — and any
+  UI-level "override the YAML trigger" toggle — needs an ADO-side disable/delete a commit cannot
+  reach. `jeremyyuAWS.acp` (default `org.repo` name) is the likely redundant duplicate; a decision
+  is needed on whether to keep one Azure pipeline as an eventual branch-policy gate or drop both.
+- **The scheduled production probe is failing on `main`** (`.github/workflows/monitor.yml` →
+  `scripts/monitor.py` against `ACP_FQDN`) — `completed/failure` repeatedly, e.g. three times on
+  `de556b5`. Not a required check, so it blocks nothing and is easy to miss; needs triage for prod
+  health vs. a broken probe / misconfigured `ACP_FQDN` var or `ACP_MONITOR_KEY` secret.
 - **This log was lost once already.** It was committed locally on 2026-08-08 and discarded by a
   `git reset --hard origin/main` in a parallel session, because it had never been pushed. It was
   recovered from the dangling object. Push it, or it will happen again.
@@ -413,3 +432,8 @@ reach production, safely.
   v2 redesign; it merged as `39157ea`. #233 — the delivery log's own reconcile commit (`6484160`) —
   is excluded as non-feature work, as the earlier log commits are. Sync marker advanced from
   `3eb4883` to `6484160`.
+- **2026-08-10 (later still)** — Added #235 (retire the redundant Azure Pipelines CI's auto-triggers)
+  as a Task under Test corpus and CI; it merged as `d9b5f14`. Two Open items recorded from tracing
+  it: the ADO-side pipeline disable/delete a commit cannot reach, and a separately-discovered
+  failing production probe (`monitor.yml`). #234 (log commit `de556b5`) is excluded as non-feature
+  work. Sync marker advanced from `6484160` to `d9b5f14`.
