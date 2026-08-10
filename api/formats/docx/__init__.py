@@ -10,8 +10,8 @@ from assessment import Confidence, Coverage
 from capabilities import Capability
 from rule_registry import register
 
-from formats.docx.detectors import (name_role_value, no_keyboard_trap, nontext_contrast,
-                                    use_of_color)
+from formats.docx.detectors import (language_parts, link_purpose, name_role_value,
+                                    no_keyboard_trap, nontext_contrast, use_of_color)
 
 # ── 4.1.2 Name, Role, Value ───────────────────────────────────────────────────────────
 # PARTIAL, not FULL: sound over interactive content controls, silent on ActiveX, embedded OLE
@@ -142,4 +142,58 @@ register(
             "reviewer to try with a keyboard; whether focus can actually move away from a "
             "control is runtime behaviour that depends on the control's own implementation and "
             "is not examined, because it is not recorded in the file"),
+)
+
+
+# ── 2.4.4 Link Purpose (In Context) ────────────────────────────────────────────────────
+# Migrated from store.RULE_FORMATS + _certify to the coverage gate (ADR 0031's consolidation).
+# The pair was never in doubt — a vague link fails, a clean file reviews — but it reached that
+# verdict through the legacy path while 4.1.2/1.4.1/1.4.11/2.1.2 above reach the SAME verdict
+# through the registry. Two mechanisms agreeing by coincidence is the "disagreeing tables" hazard
+# the registry exists to end (ADR 0023); this makes docx 2.4.4's REVIEW structural.
+#
+# PARTIAL because the technique judges whether link text is a generic filler phrase or a raw URL,
+# and not whether otherwise-fine text describes THIS destination — a link "Annual Report" pointing
+# at the wrong year passes this check and fails the criterion. That accuracy-to-target judgement is
+# the unexamined remainder, and it is a content question, so this never becomes a certified pass.
+# HIGH confidence within the subset: the vague-text predicate is exact, shared with the remediator
+# so an approved rewrite is credited by re-scan.
+register(
+    rule="2.4.4",
+    fmt="docx",
+    detector=link_purpose.detect,
+    requires={Capability.LINKS},
+    coverage=Coverage.PARTIAL,
+    confidence=Confidence.HIGH,
+    reason=("hyperlink display text is checked exactly for generic filler ('click here', a bare "
+            "URL); whether otherwise-descriptive text actually names THIS destination — a link "
+            "reading 'Annual Report' that points at the wrong document — is a content judgement "
+            "not examined, because the target's meaning is not recorded in the file"),
+)
+
+
+# ── 3.1.2 Language of Parts ────────────────────────────────────────────────────────────
+# Migrated from store.RULE_FORMATS + _certify to the coverage gate, same as 2.4.4 above and for
+# the same reason (ADR 0031). Verdict unchanged: an unmarked foreign passage fails, a clean file
+# reviews; only the mechanism moves.
+#
+# PARTIAL because the technique needs a passage of at least textchecks._MIN_SEG_WORDS (12) words
+# in a language other than the document's own before langdetect is trusted to call it, so a
+# shorter foreign phrase or a single borrowed word is under the floor and unflagged. And "which
+# language a passage IS" is a statistical detection, not a certainty. A clean result means "no
+# unmarked foreign passage long enough for us to be sure" — a real check over a strict subset,
+# which is why it reviews rather than certifies. HIGH confidence within the floor: the language
+# comparison is deterministic given langdetect's answer, and the applier writes the same w:lang
+# the detector reads, so an approved mark is credited by re-scan.
+register(
+    rule="3.1.2",
+    fmt="docx",
+    detector=language_parts.detect,
+    requires={Capability.TEXT},
+    coverage=Coverage.PARTIAL,
+    confidence=Confidence.HIGH,
+    reason=("passages of at least 12 words in a language other than the document's own are "
+            "flagged when they carry no w:lang mark; a shorter foreign phrase or a single "
+            "borrowed word is under the length floor langdetect needs to be trusted, and is not "
+            "flagged"),
 )

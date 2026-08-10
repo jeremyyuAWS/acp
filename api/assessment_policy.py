@@ -103,11 +103,17 @@ RULE_FORMATS: dict[str, frozenset[str]] = {
     # never a fabricated PASS.
     "2.1.2": frozenset(),
     "2.4.1": frozenset({"html", "pdf"}),
-    "2.4.2": _ALL_FORMATS, "2.4.3": frozenset({"html"}), "2.4.4": _ALL_FORMATS,
+    # 2.4.4 / 3.1.2 docx are ABSENT, migrated to the capability registry (ADR 0031), the same shape
+    # as 4.1.2 below: the docx link-purpose and language-of-parts checks reach a SUBSET of their
+    # criterion, which this table cannot express but coverage=PARTIAL can. The other formats keep
+    # their pass/fail lane here. `_ALL_FORMATS` minus docx = the four non-docx formats.
+    "2.4.2": _ALL_FORMATS, "2.4.3": frozenset({"html"}),
+    "2.4.4": frozenset({"html", "pptx", "xlsx", "pdf"}),
     "2.4.6": _ALL_FORMATS, "2.4.7": frozenset({"html"}), "2.4.9": frozenset({"docx", "html", "pptx"}),
     "2.4.10": frozenset({"docx"}),
     "2.5.3": frozenset({"html"}), "2.5.8": frozenset({"html"}), "3.1.1": _ALL_FORMATS,
-    "3.1.2": _ALL_FORMATS, "3.1.4": frozenset({"html"}), "3.1.5": _ALL_FORMATS, "3.3.2": frozenset({"docx", "html"}),
+    "3.1.2": frozenset({"html", "pptx", "xlsx", "pdf"}),
+    "3.1.4": frozenset({"html"}), "3.1.5": _ALL_FORMATS, "3.3.2": frozenset({"docx", "html"}),
     # docx is ABSENT here, and that is the migration rather than a regression. #144 added it,
     # which made a FAILING Word file report FAIL correctly but left a CLEAN one reading
     # NOT_EVALUATED: this table can say WHICH formats a criterion is judged on and cannot say

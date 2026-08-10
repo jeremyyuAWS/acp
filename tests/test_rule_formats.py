@@ -14,6 +14,7 @@ from pathlib import Path
 ACP = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ACP / "api"))
 
+import assessment  # noqa: E402
 import store  # noqa: E402
 
 _ALL_FORMATS = frozenset({"html", "docx", "pptx", "xlsx", "pdf"})
@@ -34,6 +35,20 @@ def registry_covers(rule: str, fmt: str) -> bool:
         return rule_registry.is_registered(rule, fmt)
     except Exception:
         return False
+
+
+def registry_coverage(rule: str, fmt: str):
+    """The registered Coverage for a pair, or None when it is not in the registry.
+
+    Used to subtract only the pairs the registry OWNS the scope of — those below FULL, which
+    RULE_FORMATS no longer lists. A FULL pair (e.g. html 3.1.1) still lives in RULE_FORMATS too.
+    """
+    try:
+        import rule_registry
+        rule_registry.load()
+        return rule_registry.coverage_for(rule, fmt)
+    except Exception:
+        return None
 
 
 def _wcag_scs(path: Path) -> set[str]:
@@ -97,6 +112,21 @@ def _derive_formats() -> dict[str, frozenset[str]]:
         derived.setdefault(sc, set()).update(fmts)
     for sc, fmts in _OFFICE_STRUCT_FORMATS.items():
         derived.setdefault(sc, set()).update(fmts)
+    # Registry pairs below FULL coverage are declared in the capability registry, NOT in
+    # RULE_FORMATS, so the ground truth for this table excludes them however the maps above derived
+    # them. The detectors still fire (the maps honestly say docx covers 2.4.4/3.1.2), but a
+    # PARTIAL pair's scope lives in coverage, so RULE_FORMATS no longer claims it. This subtraction
+    # is what makes a migration a one-place change: move the declaration, and the drift check
+    # follows — replacing the per-pair omissions the maps carried by hand (docx 4.1.2 was first).
+    #
+    # ONLY non-FULL pairs. A FULL registry pair (html 3.1.1) certifies a pass and legitimately
+    # stays in RULE_FORMATS too — the contract only forbids the reverse (a PARTIAL pair in both).
+    # Subtracting FULL pairs would wrongly drop html 3.1.1 from the ground truth.
+    for sc in list(derived):
+        for fmt in list(derived[sc]):
+            cov = registry_coverage(sc, fmt)
+            if cov is not None and cov is not assessment.Coverage.FULL:
+                derived[sc].discard(fmt)
     return {sc: frozenset(fmts) for sc, fmts in derived.items()}
 
 
