@@ -1894,6 +1894,33 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
    `.difftag` are NOT part of that: six components still emit them. */
 .reviewlist { display: flex; flex-direction: column; gap: 10px; }
 
+/* AI Work Inbox navigation — search + collapse-all toolbar, and the collapsible per-card wrapper.
+   The card itself is unchanged; .revcard is a <details> shell around it so a reviewer can read the
+   queue as a list of headers and open only what they're working. */
+.revtoolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.revsearch { flex: 1 1 260px; min-width: 180px; padding: 7px 11px; font: inherit; font-size: 13.5px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--card, #fff); color: var(--ink); }
+.revsearch:focus { outline: 2px solid var(--plum); outline-offset: 1px; border-color: var(--plum); }
+.revtoolbar-count { font-size: 12.5px; flex: 0 0 auto; }
+.revcollapse-all { flex: 0 0 auto; background: none; border: 1px solid var(--line); border-radius: 8px;
+  padding: 7px 12px; font: inherit; font-size: 13px; font-weight: 600; color: var(--ink); cursor: pointer; }
+.revcollapse-all:hover:not(:disabled) { background: var(--bg, #faf8fb); }
+.revcollapse-all:disabled { opacity: 0.5; cursor: default; }
+
+.revcard { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--card, #fff); }
+.revcard > .revcard-sum { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer;
+  font-size: 13.5px; list-style: revert; user-select: none; }
+.revcard > .revcard-sum:hover { background: var(--bg, #faf8fb); }
+.revcard[open] > .revcard-sum { border-bottom: 1px solid var(--line); }
+.revcard-sum-file { font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.revcard-sum-rule { flex: 1 1 auto; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.revcard-sev { flex: 0 0 auto; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+  padding: 2px 8px; border-radius: 999px; }
+.revcard-sev.sev-critical { background: #FDECEC; color: #8A1F1F; }
+.revcard-sev.sev-serious { background: #FCEEDD; color: #8A4B0F; }
+.revcard-sev.sev-moderate { background: #FBF4D8; color: #6B5A11; }
+.revcard-sev.sev-minor { background: #EEF3EA; color: #3B5A22; }
+
 /* Verification (§8) */
 .verify-run { display: flex; align-items: center; gap: 12px; font-size: 13.5px; flex-wrap: wrap; }
 .verify-track { flex: 1 1 200px; max-width: 320px; height: 9px; border-radius: 6px; background: var(--line); overflow: hidden; }

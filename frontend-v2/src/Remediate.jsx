@@ -7,6 +7,7 @@ import FileDrawer, { REC_STYLE, fmtEffort, EFFORT_BASIS, SOURCE_URL } from './Fi
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
+import { filterReviewQueue } from './reviewInboxFilter.js'
 import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, openTraceUrl } from './api.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
@@ -124,6 +125,9 @@ function dbItemToUi(it, files) {
     // Distinguishes a real model draft from the canned fallback, so the UI never labels a
     // template as a suggestion the AI made.
     hasProposal: !!firstProposed(it),
+    // The finding's severity (from the matched issue), carried so the collapsed inbox row can show
+    // it and search can match on it. Null when the file record has no matching issue.
+    severity: issue.severity || null,
   }
 }
 
@@ -293,6 +297,12 @@ function VerifyState({ state, pct, remaining, ready, latest }) {
 // are the time-travel feature itself).
 export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, aiEnabled = true, readOnly = false, onRefresh, onHitlCount, onNavigate }) {
   const [queue, setQueue] = useState([])
+  // AI Work Inbox navigation: a search query and a per-card collapse map (id -> true when
+  // collapsed). Both are UI-only; nothing here touches a decision. Cards default to expanded
+  // (an id absent from the map), so the inbox looks exactly as before until a reviewer collapses
+  // one or searches.
+  const [reviewQuery, setReviewQuery] = useState('')
+  const [collapsedCards, setCollapsedCards] = useState({})
   const [acted, setActed] = useState({ approved: 0, rejected: 0, deferred: 0 })
   const [deferredItems, setDeferredItems] = useState([])
   // Real applied-fix evidence: scan-wide before→after (all fix types, verified-cleared) +
@@ -548,6 +558,17 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const reVerified = verified + serverFixed + liveFixed
   const remLive = !!remProg || remBusy
   const pendingHitlFiles = new Set(queue.map((q) => q.file))
+  // Search filters the inbox without reshuffling it (priority order is already baked into `queue`).
+  const filteredQueue = useMemo(() => filterReviewQueue(queue, reviewQuery), [queue, reviewQuery])
+  // Collapse-all acts on what's VISIBLE: "all collapsed" is true only when every card currently in
+  // view is collapsed, so the one button reads correctly whether or not a search is narrowing the
+  // list. Toggling flips the visible cards; cards hidden by search keep their own state.
+  const allVisibleCollapsed = filteredQueue.length > 0 && filteredQueue.every((q) => collapsedCards[q.id])
+  const setAllVisible = (collapsed) => setCollapsedCards((m) => {
+    const next = { ...m }
+    for (const q of filteredQueue) next[q.id] = collapsed
+    return next
+  })
   const totalHitl = queue.length + acted.approved + acted.rejected + acted.deferred + self.length
   const hitlProgress = totalHitl > 0 ? Math.round(((totalHitl - queue.length) / totalHitl) * 100) : 0
   useEffect(() => { onHitlCount?.(queue.length) }, [queue.length, onHitlCount])
@@ -819,17 +840,51 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             ? 'Nothing needs your review — every fix was applied automatically. Items needing an AI-assisted fix or human sign-off will appear here.'
             : `All reviewed — ${acted.approved} approved, ${acted.rejected} rejected${acted.deferred ? `, ${acted.deferred} deferred` : ''}. Verification runs on the approved fixes.`}</p>
         ) : (
-          <div className="reviewlist">
-            {/* Unified review card (canonical vision #1): the SAME rich EvidenceCard the AI Work
-                Inbox uses — pipeline ladder, ✨ Explain, Grounding/Validation trust states, provenance
-                badge, grouped evidence, cert preview, native verify steps — now renders here too,
-                fed the raw hitl_queue row. `q._raw` is the untransformed row (live); SIM falls back
-                to the UI item. */}
-            {queue.map((q) => (
-              <EvidenceCard key={q.id} item={q._raw || q} onAct={evAct}
-                traceUrl={q._raw?.scan_id ? openTraceUrl(q._raw.scan_id, 'file', q._raw.file) : null} />
-            ))}
-          </div>
+          <>
+            {/* Inbox navigation (collapsible + searchable): a search over filename, WCAG criterion
+                and the AI recommendation, plus a collapse-all so a reviewer can scan the queue as a
+                list of headers and open only what they're working. UI-only — nothing here changes a
+                decision, and cards default to expanded so the inbox is unchanged until used. */}
+            <div className="revtoolbar">
+              <input type="search" className="revsearch" value={reviewQuery}
+                     onChange={(e) => setReviewQuery(e.target.value)}
+                     placeholder="Search by file, WCAG criterion, or recommendation…"
+                     aria-label="Search the AI Work Inbox" />
+              {reviewQuery.trim() && (
+                <span className="revtoolbar-count muted">{filteredQueue.length} of {queue.length}</span>
+              )}
+              <button type="button" className="revcollapse-all" onClick={() => setAllVisible(!allVisibleCollapsed)}
+                      aria-pressed={allVisibleCollapsed} disabled={filteredQueue.length === 0}>
+                {allVisibleCollapsed ? 'Expand all' : 'Collapse all'}
+              </button>
+            </div>
+            {filteredQueue.length === 0 ? (
+              <p className="muted">No items match “{reviewQuery.trim()}”.{' '}
+                <button type="button" className="linklike" onClick={() => setReviewQuery('')}>Clear search</button>
+              </p>
+            ) : (
+              <div className="reviewlist">
+                {/* Unified review card (canonical vision #1): the SAME rich EvidenceCard the AI Work
+                    Inbox uses — pipeline ladder, ✨ Explain, Grounding/Validation trust states,
+                    provenance badge, grouped evidence, cert preview, native verify steps. Each is
+                    wrapped in a native <details> so collapse is keyboard-operable and announces its
+                    own state — no aria-expanded to drift. `q._raw` is the untransformed row (live);
+                    SIM falls back to the UI item. */}
+                {filteredQueue.map((q) => (
+                  <details key={q.id} className="revcard" open={!collapsedCards[q.id]}
+                           onToggle={(e) => setCollapsedCards((m) => ({ ...m, [q.id]: !e.target.open }))}>
+                    <summary className="revcard-sum">
+                      <span className="revcard-sum-file"><span aria-hidden="true">{q.icon}</span> {q.file}</span>
+                      <span className="revcard-sum-rule muted">{q.rule}</span>
+                      {q.severity && <span className={`revcard-sev sev-${String(q.severity).toLowerCase()}`}>{q.severity}</span>}
+                    </summary>
+                    <EvidenceCard item={q._raw || q} onAct={evAct}
+                      traceUrl={q._raw?.scan_id ? openTraceUrl(q._raw.scan_id, 'file', q._raw.file) : null} />
+                  </details>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </section>
 
