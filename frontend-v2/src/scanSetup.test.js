@@ -110,9 +110,16 @@ describe('it does not overstate what a selection means', () => {
     expect(s()).toMatch(/pairCount\} criterion × format pairs/)
   })
 
-  it('shows which formats each criterion is judged on', () => {
-    // 2.1.1 is pptx-only; 2.4.3 is pdf+pptx. A row with no formats implies all four.
-    expect(s()).toMatch(/r\.formats\.map\(\(f\) => f\.toUpperCase\(\)\)/)
+  it('shows each criterion on the TICKED file types, not all four', () => {
+    // Was `r.formats.map(...)` — every row printed DOCX · PDF · PPTX · XLSX regardless of Step 1,
+    // making the operator reconcile two config axes by eye. Now narrowed to the ticked formats,
+    // and a criterion with no ticked-format lane is not rendered at all (availRows), so the list
+    // is never blank — the "implies all four" hazard the old assertion guarded is gone with it.
+    // The stronger proof is in scanSetupDom.test.jsx, which renders a Word-only scan and reads
+    // the row text; this line just stops the narrowing being quietly reverted in source.
+    const src = s()
+    expect(src).toMatch(/const shownFormats = r\.formats\.filter\(\(f\) => formats\.has\(f\)\)/)
+    expect(src).toMatch(/shownFormats\.map\(\(f\) => f\.toUpperCase\(\)\)/)
   })
 
   it('reports the capability lane as a set, not the best of them', () => {
