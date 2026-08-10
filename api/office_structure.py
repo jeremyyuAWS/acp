@@ -2248,23 +2248,30 @@ def pptx_nontext_contrast_checks(path: Path) -> list[dict]:
 def docx_nontext_contrast_checks(path: Path) -> list[dict]:
     """1.4.11 Non-text Contrast (Review) for docx — the lowest-contrast solid outline-on-fill
     DrawingML shape (<3:1). Word's shapes carry the SAME `<a:ln>` outline + `<a:solidFill>` under
-    `<wps:spPr>` as pptx, so this mirrors `pptx_nontext_contrast_checks` on word/document.xml.
-    Never raises."""
+    `<wps:spPr>` as pptx, so this mirrors `pptx_nontext_contrast_checks`.
+
+    Reads the body AND the running header/footer and foot/endnote parts: a banner shape or a rule
+    line drawn into a page header — a very common home for exactly those graphics — has the same
+    faint boundary and the same 1.4.11 question, but a scan of word/document.xml alone said nothing
+    about it. That is the same header/footer blind spot #214/#226/#227/#229 closed for other
+    content checks, and `_docx_story_xmls` is the one name for that set of parts so these checks
+    cannot drift apart on which parts count. Only the single WORST shape is reported, so widening
+    the scan surfaces a faint header shape — it never multiplies findings. Never raises."""
     worst = None      # (ratio, border_hex, fill_hex)
     try:
         with zipfile.ZipFile(path) as zf:
-            xml = _read(zf, "word/document.xml") or ""
-            for sppr in _WPS_SPPR.findall(xml):
-                ln_m = _A_LN_BLOCK.search(sppr)
-                if not ln_m:
-                    continue
-                border_m = _SOLID_SRGB.search(ln_m.group(0))              # the outline colour
-                fill_m = _SOLID_SRGB.search(_A_LN_BLOCK.sub("", sppr))    # the fill (border stripped)
-                if not border_m or not fill_m:
-                    continue
-                ratio = _contrast_ratio(border_m.group(1), fill_m.group(1))
-                if ratio < 3.0 and (worst is None or ratio < worst[0]):
-                    worst = (ratio, border_m.group(1), fill_m.group(1))
+            for xml in _docx_story_xmls(zf):
+                for sppr in _WPS_SPPR.findall(xml):
+                    ln_m = _A_LN_BLOCK.search(sppr)
+                    if not ln_m:
+                        continue
+                    border_m = _SOLID_SRGB.search(ln_m.group(0))              # the outline colour
+                    fill_m = _SOLID_SRGB.search(_A_LN_BLOCK.sub("", sppr))    # the fill (border stripped)
+                    if not border_m or not fill_m:
+                        continue
+                    ratio = _contrast_ratio(border_m.group(1), fill_m.group(1))
+                    if ratio < 3.0 and (worst is None or ratio < worst[0]):
+                        worst = (ratio, border_m.group(1), fill_m.group(1))
     except Exception:
         return []
     if worst is None:
