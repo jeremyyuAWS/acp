@@ -5,13 +5,23 @@ Two chains start from one event — a PR merged to `acp/main` — and then never
 **Chain A** keeps the public WCAG matrix in step with the code. It is automatic and finishes in
 minutes.
 
-**Chain B** puts the code in production. It is now `deploy.yml`, but it runs on **manual
-dispatch** — someone still decides when.
+**Chain B** puts the code in production. It is `deploy.yml`, and since #221/#222 it runs
+**automatically**: a merge to `main` runs CI, and when that CI completes green a `workflow_run`
+trigger fires the deploy for the exact commit CI just greenlit. A person no longer *triggers* it —
+but the `production` GitHub Environment still gates it, so a reviewer approves before it reaches
+the container.
 
-That asymmetry is the single most important thing on this page: **the matrix can be perfectly
-accurate about code that is not deployed.** For most of 2026-07-29 it was, and automating the
-build did not change it — a pipeline nobody triggers ships exactly as much as no pipeline. The
-gap closes when the trigger becomes `push: [main]`, not when the workflow file lands.
+That asymmetry used to be the single most important thing on this page: **the matrix could be
+perfectly accurate about code that was not deployed.** For most of 2026-07-29 it was, and
+automating the *build* alone did not change it — a pipeline nobody triggers ships exactly as much
+as no pipeline. The gap closed when the trigger became automatic, not when the workflow file
+landed.
+
+Why `workflow_run` and not `push: [main]`: a merge fires CI and the deploy at the same instant,
+and `redeploy.sh`'s own gate refuses to ship a commit whose CI has not passed — so a `push`
+trigger checks for a CI result that does not exist yet and dies at "no CI run found". #221 did
+exactly that on the very merge that enabled it; #222 moved the trigger to the CI workflow's
+*completion*, so the gate always sees a finished run.
 
 ```
                         ┌──────────────────────────┐
@@ -21,9 +31,9 @@ gap closes when the trigger becomes `push: [main]`, not when the workflow file l
               ┌──────────────────────┴──────────────────────┐
               │                                             │
    ═══════ CHAIN A: matrix sync ═══════        ═══════ CHAIN B: app deploy ═══════
-              │  (automatic)                                │  (deploy.yml — dispatch)
+              │  (automatic)                                │  (deploy.yml — auto on CI success)
               ▼                                             ▼
-   matrix-progress-log.yml                        1. pin  PIN=$(git rev-parse origin/main)
+   matrix-progress-log.yml                        1. pin  PIN=workflow_run.head_sha
    scans the pushed commits:                         └─ gate: CI on PIN must be green
      (a) Matrix-Note: trailers → count            2. clone to /tmp/acp-deploy, checkout PIN
      (b) capability sources touched?                 └─ the shared checkout is written by many
@@ -112,10 +122,15 @@ vendored the engine, which is what unblocked this. And `redeploy.sh` had to reso
 PATH — `actions/setup-dotnet` never creates `~/.dotnet/dotnet`, so the old hard-coded default
 would have failed on the one host CD runs on.
 
-It is **manual-dispatch by default**. Deploying every merge is the goal, but the honest starting
-point is a person pressing the button on a pipeline nobody has watched run; flip the trigger to
-`push: [main]` once it has shipped uneventfully a few times. The `production` GitHub Environment
-is what makes that safe — configure required reviewers there, not in the trigger.
+It is **automatic** now. The trigger is `workflow_run` on the CI workflow completing on `main`,
+plus `workflow_dispatch` for a manual pin or a blue-green run; the job's `if` runs only when the
+triggering CI concluded `success`, so a red `main` is skipped rather than deployed. Both the
+checkout `ref` and `ACP_PIN` use `github.event.workflow_run.head_sha` — the exact commit CI
+greenlit, not a moving "current `main`". Deploying every merge was the goal; the honest starting
+point was a person pressing the button on a pipeline nobody had watched run, which is why it began
+as dispatch-only and flipped to automatic once it had shipped uneventfully. The `production`
+GitHub Environment is what keeps that safe — required reviewers live there, not in the trigger, so
+"automatic" means auto-*triggered* and still human-*approved*, not unattended to production.
 
 **One-time setup, all of it outside this repo:**
 
@@ -238,8 +253,10 @@ rest. It is the right script for a first deploy and the wrong one for a redeploy
 
 ## Known weaknesses
 
-- **No deploy pipeline.** Chain B is a person. Nothing links a merge to a running container, and
-  nothing alerts when production falls behind `main`.
+- **No alerting when a deploy fails or is left unapproved.** Chain B now links a merge to the
+  container automatically, but nothing pages when the `production` approval sits unactioned, when
+  `azure/login` fails, or when a revision comes up healthy yet serves no traffic — production can
+  fall behind `main` silently, just later in the chain than before.
 - **`worker-python` is vendored, not versioned.** It is not in this repo; step 4 copies it out of
   a running image. If that image is pruned, the chain breaks until the source is located.
 - **The dispatch only fires on push to `main`.** Work on a branch is invisible to the matrix
