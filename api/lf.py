@@ -373,7 +373,28 @@ def trace_hitl_decision(scan_id, file, rule_id, status, *, note=None, approved_v
     """Trace a human-in-the-loop review decision (approve/reject/skip) as a span on the
     file's scan trace — the audit found HITL decisions had zero Langfuse coverage. Reuses
     the file's trace id so the human decision sits alongside that document's AI/scan spans.
-    No-op when tracing is disabled."""
+    No-op when tracing is disabled.
+
+    THE REVIEWER'S NOTE IS SENT AS A LENGTH, NOT AS TEXT (docs/audit-langfuse-phi.md). It was
+    the only field here with no bound and no schema: free text typed by a human who is looking
+    at a patient document, which makes it the field most likely to contain a patient.
+
+    Truncating it — the obvious reading of "bound the note", and what the neighbouring
+    `approved_value` does — would have been theatre. PHI in a note is at the FRONT of it:
+    "Patient John Smith MRN 0114233 disputes…" is forty-odd characters, so any cap that leaves
+    the note readable leaves the identifier intact. A cap bounds volume, and volume was never
+    the risk.
+
+    Nothing is lost by sending the length instead. The note is already persisted in
+    `hitl_queue.reviewer_note` (store.py), the span still carries scan_id/file/rule_id/status,
+    and per routes/hitl.py the weak-rule rollup reads the structured `resolution` field rather
+    than this free text. So the trace keeps every question it could previously answer, minus
+    one it should never have been asked.
+
+    This mirrors what the module already does for prompts one function up — `prompt_chars`, a
+    count, never the prompt — which is the precedent rather than an invention: the two fields
+    are the same class of thing, and only one of them had been treated that way.
+    """
     lf = _lf()
     if lf is None:
         return
@@ -383,7 +404,7 @@ def trace_hitl_decision(scan_id, file, rule_id, status, *, note=None, approved_v
                      metadata={"file": file, "rule_id": rule_id})
         s = t.span(name=f"hitl.{status}",
                    input={"rule_id": rule_id},
-                   output={"status": status, "note": note,
+                   output={"status": status, "note_chars": len(note or ""),
                            "approved_value": (approved_value or "")[:500]})
         s.end()
     except Exception:
