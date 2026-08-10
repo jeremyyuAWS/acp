@@ -74,7 +74,7 @@ const PHASES = [
     items: [
       { text: 'Azure AD app registration (single-tenant or multi-tenant)', status: 'partial' },
       { text: 'Microsoft Identity Platform (MSAL.js) sign-in with on-behalf-of flow', status: 'done' },
-      { text: 'Graph API scopes: Files.Read, Sites.Read.All, User.Read', status: 'done' },
+      { text: 'Graph API scopes (read-only): User.Read, Files.Read.All, Sites.Read.All', status: 'done' },
       { text: 'SharePoint site enumeration (Graph /sites?search=*)', status: 'done' },
       { text: 'Document library listing (Graph /drives per site — all libraries, not just default)', status: 'done' },
       { text: 'File metadata sync: name, author, modified, content type, compliance label', status: 'partial' },
