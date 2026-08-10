@@ -250,9 +250,17 @@ _NON_IMAGE_PREFIXES = (
 )
 # Files under an otherwise-shipping directory that are themselves never copied in. Deploy scripts
 # run from a laptop or a runner; only the Dockerfile and the worker entrypoint are baked.
+#
+# `azure-pipelines.yml` is a ROOT-level CI config, so `.github/` above does not reach it and its
+# `.yml` suffix is not exempt — yet no `COPY` references it, so a commit touching only it changes
+# nothing production runs. Left unexempted it turned the monitor red naming a CI-only change as
+# "what production runs" (e.g. #235's `d9b5f14`), the exact false-red the cosmetic filter exists
+# to suppress. Named, not a broad root-`.yml` suffix rule: the only root yaml today is this CI
+# file, and a future root yaml that DOES ship should count until someone deliberately exempts it.
 _NON_IMAGE_FILES = (
     "deploy/public/redeploy.sh",
     "deploy/public/deploy.sh",
+    "azure-pipelines.yml",
 )
 # Root-level files that ship nothing.
 _NON_IMAGE_SUFFIXES = (".md",)
