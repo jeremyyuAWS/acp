@@ -228,6 +228,16 @@ def test_a_ci_workflow_change_does_not_report_drift(monkeypatch, rep):
     assert rep.failed == 0
 
 
+def test_the_root_level_azure_pipelines_ci_file_does_not_report_drift(monkeypatch, rep):
+    """It lives at the repo root, so `.github/` never reaches it and `.yml` is not a root
+    suffix exempt — yet no COPY ships it. Before it was exempted by name, #235's `d9b5f14`
+    (which touched only this file) turned the monitor red naming a CI change as production drift."""
+    _drift(monkeypatch, rep, _git_log(("d9b5f14 ci(azure): retire triggers", ["azure-pipelines.yml"])))
+    assert rep.failed == 0
+    assert any("nothing that ships has merged" in r[2] for r in rep.rows)
+    assert M._touches_image(["azure-pipelines.yml"]) is False
+
+
 def test_the_deploy_script_does_not_ship_but_the_dockerfile_does(monkeypatch, rep):
     """redeploy.sh runs from a laptop; the Dockerfile IS the image. Same directory, opposite
     answers — which is why the exemption is by filename, not by `deploy/`."""
