@@ -1919,7 +1919,16 @@ def language_marked_spans(path: Path, ext: str) -> dict[str, str]:
     try:
         with zipfile.ZipFile(path) as zf:
             if fmt == "docx":
+                # document.xml AND the running header/footer and foot/endnote parts — the same
+                # set pii.extract_text flattens into the text 3.1.2 judges. Read from the body
+                # alone, a foreign passage correctly marked with w:lang in a header appears in that
+                # text as unexplained foreign words while its mark is invisible here, and 3.1.2
+                # fires on a passage the document DID identify. Symmetry with extract_text is the
+                # invariant: a language mark must be read wherever the text it marks is read.
                 _collect(_read(zf, "word/document.xml") or "", _W_RUN_L, _W_LANG_VAL, _WT)
+                for n in zf.namelist():
+                    if _DOCX_STORY_PART.match(n):
+                        _collect(_read(zf, n) or "", _W_RUN_L, _W_LANG_VAL, _WT)
             elif fmt == "pptx":
                 for n in zf.namelist():
                     if re.fullmatch(r"ppt/slides/slide\d+\.xml", n):
