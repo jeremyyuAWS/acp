@@ -349,6 +349,21 @@ def _read(zf: zipfile.ZipFile, name: str) -> str | None:
         return None
 
 
+def _docx_story_xmls(zf: zipfile.ZipFile) -> list[str]:
+    """The XML of every docx part that carries body-like text: word/document.xml plus the running
+    header/footer and foot/endnote parts (_DOCX_STORY_PART).
+
+    A judgement about CONTENT — a hyperlink's purpose, a passage's language mark, a form control's
+    label — must read all of these, because the same defect in a header is the same defect. Reading
+    document.xml alone is a recurring blind spot: it was closed for link purpose (#214), language of
+    parts (#226) and use of colour (#227) by walking exactly this set, and this helper is the one
+    name for it so those checks cannot drift apart on which parts count. Empty or unreadable parts
+    drop out; a docx with no document.xml still yields whatever story parts it has. Never raises."""
+    xmls = [_read(zf, "word/document.xml") or ""]
+    xmls += [_read(zf, n) or "" for n in zf.namelist() if _DOCX_STORY_PART.match(n)]
+    return [x for x in xmls if x]
+
+
 def _relationships(zf: zipfile.ZipFile, rels_path: str) -> dict[str, str]:
     """{rId -> Target} for a .rels part, independent of attribute order."""
     xml = _read(zf, rels_path)
@@ -586,14 +601,19 @@ def docx_checks(path: Path) -> list[dict]:
             # 3.3.2 stays here: it is not a registry pair, and it is the SAME condition — a
             # missing Title fails both at once. Delegating the 4.1.2 emission rather than
             # re-deriving it is what keeps the two from drifting apart.
+            # Read controls from the body AND the running header/footer and foot/endnote parts —
+            # a form field in a header (a Patient-ID or date field on a clinical form) needs a
+            # label as much as one in the body. _docx_name_role reads the same part set, so 3.3.2
+            # here and the 4.1.2 it delegates below stay over identical populations.
             from formats.docx.detectors.name_role_value import detect as _docx_name_role
-            for sdt_inner in _SDT.findall(doc):
-                pr_m = _SDT_PR.search(sdt_inner)
-                if not pr_m or not _SDT_INPUT_TYPE.search(pr_m.group(1)):
-                    continue
-                alias_m = _SDT_ALIAS.search(pr_m.group(1))
-                if not alias_m or not alias_m.group(1).strip():
-                    findings.append(_finding("DOCX_FORM_FIELD_NO_LABEL", "3.3.2 Labels or Instructions", "SERIOUS"))
+            for story_xml in _docx_story_xmls(zf):
+                for sdt_inner in _SDT.findall(story_xml):
+                    pr_m = _SDT_PR.search(sdt_inner)
+                    if not pr_m or not _SDT_INPUT_TYPE.search(pr_m.group(1)):
+                        continue
+                    alias_m = _SDT_ALIAS.search(pr_m.group(1))
+                    if not alias_m or not alias_m.group(1).strip():
+                        findings.append(_finding("DOCX_FORM_FIELD_NO_LABEL", "3.3.2 Labels or Instructions", "SERIOUS"))
             findings += _docx_name_role(path)
 
             # 2.4.10 — a document long enough to need section structure that uses
@@ -2022,18 +2042,23 @@ def office_interactive_controls(path: Path, ext: str) -> list[dict]:
                 if ctrl:
                     counts["form control"] = ctrl
             if ext == ".docx":
-                doc = _read(zf, "word/document.xml") or ""
-                # Only genuine INPUT content controls (checkbox/date/dropdown/combo/
-                # picture) — the same input-type gate the 3.3.2 detector uses, so
-                # non-interactive template placeholders (w:text/w:richText) don't count.
+                # Body AND the running header/footer and foot/endnote parts: a clinical form puts a
+                # Patient-ID or date field in a running header, and a control there is as
+                # interactive — and as trap-prone — as one in the body. _docx_story_xmls is the same
+                # part set link purpose, language of parts and use-of-color read.
                 cc = 0
-                for sdt_inner in _SDT.findall(doc):
-                    pr_m = _SDT_PR.search(sdt_inner)
-                    if pr_m and _SDT_INPUT_TYPE.search(pr_m.group(1)):
-                        cc += 1
+                ff = 0
+                for xml in _docx_story_xmls(zf):
+                    # Only genuine INPUT content controls (checkbox/date/dropdown/combo/
+                    # picture) — the same input-type gate the 3.3.2 detector uses, so
+                    # non-interactive template placeholders (w:text/w:richText) don't count.
+                    for sdt_inner in _SDT.findall(xml):
+                        pr_m = _SDT_PR.search(sdt_inner)
+                        if pr_m and _SDT_INPUT_TYPE.search(pr_m.group(1)):
+                            cc += 1
+                    ff += len(_FFDATA.findall(xml))
                 if cc:
                     counts["interactive content control"] = cc
-                ff = len(_FFDATA.findall(doc))
                 if ff:
                     counts["legacy form field"] = ff
     except Exception:

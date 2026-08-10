@@ -37,11 +37,17 @@ from pathlib import Path
 # Imported from office_structure rather than re-declared, so this detector and the 3.3.2 check
 # beside it can never disagree about what counts as an interactive content control. If these
 # move, the import fails loudly instead of the two silently drifting apart.
-from office_structure import _SDT, _SDT_ALIAS, _SDT_INPUT_TYPE, _SDT_PR, _finding
+from office_structure import _SDT, _SDT_ALIAS, _SDT_INPUT_TYPE, _SDT_PR, _docx_story_xmls, _finding
 
 
 def detect(path: Path) -> list[dict]:
     """One 4.1.2 finding per interactive content control with no Title (w:alias).
+
+    Reads content controls from word/document.xml AND the running header/footer and foot/endnote
+    parts (via _docx_story_xmls) — an unnamed date or checkbox field in a running header is as
+    anonymous to assistive technology as one in the body, and the 3.3.2 check in
+    office_structure.docx_checks that delegates here reads the same parts, so the two never disagree
+    about which controls exist.
 
     Self-gating in the same way every structural check here is: a missing part, a bad zip or a
     malformed document yields [] rather than raising. A detector must never fail a scan.
@@ -49,18 +55,15 @@ def detect(path: Path) -> list[dict]:
     findings: list[dict] = []
     try:
         with zipfile.ZipFile(path) as zf:
-            try:
-                doc = zf.read("word/document.xml").decode("utf-8", "ignore")
-            except KeyError:
-                return []
-            for sdt_inner in _SDT.findall(doc):
-                pr_m = _SDT_PR.search(sdt_inner)
-                if not pr_m or not _SDT_INPUT_TYPE.search(pr_m.group(1)):
-                    continue          # not an input gallery type — a TOC or rich-text block
-                alias_m = _SDT_ALIAS.search(pr_m.group(1))
-                if not alias_m or not alias_m.group(1).strip():
-                    findings.append(
-                        _finding("DOCX_FORM_FIELD_NO_NAME", "4.1.2 Name, Role, Value", "SERIOUS"))
+            for doc in _docx_story_xmls(zf):
+                for sdt_inner in _SDT.findall(doc):
+                    pr_m = _SDT_PR.search(sdt_inner)
+                    if not pr_m or not _SDT_INPUT_TYPE.search(pr_m.group(1)):
+                        continue          # not an input gallery type — a TOC or rich-text block
+                    alias_m = _SDT_ALIAS.search(pr_m.group(1))
+                    if not alias_m or not alias_m.group(1).strip():
+                        findings.append(
+                            _finding("DOCX_FORM_FIELD_NO_NAME", "4.1.2 Name, Role, Value", "SERIOUS"))
     except (zipfile.BadZipFile, OSError):
         return []
     return findings
