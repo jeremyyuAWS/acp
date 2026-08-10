@@ -59,10 +59,14 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Deploy a GREEN commit only. A manual dispatch is always allowed (the operator chose it); an
-    # automatic run requires the CI workflow that triggered it to have concluded 'success', so a
-    # red main never ships. workflow_run fires on 'completed' regardless of outcome, so this `if`
-    # is what actually enforces green — not the trigger.
+    # Gate whether this deploy FIRES. A manual dispatch is always allowed (the operator chose it);
+    # an automatic run requires the CI workflow that triggered it to have concluded 'success', so a
+    # red merge does not even queue a deploy (workflow_run fires on 'completed' regardless).
+    #
+    # This no longer decides what SHIPS. The steps below deploy main's live tip at approval time,
+    # not this triggering commit, so the guarantee that the shipped commit is green comes from
+    # redeploy.sh's own CI gate on that tip — not from this `if`. Kept because firing a deploy off a
+    # red triggering run is pure noise: it would only reach the script's gate and be refused.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
@@ -76,9 +80,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0          # redeploy.sh pins a sha and clones locally from this checkout
-          # The exact commit CI just passed on (workflow_run). Empty for a manual dispatch, which
-          # then checks out the branch default (main) — matching redeploy.sh's own default.
-          ref: ${{ github.event.workflow_run.head_sha }}
+          # Check out CURRENT main, not the sha that triggered this run. The trigger sha is frozen
+          # when workflow_run fires, but this job may sit for hours behind the production
+          # environment's approval gate — approving it would then ship a stale commit while newer
+          # ones wait unshipped (the exact drift the monitor's deploy-drift check exists to catch).
+          # A branch ref resolves at checkout time, i.e. AFTER approval, to main's live tip. A
+          # manual dispatch pins its own sha (or main). See ACP_PIN below and redeploy.sh's gate,
+          # which refuses to ship whatever this resolves to unless its CI is green.
+          ref: ${{ inputs.pin || 'main' }}
 
       # The Office analyser is built from source on every deploy; the image copies the DLLs.
       # setup-dotnet puts the muxer on PATH, which is why redeploy.sh resolves dotnet via PATH
@@ -100,9 +109,12 @@ jobs:
           # check rather than skip.
           GH_TOKEN: ${{ github.token }}
           ACP_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          # Deploy the commit CI just greenlit (workflow_run.head_sha); a manual dispatch may pin
-          # its own, else empty and redeploy.sh deploys current main.
-          ACP_PIN: ${{ inputs.pin || github.event.workflow_run.head_sha }}
+          # Empty on an auto (workflow_run) deploy, so redeploy.sh resolves ACP_PIN:-origin/main —
+          # main's tip at the moment this runs (after any approval wait), re-fetched by the script.
+          # A manual dispatch may still pin an explicit sha. The script's CI gate then refuses to
+          # ship the resolved commit unless CI is green on it, so pinning the live tip fails CLOSED
+          # (a refusal to wait for CI) rather than open (shipping a stale but known-green sha).
+          ACP_PIN: ${{ inputs.pin }}
           ACP_BLUE_GREEN: ${{ inputs.blue_green && '1' || '0' }}
         run: bash deploy/public/redeploy.sh
 
