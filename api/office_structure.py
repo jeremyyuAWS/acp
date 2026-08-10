@@ -2128,8 +2128,15 @@ def office_color_only_checks(path: Path, ext: str) -> list[dict]:
                         evidence={"method": "structural", "metric": "Colour-only rules",
                                   "value": cf}))
             if ext == ".docx":
-                doc = _read(zf, "word/document.xml") or ""
-                colour_only = sum(1 for _rid, inner in _HYPERLINK.findall(doc) if _W_U_NONE.search(inner))
+                # Body AND the running header/footer and foot/endnote parts — a link set apart by
+                # colour alone fails 1.4.1 wherever it sits, and a "privacy policy" or bare-URL link
+                # in a page footer with its underline stripped is one of the commonest real cases.
+                # Reading document.xml alone was the same blind spot #214 closed for link purpose;
+                # _DOCX_STORY_PART is that same set of parts.
+                parts = [_read(zf, "word/document.xml") or ""]
+                parts += [_read(zf, n) or "" for n in zf.namelist() if _DOCX_STORY_PART.match(n)]
+                colour_only = sum(1 for xml in parts
+                                  for _rid, inner in _HYPERLINK.findall(xml) if _W_U_NONE.search(inner))
                 if colour_only:
                     findings.append(_review_finding(
                         "DOCX_COLOR_ONLY_LINK", "1.4.1 Use of Color",
