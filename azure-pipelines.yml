@@ -1,17 +1,26 @@
 # ACP CI — the gate between "committed" and "trusted".
 # Runs the full backend suite (incl. the auth route-coverage guard that fails
 # the build if a new router ships unauthenticated) and proves the frontend
-# builds. Wire this as a build-validation branch policy on main so the
-# PR-required policy gates on green CI rather than ceremony.
-trigger:
-  branches:
-    include:
-      - main
+# builds. Kept runnable-on-demand; auto-triggering is OFF (see below).
+#
+# ── Auto-triggers retired 2026-08-10 ─────────────────────────────────────────────────────
+# This file is a byte-for-byte mirror of .github/workflows/ci.yml — same Office-engine build,
+# tesseract, backend suite, the three matrix guards, and both frontend builds — and GitHub
+# Actions runs all of it on every PR and push, fast and reliably. The Azure org has ONE parallel
+# job (#183), and two pipelines fed by this file (acp-ci-github and jeremyyuAWS.acp) both ran on
+# every PR/push, serialising through that single slot: runs sat in `notStarted` for ~50 minutes
+# and every PR read UNSTABLE on two checks that gate nothing (main is not branch-protected). No
+# coverage is lost by silencing them — ci.yml already is the gate.
+#
+# `trigger: none` / `pr: none` (NOT deleting the blocks — an ABSENT trigger defaults to CI on
+# every branch, which is the opposite of retiring it). The pipeline can still be run manually
+# from the Azure DevOps UI. To fully stop it, also disable/delete the acp-ci-github and
+# jeremyyuAWS.acp pipelines in Azure DevOps — this YAML cannot, and a UI "override the YAML
+# trigger" toggle would defeat these two lines. To bring auto-CI back, restore the
+# `branches: include: [main]` blocks this replaced.
+trigger: none
 
-pr:
-  branches:
-    include:
-      - main
+pr: none
 
 pool:
   vmImage: ubuntu-latest
