@@ -14,10 +14,22 @@
 name: deploy
 
 on:
-  # MANUAL BY DEFAULT. Deploying every merge is the eventual goal, but the honest starting point is
-  # a human pressing the button on a pipeline nobody has watched run yet. Flip to `push: branches:
-  # [main]` once this has shipped a few times uneventfully — the environment gate below is what
-  # makes that safe, not the trigger.
+  # AUTO ON MERGE TO MAIN. The trigger this file always meant to reach: the pipeline has shipped
+  # uneventfully several times by manual dispatch (the eventual-goal note this replaces asked for
+  # exactly that first), so every merge to main now deploys. What makes that safe is NOT the
+  # trigger but the `production` GitHub Environment gate below — configure it with required
+  # reviewers at Settings -> Environments -> production and each auto-run waits for an approval;
+  # without reviewers it deploys unattended, which is a deliberate choice to make with eyes open.
+  #
+  # A push carries none of the workflow_dispatch inputs, so `inputs.pin` is empty (redeploy.sh
+  # deploys current main) and `inputs.blue_green` is falsy (a standard in-place deploy). Use the
+  # manual dispatch below when you need to pin a sha or run blue-green.
+  #
+  # No path filter: a docs-only merge still rebuilds and redeploys. Deliberate for now — a stale
+  # app is the failure this fixes, and the build is cheap next to that; add a `paths-ignore` later
+  # if the churn matters.
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       pin:
