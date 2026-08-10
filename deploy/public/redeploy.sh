@@ -353,6 +353,28 @@ for a in "$APP" "$WORKER"; do
   done
 done
 
+# ── 8b. single-revision mode, so the new revision actually holds traffic ──────────────────────
+# The whole normal path assumes Single mode — where the update above makes its new revision the
+# sole active one at 100% (the same assumption the `--all` note near the top spells out). Nothing
+# in this path sets traffic, because Single mode does it for us.
+#
+# A blue-green deploy breaks that assumption and does not restore it: it switches the app to
+# Multiple mode (line ~253) and exits at the promotion (keeping blue at 0% for rollback), leaving
+# the app in Multiple mode for good. The next NORMAL deploy then provisions its new revision at 0%
+# traffic — healthy, ready, serving nobody — and the verify below fails with "expected version X,
+# got Y" against a revision that is running perfectly. That is the mechanism behind every stuck
+# deploy since the first blue-green: not a broken build, an unrouted one.
+#
+# Switching back to Single here sets the latest revision (the one just provisioned above) to 100%
+# and deactivates the rest. It is a no-op when already Single, so a normal-only history never
+# notices it; it only fires to unstick an app a blue-green left in Multiple mode. Placed AFTER the
+# image-confirmation loop so the revision it routes 100% to is one we have just seen come up.
+MODE="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" --query properties.configuration.activeRevisionsMode -o tsv 2>/dev/null || echo Single)"
+if [ "$MODE" != "Single" ]; then
+  say "returning $APP to single-revision mode (was $MODE) so the new revision takes traffic"
+  az containerapp revision set-mode "${AZ[@]}" -g "$RG" -n "$APP" --mode single >/dev/null
+fi
+
 # ── 9. verify ──────────────────────────────────────────────────────────────────────────────
 say "verifying"
 for _ in $(seq 1 40); do
