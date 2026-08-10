@@ -14,21 +14,23 @@
 name: deploy
 
 on:
-  # AUTO ON MERGE TO MAIN. The trigger this file always meant to reach: the pipeline has shipped
-  # uneventfully several times by manual dispatch (the eventual-goal note this replaces asked for
-  # exactly that first), so every merge to main now deploys. What makes that safe is NOT the
-  # trigger but the `production` GitHub Environment gate below — configure it with required
-  # reviewers at Settings -> Environments -> production and each auto-run waits for an approval;
-  # without reviewers it deploys unattended, which is a deliberate choice to make with eyes open.
+  # AUTO, BUT AFTER CI — NOT ON PUSH. The first cut of this triggered on `push: [main]`, which
+  # raced the commit's own CI: a merge fires deploy.yml and ci.yml at the same instant, and
+  # redeploy.sh's gate REFUSES to ship a commit whose CI has not passed. So every push-triggered
+  # deploy died at "no CI run found for <sha>" before touching anything (PR #221 shipped exactly
+  # that, and it failed on the merge that enabled it — the app was never at risk, the gate held).
   #
-  # A push carries none of the workflow_dispatch inputs, so `inputs.pin` is empty (redeploy.sh
-  # deploys current main) and `inputs.blue_green` is falsy (a standard in-place deploy). Use the
-  # manual dispatch below when you need to pin a sha or run blue-green.
+  # workflow_run fires this AFTER the CI workflow completes on main, so the gate always sees a
+  # finished run; the job's `if` below additionally requires that run to have SUCCEEDED, so a red
+  # CI never deploys. `branches: [main]` keeps PR CI completions (head branch = the PR's) from
+  # triggering it — only a CI run whose branch is main, i.e. a merge, does.
   #
-  # No path filter: a docs-only merge still rebuilds and redeploys. Deliberate for now — a stale
-  # app is the failure this fixes, and the build is cheap next to that; add a `paths-ignore` later
-  # if the churn matters.
-  push:
+  # Safety is still the `production` GitHub Environment gate, not the trigger: with required
+  # reviewers each auto-run waits for an approval; without them it deploys unattended, a choice to
+  # make with eyes open. Use the manual dispatch below to pin a sha or run blue-green.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -57,9 +59,16 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Deploy a GREEN commit only. A manual dispatch is always allowed (the operator chose it); an
+    # automatic run requires the CI workflow that triggered it to have concluded 'success', so a
+    # red main never ships. workflow_run fires on 'completed' regardless of outcome, so this `if`
+    # is what actually enforces green — not the trigger.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
     # A GitHub Environment with required reviewers is the approval gate. Configure it at
-    # Settings -> Environments -> production. Without that, this workflow deploys on dispatch
-    # alone, which is fine for a manual trigger and NOT fine once the push trigger is enabled.
+    # Settings -> Environments -> production. Without reviewers this deploys unattended once CI is
+    # green, which is a deliberate choice, not the trigger's doing.
     environment:
       name: production
       url: https://${{ vars.ACP_FQDN }}
@@ -67,6 +76,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0          # redeploy.sh pins a sha and clones locally from this checkout
+          # The exact commit CI just passed on (workflow_run). Empty for a manual dispatch, which
+          # then checks out the branch default (main) — matching redeploy.sh's own default.
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       # The Office analyser is built from source on every deploy; the image copies the DLLs.
       # setup-dotnet puts the muxer on PATH, which is why redeploy.sh resolves dotnet via PATH
@@ -88,7 +100,9 @@ jobs:
           # check rather than skip.
           GH_TOKEN: ${{ github.token }}
           ACP_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          ACP_PIN: ${{ inputs.pin }}
+          # Deploy the commit CI just greenlit (workflow_run.head_sha); a manual dispatch may pin
+          # its own, else empty and redeploy.sh deploys current main.
+          ACP_PIN: ${{ inputs.pin || github.event.workflow_run.head_sha }}
           ACP_BLUE_GREEN: ${{ inputs.blue_green && '1' || '0' }}
         run: bash deploy/public/redeploy.sh
 
