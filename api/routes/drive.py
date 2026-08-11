@@ -49,6 +49,16 @@ def me(request: Request):
 def sources(request: Request):
     from scanner import _DRIVE_MIME_Q
     token = request.headers.get("x-drive-token")
+    # No Google Drive token in GIS mode = the user is authenticated some other way (a Microsoft /
+    # SharePoint sign-in never has one) or simply hasn't connected Drive. That is NOT an error:
+    # core.drive_service would raise 401 "sign in with Google", and the SPA reads any 401 as an
+    # expired session — so an otherwise-signed-in Microsoft user gets bounced off the app, and the
+    # bounce clears their token, cascading a 401 onto the next call (/scans/active). Their sources
+    # come from /sharepoint/sites instead; Drive sources are simply absent here. Return an empty
+    # list so the load call succeeds and the app stays put. (Demo/ADC mode — no GOOGLE_CLIENT_ID —
+    # still falls through to the Google path below and lists the demo corpus.)
+    if not token and core.GOOGLE_CLIENT_ID:
+        return []
     name = "My Drive" if token else "acp-demo-corpus"
     try:
         svc = core.drive_service(request)
