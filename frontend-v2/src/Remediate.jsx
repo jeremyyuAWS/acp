@@ -298,13 +298,32 @@ function VerifyState({ state, pct, remaining, ready, latest }) {
 export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, aiEnabled = true, readOnly = false, onRefresh, onHitlCount, onNavigate }) {
   const [queue, setQueue] = useState([])
   // AI Work Inbox navigation: a search query and a per-card collapse map (id -> true when
-  // collapsed). Both are UI-only; nothing here touches a decision. Cards default to expanded
-  // (an id absent from the map), so the inbox looks exactly as before until a reviewer collapses
-  // one or searches.
+  // collapsed). Both are UI-only; nothing here touches a decision. Cards default to COLLAPSED —
+  // the inbox opens as a scannable list of headers (file · rule · severity) and the reviewer
+  // expands only the one they're working, which is what "let me choose what to tackle first"
+  // asked for. The seeding effect below marks each card collapsed the first time it appears and
+  // never again, so a card a reviewer expands stays expanded across the queue's background
+  // refetches (it already has an entry in the map, so it is not re-seeded).
   const [reviewQuery, setReviewQuery] = useState('')
   const [sevFilter, setSevFilter] = useState(null)     // one severity, or null for all
   const [critFilter, setCritFilter] = useState(null)   // one WCAG criterion, or null for all
   const [collapsedCards, setCollapsedCards] = useState({})
+  // Seed every card COLLAPSED the first time it appears, and never touch it again. Merging only
+  // ids absent from the map is what makes this survive the queue's background refetches: a card a
+  // reviewer expanded already has an entry (false), so it is left alone; only genuinely new cards
+  // arrive collapsed. Keyed off the id set, not `queue` identity, so a refetch that returns the
+  // same items is a no-op rather than a re-seed.
+  const queueIds = queue.map((q) => q.id).join(',')
+  useEffect(() => {
+    setCollapsedCards((m) => {
+      let next = m, changed = false
+      for (const q of queue) {
+        if (!(q.id in next)) { if (!changed) { next = { ...m }; changed = true } next[q.id] = true }
+      }
+      return changed ? next : m
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queueIds])
   const [acted, setActed] = useState({ approved: 0, rejected: 0, deferred: 0 })
   const [deferredItems, setDeferredItems] = useState([])
   // Real applied-fix evidence: scan-wide before→after (all fix types, verified-cleared) +
@@ -850,9 +869,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         ) : (
           <>
             {/* Inbox navigation (collapsible + searchable): a search over filename, WCAG criterion
-                and the AI recommendation, plus a collapse-all so a reviewer can scan the queue as a
-                list of headers and open only what they're working. UI-only — nothing here changes a
-                decision, and cards default to expanded so the inbox is unchanged until used. */}
+                and the AI recommendation, plus an expand-all so a reviewer can flip the whole queue
+                open at once. UI-only — nothing here changes a decision. Cards default to collapsed,
+                so the inbox opens as a scannable list of headers and the reviewer expands what
+                they're working; "Expand all" is the escape hatch back to the full read. */}
             <div className="revtoolbar">
               <input type="search" className="revsearch" value={reviewQuery}
                      onChange={(e) => setReviewQuery(e.target.value)}
