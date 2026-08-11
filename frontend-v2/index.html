@@ -12,8 +12,14 @@
     <meta property="og:type" content="website" />
     <!-- Google Identity Services: per-user "Sign in with Google" (no-op until a Web client id is configured) -->
     <script src="https://accounts.google.com/gsi/client" async></script>
-    <!-- Microsoft Authentication Library: SharePoint / OneDrive (no-op until VITE_AZURE_CLIENT_ID is configured) -->
-    <script src="https://alcdn.msauth.net/browser/3.26.1/js/msal-browser.min.js" async></script>
+    <!-- Microsoft Authentication Library: SharePoint / OneDrive (no-op until an Entra client id is configured).
+         MSAL v3 (the API SignIn.jsx calls initialize() against) is not published on Microsoft's own
+         alcdn.msauth.net CDN — that host stops at v2.38.1, so the old 3.26.1 URL 404'd and window.msal
+         never loaded ("Microsoft sign-in isn't ready yet"). Pinned to the v3 UMD on jsDelivr with an SRI
+         hash so the bytes are verified — matters for a PHI deployment loading third-party auth JS. -->
+    <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.26.1/lib/msal-browser.min.js"
+            integrity="sha384-STM1Hk2mbwBYX0WbMxgsFcNYum774lsKA4Ws1Rt9LssDv/pv04vGW9RK8CXfEJSW"
+            crossorigin="anonymous" async></script>
   </head>
   <body>
     <div id="root"></div>
