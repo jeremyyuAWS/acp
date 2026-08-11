@@ -37,6 +37,14 @@ is not covered here. The `(#NNN)` references are GitHub PRs, not ADO work items.
 - Synced the integration roadmap's SharePoint column to the code that already shipped (#221): site
   enumeration, library listing, download, chunked >4 MB upload and original-archiving were marked
   todo while the backend ships them all — the same doc-vs-code drift the backlog carried.
+- **Moved the Entra app (client) and tenant ids to runtime `/config`, and added a "Sign in with
+  Microsoft" button** (#239). The SharePoint sign-in read its Entra ids from build-time `VITE_AZURE_*`
+  baked into the bundle, so pointing ACP at a customer's tenant meant a rebuild. They now come from
+  `GET /config` (`ACP_AZURE_CLIENT_ID` / `ACP_AZURE_TENANT_ID`) — the same pattern `google_client_id`
+  already uses — with `VITE_AZURE_*` kept only as a local-dev fallback. `SharePoint.jsx`,
+  `Integrations.jsx` and the new login button all read through one `getSpAuth()`, so the three
+  sign-in paths cannot request a different app; a deployment (or each customer's tenant) is now an
+  env var, no rebuild.
 
 ## Feature: Operator scan scope
 
@@ -366,6 +374,24 @@ reach production, safely.
 - **Restored single-revision mode so a normal deploy's new revision takes traffic** (#223).
 - **Made the Google ADC optional when GIS per-user sign-in is configured** (#220), so a
   per-user-auth deployment doesn't require an application default credential it never uses.
+- **Resolved `main` at approval time, not at the frozen trigger sha** (#238). The auto-deploy
+  (`workflow_run` after CI) pinned `github.event.workflow_run.head_sha` — frozen when `workflow_run`
+  fired — so with the production environment's required-reviewer gate, approving a deploy that had
+  waited hours shipped that stale sha while newer merged commits sat unshipped. That is exactly the
+  deploy drift the production monitor exists to catch, reintroduced by the deployer itself. Checkout
+  now uses the branch ref (`inputs.pin || 'main'`), resolved when the step runs — after the wait.
+- **Stopped the production monitor false-flagging a CI-only file as deploy drift** (#237). The
+  deploy-drift check counted the root-level `azure-pipelines.yml` as image-affecting — the `.github/`
+  cosmetic-denylist prefix never reaches a root file, and no `COPY` in the Dockerfile ships it — so
+  #235's `d9b5f14` (which touched only that file) produced a false red naming a CI-only change as
+  "what production runs". Exempted by name rather than by a broad root-`.yml` rule, so a future root
+  yaml that *does* ship still counts.
+- **Disabled the two redundant Azure Pipelines in Azure DevOps** (ops, no commit) — completing the
+  #235 retirement. `acp-ci-github` (id 12) and `jeremyyuAWS.acp` (id 13), both GitHub-sourced against
+  `jeremyyuAWS/acp`, were set `queueStatus: disabled` via the Build Definitions API, so they no
+  longer post the ~50-minute `UNSTABLE` checks on every PR. `acp-ci` (id 10) was deliberately left
+  enabled: its source is an Azure Repos (TfsGit) `acp` repo on branch `fix/hitl-auto-verify`, not the
+  GitHub repo, so it never posted GitHub checks.
 
 ---
 
@@ -390,15 +416,17 @@ reach production, safely.
   are untracked in the working tree.
 - **Two corpus generators disagree about field names** (#188) — both readers now tolerate either,
   but which generator is authoritative is an open decision, not a resolved one.
-- **Azure DevOps still hosts the two now-silenced CI pipelines** (after #235). `trigger:/pr: none`
-  in the YAML stops auto-runs, but fully retiring `acp-ci-github` and `jeremyyuAWS.acp` — and any
-  UI-level "override the YAML trigger" toggle — needs an ADO-side disable/delete a commit cannot
-  reach. `jeremyyuAWS.acp` (default `org.repo` name) is the likely redundant duplicate; a decision
-  is needed on whether to keep one Azure pipeline as an eventual branch-policy gate or drop both.
-- **The scheduled production probe is failing on `main`** (`.github/workflows/monitor.yml` →
-  `scripts/monitor.py` against `ACP_FQDN`) — `completed/failure` repeatedly, e.g. three times on
-  `de556b5`. Not a required check, so it blocks nothing and is easy to miss; needs triage for prod
-  health vs. a broken probe / misconfigured `ACP_FQDN` var or `ACP_MONITOR_KEY` secret.
+- **RESOLVED — the two redundant Azure Pipelines are disabled.** `acp-ci-github` and
+  `jeremyyuAWS.acp` were set `queueStatus: disabled` in Azure DevOps (see the Continuous-deployment
+  Feature), completing #235's retirement; they no longer post checks on GitHub PRs. `acp-ci` (the
+  TfsGit pipeline on a different repo) was deliberately kept enabled. Left recorded rather than
+  deleted so the decision — and that `acp-ci` was spared on purpose — is legible.
+- **The scheduled production probe was failing on `main`** (`.github/workflows/monitor.yml` →
+  `scripts/monitor.py` against `ACP_FQDN`) — `completed/failure` repeatedly, e.g. on `de556b5`. Two
+  monitor/deploy causes have since been fixed: a false deploy-drift red from a CI-only file (#237)
+  and a real one where an approved-late deploy shipped a stale sha (#238). A dedicated investigation
+  of any remaining cause (prod health vs. a broken probe / misconfigured `ACP_FQDN` / `ACP_MONITOR_KEY`)
+  is running in a separate session; confirm the probe is green before closing this.
 - **This log was lost once already.** It was committed locally on 2026-08-08 and discarded by a
   `git reset --hard origin/main` in a parallel session, because it had never been pushed. It was
   recovered from the dangling object. Push it, or it will happen again.
@@ -437,3 +465,10 @@ reach production, safely.
   it: the ADO-side pipeline disable/delete a commit cannot reach, and a separately-discovered
   failing production probe (`monitor.yml`). #234 (log commit `de556b5`) is excluded as non-feature
   work. Sync marker advanced from `6484160` to `d9b5f14`.
+- **2026-08-10 (evening)** — Added #237/#238 to Continuous deployment to Azure (monitor false-drift
+  fix; deploy resolves `main` at approval time) and #239 to SharePoint (runtime Entra config +
+  Microsoft sign-in button). Recorded the ADO-side completion of #235 — `acp-ci-github` and
+  `jeremyyuAWS.acp` disabled in Azure DevOps (ops, no commit), `acp-ci` left enabled — as a Task and
+  resolved its Open item. #236 (log commit `9ad4c4f`) excluded as non-feature. A local shell-PATH fix
+  (`~/.bash_profile`/`~/.bashrc` for `gh`/`az` in VS Code) is dev-environment tooling, not project
+  work, so it is not logged. Sync marker advanced from `d9b5f14` to `1b49608`.
