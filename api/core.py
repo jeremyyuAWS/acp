@@ -195,6 +195,58 @@ def verify_gis_token(token: str) -> str | None:
     return email
 
 
+# ── Microsoft (Entra) token verification (cached) ─────────────────────────────
+# token → (email, monotonic_expiry). Same posture and cache window as GIS above.
+#
+# #239 added a "Sign in with Microsoft" button but never taught this backend to authenticate the
+# resulting user — the access gate only accepted Google tokens, so every Microsoft sign-in 401'd
+# the moment the SPA made its first call ("session expired", immediately). This closes that gap.
+#
+# We verify the SAME way the Google path does — by asking the provider rather than validating a JWT
+# locally: call Microsoft Graph /me with the delegated access token MSAL already holds (it carries
+# User.Read). A 200 proves the token is a live Microsoft token for a real user, and hands back the
+# identity; email_allowed() then decides access exactly as for Google. This matches the existing
+# security model (valid provider token + allow-listed identity) rather than adding a stricter,
+# audience-pinned JWKS check that the Google lane does not have either — if we tighten one, we
+# tighten both, deliberately and together.
+_ms_cache: dict[str, tuple[str, float]] = {}
+
+
+def _graph_me_email(token: str) -> str | None:
+    """GET https://graph.microsoft.com/v1.0/me and return the user's email/UPN, or None. Split out
+    so tests can substitute the network call without patching urllib."""
+    import urllib.request as _ur
+    import json as _json
+    req = _ur.Request(
+        "https://graph.microsoft.com/v1.0/me",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+    )
+    try:
+        with _ur.urlopen(req, timeout=5) as r:
+            data = _json.load(r)
+    except Exception:
+        return None
+    # `mail` is the routable address; `userPrincipalName` is the sign-in name and the reliable
+    # fallback when a mailbox isn't provisioned (common on dev-tenant test accounts).
+    email = (data.get("mail") or data.get("userPrincipalName") or "").strip()
+    return email or None
+
+
+def verify_ms_token(token: str) -> str | None:
+    now = _time.monotonic()
+    cached = _ms_cache.get(token)
+    if cached:
+        email, exp = cached
+        if now < exp:
+            return email
+        del _ms_cache[token]
+    email = _graph_me_email(token)
+    if not email:
+        return None
+    _ms_cache[token] = (email, now + 540)
+    return email
+
+
 # ── Access-gate path policy ───────────────────────────────────────────────────
 # Paths that bypass all auth (needed before the user has a token).
 ALWAYS_PUBLIC = {"/healthz", "/config", "/hub", "/ai/status", "/alerts/webhook", "/capability",

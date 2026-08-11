@@ -147,6 +147,9 @@ export default function SignIn({ onSignedIn, notice = null }) {
       const email = account.username || ''
       onSignedIn({
         id: email, name: account.name || email, email,
+        // The delegated token doubles as the ACP API bearer (App.jsx routes it to setMsToken by
+        // sso), so the backend can authenticate this Microsoft user — without it every call 401s.
+        token: accessToken,
         role: 'Compliance Officer', sso: 'Microsoft',
         scope: { label: 'Full estate · all departments', departments: 'all' },
         allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'settings', 'upload'],

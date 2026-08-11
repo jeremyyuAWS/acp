@@ -7,13 +7,20 @@ const BASE = import.meta.env.VITE_API ?? 'http://localhost:8077'
 let driveToken = null
 let spToken = null
 let googleToken = null  // GIS Bearer token (auth mode = "gis")
+let msToken = null      // Microsoft (Entra) access token — the API Bearer for a Microsoft sign-in
 export const setDriveToken = (t) => { driveToken = t }
 export const setSPToken = (t) => { spToken = t }
 export const setGoogleToken = (t) => { googleToken = t }
-export const clearAllTokens = () => { googleToken = null; driveToken = null; spToken = null }
+export const setMsToken = (t) => { msToken = t }
+export const clearAllTokens = () => { googleToken = null; msToken = null; driveToken = null; spToken = null }
+// The Authorization bearer is Google's token when present, else the Microsoft one — tagged with
+// X-Auth-Provider so the backend verifies it against the right issuer (Graph, not Google's
+// tokeninfo). Without that tag a Microsoft sign-in has no bearer the backend accepts and every
+// call 401s the instant the user is in.
 const headers = (extra = {}) => ({
   ...extra,
-  ...(googleToken ? { 'Authorization': 'Bearer ' + googleToken } : {}),
+  ...(googleToken ? { 'Authorization': 'Bearer ' + googleToken }
+      : msToken ? { 'Authorization': 'Bearer ' + msToken, 'X-Auth-Provider': 'microsoft' } : {}),
   ...(driveToken ? { 'X-Drive-Token': driveToken } : {}),
   ...(spToken ? { 'X-SP-Token': spToken } : {}),
 })
@@ -56,7 +63,7 @@ const SCAN_URL_RE = /\/scans\/([^/?#]+)/
 
 const j = async (r) => {
   if (r.status === 401) {
-    googleToken = null
+    googleToken = null; msToken = null
     window.dispatchEvent(new CustomEvent('acp:session-expired', { detail: { reason: SESSION_EXPIRED } }))
     throw new Error(SESSION_EXPIRED)
   }

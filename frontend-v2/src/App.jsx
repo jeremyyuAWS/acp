@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } fro
 import HitlBell from './HitlBell.jsx'
 import { refreshDriveToken } from './driveAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, SESSION_EXPIRED } from './api'
+import { getSources, getRubric, getConfig, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, SESSION_EXPIRED } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -358,7 +358,11 @@ export default function App() {
     } catch { /* ignore */ }
     setSignedOutReason(null)    // the sign-in worked; the expiry notice must not outlive it
     setScanUnavailable(null)    // ditto: a new session's scan list is about to be re-read
-    if (p.token) {
+    if (p.token && p.sso === 'Microsoft') {
+      // Microsoft: the Entra token is the API bearer (backend verifies it via Graph /me). It is
+      // ALSO the SharePoint token, wired below from sp_token — no Drive scopes on this one.
+      setMsToken(p.token)
+    } else if (p.token) {
       setGoogleToken(p.token)   // API Bearer auth
       setDriveToken(p.token)    // Same token has Drive scopes — no separate connect needed
       setHasDriveToken(true)
