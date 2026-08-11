@@ -56,11 +56,18 @@ async def _access_gate(request, call_next):
         hdr = request.headers.get("authorization", "")
         if not hdr.startswith("Bearer "):
             return Response(status_code=401, media_type="application/json",
-                            content='{"detail":"Sign in with Google required"}')
-        email = core.verify_gis_token(hdr[7:])
+                            content='{"detail":"Sign in required"}')
+        # The SPA tags Microsoft sign-ins with X-Auth-Provider so we verify against the right
+        # issuer (Graph) rather than trying Google first and paying a failed round-trip on every
+        # Microsoft request. Absent the header we default to Google — the original behaviour.
+        provider = request.headers.get("x-auth-provider", "").lower()
+        if provider == "microsoft":
+            email = core.verify_ms_token(hdr[7:])
+        else:
+            email = core.verify_gis_token(hdr[7:])
         if not email:
             return Response(status_code=401, media_type="application/json",
-                            content='{"detail":"Google token expired — sign in again"}')
+                            content='{"detail":"Session expired — sign in again"}')
         if not core.email_allowed(email):
             return Response(status_code=403, media_type="application/json",
                             content='{"detail":"Access restricted to authorized accounts"}')
