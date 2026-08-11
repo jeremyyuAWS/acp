@@ -178,10 +178,37 @@ def _ollama_prewarm():
     threading.Thread(target=_loop, daemon=True, name="ollama-prewarm").start()
 
 
+from fastapi.staticfiles import StaticFiles
+
+
+class SpaStaticFiles(StaticFiles):
+    """StaticFiles that sets the Cache-Control the SPA actually needs.
+
+    Plain StaticFiles ships an ETag but NO Cache-Control, which lets a browser serve a stale
+    index.html without revalidating — so after a deploy a client keeps loading the OLD, hashed JS
+    bundle named in that cached HTML. That is not hypothetical: on 2026-08-10 it stranded a
+    signed-in Microsoft user on pre-fix JS that never sent the X-Auth-Provider header, so every
+    request 401'd ("session expired") against a backend that was, by then, perfectly able to
+    authenticate them. Only a manual hard-refresh cleared it — untenable for a rollout.
+
+    The entry HTML must be re-checked every load (it is tiny, and its ETag makes an unchanged fetch
+    a cheap 304); the content-hashed /assets/* can be cached forever, because a new build gives a
+    new filename rather than mutating an old one.
+    """
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        ctype = resp.headers.get("content-type", "")
+        if ctype.startswith("text/html"):
+            resp.headers["Cache-Control"] = "no-cache"          # revalidate via ETag every load
+        elif path.startswith("assets/") or "/assets/" in path:
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return resp
+
+
 # Serve the built React SPA same-origin in the deploy container (ACP_STATIC_DIR
 # points at the vite `dist`). Registered last so all /api routes take precedence;
 # unset locally (the SPA runs on the vite dev server instead).
 _static = os.environ.get("ACP_STATIC_DIR")
 if _static and Path(_static).is_dir():
-    from fastapi.staticfiles import StaticFiles
-    app.mount("/", StaticFiles(directory=_static, html=True), name="spa")
+    app.mount("/", SpaStaticFiles(directory=_static, html=True), name="spa")
