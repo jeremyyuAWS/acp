@@ -60,10 +60,16 @@ describe('AI Work Inbox: collapsible', () => {
     expect(s).toMatch(/revcard-sev sev-\$\{String\(q\.severity\)\.toLowerCase\(\)\}/)
   })
 
-  it('defaults cards to expanded — the inbox is unchanged until a reviewer collapses one', () => {
-    // collapsedCards starts empty, so open={!collapsedCards[id]} is open for every card.
+  it('seeds each card collapsed on first appearance, preserving a reviewer’s manual expansion', () => {
+    // The map still starts empty, but an effect now seeds every NEW card id as collapsed (true).
+    // It merges only ids ABSENT from the map, so a card a reviewer expanded (already present as
+    // false) is left alone across the queue's background refetches — the property that makes a
+    // default-collapsed inbox usable rather than one that keeps snapping shut under you.
     const s = rem()
     expect(s).toMatch(/const \[collapsedCards, setCollapsedCards\] = useState\(\{\}\)/)
+    expect(s).toMatch(/if \(!\(q\.id in next\)\)/)
+    expect(s).toMatch(/next\[q\.id\] = true/)
+    expect(s).toMatch(/\}, \[queueIds\]\)/)
   })
 
   it('has a collapse-all / expand-all toggle acting on the visible cards', () => {
