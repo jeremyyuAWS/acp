@@ -5,8 +5,6 @@ import FileDrawer from './FileDrawer.jsx'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import { openReport, publishFile, publishAllFiles, listHitlQueue } from './api.js'
 
-const scoreColor = (s) => (s >= 80 ? '#3B6D11' : s >= 50 ? '#854F0B' : '#7B1D1D')
-
 // Step 9 · Publish. Marks re-validated documents as published: the conformance status
 // is recorded in the audit trail and the fixed copy (already in Blob + the Drive
 // mirror) becomes the document of record. Source replace-in-place and owner
@@ -67,9 +65,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     setPublishing(false)
   }
   const publishedCount = Object.keys(done).length + certified.length
-  const pubStarted = Object.keys(done).length > 0   // zero the outcome cards until the user publishes
-  const pct = run?.files ? Math.round((run.certifiable / run.files) * 100) : 0
-  const onTrack = pct >= 80 || (run?.avg_score ?? 0) >= 80
+  const pubStarted = Object.keys(done).length > 0   // zero the outcome cards until the user releases
   const reportDate = new Date(run?.completed_at || Date.now()).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
   // Real publish history: files carry their own published_at once the scan is re-fetched
   // (persisted server-side by POST /scans/{sid}/publish) -- this replaces a client-derived
@@ -96,51 +92,47 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           a report could be read as covering an estate that two documents of it were fixed in. */}
       <ScopeBanner run={run} fileCount={files.length}
                    docScope={documentScopeSentence(documentSelection(files, triage))} />
-      {/* The deliverable: a conformance-report header a compliance officer hands to legal. */}
+      {/* Release Center — the controlled-release summary. NOT a conformance certificate: ACP's
+          automated checks verify WITHIN the selected scope; they cannot certify overall WCAG
+          conformance. The estate score and "certifiable/conformant" language are gone for exactly
+          that reason, and the PDF is a secondary evidence artifact, not the headline. */}
       <section className="panel" style={{ borderLeft: '4px solid #3B6D11' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 18, flexWrap: 'wrap' }}>
           <div style={{ flex: '1 1 340px' }}>
-            <h2 style={{ margin: 0 }}>📜 Conformance Report</h2>
+            <h2 style={{ margin: 0 }}>🚀 Release Center</h2>
             <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
-              {orgLabel} · WCAG 2.1 Level AA · generated {reportDate}
+              {orgLabel} · WCAG 2.1 Level AA · {reportDate}
             </div>
             <p style={{ fontSize: 13.5, lineHeight: 1.6, margin: '12px 0 0', maxWidth: 620 }}>
-              This document estate was assessed against <b>WCAG 2.1 Level AA</b> — the ADA Title II, EAA, and Section 508 legal target.
-              <b style={{ color: '#3B6D11' }}> {run?.certifiable ?? 0}</b> of <b>{(run?.files ?? 0).toLocaleString()}</b> documents are certifiable as conformant today ({pct}%){run?.error ? <> · {run.error} could not be analysed</> : null}.
+              <b style={{ color: '#3B6D11' }}>{run?.certifiable ?? 0}</b> of <b>{(run?.files ?? 0).toLocaleString()}</b> documents were <b>automatically verified within the selected scope</b> and are ready to release{run?.error ? <> · {run.error} could not be analysed</> : null}. ACP verifies the criteria in scope — it does not certify overall conformance.
             </p>
           </div>
-          <div style={{ textAlign: 'center', minWidth: 124 }}>
-            <div style={{ fontSize: 42, fontWeight: 800, color: scoreColor(run?.avg_score ?? 0), lineHeight: 1 }}>{run?.avg_score ?? '—'}</div>
-            <div className="muted" style={{ fontSize: 11 }}>estate score / 100</div>
-            <span className="badge" style={{ marginTop: 9, display: 'inline-block', background: onTrack ? '#E7F0DC' : '#FAEEDA', color: onTrack ? '#2F5310' : '#854F0B' }}>{onTrack ? '✓ On track to conformant' : '⚠ Action required'}</span>
+          <div style={{ textAlign: 'right', minWidth: 150, fontSize: 13.5, lineHeight: 1.9 }}>
+            <div><b style={{ color: '#3B6D11', fontSize: 17 }}>{ready.length}</b> ready for release</div>
+            <div><b style={{ color: pubStarted ? '#3B6D11' : 'var(--muted)', fontSize: 17 }}>{pubStarted ? publishedCount : 0}</b> released</div>
+            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Policy: create a remediated copy</div>
           </div>
         </div>
-        <div style={{ marginTop: 16 }}>
-          <button className="exportbtn" onClick={() => run?.id && openReport(run.id)}>⤓ Download full conformance report (PDF)</button>
+        <div style={{ marginTop: 14, fontSize: 12.5 }}>
+          <span className="muted">Evidence &amp; reports: </span>
+          <button className="linklike" onClick={() => run?.id && openReport(run.id)}>⤓ Download scope-limited report (PDF)</button>
         </div>
       </section>
 
-      <div className="metrics">
-        <div className="metric"><span>ready to publish</span><b>{ready.length}</b></div>
-        <div className="metric"><span>published</span><b style={{ color: pubStarted ? '#3B6D11' : '#9AA1B4' }}>{pubStarted ? publishedCount : 0}</b></div>
-        <div className="metric"><span>fixed copies stored</span><b style={{ color: pubStarted ? undefined : '#9AA1B4' }}>{Object.keys(done).length}</b></div>
-        <div className="metric"><span>audit entries</span><b style={{ color: pubStarted ? undefined : '#9AA1B4' }}>{pubStarted ? Object.keys(done).length + certified.length : 0}</b></div>
-      </div>
-
       <details className="panel">
-        <summary style={{ cursor: 'pointer', fontWeight: 600, listStyle: 'revert' }}>What “publish” does <span className="muted" style={{ fontWeight: 400 }}>· what happens to every re-validated document</span></summary>
+        <summary style={{ cursor: 'pointer', fontWeight: 600, listStyle: 'revert' }}>What “release” does <span className="muted" style={{ fontWeight: 400 }}>· what happens to every verified document</span></summary>
         <div className="pubsteps" style={{ marginTop: 12 }}>
-          <div className="pubstep"><b>✓ Marked published</b><span className="muted">the re-validated fixed copy becomes the document of record</span></div>
-          <div className="pubstep"><b>⤓ Fixed copy stored</b><span className="muted">the accessible copy lives in Blob storage and the Drive “remediated” mirror</span></div>
-          <div className="pubstep"><b>📦 Original preserved</b><span className="muted">the source file is left untouched for the audit trail</span></div>
-          <div className="pubstep"><b>🏷 Audit recorded</b><span className="muted">conformance status + timestamp written to the compliance audit log</span></div>
+          <div className="pubstep"><b>✓ Marked released</b><span className="muted">the re-validated fixed copy becomes the document of record</span></div>
+          <div className="pubstep"><b>⤓ Fixed copy in Blob</b><span className="muted">the accessible copy lives in ACP Blob storage and the Drive “remediated” mirror</span></div>
+          <div className="pubstep"><b>📦 Original untouched</b><span className="muted">the fixed copy is written to a separate “remediated” folder — the source file is never overwritten</span></div>
+          <div className="pubstep"><b>🏷 Audit recorded</b><span className="muted">the verified-in-scope status + timestamp are written to the audit log</span></div>
         </div>
       </details>
 
       <section className="panel">
         <div className="rubrichdr">
-          <h2 style={{ margin: 0 }}>Publish queue <span className="muted">· {ready.length} re-validated &amp; certifiable</span></h2>
-          <button disabled={readOnly || publishing || !ready.length || Object.keys(done).length >= ready.length} title={readOnly ? 'Time-travel replay — switch to the latest scan to publish' : undefined} onClick={publishAll}>{publishing ? 'Publishing…' : 'Publish all'}</button>
+          <h2 style={{ margin: 0 }}>Release queue <span className="muted">· {ready.length} verified in scope, ready to release</span></h2>
+          <button disabled={readOnly || publishing || !ready.length || Object.keys(done).length >= ready.length} title={readOnly ? 'Time-travel replay — switch to the latest scan to release' : undefined} onClick={publishAll}>{publishing ? 'Releasing…' : `Release all (${ready.length})`}</button>
         </div>
         {ready.length > 8 && (
           <SearchFilterBar ctl={sfP} items={ready} facets={PUB_FACETS} noun="files"
@@ -149,10 +141,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         {ready.length === 0 ? (
           pendingReview.items > 0 ? (
             <div className="muted" style={{ marginTop: 10, padding: '10px 14px', borderRadius: 9, background: '#FBF1DF', border: '1px solid #EAD9BF', color: '#7A5A12' }}>
-              ⚑ <b>{pendingReview.items} finding{pendingReview.items !== 1 ? 's' : ''} await{pendingReview.items === 1 ? 's' : ''} human review</b> across {pendingReview.files} document{pendingReview.files !== 1 ? 's' : ''} — approve {pendingReview.items === 1 ? 'it' : 'them'} in <b>Remediate → step 3 · AI Work Inbox</b> first. A document becomes certifiable — and appears here — only once its every review item is approved.
+              ⚑ <b>{pendingReview.items} finding{pendingReview.items !== 1 ? 's' : ''} await{pendingReview.items === 1 ? 's' : ''} human review</b> across {pendingReview.files} document{pendingReview.files !== 1 ? 's' : ''} — approve {pendingReview.items === 1 ? 'it' : 'them'} in <b>Remediate → step 3 · AI Work Inbox</b> first. A document is verified in scope — and appears here — only once its every review item is approved.
             </div>
           ) : (
-            <p className="muted" style={{ marginTop: 10 }}>Nothing certifiable yet — remediate documents and approve their review items in Remediate first.</p>
+            <p className="muted" style={{ marginTop: 10 }}>Nothing verified yet — remediate documents and approve their review items in Remediate first.</p>
           )
         ) : (
           <div className="publist">
@@ -161,24 +153,24 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                 <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span></button>
                 <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11' }}>{f.score} / 100</span>
                 {done[f.file]
-                  ? <span className="okline" style={{ fontSize: 13 }}>✓ published · fixed copy stored · audit recorded{pubUrls[f.file] && <> · <a href={pubUrls[f.file]} target="_blank" rel="noopener noreferrer">↗ open in Drive</a></>}</span>
-                  : <button className="qbtn approve" onClick={() => publish(f.file)} disabled={readOnly || publishing} title={readOnly ? 'Time-travel replay — switch to the latest scan to publish' : undefined}>↺ Replace &amp; publish</button>}
+                  ? <span className="okline" style={{ fontSize: 13 }}>✓ released · fixed copy in Blob · audit recorded{pubUrls[f.file] && <> · <a href={pubUrls[f.file]} target="_blank" rel="noopener noreferrer">↗ open in Drive</a></>}</span>
+                  : <button className="qbtn approve" onClick={() => publish(f.file)} disabled={readOnly || publishing} title={readOnly ? 'Time-travel replay — switch to the latest scan to release' : undefined}>↺ Release</button>}
               </div>
             ))}
           </div>
         )}
         {publishedList.length > 0 ? (
           <div style={{ marginTop: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>📋 Audit trail · {publishedEntries.length} published</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>📋 Audit trail · {publishedEntries.length} released</div>
             {publishedEntries.slice(0, 8).map((e) => (
               <div key={e.file} style={{ fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
-                ✓ <b>{e.file}</b> <span className="muted">· fixed copy stored · original preserved · audit recorded · {fmtPublished(e)}{pubUrls[e.file] && <> · <a href={pubUrls[e.file]} target="_blank" rel="noopener noreferrer">↗ open in Drive</a></>}</span>
+                ✓ <b>{e.file}</b> <span className="muted">· fixed copy in Blob · source not overwritten · audit recorded · {fmtPublished(e)}{pubUrls[e.file] && <> · <a href={pubUrls[e.file]} target="_blank" rel="noopener noreferrer">↗ open in Drive</a></>}</span>
               </div>
             ))}
             {publishedEntries.length > 8 && <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>+{publishedEntries.length - 8} more</div>}
           </div>
         ) : (
-          <p className="muted" style={{ marginTop: 12 }}>Publishing writes the conformance status back to the source and records each change in the audit trail here.</p>
+          <p className="muted" style={{ marginTop: 12 }}>Releasing writes the fixed copy to the Drive “remediated” folder and records each release in the audit trail here.</p>
         )}
       </section>
       {sel && <FileDrawer file={sel} scanId={run.id} onClose={() => setSel(null)} />}

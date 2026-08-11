@@ -55,7 +55,7 @@ describe('the screens that were missing it', () => {
       // Remediate defines helper components (GroupedFixes) above its main render, and one of
       // them contains a panel — so a naive first-match compares against a section that is not on
       // the screen at all and reports a failure that is purely an artifact of file order.
-      const anchor = { 'Remediate.jsx': 'rem-hero', 'Publish.jsx': 'Conformance Report' }[file]
+      const anchor = { 'Remediate.jsx': 'rem-hero', 'Publish.jsx': 'Release Center' }[file]
       const s = read(file)
       const banner = s.indexOf('<ScopeBanner')
       const first = s.indexOf(anchor)
