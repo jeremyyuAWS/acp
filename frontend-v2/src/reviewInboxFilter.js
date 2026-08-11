@@ -46,3 +46,45 @@ export function filterReviewQueue(queue, query) {
   if (!q) return queue
   return (queue || []).filter((item) => matchesReviewQuery(item, q))
 }
+
+// ── Faceted filters (severity + WCAG criterion) ──────────────────────────────────────────────
+// Search answers "find the thing I have in mind"; facets answer "show me only the critical ones"
+// or "just the 1.1.1s" — the two ways a reviewer chunks a queue of a dozen-plus items. Both read
+// off fields already on the item, and both preserve queue order like search.
+
+export function itemSeverity(item) {
+  return String((item && (item.severity || (item._raw && item._raw.severity))) || '').toUpperCase()
+}
+
+// The WCAG number alone (e.g. "1.1.1"), pulled from the rule label ("1.1.1 — Non-text Content"),
+// the ruleId, or the raw row — so grouping is by criterion, not by the specific detector.
+export function itemCriterion(item) {
+  const s = String((item && (item.rule || item.ruleId || (item._raw && (item._raw.rule_name || item._raw.rule_id)))) || '')
+  const m = s.match(/\b\d\.\d+\.\d+\b/)
+  return m ? m[0] : ''
+}
+
+const _SEV_ORDER = ['CRITICAL', 'SERIOUS', 'MODERATE', 'MINOR']
+const _sevRank = (s) => { const i = _SEV_ORDER.indexOf(s); return i < 0 ? 99 : i }
+
+// The filter options actually present in this queue, each with its count — so the UI only offers
+// facets that exist and can show "Critical 3". Severities ordered worst-first; criteria numerically.
+export function reviewFacets(queue) {
+  const sev = {}, crit = {}
+  for (const it of (queue || [])) {
+    const s = itemSeverity(it); if (s) sev[s] = (sev[s] || 0) + 1
+    const c = itemCriterion(it); if (c) crit[c] = (crit[c] || 0) + 1
+  }
+  return {
+    severities: Object.entries(sev).sort((a, b) => _sevRank(a[0]) - _sevRank(b[0])).map(([key, count]) => ({ key, count })),
+    criteria: Object.entries(crit).sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true })).map(([key, count]) => ({ key, count })),
+  }
+}
+
+// Compose search + severity + criterion. Null/empty facet = no constraint on that axis.
+export function applyReviewFilters(queue, { query = '', severity = null, criterion = null } = {}) {
+  let q = filterReviewQueue(queue, query)
+  if (severity) q = q.filter((it) => itemSeverity(it) === severity)
+  if (criterion) q = q.filter((it) => itemCriterion(it) === criterion)
+  return q
+}
