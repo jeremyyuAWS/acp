@@ -7,7 +7,7 @@ import FileDrawer, { REC_STYLE, fmtEffort, EFFORT_BASIS, SOURCE_URL } from './Fi
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
-import { filterReviewQueue } from './reviewInboxFilter.js'
+import { applyReviewFilters, reviewFacets } from './reviewInboxFilter.js'
 import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, openTraceUrl } from './api.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
@@ -302,6 +302,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // (an id absent from the map), so the inbox looks exactly as before until a reviewer collapses
   // one or searches.
   const [reviewQuery, setReviewQuery] = useState('')
+  const [sevFilter, setSevFilter] = useState(null)     // one severity, or null for all
+  const [critFilter, setCritFilter] = useState(null)   // one WCAG criterion, or null for all
   const [collapsedCards, setCollapsedCards] = useState({})
   const [acted, setActed] = useState({ approved: 0, rejected: 0, deferred: 0 })
   const [deferredItems, setDeferredItems] = useState([])
@@ -558,8 +560,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const reVerified = verified + serverFixed + liveFixed
   const remLive = !!remProg || remBusy
   const pendingHitlFiles = new Set(queue.map((q) => q.file))
-  // Search filters the inbox without reshuffling it (priority order is already baked into `queue`).
-  const filteredQueue = useMemo(() => filterReviewQueue(queue, reviewQuery), [queue, reviewQuery])
+  // Search + facets (severity, WCAG criterion) filter the inbox without reshuffling it — priority
+  // order is already baked into `queue`. Facets offer only the values actually present, with counts.
+  const facets = useMemo(() => reviewFacets(queue), [queue])
+  const filteredQueue = useMemo(
+    () => applyReviewFilters(queue, { query: reviewQuery, severity: sevFilter, criterion: critFilter }),
+    [queue, reviewQuery, sevFilter, critFilter])
+  const anyFilter = !!(reviewQuery.trim() || sevFilter || critFilter)
+  const clearFilters = () => { setReviewQuery(''); setSevFilter(null); setCritFilter(null) }
   // Collapse-all acts on what's VISIBLE: "all collapsed" is true only when every card currently in
   // view is collapsed, so the one button reads correctly whether or not a search is narrowing the
   // list. Toggling flips the visible cards; cards hidden by search keep their own state.
@@ -850,7 +858,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                      onChange={(e) => setReviewQuery(e.target.value)}
                      placeholder="Search by file, WCAG criterion, or recommendation…"
                      aria-label="Search the AI Work Inbox" />
-              {reviewQuery.trim() && (
+              {anyFilter && (
                 <span className="revtoolbar-count muted">{filteredQueue.length} of {queue.length}</span>
               )}
               <button type="button" className="revcollapse-all" onClick={() => setAllVisible(!allVisibleCollapsed)}
@@ -858,9 +866,53 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                 {allVisibleCollapsed ? 'Expand all' : 'Collapse all'}
               </button>
             </div>
+            {/* Faceted filters: chunk the queue by severity ("just the critical ones") or by WCAG
+                criterion ("just the 1.1.1s"). Only facets present in the queue are offered, each with
+                its count. UI-only, and shown only when there's more than one value to choose between. */}
+            {queue.length > 0 && (facets.severities.length > 1 || facets.criteria.length > 1) && (
+              <div className="revfilters" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', margin: '2px 0 12px' }}>
+                {facets.severities.length > 1 && (
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span className="muted" style={{ fontSize: 11.5 }}>Severity</span>
+                    <button type="button" aria-pressed={!sevFilter} onClick={() => setSevFilter(null)}
+                            style={{ fontSize: 11.5, padding: '2px 10px', borderRadius: 20, cursor: 'pointer',
+                                     border: `1px solid ${!sevFilter ? 'var(--ink)' : 'var(--line,#e2dce4)'}`,
+                                     background: !sevFilter ? 'var(--ink)' : 'transparent',
+                                     color: !sevFilter ? '#fff' : 'var(--ink)', fontWeight: !sevFilter ? 700 : 500 }}>All</button>
+                    {facets.severities.map((s) => {
+                      const on = sevFilter === s.key
+                      return (
+                        <button key={s.key} type="button" aria-pressed={on}
+                                onClick={() => setSevFilter(on ? null : s.key)}
+                                style={{ fontSize: 11.5, padding: '2px 10px', borderRadius: 20, cursor: 'pointer',
+                                         border: `1px solid ${on ? 'var(--ink)' : 'var(--line,#e2dce4)'}`,
+                                         background: on ? 'var(--ink)' : 'transparent',
+                                         color: on ? '#fff' : 'var(--ink)', fontWeight: on ? 700 : 500 }}>
+                          {s.key.charAt(0) + s.key.slice(1).toLowerCase()} {s.count}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+                {facets.criteria.length > 1 && (
+                  <label className="muted" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11.5 }}>
+                    Criterion
+                    <select value={critFilter || ''} onChange={(e) => setCritFilter(e.target.value || null)}
+                            aria-label="Filter by WCAG criterion"
+                            style={{ fontSize: 11.5, padding: '3px 6px', borderRadius: 6, border: '1px solid var(--line,#e2dce4)' }}>
+                      <option value="">All criteria</option>
+                      {facets.criteria.map((c) => <option key={c.key} value={c.key}>{c.key} ({c.count})</option>)}
+                    </select>
+                  </label>
+                )}
+                {anyFilter && (
+                  <button type="button" className="linklike" onClick={clearFilters} style={{ fontSize: 11.5 }}>Clear filters</button>
+                )}
+              </div>
+            )}
             {filteredQueue.length === 0 ? (
-              <p className="muted">No items match “{reviewQuery.trim()}”.{' '}
-                <button type="button" className="linklike" onClick={() => setReviewQuery('')}>Clear search</button>
+              <p className="muted">No items match the current filters.{' '}
+                <button type="button" className="linklike" onClick={clearFilters}>Clear filters</button>
               </p>
             ) : (
               <div className="reviewlist">
