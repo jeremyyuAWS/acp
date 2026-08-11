@@ -948,7 +948,33 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                     <summary className="revcard-sum">
                       <span className="revcard-sum-file"><span aria-hidden="true">{q.icon}</span> {q.file}</span>
                       <span className="revcard-sum-rule muted">{q.rule}</span>
+                      {/* The AI's proposed fix, on the collapsed row: enough to approve the obvious
+                          ones without expanding. `after` is the literal proposed value (e.g. the alt
+                          text); `meta` is the shorter action hint when there is no single value. */}
+                      {(typeof q.after === 'string' && q.after.trim())
+                        ? <span className="revcard-sum-rec muted" title={q.after}
+                                style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 12 }}>→ {q.after.trim()}</span>
+                        : q.meta
+                          ? <span className="revcard-sum-rec muted" title={q.meta}
+                                  style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 12 }}>{q.meta}</span>
+                          : null}
                       {q.severity && <span className={`revcard-sev sev-${String(q.severity).toLowerCase()}`}>{q.severity}</span>}
+                      {/* Inline triage: approve the AI's proposal as drafted, or reject — the same
+                          evAct path the expanded card uses. preventDefault + stopPropagation so a
+                          click acts on the item instead of toggling the <details> it sits inside. */}
+                      {!readOnly && (
+                        <span style={{ display: 'inline-flex', gap: 6, flexShrink: 0 }}
+                              onClick={(e) => { e.preventDefault(); e.stopPropagation() }}>
+                          <button type="button" aria-label={`Approve the proposed fix for ${q.file}`}
+                                  title="Approve the AI’s proposed fix as drafted"
+                                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); evAct(q.id, 'approved') }}
+                                  style={{ fontSize: 12, lineHeight: 1, padding: '4px 9px', borderRadius: 6, cursor: 'pointer', border: '1px solid #B5D19A', background: '#E7F0DC', color: '#2F5A0E', fontWeight: 600 }}>✓ Approve</button>
+                          <button type="button" aria-label={`Reject the proposed fix for ${q.file}`}
+                                  title="Reject this fix"
+                                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); evAct(q.id, 'rejected') }}
+                                  style={{ fontSize: 12, lineHeight: 1, padding: '4px 9px', borderRadius: 6, cursor: 'pointer', border: '1px solid #E1B4B4', background: '#FBECEC', color: '#8A1F1F', fontWeight: 600 }}>✗ Reject</button>
+                        </span>
+                      )}
                     </summary>
                     <EvidenceCard item={q._raw || q} onAct={evAct}
                       traceUrl={q._raw?.scan_id ? openTraceUrl(q._raw.scan_id, 'file', q._raw.file) : null} />

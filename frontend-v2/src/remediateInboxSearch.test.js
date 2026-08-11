@@ -89,3 +89,34 @@ describe('AI Work Inbox: collapsible', () => {
     expect(s).not.toMatch(/<RemSection[^>]*id="rem-review"/)
   })
 })
+
+describe('AI Work Inbox: inline triage on the collapsed row', () => {
+  it('previews the AI’s proposed fix on the summary so the obvious ones need no expanding', () => {
+    const s = rem()
+    // The literal proposed value when there is one, the shorter action hint otherwise.
+    expect(s).toMatch(/typeof q\.after === 'string' && q\.after\.trim\(\)/)
+    expect(s).toMatch(/className="revcard-sum-rec muted"/)
+  })
+
+  it('offers Approve / Reject on the row, wired to the same evAct path as the expanded card', () => {
+    const s = rem()
+    expect(s).toMatch(/evAct\(q\.id, 'approved'\)/)
+    expect(s).toMatch(/evAct\(q\.id, 'rejected'\)/)
+    // Named for assistive tech, not just a glyph.
+    expect(s).toMatch(/aria-label=\{`Approve the proposed fix for \$\{q\.file\}`\}/)
+  })
+
+  it('acts on the item instead of toggling the <details> it sits inside', () => {
+    // Without preventDefault + stopPropagation a click on Approve would ALSO expand/collapse the
+    // card — the button lives inside the <summary> whose default action is the toggle.
+    const s = rem()
+    expect(s).toMatch(/e\.preventDefault\(\); e\.stopPropagation\(\); evAct\(q\.id, 'approved'\)/)
+    expect(s).toMatch(/e\.preventDefault\(\); e\.stopPropagation\(\); evAct\(q\.id, 'rejected'\)/)
+  })
+
+  it('hides the inline actions in read-only (time-travel replay)', () => {
+    // A historical scan is look-only; the actions must not offer to mutate it.
+    const s = rem()
+    expect(s).toMatch(/\{!readOnly && \(\s*<span style=\{\{ display: 'inline-flex'/)
+  })
+})
