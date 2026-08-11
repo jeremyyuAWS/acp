@@ -63,9 +63,17 @@ const SCAN_URL_RE = /\/scans\/([^/?#]+)/
 
 const j = async (r) => {
   if (r.status === 401) {
-    googleToken = null; msToken = null
-    window.dispatchEvent(new CustomEvent('acp:session-expired', { detail: { reason: SESSION_EXPIRED } }))
-    throw new Error(SESSION_EXPIRED)
+    // Only a GATE 401 (the access gate rejected the session's bearer) signs the user out. A
+    // ROUTE 401 — an endpoint refusing for its own reason, e.g. a Drive-only route hit by a
+    // Microsoft user — must NOT eject an authenticated user or clear their token. The backend
+    // marks its gate 401s with `X-Acp-Auth: session`; without it, this is a route error and
+    // falls through to the normal !r.ok handling below. Found 2026-08-11: /sources 401'ing a
+    // Microsoft user with no Google Drive bounced the whole session to "expired".
+    if (r.headers.get('X-Acp-Auth') === 'session') {
+      googleToken = null; msToken = null
+      window.dispatchEvent(new CustomEvent('acp:session-expired', { detail: { reason: SESSION_EXPIRED } }))
+      throw new Error(SESSION_EXPIRED)
+    }
   }
   if (!r.ok) {
     let detail = `${r.status} ${r.statusText}`

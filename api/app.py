@@ -53,9 +53,15 @@ async def _access_gate(request, call_next):
         if not ok:
             return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="acp"'})
     elif core.GOOGLE_CLIENT_ID:
+        # X-Acp-Auth: session marks a GATE 401 — the access gate itself rejected the request
+        # because the session's bearer is absent or invalid. The SPA signs the user out only on
+        # this; a route that returns 401 for its own reason (an integration not connected) must
+        # NOT eject an authenticated user. Found 2026-08-11: /sources 401'ing a Microsoft user who
+        # has no Google Drive bounced the whole session and cleared the bearer.
+        _GATE_401 = {"X-Acp-Auth": "session"}
         hdr = request.headers.get("authorization", "")
         if not hdr.startswith("Bearer "):
-            return Response(status_code=401, media_type="application/json",
+            return Response(status_code=401, media_type="application/json", headers=_GATE_401,
                             content='{"detail":"Sign in required"}')
         # The SPA tags Microsoft sign-ins with X-Auth-Provider so we verify against the right
         # issuer (Graph) rather than trying Google first and paying a failed round-trip on every
@@ -66,7 +72,7 @@ async def _access_gate(request, call_next):
         else:
             email = core.verify_gis_token(hdr[7:])
         if not email:
-            return Response(status_code=401, media_type="application/json",
+            return Response(status_code=401, media_type="application/json", headers=_GATE_401,
                             content='{"detail":"Session expired — sign in again"}')
         if not core.email_allowed(email):
             return Response(status_code=403, media_type="application/json",
