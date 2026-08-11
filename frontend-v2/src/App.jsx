@@ -47,7 +47,7 @@ const TABS = [
   ['discover',      'Discover',      'inventory · classify', 1],
   ['assess',        'Assess',        'score vs WCAG',       2],
   ['remediate',     'Remediate',     'fix issues',          3],
-  ['publish',       'Publish',       'certify',             4],
+  ['publish',       'Release',       'approve & deploy',    4],
   ['monitor',       'Monitor',       'track compliance',    5],
   ['graph',         'Knowledge Graph', 'explore findings',   0],
 ]
