@@ -24,10 +24,10 @@ describe('AI Work Inbox: searchable', () => {
     expect(s).toMatch(/aria-label="Search the AI Work Inbox"/)
   })
 
-  it('filters the queue through filterReviewQueue and maps the FILTERED list, not the raw queue', () => {
+  it('filters the queue through applyReviewFilters and maps the FILTERED list, not the raw queue', () => {
     const s = rem()
-    expect(s).toMatch(/import \{ filterReviewQueue \} from '\.\/reviewInboxFilter\.js'/)
-    expect(s).toMatch(/const filteredQueue = useMemo\(\(\) => filterReviewQueue\(queue, reviewQuery\)/)
+    expect(s).toMatch(/import \{ applyReviewFilters, reviewFacets \} from '\.\/reviewInboxFilter\.js'/)
+    expect(s).toMatch(/const filteredQueue = useMemo\(\s*\(\) => applyReviewFilters\(queue, \{ query: reviewQuery/)
     expect(s).toMatch(/\{filteredQueue\.map\(\(q\) =>/)
     // the old unconditional `queue.map` in the review list must be gone
     expect(s).not.toMatch(/<div className="reviewlist">[\s\S]{0,400}\{queue\.map\(/)
@@ -37,7 +37,7 @@ describe('AI Work Inbox: searchable', () => {
     const s = rem()
     expect(s).toMatch(/filteredQueue\.length === 0 \?/)
     expect(s).toMatch(/No items match/)
-    expect(s).toMatch(/onClick=\{\(\) => setReviewQuery\(''\)\}/)
+    expect(s).toMatch(/onClick=\{clearFilters\}/)
   })
 })
 
