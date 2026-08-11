@@ -7,7 +7,8 @@ import FileDrawer from './FileDrawer.jsx'
 import FolderPicker from './FolderPicker.jsx'
 // Single source of truth for the SharePoint/Graph scopes, so this sign-in path and SharePoint.jsx
 // can never request different permissions than IT consented to (read-only; see that module).
-import { SP_SCOPES, getSpAuth } from './sharepointScopes.js'
+import { SP_SCOPES } from './sharepointScopes.js'
+import { signInForScopes, MsalNotReady, MsalNotConfigured } from './msalClient.js'
 
 // Azure client/tenant come from /config at runtime now (getSpAuth in sharepointScopes.js), so a
 // deployment is pointed at a tenant with an env var and no rebuild; VITE_AZURE_* is the fallback.
@@ -192,26 +193,19 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
   }
 
   const connectMicrosoft = async () => {
-    if (!window.msal) { setSpError('MSAL not loaded yet — try again.'); return }
     setSpConnecting(true); setSpError('')
     try {
-      const { clientId, tenant } = await getSpAuth()
-      if (!clientId) { setSpError('SharePoint sign-in isn’t configured for this deployment.'); setSpConnecting(false); return }
-      const cfg = {
-        auth: { clientId, authority: `https://login.microsoftonline.com/${tenant}`, redirectUri: window.location.origin },
-        cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: false },
-      }
-      const instance = new window.msal.PublicClientApplication(cfg)
-      await instance.initialize()
-      const loginResult  = await instance.loginPopup({ scopes: SP_SCOPES })
-      instance.setActiveAccount(loginResult.account)
-      const tokenResult  = await instance.acquireTokenSilent({ scopes: SP_SCOPES, account: loginResult.account })
-        .catch(() => instance.acquireTokenPopup({ scopes: SP_SCOPES }))
-      sessionStorage.setItem('sp_token', tokenResult.accessToken)
-      sessionStorage.setItem('sp_account', JSON.stringify(loginResult.account))
-      onConnect('microsoft', loginResult.account.username || '', tokenResult.accessToken)
+      // Shared, resilient MSAL client (msalClient.js) — same one the login screen uses, so the two
+      // never race over interaction state, and a stuck `interaction_in_progress` lock self-clears.
+      const { account, accessToken } = await signInForScopes(SP_SCOPES)
+      sessionStorage.setItem('sp_token', accessToken)
+      sessionStorage.setItem('sp_account', JSON.stringify(account))
+      onConnect('microsoft', account.username || '', accessToken)
     } catch (e) {
-      setSpError(e.errorCode === 'user_cancelled' ? 'Sign-in cancelled.' : (e.message || 'Connection failed.'))
+      if (e instanceof MsalNotReady) setSpError('MSAL not loaded yet — try again.')
+      else if (e instanceof MsalNotConfigured) setSpError('SharePoint sign-in isn’t configured for this deployment.')
+      else if (e?.errorCode === 'user_cancelled') setSpError('Sign-in cancelled.')
+      else setSpError(e?.message || 'Connection failed.')
     } finally {
       setSpConnecting(false)
     }

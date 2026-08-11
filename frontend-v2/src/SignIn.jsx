@@ -3,7 +3,8 @@ import { getConfig, setLangfuseBase } from './api.js'
 import { PERSONAS } from './sim.js'
 import Logo from './Logo.jsx'
 import { googleUserInfo } from './googleIdentity.js'
-import { getSpAuth, SP_SCOPES } from './sharepointScopes.js'
+import { SP_SCOPES } from './sharepointScopes.js'
+import { signInForScopes, MsalNotReady, MsalNotConfigured } from './msalClient.js'
 
 const initials = (n) => n.split(' ').map((x) => x[0]).join('').slice(0, 2)
 
@@ -136,31 +137,25 @@ export default function SignIn({ onSignedIn, notice = null }) {
   // The account signed in here becomes the ACP identity, so it must be on the allowlist (or an
   // allowed domain) exactly like a Google sign-in.
   const signInWithMicrosoft = async () => {
-    if (!window.msal) { setErr('Microsoft sign-in isn’t ready yet — please refresh.'); return }
     setBusy(true); setErr('')
     try {
-      const { clientId, tenant } = await getSpAuth()
-      if (!clientId) { setErr('SharePoint sign-in isn’t configured for this deployment.'); setBusy(false); return }
-      const instance = new window.msal.PublicClientApplication({
-        auth: { clientId, authority: `https://login.microsoftonline.com/${tenant}`, redirectUri: window.location.origin },
-        cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: false },
-      })
-      await instance.initialize()
-      const login = await instance.loginPopup({ scopes: SP_SCOPES })
-      instance.setActiveAccount(login.account)
-      const tok = await instance.acquireTokenSilent({ scopes: SP_SCOPES, account: login.account })
-        .catch(() => instance.acquireTokenPopup({ scopes: SP_SCOPES }))
-      sessionStorage.setItem('sp_token', tok.accessToken)
-      sessionStorage.setItem('sp_account', JSON.stringify(login.account))
-      const email = login.account.username || ''
+      // One shared, resilient MSAL client (msalClient.js): single instance, and it self-clears a
+      // stuck `interaction_in_progress` lock so a fumbled popup doesn't wedge every later attempt.
+      const { account, accessToken } = await signInForScopes(SP_SCOPES)
+      sessionStorage.setItem('sp_token', accessToken)
+      sessionStorage.setItem('sp_account', JSON.stringify(account))
+      const email = account.username || ''
       onSignedIn({
-        id: email, name: login.account.name || email, email,
+        id: email, name: account.name || email, email,
         role: 'Compliance Officer', sso: 'Microsoft',
         scope: { label: 'Full estate · all departments', departments: 'all' },
         allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'settings', 'upload'],
       })
     } catch (e) {
-      setErr(e?.errorCode === 'user_cancelled' ? 'Sign-in cancelled.' : (e?.message || 'Microsoft sign-in failed.'))
+      if (e instanceof MsalNotReady) setErr('Microsoft sign-in isn’t ready yet — please refresh.')
+      else if (e instanceof MsalNotConfigured) setErr('SharePoint sign-in isn’t configured for this deployment.')
+      else if (e?.errorCode === 'user_cancelled') setErr('Sign-in cancelled.')
+      else setErr(e?.message || 'Microsoft sign-in failed.')
     } finally {
       setBusy(false)
     }
