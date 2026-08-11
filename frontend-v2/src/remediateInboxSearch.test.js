@@ -16,7 +16,7 @@ const rem = () => readFileSync(join(HERE, 'Remediate.jsx'), 'utf8')
 describe('AI Work Inbox: searchable', () => {
   it('renders a search input wired to reviewQuery', () => {
     const s = rem()
-    expect(s).toMatch(/const \[reviewQuery, setReviewQuery\] = useState\(''\)/)
+    expect(s).toMatch(/const \[reviewQuery, setReviewQuery\] = useState\(_prefs0\.query\)/)
     expect(s).toMatch(/<input type="search" className="revsearch"/)
     expect(s).toMatch(/value=\{reviewQuery\}/)
     expect(s).toMatch(/onChange=\{\(e\) => setReviewQuery\(e\.target\.value\)\)?\}/)
@@ -26,9 +26,9 @@ describe('AI Work Inbox: searchable', () => {
 
   it('filters the queue through applyReviewFilters and maps the FILTERED list, not the raw queue', () => {
     const s = rem()
-    expect(s).toMatch(/import \{ applyReviewFilters, reviewFacets \} from '\.\/reviewInboxFilter\.js'/)
+    expect(s).toMatch(/import \{ applyReviewFilters, reviewFacets, groupReviewByFile \} from '\.\/reviewInboxFilter\.js'/)
     expect(s).toMatch(/const filteredQueue = useMemo\(\s*\(\) => applyReviewFilters\(queue, \{ query: reviewQuery/)
-    expect(s).toMatch(/\{filteredQueue\.map\(\(q\) =>/)
+    expect(s).toMatch(/filteredQueue\.map\(renderCard\)/)
     // the old unconditional `queue.map` in the review list must be gone
     expect(s).not.toMatch(/<div className="reviewlist">[\s\S]{0,400}\{queue\.map\(/)
   })
@@ -118,5 +118,45 @@ describe('AI Work Inbox: inline triage on the collapsed row', () => {
     // A historical scan is look-only; the actions must not offer to mutate it.
     const s = rem()
     expect(s).toMatch(/\{!readOnly && \(\s*<span style=\{\{ display: 'inline-flex'/)
+  })
+})
+
+describe('AI Work Inbox: group by file', () => {
+  it('offers a Group-by-file toggle wired to groupByFile state', () => {
+    const s = rem()
+    expect(s).toMatch(/const \[groupByFile, setGroupByFile\] = useState\(/)
+    expect(s).toMatch(/onChange=\{\(e\) => setGroupByFile\(e\.target\.checked\)\}/)
+    expect(s).toMatch(/Group by file/)
+  })
+
+  it('renders the SAME card (renderCard) flat or grouped — no forked markup', () => {
+    const s = rem()
+    // One card renderer, reused in both branches.
+    expect(s).toMatch(/const renderCard = \(q\) =>/)
+    expect(s).toMatch(/groupReviewByFile\(filteredQueue\)\.map\(\(g\) =>/)
+    expect(s).toMatch(/\{g\.items\.map\(renderCard\)\}/)
+    expect(s).toMatch(/<div className="reviewlist">\{filteredQueue\.map\(renderCard\)\}<\/div>/)
+  })
+
+  it('leads the file header with the worst severity and a finding count', () => {
+    const s = rem()
+    expect(s).toMatch(/\{g\.count\} finding\{g\.count === 1 \? '' : 's'\}/)
+    expect(s).toMatch(/g\.worst && <span className=\{`revcard-sev sev-\$\{g\.worst\.toLowerCase\(\)\}`\}/)
+  })
+})
+
+describe('AI Work Inbox: view state persists across the tab remount', () => {
+  it('rehydrates search / filters / grouping from inboxPrefs on mount', () => {
+    const s = rem()
+    expect(s).toMatch(/import \{ loadInboxPrefs, saveInboxPrefs \} from '\.\/inboxPrefs\.js'/)
+    expect(s).toMatch(/const _prefs0 = loadInboxPrefs\(run\?\.id\)/)
+    expect(s).toMatch(/useState\(_prefs0\.query\)/)
+    expect(s).toMatch(/useState\(_prefs0\.groupByFile\)/)
+  })
+
+  it('persists them back whenever they change, keyed by run id', () => {
+    const s = rem()
+    expect(s).toMatch(/saveInboxPrefs\(run\?\.id, \{ query: reviewQuery, severity: sevFilter, criterion: critFilter, groupByFile \}\)/)
+    expect(s).toMatch(/\}, \[run\?\.id, reviewQuery, sevFilter, critFilter, groupByFile\]\)/)
   })
 })

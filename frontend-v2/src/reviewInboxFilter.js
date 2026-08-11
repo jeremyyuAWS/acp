@@ -88,3 +88,31 @@ export function applyReviewFilters(queue, { query = '', severity = null, criteri
   if (criterion) q = q.filter((it) => itemCriterion(it) === criterion)
   return q
 }
+
+// ── Grouping (by file) ────────────────────────────────────────────────────────────────────────
+// A scan across many documents makes the inbox one long flat list. Grouping by file turns it into
+// a per-document view — clear one file at a time — which is how a reviewer actually works an
+// estate. Order is preserved: files appear in the order their FIRST item does (the queue is
+// already priority-sorted), items keep their order within a file. Each group carries its worst
+// severity so the file header can lead with the reason to open it.
+export function worstSeverity(items) {
+  let best = null, bestRank = 99
+  for (const it of (items || [])) {
+    const s = itemSeverity(it), r = _sevRank(s)
+    if (s && r < bestRank) { best = s; bestRank = r }
+  }
+  return best
+}
+
+export function groupReviewByFile(queue) {
+  const order = [], by = new Map()
+  for (const it of (queue || [])) {
+    const f = (it && it.file) || '—'
+    if (!by.has(f)) { by.set(f, []); order.push(f) }
+    by.get(f).push(it)
+  }
+  return order.map((file) => {
+    const items = by.get(file)
+    return { file, items, count: items.length, worst: worstSeverity(items) }
+  })
+}

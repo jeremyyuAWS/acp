@@ -7,7 +7,8 @@ import FileDrawer, { REC_STYLE, fmtEffort, EFFORT_BASIS, SOURCE_URL } from './Fi
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
-import { applyReviewFilters, reviewFacets } from './reviewInboxFilter.js'
+import { applyReviewFilters, reviewFacets, groupReviewByFile } from './reviewInboxFilter.js'
+import { loadInboxPrefs, saveInboxPrefs } from './inboxPrefs.js'
 import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, openTraceUrl } from './api.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
@@ -304,9 +305,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // asked for. The seeding effect below marks each card collapsed the first time it appears and
   // never again, so a card a reviewer expands stays expanded across the queue's background
   // refetches (it already has an entry in the map, so it is not re-seeded).
-  const [reviewQuery, setReviewQuery] = useState('')
-  const [sevFilter, setSevFilter] = useState(null)     // one severity, or null for all
-  const [critFilter, setCritFilter] = useState(null)   // one WCAG criterion, or null for all
+  // Rehydrate the view controls from the last time this scan's inbox was open (sessionStorage,
+  // keyed by run id) so leaving the tab and coming back doesn't reset the reviewer's search,
+  // filters and grouping. The per-card collapse map is NOT restored — it seeds fresh below.
+  const _prefs0 = loadInboxPrefs(run?.id)
+  const [reviewQuery, setReviewQuery] = useState(_prefs0.query)
+  const [sevFilter, setSevFilter] = useState(_prefs0.severity)     // one severity, or null for all
+  const [critFilter, setCritFilter] = useState(_prefs0.criterion)  // one WCAG criterion, or null for all
+  const [groupByFile, setGroupByFile] = useState(_prefs0.groupByFile)  // per-document grouping
   const [collapsedCards, setCollapsedCards] = useState({})
   // Seed every card COLLAPSED the first time it appears, and never touch it again. Merging only
   // ids absent from the map is what makes this survive the queue's background refetches: a card a
@@ -324,6 +330,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queueIds])
+  // Persist the view controls whenever they change, so the next mount (returning to this tab)
+  // rehydrates them. sessionStorage-scoped and best-effort — see inboxPrefs.js.
+  useEffect(() => {
+    saveInboxPrefs(run?.id, { query: reviewQuery, severity: sevFilter, criterion: critFilter, groupByFile })
+  }, [run?.id, reviewQuery, sevFilter, critFilter, groupByFile])
   const [acted, setActed] = useState({ approved: 0, rejected: 0, deferred: 0 })
   const [deferredItems, setDeferredItems] = useState([])
   // Real applied-fix evidence: scan-wide before→after (all fix types, verified-cleared) +
@@ -596,6 +607,46 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     for (const q of filteredQueue) next[q.id] = collapsed
     return next
   })
+  // One review card, rendered the same whether the list is flat or grouped by file. Extracted so
+  // the grouped view reuses it verbatim rather than forking the card markup (and drifting from it).
+  const renderCard = (q) => (
+    <details key={q.id} className="revcard" open={!collapsedCards[q.id]}
+             onToggle={(e) => setCollapsedCards((m) => ({ ...m, [q.id]: !e.target.open }))}>
+      <summary className="revcard-sum">
+        <span className="revcard-sum-file"><span aria-hidden="true">{q.icon}</span> {q.file}</span>
+        <span className="revcard-sum-rule muted">{q.rule}</span>
+        {/* The AI's proposed fix, on the collapsed row: enough to approve the obvious ones without
+            expanding. `after` is the literal proposed value (e.g. the alt text); `meta` is the
+            shorter action hint when there is no single value. */}
+        {(typeof q.after === 'string' && q.after.trim())
+          ? <span className="revcard-sum-rec muted" title={q.after}
+                  style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 12 }}>→ {q.after.trim()}</span>
+          : q.meta
+            ? <span className="revcard-sum-rec muted" title={q.meta}
+                    style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 12 }}>{q.meta}</span>
+            : null}
+        {q.severity && <span className={`revcard-sev sev-${String(q.severity).toLowerCase()}`}>{q.severity}</span>}
+        {/* Inline triage: approve the AI's proposal as drafted, or reject — the same evAct path the
+            expanded card uses. preventDefault + stopPropagation so a click acts on the item instead
+            of toggling the <details> it sits inside. */}
+        {!readOnly && (
+          <span style={{ display: 'inline-flex', gap: 6, flexShrink: 0 }}
+                onClick={(e) => { e.preventDefault(); e.stopPropagation() }}>
+            <button type="button" aria-label={`Approve the proposed fix for ${q.file}`}
+                    title="Approve the AI’s proposed fix as drafted"
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); evAct(q.id, 'approved') }}
+                    style={{ fontSize: 12, lineHeight: 1, padding: '4px 9px', borderRadius: 6, cursor: 'pointer', border: '1px solid #B5D19A', background: '#E7F0DC', color: '#2F5A0E', fontWeight: 600 }}>✓ Approve</button>
+            <button type="button" aria-label={`Reject the proposed fix for ${q.file}`}
+                    title="Reject this fix"
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); evAct(q.id, 'rejected') }}
+                    style={{ fontSize: 12, lineHeight: 1, padding: '4px 9px', borderRadius: 6, cursor: 'pointer', border: '1px solid #E1B4B4', background: '#FBECEC', color: '#8A1F1F', fontWeight: 600 }}>✗ Reject</button>
+          </span>
+        )}
+      </summary>
+      <EvidenceCard item={q._raw || q} onAct={evAct}
+        traceUrl={q._raw?.scan_id ? openTraceUrl(q._raw.scan_id, 'file', q._raw.file) : null} />
+    </details>
+  )
   const totalHitl = queue.length + acted.approved + acted.rejected + acted.deferred + self.length
   const hitlProgress = totalHitl > 0 ? Math.round(((totalHitl - queue.length) / totalHitl) * 100) : 0
   useEffect(() => { onHitlCount?.(queue.length) }, [queue.length, onHitlCount])
@@ -885,6 +936,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                       aria-pressed={allVisibleCollapsed} disabled={filteredQueue.length === 0}>
                 {allVisibleCollapsed ? 'Expand all' : 'Collapse all'}
               </button>
+              <label className="revgroup-toggle" title="Group findings by document"
+                     style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                <input type="checkbox" checked={groupByFile} onChange={(e) => setGroupByFile(e.target.checked)} />
+                Group by file
+              </label>
             </div>
             {/* Faceted filters: chunk the queue by severity ("just the critical ones") or by WCAG
                 criterion ("just the 1.1.1s"). Only facets present in the queue are offered, each with
@@ -934,53 +990,27 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               <p className="muted">No items match the current filters.{' '}
                 <button type="button" className="linklike" onClick={clearFilters}>Clear filters</button>
               </p>
-            ) : (
-              <div className="reviewlist">
-                {/* Unified review card (canonical vision #1): the SAME rich EvidenceCard the AI Work
-                    Inbox uses — pipeline ladder, ✨ Explain, Grounding/Validation trust states,
-                    provenance badge, grouped evidence, cert preview, native verify steps. Each is
-                    wrapped in a native <details> so collapse is keyboard-operable and announces its
-                    own state — no aria-expanded to drift. `q._raw` is the untransformed row (live);
-                    SIM falls back to the UI item. */}
-                {filteredQueue.map((q) => (
-                  <details key={q.id} className="revcard" open={!collapsedCards[q.id]}
-                           onToggle={(e) => setCollapsedCards((m) => ({ ...m, [q.id]: !e.target.open }))}>
-                    <summary className="revcard-sum">
-                      <span className="revcard-sum-file"><span aria-hidden="true">{q.icon}</span> {q.file}</span>
-                      <span className="revcard-sum-rule muted">{q.rule}</span>
-                      {/* The AI's proposed fix, on the collapsed row: enough to approve the obvious
-                          ones without expanding. `after` is the literal proposed value (e.g. the alt
-                          text); `meta` is the shorter action hint when there is no single value. */}
-                      {(typeof q.after === 'string' && q.after.trim())
-                        ? <span className="revcard-sum-rec muted" title={q.after}
-                                style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 12 }}>→ {q.after.trim()}</span>
-                        : q.meta
-                          ? <span className="revcard-sum-rec muted" title={q.meta}
-                                  style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 12 }}>{q.meta}</span>
-                          : null}
-                      {q.severity && <span className={`revcard-sev sev-${String(q.severity).toLowerCase()}`}>{q.severity}</span>}
-                      {/* Inline triage: approve the AI's proposal as drafted, or reject — the same
-                          evAct path the expanded card uses. preventDefault + stopPropagation so a
-                          click acts on the item instead of toggling the <details> it sits inside. */}
-                      {!readOnly && (
-                        <span style={{ display: 'inline-flex', gap: 6, flexShrink: 0 }}
-                              onClick={(e) => { e.preventDefault(); e.stopPropagation() }}>
-                          <button type="button" aria-label={`Approve the proposed fix for ${q.file}`}
-                                  title="Approve the AI’s proposed fix as drafted"
-                                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); evAct(q.id, 'approved') }}
-                                  style={{ fontSize: 12, lineHeight: 1, padding: '4px 9px', borderRadius: 6, cursor: 'pointer', border: '1px solid #B5D19A', background: '#E7F0DC', color: '#2F5A0E', fontWeight: 600 }}>✓ Approve</button>
-                          <button type="button" aria-label={`Reject the proposed fix for ${q.file}`}
-                                  title="Reject this fix"
-                                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); evAct(q.id, 'rejected') }}
-                                  style={{ fontSize: 12, lineHeight: 1, padding: '4px 9px', borderRadius: 6, cursor: 'pointer', border: '1px solid #E1B4B4', background: '#FBECEC', color: '#8A1F1F', fontWeight: 600 }}>✗ Reject</button>
-                        </span>
-                      )}
+            ) : groupByFile ? (
+              /* Grouped by document: one collapsible file header (worst severity + finding count)
+                 per file, its findings — the same cards — nested inside. Files keep the queue's
+                 priority order; the group is open by default so the findings read as headers. */
+              <div className="reviewlist reviewlist-grouped">
+                {groupReviewByFile(filteredQueue).map((g) => (
+                  <details key={g.file} className="revfile-group" open
+                           style={{ border: '1px solid var(--line, #e2dce4)', borderRadius: 8, marginBottom: 8 }}>
+                    <summary style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', cursor: 'pointer', fontWeight: 600 }}>
+                      <span style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><span aria-hidden="true">📄</span> {g.file}</span>
+                      <span className="muted" style={{ fontWeight: 400, fontSize: 12, flexShrink: 0 }}>{g.count} finding{g.count === 1 ? '' : 's'}</span>
+                      {g.worst && <span className={`revcard-sev sev-${g.worst.toLowerCase()}`} style={{ flexShrink: 0 }}>{g.worst}</span>}
                     </summary>
-                    <EvidenceCard item={q._raw || q} onAct={evAct}
-                      traceUrl={q._raw?.scan_id ? openTraceUrl(q._raw.scan_id, 'file', q._raw.file) : null} />
+                    <div style={{ padding: '2px 8px 8px' }}>{g.items.map(renderCard)}</div>
                   </details>
                 ))}
               </div>
+            ) : (
+              /* Flat list. The card itself (renderCard) is the SAME rich EvidenceCard wrapped in a
+                 native <details>, whether flat or grouped — no forked markup to drift. */
+              <div className="reviewlist">{filteredQueue.map(renderCard)}</div>
             )}
           </>
         )}
