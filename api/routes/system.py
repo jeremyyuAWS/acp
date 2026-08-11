@@ -296,6 +296,11 @@ def config():
     import ai as _ai   # AI provenance (ADR 0019 Phase 0): active model + local/cloud zone
     return {"google_client_id": core.GOOGLE_CLIENT_ID,
             "drive_scope": core.DRIVE_SCOPES[0],
+            # Entra app for the SharePoint/OneDrive connect — runtime so the tenant can be set per
+            # deployment without rebuilding the SPA (the frontend falls back to VITE_AZURE_* only
+            # when these are absent). Null when SharePoint isn't configured; the SPA hides the button.
+            "azure_client_id": core.AZURE_CLIENT_ID,
+            "azure_tenant_id": core.AZURE_TENANT_ID,
             "auth": "gis" if core.GOOGLE_CLIENT_ID else "demo",
             **_build_info(),
             "ai": _ai.provenance(),

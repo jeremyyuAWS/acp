@@ -22,3 +22,25 @@
 export const SP_SCOPES = ['User.Read', 'Files.Read.All', 'Sites.Read.All']
 
 export const CAN_WRITE_BACK = SP_SCOPES.some((s) => /\.ReadWrite/i.test(s))
+
+// The Entra app (client) and directory (tenant) ids for the SharePoint/OneDrive sign-in.
+// PREFER runtime /config (azure_client_id / azure_tenant_id) over the build-time VITE_AZURE_*
+// values, so a deployment — or each customer's tenant — is set with an env var and no rebuild
+// (the same reason GOOGLE_CLIENT_ID is served from /config). The build-time values remain the
+// fallback for local dev via frontend/.env. Resolved once and cached; callers await it.
+import { getConfig } from './api.js'
+
+const VITE_CLIENT = import.meta.env.VITE_AZURE_CLIENT_ID || ''
+const VITE_TENANT = import.meta.env.VITE_AZURE_TENANT_ID || 'common'
+
+let _auth
+export async function getSpAuth() {
+  if (_auth) return _auth
+  let c = null
+  try { c = await getConfig() } catch { /* no /config → fall back to the build-time values */ }
+  _auth = {
+    clientId: (c && c.azure_client_id) || VITE_CLIENT,
+    tenant: (c && c.azure_tenant_id) || VITE_TENANT,
+  }
+  return _auth
+}

@@ -28,6 +28,12 @@ ACP = Path(__file__).resolve().parent.parent
 # ── Config (env) ──────────────────────────────────────────────────────────────
 ACCESS_CODE = os.environ.get("ACP_ACCESS_CODE")
 GOOGLE_CLIENT_ID = os.environ.get("ACP_GOOGLE_CLIENT_ID") or None
+# Microsoft Entra app (client) and directory (tenant) ids for the SharePoint/OneDrive connect.
+# Served to the SPA via /config so a deployment can be pointed at a tenant WITHOUT rebuilding the
+# bundle — the same runtime-config pattern as GOOGLE_CLIENT_ID, and the reason the frontend prefers
+# these over its build-time VITE_AZURE_* fallback. Tenant defaults to 'common' only if unset.
+AZURE_CLIENT_ID = os.environ.get("ACP_AZURE_CLIENT_ID") or None
+AZURE_TENANT_ID = os.environ.get("ACP_AZURE_TENANT_ID") or None
 # Deployment environment. ACP_DEPLOY_ENV is canonical; ACP_ENV is a legacy alias, still read.
 #
 # ACP_ENV used to mean two different things: this, and the Container Apps *environment name* in
