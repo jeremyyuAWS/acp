@@ -1182,6 +1182,34 @@ def _clip_diag(text: str, head: int = 800, tail: int = 400) -> str:
     return f"{text[:head]}\n  … {len(text) - head - tail} chars elided …\n{text[-tail:]}"
 
 
+def _docx_body_readable(path: Path) -> bool:
+    """True unless word/document.xml is missing or not well-formed XML.
+
+    A docx whose main story part is corrupt or absent still opens as a zip and still yields its
+    docProps/core.xml — so the office CLI reports the file with whatever metadata findings it can
+    (typically just "no document title") and NO error, and the file lands as a nearly-clean
+    `uncertain`. To a reviewer that reads like "almost fine, missing a title," when in fact the
+    document's entire body could not be read. This is the affirmative check that catches it.
+
+    A file that is not a valid zip at all (zero-byte, truncated header, a renamed .txt, or an
+    encrypted/CFB Office file) is deliberately reported readable=True here: that case already
+    buckets as engine-error upstream, and owning it here too would only duplicate the message."""
+    import zipfile
+    import xml.etree.ElementTree as ET
+    try:
+        with zipfile.ZipFile(path) as zf:
+            if "word/document.xml" not in zf.namelist():
+                return False
+            data = zf.read("word/document.xml")
+    except (zipfile.BadZipFile, OSError, KeyError):
+        return True
+    try:
+        ET.fromstring(data)
+        return True
+    except ET.ParseError:
+        return False
+
+
 def _analyse_office(dest: Path) -> dict:
     out = dest / "_o.json"
     # DOTNET_ROOT only when that install actually exists, and never clobbering one the
@@ -1287,7 +1315,29 @@ def _analyse_office(dest: Path) -> dict:
         # CLI reported go uncertain, everything else in this batch falls to engine-error.
         print(f"[scan] office CLI {aborted} — {len(res)} reported file(s) recorded as uncertain "
               f"(score is an upper bound, not certifiable)", flush=True)
+    _flag_unreadable_docx(dest, res)
     return res
+
+
+UNREADABLE_BODY_MSG = ("The document's main content (word/document.xml) could not be read — the "
+                       "file may be corrupt, incomplete, or password-protected. It could not be "
+                       "assessed for accessibility; any findings shown are from its metadata only.")
+
+
+def _flag_unreadable_docx(dest: Path, res: dict) -> None:
+    """Append an explicit unreadable-content engine error to any reported docx whose body is
+    missing or malformed, so it stays non-certifiable WITH a reason instead of a silent, nearly-
+    clean `uncertain`. Mutates `res` in place; the message rides the same errors channel a CLI
+    abort uses. (A file that is not a valid zip at all is already engine-error upstream.)"""
+    for fname in list(res.keys()):
+        fp = dest / fname
+        if fp.suffix.lower() != ".docx" or not fp.exists():
+            fp = dest / Path(fname).name  # in case the CLI reported a nested/relative path
+        if fp.suffix.lower() == ".docx" and fp.exists() and not _docx_body_readable(fp):
+            res[fname]["errors"] = [*res[fname].get("errors", []),
+                                    {"message": UNREADABLE_BODY_MSG, "rule": None}]
+            print(f"[scan] {fname}: word/document.xml missing or malformed — recorded as "
+                  f"uncertain with an explicit unreadable-content error", flush=True)
 
 
 _VAGUE_LINK_TEXT = frozenset({"click here", "here", "read more", "more", "link", "this", "click", "learn more", "details"})
