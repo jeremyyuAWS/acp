@@ -9,6 +9,7 @@ import FolderPicker from './FolderPicker.jsx'
 // can never request different permissions than IT consented to (read-only; see that module).
 import { SP_SCOPES } from './sharepointScopes.js'
 import { signInForScopes, MsalNotReady, MsalNotConfigured } from './msalClient.js'
+import { friendlyAuthError } from './authErrors.js'
 
 // Azure client/tenant come from /config at runtime now (getSpAuth in sharepointScopes.js), so a
 // deployment is pointed at a tenant with an env var and no rebuild; VITE_AZURE_* is the fallback.
@@ -204,8 +205,7 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
     } catch (e) {
       if (e instanceof MsalNotReady) setSpError('MSAL not loaded yet — try again.')
       else if (e instanceof MsalNotConfigured) setSpError('SharePoint sign-in isn’t configured for this deployment.')
-      else if (e?.errorCode === 'user_cancelled') setSpError('Sign-in cancelled.')
-      else setSpError(e?.message || 'Connection failed.')
+      else setSpError(friendlyAuthError(e))
     } finally {
       setSpConnecting(false)
     }

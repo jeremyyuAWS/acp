@@ -5,6 +5,7 @@ import Logo from './Logo.jsx'
 import { googleUserInfo } from './googleIdentity.js'
 import { SP_SCOPES } from './sharepointScopes.js'
 import { signInForScopes, MsalNotReady, MsalNotConfigured } from './msalClient.js'
+import { friendlyAuthError } from './authErrors.js'
 
 const initials = (n) => n.split(' ').map((x) => x[0]).join('').slice(0, 2)
 
@@ -157,8 +158,7 @@ export default function SignIn({ onSignedIn, notice = null }) {
     } catch (e) {
       if (e instanceof MsalNotReady) setErr('Microsoft sign-in isn’t ready yet — please refresh.')
       else if (e instanceof MsalNotConfigured) setErr('SharePoint sign-in isn’t configured for this deployment.')
-      else if (e?.errorCode === 'user_cancelled') setErr('Sign-in cancelled.')
-      else setErr(e?.message || 'Microsoft sign-in failed.')
+      else setErr(friendlyAuthError(e))
     } finally {
       setBusy(false)
     }
