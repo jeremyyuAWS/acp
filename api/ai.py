@@ -626,7 +626,11 @@ def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
         # reviewer re-draft (#131) and a button that silently does nothing on a compact model.
         alt = _vision_generate(_minimal_vision_prompt(style), image_bytes,
                                scan_id=scan_id, file=file)
-    return {"alt": alt, "model": OLLAMA_VISION_MODEL} if alt else None
+    # Defer to human review rather than surface a non-empty but USELESS draft — a weak vision model
+    # (moondream, the CPU default) can return garbage the empty-check above misses. Better no draft,
+    # which routes the image to a human, than a nonsense alt in a compliance artifact. See the
+    # 2026-08-12 vision bake-off and _is_usable_alt.
+    return {"alt": alt, "model": OLLAMA_VISION_MODEL} if (alt and _is_usable_alt(alt)) else None
 
 
 # An optional SECOND vision model for the validator — a different model catches a confident-but-wrong
@@ -649,6 +653,25 @@ def _content_terms(text: str) -> set:
     """Significant content words (lowercased, stopwords + short words dropped) — the nouns/verbs that
     carry meaning, so two descriptions of the same thing overlap and of different things don't."""
     return {w for w in re.findall(r"[a-z]{3,}", (text or "").lower()) if w not in _STOP}
+
+
+def _is_usable_alt(text: str) -> bool:
+    """Is a drafted alt string worth surfacing at all, or should the image defer to a human?
+
+    An empty reply already defers (describe_image returns None). But a weak vision model can return
+    non-empty GARBAGE — a run of punctuation ('~~~~~~Moviaio~~~~~~'), a bare '!!!Readings #1!', or a
+    couple of stray tokens. Measured against moondream (the CPU-deploy default) in the 2026-08-12
+    vision bake-off: on eight document images it emitted symbol runs, single-token fragments, and
+    title-only fragments. Shipping that as alt text is worse than none — it defeats the human-review
+    defer an empty reply triggers and puts a nonsense description into a compliance artifact. So the
+    draft must clear a floor of real, alphabetic content or it is treated as 'nothing usable'."""
+    t = (text or "").strip()
+    if len(t) < 8:
+        return False
+    letters = sum(c.isalpha() for c in t)
+    if letters < 6 or letters / len(t) < 0.5:      # mostly symbols/punctuation → garbage
+        return False
+    return len(_content_terms(t)) >= 2             # at least two meaningful content words
 
 
 def validate_alt_text(image_bytes: bytes, alt: str, *, filename: str = "", model: str | None = None,
