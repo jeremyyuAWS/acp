@@ -349,6 +349,11 @@ const _simSettings = { ai_enabled: true, drive_mirror_enabled: true, drive_mirro
 export const getSettings = () => (SIM
   ? sim({ ..._simSettings, simulated: true })
   : fetch(`${BASE}/settings`, { headers: headers() }).then(j))
+// Source-staleness (Release Center): did each file's SOURCE change in Drive since ACP scanned it?
+// headers() attaches X-Drive-Token, which the endpoint needs to read the source's current state.
+export const getSourceStatus = (scanId) => (SIM
+  ? sim({ scan_id: scanId, stale_count: 0, untracked_count: 0, unavailable_count: 0, files: [] })
+  : fetch(`${BASE}/scans/${scanId}/source-status`, { headers: headers() }).then(j))
 // AI usage + cost governance rollup (ADR 0019 Phase 1) — today / month / all-time.
 const _emptyRoll = { calls: 0, ok: 0, failed: 0, cost_usd: 0, avg_latency_ms: 0, scans: 0, by_provider: [], by_zone: [], by_surface: [] }
 export const getAiCosts = () => (SIM
