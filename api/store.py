@@ -80,6 +80,7 @@ _SCHEMA = [
       size_kb INT,
       pages INT,
       sheets INT,
+      source_modified TEXT,
       PRIMARY KEY (scan_id, file)
     )""",
     # Per-scan decision snapshots (PRD: time-travel). kind='triage' (value inscope|na|defer)
@@ -123,6 +124,11 @@ _SCHEMA = [
     # ADR 0010 — the remediated output's durable Blob URL, additive alongside
     # drive_write_url (a file can carry both; Drive is now a best-effort mirror).
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS blob_url TEXT",
+    # Source-staleness baseline: the source file's modifiedTime (RFC3339) at scan time, so the
+    # Release Center can tell whether the upstream Drive file changed since we fixed it. NULL for
+    # pre-existing scans and for non-Drive / SharePoint / upload files — those are "untracked",
+    # never falsely "unchanged".
+    "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS source_modified TEXT",
     """CREATE TABLE IF NOT EXISTS issue_records (
       scan_id TEXT, file TEXT, rule_id TEXT, wcag TEXT, severity TEXT, detail TEXT,
       page INT, location TEXT
@@ -743,11 +749,11 @@ class Store:
                  _json.dumps(report["scope"]) if report.get("scope") else None))
             for f in report["files"]:
                 self._db.execute(cur,
-                    "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped,checksum,size_kb,pages,sheets) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped,checksum,size_kb,pages,sheets,source_modified) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     (sid, f["file"], f["engine"], f["status"], f["score"],
                      int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id"), f.get("acp_stamped"),
-                     f.get("checksum"), f.get("size_kb"), f.get("pages"), f.get("sheets")))
+                     f.get("checksum"), f.get("size_kb"), f.get("pages"), f.get("sheets"), f.get("source_modified")))
                 for i in f["issues"]:
                     self._db.execute(cur,
                         "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location) "
@@ -883,15 +889,15 @@ class Store:
             (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text())
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped,checksum,size_kb,pages,sheets) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
+                "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped,checksum,size_kb,pages,sheets,source_modified) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
                 "engine=EXCLUDED.engine,status=EXCLUDED.status,score=EXCLUDED.score,"
                 "compliant=EXCLUDED.compliant,skipped_rules=EXCLUDED.skipped_rules,"
                 "drive_file_id=EXCLUDED.drive_file_id,acp_stamped=EXCLUDED.acp_stamped,checksum=EXCLUDED.checksum,"
-                "size_kb=EXCLUDED.size_kb,pages=EXCLUDED.pages,sheets=EXCLUDED.sheets",
+                "size_kb=EXCLUDED.size_kb,pages=EXCLUDED.pages,sheets=EXCLUDED.sheets,source_modified=EXCLUDED.source_modified",
                 (scan_id, f["file"], f["engine"], f["status"], f["score"],
                  int(f["compliant"]), f["skipped_rules"], f.get("drive_file_id"), f.get("acp_stamped"),
-                 f.get("checksum"), f.get("size_kb"), f.get("pages"), f.get("sheets")))
+                 f.get("checksum"), f.get("size_kb"), f.get("pages"), f.get("sheets"), f.get("source_modified")))
             self._db.execute(cur, "DELETE FROM issue_records WHERE scan_id=%s AND file=%s", (scan_id, f["file"]))
             for i in f.get("issues", []):
                 self._db.execute(cur,
@@ -1408,7 +1414,7 @@ class Store:
                 return None
             run = self._fill_run_aggregate(cur, run)
             self._db.execute(cur,
-                "SELECT file,engine,status,score,compliant,skipped_rules,remediated_at,drive_write_url,acp_stamped,published_at,size_kb,pages,sheets,drive_file_id "
+                "SELECT file,engine,status,score,compliant,skipped_rules,remediated_at,drive_write_url,acp_stamped,published_at,size_kb,pages,sheets,drive_file_id,source_modified "
                 "FROM file_records WHERE scan_id=%s ORDER BY file", (sid,))
             files = self._db.fetchall(cur)
             # ADR 0020 — a Discover-only scan (analysis deferred to Assess) has an inventory but no
@@ -1423,7 +1429,8 @@ class Store:
                           "status": "discovered", "score": None, "compliant": 0,
                           "skipped_rules": 0, "remediated_at": None, "drive_write_url": None,
                           "acp_stamped": None, "published_at": None, "size_kb": r.get("size_kb"),
-                          "pages": None, "sheets": None, "drive_file_id": r.get("drive_file_id")}
+                          "pages": None, "sheets": None, "drive_file_id": r.get("drive_file_id"),
+                          "source_modified": None}
                          for r in inv]
             # Drop ACP's own remediated copies when they shadow the source document they were
             # made from. They are artifacts, not documents in the estate: counting them
