@@ -3,7 +3,7 @@ import ScopeBanner from './ScopeBanner.jsx'
 import { documentSelection, documentScopeSentence } from './remediableScope.js'
 import FileDrawer from './FileDrawer.jsx'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
-import { openReport, publishFile, publishAllFiles, listHitlQueue, getSettings } from './api.js'
+import { openReport, publishFile, publishAllFiles, listHitlQueue, getSettings, getSourceStatus, rescoreFile } from './api.js'
 import { releaseDestination, releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 
 // Step 9 · Publish. Marks re-validated documents as published: the conformance status
@@ -60,6 +60,37 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [confirm])
+  // Source-staleness (Phase 3): has each file's SOURCE changed in Drive since the scan? Best-effort
+  // — a scan with nothing trackable returns all-untracked, and any error leaves the map empty (no
+  // badges) rather than blocking the queue. Never marks a file "unchanged" it can't actually verify.
+  const [srcStatus, setSrcStatus] = useState({ byFile: {}, stale: 0 })
+  const [rescanning, setRescanning] = useState({})
+  const loadSourceStatus = () => {
+    if (!run?.id) return setSrcStatus({ byFile: {}, stale: 0 })
+    getSourceStatus(run.id)
+      .then((s) => {
+        const byFile = {}
+        ;(s?.files || []).forEach((r) => { byFile[r.file] = r })
+        setSrcStatus({ byFile, stale: s?.stale_count || 0 })
+      })
+      .catch(() => setSrcStatus({ byFile: {}, stale: 0 }))
+  }
+  useEffect(() => {
+    loadSourceStatus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run?.id, ready.length])
+  const srcOf = (f) => srcStatus.byFile[f.file]?.state
+  const staleReady = ready.filter((f) => !done[f.file] && srcOf(f) === 'stale')
+  const rescanBusy = Object.keys(rescanning).length > 0
+  const rescanStale = async () => {
+    const targets = staleReady.map((f) => f.file)
+    if (!targets.length || rescanBusy) return
+    setRescanning(Object.fromEntries(targets.map((f) => [f, true])))
+    await Promise.allSettled(targets.map((f) => rescoreFile(run?.id, f)))
+    // The re-scan runs on the worker; re-check shortly so the refreshed baselines clear the badges.
+    // Honest: this re-checks the sources, it does not block on the job finishing.
+    setTimeout(() => { loadSourceStatus(); setRescanning({}) }, 4000)
+  }
   const orgLabel = me?.email
     ? me.email.split('@')[1]?.replace(/\.[^.]+$/, '') || me.name || 'your organisation'
     : me?.name || 'your organisation'
@@ -179,6 +210,14 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <h2 style={{ margin: 0 }}>Release queue <span className="muted">· {ready.length} verified in scope, ready to release</span></h2>
           <button disabled={readOnly || publishing || !ready.length || Object.keys(done).length >= ready.length} title={readOnly ? 'Time-travel replay — switch to the latest scan to release' : undefined} onClick={() => setConfirm({ kind: 'all' })}>{publishing ? 'Releasing…' : `Release all (${ready.length})`}</button>
         </div>
+        {staleReady.length > 0 && (
+          <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 9, background: '#FDECEC', border: '1px solid #E9A8A8', color: '#8A1F1F', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span>⚠ <b>{staleReady.length} document{staleReady.length !== 1 ? 's' : ''}</b> changed at the source in Drive since this scan — re-scan before releasing, or a released fix may be built on an out-of-date version.</span>
+            <button className="ghost small" disabled={readOnly || rescanBusy} onClick={rescanStale}>
+              {rescanBusy ? 'Re-scanning…' : `↻ Re-scan changed sources (${staleReady.length})`}
+            </button>
+          </div>
+        )}
         {ready.length > 8 && (
           <SearchFilterBar ctl={sfP} items={ready} facets={PUB_FACETS} noun="files"
                            placeholder="Search the publish queue…" />
@@ -198,6 +237,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                 <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span></button>
                 <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11' }}>{f.score} / 100</span>
                 <span className="muted" title="Where this document’s corrected copy will be written" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>→ {releaseDestination({ driveFileId: f.drive_file_id, driveMirrorEnabled, driveMirrorFolder }).label}</span>
+                {srcOf(f) === 'stale' && <span title="The source file in Drive changed after this scan — re-scan before releasing" style={{ fontSize: 11.5, whiteSpace: 'nowrap', color: '#8A1F1F', fontWeight: 600 }}>⚠ source changed</span>}
+                {srcOf(f) === 'unavailable' && <span className="muted" title="ACP could not read the source now (moved, deleted, or access lost)" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>source unreachable</span>}
                 {done[f.file]
                   ? <span className="okline" style={{ fontSize: 13 }}>✓ released · fixed copy in Blob · audit recorded{pubUrls[f.file] && <> · <a href={pubUrls[f.file]} target="_blank" rel="noopener noreferrer">↗ open in Drive</a></>}</span>
                   : <button className="qbtn approve" onClick={() => setConfirm({ kind: 'file', file: f.file })} disabled={readOnly || publishing} title={readOnly ? 'Time-travel replay — switch to the latest scan to release' : undefined}>↺ Release</button>}
