@@ -482,6 +482,48 @@ def remediation_status(sid: str, request: Request):
     return out
 
 
+@router.get("/scans/{sid}/source-status")
+def source_status(sid: str, request: Request):
+    """Has each file's SOURCE changed in Drive since ACP scanned it?
+
+    Compares the source's CURRENT modifiedTime (fetched now with the caller's read-only Drive
+    creds) to the baseline captured at scan time (file_records.source_modified). Owner-scoped.
+
+    A file with no baseline or no Drive id — and EVERY file when the scan's source isn't Drive —
+    is 'untracked', never a false 'unchanged'. A source that 404s/403s is 'unavailable', not
+    stale; one unreadable file never fails the batch. The Drive service is built lazily, so a scan
+    with nothing trackable answers without needing a Drive token at all."""
+    import source_staleness as _ss
+    scan = core.store.get_scan(sid, owner=_owner(request))
+    if scan is None:
+        raise HTTPException(404, "scan not found")
+    files = scan.get("files") or []
+    source_is_drive = (scan.get("run") or {}).get("source") == "drive"
+    trackable = source_is_drive and any(f.get("source_modified") and f.get("drive_file_id") for f in files)
+    svc = core.drive_service(request) if trackable else None   # 401 in GIS mode without X-Drive-Token
+    from googleapiclient.errors import HttpError
+    rows = []
+    for f in files:
+        baseline, drive_id = f.get("source_modified"), f.get("drive_file_id")
+        if not source_is_drive or not drive_id or not baseline:
+            row = _ss.classify_file(f, None, source_is_drive=source_is_drive)
+        else:
+            current, err = None, None
+            try:
+                current = svc.files().get(fileId=drive_id, fields="modifiedTime",
+                                          supportsAllDrives=True).execute().get("modifiedTime")
+            except HttpError as e:
+                status = getattr(getattr(e, "resp", None), "status", None)
+                err = "not_found" if status == 404 else "forbidden" if status == 403 else "drive_error"
+            except Exception:
+                err = "drive_error"   # a bad file must never 500 the batch
+            row = _ss.classify_file(f, current, source_is_drive=source_is_drive, fetch_error=err)
+        rows.append({"file": f["file"], "drive_file_id": drive_id, **row})
+    count = lambda st: sum(1 for r in rows if r["state"] == st)
+    return {"scan_id": sid, "stale_count": count("stale"), "untracked_count": count("untracked"),
+            "unavailable_count": count("unavailable"), "files": rows}
+
+
 @router.get("/scans/{sid}/files/{filename:path}/remediation-state")
 def file_remediation_state(sid: str, filename: str, request: Request):
     """Per-violation remediation state (ADR 0003 Phase 2) for one file — which specific
