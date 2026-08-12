@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { itemSeverity, itemCriterion, reviewFacets, applyReviewFilters } from './reviewInboxFilter.js'
+import { itemSeverity, itemCriterion, reviewFacets, applyReviewFilters, groupReviewByFile, worstSeverity } from './reviewInboxFilter.js'
 
 const Q = [
   { id: 'a', file: 'x.docx', rule: '1.1.1 — Non-text Content', severity: 'CRITICAL', _raw: { recommendation: 'write alt text' } },
@@ -33,5 +33,32 @@ describe('review inbox facets + filters', () => {
   it('no filters returns everything (the default state)', () => {
     expect(applyReviewFilters(Q, {})).toHaveLength(3)
     expect(applyReviewFilters(Q, { severity: null, criterion: null, query: '' })).toHaveLength(3)
+  })
+})
+
+describe('review inbox grouping (by file)', () => {
+  it('groups by file, files in first-appearance order, items in queue order', () => {
+    const g = groupReviewByFile(Q)
+    expect(g.map((x) => x.file)).toEqual(['x.docx', 'y.docx'])   // x first — its item leads the queue
+    expect(g[0].items.map((i) => i.id)).toEqual(['a', 'c'])      // both x.docx findings, in order
+    expect(g[0].count).toBe(2)
+    expect(g[1].items.map((i) => i.id)).toEqual(['b'])
+  })
+
+  it('surfaces each file’s WORST severity for the group header', () => {
+    const g = groupReviewByFile(Q)
+    expect(g[0].worst).toBe('CRITICAL')   // x.docx has CRITICAL + MODERATE
+    expect(g[1].worst).toBe('SERIOUS')
+    expect(worstSeverity([{ severity: 'MINOR' }, { severity: 'SERIOUS' }, { severity: 'MODERATE' }])).toBe('SERIOUS')
+    expect(worstSeverity([])).toBe(null)
+  })
+
+  it('is a no-op-safe transform of the filtered queue', () => {
+    // Grouping the RESULT of a filter keeps only what survived it — grouping composes with filters.
+    const filtered = applyReviewFilters(Q, { severity: 'CRITICAL' })
+    const g = groupReviewByFile(filtered)
+    expect(g.map((x) => x.file)).toEqual(['x.docx'])
+    expect(g[0].items.map((i) => i.id)).toEqual(['a'])
+    expect(groupReviewByFile([])).toEqual([])
   })
 })
