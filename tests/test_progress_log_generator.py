@@ -78,9 +78,21 @@ def test_a_version_number_in_prose_is_not_harvested_as_an_sc():
     assert e["scs"] == ["1.1.1"]
 
 
-def test_formats_omitted_means_all_four():
+def test_formats_omitted_means_all_tracked_formats():
+    # Omitting the format list means "all of them", which is now the five formats gen_progress_log
+    # tracks (html + the four document formats) — in agreement with gen_todo_status (issue #52).
     e = _parse("WCAG: 1.1.1\nMatrix-Note: Real note.")
     assert e["formats"] == list(glog.FORMATS)
+
+
+def test_html_is_a_valid_format_and_no_longer_dropped():
+    # Before issue #52, `(html)` raised "unknown format 'html'" and the entry was skipped — even
+    # though commits (#37, #41) declare html capability changes. It must now parse like any format.
+    e = _parse("WCAG: 1.3.1 (html)\nMatrix-Note: html pseudo-headings now file under 1.3.1.")
+    assert e is not None
+    assert e["formats"] == ["html"]
+    mixed = _parse("WCAG: 1.3.1 (html, docx)\nMatrix-Note: Real note.")
+    assert mixed["formats"] == ["html", "docx"]
 
 
 # ── "no matrix impact", in the spellings people actually use ──────────────────────────────────

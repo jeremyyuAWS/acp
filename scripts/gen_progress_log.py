@@ -71,7 +71,13 @@ TRACKED_SCS = frozenset({
     "1.4.10", "1.4.11", "1.4.12", "2.1.1", "2.1.2", "2.4.2", "2.4.3", "2.4.4",
     "2.4.6", "3.1.1", "3.1.2", "4.1.2",
 })
-FORMATS = ("docx", "xlsx", "pptx", "pdf")
+# html IS a Progress Log format. It is a real ACP engine and commits already declare `(html)`
+# capability changes in their WCAG: trailers (#37 read the HTML engine's 32 rules; #41 filed html
+# pseudo-headings under 1.3.1). Unlike the matrix (gen_matrix_coverage), which deliberately has no
+# html column, the LOG must be able to express an html change — otherwise the first author to pair
+# `(html)` with a real Matrix-Note gets a silently dropped entry (issue #52). gen_todo_status
+# already lists html; this brings the log into agreement.
+FORMATS = ("html", "docx", "xlsx", "pptx", "pdf")
 
 # Paths whose change implies a capability change worth declaring. Used by --check only.
 RULE_PATHS = (
