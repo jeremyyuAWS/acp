@@ -3,7 +3,8 @@ import ScopeBanner from './ScopeBanner.jsx'
 import { documentSelection, documentScopeSentence } from './remediableScope.js'
 import FileDrawer from './FileDrawer.jsx'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
-import { openReport, publishFile, publishAllFiles, listHitlQueue } from './api.js'
+import { openReport, publishFile, publishAllFiles, listHitlQueue, getSettings } from './api.js'
+import { releaseDestination, releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 
 // Step 9 · Publish. Marks re-validated documents as published: the conformance status
 // is recorded in the audit trail and the fixed copy (already in Blob + the Drive
@@ -37,6 +38,28 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       .catch(() => { if (live) setPendingReview({ items: 0, files: 0 }) })
     return () => { live = false }
   }, [run?.id, ready.length])
+  // The REAL release policy, read from the platform settings, so the release summary describes where
+  // a copy actually lands instead of a hard-coded guess. Best-effort — if it can't be read we fall
+  // back to the always-true half (a durable Blob copy) rather than assert a Drive folder we're
+  // unsure of.
+  const [settings, setSettings] = useState({ drive_mirror_enabled: false, drive_mirror_folder: 'Remediated' })
+  useEffect(() => {
+    let live = true
+    getSettings().then((s) => { if (live && s) setSettings(s) }).catch(() => {})
+    return () => { live = false }
+  }, [])
+  const driveMirrorEnabled = !!settings.drive_mirror_enabled
+  const driveMirrorFolder = settings.drive_mirror_folder || 'Remediated'
+  const anyDrive = ready.some((f) => f.drive_file_id)
+  // A release is confirmed before it runs: { kind: 'all' } or { kind: 'file', file }. The buttons
+  // set this; the modal's confirm calls the real publish path below.
+  const [confirm, setConfirm] = useState(null)
+  useEffect(() => {
+    if (!confirm) return
+    const onKey = (e) => { if (e.key === 'Escape') setConfirm(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [confirm])
   const orgLabel = me?.email
     ? me.email.split('@')[1]?.replace(/\.[^.]+$/, '') || me.name || 'your organisation'
     : me?.name || 'your organisation'
@@ -110,13 +133,35 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <div style={{ textAlign: 'right', minWidth: 150, fontSize: 13.5, lineHeight: 1.9 }}>
             <div><b style={{ color: '#3B6D11', fontSize: 17 }}>{ready.length}</b> ready for release</div>
             <div><b style={{ color: pubStarted ? '#3B6D11' : 'var(--muted)', fontSize: 17 }}>{pubStarted ? publishedCount : 0}</b> released</div>
-            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Policy: create a remediated copy</div>
+            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Policy: remediated copy → {driveMirrorEnabled && anyDrive ? <>Drive “{driveMirrorFolder}” + Blob</> : 'Blob'}</div>
           </div>
         </div>
         <div style={{ marginTop: 14, fontSize: 12.5 }}>
           <span className="muted">Evidence &amp; reports: </span>
           <button className="linklike" onClick={() => run?.id && openReport(run.id)}>⤓ Download scope-limited report (PDF)</button>
         </div>
+      </section>
+
+      {/* Release policy — an HONEST description of what the platform actually does, read from the
+          real settings, not a selector for a behaviour ACP can't perform. There is one policy:
+          write a corrected COPY; the original is never overwritten. The explainer says plainly why
+          replace-in-place isn't on offer. */}
+      <section className="panel" style={{ borderLeft: '3px solid #1F5FA8' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+          <b style={{ fontSize: 13.5 }}>Release policy</b>
+          <span style={{ fontSize: 13 }}>
+            <span aria-hidden="true" style={{ color: '#1F5FA8' }}>●</span> Remediated copy → {releaseDestinationPhrase({ anyDrive, driveMirrorEnabled, driveMirrorFolder })}
+          </span>
+        </div>
+        <div className="muted" style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.6 }}>
+          The source file is <b>never overwritten</b>. ACP verifies the criteria in scope — it does not certify overall WCAG conformance.
+        </div>
+        <details style={{ marginTop: 8 }}>
+          <summary className="linklike" style={{ cursor: 'pointer', fontSize: 12.5 }}>Why can’t I replace the original?</summary>
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.6, maxWidth: 640 }}>
+            Replacing the source file in place is on the roadmap, not built — so ACP doesn’t offer it rather than pretend to. Every release writes a corrected copy to a separate location, which is why your originals are never modified. SharePoint sources are connected read-only, so ACP cannot write back to them at all; those releases are delivered as a Blob download.
+          </div>
+        </details>
       </section>
 
       <details className="panel">
@@ -132,7 +177,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       <section className="panel">
         <div className="rubrichdr">
           <h2 style={{ margin: 0 }}>Release queue <span className="muted">· {ready.length} verified in scope, ready to release</span></h2>
-          <button disabled={readOnly || publishing || !ready.length || Object.keys(done).length >= ready.length} title={readOnly ? 'Time-travel replay — switch to the latest scan to release' : undefined} onClick={publishAll}>{publishing ? 'Releasing…' : `Release all (${ready.length})`}</button>
+          <button disabled={readOnly || publishing || !ready.length || Object.keys(done).length >= ready.length} title={readOnly ? 'Time-travel replay — switch to the latest scan to release' : undefined} onClick={() => setConfirm({ kind: 'all' })}>{publishing ? 'Releasing…' : `Release all (${ready.length})`}</button>
         </div>
         {ready.length > 8 && (
           <SearchFilterBar ctl={sfP} items={ready} facets={PUB_FACETS} noun="files"
@@ -152,9 +197,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
               <div className={`pubrow${done[f.file] ? ' pubdone' : ''}`} key={f.file}>
                 <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span></button>
                 <span className="badge" style={{ background: '#E7F0DC', color: '#3B6D11' }}>{f.score} / 100</span>
+                <span className="muted" title="Where this document’s corrected copy will be written" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>→ {releaseDestination({ driveFileId: f.drive_file_id, driveMirrorEnabled, driveMirrorFolder }).label}</span>
                 {done[f.file]
                   ? <span className="okline" style={{ fontSize: 13 }}>✓ released · fixed copy in Blob · audit recorded{pubUrls[f.file] && <> · <a href={pubUrls[f.file]} target="_blank" rel="noopener noreferrer">↗ open in Drive</a></>}</span>
-                  : <button className="qbtn approve" onClick={() => publish(f.file)} disabled={readOnly || publishing} title={readOnly ? 'Time-travel replay — switch to the latest scan to release' : undefined}>↺ Release</button>}
+                  : <button className="qbtn approve" onClick={() => setConfirm({ kind: 'file', file: f.file })} disabled={readOnly || publishing} title={readOnly ? 'Time-travel replay — switch to the latest scan to release' : undefined}>↺ Release</button>}
               </div>
             ))}
           </div>
@@ -174,6 +220,34 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         )}
       </section>
       {sel && <FileDrawer file={sel} scanId={run.id} onClose={() => setSel(null)} />}
+
+      {/* Confirmation before a release runs. States, in checkable terms, exactly what will happen —
+          destination, that the original is untouched, the audit entry, and that this is not a
+          conformance certificate. Escape or a backdrop click cancels. */}
+      {confirm && (() => {
+        const isAll = confirm.kind === 'all'
+        const targets = isAll ? ready.filter((f) => !done[f.file]) : ready.filter((f) => f.file === confirm.file)
+        const cnt = isAll ? targets.length : 1
+        const batchAnyDrive = targets.some((f) => f.drive_file_id)
+        const lines = releaseConfirmLines({ count: cnt, anyDrive: batchAnyDrive, driveMirrorEnabled, driveMirrorFolder })
+        const onGo = () => { setConfirm(null); if (isAll) publishAll(); else publish(confirm.file) }
+        return (
+          <div role="dialog" aria-modal="true" aria-label="Confirm release" onClick={() => setConfirm(null)}
+               style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}>
+            <div onClick={(e) => e.stopPropagation()}
+                 style={{ background: 'var(--panel, #fff)', color: 'var(--ink)', border: '1px solid var(--line)', borderRadius: 12, padding: '20px 22px', maxWidth: 520, width: '100%', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}>
+              <h3 style={{ margin: '0 0 12px' }}>{isAll ? `Release ${cnt} document${cnt === 1 ? '' : 's'}?` : `Release ${confirm.file}?`}</h3>
+              <ul style={{ margin: '0 0 18px', paddingLeft: 18, fontSize: 13.5, lineHeight: 1.65 }}>
+                {lines.map((l, i) => <li key={i}>{l}</li>)}
+              </ul>
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <button className="ghost" onClick={() => setConfirm(null)}>Cancel</button>
+                <button className="qbtn approve" onClick={onGo} disabled={cnt === 0}>{isAll ? `Release ${cnt}` : 'Release'}</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </>
   )
 }
