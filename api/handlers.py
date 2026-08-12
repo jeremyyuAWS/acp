@@ -828,7 +828,8 @@ def _scan_discover(payload: dict, job: dict) -> None:
         return
     # Normalise the source listing to the common analysis-item shape.
     norm = [{"file": it["name"], "drive_file_id": it.get("id"), "mime": it.get("mime"),
-             "path": it.get("path"), "checksum": it.get("checksum")} for it in items]
+             "path": it.get("path"), "checksum": it.get("checksum"),
+             "source_modified": it.get("source_modified")} for it in items]
     if defer:
         # ADR 0020 stage 3/4 — Discover LISTS only: classify from metadata (no file opened),
         # persist the inventory + the scan-level params, and STOP. The estate is browsable in
@@ -1023,6 +1024,7 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                      "compliant": 0, "skipped_rules": 0, "issues": []}
         fdict["drive_file_id"] = item.get("drive_file_id")
         fdict["checksum"] = checksum
+        fdict["source_modified"] = item.get("source_modified")
         if pinfo:
             fdict["pii"] = pinfo
         core.store.save_file_result(scan_id, fdict, now)

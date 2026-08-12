@@ -161,6 +161,7 @@ def _normalize(files: list[dict]) -> list[dict]:
         # ever present for real binary uploads, which is exactly the case checksum
         # dedup cares about.
         result.append({"name": unique, "id": f["id"], "checksum": f.get("md5Checksum"),
+                       "source_modified": f.get("modifiedTime"),
                        **({"mime": mime} if mime in EXPORT_MAP else {})})
     if skipped:
         # Not silent anymore: unsupported types (images, .txt/.csv, legacy .doc/.ppt/.xls,
@@ -2225,6 +2226,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
 
         # Build name → Drive file id map so write-back can reference the original.
         drive_id_map = {it["name"]: it.get("id") for it in items}
+        source_modified_map = {it["name"]: it.get("source_modified") for it in items}
 
         return {
             "_scan_id": scan_id,   # hint to save_scan so it reuses the same ID → trace joins
@@ -2237,7 +2239,8 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             "owner": user,            # per-user isolation: who ran this scan
 
             "files": [{"file": k, "engine": raw[k]["engine"], **assessed[k], "issues": raw[k]["issues"],
-                       "drive_file_id": drive_id_map.get(k), "pii": pii_by_file.get(k),
+                       "drive_file_id": drive_id_map.get(k), "source_modified": source_modified_map.get(k),
+                       "pii": pii_by_file.get(k),
                        "acp_stamped": detect_acp_stamp(tmp / k, Path(k).suffix.lower()),
                        "classify": raw[k].get("classify"),   # ADR 0020 stage 2 — inventory peek
                        **_file_extent(tmp / k, Path(k).suffix.lower())}

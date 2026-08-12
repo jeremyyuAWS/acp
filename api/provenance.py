@@ -38,7 +38,7 @@ ACP_SOURCE_KEY = "acpSourceFile"
 
 # Ask for this in every files.list `fields` mask that feeds discovery — without it Drive
 # omits `properties` entirely and `is_acp_generated` silently answers False for everything.
-DRIVE_FIELDS = "id,name,mimeType,md5Checksum,properties"
+DRIVE_FIELDS = "id,name,mimeType,md5Checksum,modifiedTime,properties"
 
 
 def stamp(source_filename: str | None = None) -> dict[str, str]:
