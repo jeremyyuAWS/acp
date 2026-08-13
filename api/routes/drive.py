@@ -42,7 +42,13 @@ def me(request: Request):
         raise
     except Exception as e:
         raise _drive_error(e)
-    return {"email": u.get("emailAddress"), "name": u.get("displayName"), "photo": u.get("photoLink")}
+    # Prefer the access-gate-verified identity for the ownership signal (it is set for BOTH
+    # Google and Microsoft sign-ins), falling back to the Drive-reported email. is_scope_owner
+    # tells the SPA whether this user may edit the scan scope — the same owner-only gate PUT
+    # /settings enforces — so the scope editor can be hidden for non-owners POST-auth.
+    verified = getattr(request.state, "user_email", None) or u.get("emailAddress")
+    return {"email": u.get("emailAddress"), "name": u.get("displayName"), "photo": u.get("photoLink"),
+            "is_scope_owner": core.is_scope_owner(verified)}
 
 
 @router.get("/sources")

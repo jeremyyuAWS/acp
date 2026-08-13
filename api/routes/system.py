@@ -284,7 +284,7 @@ def monitor_estate(request: Request):
 
 
 @router.get("/config")
-def config():
+def config(request: Request = None):
     """Tells the SPA how to authenticate: GIS per-user (client id present) vs demo."""
     import os
     # Public Langfuse trace base, so the SPA can deep-link "📊 View trace" chips straight
@@ -305,6 +305,14 @@ def config():
             **_build_info(),
             "ai": _ai.provenance(),
             "scope": _active_scope_info(),
+            # Ownership signal for the scope editor. /config is fetched PRE-auth, so identity is
+            # usually absent here (None) — the authoritative per-user value is on `me` (GET /me).
+            # When the request DOES carry a verified identity (the access gate ran), report it;
+            # otherwise None. When no owner is configured at all, everyone is an owner.
+            "is_scope_owner": (core.is_scope_owner(_ident)
+                               if (_ident := getattr(getattr(request, "state", None), "user_email", None))
+                               or not core.OWNER_EMAIL
+                               else None),
             "langfuse_trace_base": (f"{lf_host}/project/{lf_project}/traces" if lf_host else None)}
 
 
