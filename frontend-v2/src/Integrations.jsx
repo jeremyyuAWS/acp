@@ -116,6 +116,18 @@ function lastScanLabel(scans, type) {
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
 
+// Most-recent completed scan RUN object for a source (not just its date) — used for the
+// truthful "N in last scan" count line, which reads the run's post-filter `files`.
+function lastCompletedRun(scans, type) {
+  const src = type === 'google_drive' ? 'drive' : type === 'onedrive' ? 'sharepoint' : null
+  if (!src) return null
+  let latest = null
+  for (const s of scans || []) {
+    if (s.source === src && s.completed_at && (!latest || s.completed_at > latest.completed_at)) latest = s
+  }
+  return latest
+}
+
 // Per-source health: this source's own recent scan history (up to its last 5 completed
 // scans) — error rate (files the engine couldn't open/parse) + avg compliance score.
 // A source with a rising error rate usually means a connector/permissions problem, not
@@ -136,11 +148,6 @@ function sourceHealth(scans, type) {
   const status = errRate >= 0.15 ? 'unhealthy' : errRate > 0 ? 'degraded' : 'healthy'
   return { status, errRate, totalErr, totalFiles, avgScore, scansCounted: recent.length }
 }
-const HEALTH_BADGE = {
-  healthy:   ['✓ healthy', '#3B6D11', '#E7F0DC'],
-  degraded:  ['◐ degraded', '#854F0B', '#FAEEDA'],
-  unhealthy: ['⚠ unhealthy', '#A32D2D', '#FCEBEB'],
-}
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
@@ -157,6 +164,11 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
   const [spError,      setSpError]      = useState('')
   const [googleClientId, setGoogleClientId] = useState('')
   const [scanModalOpen, setScanModalOpen] = useState(false)
+  // Which connected sources the review modal opened against (page-level "New scan" → all connected;
+  // a card's "New scan" → just that one), and which of them are ticked inside the modal.
+  const [modalTargets, setModalTargets] = useState([])
+  const [pickedIds,    setPickedIds]    = useState([])
+  const availRef = useRef(null)
   const gdTokenClientRef = useRef(null)
 
   useEffect(() => {
@@ -164,8 +176,6 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
   }, [])
 
   const driveBackend   = sources.find((s) => s.type === 'google_drive')
-  const connectedCount = (hasDriveToken ? 1 : 0) + (hasSPToken ? 1 : 0)
-  const total          = sources.reduce((a, s) => a + (s.files || 0), 0)
 
   // ── OAuth connect ────────────────────────────────────────────────────────────
 
@@ -229,6 +239,10 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
 
   const canScanAll = SIM || hasDriveToken || hasSPToken
 
+  // The connected connectable sources (Drive / OneDrive) — the ones a scan can actually run against.
+  const connectedSources = CONNECTABLE.filter((s) => (s.type === 'google_drive' ? hasDriveToken : hasSPToken))
+    .map((s) => (s.type === 'google_drive' && hasDriveToken ? (driveBackend || s) : s))
+
   // The scan dispatch the "Scan all sources" button used to run inline. It now runs only after the
   // scope wizard's "Start scan" confirms scope — so every scan from here has a confirmed scope.
   const runTheScan = () => {
@@ -237,110 +251,154 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
     if (hasSPToken)    { onScan('sharepoint'); return }
   }
 
+  // Open the single gated review modal. `targets` are the connected sources it offers; every one is
+  // ticked by default. Both the page-level "New scan" and each card's "New scan" route through here.
+  const openScanModal = (targets) => {
+    const list = targets && targets.length ? targets : connectedSources
+    setModalTargets(list)
+    setPickedIds(list.map((s) => s.id))
+    setScanModalOpen(true)
+  }
+
+  // The modal's confirm. Uses the chosen source: one source → the per-source dispatch (Drive still
+  // opens its folder picker); >1 or none → the "scan everything connected" path. Reuses handleScan /
+  // runTheScan so the OAuth/SIM branches stay in one place.
+  const runChosenScan = () => {
+    const chosen = modalTargets.filter((s) => pickedIds.includes(s.id))
+    if (chosen.length === 1) {
+      const t = chosen[0]
+      if (SIM) { onScan(t.type === 'google_drive' ? 'drive' : 'sharepoint'); return }
+      handleScan(t.id)
+      return
+    }
+    runTheScan()
+  }
+
+  // The connected sources the modal is currently offering, filtered to the ticked ones.
+  const chosenSources = modalTargets.filter((s) => pickedIds.includes(s.id))
+  const estCount = (chosenSources.length ? chosenSources : connectedSources)
+    .reduce((a, s) => a + (s.files || 0), 0)
+  const estWhere = chosenSources.length === 1
+    ? (chosenSources[0].type === 'google_drive' ? 'Google Drive' : 'OneDrive')
+    : `${(chosenSources.length || connectedSources.length)} sources`
+
+  // One dominant health state per source — never more than one badge (see plan §4).
+  const healthState = (h) => {
+    if (!h) return { key: 'none', label: 'Not yet scanned' }
+    if (h.status === 'healthy') return { key: 'ok', label: 'Healthy' }
+    return { key: 'attn', label: 'Needs attention',
+      sub: `${h.totalErr} file${h.totalErr !== 1 ? 's' : ''} couldn’t be accessed in recent scans` }
+  }
+  const HEALTH_STATE = {
+    ok:   ['#3B6D11', '#E7F0DC'],
+    attn: ['#A32D2D', '#FCEBEB'],
+    none: ['var(--muted)', 'var(--line)'],
+  }
+
   return (
     <>
+      {/* ── Page header ─────────────────────────────────────────────────────── */}
       <div className="estatebar">
         <div>
-          <b>{connectedCount} source{connectedCount !== 1 ? 's' : ''} connected</b>
-          {total > 0 && ` · ${total.toLocaleString()} documents under compliance monitoring`}
-          <div className="muted" style={{ marginTop: 2 }}>
-            connect a source below, then run a scan — the mova Agent classifies and re-scans continuously
+          <b style={{ fontSize: 20 }}>Content Sources</b>
+          <div className="muted" style={{ marginTop: 4 }}>
+            Manage the locations ACP scans and monitors.
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {/* Scan-time options — they configure the NEXT scan, so they live here next
-              to the Scan button (not in the global header). */}
-          <details style={{ border: '1px solid var(--line)', borderRadius: 8 }}>
-            <summary style={{ padding: '6px 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', userSelect: 'none' }}>
-              Choose what to assess
-            </summary>
-            <div style={{ padding: '4px 12px 12px', width: 'min(560px, 78vw)' }}>
-              <ScanScopeWizard />
-            </div>
-          </details>
-          {setDeepScan && (
-            <ScanSwitch on={deepScan} onToggle={() => setDeepScan(v => !v)} label="PII scan"
-              title={deepScan
-                ? 'PII scan also looks for sensitive data (SSNs, credit cards, emails) in your documents — a bit slower on large PDF sets. Turn off for a fast, accessibility-only scan.'
-                : 'Off — Fast scan (accessibility only). Turn on to also detect sensitive data (PII).'} />
-          )}
-          {setQueuedScan && (
-            <ScanSwitch on={queuedScan} onToggle={() => setQueuedScan(v => !v)} label="Durable scan"
-              title={queuedScan
-                ? 'Durable scan — runs in the background queue: keeps going if you close the tab AND survives server restarts, with parallel downloads for large libraries (recommended). Turn off for a quick one-off scan in this browser session.'
-                : 'Off — Quick scan in this browser session: starts instantly, streams live per-file progress, best for spot-checking a few files. Turn on for a durable background scan that survives restarts and handles very large libraries.'} />
-          )}
-          {setExcludeRemediated && (
-            <ScanSwitch on={excludeRemediated} onToggle={() => setExcludeRemediated(v => !v)} label="Skip Remediated/"
-              title={excludeRemediated
-                ? 'On — skips the Remediated/ folder ACP writes fixed copies to, so they don’t get re-discovered and flagged as new documents needing attention. Turn off to also audit that folder.'
-                : 'Off — the Remediated/ folder (ACP’s own output) is scanned like any other folder. Turn on to skip it and avoid a re-discovery feedback loop.'} />
-          )}
-          {setIncremental && (
-            <ScanSwitch on={incremental} onToggle={() => setIncremental(v => !v)} label="Incremental scan"
-              title={incremental
-                ? 'On — a file byte-identical to one already scored under the current rubric is copied forward instead of re-analysed (ADR 0011). Turn off to force a fresh re-analysis of every file (e.g. after a manual rubric edit, or if you don’t trust the cache).'
-                : 'Off — Fresh scan: every file is re-downloaded and re-analysed, even ones that haven’t changed. Turn on for the normal, much faster incremental behavior.'} />
-          )}
-          <button disabled={busy || !canScanAll} onClick={() => setScanModalOpen(true)}>
-            {busy ? 'scanning…' : 'Scan all sources'}
+          <button type="button" className="ghost small"
+                  onClick={() => availRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+            + Connect source
+          </button>
+          <button disabled={busy || !canScanAll} onClick={() => openScanModal(connectedSources)}>
+            {busy ? 'scanning…' : 'New scan'}
           </button>
         </div>
       </div>
 
-      {/* ── Active sources — horizontal cards ─────────────────────────────── */}
-      <div className="intsources">
-        {CONNECTABLE.map((s) => {
-          const isGdrive     = s.type === 'google_drive'
-          const connected    = isGdrive ? hasDriveToken : hasSPToken
-          const enriched     = isGdrive && hasDriveToken ? (driveBackend || s) : s
-          const isConnecting = isGdrive ? gdConnecting : spConnecting
-          const error        = isGdrive ? gdError : spError
-          const desc         = isGdrive
-            ? 'Scan Google Drive files for WCAG accessibility issues'
-            : 'Scan OneDrive & SharePoint for accessibility issues'
-          const lastScan     = lastScanLabel(scans, s.type)
-          const health       = sourceHealth(scans, s.type)
+      {/* ── Connected sources — one status card each ────────────────────────── */}
+      {connectedSources.length > 0 && (
+        <section style={{ marginBottom: 24 }}>
+          <div className="intsec-head muted">CONNECTED SOURCES ({connectedSources.length})</div>
+          <div className="intsources">
+            {connectedSources.map((src) => {
+              const isGdrive  = src.type === 'google_drive'
+              const typeLabel = isGdrive ? 'Google Drive' : 'OneDrive'
+              const title     = src.name && src.name !== typeLabel ? `${typeLabel} — ${src.name}` : typeLabel
+              const store     = isGdrive ? 'Drive' : 'OneDrive'
+              const lastRun   = lastCompletedRun(scans, src.type)
+              const lastScan  = lastScanLabel(scans, src.type)
+              const health    = healthState(sourceHealth(scans, src.type))
+              const [hfg, hbg] = HEALTH_STATE[health.key]
+              const err       = isGdrive ? gdError : spError
+              return (
+                <div className="srccard srccard--on" key={src.id}>
+                  <div className="srccard-logo" aria-hidden="true">{LOGO[src.type] || LOGO.web}</div>
 
-          return (
-            <div className={`srccard${connected ? ' srccard--on' : ''}`} key={s.id}>
-              {/* Left: logo */}
-              <div className="srccard-logo" aria-hidden="true">{LOGO[s.type] || LOGO.web}</div>
-
-              {/* Middle: name + status */}
-              <div className="srccard-body">
-                <div className="srccard-name">{enriched.name || s.name}</div>
-                {connected ? (
-                  <div className="srccard-meta">
-                    {enriched.user && <span>{enriched.user}</span>}
-                    {enriched.files != null && <span>{enriched.files.toLocaleString()} files</span>}
-                    <span>{lastScan ? `last scanned ${lastScan}` : 'not yet scanned'}</span>
-                    <span className="srccard-badge">
-                      <span className="pulsedot" aria-hidden="true" />connected · read-only
-                    </span>
-                    {health && (() => {
-                      const [label, fg, bg] = HEALTH_BADGE[health.status]
-                      const title = `${health.totalErr} of ${health.totalFiles} files failed to open across the last ${health.scansCounted} scan${health.scansCounted !== 1 ? 's' : ''}`
-                        + (health.avgScore != null ? ` · avg compliance ${health.avgScore}/100` : '')
-                      return <span className="srccard-badge" style={{ background: bg, color: fg, padding: '2px 8px', borderRadius: 999, fontSize: 11.5 }} title={title}>{label}</span>
-                    })()}
+                  <div className="srccard-body">
+                    <div className="srccard-name">{title}</div>
+                    <div className="srccard-meta">
+                      {src.user && <span>{src.user}</span>}
+                      {src.folder && <span>folder: {src.folder}</span>}
+                      <span className="srccard-count">
+                        {src.files != null ? `${src.files.toLocaleString()} in ${store}` : `— in ${store}`}
+                        {lastRun && lastRun.files != null && ` · ${lastRun.files.toLocaleString()} in last scan`}
+                      </span>
+                      <span>{lastScan ? `Last scanned ${lastScan}` : 'Not yet scanned'}</span>
+                    </div>
+                    <div style={{ marginTop: 6 }}>
+                      <span className="srccard-health" style={{ background: hbg, color: hfg }}>{health.label}</span>
+                      {health.sub && <div className="srccard-health-sub muted">{health.sub}</div>}
+                    </div>
+                    <details className="srccard-conn">
+                      <summary>Connection details</summary>
+                      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                        <span className="pulsedot" aria-hidden="true" /> Connected · read-only access
+                      </div>
+                    </details>
+                    {err && <div className="srccard-err">{err}</div>}
                   </div>
-                ) : (
-                  <div className="srccard-desc">{desc}</div>
-                )}
-                {error && <div className="srccard-err">{error}</div>}
-              </div>
 
-              {/* Right: action */}
-              <div className="srccard-actions">
-                {connected ? (
-                  <>
-                    <button className="ghost small" onClick={() => setSelSrc(enriched)}>Details</button>
-                    <button disabled={busy} onClick={() => handleScan(s.id)}>
-                      {busy ? 'Scanning…' : 'Scan'}
+                  <div className="srccard-actions">
+                    <button disabled={busy} onClick={() => openScanModal([src])}>
+                      {busy ? 'Scanning…' : 'New scan'}
                     </button>
-                  </>
-                ) : (
+                    <button className="ghost small" onClick={() => setSelSrc(src)}>Manage</button>
+                    <details className="srccard-ovf">
+                      <summary aria-label="More actions" title="More actions">⋯</summary>
+                      <div className="srccard-ovf-menu">
+                        <button type="button" onClick={() => setSelSrc(src)}>View files</button>
+                        <button type="button" onClick={() => setSelSrc(src)}>Details</button>
+                      </div>
+                    </details>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* ── Available sources — connectable, not yet connected ──────────────── */}
+      <section ref={availRef}>
+        <div className="intsec-head muted">AVAILABLE SOURCES</div>
+        <div className="intsources">
+          {CONNECTABLE.filter((s) => !(s.type === 'google_drive' ? hasDriveToken : hasSPToken)).map((s) => {
+            const isGdrive     = s.type === 'google_drive'
+            const isConnecting = isGdrive ? gdConnecting : spConnecting
+            const error        = isGdrive ? gdError : spError
+            const desc         = isGdrive
+              ? 'Scan Google Drive files for WCAG accessibility issues'
+              : 'Scan OneDrive & SharePoint for accessibility issues'
+            return (
+              <div className="srccard" key={s.id}>
+                <div className="srccard-logo" aria-hidden="true">{LOGO[s.type] || LOGO.web}</div>
+                <div className="srccard-body">
+                  <div className="srccard-name">{s.name}</div>
+                  <div className="srccard-desc">{desc}</div>
+                  {error && <div className="srccard-err">{error}</div>}
+                </div>
+                <div className="srccard-actions">
                   <button className="srccard-connect" disabled={isConnecting}
                           onClick={isGdrive ? connectGoogle : connectMicrosoft}>
                     {isConnecting
@@ -349,28 +407,20 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                         ? <><GoogleG /> Connect Google Drive</>
                         : <><MsLogo /> Connect Microsoft</>}
                   </button>
-                )}
+                </div>
               </div>
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
+        </div>
+        {/* The far-future connectors — a compact muted line, not big disabled cards. */}
+        <div className="intsoon-line muted">
+          More sources coming soon: {FUTURE.map((f) => f.name).join(' · ')}
+        </div>
+      </section>
 
-      {/* ── Coming-soon sources — small chips ─────────────────────────────── */}
-      <div className="intsoon">
-        {FUTURE.map((s) => (
-          <div className="soonchip" key={s.name} aria-hidden="true">
-            {s.logo}
-            <span className="soonchip-name">{s.name}</span>
-            <span className="soonchip-tag">coming soon</span>
-          </div>
-        ))}
-      </div>
-
-      {/* Confirm scope before every scan — a required modal prefilled with the last-used scope.
-          "Start scan" persists the scope (when Remember is on) then runs; Cancel/× just closes. */}
+      {/* ── The single gated "New scan" review modal ────────────────────────── */}
       {scanModalOpen && (
-        <div role="dialog" aria-modal="true" aria-label="Configure scan scope"
+        <div role="dialog" aria-modal="true" aria-label="New scan"
              onClick={() => setScanModalOpen(false)}
              style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,.45)',
                       display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '6vh 16px' }}>
@@ -378,13 +428,78 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                style={{ background: 'var(--surface, #fff)', color: 'inherit', borderRadius: 12,
                         width: 'min(620px, 100%)', maxHeight: '88vh', overflowY: 'auto',
                         boxShadow: '0 12px 40px rgba(0,0,0,.3)', padding: '16px 18px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
-              <h3 style={{ margin: 0, fontSize: 16 }}>Configure scan scope</h3>
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+              <h3 style={{ margin: 0, fontSize: 16 }}>New scan</h3>
               <button className="ghost small" aria-label="Close" onClick={() => setScanModalOpen(false)}
                       style={{ marginLeft: 'auto' }}>×</button>
             </div>
-            <ScanScopeWizard showStartButton
-              onStartScan={(o) => { setScanModalOpen(false); if (!o?.cancel) runTheScan() }} />
+
+            {/* 1. Sources included */}
+            <div className="scanmodal-sec">
+              <div className="scanmodal-head">Sources included</div>
+              {modalTargets.length === 0 ? (
+                <div className="muted" style={{ fontSize: 13 }}>All connected sources will be scanned.</div>
+              ) : modalTargets.length === 1 ? (
+                <div style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span className="pulsedot" aria-hidden="true" />
+                  {modalTargets[0].type === 'google_drive' ? 'Google Drive' : 'OneDrive'}
+                  {modalTargets[0].user ? ` — ${modalTargets[0].user}` : ''}
+                </div>
+              ) : (
+                modalTargets.map((s) => (
+                  <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, margin: '4px 0' }}>
+                    <input type="checkbox" checked={pickedIds.includes(s.id)}
+                           onChange={(e) => setPickedIds((ids) => e.target.checked
+                             ? [...ids, s.id] : ids.filter((x) => x !== s.id))} />
+                    {s.type === 'google_drive' ? 'Google Drive' : 'OneDrive'}{s.user ? ` — ${s.user}` : ''}
+                  </label>
+                ))
+              )}
+            </div>
+
+            {/* 2. Scan behavior — the four toggles moved out of the toolbar */}
+            <div className="scanmodal-sec">
+              <div className="scanmodal-head">Scan behavior</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {setDeepScan && (
+                  <ScanSwitch on={deepScan} onToggle={() => setDeepScan(v => !v)} label="PII scan"
+                    title={deepScan
+                      ? 'PII scan also looks for sensitive data (SSNs, credit cards, emails) in your documents — a bit slower on large PDF sets. Turn off for a fast, accessibility-only scan.'
+                      : 'Off — Fast scan (accessibility only). Turn on to also detect sensitive data (PII).'} />
+                )}
+                {setQueuedScan && (
+                  <ScanSwitch on={queuedScan} onToggle={() => setQueuedScan(v => !v)} label="Durable scan"
+                    title={queuedScan
+                      ? 'Durable scan — runs in the background queue: keeps going if you close the tab AND survives server restarts, with parallel downloads for large libraries (recommended). Turn off for a quick one-off scan in this browser session.'
+                      : 'Off — Quick scan in this browser session: starts instantly, streams live per-file progress, best for spot-checking a few files. Turn on for a durable background scan that survives restarts and handles very large libraries.'} />
+                )}
+                {setExcludeRemediated && (
+                  <ScanSwitch on={excludeRemediated} onToggle={() => setExcludeRemediated(v => !v)} label="Skip Remediated/"
+                    title={excludeRemediated
+                      ? 'On — skips the Remediated/ folder ACP writes fixed copies to, so they don’t get re-discovered and flagged as new documents needing attention. Turn off to also audit that folder.'
+                      : 'Off — the Remediated/ folder (ACP’s own output) is scanned like any other folder. Turn on to skip it and avoid a re-discovery feedback loop.'} />
+                )}
+                {setIncremental && (
+                  <ScanSwitch on={incremental} onToggle={() => setIncremental(v => !v)} label="Incremental scan"
+                    title={incremental
+                      ? 'On — a file byte-identical to one already scored under the current rubric is copied forward instead of re-analysed (ADR 0011). Turn off to force a fresh re-analysis of every file (e.g. after a manual rubric edit, or if you don’t trust the cache).'
+                      : 'Off — Fresh scan: every file is re-downloaded and re-analysed, even ones that haven’t changed. Turn on for the normal, much faster incremental behavior.'} />
+                )}
+              </div>
+            </div>
+
+            {/* 3. Formats & WCAG criteria + estimate + the confirm/cancel footer */}
+            <div className="scanmodal-sec">
+              <div className="scanmodal-head">Formats &amp; WCAG criteria</div>
+              <div className="scanmodal-est muted">
+                ~{estCount.toLocaleString()} documents in {estWhere}
+                <span style={{ display: 'block', fontSize: 11 }}>
+                  Discovered count — the actual scanned total may be lower after dedup, scope and unsupported-type filtering.
+                </span>
+              </div>
+              <ScanScopeWizard showStartButton
+                onStartScan={(o) => { setScanModalOpen(false); if (!o?.cancel) runChosenScan() }} />
+            </div>
           </div>
         </div>
       )}

@@ -43,7 +43,7 @@ const SHOW_A11Y = import.meta.env.DEV || (typeof location !== 'undefined' && new
 // step=0 → utility tab (no number); step>0 → workflow step with numbered badge
 const TABS = [
   ['overview',      'Overview',      'at a glance',         0],
-  ['integrations',  'Integrations',  'connect sources',     0],
+  ['integrations',  'Sources',       'connect sources',     0],
   ['discover',      'Discover',      'inventory · classify', 1],
   ['assess',        'Assess',        'score vs WCAG',       2],
   ['remediate',     'Remediate',     'fix issues',          3],
@@ -871,7 +871,7 @@ export default function App() {
 
         {/* Guided workflow: a "next step" CTA on each workflow tab once a scan exists.
             'discover' is excluded — it owns a sub-step CTA (Inventory → Classify → Actions → Assess). */}
-        {run && ['integrations', 'assess', 'remediate', 'publish'].includes(view) && (() => {
+        {run && ['assess', 'remediate', 'publish'].includes(view) && (() => {
           const flow = ['integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor']
           const label = { discover: '1 · Discover — classify the estate', assess: '2 · Assess — score vs WCAG',
                           remediate: '3 · Remediate — fix the issues', publish: '4 · Publish — certify what passes',

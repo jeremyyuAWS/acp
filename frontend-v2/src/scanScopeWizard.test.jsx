@@ -341,12 +341,12 @@ describe('Integrations wires the wizard', () => {
     expect(code).toMatch(/<ScanScopeWizard/)
   })
 
-  it('routes "Scan all sources" through a required modal, not a direct scan', () => {
-    // The button opens the modal instead of dispatching the scan inline.
+  it('routes "New scan" through a required modal, not a direct scan', () => {
+    // Every scan entry opens the review modal instead of dispatching the scan inline.
     expect(code).toMatch(/setScanModalOpen\(true\)/)
     // The modal is a real dialog carrying the wizard with a Start button and a scan callback.
     expect(code).toMatch(/role="dialog"[\s\S]*aria-modal="true"/)
     expect(code).toMatch(/<ScanScopeWizard showStartButton/)
-    expect(code).toMatch(/onStartScan=\{[^}]*runTheScan\(\)/)
+    expect(code).toMatch(/onStartScan=\{[^}]*runChosenScan\(\)/)
   })
 })
