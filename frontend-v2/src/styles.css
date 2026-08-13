@@ -6,6 +6,10 @@
   --line: #ece8ee;
   --bg: #faf8fb;
   --card: #ffffff;
+  /* Opaque surface token used by sticky table headers/columns and card backgrounds. Aliased to
+     --card so it is always opaque (an undefined --surface resolves to transparent, which let
+     scrolling rows bleed through the sticky scope-matrix header). */
+  --surface: var(--card);
 }
 * { box-sizing: border-box; }
 
