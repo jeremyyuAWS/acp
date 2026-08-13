@@ -36,12 +36,19 @@ vi.mock('./api.js', () => ({
 const { default: ScanScopeWizard } = await import('./ScanScopeWizard.jsx')
 const { SCOPE_UNIVERSE, SCOPE_FORMATS } = await import('./scopePresets.js')
 const { TRACKED_17 } = await import('./ruleDetails.js')
+const { ASSESSMENT_FALLBACK, assessmentFor } = await import('./capability.js')
 
 // Derived exactly as the component derives them — the universe narrowed to the tracked criteria,
-// then a per-format count. This is the answer the cards must show.
-const OFFERED = SCOPE_UNIVERSE.filter((r) => TRACKED_17.has(r.sc))
+// then split into what ACP can actually ASSESS (`ready`, the selectable/counted cells) vs what the
+// engine merely reaches. A cell is ready when its assessment lane is 'auto' or 'review' (both
+// return a verdict); 'human'/absent do not, so they are greyed and can't be selected.
+const isReady = (sc, f) => ['auto', 'review'].includes(assessmentFor(ASSESSMENT_FALLBACK, f, sc))
+const OFFERED = SCOPE_UNIVERSE
+  .filter((r) => TRACKED_17.has(r.sc))
+  .map((r) => ({ ...r, ready: r.formats.filter((f) => isReady(r.sc, f)) }))
+// The count each format card shows: tracked criteria ACP can assess for that format (ready only).
 const FMT_COUNT = Object.fromEntries(
-  SCOPE_FORMATS.map((f) => [f, OFFERED.filter((r) => r.formats.includes(f)).length]),
+  SCOPE_FORMATS.map((f) => [f, OFFERED.filter((r) => r.ready.includes(f)).length]),
 )
 const FMT_LABEL = { docx: 'DOCX', xlsx: 'XLSX', pptx: 'PPTX', pdf: 'PDF' }
 
@@ -82,8 +89,9 @@ describe('the wizard chrome', () => {
     const text = c.textContent
     expect(text).toMatch(/supported checks selected/)
     expect(text).toMatch(/unsupported combination.*will not be evaluated/)
-    // Everything supported evaluates the whole offered grid.
-    const total = OFFERED.reduce((n, r) => n + r.formats.length, 0)
+    // Everything supported evaluates every READY cell in the offered grid (not-ready pairs are
+    // excluded from selection, so they are not counted).
+    const total = OFFERED.reduce((n, r) => n + r.ready.length, 0)
     expect(text).toMatch(new RegExp(`${total} supported checks selected`))
   })
 
@@ -104,8 +112,10 @@ describe('the format cards', () => {
       expect(card.getAttribute('aria-label')).toContain(`${FMT_COUNT[f]} supported criteria`)
       expect(card.textContent).toContain(`${FMT_COUNT[f]} supported criteria`)
     }
-    // Guard the numbers themselves so a regression in the derivation is visible here.
-    expect(FMT_COUNT).toEqual({ docx: 15, xlsx: 15, pptx: 16, pdf: 15 })
+    // Guard the numbers themselves so a regression in the derivation is visible here. These are the
+    // ASSESSABLE (ready) counts per format — lower than the engine-reachable counts, because pairs
+    // ACP can't yet certify/detect are excluded (e.g. xlsx/pptx drop 4.1.2, 1.4.11, 2.1.2).
+    expect(FMT_COUNT).toEqual({ docx: 15, xlsx: 11, pptx: 11, pdf: 12 })
   })
 })
 
@@ -122,7 +132,9 @@ describe('the Customize reveal', () => {
     // Screen-reader-named checkboxes, same contract as the admin grid.
     const boxes = [...table.querySelectorAll('input[type=checkbox]')]
     expect(boxes.length).toBeGreaterThan(20)
-    for (const b of boxes) expect(b.getAttribute('aria-label')).toMatch(/^\d+\.\d+\.\d+ .+, (DOCX|XLSX|PPTX|PDF)$/)
+    // Cell checkboxes name their criterion, format, and readiness lane (only ready cells render one).
+    for (const b of boxes) expect(b.getAttribute('aria-label'))
+      .toMatch(/^\d+\.\d+\.\d+ .+, (DOCX|XLSX|PPTX|PDF) — (ready, certifies|ready, detect and confirm)$/)
   })
 })
 
@@ -132,8 +144,9 @@ describe('scope state', () => {
     const c = await render()
     const core = byRole(c, 'radio').find((r) => r.textContent.includes('Core 17'))
     await click(core)
-    // Core 17 is the whole offered grid (17 criteria, every supported format).
-    const total = OFFERED.reduce((n, r) => n + r.formats.length, 0)
+    // Core 17 selects every READY cell in the offered grid — not-ready pairs are dropped, so the
+    // count is the ready total, not the engine-reachable total.
+    const total = OFFERED.reduce((n, r) => n + r.ready.length, 0)
     expect(c.textContent).toMatch(new RegExp(`${total} supported checks selected`))
     expect(core.getAttribute('aria-checked')).toBe('true')
   })
@@ -249,8 +262,8 @@ describe('Phase 2 matrix — column and row controls', () => {
     const docxCol = toggleByLabel(grid, /^Select DOCX for all/)
     expect(docxCol).toBeTruthy()
     expect(docxCol.getAttribute('aria-checked')).toBe('true')  // Core 17 → all on
-    // Count DOCX-supporting rows among the offered set.
-    const docxRows = OFFERED.filter((r) => r.formats.includes('docx')).length
+    // Count DOCX-ASSESSABLE rows among the offered set — only ready cells carry a checkbox.
+    const docxRows = OFFERED.filter((r) => r.ready.includes('docx')).length
     const before = checkedCount(c)
     await click(docxCol)                                       // clears the whole DOCX column
     expect(docxCol.getAttribute('aria-checked')).toBe('false')
@@ -277,16 +290,55 @@ describe('Phase 2 matrix — cell states', () => {
     const c = await render()
     const grid = gridOf(c)
     // 1.4.1 supports docx/pdf/xlsx but NOT pptx (per SCOPE_UNIVERSE) — that cell must be muted,
-    // titled "Not supported", and carry no checkbox.
-    const notSupported = [...grid.querySelectorAll('td[title="Not supported"]')]
+    // titled "Not supported…", and carry no checkbox.
+    const notSupported = [...grid.querySelectorAll('td[title^="Not supported"]')]
     expect(notSupported.length).toBeGreaterThan(0)
     for (const td of notSupported) {
       expect(td.querySelector('input[type=checkbox]'), 'unsupported cell has a checkbox').toBeNull()
       expect(td.textContent).toMatch(/Not supported/)   // sr-only label
     }
-    // The count matches the offered universe's unsupported pairs exactly.
+    // The count matches the offered universe's unsupported pairs exactly (format not in row.formats).
     const unsupported = OFFERED.reduce((n, r) => n + (SCOPE_FORMATS.length - r.formats.length), 0)
     expect(notSupported.length).toBe(unsupported)
+  })
+})
+
+// ── readiness: cells ACP can't assess yet are greyed, disabled, and out of the count ────────────
+describe('readiness — not-ready pairs are greyed and cannot be selected', () => {
+  it('renders offered-but-not-assessable pairs as "Not ready yet", never as a checkbox', async () => {
+    const c = await render()
+    const grid = gridOf(c)
+    const notReady = [...grid.querySelectorAll('td[title^="Not ready yet"]')]
+    // The exact set: every offered (row.formats) pair whose assessment lane is absent/human.
+    const want = OFFERED.reduce((n, r) => n + r.formats.filter((f) => !isReady(r.sc, f)).length, 0)
+    expect(want).toBeGreaterThan(0)                 // there really are such cells (guards the premise)
+    expect(notReady.length).toBe(want)
+    for (const td of notReady) {
+      expect(td.querySelector('input[type=checkbox]'), 'not-ready cell has a checkbox').toBeNull()
+      expect(td.textContent).toMatch(/Not ready yet/)
+    }
+  })
+
+  it('tags a fully-not-ready criterion and disables its row control', async () => {
+    const c = await render()
+    const grid = gridOf(c)
+    // 2.1.1 (Keyboard) and 2.4.3 (Focus Order) have no format ACP can assess yet.
+    for (const sc of ['2.1.1', '2.4.3']) {
+      const row = OFFERED.find((r) => r.sc === sc)
+      expect(row.ready.length, `${sc} should have no ready format`).toBe(0)
+    }
+    expect(grid.textContent).toContain('NOT READY')
+    const rowCtl = toggleByLabel(grid, /^Select every format for 2\.1\.1/)
+    expect(rowCtl).toBeTruthy()
+    expect(rowCtl.disabled).toBe(true)
+  })
+
+  it('Core 17 selects only assessable cells — no not-ready pair is ever checked', async () => {
+    const c = await render()
+    await pickCore17(c)
+    // Every checked cell must be a ready pair. (checkedCount counts input checkboxes, which only
+    // ready cells render — so this proves the preset didn't smuggle in an unassessable pair.)
+    expect(checkedCount(c)).toBe(OFFERED.reduce((n, r) => n + r.ready.length, 0))
   })
 })
 
