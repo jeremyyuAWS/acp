@@ -350,7 +350,7 @@ Route legend: **Auto** (deterministic/AI fix) · **HITL** (human review) · **Op
 
 | # | Item | Verb | Route | LOE | Notes |
 |---|---|---|---|---|---|
-| 1 | Fix live "Couldn't remediate this file" | Remediate | Auto | M · 1–2 d | Runtime failure in the Drive round-trip (re-download via per-user token / write-back), NOT a remediator bug — `remediate_pdf` runs clean locally on the same file (applies language + display-title). Likely the write-back needs a Drive *write* scope the read-only sign-in token lacks, and the Blob fallback isn't catching it. Lives in `handlers.py` / `routes/scans.py` — **T-contested; coordinate**. |
+| 1 | ~~Fix live "Couldn't remediate this file"~~ | Remediate | Auto | ~~M · 1–2 d~~ **verified stale 2026-08-12** | The 2026-07 diagnosis no longer holds and the failure does not reproduce (checked against `handlers.py` + live `acp-worker` logs). Both blamed causes are already fixed: `DRIVE_SCOPES` grants `drive.file` (write), and the Blob copy is written FIRST and UNCONDITIONALLY (`handlers.py:617`, ADR 0010) while the Drive-mirror 403 is CAUGHT (`handlers.py:679`) — so a write-back denial never fails the job; the fixed file is in Blob regardless, and the mirror succeeds in live logs. `"Couldn't remediate"` (`FileDrawer.jsx:916`) only fires on a genuine job error. The one residual path — an expired GIS token before a queued job runs — is already mitigated: the token rides the durable job payload (`handlers.py:448`). Pinned by `tests/test_remediate_token_resolution.py`. **No engineering left here.** |
 | 2 | Complete the DB-backed HITL queue | Remediate | HITL | In progress (T) | Assignment, status, notifications — this IS the HITL route. Owned by the concurrent session (~M if scoped fresh). |
 | 3 | 3.1.3 Unusual Words | Assess | HITL | ~~XS~~ DONE | Re-tagged Human / AT · Tier 3 HITL in `wcagCatalog.js` (was aspirational "Automated + Agentic"). No AI check built, by decision. |
 | 4 | ~~1.4.2 pptx audio autoplay~~ | Assess | — | DONE | Detection shipped (`pptx_audio_autoplay_checks`, dispatched, tested) with an `assisted` remediation lane — no longer blocked on a fixture, and no longer HITL-only. See P1 #2. |
@@ -359,9 +359,11 @@ Route legend: **Auto** (deterministic/AI fix) · **HITL** (human review) · **Op
 | 7 | Measure Ollama 8B latency | Verify | — | XS · 0.25 d | Needs live access; include a cold-start number (scale-to-zero). |
 | 8 | ADO review cadence | — | Decision | 0 d | Standing reviewer vs. bypass-as-needed. |
 
-**Real engineering build left ≈ 2–3.5 person-days, almost all of it item #1**
-(and #1 is blocked on coordinating with T's rewrite of that exact code, not on
-effort). Item #2 is T's. Items #4–7 are hours; #3 is done; #8 is a decision.
+**Real engineering build left ≈ near zero.** The old estimate was "≈ 2–3.5
+person-days, almost all of it item #1" — but #1 was verified stale on 2026-08-12
+(see above): the failure it describes is already fixed and does not reproduce.
+With #1 removed, item #2 is T's, #3 is done, #4–7 are hours (mostly Ops/verify),
+and #8 is a decision. Nothing substantial remains for engineering to build.
 
 **Two mislabel/UX fixes already landed this session:** the "fully automatic"
 misclassification (`e83d775`, `sim.js` — real-vs-sim wcag format mismatch +
