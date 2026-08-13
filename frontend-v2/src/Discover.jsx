@@ -335,7 +335,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       )}
 
       {files.length === 0 ? (
-        <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Integrations.</p>
+        <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Sources.</p>
       ) : (() => {
         const totalWidth = files.length || 1
         return (

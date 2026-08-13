@@ -1,0 +1,205 @@
+/**
+ * The Sources page (formerly the Integrations tab) — DOM-level, mounting the real component.
+ *
+ * What it guards, top to bottom:
+ *   - a CONNECTED SOURCES section with a status card that shows the TRUTHFUL count line
+ *     ("{discovered} in Drive · {lastScanFiles} in last scan") and exactly ONE dominant health state;
+ *   - the page-level "New scan" button opens the single required review modal;
+ *   - that modal carries the four scan-behavior toggles AND the ScanScopeWizard;
+ *   - the wizard's "Start scan" is the modal's confirm — the only path that actually dispatches a scan.
+ *
+ * DOM-level, not browser-level: this repo's preview server runs vite rooted at the SHARED checkout
+ * whatever worktree you are in (see CLAUDE.md), so a browser check would exercise code that does not
+ * contain this change. Everything here mounts the component and asserts against the rendered DOM.
+ */
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { createElement } from 'react'
+import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
+
+afterEach(unmountAll)
+
+// Integrations reads getConfig; the wizard nested in the modal reads getSettings/updateSettings.
+vi.mock('./api.js', () => ({
+  getConfig: vi.fn(async () => ({ google_client_id: null })),
+  getSettings: vi.fn(async () => ({ scan_scope: '' })),
+  updateSettings: vi.fn(async () => ({ scan_scope: '' })),
+}))
+
+const { default: Integrations } = await import('./Integrations.jsx')
+
+const DRIVE_BACKEND = { id: '_gdrive', type: 'google_drive', name: 'My Drive',
+  user: 'alex@example.com', files: 50 }
+
+// A source with a clean recent history → Healthy; the run's post-filter files drive the count line.
+const HEALTHY_SCANS = [
+  { id: 'r1', source: 'drive', completed_at: '2026-08-10T12:00:00Z', files: 44, error: 0, avg_score: 88 },
+]
+// A source with file-access errors in recent scans → Needs attention.
+const DEGRADED_SCANS = [
+  { id: 'r1', source: 'drive', completed_at: '2026-08-10T12:00:00Z', files: 40, error: 9, avg_score: 70 },
+]
+
+function baseProps(over = {}) {
+  return {
+    sources: [DRIVE_BACKEND],
+    files: [],
+    scans: HEALTHY_SCANS,
+    onScan: vi.fn(),
+    busy: false,
+    hasDriveToken: true,
+    hasSPToken: false,
+    onConnect: vi.fn(),
+    deepScan: true, setDeepScan: vi.fn(),
+    queuedScan: false, setQueuedScan: vi.fn(),
+    excludeRemediated: true, setExcludeRemediated: vi.fn(),
+    incremental: true, setIncremental: vi.fn(),
+    ...over,
+  }
+}
+
+async function mount(props) {
+  const { root, container } = createTestRoot()
+  await act(async () => { root.render(createElement(Integrations, props)) })
+  // Flush the getConfig/getSettings effects.
+  await act(async () => { await Promise.resolve() })
+  return container
+}
+const click = async (el) => { await act(async () => { el.click() }); await act(async () => { await Promise.resolve() }) }
+const btn = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent))
+
+describe('the Sources page', () => {
+  it('renders the page header with a New scan button', async () => {
+    const c = await mount(baseProps())
+    expect(c.textContent).toMatch(/Content Sources/)
+    expect(c.textContent).toMatch(/Manage the locations ACP scans and monitors/)
+    expect(btn(c, /New scan/)).toBeTruthy()
+  })
+
+  it('shows a CONNECTED SOURCES section with a status card', async () => {
+    const c = await mount(baseProps())
+    expect(c.textContent).toMatch(/CONNECTED SOURCES \(1\)/)
+    const card = c.querySelector('.srccard--on')
+    expect(card).toBeTruthy()
+    expect(card.textContent).toMatch(/Google Drive/)
+    expect(card.textContent).toMatch(/alex@example\.com/)
+  })
+
+  it('shows the truthful "{discovered} in Drive · {lastScan} in last scan" count line', async () => {
+    const c = await mount(baseProps())
+    const count = c.querySelector('.srccard-count')
+    expect(count).toBeTruthy()
+    expect(count.textContent).toMatch(/50 in Drive/)
+    expect(count.textContent).toMatch(/44 in last scan/)
+  })
+
+  it('omits the "in last scan" half when the source has never completed a scan', async () => {
+    const c = await mount(baseProps({ scans: [] }))
+    const count = c.querySelector('.srccard-count')
+    expect(count.textContent).toMatch(/50 in Drive/)
+    expect(count.textContent).not.toMatch(/in last scan/)
+    // And the health state falls back to "Not yet scanned".
+    expect(c.querySelector('.srccard--on').textContent).toMatch(/Not yet scanned/)
+  })
+
+  it('shows exactly one dominant health state — Healthy for a clean history', async () => {
+    const c = await mount(baseProps())
+    const health = c.querySelectorAll('.srccard--on .srccard-health')
+    expect(health.length).toBe(1)
+    expect(health[0].textContent).toMatch(/Healthy/)
+  })
+
+  it('shows "Needs attention" with a file-access sub-line when recent scans errored', async () => {
+    const c = await mount(baseProps({ scans: DEGRADED_SCANS }))
+    const health = c.querySelectorAll('.srccard--on .srccard-health')
+    expect(health.length).toBe(1)
+    expect(health[0].textContent).toMatch(/Needs attention/)
+    expect(c.querySelector('.srccard-health-sub').textContent).toMatch(/9 files couldn’t be accessed/)
+  })
+
+  it('keeps read-only out of the status line, in a Connection details reveal instead', async () => {
+    const c = await mount(baseProps())
+    const card = c.querySelector('.srccard--on')
+    // Not in the health pill.
+    expect(card.querySelector('.srccard-health').textContent).not.toMatch(/read-only/)
+    const details = card.querySelector('.srccard-conn')
+    expect(details.querySelector('summary').textContent).toMatch(/Connection details/)
+    expect(details.textContent).toMatch(/read-only/)
+  })
+
+  it('lists OneDrive under AVAILABLE SOURCES and the future connectors as a muted line', async () => {
+    const c = await mount(baseProps())
+    expect(c.textContent).toMatch(/AVAILABLE SOURCES/)
+    expect(btn(c, /Connect Microsoft/)).toBeTruthy()
+    const soon = c.querySelector('.intsoon-line')
+    expect(soon.textContent).toMatch(/More sources coming soon/)
+    expect(soon.textContent).toMatch(/SharePoint/)
+    // The future connectors are NOT rendered as big cards.
+    expect(c.querySelector('.soonchip')).toBeNull()
+  })
+})
+
+describe('the New scan review modal — the single gated scan entry', () => {
+  const dialog = (c) => c.querySelector('[role="dialog"]')
+
+  it('opens from the page-level New scan button', async () => {
+    const c = await mount(baseProps())
+    expect(dialog(c)).toBeNull()
+    await click(btn(c, /New scan/))
+    const d = dialog(c)
+    expect(d).toBeTruthy()
+    expect(d.getAttribute('aria-label')).toBe('New scan')
+  })
+
+  it('opens from a connected card\'s New scan button too', async () => {
+    const c = await mount(baseProps())
+    const card = c.querySelector('.srccard--on')
+    await click([...card.querySelectorAll('button')].find((b) => /New scan/.test(b.textContent)))
+    expect(dialog(c)).toBeTruthy()
+  })
+
+  it('carries the four scan-behavior toggles and the ScanScopeWizard', async () => {
+    const c = await mount(baseProps())
+    await click(btn(c, /New scan/))
+    const d = dialog(c)
+    expect(d.textContent).toMatch(/Scan behavior/)
+    for (const label of ['PII scan', 'Durable scan', 'Skip Remediated/', 'Incremental scan']) {
+      expect([...d.querySelectorAll('[role="switch"]')].some((s) => (s.getAttribute('aria-label') || '').includes(label)),
+        `missing behavior toggle "${label}"`).toBe(true)
+    }
+    // The wizard renders inside — its format cards / summary and its Start scan footer.
+    expect(d.textContent).toMatch(/Formats & WCAG criteria/)
+    expect(d.textContent).toMatch(/supported checks selected/)
+    expect([...d.querySelectorAll('button')].some((b) => /Start scan/.test(b.textContent))).toBe(true)
+  })
+
+  it('shows the honest estimated-documents line for the chosen source', async () => {
+    const c = await mount(baseProps())
+    await click(btn(c, /New scan/))
+    const est = dialog(c).querySelector('.scanmodal-est')
+    expect(est.textContent).toMatch(/~50 documents in Google Drive/)
+  })
+
+  it('dispatches the scan ONLY through the wizard\'s Start scan confirm', async () => {
+    const props = baseProps()
+    const c = await mount(props)
+    await click(btn(c, /New scan/))
+    // Opening the modal has not scanned anything yet.
+    expect(props.onScan).not.toHaveBeenCalled()
+    const start = [...dialog(c).querySelectorAll('button')].find((b) => /Start scan/.test(b.textContent))
+    await click(start)
+    // Confirm ran the dispatch (SIM path → onScan('drive')) and closed the modal.
+    expect(props.onScan).toHaveBeenCalledWith('drive')
+    expect(dialog(c)).toBeNull()
+  })
+
+  it('closes without scanning on Cancel', async () => {
+    const props = baseProps()
+    const c = await mount(props)
+    await click(btn(c, /New scan/))
+    const cancel = [...dialog(c).querySelectorAll('button')].find((b) => /Cancel/.test(b.textContent))
+    await click(cancel)
+    expect(props.onScan).not.toHaveBeenCalled()
+    expect(dialog(c)).toBeNull()
+  })
+})
