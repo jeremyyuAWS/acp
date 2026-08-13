@@ -622,6 +622,31 @@ def scope_as_json(scope: dict | None) -> dict[str, list[str]] | None:
     return {sc: sorted(fmts or ()) for sc, fmts in sorted(scope.items())}
 
 
+def scope_from_json(raw: dict | None) -> dict[str, frozenset[str]] | None:
+    """Rehydrate a persisted `scan_scope` map (the shape `scope_as_json` wrote) back into the
+    in-memory {criterion -> frozenset(formats)} form `active_scope` returns. The inverse of
+    `scope_as_json`.
+
+    Phase 3a leans on this being the ONE place a stored per-scan scope becomes a live scope
+    object again: the score (scanner._scoped_for_scoring) and the outcome traces
+    (store save paths → _rule_outcome) both go through here, so they cannot diverge on how the
+    same recorded JSON is read — the load-bearing invariant that keeps "scoped traces beside an
+    unscoped score" from coming back.
+
+    Falsy / empty → None (NO RESTRICTION), matching `parse_scope_setting`: a scan with nothing
+    recorded (legacy, pre-3a) or an empty map is unrestricted, never a total block. A criterion
+    whose format list is empty is dropped for the same reason.
+
+    Deliberately NOT defensive about a MALFORMED shape: the callers that read from the DB
+    (store.get_scan_scope) surface a genuine read/parse error rather than widening a scoped scan,
+    so this stays a pure, total transform over an already-parsed dict.
+    """
+    if not raw or not isinstance(raw, dict):
+        return None
+    out = {str(sc): frozenset(fmts or ()) for sc, fmts in raw.items()}
+    return {sc: fmts for sc, fmts in out.items() if fmts} or None
+
+
 def criteria_for_format(scope: dict | None, fmt: str | None) -> frozenset[str] | None:
     """Which criteria are in scope FOR ONE FORMAT, or None for no restriction.
 

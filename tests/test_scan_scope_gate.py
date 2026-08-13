@@ -197,7 +197,7 @@ def test_uncertain_stays_uncertain_and_uncertifiable(scoped):
 
 # ── The two layers have to agree with each other ──────────────────────────────────────
 
-def _report(files, sid="scopetest"):
+def _report(files, sid="scopetest", scope=None):
     return {
         "_scan_id": sid,
         "rubric": {"name": "r", "version": "1", "hash": "h", "target": "AA"},
@@ -206,6 +206,10 @@ def _report(files, sid="scopetest"):
         "started_at": "2026-07-30T00:00:00+00:00",
         "completed_at": "2026-07-30T00:01:00+00:00",
         "source": "local", "owner": "scope@test", "files": files,
+        # Phase 3a — a scan carries its OWN frozen scope (run_scan records scope_out here, with
+        # scan_scope inside it). save_scan gates the traces from THIS, not the live setting. None
+        # by default so the unscoped baseline stays unscoped.
+        **({"scope": scope} if scope is not None else {}),
     }
 
 
@@ -220,26 +224,40 @@ def _file(name):
 # The unit tests above pass a scope to `_rule_outcome` directly, which proves the gate but NOT
 # that anything resolves and threads one. That resolution is exactly what was missing, so it gets
 # its own tests through the two paths that write traces.
+#
+# PHASE 3a moved the SOURCE of that scope from the live global setting to the scan's OWN frozen
+# scope: save_scan reads report["scope"]["scan_scope"] (what run_scan recorded) and
+# save_file_result reads store.get_scan_scope(scan_id) (what init_scan_run recorded). Both tests
+# now set the live setting the OTHER way to prove the FROZEN scope — not the live one — is what
+# gates.
 
-def test_save_scan_resolves_the_setting_and_gates_the_traces(store):
+# The 14-criterion preset in the JSON shape a scan records on itself.
+_ENGAGEMENT_JSON = ap.scope_as_json(ap.SCOPE_PRESETS[ENGAGEMENT])
+
+
+def test_save_scan_gates_the_traces_from_the_recorded_scan_scope(store):
     store.save_scan(_report([_file("unscoped.pdf")], sid="before"))
     before = {t["rule_id"]: t["outcome"] for t in store.get_scan_traces("before")}
     assert before["1.4.11"] == "FAIL", "baseline: an unscoped save records the finding"
     assert before["1.1.1"] == "FAIL"
 
-    store.set_setting(ap.SCOPE_SETTING, ENGAGEMENT)
-    store.save_scan(_report([_file("scoped.pdf")], sid="after"))
+    # Live global left UNSCOPED on purpose; the scope is frozen on the scan itself.
+    store.set_setting(ap.SCOPE_SETTING, "")
+    store.save_scan(_report([_file("scoped.pdf")], sid="after",
+                            scope={"kind": "local", "kept": 1, "scan_scope": _ENGAGEMENT_JSON}))
     after = {t["rule_id"]: t["outcome"] for t in store.get_scan_traces("after")}
     assert after["1.4.11"] == ap.NOT_EVALUATED, (
-        "save_scan did not thread the resolved scope into _rule_outcome — writing the setting "
-        "gated nothing, which is the defect this test exists for")
+        "save_scan did not thread the scan's FROZEN scope into _rule_outcome — the recorded "
+        "scan_scope gated nothing, which is the defect the 3a wiring must prevent")
     assert after["1.1.1"] == "FAIL", "an in-scope criterion must still fail"
 
 
-def test_save_file_result_gates_the_traces_too(store):
-    """The per-file path is a separate call site and had to be wired separately."""
-    store.set_setting(ap.SCOPE_SETTING, ENGAGEMENT)
-    store.init_scan_run("perfile", "local", 1, "2026-07-30T00:00:00+00:00", "rubric", "hash")
+def test_save_file_result_gates_the_traces_from_the_recorded_scan_scope(store):
+    """The per-file path is a separate call site and reads the scan's frozen scope separately."""
+    # Live global left UNSCOPED; the frozen scope is what init_scan_run recorded on this scan.
+    store.set_setting(ap.SCOPE_SETTING, "")
+    store.init_scan_run("perfile", "local", 1, "2026-07-30T00:00:00+00:00", "rubric", "hash",
+                        scope={"kind": "local", "kept": 1, "scan_scope": _ENGAGEMENT_JSON})
     store.save_file_result("perfile", _file("one.pdf"), "2026-07-30T00:01:00+00:00")
     tr = {t["rule_id"]: t["outcome"] for t in store.get_scan_traces("perfile")}
     assert tr["1.4.11"] == ap.NOT_EVALUATED
@@ -252,8 +270,8 @@ def test_the_findings_themselves_are_still_stored_under_a_scope(store):
     If the gate dropped findings at the storage layer instead, narrowing the scope would destroy
     evidence and widening it again would silently report fewer failures than the scan found.
     """
-    store.set_setting(ap.SCOPE_SETTING, ENGAGEMENT)
-    store.save_scan(_report([_file("kept.pdf")]))
+    store.save_scan(_report([_file("kept.pdf")],
+                            scope={"kind": "local", "kept": 1, "scan_scope": _ENGAGEMENT_JSON}))
     scan = store.get_scan("scopetest")
     stored = [i["wcag"] for f in scan["files"] for i in (f.get("issues") or [])]
     assert "SC_1_4_11" in stored, "the out-of-scope finding was dropped from the record"

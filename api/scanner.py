@@ -1884,7 +1884,8 @@ def _scope_for_listing() -> dict | None:
     return active_scope(core.store)
 
 
-def _scoped_for_scoring(issues: list[dict], filename: str) -> list[dict]:
+def _scoped_for_scoring(issues: list[dict], filename: str,
+                        scope: dict | None = None) -> list[dict]:
     """The findings a SCORE may be computed from, for one file — the operator scope applied.
 
     Both `rb.assess` call sites go through here so the single-file path and the batch path cannot
@@ -1892,26 +1893,23 @@ def _scoped_for_scoring(issues: list[dict], filename: str) -> list[dict]:
     rules). Returns `issues` unchanged when no scope is set, so an unscoped deployment scores
     exactly as it did before this existed.
 
-    The Store is consulted for the scope rather than `in_scope`'s storeless fallback, which cannot
-    see the `scan_scope` setting.
-
-    NOT wrapped in a bare try/except. The obvious defensive shape here — swallow everything and
-    return the unfiltered list — is how this feature was broken in the first place: a gate that
-    fails open and says nothing is indistinguishable from a gate that was never wired up, and the
-    only symptom is numbers that look plausible. `core` and `store` are imported inside the
-    function (the module-level idiom here, to avoid a circular import at load), so a resolution
-    failure is a real defect and should surface as one.
+    PHASE 3a — the `scope` is now THREADED IN by the caller, not resolved live from the Store
+    here. It is this scan's FROZEN scope (store.get_scan_scope on the fan-out path, or the
+    in-memory `scan_scope` on the monolithic path), so the score reads the same recorded scope the
+    Assess traces are gated by, and a later global scope change cannot re-score an old scan while
+    its trace counts stay frozen. `scope=None` = NO RESTRICTION (unscoped, or a legacy scan with
+    nothing recorded), which is also what a caller with no scan context passes — so this stays a
+    no-op for the storeless benchmark/proposal callers exactly as before.
     """
-    import core
-    from store import active_scope, filter_issues_to_scope, _file_format
-    scope = active_scope(core.store)
+    from store import filter_issues_to_scope, _file_format
     if not scope:
         return issues
     return filter_issues_to_scope(issues, _file_format(filename), scope)
 
 
-def rescore_reused(issues: list[dict], filename: str, status: str | None = None) -> dict:
-    """Score for a REUSED analysis, computed under the scope in force now (ADR 0011).
+def rescore_reused(issues: list[dict], filename: str, status: str | None = None,
+                   scope: dict | None = None) -> dict:
+    """Score for a REUSED analysis, computed under THIS RUN's frozen scope (ADR 0011 + Phase 3a).
 
     Incremental reuse skips the download, the engine and the OCR — the expensive parts, and the
     whole point of ADR 0011. It must not also skip the SCORE, because a score is a function of
@@ -1919,16 +1917,24 @@ def rescore_reused(issues: list[dict], filename: str, status: str | None = None)
     `find_prior_analysis` gates reuse on `rubric_hash` and nothing else, so before this the
     reused row carried whatever score was right the last time somebody scanned.
 
+    PHASE 3a — DELIBERATE SEMANTIC CHANGE. ADR 0011 originally re-scored the reused file under the
+    LIVE global scope ("the scope in force now"). Under 3a "the scope in force now" is reinterpreted
+    as THIS run's FROZEN scope — the caller resolves store.get_scan_scope(scan_id) and threads it in
+    as `scope`. This keeps the reuse deterministic against the scope the run was actually started
+    under (the same scope its traces are gated by), instead of drifting with a global setting that
+    may have moved since. A reuse is still a fresh score for its run — just its own run's scope, not
+    whatever the global happens to be at the instant the job runs.
+
     Deliberately goes through `_scoped_for_scoring` and `Rubric.assess` — the same two calls the
     fresh path uses — rather than re-deriving a score here. A second expression of "what a score
     counts" is exactly how the single-file and batch paths diverged once already (see
-    `_scoped_for_scoring`'s note), and this is a third caller.
+    `_scoped_for_scoring`'s note), and this is a third caller. `scope=None` = no restriction.
 
     Returns only the keys a reused fdict should overwrite, so the caller's `issues`, `engine`,
     `acp_stamped` and every other reused field pass through untouched.
     """
     rb = Rubric.load_active(ACP / "config")
-    assessed = rb.assess(status != "error", _scoped_for_scoring(issues, filename), [])
+    assessed = rb.assess(status != "error", _scoped_for_scoring(issues, filename, scope), [])
     return {k: assessed[k] for k in ("score", "compliant", "skipped_rules") if k in assessed}
 
 
@@ -2005,8 +2011,15 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
     # scope, so scoring the full list gave a scoped scan unscoped scores — a document with no
     # in-scope findings beside a penalised score, which is the contradiction the scope gate exists
     # to prevent. `raw["issues"]` is passed on untouched, so re-scoping needs no re-scan.
-    # A no-op when no scope is set.
-    assessed = rb.assess(raw["succeeded"], _scoped_for_scoring(raw["issues"], name),
+    # A no-op when no scope is set. PHASE 3a — score over THIS scan's FROZEN scope (the fan-out
+    # path: init_scan_run recorded it, get_scan_scope reads it), the SAME value save_file_result
+    # gates the traces by, so score and traces cannot disagree. `scan_id` is None for the storeless
+    # benchmark/proposal callers → frozen scope None → unrestricted, exactly as before.
+    _frozen_scope = None
+    if scan_id:
+        import core
+        _frozen_scope = core.store.get_scan_scope(scan_id)
+    assessed = rb.assess(raw["succeeded"], _scoped_for_scoring(raw["issues"], name, _frozen_scope),
                          raw["errors"])
     fdict = {"file": name, "engine": raw["engine"], **assessed, "issues": raw["issues"],
              "acp_stamped": detect_acp_stamp(tmp / name, ext),
@@ -2219,7 +2232,16 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
             r["errors"] = [e for e in r["errors"] if (e.get("rule") if isinstance(e, dict) else None) not in rb.disabled]
         # Scored over the in-scope findings; `r["issues"]` stays whole on the record. Same helper
         # as the single-file path above, so the two cannot disagree about what a score counts.
-        assessed = {k: rb.assess(r["succeeded"], _scoped_for_scoring(r["issues"], k), r["errors"])
+        # PHASE 3a — score over THIS scan's FROZEN scope. The MONOLITHIC path's scan_runs row does
+        # not exist yet (save_scan writes it next), so the frozen scope is read from the in-memory
+        # `scope["scan_scope"]` that _list just recorded — the exact same value save_scan will
+        # persist and re-read via scope_from_json to gate the traces, so score and traces read one
+        # frozen scope. Resolved ONCE here rather than per file so every file scores under the same
+        # value. None (unscoped / no restriction) is a no-op.
+        from store import scope_from_json
+        _frozen_scope = scope_from_json((scope or {}).get("scan_scope"))
+        assessed = {k: rb.assess(r["succeeded"], _scoped_for_scoring(r["issues"], k, _frozen_scope),
+                                 r["errors"])
                     for k, r in raw.items()}
         summary = rb.aggregate(assessed)
         _lf_mod.flush()

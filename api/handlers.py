@@ -158,8 +158,8 @@ def _phase(job: dict, msg: str) -> None:
         core.store.set_job_phase(jid, msg)
 
 
-def _remediation_scope(filename: str):
-    """The operator scope in force for THIS file, as a `(sc) -> bool` predicate.
+def _remediation_scope(filename: str, scan_id: str):
+    """The scope in force for THIS SCAN and file, as a `(sc) -> bool` predicate.
 
     The remediation-side twin of scanner._scoped_for_scoring (#107). That change made the
     `scan_scope` setting gate what gets ASSESSED and SCORED; nothing gated what gets FIXED, so
@@ -168,14 +168,22 @@ def _remediation_scope(filename: str):
     of the score. Excluding a criterion has to mean ACP leaves it alone, not that ACP edits it
     and declines to mention it.
 
-    Returns None when no scope is set, so an unscoped deployment behaves exactly as before and
-    pays nothing for this. The Store is consulted explicitly rather than through `in_scope`'s
-    storeless fallback, which cannot see the setting and answers True for everything — the
-    failure `in_scope`'s own docstring calls "the worst way for a feature flag to be off".
+    PHASE 3a — resolved from THIS scan's FROZEN scope (store.get_scan_scope), not the live global
+    `active_scope(core.store)`. This is the actual 3a bug: remediation read the live scope, so
+    changing the operator's scope after a scan altered what that OLD scan would remediate while its
+    frozen Assess counts stayed put — a Remediate/Assess contradiction. Reading the recorded
+    per-scan scope makes remediation honour exactly the boundary the scan was assessed under. A
+    legacy scan with nothing recorded → get_scan_scope None → predicate None → nothing gated, the
+    same "unscoped behaves as before" contract as ever.
+
+    Returns None when no scope is recorded. The `except` keeps the established fail-open contract
+    for THIS predicate specifically: a scope we cannot resolve must not silently become a scope
+    that blocks all remediation. (get_scan_scope itself stays fail-loud; this net is the caller's
+    choice, not the reader's.)
     """
     try:
-        from store import active_scope, in_scope, _file_format
-        scope = active_scope(core.store)
+        from store import in_scope, _file_format
+        scope = core.store.get_scan_scope(scan_id)
         if not scope:
             return None
         fmt = _file_format(filename)
@@ -393,7 +401,7 @@ def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
     # Suppression is RECORDED, never silent: an operator who narrowed the scope should be able to
     # see that the narrowing is what stopped a fix, rather than wonder why a known finding never
     # produced a review card.
-    allows = _remediation_scope(filename)
+    allows = _remediation_scope(filename, scan_id)
     if allows is not None and not allows(sc):
         try:
             core.store.log_decision("system", "remediate.out_of_scope", scan_id=scan_id,
@@ -480,7 +488,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
     inline_proposals: list[dict] = []
 
     _phase(job, f"applying fixes to {filename}")
-    _scope_allows = _remediation_scope(filename)
+    _scope_allows = _remediation_scope(filename, scan_id)
     # The gap #137 recorded here as `remediate.scope_partial` is CLOSED. The office/pdf
     # deterministic fixers now take the same `in_scope` predicate the HTML fixer does, gated at
     # each individual fix by the SC it actually writes (remediate_office._sc_ok /
@@ -928,8 +936,12 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
             # record, so re-reporting the same scan under a different scope needs no re-scan."
             try:
                 from scanner import rescore_reused
+                # PHASE 3a — re-score the reused analysis under THIS scan's FROZEN scope
+                # (get_scan_scope), not the live global, so the reused score matches the scope the
+                # run was started under and the traces save_file_result writes for it below.
                 fdict.update(rescore_reused(fdict.get("issues") or [], name,
-                                            fdict.get("status")))
+                                            fdict.get("status"),
+                                            scope=core.store.get_scan_scope(scan_id)))
             except Exception:
                 # Deliberately narrow: a rescore failure leaves the reused score in place rather
                 # than failing the file. Logged, because a silent fallback here is how the stale
