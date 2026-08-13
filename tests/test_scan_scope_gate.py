@@ -10,7 +10,7 @@ feature flag that works:
    the `_scope_override` module global, a value nothing in the codebase assigns. So writing
    `scan_scope` to the settings table gated NOTHING, silently. Verified before the fix:
 
-       store.get_setting("scan_scope")        -> 'deva-final'
+       store.get_setting("scan_scope")        -> 'engagement-14'
        active_scope(store)                    -> the 14-criterion map
        active_scope()      (as in_scope calls it) -> None   == no restriction
        _rule_outcome('4.1.2', 'docx', fail=3) -> 'FAIL'     == gate never fired
@@ -37,7 +37,7 @@ sys.path.insert(0, str(ROOT / "api"))
 import assessment_policy as ap          # noqa: E402
 from rubric import Rubric               # noqa: E402
 
-DEVA = "deva-final"
+ENGAGEMENT = "engagement-14"
 # 4.1.2 is in scope for pdf ONLY, so the same criterion answers differently per format — which is
 # what makes it the useful probe: a format-blind bug passes a criterion-only assertion.
 PDF_ONLY = "4.1.2"
@@ -49,7 +49,7 @@ IN_SCOPE_ALL = "1.1.1"
 @pytest.fixture
 def scoped():
     """The 14-criterion preset resolved as a scope map, without touching module globals."""
-    return ap.SCOPE_PRESETS[DEVA]
+    return ap.SCOPE_PRESETS[ENGAGEMENT]
 
 
 @pytest.fixture
@@ -63,7 +63,7 @@ def store(tmp_path, monkeypatch):
 # ── Defect 1: the setting has to be readable ──────────────────────────────────────────
 
 def test_setting_written_to_the_store_is_what_active_scope_returns(store):
-    store.set_setting(ap.SCOPE_SETTING, DEVA)
+    store.set_setting(ap.SCOPE_SETTING, ENGAGEMENT)
     scope = ap.active_scope(store)
     assert scope is not None, "the scan_scope setting did not resolve to a scope"
     assert len(scope) == 14
@@ -82,7 +82,7 @@ def test_empty_setting_means_no_restriction(store):
 
 def test_unknown_preset_name_does_not_invent_a_scope(store):
     """A typo must fail OPEN (assess everything), never silently narrow the assertion."""
-    store.set_setting(ap.SCOPE_SETTING, "deva-fnial")
+    store.set_setting(ap.SCOPE_SETTING, "engagement-typo")
     assert ap.active_scope(store) is None
 
 
@@ -227,7 +227,7 @@ def test_save_scan_resolves_the_setting_and_gates_the_traces(store):
     assert before["1.4.11"] == "FAIL", "baseline: an unscoped save records the finding"
     assert before["1.1.1"] == "FAIL"
 
-    store.set_setting(ap.SCOPE_SETTING, DEVA)
+    store.set_setting(ap.SCOPE_SETTING, ENGAGEMENT)
     store.save_scan(_report([_file("scoped.pdf")], sid="after"))
     after = {t["rule_id"]: t["outcome"] for t in store.get_scan_traces("after")}
     assert after["1.4.11"] == ap.NOT_EVALUATED, (
@@ -238,7 +238,7 @@ def test_save_scan_resolves_the_setting_and_gates_the_traces(store):
 
 def test_save_file_result_gates_the_traces_too(store):
     """The per-file path is a separate call site and had to be wired separately."""
-    store.set_setting(ap.SCOPE_SETTING, DEVA)
+    store.set_setting(ap.SCOPE_SETTING, ENGAGEMENT)
     store.init_scan_run("perfile", "local", 1, "2026-07-30T00:00:00+00:00", "rubric", "hash")
     store.save_file_result("perfile", _file("one.pdf"), "2026-07-30T00:01:00+00:00")
     tr = {t["rule_id"]: t["outcome"] for t in store.get_scan_traces("perfile")}
@@ -252,7 +252,7 @@ def test_the_findings_themselves_are_still_stored_under_a_scope(store):
     If the gate dropped findings at the storage layer instead, narrowing the scope would destroy
     evidence and widening it again would silently report fewer failures than the scan found.
     """
-    store.set_setting(ap.SCOPE_SETTING, DEVA)
+    store.set_setting(ap.SCOPE_SETTING, ENGAGEMENT)
     store.save_scan(_report([_file("kept.pdf")]))
     scan = store.get_scan("scopetest")
     stored = [i["wcag"] for f in scan["files"] for i in (f.get("issues") or [])]
@@ -264,7 +264,7 @@ def test_traces_and_score_agree_about_every_scoped_pair(scoped):
     """The invariant both defects broke: a criterion the trace calls NOT_EVALUATED must not be
     carrying a score penalty, and one the trace calls FAIL must be."""
     rb = rubric()
-    for sc in sorted(set(ap.SCOPE_PRESETS[DEVA]) | {OUT_OF_SCOPE, "1.4.4", "3.3.2"}):
+    for sc in sorted(set(ap.SCOPE_PRESETS[ENGAGEMENT]) | {OUT_OF_SCOPE, "1.4.4", "3.3.2"}):
         for fmt in ("docx", "xlsx", "pptx", "pdf"):
             one = [issue(sc)]
             outcome = ap._rule_outcome(sc, fmt, 1, 0, "AA", scoped)

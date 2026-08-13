@@ -71,8 +71,8 @@ def test_a_scope_sent_as_a_dict_is_stored_as_json(sysmod):
 
 def test_a_preset_name_is_stored_verbatim(sysmod):
     s, core = sysmod
-    _put(s, scan_scope="deva-final")
-    assert core.store.settings["scan_scope"] == "deva-final"
+    _put(s, scan_scope="engagement-14")
+    assert core.store.settings["scan_scope"] == "engagement-14"
 
 
 def test_get_settings_returns_the_raw_stored_value(sysmod):
@@ -96,7 +96,7 @@ def test_no_scope_set_reads_as_empty_string(sysmod):
 def test_an_empty_scope_clears_the_setting(sysmod, value):
     """`{}` and `""` both mean no restriction, so both store the simpler one."""
     s, core = sysmod
-    core.store.settings["scan_scope"] = "deva-final"
+    core.store.settings["scan_scope"] = "engagement-14"
     _put(s, scan_scope=value)
     assert core.store.settings["scan_scope"] == ""
 
@@ -120,10 +120,10 @@ def test_an_unparseable_scope_is_refused_not_stored(sysmod, value, fragment):
 def test_a_refused_scope_leaves_the_previous_one_intact(sysmod):
     """Rejection must not be destructive — the operator keeps the scope they had."""
     s, core = sysmod
-    core.store.settings["scan_scope"] = "deva-final"
+    core.store.settings["scan_scope"] = "engagement-14"
     with pytest.raises(HTTPException):
         _put(s, scan_scope={"9.9.9": ["docx"]})
-    assert core.store.settings["scan_scope"] == "deva-final"
+    assert core.store.settings["scan_scope"] == "engagement-14"
 
 
 # ── the hollow-200 class ──────────────────────────────────────────────────────────────────────

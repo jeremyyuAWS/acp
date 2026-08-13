@@ -30,7 +30,7 @@ export const SCOPE_PRESETS = {
     "3.1.2": ["docx", "pdf", "pptx", "xlsx"],
     "4.1.2": ["docx", "pdf", "pptx", "xlsx"],
   },   // 17 criteria
-  "deva-final": {
+  "engagement-14": {
     "1.1.1": ["docx", "pdf", "pptx", "xlsx"],
     "1.3.1": ["docx", "pdf", "pptx", "xlsx"],
     "1.3.2": ["pdf", "pptx"],

@@ -1,7 +1,7 @@
 // The SPA must render the scope the SERVER is gating on, not a preset compiled into the bundle.
 //
 // Before applyScopeConfig() existed, activeScope.js declared `const ACTIVE_SCOPE_PRESET =
-// 'deva-final'`. Changing the backend's `scan_scope` setting moved the server's gate while every
+// 'engagement-14'`. Changing the backend's `scan_scope` setting moved the server's gate while every
 // denominator, "N of 20 in scope" line and out-of-scope note in the UI went on describing the
 // build's preset — two sources of truth for one question, and the wrong one was the one the
 // customer could see.
@@ -22,7 +22,7 @@ beforeEach(async () => {
 
 describe('the pre-fetch fallback', () => {
   it('is the value the file used to hard-code, so first paint is unchanged', () => {
-    expect(A.ACTIVE_SCOPE_PRESET).toBe('deva-final')
+    expect(A.ACTIVE_SCOPE_PRESET).toBe('engagement-14')
     expect(A.SCOPE_SIZE).toBe(A.SCOPE_SCS.size)
     expect(A.SCOPE_SIZE).toBeGreaterThan(0)
   })
@@ -82,7 +82,7 @@ describe('applyScopeConfig — bad input keeps the fallback', () => {
   it.each([
     ['no config', undefined],
     ['no scope field', {}],
-    ['scope not an object', { scope: 'deva-final' }],
+    ['scope not an object', { scope: 'engagement-14' }],
     ['empty criteria map', { scope: { name: 'x', criteria: {} } }],
   ])('%s leaves the scope untouched and reports no change', (_label, cfg) => {
     const b = before()
@@ -96,6 +96,6 @@ describe('change detection', () => {
   it('reports false when the server confirms the scope already in force', () => {
     const criteria = {}
     for (const sc of A.SCOPE_SCS) criteria[sc] = ['docx']
-    expect(A.applyScopeConfig({ scope: { name: 'deva-final', criteria } })).toBe(false)
+    expect(A.applyScopeConfig({ scope: { name: 'engagement-14', criteria } })).toBe(false)
   })
 })

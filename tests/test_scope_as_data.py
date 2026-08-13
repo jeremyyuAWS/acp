@@ -1,7 +1,7 @@
 """A scan scope can be written as DATA, not only chosen from the presets compiled into the code.
 
 `scan_scope` has always held a preset NAME, so every engagement whose criteria list differed from
-`deva-final` needed a code change, a review and a deploy to express what is really a
+`engagement-14` needed a code change, a review and a deploy to express what is really a
 configuration fact. The setting now also accepts a JSON map, and both forms resolve to the same
 `{criterion: frozenset(formats)}` shape — so `in_scope`, every denominator and the /config report
 cannot tell which was used, and none of them changed.
@@ -47,9 +47,9 @@ def _no_override(monkeypatch):
 
 # ── the presets still work, unchanged ─────────────────────────────────────────────────────────
 def test_a_preset_name_still_resolves():
-    scope = ap.active_scope(_Store("deva-final"))
-    assert scope == ap.SCOPE_PRESETS["deva-final"]
-    assert ap.scope_problem(_Store("deva-final")) is None
+    scope = ap.active_scope(_Store("engagement-14"))
+    assert scope == ap.SCOPE_PRESETS["engagement-14"]
+    assert ap.scope_problem(_Store("engagement-14")) is None
 
 
 def test_no_setting_means_no_restriction():
@@ -115,8 +115,8 @@ def test_an_empty_scope_is_no_restriction_not_a_total_block(raw):
 
 # ── the override path tests use must keep working ─────────────────────────────────────────────
 def test_the_module_override_accepts_both_forms(monkeypatch):
-    monkeypatch.setattr(ap, "_scope_override", "deva-final")
-    assert ap.active_scope() == ap.SCOPE_PRESETS["deva-final"]
+    monkeypatch.setattr(ap, "_scope_override", "engagement-14")
+    assert ap.active_scope() == ap.SCOPE_PRESETS["engagement-14"]
     monkeypatch.setattr(ap, "_scope_override", json.dumps({"2.4.2": ["pptx"]}))
     assert ap.active_scope() == {"2.4.2": frozenset({"pptx"})}
 

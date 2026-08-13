@@ -1,6 +1,6 @@
 """GET /config must report the scope the SERVER is gating on.
 
-The SPA used to hard-code `ACTIVE_SCOPE_PRESET = 'deva-final'` in activeScope.js, so changing
+The SPA used to hard-code `ACTIVE_SCOPE_PRESET = 'engagement-14'` in activeScope.js, so changing
 the `scan_scope` setting moved the server's gate while every denominator and "N of 20 in scope"
 line in the UI kept describing the preset compiled into the bundle. This endpoint is the single
 source the SPA now adopts, so what it reports has to be exactly what in_scope() enforces.
@@ -40,9 +40,9 @@ def test_no_scope_set_reports_no_restriction(sysmod):
 
 def test_a_configured_scope_reports_its_name_and_resolved_criteria(sysmod):
     s, core = sysmod
-    core.store._s["scan_scope"] = "deva-final"
+    core.store._s["scan_scope"] = "engagement-14"
     info = s._active_scope_info()
-    assert info["name"] == "deva-final"
+    assert info["name"] == "engagement-14"
     assert isinstance(info["criteria"], dict) and info["criteria"]
     # Formats are sorted lists, not sets — the payload has to be JSON-serialisable.
     for sc, fmts in info["criteria"].items():
@@ -53,7 +53,7 @@ def test_what_it_reports_matches_what_in_scope_actually_enforces(sysmod):
     """The whole point: the UI's arithmetic and the server's gate must not diverge."""
     s, core = sysmod
     from store import active_scope, in_scope
-    core.store._s["scan_scope"] = "deva-final"
+    core.store._s["scan_scope"] = "engagement-14"
     info = s._active_scope_info()
     scope = active_scope(core.store)
     for sc, fmts in info["criteria"].items():

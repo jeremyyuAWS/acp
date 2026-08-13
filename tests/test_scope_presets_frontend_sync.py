@@ -184,7 +184,7 @@ def test_universe_offers_nothing_the_engine_cannot_judge():
                 "entry can reach a verdict on -- ticking it would change nothing")
 
 
-def test_deva_final_is_the_fourteen_the_panel_claims():
+def test_engagement_14_is_the_fourteen_the_panel_claims():
     """The panel's header says 14 and its note says "6 of the 20". Pin the 14 server-side.
 
     Not a duplicate of the frontend's own assertion: that one proves the SPA renders what it
@@ -193,7 +193,7 @@ def test_deva_final_is_the_fourteen_the_panel_claims():
     """
     import store
 
-    scope = store.SCOPE_PRESETS["deva-final"]
+    scope = store.SCOPE_PRESETS["engagement-14"]
     assert len(scope) == 14
     assert all(fmts for fmts in scope.values()), "a criterion in scope for no format is not in scope"
 
@@ -203,9 +203,9 @@ def _emitted_preset(js: str, name: str) -> dict[str, list[str]]:
 
     Scoped to that preset's own block, and this is the whole point of the function. The earlier
     version searched the entire file for the first `    "1.3.2": [...]` line, which was correct
-    only while `deva-final` was the sole preset. Adding `acp-core-17` — which sorts first —
+    only while `engagement-14` was the sole preset. Adding `acp-core-17` — which sorts first —
     silently repointed every lookup at the new preset's rows while the Python side still read
-    deva-final's, and the test reported the two disagreeing about 1.3.2 × docx. The data was
+    engagement-14's, and the test reported the two disagreeing about 1.3.2 × docx. The data was
     fine; the reader was.
     """
     block = re.search(rf'^  "{re.escape(name)}": \{{$(.*?)^  \}},.*$', js, flags=re.M | re.S)
@@ -222,7 +222,7 @@ def test_frontend_gate_agrees_with_in_scope(fmt):
     the DATA behind it disagreeing per format. 1.3.2, 2.1.1, 2.4.3 and 4.1.2 are scoped to a
     subset of the four formats, so a whole-format drift shows up here rather than in a count.
 
-    Over EVERY preset, not just deva-final. One preset checked is one preset guarded, and the
+    Over EVERY preset, not just engagement-14. One preset checked is one preset guarded, and the
     generator emits them all — a second going wrong would otherwise ship unnoticed, which is
     close to what just happened.
     """

@@ -62,10 +62,10 @@ def test_scope_resolves_through_the_store_not_the_storeless_fallback(handlers):
     docstring calls the worst way for a feature flag to be off. The predicate must see the
     SETTING, so a criterion outside the preset comes back False."""
     h, store = handlers
-    store._settings["scan_scope"] = "deva-final"
+    store._settings["scan_scope"] = "engagement-14"
     allows = h._remediation_scope("report.docx")
     assert allows is not None, "a configured scope must produce a predicate"
-    # deva-final admits 1.1.1 on docx and does NOT admit 2.1.1 on docx (pptx/pdf only).
+    # engagement-14 admits 1.1.1 on docx and does NOT admit 2.1.1 on docx (pptx/pdf only).
     assert allows("1.1.1") is True
     assert allows("2.1.1") is False
 
@@ -73,7 +73,7 @@ def test_scope_resolves_through_the_store_not_the_storeless_fallback(handlers):
 def test_unknown_format_is_never_excluded(handlers):
     """The gate honours a deliberate choice; it must not invent one from an unparseable name."""
     h, store = handlers
-    store._settings["scan_scope"] = "deva-final"
+    store._settings["scan_scope"] = "engagement-14"
     allows = h._remediation_scope("no-extension-here")
     assert allows("2.1.1") is True
 
@@ -92,16 +92,16 @@ def test_a_broken_scope_lookup_does_not_block_everything(handlers, monkeypatch):
 # ── 2. the proposal lane ──────────────────────────────────────────────────────
 def test_in_scope_proposals_are_enqueued(handlers):
     h, store = handlers
-    store._settings["scan_scope"] = "deva-final"
+    store._settings["scan_scope"] = "engagement-14"
     h._enqueue_proposals("s1", "report.docx", "1.1.1", "Non-text Content", [{"v": "alt"}])
     assert [e[2] for e in store.enqueued] == ["1.1.1"]
 
 
 def test_out_of_scope_proposals_are_dropped(handlers):
-    """The regression this suite exists for: 2.1.1 is not in deva-final for docx, so no review
+    """The regression this suite exists for: 2.1.1 is not in engagement-14 for docx, so no review
     card may be created for it — deferring is still acting on an excluded criterion."""
     h, store = handlers
-    store._settings["scan_scope"] = "deva-final"
+    store._settings["scan_scope"] = "engagement-14"
     h._enqueue_proposals("s1", "report.docx", "2.1.1", "Keyboard", [{"v": "x"}])
     assert store.enqueued == []
 
@@ -110,7 +110,7 @@ def test_the_drop_is_recorded_not_silent(handlers):
     """An operator who narrowed the scope must be able to see that the narrowing is what
     stopped the fix, rather than wonder why a known finding produced no card."""
     h, store = handlers
-    store._settings["scan_scope"] = "deva-final"
+    store._settings["scan_scope"] = "engagement-14"
     h._enqueue_proposals("s1", "report.docx", "2.1.1", "Keyboard", [{"v": "x"}, {"v": "y"}])
     actions = [d[1] for d in store.decisions]
     assert "remediate.out_of_scope" in actions
@@ -121,7 +121,7 @@ def test_the_drop_is_recorded_not_silent(handlers):
 def test_same_criterion_allowed_on_one_format_and_blocked_on_another(handlers):
     """Scope is per (criterion, format) — the whole reason it is not a file-type filter."""
     h, store = handlers
-    store._settings["scan_scope"] = "deva-final"
+    store._settings["scan_scope"] = "engagement-14"
     h._enqueue_proposals("s1", "deck.pptx", "2.1.1", "Keyboard", [{"v": "x"}])
     h._enqueue_proposals("s1", "report.docx", "2.1.1", "Keyboard", [{"v": "x"}])
     assert [(e[1], e[2]) for e in store.enqueued] == [("deck.pptx", "2.1.1")]

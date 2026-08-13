@@ -31,12 +31,12 @@ import { DOCUMENTS_20 } from './documents20.js'
 // they did before this became server-driven.
 //
 // Why it moved: the backend gates on the `scan_scope` SETTING, and this file used to declare
-// `const ACTIVE_SCOPE_PRESET = 'deva-final'` compiled into the bundle. Change the setting and the
+// `const ACTIVE_SCOPE_PRESET = 'engagement-14'` compiled into the bundle. Change the setting and the
 // server's gate moved while every denominator, "N of 20 in scope" line and out-of-scope note in
 // the UI went on describing the preset in the build. Two sources of truth for one question, and
 // the wrong one was the one the customer could see. Same shape as the /ai/status split, where a
 // stored override made the status page describe a model the worker was not using.
-export let ACTIVE_SCOPE_PRESET = 'deva-final'
+export let ACTIVE_SCOPE_PRESET = 'engagement-14'
 
 // Customer-neutral wording for the UI. "Agreed scope" is the honest description: it is a
 // checklist someone signed off, not a capability claim and not a WCAG subset.
@@ -64,7 +64,7 @@ export let OUT_OF_SCOPE_SCS = new Set([...DOCUMENTS_20].filter((sc) => !SCOPE_SC
 export let SCOPE_IS_SUBSET_OF_CORE = [...SCOPE_SCS].every((sc) => DOCUMENTS_20.has(sc))
 
 // Adopt the scope the SERVER reports, from GET /config's `scope` field:
-//   {name: "deva-final", criteria: {"1.1.1": ["docx", …], …}}   a narrowing is in force
+//   {name: "engagement-14", criteria: {"1.1.1": ["docx", …], …}}   a narrowing is in force
 //   {name: "",           criteria: null}                        no restriction
 //
 // Returns true when anything changed, so the caller knows whether a re-render is warranted.
