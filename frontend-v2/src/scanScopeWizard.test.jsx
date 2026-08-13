@@ -155,6 +155,174 @@ describe('scope state', () => {
   })
 })
 
+// ── Phase 2: the redesigned matrix (sticky, principle groups, column/row/group controls, cells,
+//    search + filters) ─────────────────────────────────────────────────────────────────────────
+const detailsOf = (c) => [...c.querySelectorAll('details')]
+  .find((d) => /Customize criteria and combinations/.test(d.querySelector('summary')?.textContent || ''))
+const gridOf = (c) => detailsOf(c).querySelector('table')
+// A control the redesign renders as a role=checkbox button (group / column / row toggles, filters),
+// found by its aria-label — distinct from the cell inputs, which are input[type=checkbox].
+const toggleByLabel = (scope, re) => byRole(scope, 'checkbox')
+  .filter((e) => e.tagName === 'BUTTON')
+  .find((e) => re.test(e.getAttribute('aria-label') || ''))
+const cellBoxes = (c) => [...gridOf(c).querySelectorAll('input[type=checkbox]')]
+const checkedCount = (c) => cellBoxes(c).filter((b) => b.checked).length
+// The grid renders the live `sel` map, which is empty under "Everything supported"; pick Core 17
+// (the whole offered grid, restrict on) so every supported cell reads as ticked to start.
+const pickCore17 = async (c) => {
+  const core = byRole(c, 'radio').find((r) => r.textContent.includes('Core 17'))
+  await click(core)
+}
+// Type into a controlled React input via the native value setter, so React's onChange fires.
+const typeSearch = async (input, value) => {
+  const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+  await act(async () => {
+    set.call(input, value)
+    input.dispatchEvent(new window.Event('input', { bubbles: true }))
+  })
+}
+
+describe('Phase 2 matrix — principle grouping', () => {
+  it('renders a labeled group header for each WCAG principle present', async () => {
+    const c = await render()
+    const grid = gridOf(c)
+    // Offered criteria span all four principles (1.x, 2.x, 3.x, 4.x), so every label shows.
+    for (const name of ['Perceivable', 'Operable', 'Understandable', 'Robust']) {
+      expect(grid.textContent, `missing group "${name}"`).toContain(name)
+    }
+    // Group headers are full-width rows spanning the whole table (1 criterion + 4 formats + row col).
+    const spanned = [...grid.querySelectorAll('td[colspan]')].map((t) => Number(t.getAttribute('colspan')))
+    expect(spanned).toContain(SCOPE_FORMATS.length + 2)
+  })
+
+  it('a group All/None control toggles every supported pair in that group', async () => {
+    const c = await render()
+    await pickCore17(c)        // the whole offered grid ticked, restrict on
+    const grid = gridOf(c)
+    // Robust = 4.1.2 only, four supported formats.
+    const robust = toggleByLabel(grid, /Select all criteria in Robust/)
+    expect(robust).toBeTruthy()
+    expect(robust.getAttribute('aria-checked')).toBe('true')   // all on to start
+    const before = checkedCount(c)
+    await click(robust)                                        // → None for the group
+    expect(robust.getAttribute('aria-checked')).toBe('false')
+    const afterNone = checkedCount(c)
+    expect(afterNone).toBeLessThan(before)
+    await click(robust)                                        // → All again
+    expect(robust.getAttribute('aria-checked')).toBe('true')
+    expect(checkedCount(c)).toBe(before)
+  })
+})
+
+describe('Phase 2 matrix — column and row controls', () => {
+  it('a format column header toggles that format down the visible rows', async () => {
+    const c = await render()
+    await pickCore17(c)
+    const grid = gridOf(c)
+    const docxCol = toggleByLabel(grid, /^Select DOCX for all/)
+    expect(docxCol).toBeTruthy()
+    expect(docxCol.getAttribute('aria-checked')).toBe('true')  // Core 17 → all on
+    // Count DOCX-supporting rows among the offered set.
+    const docxRows = OFFERED.filter((r) => r.formats.includes('docx')).length
+    const before = checkedCount(c)
+    await click(docxCol)                                       // clears the whole DOCX column
+    expect(docxCol.getAttribute('aria-checked')).toBe('false')
+    expect(checkedCount(c)).toBe(before - docxRows)
+  })
+
+  it('a row control toggles every supported format for its criterion', async () => {
+    const c = await render()
+    await pickCore17(c)
+    const grid = gridOf(c)
+    // 1.1.1 supports all four formats.
+    const row111 = toggleByLabel(grid, /^Select every format for 1\.1\.1/)
+    expect(row111).toBeTruthy()
+    expect(row111.getAttribute('aria-checked')).toBe('true')
+    const before = checkedCount(c)
+    await click(row111)
+    expect(row111.getAttribute('aria-checked')).toBe('false')
+    expect(checkedCount(c)).toBe(before - 4)
+  })
+})
+
+describe('Phase 2 matrix — cell states', () => {
+  it('renders unsupported pairs as "Not supported", never as an unchecked checkbox', async () => {
+    const c = await render()
+    const grid = gridOf(c)
+    // 1.4.1 supports docx/pdf/xlsx but NOT pptx (per SCOPE_UNIVERSE) — that cell must be muted,
+    // titled "Not supported", and carry no checkbox.
+    const notSupported = [...grid.querySelectorAll('td[title="Not supported"]')]
+    expect(notSupported.length).toBeGreaterThan(0)
+    for (const td of notSupported) {
+      expect(td.querySelector('input[type=checkbox]'), 'unsupported cell has a checkbox').toBeNull()
+      expect(td.textContent).toMatch(/Not supported/)   // sr-only label
+    }
+    // The count matches the offered universe's unsupported pairs exactly.
+    const unsupported = OFFERED.reduce((n, r) => n + (SCOPE_FORMATS.length - r.formats.length), 0)
+    expect(notSupported.length).toBe(unsupported)
+  })
+})
+
+describe('Phase 2 matrix — search and filters', () => {
+  it('"Selected only" hides rows with nothing selected', async () => {
+    const c = await render()
+    // Custom keeps the (empty) selection but turns restrict on, so the grid starts all-unticked.
+    const custom = byRole(c, 'radio').find((r) => r.textContent.includes('Custom scope'))
+    await click(custom)
+    // Tick exactly one criterion (1.1.1, all four formats) via its row control.
+    await click(toggleByLabel(gridOf(c), /^Select every format for 1\.1\.1/))
+    const rowsBefore = [...gridOf(c).querySelectorAll('th[scope="row"]')].length
+    expect(rowsBefore).toBe(OFFERED.length)   // no filter yet: every offered row shows
+    const chip = byRole(c, 'checkbox').filter((e) => e.tagName === 'BUTTON')
+      .find((e) => e.textContent === 'Selected only')
+    expect(chip).toBeTruthy()
+    await click(chip)
+    const rowsAfter = [...gridOf(c).querySelectorAll('th[scope="row"]')].length
+    expect(rowsAfter).toBeLessThan(rowsBefore)
+    expect(rowsAfter).toBe(1)   // only 1.1.1 remains
+  })
+
+  it('a level filter reduces visible rows to that level, and Clear filters restores them', async () => {
+    const c = await render()
+    const allRows = [...gridOf(c).querySelectorAll('th[scope="row"]')].length
+    expect(allRows).toBe(OFFERED.length)
+    const levelAA = byRole(c, 'checkbox').filter((e) => e.tagName === 'BUTTON')
+      .find((e) => e.textContent === 'Level AA')
+    expect(levelAA).toBeTruthy()
+    await click(levelAA)
+    const aaRows = [...gridOf(c).querySelectorAll('th[scope="row"]')].length
+    const wantAA = OFFERED.filter((r) => r.level === 'AA').length
+    expect(aaRows).toBe(wantAA)
+    expect(aaRows).toBeLessThan(allRows)
+    // The visible-count status reflects the filter.
+    expect(c.textContent).toMatch(new RegExp(`Showing ${wantAA} of ${OFFERED.length} criteria`))
+    // Clear filters restores the full grid.
+    const clear = [...c.querySelectorAll('button')].find((b) => b.textContent === 'Clear filters')
+    expect(clear).toBeTruthy()
+    await click(clear)
+    expect([...gridOf(c).querySelectorAll('th[scope="row"]')].length).toBe(OFFERED.length)
+  })
+
+  it('text search matches criterion id and name', async () => {
+    const c = await render()
+    const search = c.querySelector('input[type=search]')
+    expect(search).toBeTruthy()
+    await typeSearch(search, 'contrast')
+    const rows = [...gridOf(c).querySelectorAll('th[scope="row"]')].map((t) => t.textContent)
+    expect(rows.length).toBeGreaterThan(0)
+    for (const r of rows) expect(r.toLowerCase()).toMatch(/contrast/)
+  })
+
+  it('the sticky header exposes a per-format column select and the criterion column header', async () => {
+    const c = await render()
+    const grid = gridOf(c)
+    // Header cells still use scope="col"; the redesign keeps a Criterion header and one per format.
+    const cols = [...grid.querySelectorAll('th[scope="col"]')].map((t) => t.textContent)
+    expect(cols.some((t) => /Criterion/.test(t))).toBe(true)
+    for (const f of SCOPE_FORMATS) expect(cols.some((t) => t.includes(FMT_LABEL[f]))).toBe(true)
+  })
+})
+
 // ── source-level: Integrations mounts the wizard and gates the scan behind the modal ────────────
 const HERE = dirname(fileURLToPath(import.meta.url))
 const codeOf = (f) => readFileSync(join(HERE, f), 'utf8')

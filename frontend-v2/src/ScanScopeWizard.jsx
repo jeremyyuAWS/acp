@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { getSettings, updateSettings } from './api.js'
 import { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } from './scopePresets.js'
-import { TRACKED_17 } from './ruleDetails.js'
+import { TRACKED_17, RULE_DETAILS } from './ruleDetails.js'
 
 // ── Scan-scope WIZARD (Phase 1) ─────────────────────────────────────────────────────────────────
 //
@@ -22,6 +22,49 @@ import { TRACKED_17 } from './ruleDetails.js'
 const OFFERED = SCOPE_UNIVERSE.filter((r) => TRACKED_17.has(r.sc))
 
 const FMT_LABEL = { docx: 'DOCX', xlsx: 'XLSX', pptx: 'PPTX', pdf: 'PDF' }
+
+// WCAG principle by the SC id's first digit — the grouping the matrix sections rows into.
+const PRINCIPLES = [
+  { digit: '1', name: 'Perceivable' },
+  { digit: '2', name: 'Operable' },
+  { digit: '3', name: 'Understandable' },
+  { digit: '4', name: 'Robust' },
+]
+
+// Fix-mode filter labels, and the criterion → set-of-fix-modes map the fix-mode chips join on.
+// Derived from RULE_DETAILS (each rule carries a `fixMode`), keyed by the rule's criterion. A
+// criterion with several rules can offer several modes; one with no rule detail resolves to an
+// empty set — "unknown", excluded from any fix-mode-filtered view rather than crashing.
+const FIX_LABEL = { auto: 'Deterministic', 'ai-assisted': 'Assisted', 'human-only': 'Human review' }
+const FIX_ORDER = ['auto', 'ai-assisted', 'human-only']
+const FIXMODE_BY_SC = (() => {
+  const out = {}
+  for (const r of Object.values(RULE_DETAILS)) (out[r.sc] || (out[r.sc] = new Set())).add(r.fixMode)
+  return out
+})()
+
+// ── Matrix cell / sticky styles ──────────────────────────────────────────────────────────────────
+// Sticky needs an opaque background painted on the pinned cells (else scrolling content shows
+// through) and a z-index order: the top-left corner sits above both the header row and the first
+// column. borderCollapse must be `separate` for sticky offsets to hold, so borders live per-cell.
+const CELL = { textAlign: 'center', padding: '3px 8px', borderBottom: '1px solid var(--line)' }
+const STICKY_TOP = { position: 'sticky', top: 0, zIndex: 2, background: 'var(--surface)',
+  padding: '5px 8px', borderBottom: '1px solid var(--line)' }
+const STICKY_CORNER = { ...STICKY_TOP, left: 0, zIndex: 4, textAlign: 'left' }
+const STICKY_LEFT = { position: 'sticky', left: 0, zIndex: 1, background: 'var(--surface)',
+  textAlign: 'left', fontWeight: 400, padding: '3px 8px', whiteSpace: 'nowrap',
+  borderBottom: '1px solid var(--line)' }
+const GROUP_ROW = { textAlign: 'left', padding: '6px 8px', background: 'var(--surface)',
+  borderBottom: '1px solid var(--line)', borderTop: '1px solid var(--line)' }
+
+// A compact select/deselect toggle used for the column, row and group controls — purple when it
+// reads all-on, a muted outline otherwise. `st` is 'all' | 'some' | 'none'.
+const selMini = (st) => ({
+  cursor: 'pointer', font: 'inherit', fontSize: 11, lineHeight: 1.4, borderRadius: 6,
+  padding: '1px 7px', color: 'inherit',
+  border: `1px solid ${st === 'none' ? 'var(--line)' : '#6D28D9'}`,
+  background: st === 'all' ? '#F3EEFC' : 'var(--surface)',
+})
 
 // How many tracked criteria the engine can reach a verdict on for each format — the count each
 // format card shows. Derived from OFFERED, NOT hardcoded, so it tracks the generated universe.
@@ -204,6 +247,99 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false }
 
   const total = OFFERED.reduce((n, r) => n + r.formats.length, 0)
 
+  // ── matrix search + filters (view-only; they never mutate the scope) ──────────────────────────
+  const [query, setQuery] = useState('')
+  const [fSelected, setFSelected] = useState(false)
+  const [fLevels, setFLevels] = useState(() => new Set())   // 'A' / 'AA'
+  const [fSupportedAll, setFSupportedAll] = useState(false)
+  const [fModes, setFModes] = useState(() => new Set())      // 'auto' / 'ai-assisted' / 'human-only'
+  const toggleIn = (setter) => (val) => setter((prev) => {
+    const n = new Set(prev); if (n.has(val)) n.delete(val); else n.add(val); return n
+  })
+  const toggleLevel = toggleIn(setFLevels)
+  const toggleMode = toggleIn(setFModes)
+
+  // The formats currently in scope — what "Supported by all selected formats" measures against.
+  const activeFormats = SCOPE_FORMATS.filter(formatActive)
+
+  const rowVisible = (row) => {
+    const q = query.trim().toLowerCase()
+    if (q && !`${row.sc} ${row.name}`.toLowerCase().includes(q)) return false
+    if (fSelected && !row.formats.some((f) => has(row.sc, f))) return false
+    if (fLevels.size && !fLevels.has(row.level)) return false
+    if (fSupportedAll && !activeFormats.every((f) => row.formats.includes(f))) return false
+    if (fModes.size) {
+      const modes = FIXMODE_BY_SC[row.sc]                    // undefined = unknown → excluded
+      if (!modes || ![...fModes].some((m) => modes.has(m))) return false
+    }
+    return true
+  }
+  const visibleRows = OFFERED.filter(rowVisible)
+  const anyFilter = Boolean(query.trim()) || fSelected || fLevels.size > 0 || fSupportedAll || fModes.size > 0
+  const clearFilters = () => {
+    setQuery(''); setFSelected(false); setFLevels(new Set()); setFSupportedAll(false); setFModes(new Set())
+  }
+
+  // Visible rows sectioned by WCAG principle — empty groups drop out so a filtered view has no
+  // orphan headers.
+  const groups = PRINCIPLES
+    .map((p) => ({ ...p, rows: visibleRows.filter((r) => r.sc[0] === p.digit) }))
+    .filter((g) => g.rows.length)
+
+  // all / some / none across a set of (criterion, format) pairs — drives aria-checked and whether
+  // a click ticks or unticks.
+  const tallState = (on, total) => (on === 0 ? 'none' : on >= total ? 'all' : 'some')
+  const ariaChecked = (st) => (st === 'all' ? 'true' : st === 'some' ? 'mixed' : 'false')
+  const rowState = (row) => tallState(row.formats.filter((f) => has(row.sc, f)).length, row.formats.length)
+  const colRows = (f) => visibleRows.filter((r) => r.formats.includes(f))
+  const colState = (f) => {
+    const rows = colRows(f)
+    return tallState(rows.filter((r) => has(r.sc, f)).length, rows.length)
+  }
+  const groupState = (rows) => {
+    let on = 0, n = 0
+    for (const r of rows) for (const f of r.formats) { n++; if (has(r.sc, f)) on++ }
+    return tallState(on, n)
+  }
+
+  // Toggle a whole format COLUMN down the currently-visible rows only.
+  const toggleColumn = (f) => {
+    const rows = colRows(f)
+    const on = rows.length > 0 && rows.every((r) => has(r.sc, f))
+    setSel((prev) => {
+      const next = { ...prev }
+      for (const r of rows) {
+        const s = new Set(next[r.sc] || [])
+        if (on) s.delete(f); else s.add(f)
+        if (s.size) next[r.sc] = s; else delete next[r.sc]
+      }
+      return next
+    })
+    setRestrict(true); setMsg('')
+  }
+
+  // Toggle every supported pair in a principle GROUP (its visible rows). `on` ticks, else unticks.
+  const setGroup = (rows, on) => {
+    setSel((prev) => {
+      const next = { ...prev }
+      for (const r of rows) { if (on) next[r.sc] = new Set(r.formats); else delete next[r.sc] }
+      return next
+    })
+    setRestrict(true); setMsg('')
+  }
+
+  // A pill filter toggle. View-only, so it stays enabled even for a read-only account.
+  const chip = (label, on, onClick, opts = {}) => (
+    <button key={label} type="button" role="checkbox" aria-checked={on} onClick={onClick}
+            disabled={busy} title={opts.title}
+            style={{ cursor: 'pointer', font: 'inherit', fontSize: 12, borderRadius: 999,
+                     padding: '3px 10px', color: 'inherit',
+                     border: `1px solid ${on ? '#6D28D9' : 'var(--line)'}`,
+                     background: on ? '#F3EEFC' : 'var(--surface)' }}>
+      {label}
+    </button>
+  )
+
   // Persist the scope. Returns true when the platform accepted (or was cleared), false when it was
   // refused or only simulated — the caller uses that to decide whether "Start scan" proceeds.
   const save = async () => {
@@ -336,7 +472,8 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false }
           Customize criteria and combinations
         </summary>
         <div style={{ paddingBottom: 8 }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '0 0 8px' }}>
+          {/* Preset quick-picks + running count */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '0 0 8px', flexWrap: 'wrap' }}>
             <button className="ghost small" type="button" disabled={busy || !canEdit}
                     onClick={() => applyPreset('acp-core-17')}>Core 17</button>
             <button className="ghost small" type="button" disabled={busy || !canEdit}
@@ -347,52 +484,125 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false }
               {chosen} supported checks selected
             </span>
           </div>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ borderCollapse: 'collapse', fontSize: 13, width: '100%' }}>
+
+          {/* ── Search + filters ────────────────────────────────────────────── */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '0 0 6px' }}>
+            <input type="search" value={query} onChange={(e) => setQuery(e.target.value)}
+                   placeholder="Search criterion id or name" aria-label="Search criteria"
+                   style={{ flex: '1 1 200px', minWidth: 160, font: 'inherit', fontSize: 13,
+                            border: '1px solid var(--line)', borderRadius: 8, padding: '5px 10px',
+                            background: 'var(--surface)', color: 'inherit' }} />
+            {chip('Selected only', fSelected, () => setFSelected((v) => !v))}
+            {chip('Level A', fLevels.has('A'), () => toggleLevel('A'))}
+            {chip('Level AA', fLevels.has('AA'), () => toggleLevel('AA'))}
+            {chip('Supported by all selected formats', fSupportedAll, () => setFSupportedAll((v) => !v),
+              { title: activeFormats.length ? `Rows supporting every selected format (${activeFormats.map((f) => FMT_LABEL[f]).join(', ')})` : 'Rows supporting every selected format' })}
+            {FIX_ORDER.map((m) => chip(FIX_LABEL[m], fModes.has(m), () => toggleMode(m),
+              { title: `Fix mode: ${FIX_LABEL[m]}` }))}
+          </div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', margin: '0 0 8px' }}>
+            <span className="muted" role="status" aria-live="polite" style={{ fontSize: 12 }}>
+              Showing {visibleRows.length} of {OFFERED.length} criteria
+            </span>
+            {anyFilter && (
+              <button className="ghost small" type="button" onClick={clearFilters}>Clear filters</button>
+            )}
+          </div>
+
+          {/* ── The matrix (sticky header + criterion column) ───────────────── */}
+          <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 360,
+                        border: '1px solid var(--line)', borderRadius: 8 }}>
+            <table style={{ borderCollapse: 'separate', borderSpacing: 0, fontSize: 13, width: '100%' }}>
               <caption className="sronly">
-                Scan scope: tick each criterion and format this scan assesses.
+                Scan scope: tick each criterion and format this scan assesses. Rows are grouped by
+                WCAG principle; unchecked but available pairs are excluded, and pairs the engine has
+                no verdict for are marked Not supported.
               </caption>
               <thead>
                 <tr>
-                  <th scope="col" style={{ textAlign: 'left', padding: '4px 8px', borderBottom: '1px solid var(--line)' }}>Criterion</th>
-                  {SCOPE_FORMATS.map((f) => (
-                    <th key={f} scope="col" style={{ padding: '4px 8px', borderBottom: '1px solid var(--line)' }}>{FMT_LABEL[f]}</th>
-                  ))}
-                  <th scope="col" style={{ padding: '4px 8px', borderBottom: '1px solid var(--line)' }}>All</th>
+                  <th scope="col" style={STICKY_CORNER}>Criterion</th>
+                  {SCOPE_FORMATS.map((f) => {
+                    const st = colState(f)
+                    return (
+                      <th key={f} scope="col" style={STICKY_TOP}>
+                        <div style={{ fontWeight: 700 }}>{FMT_LABEL[f]}</div>
+                        <button type="button" role="checkbox" aria-checked={ariaChecked(st)}
+                                disabled={busy || !canEdit || colRows(f).length === 0}
+                                onClick={() => toggleColumn(f)}
+                                aria-label={`Select ${FMT_LABEL[f]} for all ${colRows(f).length} visible criteria`}
+                                title={`Toggle ${FMT_LABEL[f]} down the visible rows`}
+                                style={selMini(st)}>{st === 'all' ? 'Clear' : 'All'}</button>
+                      </th>
+                    )
+                  })}
+                  <th scope="col" style={STICKY_TOP}>Row</th>
                 </tr>
               </thead>
               <tbody>
-                {OFFERED.map((row) => (
-                  <tr key={row.sc}>
-                    <th scope="row" style={{ textAlign: 'left', fontWeight: 400, padding: '3px 8px', whiteSpace: 'nowrap' }}>
-                      <b>{row.sc}</b> {row.name} <span className="muted">· {row.level}</span>
-                    </th>
-                    {SCOPE_FORMATS.map((f) => (
-                      <td key={f} style={{ textAlign: 'center', padding: '3px 8px' }}>
-                        {row.formats.includes(f) ? (
-                          <input type="checkbox" checked={has(row.sc, f)} disabled={busy || !canEdit}
-                                 onChange={() => toggle(row.sc, f)}
-                                 aria-label={`${row.sc} ${row.name}, ${FMT_LABEL[f]}`} />
-                        ) : (
-                          <>
-                            <span aria-hidden="true" className="muted">—</span>
-                            <span className="sronly">{`${FMT_LABEL[f]} not applicable to ${row.sc}`}</span>
-                          </>
-                        )}
-                      </td>
-                    ))}
-                    <td style={{ textAlign: 'center', padding: '3px 8px' }}>
-                      <button className="ghost small" type="button" disabled={busy || !canEdit}
-                              onClick={() => toggleRow(row)}
-                              aria-label={`Toggle every format for ${row.sc} ${row.name}`}>
-                        {row.formats.every((f) => has(row.sc, f)) ? 'none' : 'all'}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {groups.map((g) => {
+                  const gst = groupState(g.rows)
+                  return (
+                    <Fragment key={g.digit}>
+                      <tr>
+                        <td colSpan={SCOPE_FORMATS.length + 2} style={GROUP_ROW}>
+                          <span style={{ position: 'sticky', left: 0, display: 'inline-flex',
+                                         alignItems: 'center', gap: 8 }}>
+                            <button type="button" role="checkbox" aria-checked={ariaChecked(gst)}
+                                    disabled={busy || !canEdit}
+                                    onClick={() => setGroup(g.rows, gst !== 'all')}
+                                    aria-label={`Select all criteria in ${g.name}`}
+                                    style={selMini(gst)}>{gst === 'all' ? 'None' : 'All'}</button>
+                            <b>{g.name}</b>
+                            <span className="muted" style={{ fontWeight: 400 }}>· {g.rows.length}</span>
+                          </span>
+                        </td>
+                      </tr>
+                      {g.rows.map((row) => {
+                        const rst = rowState(row)
+                        return (
+                          <tr key={row.sc}>
+                            <th scope="row" style={STICKY_LEFT}>
+                              <b>{row.sc}</b> {row.name} <span className="muted">· {row.level}</span>
+                            </th>
+                            {SCOPE_FORMATS.map((f) => {
+                              if (!row.formats.includes(f)) {
+                                return (
+                                  <td key={f} title="Not supported"
+                                      style={{ ...CELL, background: 'var(--surface)' }}>
+                                    <span aria-hidden="true" className="muted" style={{ opacity: 0.45 }}>·</span>
+                                    <span className="sronly">{`${FMT_LABEL[f]}: Not supported for ${row.sc}`}</span>
+                                  </td>
+                                )
+                              }
+                              const on = has(row.sc, f)
+                              return (
+                                <td key={f} style={{ ...CELL, background: on ? '#F3EEFC' : 'transparent' }}>
+                                  <input type="checkbox" checked={on} disabled={busy || !canEdit}
+                                         onChange={() => toggle(row.sc, f)}
+                                         aria-label={`${row.sc} ${row.name}, ${FMT_LABEL[f]}`} />
+                                </td>
+                              )
+                            })}
+                            <td style={CELL}>
+                              <button type="button" role="checkbox" aria-checked={ariaChecked(rst)}
+                                      disabled={busy || !canEdit} onClick={() => toggleRow(row)}
+                                      aria-label={`Select every format for ${row.sc} ${row.name}`}
+                                      style={selMini(rst)}>{rst === 'all' ? 'None' : 'All'}</button>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </Fragment>
+                  )
+                })}
               </tbody>
             </table>
           </div>
+          {visibleRows.length === 0 && (
+            <p className="muted" role="status" style={{ fontSize: 13, margin: '8px 2px 0' }}>
+              No criteria match these filters. <button className="ghost small" type="button" onClick={clearFilters}>Clear filters</button>
+            </p>
+          )}
         </div>
       </details>
 
