@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { googleUserInfo } from './googleIdentity.js'
-import ScanScope from './ScanScope.jsx'
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || ''
 const SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file'
@@ -441,19 +440,6 @@ export default function GoogleDrive({ onFiles }) {
             {nextPage && !loading && <button className="ghost small" style={{ width: '100%', borderRadius: 0, padding: '8px 0', fontSize: 12 }} onClick={() => fetchFiles(token, nextPage, search, selectedFolder)}>Load more…</button>}
             {loading && files.length > 0 && <div style={{ padding: 6, textAlign: 'center', fontSize: 12 }}><span className="spinner" /></div>}
           </div>
-
-          {/* Scope — which criteria/formats this scan assesses. Self-contained: ScanScope persists
-              to the `scan_scope` setting, which the "Scan selected" run below inherits server-side,
-              exactly as it does from the Discover tab. Collapsed by default so it doesn't crowd the
-              file list. */}
-          <details style={{ borderTop: '1px solid var(--line)' }}>
-            <summary style={{ padding: '7px 10px', cursor: 'pointer', fontSize: 12, color: 'var(--muted)', userSelect: 'none' }}>
-              Choose what to assess · which checks and file types
-            </summary>
-            <div style={{ padding: '0 10px 10px' }}>
-              <ScanScope />
-            </div>
-          </details>
 
           {/* Action bar */}
           <div style={{ padding: '7px 10px', borderTop: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', background: 'var(--bg-subtle, #F8F7F5)' }}>

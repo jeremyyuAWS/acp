@@ -5,6 +5,7 @@ import { googleUserInfo } from './googleIdentity.js'
 import SourceDrawer from './SourceDrawer.jsx'
 import FileDrawer from './FileDrawer.jsx'
 import FolderPicker from './FolderPicker.jsx'
+import ScanScopeWizard from './ScanScopeWizard.jsx'
 // Single source of truth for the SharePoint/Graph scopes, so this sign-in path and SharePoint.jsx
 // can never request different permissions than IT consented to (read-only; see that module).
 import { SP_SCOPES } from './sharepointScopes.js'
@@ -155,6 +156,7 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
   const [spConnecting, setSpConnecting] = useState(false)
   const [spError,      setSpError]      = useState('')
   const [googleClientId, setGoogleClientId] = useState('')
+  const [scanModalOpen, setScanModalOpen] = useState(false)
   const gdTokenClientRef = useRef(null)
 
   useEffect(() => {
@@ -227,6 +229,14 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
 
   const canScanAll = SIM || hasDriveToken || hasSPToken
 
+  // The scan dispatch the "Scan all sources" button used to run inline. It now runs only after the
+  // scope wizard's "Start scan" confirms scope — so every scan from here has a confirmed scope.
+  const runTheScan = () => {
+    if (SIM) { onScan('all'); return }
+    if (hasDriveToken) { handleScan('_gdrive'); return }
+    if (hasSPToken)    { onScan('sharepoint'); return }
+  }
+
   return (
     <>
       <div className="estatebar">
@@ -240,6 +250,14 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {/* Scan-time options — they configure the NEXT scan, so they live here next
               to the Scan button (not in the global header). */}
+          <details style={{ border: '1px solid var(--line)', borderRadius: 8 }}>
+            <summary style={{ padding: '6px 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', userSelect: 'none' }}>
+              Choose what to assess
+            </summary>
+            <div style={{ padding: '4px 12px 12px', width: 'min(560px, 78vw)' }}>
+              <ScanScopeWizard />
+            </div>
+          </details>
           {setDeepScan && (
             <ScanSwitch on={deepScan} onToggle={() => setDeepScan(v => !v)} label="PII scan"
               title={deepScan
@@ -264,11 +282,7 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                 ? 'On — a file byte-identical to one already scored under the current rubric is copied forward instead of re-analysed (ADR 0011). Turn off to force a fresh re-analysis of every file (e.g. after a manual rubric edit, or if you don’t trust the cache).'
                 : 'Off — Fresh scan: every file is re-downloaded and re-analysed, even ones that haven’t changed. Turn on for the normal, much faster incremental behavior.'} />
           )}
-          <button disabled={busy || !canScanAll} onClick={() => {
-            if (SIM) { onScan('all'); return }
-            if (hasDriveToken) { handleScan('_gdrive'); return }
-            if (hasSPToken)    { onScan('sharepoint'); return }
-          }}>
+          <button disabled={busy || !canScanAll} onClick={() => setScanModalOpen(true)}>
             {busy ? 'scanning…' : 'Scan all sources'}
           </button>
         </div>
@@ -352,6 +366,28 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
           </div>
         ))}
       </div>
+
+      {/* Confirm scope before every scan — a required modal prefilled with the last-used scope.
+          "Start scan" persists the scope (when Remember is on) then runs; Cancel/× just closes. */}
+      {scanModalOpen && (
+        <div role="dialog" aria-modal="true" aria-label="Configure scan scope"
+             onClick={() => setScanModalOpen(false)}
+             style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,.45)',
+                      display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '6vh 16px' }}>
+          <div onClick={(e) => e.stopPropagation()}
+               style={{ background: 'var(--surface, #fff)', color: 'inherit', borderRadius: 12,
+                        width: 'min(620px, 100%)', maxHeight: '88vh', overflowY: 'auto',
+                        boxShadow: '0 12px 40px rgba(0,0,0,.3)', padding: '16px 18px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+              <h3 style={{ margin: 0, fontSize: 16 }}>Configure scan scope</h3>
+              <button className="ghost small" aria-label="Close" onClick={() => setScanModalOpen(false)}
+                      style={{ marginLeft: 'auto' }}>×</button>
+            </div>
+            <ScanScopeWizard showStartButton
+              onStartScan={(o) => { setScanModalOpen(false); if (!o?.cancel) runTheScan() }} />
+          </div>
+        </div>
+      )}
 
       {pickerSrc && !busy && (
         <FolderPicker onScan={handlePickerScan} onClose={() => setPickerSrc(null)} />
