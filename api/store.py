@@ -436,7 +436,7 @@ from assessment_policy import (  # noqa: F401,E402  (re-export)
     _LEGACY_NOT_EVALUATED, _SUPERSEDING_OUTCOMES, _SC_LEVEL, _ALL_FORMATS,
     active_scope, scope_problem, parse_scope_setting,
     in_scope, in_target, parse_target, config_target,
-    formats_in_scope, file_in_scope, scope_as_json, criteria_for_format,
+    formats_in_scope, file_in_scope, scope_as_json, scope_from_json, criteria_for_format,
     filter_issues_to_target, filter_issues_to_scope, _rule_outcome, _certify, _registry_for,
     _split_sc_counts, _file_format, _extract_sc, _pages_csv,
 )
@@ -729,10 +729,16 @@ class Store:
         s = report["summary"]
         # The level this scan was run for. A criterion above it is not assessed (see in_target).
         target = parse_target((report.get("rubric") or {}).get("target") or config_target())
-        # The operator scope in force, resolved ONCE per save from this Store. Must be threaded
-        # into `_rule_outcome` explicitly: `in_scope`'s storeless fallback cannot see the
-        # `scan_scope` setting, so relying on it made writing the setting gate nothing at all.
-        scope = active_scope(self)
+        # Phase 3a — the scan's FROZEN scope, resolved ONCE from the payload this save is about to
+        # persist as `scan_runs.scope`. NOT the live global `active_scope(self)`: this same
+        # `report["scope"]["scan_scope"]` is exactly what run_scan scored over (scanner threads
+        # scope_from_json(scope["scan_scope"]) into _scoped_for_scoring), so the traces gated here
+        # and the score cannot diverge — the load-bearing "same frozen scope for score and traces"
+        # invariant. Resolved from the in-memory payload rather than get_scan_scope(sid) on purpose:
+        # this is the MONOLITHIC path and the scan_runs row does not exist until the INSERT below,
+        # and each cursor opens its own connection, so a read here would see nothing yet. Threaded
+        # into `_rule_outcome` explicitly — `in_scope`'s storeless fallback cannot see any scope.
+        scope = scope_from_json((report.get("scope") or {}).get("scan_scope"))
         import json as _json
         catalog = _json.loads(
             (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text()
@@ -883,7 +889,11 @@ class Store:
         """Persist one assessed file (same shape save_scan writes). Idempotent so a
         retried scan_file job doesn't double-insert."""
         target = config_target()
-        scope = active_scope(self)     # see save_scan — resolved here, threaded in explicitly
+        # Phase 3a — the scan's FROZEN scope (recorded by init_scan_run at discover), NOT the live
+        # global. This is the FAN-OUT path: the scan_runs row already exists, so get_scan_scope(sid)
+        # reads the committed value — the SAME value analyse_and_assess / rescore_reused thread into
+        # the score for this scan, so the traces written here and that score read one frozen scope.
+        scope = self.get_scan_scope(scan_id)
         import json as _json
         catalog = _json.loads(
             (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text())
@@ -1456,7 +1466,49 @@ class Store:
                     "SELECT rule_id,wcag,severity,detail,page,location FROM issue_records WHERE scan_id=%s AND file=%s",
                     (sid, f["file"]))
                 f["issues"] = self._db.fetchall(cur)
+            # Phase 3a — project the scan's FROZEN criterion×format scope onto the run payload so
+            # the SPA can render a scope chip (3b) from `run.scan_scope` without re-reading and
+            # re-decoding the scope JSON itself. Additive and non-breaking: None when the scan
+            # predates the field or was genuinely unrestricted. `run["scope"]` is already decoded
+            # to a dict (or None) by _fill_run_aggregate above.
+            _scope = run.get("scope")
+            run["scan_scope"] = _scope.get("scan_scope") if isinstance(_scope, dict) else None
             return {"run": run, "files": files}
+
+    def get_scan_scope(self, scan_id: str) -> dict[str, frozenset[str]] | None:
+        """The criterion→formats scope this scan was FROZEN to at scan-start, rehydrated to
+        {sc: frozenset(fmts)}, or None for NO RESTRICTION.
+
+        Phase 3a. `scan_runs.scope["scan_scope"]` is recorded once — at discover (init_scan_run)
+        or save (save_scan) — from the operator's scope in force THEN, and never mutated after.
+        Remediation and the numeric score read THIS instead of the live global
+        `active_scope(store)`, so changing the operator's scope later can no longer alter what an
+        old scan remediates or scores while its Assess counts stay frozen (the Remediate/Assess
+        contradiction). Assess/coverage were already frozen — they count stored rule traces.
+
+        None means NO RESTRICTION, EVERYWHERE (the remediation predicate reads None as "all
+        in-scope", the score and traces as "unrestricted"). A legacy scan predating the field
+        has nothing recorded and so reads as None — never as the live global, which would
+        re-introduce the very drift 3a removes.
+
+        Mirrors get_scan_diff's `_scan_scope` for the decode shape, but deliberately NOT wrapped
+        in a blanket except that returns "everything": a genuine read/parse error must surface,
+        not silently widen a scoped scan to the whole criteria set (the fail-loud discipline of
+        _scope_for_listing / _scoped_for_scoring). None is returned ONLY when the row or the
+        `scan_scope` key is genuinely absent or empty.
+        """
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT scope FROM scan_runs WHERE id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+        if not row:
+            return None
+        raw = row.get("scope")
+        if not raw:
+            return None
+        # NOT guarded: a stored-but-corrupt scope raises here rather than reading as unrestricted.
+        data = _json.loads(raw) if isinstance(raw, str) else raw
+        return scope_from_json((data or {}).get("scan_scope"))
 
     def get_scan_diff(self, cur_id: str, prev_id: str, owner: str | None = None) -> dict | None:
         """Diff two scans (ADR 0009) → per-file score regressions / improvements + the WCAG
