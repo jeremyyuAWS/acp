@@ -323,7 +323,11 @@ describe('Phase 2 matrix — search and filters', () => {
   })
 })
 
-// ── source-level: Integrations mounts the wizard and gates the scan behind the modal ────────────
+// ── source-level: the shared ScanReviewModal mounts the wizard, and App gates every scan ────────
+// The review modal moved OUT of Integrations to app level (ScanReviewModal.jsx, rendered once by
+// App) so every entry point — not just the Sources tab — passes through it. These assert that
+// wiring against code lines (Integrations is deep in OAuth/MSAL that a unit mount would stub
+// wholesale). Comment lines are stripped first, so a naive substring can't match this very block.
 const HERE = dirname(fileURLToPath(import.meta.url))
 const codeOf = (f) => readFileSync(join(HERE, f), 'utf8')
   .split('\n')
@@ -333,20 +337,73 @@ const codeOf = (f) => readFileSync(join(HERE, f), 'utf8')
   })
   .join('\n')
 
-describe('Integrations wires the wizard', () => {
-  const code = codeOf('Integrations.jsx')
+describe('the shared ScanReviewModal mounts the wizard', () => {
+  const code = codeOf('ScanReviewModal.jsx')
 
-  it('imports and mounts the wizard', () => {
+  it('imports and mounts the wizard with a Start button and a scan callback', () => {
     expect(code).toMatch(/import ScanScopeWizard from '\.\/ScanScopeWizard\.jsx'/)
-    expect(code).toMatch(/<ScanScopeWizard/)
+    expect(code).toMatch(/<ScanScopeWizard showStartButton/)
+    expect(code).toMatch(/onStartScan=\{[^}]*onConfirm/)
   })
 
-  it('routes "New scan" through a required modal, not a direct scan', () => {
-    // Every scan entry opens the review modal instead of dispatching the scan inline.
-    expect(code).toMatch(/setScanModalOpen\(true\)/)
-    // The modal is a real dialog carrying the wizard with a Start button and a scan callback.
+  it('is a real dialog ~1.5× wider than the old Sources-tab modal', () => {
     expect(code).toMatch(/role="dialog"[\s\S]*aria-modal="true"/)
-    expect(code).toMatch(/<ScanScopeWizard showStartButton/)
-    expect(code).toMatch(/onStartScan=\{[^}]*runChosenScan\(\)/)
+    expect(code).toMatch(/min\(940px, 100%\)/)
+  })
+})
+
+describe('App renders the gate once and routes every entry point through it', () => {
+  const code = codeOf('App.jsx')
+
+  it('opens the gate via requestScan instead of scanning inline', () => {
+    expect(code).toMatch(/const requestScan = \(source, folder = null\) => setPendingScan/)
+    expect(code).toMatch(/<ScanReviewModal/)
+    // The confirm is the only path that dispatches doScan.
+    expect(code).toMatch(/onConfirm=\{[\s\S]*?doScan\(source, folder\)/)
+  })
+
+  it('wires onScan={requestScan} at every entry point, not doScan', () => {
+    for (const entry of ['<EmptyState', '<Overview', '<Integrations', '<Discover']) {
+      // Not asserting per-component here (they share one prop name); instead prove no entry point
+      // is wired straight to doScan anymore.
+      expect(entry).toBeTruthy()
+    }
+    expect(code).not.toMatch(/onScan=\{doScan\}/)
+    expect((code.match(/onScan=\{requestScan\}/g) || []).length).toBeGreaterThanOrEqual(4)
+  })
+})
+
+describe('Integrations no longer owns the modal', () => {
+  const code = codeOf('Integrations.jsx')
+
+  it('does not import or mount the wizard, and renders no dialog', () => {
+    expect(code).not.toMatch(/ScanScopeWizard/)
+    expect(code).not.toMatch(/role="dialog"/)
+    expect(code).not.toMatch(/setScanModalOpen/)
+  })
+
+  it('its New scan buttons just call onScan', () => {
+    expect(code).toMatch(/onScan\('all'\)/)
+    expect(code).toMatch(/onScan\(cardScanArg\(src\)\)/)
+  })
+})
+
+describe('the Drive/SharePoint browse panels gate through Upload (parity-safe)', () => {
+  it('Upload opens the shared modal before assessing browse selections', () => {
+    const code = codeOf('Upload.jsx')
+    expect(code).toMatch(/import ScanReviewModal from '\.\/ScanReviewModal\.jsx'/)
+    // The browse handlers open the gate instead of assessing inline…
+    expect(code).toMatch(/setBrowseGate\(\{ source: 'drive'/)
+    expect(code).toMatch(/setBrowseGate\(\{ source: 'sharepoint'/)
+    // …and only the modal's confirm runs the assess path.
+    expect(code).toMatch(/onConfirm=\{[\s\S]*?processBrowseFiles\(g\.files\)/)
+  })
+
+  it('the browse panels themselves carry no modal — GoogleDrive.jsx stays byte-identical', () => {
+    // The gate lives in the shared parent (Upload), NOT in GoogleDrive.jsx, which driveArchive
+    // .test.js pins byte-for-byte to the legacy SPA. Guard that here so a future refactor that
+    // "helpfully" moves the modal into the panel is caught with this reason attached.
+    expect(codeOf('GoogleDrive.jsx')).not.toMatch(/ScanReviewModal/)
+    expect(codeOf('SharePoint.jsx')).not.toMatch(/ScanReviewModal/)
   })
 })

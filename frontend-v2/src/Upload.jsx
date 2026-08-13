@@ -17,6 +17,7 @@ import { prescreenHtml } from './prescreen.js'
 import { useDialog } from './a11y.js'
 import GoogleDrive, { DriveUploadButton, saveDriveScore, uploadToDrive, archiveOriginal } from './GoogleDrive.jsx'
 import SharePoint, { SpUploadButton } from './SharePoint.jsx'
+import ScanReviewModal from './ScanReviewModal.jsx'
 import { loadAiModels, modelLabel, UNKNOWN_MODEL } from './aiModel.js'
 
 const isOffice = (name) => /\.(docx|pptx|xlsx)$/i.test(name || '')
@@ -294,6 +295,9 @@ export default function Upload({ onCertified, me }) {
   const [bulkSaving, setBulkSaving] = useState(false)
   const [bulkSaved, setBulkSaved] = useState(false)
   const [batchZipping, setBatchZipping] = useState(false)
+  // Universal scan gate for the browse panels. `{ source, files }` while the shared ScanReviewModal
+  // is open over Drive/SharePoint-downloaded files, before they are assessed.
+  const [browseGate, setBrowseGate] = useState(null)
 
   // Real captions (1.2.2/1.2.3) via the Whisper-backed function when an audio file is uploaded.
   useEffect(() => {
@@ -339,19 +343,22 @@ export default function Upload({ onCertified, me }) {
     setBatchDone(false)
   }
 
-  const handleGDriveFiles = (fileObjs) => {
-    if (!fileObjs.length) return
+  // The actual assess path once the browse files clear the gate — the branching the two
+  // handlers used to do inline.
+  const processBrowseFiles = (fileObjs) => {
     if (fileObjs.length === 1 && !batchMode) { handleFile(fileObjs[0]); return }
     setBatchMode(true)
     addToQueue(fileObjs)
   }
 
-  const handleSpFiles = (fileObjs) => {
-    if (!fileObjs.length) return
-    if (fileObjs.length === 1 && !batchMode) { handleFile(fileObjs[0]); return }
-    setBatchMode(true)
-    addToQueue(fileObjs)
-  }
+  // The Drive/SharePoint browse panels download client-side and hand the files here. That path
+  // never touched App's doScan, so it was the one scan entry that bypassed the universal scope/
+  // behavior review. Intercept it: hold the downloaded files and open the shared ScanReviewModal;
+  // only assess them once its scope is confirmed. (GoogleDrive.jsx's own "Scan N selected" button
+  // is held byte-identical with the legacy SPA by driveArchive.test.js, so the gate lives here in
+  // the shared parent rather than inside the panel.)
+  const handleGDriveFiles = (fileObjs) => { if (fileObjs.length) setBrowseGate({ source: 'drive', files: fileObjs }) }
+  const handleSpFiles = (fileObjs) => { if (fileObjs.length) setBrowseGate({ source: 'sharepoint', files: fileObjs }) }
 
   const runBatch = async () => {
     setBatchRunning(true)
@@ -1077,6 +1084,14 @@ export default function Upload({ onCertified, me }) {
             </>
           )}
         </>
+      )}
+
+      {/* Universal scan gate over Drive/SharePoint browse selections — the scope/behavior review
+          appears before the downloaded files are assessed. estCount is the number picked. */}
+      {browseGate && (
+        <ScanReviewModal source={browseGate.source} estCount={browseGate.files.length}
+          onConfirm={() => { const g = browseGate; setBrowseGate(null); processBrowseFiles(g.files) }}
+          onCancel={() => setBrowseGate(null)} />
       )}
     </>
   )

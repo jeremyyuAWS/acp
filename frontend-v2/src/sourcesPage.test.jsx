@@ -4,9 +4,10 @@
  * What it guards, top to bottom:
  *   - a CONNECTED SOURCES section with a status card that shows the TRUTHFUL count line
  *     ("{discovered} in Drive · {lastScanFiles} in last scan") and exactly ONE dominant health state;
- *   - the page-level "New scan" button opens the single required review modal;
- *   - that modal carries the four scan-behavior toggles AND the ScanScopeWizard;
- *   - the wizard's "Start scan" is the modal's confirm — the only path that actually dispatches a scan.
+ *   - the page-level "New scan" button routes through `onScan` (App's `requestScan`) — NOT a
+ *     local dialog. The scope/behavior review modal is now app-level (ScanReviewModal, rendered by
+ *     App), shared by every scan entry point, so the Sources tab no longer owns one. This guards
+ *     that Integrations does not re-introduce its own modal and simply calls onScan.
  *
  * DOM-level, not browser-level: this repo's preview server runs vite rooted at the SHARED checkout
  * whatever worktree you are in (see CLAUDE.md), so a browser check would exercise code that does not
@@ -139,67 +140,32 @@ describe('the Sources page', () => {
   })
 })
 
-describe('the New scan review modal — the single gated scan entry', () => {
+describe('the New scan buttons route through the app-level gate (onScan), not a local modal', () => {
   const dialog = (c) => c.querySelector('[role="dialog"]')
 
-  it('opens from the page-level New scan button', async () => {
-    const c = await mount(baseProps())
-    expect(dialog(c)).toBeNull()
+  it('the page-level New scan button calls onScan("all") — every connected source', async () => {
+    const props = baseProps()
+    const c = await mount(props)
     await click(btn(c, /New scan/))
-    const d = dialog(c)
-    expect(d).toBeTruthy()
-    expect(d.getAttribute('aria-label')).toBe('New scan')
+    expect(props.onScan).toHaveBeenCalledWith('all')
   })
 
-  it('opens from a connected card\'s New scan button too', async () => {
-    const c = await mount(baseProps())
+  it('a connected card\'s New scan button calls onScan for that source ("drive")', async () => {
+    const props = baseProps()
+    const c = await mount(props)
     const card = c.querySelector('.srccard--on')
     await click([...card.querySelectorAll('button')].find((b) => /New scan/.test(b.textContent)))
-    expect(dialog(c)).toBeTruthy()
-  })
-
-  it('carries the four scan-behavior toggles and the ScanScopeWizard', async () => {
-    const c = await mount(baseProps())
-    await click(btn(c, /New scan/))
-    const d = dialog(c)
-    expect(d.textContent).toMatch(/Scan behavior/)
-    for (const label of ['PII scan', 'Durable scan', 'Skip Remediated/', 'Incremental scan']) {
-      expect([...d.querySelectorAll('[role="switch"]')].some((s) => (s.getAttribute('aria-label') || '').includes(label)),
-        `missing behavior toggle "${label}"`).toBe(true)
-    }
-    // The wizard renders inside — its format cards / summary and its Start scan footer.
-    expect(d.textContent).toMatch(/Formats & WCAG criteria/)
-    expect(d.textContent).toMatch(/supported checks selected/)
-    expect([...d.querySelectorAll('button')].some((b) => /Start scan/.test(b.textContent))).toBe(true)
-  })
-
-  it('shows the honest estimated-documents line for the chosen source', async () => {
-    const c = await mount(baseProps())
-    await click(btn(c, /New scan/))
-    const est = dialog(c).querySelector('.scanmodal-est')
-    expect(est.textContent).toMatch(/~50 documents in Google Drive/)
-  })
-
-  it('dispatches the scan ONLY through the wizard\'s Start scan confirm', async () => {
-    const props = baseProps()
-    const c = await mount(props)
-    await click(btn(c, /New scan/))
-    // Opening the modal has not scanned anything yet.
-    expect(props.onScan).not.toHaveBeenCalled()
-    const start = [...dialog(c).querySelectorAll('button')].find((b) => /Start scan/.test(b.textContent))
-    await click(start)
-    // Confirm ran the dispatch (SIM path → onScan('drive')) and closed the modal.
     expect(props.onScan).toHaveBeenCalledWith('drive')
-    expect(dialog(c)).toBeNull()
   })
 
-  it('closes without scanning on Cancel', async () => {
-    const props = baseProps()
-    const c = await mount(props)
-    await click(btn(c, /New scan/))
-    const cancel = [...dialog(c).querySelectorAll('button')].find((b) => /Cancel/.test(b.textContent))
-    await click(cancel)
-    expect(props.onScan).not.toHaveBeenCalled()
+  it('does NOT render its own scan-review dialog — the modal is app-level now', async () => {
+    const c = await mount(baseProps())
     expect(dialog(c)).toBeNull()
+    await click(btn(c, /New scan/))
+    // Clicking still opens no local dialog; App renders the shared ScanReviewModal instead.
+    expect(dialog(c)).toBeNull()
+    // And the scan-behavior toggles no longer live on this page.
+    expect(c.textContent).not.toMatch(/Scan behavior/)
+    expect([...c.querySelectorAll('[role="switch"]')].length).toBe(0)
   })
 })

@@ -31,6 +31,7 @@ import Discover from './Discover.jsx'
 import Dashboard from './Dashboard.jsx'
 import Remediate from './Remediate.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
+import ScanReviewModal from './ScanReviewModal.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
 import { applyScopeConfig } from './activeScope.js'
 import A11ySelfCheck from './A11ySelfCheck.jsx'
@@ -219,6 +220,9 @@ export default function App() {
   // Rendered as an alert, because the alternative — which is what shipped — is an empty score.
   const [scanUnavailable, setScanUnavailable] = useState(null)
   const recoveringRef = useRef(false)      // one recovery at a time; getScan() below can 404 too
+  // Universal scan gate: `{ source, folder }` while the app-level review modal is open. Declared
+  // with the other hooks (above the `!me` early return) so the hook order never changes.
+  const [pendingScan, setPendingScan] = useState(null)
 
   useEffect(() => {
     const t = setInterval(() => setTick((n) => n + 1), 60_000)
@@ -498,6 +502,15 @@ export default function App() {
     } catch { /* leave current scan */ } finally { setScanLoading(false) }
   }
 
+  // ── Universal scan gate ──────────────────────────────────────────────────────
+  // Every scan entry point calls `requestScan` (wired as their `onScan` prop), which OPENS the
+  // app-level review modal instead of scanning. The only path that actually dispatches a scan is
+  // the modal's "Start scan" confirm → `doScan`. This is what makes the scope/behavior review
+  // unbypassable from Discover, Overview, EmptyState/ScanSetup, the Sources tab, and the
+  // Drive/SharePoint browse panels alike — before this, the modal lived inside Integrations and
+  // only the Sources tab reached it. (`pendingScan` state is declared with the other hooks above.)
+  const requestScan = (source, folder = null) => setPendingScan({ source, folder })
+
   const doScan = async (source, folder = null) => {
     if (busy) return                              // a scan/assessment is already running — don't launch another
     setBusy(true); setErr(null); setProgress({ phase: 'queued' })
@@ -613,7 +626,7 @@ export default function App() {
     acc[action] = (acc[action] || 0) + 1; acc.total += 1
     return acc
   }, { auto: 0, assisted: 0, review: 0, archive: 0, keep: 0, manual: 0, total: 0 })
-  const placeholder = loaded ? <EmptyState onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onFileTypeChange={setFileTypeConfig} /> : <Loading />
+  const placeholder = loaded ? <EmptyState onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onFileTypeChange={setFileTypeConfig} /> : <Loading />
   // The scan panel renders inside whichever view is open, so scope its narration to that view
   // when the view is a pipeline step that owns scan phases. The view ids ARE the step names in
   // PHASE_STEP ('discover', 'assess'); anything else is a non-step view and narrates the job.
@@ -827,14 +840,12 @@ export default function App() {
         {/* onScan/busy/tokens are threaded so Overview can offer the scan-scope editor after a
             scan exists. Before one, `placeholder` (EmptyState → ScanSetup) is the whole screen;
             without these the editor would still be reachable exactly once per workspace. */}
-        {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} me={me} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onFileTypeChange={setFileTypeConfig} /> : assessGate) : placeholder)}
+        {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} me={me} onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onFileTypeChange={setFileTypeConfig} /> : assessGate) : placeholder)}
 
-        {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
-          deepScan={deepScan} setDeepScan={setDeepScan} queuedScan={queuedScan} setQueuedScan={setQueuedScan}
-          excludeRemediated={excludeRemediated} setExcludeRemediated={setExcludeRemediated}
-          incremental={incremental} setIncremental={setIncremental} scanId={run?.id} />}
+        {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
+          scanId={run?.id} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} scope={run?.scope || null} decisions={decisions} setDecisions={setDecisions}
+        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={requestScan} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} scope={run?.scope || null} decisions={decisions} setDecisions={setDecisions}
           /* Upload lost its top-level tab in the v2 simplification, but not its capability:
              it is a secondary action inside Discover now, which is where "get files in front
              of ACP" already lives. Dropping it outright would have removed the only way to try
@@ -909,6 +920,24 @@ export default function App() {
           panels. The ontology DATA path below is untouched — App still annotates the corpus from
           whatever was last published; only its editor left Settings. */}
       {settingsOpen && me.allow?.includes('settings') && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onDelegationChange={setDelegations} onFileTypeChange={(cfg) => setFileTypeConfig(cfg)} />}
+
+      {/* The universal scan gate. Opened by `requestScan` from every entry point; the wizard's
+          "Start scan" confirm is the only thing that dispatches `doScan`. The behavior toggles are
+          bound to the App-level state so a choice here carries into the scan that follows. */}
+      {pendingScan && (
+        <ScanReviewModal
+          source={pendingScan.source} folder={pendingScan.folder}
+          deepScan={deepScan} setDeepScan={setDeepScan}
+          queuedScan={queuedScan} setQueuedScan={setQueuedScan}
+          excludeRemediated={excludeRemediated} setExcludeRemediated={setExcludeRemediated}
+          incremental={incremental} setIncremental={setIncremental}
+          estCount={sources.filter((s) => (pendingScan.source === 'sharepoint'
+            ? (s.type === 'onedrive' || s.type === 'sharepoint')
+            : (pendingScan.source === 'all' || s.type === 'google_drive')))
+            .reduce((a, s) => a + (s.files || 0), 0)}
+          onConfirm={() => { const { source, folder } = pendingScan; setPendingScan(null); doScan(source, folder) }}
+          onCancel={() => setPendingScan(null)} />
+      )}
     </div>
   )
 }
