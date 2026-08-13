@@ -311,7 +311,7 @@ def config():
 def _active_scope_info() -> dict:
     """The operator scope the SERVER is actually gating on, for the SPA to render.
 
-    Until this existed the SPA hard-coded `ACTIVE_SCOPE_PRESET = 'deva-final'` in
+    Until this existed the SPA hard-coded `ACTIVE_SCOPE_PRESET = 'engagement-14'` in
     activeScope.js, so changing the `scan_scope` setting moved the server's gate while every
     denominator, "N of 20 in scope" line and out-of-scope note in the UI kept describing the
     preset compiled into the bundle. Two sources of truth for one question, and the wrong one

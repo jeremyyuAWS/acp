@@ -2,7 +2,7 @@
 // Static detectors that FLAG the runtime / interactive / media risks for the Required
 // A/AA criteria that can't be confirmed or auto-fixed without rendering or interaction.
 // Each item is ROUTED to a human reviewer, never auto-remediated — the honest
-// "detect & route" half of Devanathan's two-axis model. The detail always says what a
+// "detect & route" half of the two-axis triage model. The detail always says what a
 // human must confirm, because static analysis can only surface the risk, not the verdict.
 export function prescreenHtml(text) {
   if (!text) return []

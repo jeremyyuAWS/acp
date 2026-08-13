@@ -408,13 +408,13 @@ SCOPE_PRESETS: dict[str, dict[str, frozenset[str]]] = {
         "3.1.2": frozenset({"docx", "pdf", "pptx", "xlsx"}),
         "4.1.2": frozenset({"docx", "pdf", "pptx", "xlsx"}),
     },
-    # Deva's FINAL tab, IN-SCOPE grid — 14 criteria, per-format. Mirrors V5_APPLICABLE in the
+    # The engagement's FINAL tab, IN-SCOPE grid — 14 criteria, per-format. Mirrors V5_APPLICABLE in the
     # WCAG matrix, which was built from the same sheet; the two must not drift.
     #
     # NARROWER than Core 17 and specific to one engagement, so it is no longer the only preset on
     # offer. Kept because it mirrors an external artifact that must not drift, not because it is a
     # sensible default for a new customer.
-    "deva-final": {
+    "engagement-14": {
         "1.1.1": frozenset({"docx", "xlsx", "pptx", "pdf"}),
         "1.3.1": frozenset({"docx", "xlsx", "pptx", "pdf"}),
         "1.3.2": frozenset({"pptx", "pdf"}),
@@ -443,7 +443,7 @@ SCOPE_PRESETS: dict[str, dict[str, frozenset[str]]] = {
 #                         scripts/gen_scope_presets.py.
 #    20  DOCUMENT CORE  — what the product certifies against (frontend documents20.js).
 #    17  THIS           — what the customer tracks. DOCUMENT CORE minus 1.4.4, 1.4.10 and 1.4.12.
-#    14  deva-final     — the narrower per-format checklist agreed for one engagement.
+#    14  engagement-14     — the narrower per-format checklist agreed for one engagement.
 #
 # The three it drops are the ones column G marks "No", and they share a reason: resize, reflow
 # and text-spacing are VIEWER behaviours, not properties of a static document — there is nothing
@@ -464,7 +464,7 @@ _scope_override: str | None = None    # tests and per-call use; None = read the 
 # either a preset NAME (as it always has) or a JSON object `{"1.4.3": ["docx","pdf"], ...}`.
 #
 # Why both. A preset is a name an operator recognises and a reviewer can audit at a glance, and
-# `deva-final` earns its place because it mirrors an external artifact that must not drift. But
+# `engagement-14` earns its place because it mirrors an external artifact that must not drift. But
 # every OTHER engagement needed a code change, a review and a deploy to express a scope that is
 # really just a customer's list of criteria — a configuration fact wearing a source-code costume.
 # Data removes that without removing the presets: the two forms resolve to the same shape, so

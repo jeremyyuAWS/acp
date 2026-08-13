@@ -73,8 +73,8 @@ describe('an empty selection under "restrict"', () => {
 // ── loading ───────────────────────────────────────────────────────────────────────────────────
 describe('loading the stored scope', () => {
   it('resolves a preset NAME into ticked boxes', async () => {
-    const c = await render('deva-final')
-    const preset = SCOPE_PRESETS['deva-final']
+    const c = await render('engagement-14')
+    const preset = SCOPE_PRESETS['engagement-14']
     const [sc, fmts] = Object.entries(preset)[0]
     const box = byLabel(c, `${sc} `)
     expect(box, `no checkbox rendered for ${sc}`).toBeTruthy()
@@ -112,7 +112,7 @@ describe('saving', () => {
   })
 
   it('sends "" to clear, so the backend stores the simpler form', async () => {
-    const c = await render('deva-final')
+    const c = await render('engagement-14')
     await click(c.querySelectorAll('input[type=radio]')[0])   // no restriction
     await click(saveBtn(c))
     expect(settingsMock.put).toHaveBeenCalledWith({ scan_scope: '' })
@@ -154,7 +154,7 @@ describe('saving', () => {
 // ── the grid only offers what the engine can judge ────────────────────────────────────────────
 describe('the grid', () => {
   it('renders no checkbox where the engine has no verdict for the pair', async () => {
-    const c = await render('deva-final')
+    const c = await render('engagement-14')
     // 1.4.1 has no pptx lane on either axis, so that cell must not be a checkbox at all —
     // a disabled box would read as "off", implying a choice nobody made.
     const row = SCOPE_UNIVERSE.find((r) => r.sc === '1.4.1')
@@ -164,14 +164,14 @@ describe('the grid', () => {
   })
 
   it('names every checkbox for a screen reader', async () => {
-    const c = await render('deva-final')
+    const c = await render('engagement-14')
     const boxes = [...c.querySelectorAll('input[type=checkbox]')]
     expect(boxes.length).toBeGreaterThan(20)
     for (const b of boxes) expect(b.getAttribute('aria-label')).toMatch(/^\d+\.\d+\.\d+ .+, (DOCX|XLSX|PPTX|PDF)$/)
   })
 
   it('uses real row and column headers', async () => {
-    const c = await render('deva-final')
+    const c = await render('engagement-14')
     expect(c.querySelector('caption')).toBeTruthy()
     expect([...c.querySelectorAll('th[scope="col"]')].length).toBeGreaterThan(4)
     expect([...c.querySelectorAll('th[scope="row"]')].length).toBe(OFFERED.length)
@@ -182,7 +182,7 @@ describe('the grid', () => {
     // COULD be scoped", and the wrong one to "what should this operator choose between". Twelve
     // of the 29 are AAA rules and viewer behaviours Mova iO does not track, and each was a row to
     // read and dismiss on the screen meant to be the first thing an operator does.
-    const c = await render('deva-final')
+    const c = await render('engagement-14')
     const shown = [...c.querySelectorAll('th[scope="row"] b')].map((b) => b.textContent)
     expect(new Set(shown)).toEqual(new Set([...TRACKED_17]))
 
@@ -196,7 +196,7 @@ describe('the grid', () => {
   it('drops no tracked criterion — every one of the 17 has a row', async () => {
     // The failure this guards is the quiet direction: a filter that hides a criterion the product
     // says it follows, leaving an operator unable to scope it and nothing on screen to say why.
-    const c = await render('deva-final')
+    const c = await render('engagement-14')
     const shown = [...c.querySelectorAll('th[scope="row"] b')].map((b) => b.textContent)
     const missing = [...TRACKED_17].filter((sc) => !shown.includes(sc))
     expect(missing, `tracked but not offerable: ${missing.join(', ')}`).toHaveLength(0)

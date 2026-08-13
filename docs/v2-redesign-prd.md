@@ -169,7 +169,7 @@ retype one.
 | 29 | `SCOPE_UNIVERSE` | Which (criterion, format) pairs may an operator scope? |
 | 20 | Document core | What does the product certify against? |
 | **17** | **Tracked** (`MOVA_TRACKED`) | **What does this customer follow?** |
-| 14 | Agreed scope (`deva-final`) | What did we agree to assess for this engagement? |
+| 14 | Agreed scope (`engagement-14`) | What did we agree to assess for this engagement? |
 
 17 = the document core minus 1.4.4, 1.4.10 and 1.4.12 — resize, reflow and text spacing, which
 are viewer behaviours rather than properties of a static document. The relationship is pinned by

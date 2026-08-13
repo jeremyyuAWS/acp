@@ -81,17 +81,17 @@ def test_no_judgeable_pair_is_left_out():
 
 
 def test_it_covers_more_criteria_than_the_engagement_preset():
-    """deva-final is 14 criteria agreed for one customer. If Core 17 ever became the narrower of
+    """engagement-14 is 14 criteria agreed for one customer. If Core 17 ever became the narrower of
     the two, the default would be hiding work rather than describing the product."""
-    assert set(pol.SCOPE_PRESETS["deva-final"]) < set(pol.SCOPE_PRESETS[CORE])
+    assert set(pol.SCOPE_PRESETS["engagement-14"]) < set(pol.SCOPE_PRESETS[CORE])
 
 
 def test_the_engagement_preset_names_two_pairs_the_engine_cannot_judge():
     """Two real gaps, pinned rather than tolerated silently — and the reason this file does NOT
-    assert deva-final ⊆ Core 17 by format.
+    assert engagement-14 ⊆ Core 17 by format.
 
     The presets answer different questions. Core 17 is what the ENGINE can judge, so every pair in
-    it is backed by a lane. deva-final mirrors what a CUSTOMER agreed to assess, and a customer can
+    it is backed by a lane. engagement-14 mirrors what a CUSTOMER agreed to assess, and a customer can
     agree to something ACP cannot do. Both gaps verified against the tables directly:
 
         1.4.1 / pptx   RULE_FORMATS html-only, REVIEW_FORMATS docx+pdf+xlsx, registry empty
@@ -107,9 +107,9 @@ def test_the_engagement_preset_names_two_pairs_the_engine_cannot_judge():
     and closing either fails here too — the discrepancy has to be looked at either way.
     """
     core = pol.SCOPE_PRESETS[CORE]
-    deva = pol.SCOPE_PRESETS["deva-final"]
+    eng = pol.SCOPE_PRESETS["engagement-14"]
     beyond = {sc: sorted(set(f) - set(core.get(sc, ())))
-              for sc, f in deva.items() if set(f) - set(core.get(sc, ()))}
+              for sc, f in eng.items() if set(f) - set(core.get(sc, ()))}
     assert beyond == {"1.4.1": ["pptx"], "2.1.1": ["pdf"]}, (
         f"the engagement scope's unjudgeable pairs changed: {beyond}. If a pair was ADDED, the "
         "engagement now claims coverage ACP cannot deliver; if one was fixed, drop it from this "
