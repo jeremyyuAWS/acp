@@ -2,6 +2,7 @@ import { useState, useEffect, Fragment } from 'react'
 import { getSettings, updateSettings } from './api.js'
 import { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } from './scopePresets.js'
 import { TRACKED_17, RULE_DETAILS } from './ruleDetails.js'
+import { ASSESSMENT_FALLBACK, assessmentFor } from './capability.js'
 
 // ── Scan-scope WIZARD (Phase 1) ─────────────────────────────────────────────────────────────────
 //
@@ -16,10 +17,25 @@ import { TRACKED_17, RULE_DETAILS } from './ruleDetails.js'
 // under "restrict" is refused rather than saved (backend reads `{}` as NO restriction, the exact
 // opposite of "assess nothing"), and a save trusts the SERVER's echo, not its own request.
 
-// The criteria this wizard OFFERS — SCOPE_UNIVERSE (every criterion×format pair the engine can
-// reach a verdict on) narrowed to the 17 criteria Mova iO actually tracks. Derived, never typed,
-// so it can neither offer a checkbox the engine has no verdict for nor hide a tracked capability.
-const OFFERED = SCOPE_UNIVERSE.filter((r) => TRACKED_17.has(r.sc))
+// ── READINESS (ADR 0023 assessment axis) ─────────────────────────────────────────────────────────
+// SCOPE_UNIVERSE says which (criterion, format) pairs the engine CAN reach — a code fact. It is
+// broader than what ACP can actually ASSESS: the assessment table (capability.js, CI-locked to the
+// backend) is the "can ACP determine compliance?" answer, and a pair absent there, or marked
+// 'human', yields no verdict a tester could act on. Those pairs are OFFERED but NOT READY: we grey
+// them out and take them out of selection so nobody scopes a scan around a cell that returns nothing.
+// A cell is READY when its assessment lane is 'auto' (🟢 certifies pass & fail) or 'review' (🟡
+// detects, human confirms). Both produce a result; only 'human'/absent do not.
+const laneOf = (sc, f) => assessmentFor(ASSESSMENT_FALLBACK, f, sc)   // 'auto' | 'review' | 'human' | null
+const isReady = (sc, f) => laneOf(sc, f) === 'auto' || laneOf(sc, f) === 'review'
+
+// The criteria this wizard OFFERS — SCOPE_UNIVERSE narrowed to the 17 criteria Mova iO tracks.
+// Each row carries `.formats` (what the engine reaches — for the not-supported vs not-ready render
+// distinction) AND `.ready` (the subset ACP can actually assess — the ONLY formats selection,
+// counting and the presets operate on). Derived, never typed, so it tracks the generated universe
+// and the assessment table together.
+const OFFERED = SCOPE_UNIVERSE
+  .filter((r) => TRACKED_17.has(r.sc))
+  .map((r) => ({ ...r, ready: r.formats.filter((f) => isReady(r.sc, f)) }))
 
 const FMT_LABEL = { docx: 'DOCX', xlsx: 'XLSX', pptx: 'PPTX', pdf: 'PDF' }
 
@@ -66,10 +82,11 @@ const selMini = (st) => ({
   background: st === 'all' ? '#F3EEFC' : 'var(--surface)',
 })
 
-// How many tracked criteria the engine can reach a verdict on for each format — the count each
-// format card shows. Derived from OFFERED, NOT hardcoded, so it tracks the generated universe.
+// How many tracked criteria ACP can actually ASSESS for each format — the count each format card
+// shows. Counts READY cells only (not merely engine-reachable ones), so the card never promises a
+// number the scan can't deliver. Derived from OFFERED, NOT hardcoded.
 const FMT_COUNT = Object.fromEntries(
-  SCOPE_FORMATS.map((f) => [f, OFFERED.filter((r) => r.formats.includes(f)).length]),
+  SCOPE_FORMATS.map((f) => [f, OFFERED.filter((r) => r.ready.includes(f)).length]),
 )
 
 const SIM_NOT_WRITTEN =
@@ -106,24 +123,35 @@ const toPayload = (sel) => {
 }
 const payloadJson = (sel) => JSON.stringify(toPayload(sel))
 
-// A preset materialised as {sc: Set} and as its canonical payload JSON, so a selection can be
-// matched back to the profile that produced it (drives which profile pill reads as chosen).
-const presetSel = (name) => {
-  const p = SCOPE_PRESETS[name] || {}
+// Drop every NOT-READY (criterion, format) pair from a {sc: Set} selection, and drop any criterion
+// left empty. Applied to presets and to the stored scope on load, so `sel` only ever holds pairs
+// ACP can assess — counts, toggles and the saved payload can't promise a cell that returns nothing.
+const readyOnly = (sel) => {
   const out = {}
-  for (const [sc, fmts] of Object.entries(p)) out[sc] = new Set(fmts)
+  for (const [sc, fmts] of Object.entries(sel || {})) {
+    const kept = new Set([...fmts].filter((f) => isReady(sc, f)))
+    if (kept.size) out[sc] = kept
+  }
   return out
 }
+
+// A preset materialised as {sc: Set} (READY pairs only) and as its canonical payload JSON, so a
+// selection can be matched back to the profile that produced it (drives which profile pill reads as
+// chosen). A preset that lists a not-ready pair contributes only its ready formats here.
+const presetSel = (name) => readyOnly(
+  Object.fromEntries(Object.entries(SCOPE_PRESETS[name] || {}).map(([sc, fmts]) => [sc, new Set(fmts)])),
+)
 const PRESET_JSON = {
   'acp-core-17': payloadJson(presetSel('acp-core-17')),
   'engagement-14': payloadJson(presetSel('engagement-14')),
 }
 
 // The full OFFERED grid as a selection — what "Everything supported" evaluates, and the base a
-// format toggle edits when it starts from no-restriction.
+// format toggle edits when it starts from no-restriction. READY cells only: "everything supported"
+// means every criterion ACP can assess, not every pair the engine merely reaches.
 const fullGridSel = () => {
   const out = {}
-  for (const r of OFFERED) out[r.sc] = new Set(r.formats)
+  for (const r of OFFERED) if (r.ready.length) out[r.sc] = new Set(r.ready)
   return out
 }
 
@@ -173,7 +201,9 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
       const parsed = parseStoredScope(raw)
       setSaved(raw)
       setRestrict(Boolean(parsed))
-      setSel(parsed || {})
+      // A scope stored before the readiness narrowing may name not-ready pairs; drop them so the
+      // grid, counts and dirty check only ever reason about cells ACP can assess.
+      setSel(parsed ? readyOnly(parsed) : {})
     }).catch(() => { /* the panel still renders; a save reports the real failure */ })
     return () => { alive = false }
   }, [])
@@ -225,7 +255,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
       }
     } else {
       for (const [sc, s] of Object.entries(base)) next[sc] = new Set(s)
-      for (const r of OFFERED) if (r.formats.includes(f)) (next[r.sc] || (next[r.sc] = new Set())).add(f)
+      for (const r of OFFERED) if (r.ready.includes(f)) (next[r.sc] || (next[r.sc] = new Set())).add(f)
     }
     setSel(next); setRestrict(true); setMsg('')
   }
@@ -243,17 +273,17 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
     setRestrict(true); setMsg('')
   }
   const toggleRow = (row) => {
-    const all = row.formats.every((f) => has(row.sc, f))
+    const all = row.ready.length > 0 && row.ready.every((f) => has(row.sc, f))
     setSel((prev) => {
       const next = { ...prev }
       if (all) delete next[row.sc]
-      else next[row.sc] = new Set(row.formats)
+      else next[row.sc] = new Set(row.ready)
       return next
     })
     setRestrict(true); setMsg('')
   }
 
-  const total = OFFERED.reduce((n, r) => n + r.formats.length, 0)
+  const total = OFFERED.reduce((n, r) => n + r.ready.length, 0)
 
   // ── matrix search + filters (view-only; they never mutate the scope) ──────────────────────────
   const [query, setQuery] = useState('')
@@ -273,9 +303,9 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   const rowVisible = (row) => {
     const q = query.trim().toLowerCase()
     if (q && !`${row.sc} ${row.name}`.toLowerCase().includes(q)) return false
-    if (fSelected && !row.formats.some((f) => has(row.sc, f))) return false
+    if (fSelected && !row.ready.some((f) => has(row.sc, f))) return false
     if (fLevels.size && !fLevels.has(row.level)) return false
-    if (fSupportedAll && !activeFormats.every((f) => row.formats.includes(f))) return false
+    if (fSupportedAll && !activeFormats.every((f) => row.ready.includes(f))) return false
     if (fModes.size) {
       const modes = FIXMODE_BY_SC[row.sc]                    // undefined = unknown → excluded
       if (!modes || ![...fModes].some((m) => modes.has(m))) return false
@@ -298,15 +328,15 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   // a click ticks or unticks.
   const tallState = (on, total) => (on === 0 ? 'none' : on >= total ? 'all' : 'some')
   const ariaChecked = (st) => (st === 'all' ? 'true' : st === 'some' ? 'mixed' : 'false')
-  const rowState = (row) => tallState(row.formats.filter((f) => has(row.sc, f)).length, row.formats.length)
-  const colRows = (f) => visibleRows.filter((r) => r.formats.includes(f))
+  const rowState = (row) => tallState(row.ready.filter((f) => has(row.sc, f)).length, row.ready.length)
+  const colRows = (f) => visibleRows.filter((r) => r.ready.includes(f))
   const colState = (f) => {
     const rows = colRows(f)
     return tallState(rows.filter((r) => has(r.sc, f)).length, rows.length)
   }
   const groupState = (rows) => {
     let on = 0, n = 0
-    for (const r of rows) for (const f of r.formats) { n++; if (has(r.sc, f)) on++ }
+    for (const r of rows) for (const f of r.ready) { n++; if (has(r.sc, f)) on++ }
     return tallState(on, n)
   }
 
@@ -330,7 +360,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   const setGroup = (rows, on) => {
     setSel((prev) => {
       const next = { ...prev }
-      for (const r of rows) { if (on) next[r.sc] = new Set(r.formats); else delete next[r.sc] }
+      for (const r of rows) { if (on) next[r.sc] = new Set(r.ready); else delete next[r.sc] }
       return next
     })
     setRestrict(true); setMsg('')
@@ -386,7 +416,10 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   const dirty = (() => {
     const now = restrict ? payloadJson(sel) : ''
     const p = parseStoredScope(saved)
-    const was = p ? payloadJson(p) : ''
+    // Project the stored scope through readyOnly too: `sel` is always ready-only, so a scope saved
+    // before the narrowing (which may list not-ready pairs) must be compared on the same footing or
+    // it reads as dirty the instant it loads.
+    const was = p ? payloadJson(readyOnly(p)) : ''
     return now !== was
   })()
 
@@ -517,14 +550,39 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
             )}
           </div>
 
+          {/* ── Readiness legend ────────────────────────────────────────────────
+              What each cell state means, so a tester knows what is theirs to try. Keyed on the
+              CI-locked assessment axis (capability.js): 🟢 auto certifies, 🟡 review detects, and
+              a criterion×format ACP can't assess yet is greyed and can't be selected. */}
+          <div role="note" aria-label="Readiness legend"
+               style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', alignItems: 'center',
+                        fontSize: 11.5, color: 'var(--muted)', margin: '0 2px 8px' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: 3, border: '2px solid #3B6D11', display: 'inline-block' }} />
+              Ready — ACP certifies pass &amp; fail
+            </span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: 3, border: '2px solid #B45309', display: 'inline-block' }} />
+              Ready — ACP detects, you confirm
+            </span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span aria-hidden="true" style={{ color: 'var(--muted)', opacity: 0.6 }}>◌</span>
+              Not ready yet — greyed, can't be selected
+            </span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span aria-hidden="true" className="muted" style={{ opacity: 0.45 }}>·</span>
+              Not supported for that format
+            </span>
+          </div>
+
           {/* ── The matrix (sticky header + criterion column) ───────────────── */}
           <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 360,
                         border: '1px solid var(--line)', borderRadius: 8 }}>
             <table style={{ borderCollapse: 'separate', borderSpacing: 0, fontSize: 13, width: '100%' }}>
               <caption className="sronly">
                 Scan scope: tick each criterion and format this scan assesses. Rows are grouped by
-                WCAG principle; unchecked but available pairs are excluded, and pairs the engine has
-                no verdict for are marked Not supported.
+                WCAG principle. Pairs ACP cannot assess yet are marked Not ready and cannot be
+                selected; pairs the engine has no verdict for are marked Not supported.
               </caption>
               <thead>
                 <tr>
@@ -567,35 +625,60 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                       </tr>
                       {g.rows.map((row) => {
                         const rst = rowState(row)
+                        const rowNotReady = row.ready.length === 0   // no format ACP can assess yet
                         return (
                           <tr key={row.sc}>
-                            <th scope="row" style={STICKY_LEFT}>
+                            <th scope="row" style={{ ...STICKY_LEFT, opacity: rowNotReady ? 0.55 : 1 }}>
                               <b>{row.sc}</b> {row.name} <span className="muted">· {row.level}</span>
+                              {rowNotReady && (
+                                <span title="No format ACP can assess for this criterion yet"
+                                      style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 600, letterSpacing: '.02em',
+                                               color: 'var(--muted)', border: '1px solid var(--line)',
+                                               borderRadius: 999, padding: '0 6px' }}>NOT READY</span>
+                              )}
                             </th>
                             {SCOPE_FORMATS.map((f) => {
+                              // Three states: not supported (engine has no verdict) · not ready
+                              // (engine reaches it but ACP can't yet ASSESS it — greyed, disabled) ·
+                              // ready (selectable checkbox, tinted by assessment lane).
                               if (!row.formats.includes(f)) {
                                 return (
-                                  <td key={f} title="Not supported"
+                                  <td key={f} title="Not supported for this format"
                                       style={{ ...CELL, background: 'var(--surface)' }}>
                                     <span aria-hidden="true" className="muted" style={{ opacity: 0.45 }}>·</span>
                                     <span className="sronly">{`${FMT_LABEL[f]}: Not supported for ${row.sc}`}</span>
                                   </td>
                                 )
                               }
+                              if (!isReady(row.sc, f)) {
+                                return (
+                                  <td key={f} title={`Not ready yet — ACP can't certify ${row.sc} for ${FMT_LABEL[f]} in this release`}
+                                      style={{ ...CELL, background: 'var(--surface)', opacity: 0.9 }}>
+                                    <span aria-hidden="true" style={{ color: 'var(--muted)', opacity: 0.6, fontSize: 12 }}>◌</span>
+                                    <span className="sronly">{`${FMT_LABEL[f]}: Not ready yet for ${row.sc} — cannot be selected`}</span>
+                                  </td>
+                                )
+                              }
                               const on = has(row.sc, f)
+                              const lane = laneOf(row.sc, f)        // 'auto' | 'review'
+                              const accent = lane === 'auto' ? '#3B6D11' : '#B45309'
                               return (
-                                <td key={f} style={{ ...CELL, background: on ? '#F3EEFC' : 'transparent' }}>
+                                <td key={f} title={lane === 'auto'
+                                      ? `Ready — ACP certifies ${row.sc} pass & fail for ${FMT_LABEL[f]}`
+                                      : `Ready — ACP detects ${row.sc} for ${FMT_LABEL[f]}, you confirm`}
+                                    style={{ ...CELL, background: on ? '#F3EEFC' : 'transparent' }}>
                                   <input type="checkbox" checked={on} disabled={busy || !canEdit}
                                          onChange={() => toggle(row.sc, f)}
-                                         aria-label={`${row.sc} ${row.name}, ${FMT_LABEL[f]}`} />
+                                         style={{ accentColor: accent }}
+                                         aria-label={`${row.sc} ${row.name}, ${FMT_LABEL[f]} — ${lane === 'auto' ? 'ready, certifies' : 'ready, detect and confirm'}`} />
                                 </td>
                               )
                             })}
                             <td style={CELL}>
                               <button type="button" role="checkbox" aria-checked={ariaChecked(rst)}
-                                      disabled={busy || !canEdit} onClick={() => toggleRow(row)}
+                                      disabled={busy || !canEdit || rowNotReady} onClick={() => toggleRow(row)}
                                       aria-label={`Select every format for ${row.sc} ${row.name}`}
-                                      style={selMini(rst)}>{rst === 'all' ? 'None' : 'All'}</button>
+                                      style={{ ...selMini(rst), ...(rowNotReady ? { opacity: 0.4, cursor: 'not-allowed' } : {}) }}>{rst === 'all' ? 'None' : 'All'}</button>
                             </td>
                           </tr>
                         )
