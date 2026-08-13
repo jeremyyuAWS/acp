@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } fro
 import HitlBell from './HitlBell.jsx'
 import { refreshDriveToken } from './driveAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, SESSION_EXPIRED } from './api'
+import { getSources, getRubric, getConfig, getMe, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, SESSION_EXPIRED } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -394,6 +394,11 @@ export default function App() {
     setOntology(loadPublished())
     setSettingsOpen(false); setView((p.allow || ['overview'])[0])
     setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label, allow: p.allow || [] })
+    // Scope editing is owner-only (PUT /settings = _require_admin). GET /me returns the
+    // authoritative per-user `is_scope_owner` post-auth (the sign-in payload doesn't carry it,
+    // and /config is fetched pre-auth so its copy is null). A non-owner → read-only scope in the
+    // review modal instead of a silently-dropped edit; fail-open (null) keeps the owner editable.
+    getMe().then((m2) => { if (typeof m2?.is_scope_owner === 'boolean') setScopeOwner(m2.is_scope_owner) }).catch(() => {})
   }
 
   // Called from Integrations when a source OAuth succeeds
