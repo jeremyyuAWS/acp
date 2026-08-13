@@ -284,7 +284,7 @@ def monitor_estate(request: Request):
 
 
 @router.get("/config")
-def config(request: Request | None = None):
+def config(request: Request = None):
     """Tells the SPA how to authenticate: GIS per-user (client id present) vs demo."""
     import os
     # Public Langfuse trace base, so the SPA can deep-link "📊 View trace" chips straight
