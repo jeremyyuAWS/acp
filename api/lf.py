@@ -420,8 +420,17 @@ def trace_ai_call(surface: str, model: str, latency_ms: int, *, ok: bool,
     """Trace one local-model (Ollama) generation. AI calls run on the request path,
     outside the per-file scan trace, so each becomes its own trace (grouped into the
     scan's session when scan_id is known). Captures model, latency, prompt size,
-    completion and success — the LLM-observability the audit found missing. No-op when
-    tracing is disabled."""
+    completion SIZE and success — the LLM-observability the audit found missing. No-op when
+    tracing is disabled.
+
+    THE COMPLETION IS SENT AS A LENGTH, NOT AS TEXT (docs/audit-langfuse-phi.md). The
+    completion is model output derived from the document — alt text, rewrites, extracted
+    values — so for a PHI customer it is document content by another name and must not be
+    retained in a trace. This mirrors what the module already does one axis over: the prompt
+    is `prompt_chars`, a count, never the prompt, and `trace_hitl_decision` sends the
+    reviewer note the same way. The count keeps the observability the audit wanted (did the
+    model return anything? how much?) without holding the content. `ok`, `latency_ms`,
+    `model` and `prompt_chars` are non-content metadata and stay."""
     lf = _lf()
     if lf is None:
         return
@@ -430,7 +439,7 @@ def trace_ai_call(surface: str, model: str, latency_ms: int, *, ok: bool,
                      metadata={"file": _doc_label(file), "model": model, "surface": surface})
         s = t.span(name=surface,
                    input={"prompt_chars": prompt_chars, "model": model},
-                   output={"completion": (completion or "")[:1500],
+                   output={"completion_chars": len(completion or ""),
                            "latency_ms": latency_ms, "ok": ok})
         s.end()
     except Exception:

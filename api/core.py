@@ -97,6 +97,19 @@ def email_allowed(email: str) -> bool:
     return any(email.endswith("@" + d.lower()) for d in ALLOWED_DOMAINS)
 
 
+def is_scope_owner(email: str | None) -> bool:
+    """May this identity edit the scan scope? Scope writes go through PUT /settings, which is
+    owner-only (_require_admin on OWNER_EMAIL), so this is the same gate the API enforces — it
+    exists so the SPA can hide the scope editor for non-owners POST-auth instead of letting a
+    non-owner attempt a write that the server will 403.
+
+    True when the verified email is the owner (case-insensitive) OR when no owner is configured
+    (local dev / demo / no-auth — _require_admin is a no-op there, so everyone may edit)."""
+    if not OWNER_EMAIL:
+        return True
+    return (email or "").strip().lower() == OWNER_EMAIL
+
+
 def seed_allowlist_once(st: Store) -> None:
     """One-time bootstrap: copy ACP_ALLOWED_EMAILS into the editable runtime list so
     pre-existing users appear in Settings → Test users and can be removed. Guarded by a

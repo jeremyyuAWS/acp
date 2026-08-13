@@ -2,10 +2,11 @@
 from __future__ import annotations
 import json
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 import core
+from routes.system import _require_admin
 
 router = APIRouter()
 
@@ -47,7 +48,11 @@ class RubricUpdate(BaseModel):
 
 
 @router.put("/rubric")
-def update_rubric(body: RubricUpdate):
+def update_rubric(body: RubricUpdate, request: Request):
+    # Owner-only, same gate as PUT /settings: the rubric is the GLOBAL scoring policy (disabled
+    # rules + compliant threshold), so any allow-listed user could otherwise rewrite how every
+    # tenant is scored with a direct call. No-op when no owner is configured (local dev).
+    _require_admin(request)
     base = core.ACP / "config" / ("rubric.active.json" if (core.ACP / "config/rubric.active.json").exists()
                                   else "rubric.default.json")
     cfg = json.loads(base.read_text())
