@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } fro
 import HitlBell from './HitlBell.jsx'
 import { refreshDriveToken } from './driveAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, SESSION_EXPIRED } from './api'
+import { getSources, getRubric, getConfig, getMe, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, SESSION_EXPIRED } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -202,7 +202,7 @@ export default function App() {
   const [ontology, setOntology] = useState(loadPublished)
   const [aiEnabled, setAiEnabled] = useState(true)
   const [hitlCount, setHitlCount] = useState(0)  // pending HITL items, reported up from Remediate for the nav badge
-  const [queuedScan, setQueuedScan] = useState(true)   // durable fan-out queue by default; "This session" is the opt-out
+  const [queuedScan, setQueuedScan] = useState(false)  // session-scoped is the pilot default; opt into Durable (background queue) via the switch
   const [deepScan, setDeepScan] = useState(false)      // off by default → Fast scan; opt in to PII scan via the switch
   const [excludeRemediated, setExcludeRemediated] = useState(true)  // on by default — skip re-discovering ACP's own Remediated/ output
   const [incremental, setIncremental] = useState(true)  // ADR 0011 — skip re-analysing byte-identical files already scored under the same rubric
@@ -220,6 +220,10 @@ export default function App() {
   // Rendered as an alert, because the alternative — which is what shipped — is an empty score.
   const [scanUnavailable, setScanUnavailable] = useState(null)
   const recoveringRef = useRef(false)      // one recovery at a time; getScan() below can 404 too
+  // Ownership of the platform `scan_scope` setting (PUT /settings is owner-only). null = unknown
+  // until /config reports `is_scope_owner`. Fail-open: unknown/absent leaves scope editing enabled
+  // (current behavior); only an explicit `false` gates a non-owner to a read-only scope wizard.
+  const [scopeOwner, setScopeOwner] = useState(null)
   // Universal scan gate: `{ source, folder }` while the app-level review modal is open. Declared
   // with the other hooks (above the `!me` early return) so the hook order never changes.
   const [pendingScan, setPendingScan] = useState(null)
@@ -241,6 +245,9 @@ export default function App() {
       // variable, so without it the UI would keep rendering the fallback's arithmetic and the
       // fetch would be pointless. Bumped only when something actually changed.
       if (applyScopeConfig(c)) setScopeTick((n) => n + 1)
+      // Ownership of the owner-only `scan_scope` setting. Only trust an explicit boolean; a build
+      // whose backend predates this field leaves `scopeOwner` null → scope editing stays enabled.
+      if (typeof c?.is_scope_owner === 'boolean') setScopeOwner(c.is_scope_owner)
     }).catch(() => { /* keep the build-time fallback */ })
   }, [])
 
@@ -387,6 +394,11 @@ export default function App() {
     setOntology(loadPublished())
     setSettingsOpen(false); setView((p.allow || ['overview'])[0])
     setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label, allow: p.allow || [] })
+    // Scope editing is owner-only (PUT /settings = _require_admin). GET /me returns the
+    // authoritative per-user `is_scope_owner` post-auth (the sign-in payload doesn't carry it,
+    // and /config is fetched pre-auth so its copy is null). A non-owner → read-only scope in the
+    // review modal instead of a silently-dropped edit; fail-open (null) keeps the owner editable.
+    getMe().then((m2) => { if (typeof m2?.is_scope_owner === 'boolean') setScopeOwner(m2.is_scope_owner) }).catch(() => {})
   }
 
   // Called from Integrations when a source OAuth succeeds
@@ -576,7 +588,7 @@ export default function App() {
       if (prevAvg != null && newAvg != null && newAvg !== prevAvg) { setDelta(newAvg - prevAvg); setDeltaKey((k) => k + 1) }
       // Guide the user into the workflow: land on Discover (step 1) after a scan.
       setView(me?.allow && !me.allow.includes('discover') ? 'overview' : 'discover')
-    } catch (e) { setErr(`scan failed: ${e}`) } finally { setBusy(false); setProgress(null); setLiveScanId(null) }
+    } catch (e) { setErr(`scan failed: ${e?.message ?? e}`) } finally { setBusy(false); setProgress(null); setLiveScanId(null) }
   }
 
   // Reconnect to an in-flight scan after a page reload — the durable fan-out keeps
@@ -935,6 +947,7 @@ export default function App() {
             ? (s.type === 'onedrive' || s.type === 'sharepoint')
             : (pendingScan.source === 'all' || s.type === 'google_drive')))
             .reduce((a, s) => a + (s.files || 0), 0)}
+          hasDrive={hasDriveToken} hasSP={hasSPToken} canEditScope={scopeOwner !== false}
           onConfirm={() => { const { source, folder } = pendingScan; setPendingScan(null); doScan(source, folder) }}
           onCancel={() => setPendingScan(null)} />
       )}

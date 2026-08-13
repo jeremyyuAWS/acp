@@ -414,12 +414,12 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
                                 real answer — it means nothing failed — so it renders as such
                                 rather than as a spinner that never resolves. */}
                             {scs === undefined
-                              ? <span className="muted alscs">reading criteria\u2026</span>
+                              ? <span className="muted alscs">reading criteria…</span>
                               : scs.length
                                 ? <span className="alscs">{scs.map((c) => <b key={c}>{c}</b>)}</span>
                                 : <span className="alclean">no failures</span>}
                           </>
-                        : <span className="muted alscs">{f.status === 'analysed' ? 'scoring\u2026' : 'queued'}</span>}
+                        : <span className="muted alscs">{f.status === 'analysed' ? 'scoring…' : 'queued'}</span>}
                     </li>
                   )
                 })}

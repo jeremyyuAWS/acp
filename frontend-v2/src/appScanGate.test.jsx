@@ -54,6 +54,8 @@ const flush = async () => { for (let i = 0; i < 4; i++) await act(async () => { 
 const click = async (el) => { await act(async () => { el.click() }); await flush() }
 const dialog = (c) => c.querySelector('[role="dialog"]')
 const byText = (c, sel, re) => [...c.querySelectorAll(sel)].find((e) => re.test(e.textContent))
+const durableSwitch = (c) => [...dialog(c).querySelectorAll('[role="switch"]')]
+  .find((s) => (s.getAttribute('aria-label') || '').includes('Durable scan'))
 
 async function mountSignedInOnDiscover() {
   const { root, container } = createTestRoot()
@@ -84,10 +86,21 @@ describe('the universal scan gate (App)', () => {
     expect(startScanQueued).not.toHaveBeenCalled()
   })
 
+  it('defaults the Durable-scan toggle OFF — session-scoped is the pilot default', async () => {
+    const c = await mountSignedInOnDiscover()
+    await click(byText(c, 'button', /Re-scan all sources/))
+    const durable = durableSwitch(c)
+    expect(durable, 'no Durable scan toggle in the gate').toBeTruthy()
+    expect(durable.getAttribute('aria-checked')).toBe('false')
+  })
+
   it('starts the scan only when the gate is confirmed', async () => {
     const c = await mountSignedInOnDiscover()
     await click(byText(c, 'button', /Re-scan all sources/))
     expect(startScanQueued).not.toHaveBeenCalled()
+    // The durable path is what startScanQueued (stubbed to throw) makes observable without running
+    // a poll loop; the pilot default is now session-scoped, so flip Durable on before confirming.
+    await click(durableSwitch(c))
     const start = [...dialog(c).querySelectorAll('button')].find((b) => /Start scan/.test(b.textContent))
     expect(start).toBeTruthy()
     await click(start)

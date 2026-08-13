@@ -148,14 +148,22 @@ const PROFILES = [
     hint: 'No restriction — assess every criterion the engine supports.' },
 ]
 
-export default function ScanScopeWizard({ onStartScan, showStartButton = false }) {
+export default function ScanScopeWizard({ onStartScan, showStartButton = false,
+                                          canEditScope = true, rememberDefault = true }) {
   const [restrict, setRestrict] = useState(false)
   const [sel, setSel] = useState({})
   const [saved, setSaved] = useState('')       // the raw value as loaded, for the dirty check
   const [busy, setBusy] = useState(false)
-  const [canEdit, setCanEdit] = useState(true)
+  // `scan_scope` is owner-only (PUT /settings is _require_admin). A non-owner used to discover this
+  // only AFTER a save 403'd — by which point the review modal had closed and their edit was silently
+  // dropped. `canEditScope` is the ownership signal threaded in from where the identity is known
+  // (App passes me.allow.includes('settings'), the same gate the platform-admin UI uses), so a
+  // non-owner gets read-only controls and a clear note UP FRONT. `forbidden` still handles the
+  // belt-and-braces case of a 403 slipping through at save time.
+  const [forbidden, setForbidden] = useState(false)
+  const canEdit = canEditScope && !forbidden
   const [msg, setMsg] = useState('')
-  const [remember, setRemember] = useState(true)
+  const [remember, setRemember] = useState(rememberDefault)
 
   useEffect(() => {
     let alive = true
@@ -361,7 +369,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false }
       return true
     } catch (e) {
       const m = String(e?.message || e)
-      if (m.includes('403')) { setCanEdit(false); setMsg('Owner-only — this account cannot change the scope.') }
+      if (m.includes('403')) { setForbidden(true); setMsg('Owner-only — this account cannot change the scope.') }
       else setMsg(`Could not save: ${m}`)
       return false
     } finally { setBusy(false) }
@@ -400,7 +408,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false }
       {!canEdit && (
         <p role="status" style={{ fontSize: 13, background: '#FBF1DF', border: '1px solid #EAD9BF',
                                   borderRadius: 8, padding: '10px 12px', color: '#6B4A0B' }}>
-          🔒 <b>Read-only.</b> The scope is owner-only and you are signed in as another user.
+          🔒 <b>Read-only.</b> Scope is set by your workspace owner — this scan uses the shared scope.
         </p>
       )}
 
