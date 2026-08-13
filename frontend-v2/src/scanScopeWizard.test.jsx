@@ -155,6 +155,33 @@ describe('scope state', () => {
   })
 })
 
+// ── owner-only: a non-owner (canEditScope=false) gets a read-only wizard + a clear note ──────────
+describe('read-only for a non-owner', () => {
+  it('renders the owner note and disables every scope control when canEditScope is false', async () => {
+    const c = await render({ canEditScope: false })
+    // The note is up front (role=status), names it read-only, and points at the workspace owner —
+    // scope is owner-only (PUT /settings is owner-gated), so a non-owner is told before they edit.
+    const note = [...c.querySelectorAll('[role="status"]')]
+      .find((n) => /Read-only/i.test(n.textContent))
+    expect(note, 'no read-only owner note').toBeTruthy()
+    expect(note.textContent).toMatch(/owner/i)
+    // Profile pills and format cards are disabled — the scope cannot be changed here.
+    for (const r of byRole(c, 'radio')) expect(r.disabled).toBe(true)
+    const formatCards = byRole(c, 'checkbox')
+      .filter((e) => /supported criteria/.test(e.getAttribute('aria-label') || ''))
+    expect(formatCards.length).toBe(4)
+    for (const card of formatCards) expect(card.disabled).toBe(true)
+    // Every criterion×format cell input in the grid is disabled too.
+    for (const b of cellBoxes(c)) expect(b.disabled).toBe(true)
+  })
+
+  it('leaves the controls editable when canEditScope is true (the default, fail-open)', async () => {
+    const c = await render({ canEditScope: true })
+    expect([...c.querySelectorAll('[role="status"]')].some((n) => /Read-only/i.test(n.textContent))).toBe(false)
+    for (const r of byRole(c, 'radio')) expect(r.disabled).toBe(false)
+  })
+})
+
 // ── Phase 2: the redesigned matrix (sticky, principle groups, column/row/group controls, cells,
 //    search + filters) ─────────────────────────────────────────────────────────────────────────
 const detailsOf = (c) => [...c.querySelectorAll('details')]

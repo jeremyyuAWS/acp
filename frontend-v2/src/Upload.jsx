@@ -1090,6 +1090,7 @@ export default function Upload({ onCertified, me }) {
           appears before the downloaded files are assessed. estCount is the number picked. */}
       {browseGate && (
         <ScanReviewModal source={browseGate.source} estCount={browseGate.files.length}
+          rememberDefault={false}
           onConfirm={() => { const g = browseGate; setBrowseGate(null); processBrowseFiles(g.files) }}
           onCancel={() => setBrowseGate(null)} />
       )}

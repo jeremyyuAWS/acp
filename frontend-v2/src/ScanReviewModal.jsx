@@ -30,10 +30,22 @@ export function ScanSwitch({ on, onToggle, label, title }) {
   )
 }
 
-// A friendly label for the source being scanned. 'all'/'drive' → Google Drive; 'sharepoint' →
-// SharePoint/OneDrive; a folder adds a "selected folder" note.
-export function scanSourceLabel(source) {
-  return source === 'sharepoint' ? 'SharePoint/OneDrive' : 'Google Drive'
+// A friendly label for the source being scanned. Accurate per source rather than calling
+// everything that isn't SharePoint "Google Drive": 'local' → sample corpus, 'sharepoint' →
+// SharePoint / OneDrive, 'drive' → Google Drive. 'all' has no single source, so it is derived
+// from whichever provider is connected (opts.hasDrive / opts.hasSP), falling back to the neutral
+// "connected source" when nothing is known.
+export function scanSourceLabel(source, opts = {}) {
+  switch (source) {
+    case 'local': return 'sample corpus'
+    case 'sharepoint': return 'SharePoint / OneDrive'
+    case 'drive': return 'Google Drive'
+    case 'all':
+    default:
+      if (opts.hasDrive) return 'Google Drive'
+      if (opts.hasSP) return 'SharePoint / OneDrive'
+      return 'connected source'
+  }
 }
 
 export default function ScanReviewModal({
@@ -41,11 +53,16 @@ export default function ScanReviewModal({
   deepScan, setDeepScan, queuedScan, setQueuedScan,
   excludeRemediated, setExcludeRemediated, incremental, setIncremental,
   estCount = null, estWhere = null,
+  hasDrive = false, hasSP = false,
+  canEditScope = true, rememberDefault = true,
   onConfirm, onCancel,
 }) {
-  const label = scanSourceLabel(source)
+  const label = scanSourceLabel(source, { hasDrive, hasSP })
   const where = estWhere || label
   const hasBehavior = setDeepScan || setQueuedScan || setExcludeRemediated || setIncremental
+  // Only a real, positive count is worth showing. 0 / null / unknown would render "~0 documents",
+  // which reads as "nothing to scan" — so we say when the count is actually determined instead.
+  const hasEstimate = typeof estCount === 'number' && estCount > 0
 
   return (
     <div role="dialog" aria-modal="true" aria-label="New scan"
@@ -110,12 +127,18 @@ export default function ScanReviewModal({
         <div className="scanmodal-sec">
           <div className="scanmodal-head">Formats &amp; WCAG criteria</div>
           <div className="scanmodal-est muted">
-            ~{(estCount ?? 0).toLocaleString()} documents in {where}
-            <span style={{ display: 'block', fontSize: 11 }}>
-              Discovered count — the actual scanned total may be lower after dedup, scope and unsupported-type filtering.
-            </span>
+            {hasEstimate ? (
+              <>
+                ~{estCount.toLocaleString()} documents in {where}
+                <span style={{ display: 'block', fontSize: 11 }}>
+                  Discovered count — the actual scanned total may be lower after dedup, scope and unsupported-type filtering.
+                </span>
+              </>
+            ) : (
+              <>Document count is determined when the scan starts.</>
+            )}
           </div>
-          <ScanScopeWizard showStartButton
+          <ScanScopeWizard showStartButton canEditScope={canEditScope} rememberDefault={rememberDefault}
             onStartScan={(o) => { if (o?.cancel) onCancel?.(); else onConfirm?.() }} />
         </div>
       </div>

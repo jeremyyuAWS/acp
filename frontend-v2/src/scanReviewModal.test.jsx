@@ -23,7 +23,7 @@ vi.mock('./api.js', () => ({
   updateSettings: vi.fn(async () => ({ scan_scope: '' })),
 }))
 
-const { default: ScanReviewModal } = await import('./ScanReviewModal.jsx')
+const { default: ScanReviewModal, scanSourceLabel } = await import('./ScanReviewModal.jsx')
 
 const BEHAVIOR = {
   deepScan: true, setDeepScan: vi.fn(),
@@ -43,6 +43,39 @@ const dialog = (c) => c.querySelector('[role="dialog"]')
 const startBtn = (c) => [...dialog(c).querySelectorAll('button')].find((b) => /Start scan/.test(b.textContent))
 const cancelBtn = (c) => [...dialog(c).querySelectorAll('button')].find((b) => b.textContent.trim() === 'Cancel')
 
+describe('scanSourceLabel — accurate per source, not "everything is Google Drive"', () => {
+  it('maps each concrete source to its own friendly name', () => {
+    expect(scanSourceLabel('local')).toBe('sample corpus')
+    expect(scanSourceLabel('sharepoint')).toBe('SharePoint / OneDrive')
+    expect(scanSourceLabel('drive')).toBe('Google Drive')
+  })
+
+  it("derives 'all' from whichever provider is connected", () => {
+    expect(scanSourceLabel('all', { hasDrive: true })).toBe('Google Drive')
+    expect(scanSourceLabel('all', { hasSP: true })).toBe('SharePoint / OneDrive')
+    // Drive wins when both are present (the app's primary), and with nothing known it stays neutral.
+    expect(scanSourceLabel('all', { hasDrive: true, hasSP: true })).toBe('Google Drive')
+    expect(scanSourceLabel('all')).toBe('connected source')
+    expect(scanSourceLabel('unknown-source')).toBe('connected source')
+  })
+})
+
+describe('ScanReviewModal — honest estimate line', () => {
+  it('suppresses the count for 0 / null / missing (never renders "~0 documents")', async () => {
+    for (const estCount of [0, null, undefined]) {
+      const c = await mount({ source: 'drive', estCount, ...BEHAVIOR })
+      const est = dialog(c).querySelector('.scanmodal-est').textContent
+      expect(est, `estCount=${estCount} leaked a ~0 line`).not.toMatch(/~0/)
+      expect(est).toMatch(/determined when the scan starts/)
+    }
+  })
+
+  it('shows the count only for a real positive estimate', async () => {
+    const c = await mount({ source: 'drive', estCount: 42, ...BEHAVIOR })
+    expect(dialog(c).querySelector('.scanmodal-est').textContent).toMatch(/~42 documents in Google Drive/)
+  })
+})
+
 describe('ScanReviewModal — chrome and labels', () => {
   it('renders a real dialog labeled "New scan", ~1.5× wider than the old modal', async () => {
     const c = await mount({ source: 'drive', ...BEHAVIOR })
@@ -58,10 +91,12 @@ describe('ScanReviewModal — chrome and labels', () => {
   it('shows a friendly "Sources included" label per source', async () => {
     const drive = await mount({ source: 'drive', ...BEHAVIOR })
     expect(drive.querySelector('.scanmodal-sec').textContent).toMatch(/Google Drive/)
-    const all = await mount({ source: 'all', ...BEHAVIOR })
+    // 'all' has no single source, so it is named for the connected provider (accurate labeling —
+    // no longer "everything that isn't SharePoint is Google Drive").
+    const all = await mount({ source: 'all', hasDrive: true, ...BEHAVIOR })
     expect(all.querySelector('.scanmodal-sec').textContent).toMatch(/Google Drive/)
     const sp = await mount({ source: 'sharepoint', ...BEHAVIOR })
-    expect(sp.querySelector('.scanmodal-sec').textContent).toMatch(/SharePoint\/OneDrive/)
+    expect(sp.querySelector('.scanmodal-sec').textContent).toMatch(/SharePoint \/ OneDrive/)
   })
 
   it('notes a selected folder when one is passed', async () => {
