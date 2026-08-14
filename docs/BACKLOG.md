@@ -24,6 +24,76 @@ Context: the customer is a **hospital**, the documents are **PHI**, and the near
 
 **Status key:** `[ ]` open · `[~]` in progress · `[x]` done · `[?]` needs a decision, not code
 
+**Updated 2026-08-14 (pilot-readiness pass).** Ahead of a 3-user pilot, a fresh gap sweep — the new
+items are in **Phase R** immediately below. Two are ops-blocking (a wedged deploy, an unwired GPU
+vision lane); the rest are the four demo-pillar features and the verification holes, each named with
+what to re-run. The capability-completion counts (R8) are **source-verified, not fixture-run** —
+that gap is itself R10. Same rule as ever: where this file and the code disagree, the code wins.
+
+---
+
+## Phase R — Pilot readiness (observed 2026-08-14)
+
+Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, **R4–R9 features**,
+**R10–R13 testing**. Priority order for the pilot: R1, R2, R5.
+
+### Ops-blocking (nothing else ships until these clear)
+
+- [~] **R1 — Ship the wedged 3a + readiness deploy.** Frozen per-scan scope (#267) and the greyed
+  not-ready SC matrix (#268) are **merged and green on `main` but not live** — the GitHub Actions
+  deploy sits `pending` in the `deploy-production` concurrency group and never dispatches (the
+  chronic stuck-Actions pattern, cf. P-era #239). Prod still serves `2026.8.13.5`. **Re-run to check:**
+  `curl https://<ACP_FQDN>/healthz` (version), `gh run list --workflow deploy.yml` (runs sit
+  completed/cancelled). **Fix:** `workflow_dispatch` + approve the `production` environment, or a
+  manual `bash deploy/public/redeploy.sh` under `az login`.
+- [ ] **R2 — Wire RunPod serverless vision into the live app.** A scale-to-zero Qwen2.5-VL endpoint is
+  provisioned (`er7oqd0gq6ulsb`) but `ACP_VISION_PROVIDER` is not set on `acp-app`/`acp-worker`, so the
+  vision lane still runs the CPU `moondream` floor for pilot users. **Fix:** set the `runpod-api-key`
+  secret + the four RunPod env vars on both apps via `az` (per `deploy/public/deploy.sh:373-389`), or a
+  full `deploy.sh` re-derive. Persists across redeploys once set. CPU fallback means enabling it "can
+  only upgrade quality, never break AI" (`ai._vision_generate`).
+- [?] **R3 — Rotate the RunPod API key.** It was pasted in plaintext into an ops chat. Decision/action,
+  not code: RunPod → API Keys → revoke + reissue, update `~/.zshrc` and the `runpod-api-key` secret.
+
+### Features (the four demo pillars + capability completion)
+
+- [ ] **R4 — Remediate drawer redesign.** Action / Coverage / Evidence views + resolve the fix-status
+  contradictions. **Spec'd, not built** (`scratchpad/remediate-drawer-redesign-spec.md`). Biggest UX
+  gap for the *Remediation* pillar. (3a fixed the scope-freeze half of the honesty problem; this is the
+  UI half.)
+- [ ] **R5 — Continuous Monitoring: wire the Monitor tab to real source-staleness.** The backend
+  (`GET /scans/{sid}/source-status`, #253) and the Release Center (`Publish.jsx:63`) consume real
+  drift; the **Monitor tab still runs on demo data** (`Monitor.jsx:2`, `sourceWatch` from `sim.js`).
+  Wiring it to the real endpoint is the remaining *Continuous Monitoring* piece.
+- [ ] **R6 — Phase 3b: per-scan scope chip + change-scope-and-rescan + impact estimate.** 3a shipped the
+  frozen scope (#267) and projected `run.scan_scope`; the surfacing UI is unbuilt.
+- [ ] **R7 — Phase 3c: per-user config (owner default + per-user override).** Governance model chosen
+  ("owner sets a default, users can override"); not implemented.
+- [ ] **R8 — WCAG capability completion (the 12 not-ready cells).** Source-verified against
+  `remediation_capability.py` + `api/formats/*`, split 4/4/4: **~4 quick table-fixes** — detector ships
+  but isn't declared (`xlsx 1.4.1`, `xlsx 1.4.11`, `xlsx 4.1.2`, `pdf 2.4.3` heuristic `/Tabs=/S`);
+  **~4 real detector builds** — no detector (`pdf 1.4.1`, `pptx 1.4.11`, `pdf 1.4.11`, `pptx 4.1.2`);
+  **3 appliers** — assessable, human-only fix (`2.4.4 pdf`, `3.1.2 xlsx`, `2.1.2 docx`); **~4 are
+  legitimately N/A** (interaction SCs on static docs: `pptx 2.1.1/2.1.2/2.4.3`, `xlsx 2.1.2` — see the
+  `ASSESSMENT_OVERRIDES` rationale). The quick-fixes are gated on R10.
+- [ ] **R9 — (optional) Archive auto-fire.** Lifecycle Archive is override-only on real scans; auto-fire
+  needs backend `superseded` detection (`retentionOf`, `FileDrawer.jsx:373`). Skip unless the demo wants
+  Archive on the auto path.
+
+### Testing / verification holes
+
+- [ ] **R10 — CI fixture-verification harness for the R8 understated cells.** The office/PDF detectors
+  can't run locally (no venv here); confirming `xlsx 1.4.1/1.4.11/4.1.2` and `pdf 2.4.3` actually *emit*
+  on a built fixture needs a CI run before editing the capability table. This is the honest gate on R8.
+- [ ] **R11 — Multi-user / concurrency load test.** The durable Postgres queue + `owner_email` isolation
+  is code-verified but not stress-tested with concurrent users — the exact 3-users-scanning-their-own-
+  Drives pilot scenario. Re-run: a fan-out load harness against a staging estate.
+- [ ] **R12 — RunPod serverless end-to-end verification (after R2).** GPU alt-text quality on real docs,
+  cold-start latency, and provenance (🟢/🟡) through the live app — none verified in prod yet.
+- [ ] **R13 — Test the isolation-off invariant.** Setting `ACCESS_CODE` on a Google-configured deploy
+  silently collapses everyone to the `demo` estate (`app.py:127`, `if ACCESS_CODE / elif GOOGLE_CLIENT_ID`),
+  guarded only by a startup warning. Add a test asserting isolation stays ON for a PHI deploy.
+
 ---
 
 ## Phase 0 — CLOSED 2026-08-09 (all ten; P0.10 is a decision, not code)
