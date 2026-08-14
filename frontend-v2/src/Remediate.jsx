@@ -313,28 +313,28 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [sevFilter, setSevFilter] = useState(_prefs0.severity)     // one severity, or null for all
   const [critFilter, setCritFilter] = useState(_prefs0.criterion)  // one WCAG criterion, or null for all
   const [groupByFile, setGroupByFile] = useState(_prefs0.groupByFile)  // per-document grouping
-  const [collapsedCards, setCollapsedCards] = useState({})
-  // Seed every card COLLAPSED the first time it appears, and never touch it again. Merging only
-  // ids absent from the map is what makes this survive the queue's background refetches: a card a
-  // reviewer expanded already has an entry (false), so it is left alone; only genuinely new cards
-  // arrive collapsed. Keyed off the id set, not `queue` identity, so a refetch that returns the
-  // same items is a no-op rather than a re-seed.
+  // Review queue is a SINGLE-OPEN accordion: at most ONE finding is expanded, so opening one closes
+  // the previously open one and the queue stays scannable instead of being pushed below the fold (a
+  // single expanded card — with its document preview — is tall). Default: all collapsed (openId null).
+  // Persisted per scan so returning to the tab reopens the finding you were working.
+  const [openId, setOpenId] = useState(_prefs0.openId ?? null)
   const queueIds = queue.map((q) => q.id).join(',')
   useEffect(() => {
-    setCollapsedCards((m) => {
-      let next = m, changed = false
-      for (const q of queue) {
-        if (!(q.id in next)) { if (!changed) { next = { ...m }; changed = true } next[q.id] = true }
-      }
-      return changed ? next : m
+    setOpenId((cur) => {
+      const ids = queue.map((q) => q.id)
+      if (cur != null && !ids.includes(cur)) cur = null   // the open finding was resolved/removed → collapse
+      // Exactly ONE unresolved finding → open it (one card can't bury a queue). Two or more START
+      // collapsed so the reviewer sees the whole workload before choosing what to handle first.
+      if (cur == null && queue.length === 1) return queue[0].id
+      return cur
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queueIds])
-  // Persist the view controls whenever they change, so the next mount (returning to this tab)
-  // rehydrates them. sessionStorage-scoped and best-effort — see inboxPrefs.js.
+  // Persist the view controls + the open finding whenever they change, so the next mount (returning
+  // to this tab) rehydrates them. sessionStorage-scoped and best-effort — see inboxPrefs.js.
   useEffect(() => {
-    saveInboxPrefs(run?.id, { query: reviewQuery, severity: sevFilter, criterion: critFilter, groupByFile })
-  }, [run?.id, reviewQuery, sevFilter, critFilter, groupByFile])
+    saveInboxPrefs(run?.id, { query: reviewQuery, severity: sevFilter, criterion: critFilter, groupByFile, openId })
+  }, [run?.id, reviewQuery, sevFilter, critFilter, groupByFile, openId])
   const [acted, setActed] = useState({ approved: 0, rejected: 0, deferred: 0 })
   const [deferredItems, setDeferredItems] = useState([])
   // Real applied-fix evidence: scan-wide before→after (all fix types, verified-cleared) +
@@ -556,6 +556,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // status='skipped' → this tab's self-fix lane. The per-image approved values ride in telemetry.
   const evAct = (id, status, _note, finalValue, tel) => {
     if (readOnly) return   // time-travel replay is look-only — never mutate a historical scan
+    // Auto-advance the accordion: after a decision, open the NEXT finding so review flows as a guided
+    // sequence (Save and continue → the next card). Computed from the current order BEFORE act()
+    // refetches (which drops this resolved item); null when it was the last one, leaving all collapsed.
+    const idx = queue.findIndex((q) => q.id === id)
+    setOpenId((idx >= 0 && idx + 1 < queue.length) ? queue[idx + 1].id : null)
     act(id, status === 'skipped' ? 'self' : status, finalValue, tel && tel.approvedValues)
   }
 
@@ -598,20 +603,13 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     [queue, reviewQuery, sevFilter, critFilter])
   const anyFilter = !!(reviewQuery.trim() || sevFilter || critFilter)
   const clearFilters = () => { setReviewQuery(''); setSevFilter(null); setCritFilter(null) }
-  // Collapse-all acts on what's VISIBLE: "all collapsed" is true only when every card currently in
-  // view is collapsed, so the one button reads correctly whether or not a search is narrowing the
-  // list. Toggling flips the visible cards; cards hidden by search keep their own state.
-  const allVisibleCollapsed = filteredQueue.length > 0 && filteredQueue.every((q) => collapsedCards[q.id])
-  const setAllVisible = (collapsed) => setCollapsedCards((m) => {
-    const next = { ...m }
-    for (const q of filteredQueue) next[q.id] = collapsed
-    return next
-  })
+  // Bulk collapse/expand is gone: the queue is single-open, so at most one card is ever expanded and
+  // "expand all" (six tall cards) is exactly the unusable state this redesign removes.
   // One review card, rendered the same whether the list is flat or grouped by file. Extracted so
   // the grouped view reuses it verbatim rather than forking the card markup (and drifting from it).
   const renderCard = (q) => (
-    <details key={q.id} className="revcard" open={!collapsedCards[q.id]}
-             onToggle={(e) => setCollapsedCards((m) => ({ ...m, [q.id]: !e.target.open }))}>
+    <details key={q.id} className="revcard" open={openId === q.id}
+             onToggle={(e) => { if (e.target.open) setOpenId(q.id); else setOpenId((cur) => cur === q.id ? null : cur) }}>
       <summary className="revcard-sum">
         <span className="revcard-sum-file"><span aria-hidden="true">{q.icon}</span> {q.file}</span>
         <span className="revcard-sum-rule muted">{q.rule}</span>
@@ -779,7 +777,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // that runs it. The two branches were mutually exclusive and nobody could reach the second.
   const remRunning = remBusy || (remProg != null && remProg.done < remProg.total)
   const primary = readOnly ? null
-    : queue.length > 0 ? { label: `Review ${queue.length} Remaining Issue${queue.length === 1 ? '' : 's'} →`, onClick: () => window.dispatchEvent(new Event('acp:open-inbox')) }
+    : queue.length > 0 ? { label: `Review ${queue.length} Remaining Issue${queue.length === 1 ? '' : 's'} →`,
+        onClick: () => { setOpenId(queue[0]?.id ?? null); requestAnimationFrame(() => document.getElementById('rem-review')?.scrollIntoView({ behavior: 'smooth', block: 'start' })) } }
     : remRunning ? { label: '⏳ Remediating…', disabled: true }
     : verifyState === 'running' ? { label: '⏳ Verifying…', disabled: true }
     : remediable.length > 0 ? { label: '⚡ Run Remediation →', onClick: () => runServerRemediation(remediable), disabled: !runId }
@@ -928,11 +927,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             : `All reviewed — ${acted.approved} approved, ${acted.rejected} rejected${acted.deferred ? `, ${acted.deferred} deferred` : ''}. Verification runs on the approved fixes.`}</p>
         ) : (
           <>
-            {/* Inbox navigation (collapsible + searchable): a search over filename, WCAG criterion
-                and the AI recommendation, plus an expand-all so a reviewer can flip the whole queue
-                open at once. UI-only — nothing here changes a decision. Cards default to collapsed,
-                so the inbox opens as a scannable list of headers and the reviewer expands what
-                they're working; "Expand all" is the escape hatch back to the full read. */}
+            {/* Inbox navigation (searchable): a search over filename, WCAG criterion and the AI
+                recommendation. UI-only — nothing here changes a decision. The queue is a single-open
+                accordion: it opens as a scannable list of collapsed headers and the reviewer expands
+                one finding at a time (opening one closes the last). No bulk expand — six tall cards is
+                the buried-queue state this removes. */}
             <div className="revtoolbar">
               <input type="search" className="revsearch" value={reviewQuery}
                      onChange={(e) => setReviewQuery(e.target.value)}
@@ -941,10 +940,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               {anyFilter && (
                 <span className="revtoolbar-count muted">{filteredQueue.length} of {queue.length}</span>
               )}
-              <button type="button" className="revcollapse-all" onClick={() => setAllVisible(!allVisibleCollapsed)}
-                      aria-pressed={allVisibleCollapsed} disabled={filteredQueue.length === 0}>
-                {allVisibleCollapsed ? 'Expand all' : 'Collapse all'}
-              </button>
               <label className="revgroup-toggle" title="Group findings by document"
                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                 <input type="checkbox" checked={groupByFile} onChange={(e) => setGroupByFile(e.target.checked)} />
