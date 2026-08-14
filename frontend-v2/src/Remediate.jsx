@@ -626,22 +626,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                     style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 12 }}>{q.meta}</span>
             : null}
         {q.severity && <span className={`revcard-sev sev-${String(q.severity).toLowerCase()}`}>{q.severity}</span>}
-        {/* Inline triage: approve the AI's proposal as drafted, or reject — the same evAct path the
-            expanded card uses. preventDefault + stopPropagation so a click acts on the item instead
-            of toggling the <details> it sits inside. */}
-        {!readOnly && (
-          <span style={{ display: 'inline-flex', gap: 6, flexShrink: 0 }}
-                onClick={(e) => { e.preventDefault(); e.stopPropagation() }}>
-            <button type="button" aria-label={`Approve the proposed fix for ${q.file}`}
-                    title="Approve the AI’s proposed fix as drafted"
-                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); evAct(q.id, 'approved') }}
-                    style={{ fontSize: 12, lineHeight: 1, padding: '4px 9px', borderRadius: 6, cursor: 'pointer', border: '1px solid #B5D19A', background: '#E7F0DC', color: '#2F5A0E', fontWeight: 600 }}>✓ Approve</button>
-            <button type="button" aria-label={`Reject the proposed fix for ${q.file}`}
-                    title="Reject this fix"
-                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); evAct(q.id, 'rejected') }}
-                    style={{ fontSize: 12, lineHeight: 1, padding: '4px 9px', borderRadius: 6, cursor: 'pointer', border: '1px solid #E1B4B4', background: '#FBECEC', color: '#8A1F1F', fontWeight: 600 }}>✗ Reject</button>
-          </span>
-        )}
+        {/* Redesign R4: no Approve/Reject on the collapsed row. A decision needs the evidence first,
+            so the row is inspect-only — it opens the finding, and the decision controls live in the
+            expanded card below (EvidenceCard's onAct, the same evAct path). */}
       </summary>
       <EvidenceCard item={q._raw || q} onAct={evAct}
         traceUrl={q._raw?.scan_id ? openTraceUrl(q._raw.scan_id, 'file', q._raw.file) : null} />
@@ -649,6 +636,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   )
   const totalHitl = queue.length + acted.approved + acted.rejected + acted.deferred + self.length
   const hitlProgress = totalHitl > 0 ? Math.round(((totalHitl - queue.length) / totalHitl) * 100) : 0
+  // Redesign R4: the ONE dominant statement — how many findings across how many documents. Both are
+  // real counts (the live queue and its distinct files); no fabricated time estimate is shown until
+  // per-finding review time is grounded (Phase 2).
+  const reviewDocCount = new Set(queue.map((q) => q.file).filter(Boolean)).size
   useEffect(() => { onHitlCount?.(queue.length) }, [queue.length, onHitlCount])
   // Don't surface remediation numbers until the user has actually started remediating
   // (ran "Remediate all" or acted on a review item) — pre-engagement estimates read as
@@ -827,8 +818,15 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           otherwise take as "the estate". No findings count is passed: there is no open-findings
           total in scope here, and inventing one to fill the sentence would be the opposite of
           what this banner is for. */}
-      <ScopeBanner run={run} fileCount={files.length}
-                   docScope={documentScopeSentence(documentSelection(files, triage))} />
+      {/* Redesign R4: the scope-counting banner is disclosure, not a permanent fixture on the work
+          surface. It stays one click away for anyone reconciling the count, without occupying the page. */}
+      <details className="rem-scope-disc" style={{ margin: '0 0 6px' }}>
+        <summary style={{ cursor: 'pointer', fontSize: 12.5, color: 'var(--muted)', padding: '4px 2px', userSelect: 'none' }}>
+          Assessment scope
+        </summary>
+        <ScopeBanner run={run} fileCount={files.length}
+                     docScope={documentScopeSentence(documentSelection(files, triage))} />
+      </details>
       {/* HERO (§1) — the 5-second story + ONE primary action (§11). Every count is real:
           documents from the scan, issues fixed from applied-fix evidence, review from the
           live HITL queue, savings from the recommendation model. */}
@@ -838,7 +836,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           <div className="rem-hero-line">
             <b>{files.length}</b> document{files.length === 1 ? '' : 's'} processed
             {fixedCount > 0 && <> · <b className="rh-fixed">{fixedCount}</b> issue{fixedCount === 1 ? '' : 's'} fixed automatically</>}
-            {queue.length > 0 && <> · <b className="rh-review">{queue.length}</b> need your review</>}
+            {/* Redesign R4: "N need your review" removed here — the Review queue section below is the
+                single dominant place that count lives, so the hero no longer repeats it. */}
             {measured && (
               <span title={REVIEW_TIME_BASIS}> · avg review <b className="rh-review">{measured.avg}</b>
                 <span className="muted"> over {measured.reviewed} decision{measured.reviewed === 1 ? '' : 's'}</span>
@@ -859,11 +858,21 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           "Why am I reviewing this?" panel (real confidence + reason + suggested value). ── */}
       <section className="panel rem-review-panel" id="rem-review">
         <div className="rem-sec-hd">
-          <h2 style={{ margin: 0 }}>AI Work Inbox {queue.length > 0 ? <span className="reviewpill">{queue.length}</span> : <span className="muted">· all clear</span>}</h2>
+          {/* Redesign R4: one dominant statement (findings × documents) replaces the repeated `N`
+              badges. The numeric pill is gone — the count lives in the sentence, said once. */}
+          <div>
+            <h2 style={{ margin: 0 }}>AI Work Inbox</h2>
+            {queue.length > 0
+              ? <p className="rem-review-lead" style={{ margin: '2px 0 0', fontSize: 13 }}>
+                  <b>{queue.length}</b> finding{queue.length === 1 ? '' : 's'} need review across{' '}
+                  <b>{reviewDocCount}</b> document{reviewDocCount === 1 ? '' : 's'}
+                </p>
+              : <p className="muted" style={{ margin: '2px 0 0', fontSize: 13 }}>All clear — nothing needs your review.</p>}
+          </div>
           {totalHitl > 0 && (
             <div className="rem-sec-prog">
               <div className="conftrack" style={{ width: 120 }}><i style={{ width: `${hitlProgress}%`, background: hitlProgress === 100 ? '#3B6D11' : '#1F5FA8' }} /></div>
-              <span className="muted">{totalHitl - queue.length} of {totalHitl} reviewed</span>
+              <span className="muted">{totalHitl - queue.length} of {totalHitl} resolved</span>
             </div>
           )}
           {/* Reviewer analytics (vision #39) — real counts from hitl_events, not a fabricated score:
