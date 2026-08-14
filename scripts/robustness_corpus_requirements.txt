@@ -1,0 +1,8 @@
+# Wheel-only, no system libraries — for scripts/robustness_corpus.py (the robustness smoke-test generator).
+# Separate from api/requirements.txt on purpose: these are TEST-CORPUS authoring libs, not runtime deps.
+fpdf2
+pypdf
+Pillow
+python-docx
+python-pptx
+openpyxl
