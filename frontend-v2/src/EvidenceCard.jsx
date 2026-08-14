@@ -24,7 +24,7 @@ const trustPill = (tone) => ({ padding: '2px 9px', borderRadius: 6, fontSize: 12
   background: _TRUST_BG[tone] || _TRUST_BG.todo, color: _TRUST_FG[tone] || _TRUST_FG.todo })
 const trustIcon = (tone) => (tone === 'ok' ? '✓' : tone === 'warn' ? '◐' : '○')
 
-export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null }) {
+export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null, actualZone = null }) {
   const [diffs, setDiffs] = useState([])
   // One editor per proposal: the row carries one proposal per image, and a single text box
   // could never describe ten different pictures. Seeded from each image's own draft, so
@@ -251,6 +251,12 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
   const primaryAction = primaryActionLabel(item)
   // AI provenance (ADR 0019 Phase 0): which model produced this + where the bytes were processed.
   const aiProv = aiProvenance()
+  // W6 — the zone shown is the ACTUAL one this file's AI ran in (from the per-call ledger, passed
+  // down by Remediate) when we know it, falling back to the configured provider zone only when we
+  // don't. This ordering is the whole point: a GPU→CPU fallback makes the config say "cloud" while
+  // the call really ran "local", and the reviewer must see what actually happened, not the intent.
+  const provZone = actualZone || aiProv?.zone || null
+  const aiValueShown = !!(card.proposal || card.recommendation)
 
   // The AI audit trail (#129) — the real per-call provenance ledger, lazily fetched on first open
   // and narrowed to this file. Every row is a logged model call (surface/model/zone/latency), so the
@@ -720,6 +726,25 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
             <p className="evcard-rec-static"><b>AI recommendation:</b> {card.recommendation}</p>
           ) : null}
 
+          {/* W6 — provenance ON THE SURFACE, not behind the audit disclosure. A reviewer approving an
+              AI value must see where it ran WITHOUT expanding anything, because the whole risk is a
+              silent GPU→CPU fallback: the weaker local model looks identical on the card. Shown only
+              where AI produced a value and we actually know the zone — never a fabricated badge. */}
+          {aiValueShown && provZone && (
+            <div className="evcard-prov-surface" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '2px 0 8px' }}>
+              <span style={{ padding: '2px 9px', borderRadius: 6, fontSize: 11.5, fontWeight: 600, whiteSpace: 'nowrap',
+                   background: provZone === 'local' ? '#E1F5EE' : '#FAEEDA',
+                   color: provZone === 'local' ? '#0F6E56' : '#854F0B' }}>
+                {provZone === 'local' ? '🟢 Local AI' : '🟡 Cloud AI'}
+              </span>
+              <span className="muted" style={{ fontSize: 12 }}>
+                {provZone === 'local'
+                  ? 'ran on your infrastructure — no document left your network'
+                  : 'processed off your network'}{actualZone ? '' : ' (configured)'}
+              </span>
+            </div>
+          )}
+
           {/* Details ▾ (AI Work Inbox progressive disclosure) — the audit jargon a reviewer only
               needs when they want to dig: the trust-state enums, model/provenance/zone + audit
               trail, the clustered detection evidence, and the honest "why a human is here". The
@@ -757,11 +782,11 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null 
             <div className="evcard-provenance" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 12, margin: '2px 0 8px' }}>
               <span className="muted">🤖 {card.proposalSource || `${aiProv.provider} · ${card.sc === '1.1.1' ? aiProv.vision_model : aiProv.model}`}</span>
               <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 11.5, whiteSpace: 'nowrap',
-                   background: aiProv.zone === 'local' ? '#E1F5EE' : '#FAEEDA',
-                   color: aiProv.zone === 'local' ? '#0F6E56' : '#854F0B' }}>
-                {aiProv.zone === 'local' ? '🟢 Local only' : '🟡 Cloud'}
+                   background: provZone === 'local' ? '#E1F5EE' : '#FAEEDA',
+                   color: provZone === 'local' ? '#0F6E56' : '#854F0B' }}>
+                {provZone === 'local' ? '🟢 Local only' : '🟡 Cloud'}
               </span>
-              <span className="muted">{aiProv.zone === 'local'
+              <span className="muted">{provZone === 'local'
                 ? 'processed on your infrastructure — no document left your network'
                 : `sent to ${aiProv.host}`}</span>
               {item?.scan_id && (
