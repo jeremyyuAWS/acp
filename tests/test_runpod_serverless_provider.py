@@ -89,3 +89,52 @@ def test_vision_generate_falls_back_to_cpu_on_gpu_miss(monkeypatch):
     monkeypatch.setattr(providers, "local_vision_provider", lambda: _Floor())
     out = ai._vision_generate("describe", b"imgbytes")
     assert out == "A bar chart of revenue by region."       # the CPU floor served it, not the GPU
+
+
+def test_gpu_miss_is_recorded_not_silent(monkeypatch):
+    """A RunPod miss must be VISIBLE — its own ai_calls row (zone=cloud, ok=False, with the reason) —
+    not silently overwritten by the local fallback. Otherwise the GPU failure exists only in the
+    worker stdout log, which is exactly why it was undiagnosable without az."""
+    import ai
+    calls = []
+    monkeypatch.setattr(ai, "_trace_ai", lambda *a, **k: calls.append(k))
+
+    class _Miss:
+        name = "runpod_serverless"
+        def generate(self, *a, **k):
+            return {"ok": False, "text": None, "model": "qwen2.5-vl", "provider": "runpod_serverless",
+                    "zone": "cloud", "latency_ms": 1, "cost_usd": 0.0, "reason": "transport_error"}
+
+    class _Floor:
+        name = "ollama"
+        def generate(self, *a, **k):
+            return {"ok": True, "text": "A bar chart of revenue by region.", "model": "moondream",
+                    "provider": "ollama", "zone": "local", "latency_ms": 1, "cost_usd": 0.0}
+
+    monkeypatch.setattr(providers, "active_vision_provider", lambda: _Miss())
+    monkeypatch.setattr(providers, "local_vision_provider", lambda: _Floor())
+    ai._vision_generate("describe", b"imgbytes")
+    cloud = [k for k in calls if k.get("zone") == "cloud"]
+    assert cloud, "the failed RunPod attempt was not recorded — the GPU miss is invisible"
+    assert cloud[0]["ok"] is False and cloud[0]["provider"] == "runpod_serverless"
+    assert cloud[0]["reason"] == "transport_error"
+
+
+def test_runpod_gets_the_longer_cold_start_timeout(monkeypatch):
+    """The serverless GPU call must use RUNPOD_VISION_TIMEOUT, not the shorter Ollama budget: a
+    scale-to-zero VL-7B cold boot exceeds 120s and would otherwise time out into a silent fallback."""
+    import ai
+    seen = {}
+
+    class _Cloud:
+        name = "runpod_serverless"
+        def generate(self, prompt, image_bytes, *, model=None, timeout=None):
+            seen["timeout"] = timeout
+            return {"ok": True, "text": "A bar chart of revenue by region.", "model": "qwen2.5-vl",
+                    "provider": "runpod_serverless", "zone": "cloud", "latency_ms": 1, "cost_usd": 0.0}
+
+    monkeypatch.setattr(providers, "active_vision_provider", lambda: _Cloud())
+    monkeypatch.setattr(ai, "RUNPOD_VISION_TIMEOUT", 240.0)
+    monkeypatch.setattr(ai, "OLLAMA_VISION_TIMEOUT", 120.0)
+    ai._vision_generate("describe", b"imgbytes")
+    assert seen["timeout"] == 240.0                          # GPU cold-start budget, not the CPU one

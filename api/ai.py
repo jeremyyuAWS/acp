@@ -38,6 +38,11 @@ def _envf(name: str, default: float) -> float:
 
 
 OLLAMA_VISION_TIMEOUT = _envf("OLLAMA_VISION_TIMEOUT", 120.0)
+# RunPod serverless GPU needs a LONGER cold-start budget than the local CPU floor: a scale-to-zero
+# VL-7B endpoint cold-boots the GPU and loads the model on the first call, which routinely exceeds
+# the 120s Ollama budget and times out into a SILENT local fallback (the endpoint is fine; the
+# timeout was too short). Tunable via env without a redeploy.
+RUNPOD_VISION_TIMEOUT = _envf("RUNPOD_VISION_TIMEOUT", 240.0)
 # Availability probe. The warm path answers in milliseconds; the long budget only ever
 # applies after the fast probe TIMES OUT, which is how a Container App scaling up from
 # minReplicas=0 behaves (ACA holds the request while the replica activates).
@@ -571,12 +576,25 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     # real cost and zone here without touching this function again. generate() never raises.
     import providers as _providers
     prov = _providers.active_vision_provider()
-    res = prov.generate(prompt, image_bytes, model=model, timeout=OLLAMA_VISION_TIMEOUT)
+    # A scale-to-zero GPU provider gets its own cold-start budget; the Ollama timeout is too short
+    # for a RunPod VL-7B cold boot and would turn a healthy endpoint into a silent local fallback.
+    _timeout = RUNPOD_VISION_TIMEOUT if getattr(prov, "name", "") == "runpod_serverless" else OLLAMA_VISION_TIMEOUT
+    res = prov.generate(prompt, image_bytes, model=model, timeout=_timeout)
     # Fallback floor (ADR 0022): if the default GPU provider missed — a serverless cold-start over the
     # timeout, or the endpoint down — retry on the always-available local CPU Ollama so the finding
     # still gets *a* draft (degraded, not broken). Recorded honestly: the trace/ai_calls row reports
     # whichever provider ACTUALLY served the call, so provenance never claims GPU when CPU ran.
     if not res.get("ok") and getattr(prov, "name", "") != "ollama":
+        # Surface the GPU miss BEFORE the local fallback overwrites `res`: record the failed cloud
+        # attempt as its OWN ai_calls row, so a reviewer/auditor (and anyone diagnosing) sees that
+        # runpod_serverless failed and WHY (providers.REASON_*) instead of the failure being invisible
+        # to everything but the worker stdout log. W6's honesty, applied to the provenance ledger.
+        _trace_ai("vision", prompt, None, _t0, ok=False,
+                  reason=res.get("reason") or _providers.REASON_TRANSPORT,
+                  model=res.get("model") or model or OLLAMA_VISION_MODEL,
+                  scan_id=scan_id, file=file,
+                  provider=res.get("provider") or getattr(prov, "name", "runpod_serverless"),
+                  zone=res.get("zone") or "cloud", cost_usd=res.get("cost_usd", 0.0))
         fb = _providers.local_vision_provider()
         if getattr(fb, "name", "") == "ollama":
             res = fb.generate(prompt, image_bytes, model=None, timeout=OLLAMA_VISION_TIMEOUT)
