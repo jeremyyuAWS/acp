@@ -5,6 +5,15 @@ files — no crash, no hang, no silent drop, every truncation/cap surfaced — *
 scores perfectly. It deliberately pushes past ACP's known bounds and checks the platform reports the
 limit instead of hiding it.
 
+> **Two corpora, two purposes.** This doc covers the **robustness** corpus (`scripts/robustness_corpus.py`
+> — large/malformed, tests honest degradation). Its companion is the **coverage / accuracy** corpus
+> (`scripts/complex_corpus.py`), which builds one complex file per format (docx/xlsx/pptx/pdf) with **50+
+> deliberately-injected issues mapped to WCAG SCs** — so a scan's findings can be diffed against a known
+> `{SC: count}` floor. Same libraries; run it with `python scripts/complex_corpus.py --out ./complex-corpus`.
+> Some SCs can't be authored with these libs (a real AcroForm control for 4.1.2, a slide animation for
+> 2.1.1, autoplay audio for 1.4.2) — the manifest lists those under `not_seeded` per file so it never
+> claims coverage it didn't produce.
+
 ## Generate the corpus
 
 ```bash
