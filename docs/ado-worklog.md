@@ -7,6 +7,8 @@ Repository: `jeremyyuAWS/acp` · 1,771 files · 1,067 commits total
 **This log starts at 2026-08-01.** The project predates it by ~1,000 commits; earlier work
 is not covered here. The `(#NNN)` references are GitHub PRs, not ADO work items.
 
+ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility Compliance Platform
+
 ---
 
 ## Feature: SharePoint as a document source
