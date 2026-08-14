@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const pub = () => readFileSync(join(HERE, 'Publish.jsx'), 'utf8')
 const api = () => readFileSync(join(HERE, 'api.js'), 'utf8')
+const mon = () => readFileSync(join(HERE, 'Monitor.jsx'), 'utf8')
 
 describe('api: getSourceStatus', () => {
   it('GETs the source-status endpoint (headers() attaches the Drive token)', () => {
@@ -51,5 +52,32 @@ describe('Release Center: source-staleness UI', () => {
     // No blanket "source unchanged" / "up to date" claim rendered per row.
     expect(s).not.toMatch(/source unchanged/)
     expect(s).not.toMatch(/source up to date/)
+  })
+})
+
+// R5 — the same real drift signal, now surfaced on the Monitor tab (Continuous Monitoring), which
+// previously ran on illustrative demo data (sourceWatch from sim.js).
+describe('Monitor: real source-drift panel (R5)', () => {
+  it('imports getSourceStatus and fetches it for the real run', () => {
+    const s = mon()
+    expect(s).toMatch(/import \{[^}]*getSourceStatus[^}]*\} from '\.\/api\.js'/)
+    expect(s).toMatch(/getSourceStatus\(run\.id\)/)
+  })
+
+  it('derives the stale set from the SERVER state and never invents drift', () => {
+    const s = mon()
+    expect(s).toMatch(/\.filter\(\(r\) => r\.state === 'stale'\)/)
+    expect(s).toMatch(/stale: s\?\.stale_count \|\| 0/)
+    // the error path leaves the panel empty rather than fabricating changes
+    expect(s).toMatch(/\.catch\(\(\) => \{ if \(live\) setDrift\(\{ loaded: true, stale: 0/)
+  })
+
+  it('is a REAL panel (LIVE), gated to a real run — not the illustrative demo surface', () => {
+    const s = mon()
+    expect(s).toMatch(/\{!SIM && run\?\.id && \(/)
+    expect(s).toMatch(/className="panel mon-drift"/)
+    expect(s).toMatch(/No source changes since the last scan/)
+    // the drift panel must NOT be fed by the sim sourceWatch
+    expect(s).not.toMatch(/sourceWatch[^)]*drift/)
   })
 })
