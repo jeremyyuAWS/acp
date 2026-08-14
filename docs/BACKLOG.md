@@ -36,6 +36,13 @@ fix with nowhere to go, re-validate that may not re-score the whole file, and si
 items. They are in **Phase W** (after Phase R). Unlike Phase R these were observed from the *flow*,
 not confirmed in source this session — each names the file to confirm in first.
 
+**Also 2026-08-14 (RunPod live verification).** Drove the live app end-to-end: **GPU vision is NOT
+engaged** — alt-text falls back to a local filename-guess template and the AI-cost zone stays
+`local (8/8)`, zero cloud, even after clearing the endpoint override. **R2 downgraded** from "env not
+set" to "env set but runtime doesn't select RunPod" (the `runpod-api-key` secret not resolving is the
+prime suspect → **R3**); **R12 is now VERIFIED FAILING**, not merely unverified. Both carry the exact
+re-check steps.
+
 ---
 
 ## Phase R — Pilot readiness (observed 2026-08-14)
@@ -52,12 +59,20 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   `curl https://<ACP_FQDN>/healthz` (version), `gh run list --workflow deploy.yml` (runs sit
   completed/cancelled). **Fix:** `workflow_dispatch` + approve the `production` environment, or a
   manual `bash deploy/public/redeploy.sh` under `az login`.
-- [ ] **R2 — Wire RunPod serverless vision into the live app.** A scale-to-zero Qwen2.5-VL endpoint is
-  provisioned (`er7oqd0gq6ulsb`) but `ACP_VISION_PROVIDER` is not set on `acp-app`/`acp-worker`, so the
-  vision lane still runs the CPU `moondream` floor for pilot users. **Fix:** set the `runpod-api-key`
-  secret + the four RunPod env vars on both apps via `az` (per `deploy/public/deploy.sh:373-389`), or a
-  full `deploy.sh` re-derive. Persists across redeploys once set. CPU fallback means enabling it "can
-  only upgrade quality, never break AI" (`ai._vision_generate`).
+- [~] **R2 — RunPod serverless vision: env is set, but the runtime does NOT select it.** The four
+  RunPod env vars ARE now on `acp-app` (verified `az containerapp show` 2026-08-14:
+  `ACP_VISION_PROVIDER=runpod_serverless`, `RUNPOD_ENDPOINT_ID=er7oqd0gq6ulsb`, `RUNPOD_API_KEY` →
+  secretRef `runpod-api-key`, `RUNPOD_VISION_MODEL=Qwen/Qwen2.5-VL-7B-Instruct`) — so the *config*
+  half is done. **But live testing (R12) proves vision still never reaches the GPU**: every AI call
+  is recorded in the `local` processing zone, and a real 1.1.1 draft falls back to a filename-guess
+  template ("this text model cannot see the image"). So `active_vision_provider()` is landing on
+  local despite the env, which means `serverless_vision_provider()` is returning `None` — its guard
+  is `not (eid and key)`, so the most likely cause is the **`runpod-api-key` secret not resolving to
+  a valid key at runtime** (empty/absent → silent local fallback; ties to **R3**). **Fix / re-check:**
+  `az containerapp secret list -g mdk-accessibility -n acp-app` (and `-n acp-worker`) to confirm the
+  secret is populated with a valid key on BOTH apps, then read `providers.py:serverless_vision_provider`
+  / backend logs for why it's `None`. Env being set is necessary, not sufficient — the secret is the
+  open link.
 - [?] **R3 — Rotate the RunPod API key.** It was pasted in plaintext into an ops chat. Decision/action,
   not code: RunPod → API Keys → revoke + reissue, update `~/.zshrc` and the `runpod-api-key` secret.
 
@@ -94,8 +109,22 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
 - [ ] **R11 — Multi-user / concurrency load test.** The durable Postgres queue + `owner_email` isolation
   is code-verified but not stress-tested with concurrent users — the exact 3-users-scanning-their-own-
   Drives pilot scenario. Re-run: a fan-out load harness against a staging estate.
-- [ ] **R12 — RunPod serverless end-to-end verification (after R2).** GPU alt-text quality on real docs,
-  cold-start latency, and provenance (🟢/🟡) through the live app — none verified in prod yet.
+- [~] **R12 — RunPod serverless E2E: VERIFIED FAILING in prod (2026-08-14, live drive of `acp-app`).**
+  Not "unverified" any more — driven end-to-end through the live app and the answer is negative:
+  **GPU vision is not engaged; alt-text silently falls back to local.** Evidence, all from the running
+  app on `2026.8.14.1`:
+  - A real `1.1.1` finding (`ACP_DOCX_01_01-issues.docx`) drafted to a **filename guess** with the
+    literal banner *"Template only — this text model cannot see the image, so it guessed from the
+    filename."* Every 1.1.1 finding routes to `Critical · manual authoring`, never an image-derived draft.
+  - The **AI-cost processing-zone counter is the objective instrument**: it read `local (5)` before and
+    `local (8)` after forcing fresh drafts — **8/8 calls local, zero cloud**. A RunPod call would register
+    as a cloud zone; none ever did.
+  - **Clearing the `ai_base_url` / `ai_vision_model` override** (Settings → "Use deploy default (clears
+    both)") changed nothing — the count still climbed in `local`. So the override was NOT the cause; the
+    provider selection is failing upstream (see R2). The override is now left cleared (deploy default).
+  - Re-run this test the same way after any R2/R3 fix: force a `1.1.1` draft, then re-read the AI-cost
+    zone — a genuine GPU call must show up as **cloud**, and the draft must be image-derived (🟡), not a
+    filename template.
 - [ ] **R13 — Test the isolation-off invariant.** Setting `ACCESS_CODE` on a Google-configured deploy
   silently collapses everyone to the `demo` estate (`app.py:127`, `if ACCESS_CODE / elif GOOGLE_CLIENT_ID`),
   guarded only by a startup warning. Add a test asserting isolation stays ON for a PHI deploy.
