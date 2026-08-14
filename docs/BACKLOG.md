@@ -30,6 +30,12 @@ vision lane); the rest are the four demo-pillar features and the verification ho
 what to re-run. The capability-completion counts (R8) are **source-verified, not fixture-run** —
 that gap is itself R10. Same rule as ever: where this file and the code disagree, the code wins.
 
+**Also 2026-08-14 (workflow-completeness pass).** Walking the full end-to-end flow as a diagram
+surfaced nine **missing-edge / dead-end** gaps — a released file with no publish target, a rejected
+fix with nowhere to go, re-validate that may not re-score the whole file, and six scale/honesty
+items. They are in **Phase W** (after Phase R). Unlike Phase R these were observed from the *flow*,
+not confirmed in source this session — each names the file to confirm in first.
+
 ---
 
 ## Phase R — Pilot readiness (observed 2026-08-14)
@@ -93,6 +99,77 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
 - [ ] **R13 — Test the isolation-off invariant.** Setting `ACCESS_CODE` on a Google-configured deploy
   silently collapses everyone to the `demo` estate (`app.py:127`, `if ACCESS_CODE / elif GOOGLE_CLIENT_ID`),
   guarded only by a startup warning. Add a test asserting isolation stays ON for a PHI deploy.
+
+---
+
+## Phase W — Workflow completeness (observed 2026-08-14, from the end-to-end flow)
+
+These came out of walking the full "connected source → continuously governed content" flow as a
+diagram and asking, at each box, *where does a real file (or a real reviewer) go next?* Every item
+below is a **missing edge or a dead-end box** — a path the pipeline needs and does not visibly have.
+
+**Read this differently from Phase R.** Phase R items were verified against code or ops state. These
+were observed from the *flow*, not confirmed in the source this session — so each names the file to
+**confirm in** before building. Where the code already has the edge and only the diagram omits it,
+the item collapses to "document it"; where neither has it, it is a real build. The point of writing
+them down is so the confirmation happens, not so anyone trusts the gap sight-unseen. Same rule as
+ever: **the code wins over this file.**
+
+Priority order: **W1, W2, W3** are the three a released file cannot currently route around; the rest
+are scale and honesty polish.
+
+### The three a file cannot route around
+
+- [ ] **W1 — Where does the remediated file actually land? (the missing terminal).** The source is
+  connected **read-only**, so after Certify + Release the org's *live* document in Drive/SharePoint
+  still serves the non-compliant original — ACP certifies a *copy*. The flow ends at Release Center
+  (`Publish.jsx`) with no explicit **publish-target** decision: download-only vs. write to a governed
+  store vs. replace-at-source (which read-only forbids). Without it, the certified artifact is one
+  nobody is actually served. **Confirm in:** `Publish.jsx`, the remediated-doc store/download path
+  (`api/remediate_*`; cf. #209, which proves a served remediated-doc store exists). Likely the biggest
+  logical hole in the flow.
+- [ ] **W2 — A rejected fix dead-ends.** The reviewer card offers approve / edit / **reject**, but
+  *reject* has no outgoing edge — the finding has no shown path back to a different fix lane or to an
+  expert/manual queue, so a rejected finding can silently stall as unresolved-forever. **Fix:** route
+  `evAct(id, 'rejected')` back to *Fix path?* (try another lane) or to an escalation queue. **Confirm
+  in:** `Remediate.jsx` `evAct` — check what state a rejected finding actually lands in today.
+- [ ] **W3 — Re-validate must re-score the WHOLE file, not just the fixed criterion.** A fix can
+  regress a criterion that already passed — this is not hypothetical here: the `1.4.3` PDF fixer once
+  rewrote compliant dark-theme pages from 21:1 down to a failing 3.66:1 (see CLAUDE.md "Verify before
+  you diagnose"), and heading-promote had a sibling trap (memory `heading-promote-restyles-ambiguous-
+  paragraphs`). Re-validate must re-run **all** in-scope criteria and be able to send a file
+  *backward* into the queue, not only forward to Certify. **Confirm in:** the re-validation path — does
+  it re-run the full detector set or only the touched SC?
+
+### Scale & honesty polish
+
+- [ ] **W4 — UNCHECKED is a dead-end box.** Unsupported criteria are honestly *reported* (never
+  assumed-pass — the flow's best honesty property), but the customer can't *do* anything with them:
+  there's no manual-attestation or out-of-scope-with-reason lane, so UNCHECKED sits terminal. **Fix:**
+  an edge to a documented disposition lane. **Confirm in:** `api/assessment_policy.py`
+  (`ASSESSMENT_OVERRIDES`), the `UNCHECKED` outcome in `reportModel.js`.
+- [ ] **W5 — Conditional release can't graduate.** "Hold · exclude · partial" terminates; once the held
+  items are remediated a file should promote conditional → fully certified **without a full re-scan**.
+  No such loop is shown. **Confirm in:** `Publish.jsx` conditional/partial path.
+- [ ] **W6 — Surface AI provenance on the review card (the silent-fallback made visible).** The
+  GPU→CPU fallback (`ai._vision_generate`) is silent — a reviewer approving an alt-text draft never
+  sees whether it came from RunPod Qwen2.5-VL or the much weaker CPU `moondream` floor, so they can't
+  weight their review. **Fix:** stamp each draft with its engine and show a 🟢/🟡 badge on the
+  EvidenceCard. **Distinct from R12** (which *verifies* provenance E2E); this is *surfacing* it in the
+  UI. **Confirm in:** `Remediate.jsx` EvidenceCard, `ai._vision_generate`.
+- [ ] **W7 — No operational-failure lane.** The flow has the "unsupported type" branch but not the
+  "job *failed*" branch — corrupt file, OAuth token expired mid-scan, source unreachable. The durable
+  `jobs` table + sweeper already back a retry story; the workflow should show **retry → dead-letter →
+  notify** so operational failures aren't invisible. **Confirm in:** the `jobs` table sweeper /
+  `claim_job` compare-and-swap — what happens to a file whose `scan_file` throws N times?
+- [ ] **W8 — Batch action for identical findings.** Single-open review is right for judgment calls, but
+  "missing alt-text" across 200 files = 200 identical approvals. An **"apply to all matching"**
+  shortcut off a reviewed finding keeps the careful default while scaling repetition. Pairs with the
+  W11 concurrency/scale concerns. **Confirm in:** `Remediate.jsx` queue / `EvidenceCard onAct`.
+- [ ] **W9 — Time-based re-validation, not only change-based.** `Source changed?` (modifiedTime, #253 /
+  baseline `92ddbbf9`) is the only re-entry trigger; a certificate also *ages* — an untouched cert may
+  warrant periodic re-attestation independent of source drift. Add a **staleness-by-age** trigger
+  alongside modifiedTime. **Confirm in:** `GET /scans/{sid}/source-status` (#253), the Monitor loop.
 
 ---
 
