@@ -9,7 +9,7 @@ import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './s
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
 import { applyReviewFilters, reviewFacets, groupReviewByFile } from './reviewInboxFilter.js'
 import { loadInboxPrefs, saveInboxPrefs } from './inboxPrefs.js'
-import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, openTraceUrl } from './api.js'
+import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl } from './api.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
 import QueuePanel from './QueuePanel.jsx'
@@ -342,11 +342,26 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // straight count of these rows — never a fabricated number (see fixSummary.js).
   const [scanDiffs, setScanDiffs] = useState([])
   const [appliedFixes, setAppliedFixes] = useState([])
+  // W6 — where each file's AI actually RAN, from the real per-call ledger (one fetch for the whole
+  // scan, not one per card). Maps file → 'local' | 'cloud'. This is the ACTUAL zone the bytes were
+  // processed in, not the configured provider — so a GPU→CPU fallback shows the truth on the card
+  // instead of the config's intent. Any cloud call for a file wins (privacy-conservative); a file
+  // with no AI call at all stays absent (deterministic fix — no badge, nothing to claim).
+  const [aiZoneByFile, setAiZoneByFile] = useState({})
   const runId = run?.id
   const fetchFixes = () => {
-    if (!runId) { setScanDiffs([]); setAppliedFixes([]); return }
-    Promise.all([getScanRemediationDiffs(runId), getAppliedFixes(runId)])
-      .then(([d, a]) => { setScanDiffs(Array.isArray(d) ? d : []); setAppliedFixes(Array.isArray(a) ? a : []) })
+    if (!runId) { setScanDiffs([]); setAppliedFixes([]); setAiZoneByFile({}); return }
+    Promise.all([getScanRemediationDiffs(runId), getAppliedFixes(runId), getScanAiCalls(runId)])
+      .then(([d, a, calls]) => {
+        setScanDiffs(Array.isArray(d) ? d : []); setAppliedFixes(Array.isArray(a) ? a : [])
+        const byFile = {}
+        ;(Array.isArray(calls) ? calls : []).forEach((c) => {
+          if (!c || !c.file) return
+          if (byFile[c.file] === 'cloud') return
+          byFile[c.file] = c.zone === 'local' ? (byFile[c.file] || 'local') : 'cloud'
+        })
+        setAiZoneByFile(byFile)
+      })
       .catch(() => {})
   }
   useEffect(() => {
@@ -628,7 +643,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             so the row is inspect-only — it opens the finding, and the decision controls live in the
             expanded card below (EvidenceCard's onAct, the same evAct path). */}
       </summary>
-      <EvidenceCard item={q._raw || q} onAct={evAct}
+      <EvidenceCard item={q._raw || q} onAct={evAct} actualZone={aiZoneByFile[q.file]}
         traceUrl={q._raw?.scan_id ? openTraceUrl(q._raw.scan_id, 'file', q._raw.file) : null} />
     </details>
   )
