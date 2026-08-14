@@ -66,6 +66,26 @@ artifact they'd value; keep it read-only and advisory.
 
 ---
 
+## 2b. Re-activation triggers — the customer's "Accessibility Trigger Point"
+
+The customer defined exactly when an **archived** document must come *back* into scope and be made fully
+accessible. This is the mirror of §2: bucket C → bucket A/B. A file re-activates when it is:
+
+| Customer trigger | Signal it maps to | Can ACP detect it? |
+|---|---|---|
+| **Updated or modified after archiving** | `modifiedTime` later than the archive date | ✅ **Already supported** — ACP ingests `source_modified` (the source-staleness baseline, #253). This is the strongest trigger *and* the one that already works. |
+| **Moved out of an archived folder** | item path no longer under a `*_ARCHIVED` ancestor | ⚠️ Path is available; needs move-tracking (compare path across scans). Small build. |
+| **Submitted for leadership approval** | an approval-workflow event | ❌ Not visible from Graph file metadata — needs a workflow/webhook signal or a customer-supplied list. |
+| **Published / shared on an internal or external platform** | a sharing link / permission change (esp. external) | ⚠️ Needs Graph `permissions` / sharing-link read (extra scope). |
+| **Distributed beyond the original working group** | permission-scope expansion | ⚠️ Same sharing/permission signal as above. |
+
+**Design it as a watch, not a one-shot.** Re-activation is continuous — it's the same mechanism as
+Continuous Monitoring (the Monitor tab's source-drift, R5): once ACP knows a file's archive baseline, any
+`modifiedTime` change *past that baseline* re-queues it for assessment automatically. The "modified after
+archiving" trigger is therefore mostly wiring the archive-date baseline into the existing staleness loop.
+
+---
+
 ## 3. ROT triggers (for the not-yet-archived remainder)
 
 Each flag is a **recommendation**, gated by approval, with a plain-language reason. Grouped by type:
@@ -110,6 +130,42 @@ never fabricate one.
 
 Where a signal is `⚠️`, label the trigger "available if enabled" rather than shipping a fabricated view
 count — consistent with the read-only, no-standing-access posture in `docs/sharepoint-app-registration.md`.
+
+### 4b. What ACP already ingests vs. needs building (verified in code, 2026-08-14)
+
+There is a real starting point — a working disposition engine and a lifecycle recommender — but several
+triage signals are demo-corpus fields, not yet ingested from the live source.
+
+**Have today (real):**
+- **Disposition policy engine** — `api/disposition.py` + `api/routes/disposition.py`: configurable
+  `match` conditions (AND), **actions** `{leave, archive, rename, move, delete}`, **approval-gated**
+  (preview → `/execute`), **delete is always Drive trash** (never permanent), and a doc/policy pair with a
+  live outcome is never re-queued. Matchable **`FIELDS = {department, business_criticality,
+  regulatory_tags, triage_score, source, owner, age_days}`**.
+- **`age_days`** — computed from the item's `created_at` (`disposition._age_days`).
+- **`modifiedTime`** — ingested as `source_modified` (the staleness baseline, #253) → powers the
+  "modified after archiving" re-activation trigger and age-by-last-edit.
+- **File type / extension** and **unreadable/locked** detection (the "N of M excluded" case).
+- **Lifecycle recommender** — `retentionOf` (`FileDrawer.jsx`): locked → legal-hold tag → superseded →
+  `ageDays ≥ 540 && views90d < 60` → Keep. The *shape* of the ROT policy already exists here.
+
+**Needs building (signal not ingested, or field not in the engine):**
+- **`_ARCHIVED` suffix / folder-path / archive-keyword recognition** — the highest-value trigger, and it
+  is **not** a disposition `FIELD` today (no filename/path/tag-keyword match). Cheap to add (a name/path
+  match + one SharePoint column read), and it's the one that honors the 17,512.
+- **Content-hash dedup (Redundant)** — not present; needs a hashing pass at discover.
+- **Document-version supersession** — `f.superseded` in `retentionOf` is a **demo-corpus field**, not
+  real backend detection (the backend `_superseded_items` is about resolved *findings*, a different
+  concept). Real version-supersession is unbuilt (ties backlog **R9**).
+- **`views90d` / access analytics (Obsolete-by-engagement)** — a demo-corpus field, **not** read from
+  Graph; needs the Graph analytics endpoint + permission.
+- **Sharing / permission signals** (the "published / shared / distributed" re-activation triggers) — not
+  ingested; needs Graph `permissions` / sharing-link read.
+
+**Read this as:** the *policy machinery* (match → approval-gated action → trash) and the *age/modified*
+signals are real and reusable. The customer-specific wins — the `_ARCHIVED` recognition and the
+"modified-after-archiving" re-activation — are small builds on top of what exists; the engagement/sharing
+signals are the ones that need new Graph scopes.
 
 ---
 
