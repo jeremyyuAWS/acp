@@ -4,12 +4,13 @@
 // queue. Scoped per scan (keyed by run id) so two scans don't share a filter, and held in
 // sessionStorage so it lasts the working session and no longer.
 //
-// The per-card COLLAPSE map is deliberately NOT persisted: cards are seeded fresh (collapsed) on
-// each mount, and restoring a stale collapse map would fight that seeding for no real gain. This
-// module carries only the view controls, which are cheap, safe to restore, and the actual papercut.
+// The single OPEN finding (`openId`) IS persisted — the review queue is a single-open accordion, so
+// restoring which one finding the reviewer had open lands them back on the finding they were working,
+// which is the real papercut. (This replaces the old per-card collapse MAP, which was deliberately
+// not persisted because restoring a stale multi-open map fought the fresh-collapsed seeding.)
 
 const PREFIX = 'acp:inbox:'
-const DEFAULTS = { query: '', severity: null, criterion: null, groupByFile: false }
+const DEFAULTS = { query: '', severity: null, criterion: null, groupByFile: false, openId: null }
 
 export function inboxPrefsKey(runId) {
   return PREFIX + (runId || 'none')
@@ -32,6 +33,7 @@ export function loadInboxPrefs(runId, storage) {
       severity: p.severity || null,
       criterion: p.criterion || null,
       groupByFile: !!p.groupByFile,
+      openId: p.openId != null ? p.openId : null,
     }
   } catch { return { ...DEFAULTS } }
 }
@@ -45,6 +47,7 @@ export function saveInboxPrefs(runId, prefs, storage) {
       severity: (prefs && prefs.severity) || null,
       criterion: (prefs && prefs.criterion) || null,
       groupByFile: !!(prefs && prefs.groupByFile),
+      openId: (prefs && prefs.openId != null) ? prefs.openId : null,
     }))
   } catch { /* storage full or disabled — persistence is a nicety, never fatal */ }
 }

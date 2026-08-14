@@ -15,26 +15,26 @@ function fakeStore() {
 describe('inboxPrefs', () => {
   it('returns defaults when nothing is stored', () => {
     const s = fakeStore()
-    expect(loadInboxPrefs('run1', s)).toEqual({ query: '', severity: null, criterion: null, groupByFile: false })
+    expect(loadInboxPrefs('run1', s)).toEqual({ query: '', severity: null, criterion: null, groupByFile: false, openId: null })
   })
 
   it('round-trips the view controls', () => {
     const s = fakeStore()
-    saveInboxPrefs('run1', { query: 'contrast', severity: 'CRITICAL', criterion: '1.4.3', groupByFile: true }, s)
-    expect(loadInboxPrefs('run1', s)).toEqual({ query: 'contrast', severity: 'CRITICAL', criterion: '1.4.3', groupByFile: true })
+    saveInboxPrefs('run1', { query: 'contrast', severity: 'CRITICAL', criterion: '1.4.3', groupByFile: true, openId: 'h-9' }, s)
+    expect(loadInboxPrefs('run1', s)).toEqual({ query: 'contrast', severity: 'CRITICAL', criterion: '1.4.3', groupByFile: true, openId: 'h-9' })
   })
 
   it('scopes prefs per scan — one run’s filter never bleeds into another', () => {
     const s = fakeStore()
     saveInboxPrefs('run1', { query: 'docx', groupByFile: true }, s)
     expect(inboxPrefsKey('run1')).not.toEqual(inboxPrefsKey('run2'))
-    expect(loadInboxPrefs('run2', s)).toEqual({ query: '', severity: null, criterion: null, groupByFile: false })
+    expect(loadInboxPrefs('run2', s)).toEqual({ query: '', severity: null, criterion: null, groupByFile: false, openId: null })
   })
 
   it('falls back to defaults on corrupt JSON rather than throwing', () => {
     const s = fakeStore()
     s.setItem(inboxPrefsKey('run1'), '{not valid json')
-    expect(loadInboxPrefs('run1', s)).toEqual({ query: '', severity: null, criterion: null, groupByFile: false })
+    expect(loadInboxPrefs('run1', s)).toEqual({ query: '', severity: null, criterion: null, groupByFile: false, openId: null })
   })
 
   it('coerces types — groupByFile is always boolean, empty facets become null', () => {

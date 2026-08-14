@@ -42,13 +42,16 @@ describe('AI Work Inbox: searchable', () => {
 })
 
 describe('AI Work Inbox: collapsible', () => {
-  it('wraps each card in a native <details> so collapse is keyboard-operable and self-announcing', () => {
+  it('wraps each card in a native <details> as a single-open accordion (opening one closes the last)', () => {
     const s = rem()
-    // <details>, not a button+useState with a hand-managed aria-expanded — same accessibility
-    // reasoning the RemSection helper follows.
-    expect(s).toMatch(/<details key=\{q\.id\} className="revcard" open=\{!collapsedCards\[q\.id\]\}/)
+    // <details>, not a button+useState with a hand-managed aria-expanded. Open state is the single
+    // `openId` — one finding expanded at a time — not a per-card map.
+    expect(s).toMatch(/<details key=\{q\.id\} className="revcard" open=\{openId === q\.id\}/)
     expect(s).toMatch(/<summary className="revcard-sum">/)
-    expect(s).not.toMatch(/aria-expanded=\{[^}]*collapsedCards/)
+    // Opening a card sets openId; closing clears it ONLY when it was the open one, so opening a
+    // different card is not clobbered by the closing card's own toggle event.
+    expect(s).toMatch(/if \(e\.target\.open\) setOpenId\(q\.id\)/)
+    expect(s).toMatch(/setOpenId\(\(cur\) => cur === q\.id \? null : cur\)/)
   })
 
   it('keeps the identity a reviewer navigates by visible on the collapsed row', () => {
@@ -60,25 +63,30 @@ describe('AI Work Inbox: collapsible', () => {
     expect(s).toMatch(/revcard-sev sev-\$\{String\(q\.severity\)\.toLowerCase\(\)\}/)
   })
 
-  it('seeds each card collapsed on first appearance, preserving a reviewer’s manual expansion', () => {
-    // The map still starts empty, but an effect now seeds every NEW card id as collapsed (true).
-    // It merges only ids ABSENT from the map, so a card a reviewer expanded (already present as
-    // false) is left alone across the queue's background refetches — the property that makes a
-    // default-collapsed inbox usable rather than one that keeps snapping shut under you.
+  it('defaults all findings collapsed, with the exactly-one exception, and clears a resolved open id', () => {
+    // openId starts from persisted prefs (null = all collapsed). The queueIds effect clears a stale
+    // id (the open finding was resolved/removed) and auto-opens when there is EXACTLY ONE finding —
+    // two or more start collapsed so the reviewer sees the whole workload before choosing.
     const s = rem()
-    expect(s).toMatch(/const \[collapsedCards, setCollapsedCards\] = useState\(\{\}\)/)
-    expect(s).toMatch(/if \(!\(q\.id in next\)\)/)
-    expect(s).toMatch(/next\[q\.id\] = true/)
+    expect(s).toMatch(/const \[openId, setOpenId\] = useState\(_prefs0\.openId/)
+    expect(s).toMatch(/if \(cur != null && !ids\.includes\(cur\)\) cur = null/)
+    expect(s).toMatch(/if \(cur == null && queue\.length === 1\) return queue\[0\]\.id/)
     expect(s).toMatch(/\}, \[queueIds\]\)/)
   })
 
-  it('has a collapse-all / expand-all toggle acting on the visible cards', () => {
+  it('has NO bulk collapse/expand — single-open makes "six tall cards" impossible', () => {
     const s = rem()
-    expect(s).toMatch(/const allVisibleCollapsed = filteredQueue\.length > 0 && filteredQueue\.every\(\(q\) => collapsedCards\[q\.id\]\)/)
-    expect(s).toMatch(/onClick=\{\(\) => setAllVisible\(!allVisibleCollapsed\)\}/)
-    expect(s).toMatch(/\{allVisibleCollapsed \? 'Expand all' : 'Collapse all'\}/)
-    // the toggle reports its state to assistive tech
-    expect(s).toMatch(/aria-pressed=\{allVisibleCollapsed\}/)
+    // The old per-card collapse map and the Collapse-all/Expand-all toggle are gone.
+    expect(s).not.toMatch(/collapsedCards/)
+    expect(s).not.toMatch(/setAllVisible/)
+    expect(s).not.toMatch(/Expand all|Collapse all/)
+  })
+
+  it('auto-advances the accordion to the next finding after a decision (Save and continue)', () => {
+    const s = rem()
+    // evAct opens the NEXT finding computed from the current order before act() refetches.
+    expect(s).toMatch(/const idx = queue\.findIndex\(\(q\) => q\.id === id\)/)
+    expect(s).toMatch(/setOpenId\(\(idx >= 0 && idx \+ 1 < queue\.length\) \? queue\[idx \+ 1\]\.id : null\)/)
   })
 
   it('leaves the review panel a plain <section>, not a collapsed RemSection', () => {
@@ -150,7 +158,7 @@ describe('AI Work Inbox: view state persists across the tab remount', () => {
 
   it('persists them back whenever they change, keyed by run id', () => {
     const s = rem()
-    expect(s).toMatch(/saveInboxPrefs\(run\?\.id, \{ query: reviewQuery, severity: sevFilter, criterion: critFilter, groupByFile \}\)/)
-    expect(s).toMatch(/\}, \[run\?\.id, reviewQuery, sevFilter, critFilter, groupByFile\]\)/)
+    expect(s).toMatch(/saveInboxPrefs\(run\?\.id, \{ query: reviewQuery, severity: sevFilter, criterion: critFilter, groupByFile, openId \}\)/)
+    expect(s).toMatch(/\}, \[run\?\.id, reviewQuery, sevFilter, critFilter, groupByFile, openId\]\)/)
   })
 })
