@@ -90,7 +90,7 @@ describe('AI Work Inbox: collapsible', () => {
   })
 })
 
-describe('AI Work Inbox: inline triage on the collapsed row', () => {
+describe('Review queue: the collapsed row is inspect-only (redesign R4)', () => {
   it('previews the AI’s proposed fix on the summary so the obvious ones need no expanding', () => {
     const s = rem()
     // The literal proposed value when there is one, the shorter action hint otherwise.
@@ -98,26 +98,20 @@ describe('AI Work Inbox: inline triage on the collapsed row', () => {
     expect(s).toMatch(/className="revcard-sum-rec muted"/)
   })
 
-  it('offers Approve / Reject on the row, wired to the same evAct path as the expanded card', () => {
+  it('does NOT place Approve/Reject on the collapsed row — a decision needs the evidence first', () => {
     const s = rem()
-    expect(s).toMatch(/evAct\(q\.id, 'approved'\)/)
-    expect(s).toMatch(/evAct\(q\.id, 'rejected'\)/)
-    // Named for assistive tech, not just a glyph.
-    expect(s).toMatch(/aria-label=\{`Approve the proposed fix for \$\{q\.file\}`\}/)
+    // Redesign R4: the row is inspect-only. The old inline Approve/Reject buttons are gone, so a
+    // reviewer opens the finding before deciding rather than acting on a one-line summary.
+    expect(s).not.toMatch(/aria-label=\{`Approve the proposed fix for \$\{q\.file\}`\}/)
+    expect(s).not.toMatch(/aria-label=\{`Reject the proposed fix for \$\{q\.file\}`\}/)
+    expect(s).not.toMatch(/evAct\(q\.id, 'approved'\)/)
+    expect(s).not.toMatch(/evAct\(q\.id, 'rejected'\)/)
   })
 
-  it('acts on the item instead of toggling the <details> it sits inside', () => {
-    // Without preventDefault + stopPropagation a click on Approve would ALSO expand/collapse the
-    // card — the button lives inside the <summary> whose default action is the toggle.
+  it('routes the decision through the expanded card (EvidenceCard onAct), not the row', () => {
     const s = rem()
-    expect(s).toMatch(/e\.preventDefault\(\); e\.stopPropagation\(\); evAct\(q\.id, 'approved'\)/)
-    expect(s).toMatch(/e\.preventDefault\(\); e\.stopPropagation\(\); evAct\(q\.id, 'rejected'\)/)
-  })
-
-  it('hides the inline actions in read-only (time-travel replay)', () => {
-    // A historical scan is look-only; the actions must not offer to mutate it.
-    const s = rem()
-    expect(s).toMatch(/\{!readOnly && \(\s*<span style=\{\{ display: 'inline-flex'/)
+    // evAct is still the decision path — now reached only by opening the finding.
+    expect(s).toMatch(/onAct=\{evAct\}/)
   })
 })
 
