@@ -48,6 +48,18 @@ function DriveMark() {
   )
 }
 
+function OneDriveMark() {
+  // Official OneDrive cloud mark (full colour), shown on a white tile like the Drive logo above.
+  return (
+    <svg viewBox="-154.5063 -164.9805 1339.0546 989.883" width="26" height="26" aria-hidden="true">
+      <path fill="#0364B8" d="M622.292 445.338l212.613-203.327C790.741 69.804 615.338-33.996 443.13 10.168a321.9 321.9 0 00-188.92 134.837c3.29-.083 368.082 300.333 368.082 300.333z" />
+      <path fill="#0078D4" d="M392.776 183.283l-.01.035A256.233 256.233 0 00257.5 144.921c-1.104 0-2.189.07-3.29.083C112.063 146.765-1.74 263.424.02 405.567a257.389 257.389 0 0046.244 144.04l318.528-39.894 244.21-196.915z" />
+      <path fill="#1490DF" d="M834.905 242.012c-4.674-.312-9.37-.528-14.123-.528a208.464 208.464 0 00-82.93 17.117l-.006-.022-128.844 54.22 142.041 175.456 253.934 61.728c54.8-101.732 16.752-228.625-84.98-283.424a209.23 209.23 0 00-85.09-24.546z" />
+      <path fill="#28A8EA" d="M46.264 549.607C94.36 618.757 173.27 659.967 257.5 659.922h563.281c76.946.022 147.691-42.202 184.195-109.937L609.001 312.798z" />
+    </svg>
+  )
+}
+
 const Tile = ({ bg, children }) => (
   <span style={{ width: 40, height: 40, borderRadius: 10, background: bg, display: 'inline-flex',
     alignItems: 'center', justifyContent: 'center', color: '#fff', flex: '0 0 auto' }}>
@@ -63,7 +75,7 @@ const G = (d) => (
 
 const LOGO = {
   google_drive: <Tile bg="#fff"><DriveMark /></Tile>,
-  onedrive: <Tile bg="#0364B8">{G('M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.5A3.5 3.5 0 0 1 19 18z')}</Tile>,
+  onedrive: <Tile bg="#fff"><OneDriveMark /></Tile>,
   sharepoint: <Tile bg="#036C70"><b style={{ fontSize: 15 }}>S</b></Tile>,
   confluence: <Tile bg="#1868DB"><b style={{ fontSize: 15 }}>C</b></Tile>,
   box: <Tile bg="#0061D5"><b style={{ fontSize: 12 }}>box</b></Tile>,
