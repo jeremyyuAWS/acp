@@ -309,7 +309,6 @@ import Disposition from './Disposition.jsx'
 import OwnerDelegate from './OwnerDelegate.jsx'
 import FileTypeConfig from './FileTypeConfig.jsx'
 import { useDialog } from './a11y.js'
-import { downloadUpdatedXlsx, downloadUpdatedPptx } from './exportDeliverables.js'
 
 // Platform settings, behind the header cog — gated to the Platform Admin. Holds
 // the scoring rules (Rubric), the validation coverage (WCAG 2.1 + 2.2 matrix), and
@@ -584,22 +583,8 @@ const L = ({ label, children }) => (<label style={{ fontSize: 12 }} className="m
 
 export default function Settings({ onClose, onRubricSaved, files = [], onDelegationChange, onFileTypeChange }) {
   const [tab, setTab] = useState('rules')
-  const [dl, setDl] = useState(null) // 'xlsx' | 'pptx' while a deliverable is generating
-  const [dlErr, setDlErr] = useState('')
   const panelRef = useRef(null)
   useDialog(panelRef, onClose)
-  // console.error alone made a failed export indistinguishable from a slow one: the spinner
-  // stopped, no file arrived, and nothing said why. Now the reason reaches the person who
-  // clicked — these errors name a missing asset or a server returning the app instead of it,
-  // which is a deployment fact an operator can act on.
-  const grab = async (kind, fn) => {
-    if (dl) return
-    setDl(kind); setDlErr('')
-    try { await fn() } catch (e) {
-      console.error('deliverable export failed', e)
-      setDlErr(e?.message || 'The download could not be prepared.')
-    } finally { setDl(null) }
-  }
   return (
     <div className="setoverlay" role="dialog" aria-modal="true" aria-label="Platform settings" onClick={onClose}>
       <div className="setpanel" ref={panelRef} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
@@ -610,14 +595,6 @@ export default function Settings({ onClose, onRubricSaved, files = [], onDelegat
         {/* Above the subtabs on purpose — it is true of every tab in this panel, not just the
             settings write paths. Rubric, Users, Disposition and Reset data are SIM stubs too. */}
         {SIM && <SimNotice />}
-        <div className="setexports">
-          <span className="setexporthint">Updated deliverables — original format, with a live <b>Status</b> column reflecting what the platform ships today:</span>
-          <div className="setexportbtns">
-            <button className="dlbtn" disabled={!!dl} onClick={() => grab('xlsx', downloadUpdatedXlsx)}>{dl === 'xlsx' ? 'Preparing…' : '⤓ Coverage matrix · Excel'}</button>
-            <button className="dlbtn" disabled={!!dl} onClick={() => grab('pptx', downloadUpdatedPptx)}>{dl === 'pptx' ? 'Preparing…' : '⤓ Method deck · PPT'}</button>
-          </div>
-          {dlErr && <p role="alert" style={{ fontSize: 12.5, color: '#A32D2D', margin: '6px 0 0' }}>⚠ {dlErr}</p>}
-        </div>
         <div className="subtabs" role="tablist" aria-label="Settings sections">
           <button role="tab" aria-selected={tab === 'rules'} className={tab === 'rules' ? 'fchip on' : 'fchip'} onClick={() => setTab('rules')}>Scoring rules</button>
           <button role="tab" aria-selected={tab === 'estate'} className={tab === 'estate' ? 'fchip on' : 'fchip'} onClick={() => setTab('estate')}>Estate</button>

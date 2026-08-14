@@ -82,14 +82,6 @@ describe('the deliverable downloads', () => {
     expect(s).toMatch(/JSZip\.loadAsync\(await loadAsset\(url\)\)/)
     expect(s, 'an unguarded arrayBuffer fetch is back').not.toMatch(/await \(await fetch\([^)]*\)\)\.arrayBuffer\(\)/)
   })
-
-  it('tells the operator when it fails', () => {
-    // console.error alone left the spinner stopping with no file and no reason — indistinguishable
-    // from a slow download. These errors name a deployment fact someone can act on.
-    const s = code('Settings.jsx')
-    expect(s).toMatch(/setDlErr\(e\?\.message/)
-    expect(s).toMatch(/\{dlErr && <p role="alert"/)
-  })
 })
 
 describe('both SPAs', () => {
