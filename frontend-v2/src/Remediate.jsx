@@ -2,13 +2,11 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
-import EvidenceCard from './EvidenceCard.jsx'
 import RemediationInbox from './RemediationInbox.jsx'
 import FileDrawer, { REC_STYLE, fmtEffort, EFFORT_BASIS, SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
-import { applyReviewFilters, reviewFacets, groupReviewByFile } from './reviewInboxFilter.js'
 import { loadInboxPrefs, saveInboxPrefs } from './inboxPrefs.js'
 import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl } from './api.js'
 import { SIM, simProposalsFor } from './sim.js'
@@ -567,19 +565,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       )
     }
   }
-  // Adapter for the unified EvidenceCard: it calls onAct(id, status, note, finalValue, telemetry);
-  // map to this tab's act(id, kind, editedValue, approvedValues). EvidenceCard's "I'll fix it" sends
-  // status='skipped' → this tab's self-fix lane. The per-image approved values ride in telemetry.
-  const evAct = (id, status, _note, finalValue, tel) => {
-    if (readOnly) return   // time-travel replay is look-only — never mutate a historical scan
-    // Auto-advance the accordion: after a decision, open the NEXT finding so review flows as a guided
-    // sequence (Save and continue → the next card). Computed from the current order BEFORE act()
-    // refetches (which drops this resolved item); null when it was the last one, leaving all collapsed.
-    const idx = queue.findIndex((q) => q.id === id)
-    setOpenId((idx >= 0 && idx + 1 < queue.length) ? queue[idx + 1].id : null)
-    act(id, status === 'skipped' ? 'self' : status, finalValue, tel && tel.approvedValues)
-  }
-
   const draftAi = (item) => suggestFix(item.scanId || runId, item.file, item.ruleId).then((r) => r?.suggestion)
   const rescan = (id) => {
     const item = self.find((x) => x.id === id)
@@ -611,43 +596,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const reVerified = verified + serverFixed + liveFixed
   const remLive = !!remProg || remBusy
   const pendingHitlFiles = new Set(queue.map((q) => q.file))
-  // Search + facets (severity, WCAG criterion) filter the inbox without reshuffling it — priority
-  // order is already baked into `queue`. Facets offer only the values actually present, with counts.
-  const facets = useMemo(() => reviewFacets(queue), [queue])
-  const filteredQueue = useMemo(
-    () => applyReviewFilters(queue, { query: reviewQuery, severity: sevFilter, criterion: critFilter }),
-    [queue, reviewQuery, sevFilter, critFilter])
-  const anyFilter = !!(reviewQuery.trim() || sevFilter || critFilter)
-  const clearFilters = () => { setReviewQuery(''); setSevFilter(null); setCritFilter(null) }
-  // Bulk collapse/expand is gone: the queue is single-open, so at most one card is ever expanded and
-  // "expand all" (six tall cards) is exactly the unusable state this redesign removes.
-  // One review card, rendered the same whether the list is flat or grouped by file. Extracted so
-  // the grouped view reuses it verbatim rather than forking the card markup (and drifting from it).
-  const renderCard = (q) => (
-    <details key={q.id} className="revcard" open={openId === q.id}
-             onToggle={(e) => { if (e.target.open) setOpenId(q.id); else setOpenId((cur) => cur === q.id ? null : cur) }}>
-      <summary className="revcard-sum">
-        <span className="revcard-sum-file"><span aria-hidden="true">{q.icon}</span> {q.file}</span>
-        <span className="revcard-sum-rule muted">{q.rule}</span>
-        {/* The AI's proposed fix, on the collapsed row: enough to approve the obvious ones without
-            expanding. `after` is the literal proposed value (e.g. the alt text); `meta` is the
-            shorter action hint when there is no single value. */}
-        {(typeof q.after === 'string' && q.after.trim())
-          ? <span className="revcard-sum-rec muted" title={q.after}
-                  style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 12 }}>→ {q.after.trim()}</span>
-          : q.meta
-            ? <span className="revcard-sum-rec muted" title={q.meta}
-                    style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 12 }}>{q.meta}</span>
-            : null}
-        {q.severity && <span className={`revcard-sev sev-${String(q.severity).toLowerCase()}`}>{q.severity}</span>}
-        {/* Redesign R4: no Approve/Reject on the collapsed row. A decision needs the evidence first,
-            so the row is inspect-only — it opens the finding, and the decision controls live in the
-            expanded card below (EvidenceCard's onAct, the same evAct path). */}
-      </summary>
-      <EvidenceCard item={q._raw || q} onAct={evAct} actualZone={aiZoneByFile[q.file]}
-        traceUrl={q._raw?.scan_id ? openTraceUrl(q._raw.scan_id, 'file', q._raw.file) : null} />
-    </details>
-  )
   const totalHitl = queue.length + acted.approved + acted.rejected + acted.deferred + self.length
   const hitlProgress = totalHitl > 0 ? Math.round(((totalHitl - queue.length) / totalHitl) * 100) : 0
   // Redesign R4: the ONE dominant statement — how many findings across how many documents. Both are
