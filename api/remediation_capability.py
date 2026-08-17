@@ -193,10 +193,17 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "1.3.1": AUTO,       # defined-table headerRowCount → 1
         "1.3.2": AUTO,       # hidden rows/columns holding data un-hidden
         "1.3.3": ASSISTED,
+        "1.4.1": HUMAN,      # use of colour — colour-only status via a conditional-format colour
+                             # scale, flagged for REVIEW by office_color_only_checks. Assessed,
+                             # never auto-fixed: there is no write-back that adds a non-colour cue,
+                             # so a person recolours or adds the icon/text. Declared 🟡/👤 in #288.
         "1.4.3": AUTO,       # low-contrast font clone to reach the AA luma-diff
         "1.4.5": ASSISTED,
         "1.4.6": AUTO,       # same contrast fix reaches the AAA threshold
         "1.4.9": ASSISTED,
+        "1.4.11": HUMAN,     # non-text contrast — a drawing shape whose fill-vs-outline is <3:1,
+                             # flagged for REVIEW by xlsx_nontext_contrast_checks. No write-back
+                             # restyles a shape, so a person adjusts the border/fill. 🟡/👤.
         "2.4.2": AUTO,
         "2.4.4": ASSISTED,   # vague cell-hyperlink text → descriptive link-text proposal (propose_link_texts, xlsx)
         "2.4.6": ASSISTED,   # default sheet tabs / table columns → AI-named label proposal (propose_xlsx_labels)
@@ -213,6 +220,11 @@ REMEDIATION: dict[str, dict[str, str]] = {
                              # re-authored by a person. Document-level language (3.1.1) is
                              # unaffected — docProps/core.xml holds that one and stays AUTO.
         "3.1.5": ASSISTED,
+        "4.1.2": HUMAN,      # name/role/value — an embedded control (ActiveX/OLE) whose name and
+                             # role live in code no static read can see, flagged for REVIEW by
+                             # office_control_review_checks. No write-back names an opaque control,
+                             # so a person supplies it. 🟡/👤 — unlike docx/pdf 4.1.2 (⚡ AcroForm/
+                             # content-control appliers), xlsx has no such applier.
     },
     # PowerPoint — slide-level deterministic fixes (title, contrast, reading order, language);
     # tables/keyboard/link/heading criteria have no pptx remediator, so they are human.
@@ -256,6 +268,12 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "1.4.9": ASSISTED,
         "2.4.1": AUTO,       # bookmark outline built from the document's headings
         "2.4.2": AUTO,       # /Title + ViewerPreferences DisplayDocTitle
+        "2.4.3": AUTO,       # focus order — remediate_pdf sets /Tabs = /S on every page carrying
+                             # form widgets (deterministic, no model). Honest-partial like 4.1.2
+                             # below: /Tabs = /S is a PROXY for structure-order tab sequence, not a
+                             # proof, so the ASSESSMENT lane is held at 🟡 review by the override
+                             # (formats/pdf registers this HEURISTIC/MEDIUM). The ⚡ remediation
+                             # lane is sound — the write is deterministic and re-scan proven.
         "2.4.4": HUMAN,      # raw-URL link text — EXPLAIN-ONLY. A label derived from the target
                              # is easy; writing it is not (the text-showing operators re-flow),
                              # and there is no PDF link write-back, so an approval could never
@@ -375,6 +393,16 @@ ASSESSMENT_OVERRIDES: dict[tuple[str, str], str] = {
     # its own axis (coverage=PARTIAL) and store._rule_outcome already resolves a clean PDF scan
     # to REVIEW; this override is what keeps the two from disagreeing. When a tag-tree detector
     # lands and coverage moves to FULL, delete this line.
+    # pdf 2.4.3 is the same ⚡-but-not-🟢 shape and needs the same brake the moment its remediation
+    # lane is ⚡. _assessment() derives 🟢 from AUTO, so declaring the lane without this line would
+    # silently start certifying focus order — the false-PASS direction. The lane is sound (/Tabs = /S
+    # is written deterministically per page with widgets and re-scan proven), but a clean re-scan
+    # proves /Tabs = /S is DECLARED, not that the tab sequence follows reading order: formats/pdf
+    # registers focus_order.detect as HEURISTIC/MEDIUM precisely because /Tabs = /S is neither
+    # necessary (/R and /C are legitimate) nor sufficient (a page can declare /S and still tab
+    # nonsensically). Proving the real thing needs a /StructTreeRoot walk this codebase does not
+    # have. When that lands and coverage moves to FULL, delete this line.
+    ("pdf", "2.4.3"): A_REVIEW,   # /Tabs = /S is a proxy for tab order — can't certify the sequence
     ("pdf", "4.1.2"): A_REVIEW,   # AcroForm-only detector — can't certify the whole criterion
     # docx 4.1.2 is the same shape and needed the same brake THE MOMENT its remediation lane
     # moved to ⚡. _assessment() derives 🟢 from AUTO, so flipping the lane without this line
