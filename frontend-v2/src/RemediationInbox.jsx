@@ -177,15 +177,15 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck }) {
           <span className="muted" style={{ fontSize: 13 }}>✓ Resolved — nothing left to do on this finding.</span>
         ) : isManual ? (
           <>
-            <button className="primary" onClick={() => onOpenWord?.(f)}>Open in Word</button>
-            <button className="ghost" onClick={() => onRecheck?.(f)}>Upload &amp; recheck</button>
-            <button className="ghost" onClick={() => onDecide?.(f, { state: 'assigned' })}>Assign</button>
+            {onOpenWord && <button className="primary" onClick={() => onOpenWord(f)}>Open in Word</button>}
+            {onRecheck && <button className="ghost" onClick={() => onRecheck(f)}>Upload &amp; recheck</button>}
+            <button className="ghost" onClick={() => onDecide?.(f, { state: 'assigned' })}>Mark as assigned</button>
           </>
         ) : (
           <>
             <button className="primary" onClick={() => onDecide?.(f, { state: 'accepted' })}>{lane.action}</button>
             <button className="ghost" onClick={() => onDecide?.(f, { state: 'rejected' })}>Reject</button>
-            <button className="ghost" onClick={() => onOpenWord?.(f)}>Open in Word</button>
+            {onOpenWord && <button className="ghost" onClick={() => onOpenWord(f)}>Open in Word</button>}
           </>
         )}
       </div>

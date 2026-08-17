@@ -3,6 +3,7 @@ import ScopeBanner from './ScopeBanner.jsx'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
 import EvidenceCard from './EvidenceCard.jsx'
+import RemediationInbox from './RemediationInbox.jsx'
 import FileDrawer, { REC_STYLE, fmtEffort, EFFORT_BASIS, SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
@@ -941,97 +942,15 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             ? 'Nothing needs your review — every fix was applied automatically. Items needing an AI-assisted fix or human sign-off will appear here.'
             : `All reviewed — ${acted.approved} approved, ${acted.rejected} rejected${acted.deferred ? `, ${acted.deferred} deferred` : ''}. Verification runs on the approved fixes.`}</p>
         ) : (
-          <>
-            {/* Inbox navigation (searchable): a search over filename, WCAG criterion and the AI
-                recommendation. UI-only — nothing here changes a decision. The queue is a single-open
-                accordion: it opens as a scannable list of collapsed headers and the reviewer expands
-                one finding at a time (opening one closes the last). No bulk expand — six tall cards is
-                the buried-queue state this removes. */}
-            <div className="revtoolbar">
-              <input type="search" className="revsearch" value={reviewQuery}
-                     onChange={(e) => setReviewQuery(e.target.value)}
-                     placeholder="Search by file, WCAG criterion, or recommendation…"
-                     aria-label="Search the AI Work Inbox" />
-              {anyFilter && (
-                <span className="revtoolbar-count muted">{filteredQueue.length} of {queue.length}</span>
-              )}
-              <label className="revgroup-toggle" title="Group findings by document"
-                     style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                <input type="checkbox" checked={groupByFile} onChange={(e) => setGroupByFile(e.target.checked)} />
-                Group by file
-              </label>
-            </div>
-            {/* Faceted filters: chunk the queue by severity ("just the critical ones") or by WCAG
-                criterion ("just the 1.1.1s"). Only facets present in the queue are offered, each with
-                its count. UI-only, and shown only when there's more than one value to choose between. */}
-            {queue.length > 0 && (facets.severities.length > 1 || facets.criteria.length > 1) && (
-              <div className="revfilters" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', margin: '2px 0 12px' }}>
-                {facets.severities.length > 1 && (
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <span className="muted" style={{ fontSize: 11.5 }}>Severity</span>
-                    <button type="button" aria-pressed={!sevFilter} onClick={() => setSevFilter(null)}
-                            style={{ fontSize: 11.5, padding: '2px 10px', borderRadius: 20, cursor: 'pointer',
-                                     border: `1px solid ${!sevFilter ? 'var(--ink)' : 'var(--line,#e2dce4)'}`,
-                                     background: !sevFilter ? 'var(--ink)' : 'transparent',
-                                     color: !sevFilter ? '#fff' : 'var(--ink)', fontWeight: !sevFilter ? 700 : 500 }}>All</button>
-                    {facets.severities.map((s) => {
-                      const on = sevFilter === s.key
-                      return (
-                        <button key={s.key} type="button" aria-pressed={on}
-                                onClick={() => setSevFilter(on ? null : s.key)}
-                                style={{ fontSize: 11.5, padding: '2px 10px', borderRadius: 20, cursor: 'pointer',
-                                         border: `1px solid ${on ? 'var(--ink)' : 'var(--line,#e2dce4)'}`,
-                                         background: on ? 'var(--ink)' : 'transparent',
-                                         color: on ? '#fff' : 'var(--ink)', fontWeight: on ? 700 : 500 }}>
-                          {s.key.charAt(0) + s.key.slice(1).toLowerCase()} {s.count}
-                        </button>
-                      )
-                    })}
-                  </div>
-                )}
-                {facets.criteria.length > 1 && (
-                  <label className="muted" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11.5 }}>
-                    Criterion
-                    <select value={critFilter || ''} onChange={(e) => setCritFilter(e.target.value || null)}
-                            aria-label="Filter by WCAG criterion"
-                            style={{ fontSize: 11.5, padding: '3px 6px', borderRadius: 6, border: '1px solid var(--line,#e2dce4)' }}>
-                      <option value="">All criteria</option>
-                      {facets.criteria.map((c) => <option key={c.key} value={c.key}>{c.key} ({c.count})</option>)}
-                    </select>
-                  </label>
-                )}
-                {anyFilter && (
-                  <button type="button" className="linklike" onClick={clearFilters} style={{ fontSize: 11.5 }}>Clear filters</button>
-                )}
-              </div>
-            )}
-            {filteredQueue.length === 0 ? (
-              <p className="muted">No items match the current filters.{' '}
-                <button type="button" className="linklike" onClick={clearFilters}>Clear filters</button>
-              </p>
-            ) : groupByFile ? (
-              /* Grouped by document: one collapsible file header (worst severity + finding count)
-                 per file, its findings — the same cards — nested inside. Files keep the queue's
-                 priority order; the group is open by default so the findings read as headers. */
-              <div className="reviewlist reviewlist-grouped">
-                {groupReviewByFile(filteredQueue).map((g) => (
-                  <details key={g.file} className="revfile-group" open
-                           style={{ border: '1px solid var(--line, #e2dce4)', borderRadius: 8, marginBottom: 8 }}>
-                    <summary style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', cursor: 'pointer', fontWeight: 600 }}>
-                      <span style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><span aria-hidden="true">📄</span> {g.file}</span>
-                      <span className="muted" style={{ fontWeight: 400, fontSize: 12, flexShrink: 0 }}>{g.count} finding{g.count === 1 ? '' : 's'}</span>
-                      {g.worst && <span className={`revcard-sev sev-${g.worst.toLowerCase()}`} style={{ flexShrink: 0 }}>{g.worst}</span>}
-                    </summary>
-                    <div style={{ padding: '2px 8px 8px' }}>{g.items.map(renderCard)}</div>
-                  </details>
-                ))}
-              </div>
-            ) : (
-              /* Flat list. The card itself (renderCard) is the SAME rich EvidenceCard wrapped in a
-                 native <details>, whether flat or grouped — no forked markup to drift. */
-              <div className="reviewlist">{filteredQueue.map(renderCard)}</div>
-            )}
-          </>
+          <RemediationInbox
+            queue={queue}
+            decisions={decisions}
+            onDecide={(f, d) => {
+              if (d.state === 'accepted') act(f.id, 'approved', f.after ?? null)
+              else if (d.state === 'rejected') act(f.id, 'rejected')
+              else if (d.state === 'assigned') act(f.id, 'deferred')
+            }}
+          />
         )}
       </section>
 
