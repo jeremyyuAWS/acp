@@ -16,7 +16,9 @@ const QUEUE = [
 let container, root
 beforeEach(() => { ;({ container, root } = createTestRoot()) })
 
-const render = async (props) => { await act(async () => { root.render(createElement(RemediationInbox, props)) }) }
+// Interaction tests use a deterministic document sort so the queue order is stable (1,2,3);
+// the priority-default ordering (critical-first) is covered by remediationInboxModel.test.js.
+const render = async (props) => { await act(async () => { root.render(createElement(RemediationInbox, { initialSort: 'document', ...props })) }) }
 const click = async (el) => { await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }
 const btnByText = (t) => [...container.querySelectorAll('button')].find((b) => b.textContent.includes(t))
 const detailHeading = () => container.querySelector('h3')?.textContent
