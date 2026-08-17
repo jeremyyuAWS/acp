@@ -64,4 +64,15 @@ describe('RemediationInbox — master/detail queue', () => {
     expect(btnByText('Resolved 1')).toBeTruthy()
     expect(container.textContent).toContain('1 of 3 resolved')
   })
+
+  it('search narrows the queue to findings whose issue or file matches', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    const input = container.querySelector('input[type=search]')
+    // Drive the controlled input through the native value setter so React's onChange fires.
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    await act(async () => { setValue.call(input, 'alt text'); input.dispatchEvent(new Event('input', { bubbles: true })) })
+    const rows = [...container.querySelectorAll('.rinbox-row')]
+    expect(rows.some((r) => r.textContent.includes('Image needs alt text'))).toBe(true)
+    expect(rows.some((r) => r.textContent.includes('Heading contrast is too low'))).toBe(false)
+  })
 })
