@@ -7,10 +7,12 @@ afterEach(unmountAll)
 
 const { default: RemediationInbox } = await import('./RemediationInbox.jsx')
 
+// Filenames are prefixed a-/b- so the document sort (alphabetical by file, then id) yields a
+// stable [1, 2, 3] order for the interaction assertions below.
 const QUEUE = [
-  { id: 1, file: 'Security-Brief-14.docx', title: 'DOCX · Heading contrast is too low', page: 1, severity: 'SERIOUS', autoApplied: true, before: '#D9D9D9', after: '#2F6FED' },
-  { id: 2, file: 'Security-Brief-14.docx', title: 'DOCX · Image needs alt text', page: 3, severity: 'CRITICAL', hasProposal: true, after: 'A bar chart of revenue' },
-  { id: 3, file: 'Policy.pdf', title: 'PDF · Scanned page, no text', rule_id: '1.1.1', severity: 'SERIOUS' },
+  { id: 1, file: 'a-brief.docx', title: 'DOCX · Heading contrast is too low', page: 1, severity: 'SERIOUS', autoApplied: true, before: '#D9D9D9', after: '#2F6FED' },
+  { id: 2, file: 'a-brief.docx', title: 'DOCX · Image needs alt text', page: 3, severity: 'CRITICAL', hasProposal: true, after: 'A bar chart of revenue' },
+  { id: 3, file: 'b-policy.pdf', title: 'PDF · Scanned page, no text', rule_id: '1.1.1', severity: 'SERIOUS' },
 ]
 
 let container, root
