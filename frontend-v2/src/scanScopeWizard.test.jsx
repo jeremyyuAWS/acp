@@ -114,8 +114,9 @@ describe('the format cards', () => {
     }
     // Guard the numbers themselves so a regression in the derivation is visible here. These are the
     // ASSESSABLE (ready) counts per format — lower than the engine-reachable counts, because pairs
-    // ACP can't yet certify/detect are excluded (e.g. xlsx/pptx drop 4.1.2, 1.4.11, 2.1.2).
-    expect(FMT_COUNT).toEqual({ docx: 15, xlsx: 11, pptx: 11, pdf: 12 })
+    // ACP can't yet certify/detect are excluded (e.g. pptx still drops 2.1.2). xlsx rose to 14 and
+    // pdf to 13 when R8 declared xlsx 1.4.1/1.4.11/4.1.2 and pdf 2.4.3 as registry-backed review lanes.
+    expect(FMT_COUNT).toEqual({ docx: 15, xlsx: 14, pptx: 11, pdf: 13 })
   })
 })
 
@@ -322,8 +323,9 @@ describe('readiness — not-ready pairs are greyed and cannot be selected', () =
   it('tags a fully-not-ready criterion and disables its row control', async () => {
     const c = await render()
     const grid = gridOf(c)
-    // 2.1.1 (Keyboard) and 2.4.3 (Focus Order) have no format ACP can assess yet.
-    for (const sc of ['2.1.1', '2.4.3']) {
+    // 2.1.1 (Keyboard) has no format ACP can assess yet. (2.4.3 Focus Order left this set when
+    // R8 declared pdf 2.4.3 as a registry-backed review lane — it is now ready on pdf.)
+    for (const sc of ['2.1.1']) {
       const row = OFFERED.find((r) => r.sc === sc)
       expect(row.ready.length, `${sc} should have no ready format`).toBe(0)
     }
