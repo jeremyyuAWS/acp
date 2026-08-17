@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import lf as _lf_mod
 import provenance
+import estate_inventory
 
 # Per-file analysis is CPU/IO bound and independent; run it across a small thread
 # pool. pikepdf/lxml release the GIL and each analyser is built fresh per call.
@@ -292,6 +293,7 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
     settle_secs = float(os.environ.get("ACP_DRIVE_SETTLE_SECS", "0") or 0)
     settle_passes = int(os.environ.get("ACP_DRIVE_SETTLE_PASSES", "2") or 0)
     by_id: dict[str, dict] = {}      # union across settle passes, keyed by Drive file id
+    inv_by_id: dict[str, dict] = {}  # EVERY file (any type) for the estate inventory, same keying
     raw_seen = 0
     hit_cap = False
     extra = 0
@@ -301,6 +303,10 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
         raw_seen = max(raw_seen, len(batch))
         before = len(by_id)
         for f in batch:
+            # The estate inventory keeps EVERY file — the un-filtered denominator the dashboard
+            # funnel reports. Scanning still keeps only the scannable subset just below; this only
+            # changes what we COUNT, never what we assess or remediate.
+            inv_by_id.setdefault(f["id"], f)
             if _is_scannable_mime(f):     # the filter Drive's index was too stale to do
                 by_id.setdefault(f["id"], f)
         added = len(by_id) - before
@@ -325,11 +331,22 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
         print(f"[scan] whole-Drive listing hit the {raw_cap}-item raw cap — not all files were "
               f"listed; raise ACP_FANOUT_MAX_FILES to cover the full estate", flush=True)
     result = _normalize(files[:max_files])
+    # Whole-estate inventory: classify every file discovered (any format), flagging ACP's own
+    # output as EXCLUDED so it isn't counted as the user's content. Assessment/remediation are
+    # untouched — this is the DISCOVERED denominator, reported alongside the scannable one.
+    inv_files = list(inv_by_id.values())
+    for f in inv_files:
+        if provenance.is_acp_generated(f):
+            f["_excluded"] = True
+    inventory = estate_inventory.summarize(inv_files)
     if scope_out is not None:
         scope_out.update({"kind": "drive", "raw": raw_seen, "scannable": listed,
                           "skipped_acp": skipped_acp, "kept": len(result),
                           "truncated": bool(hit_cap or len(files) > max_files),
-                          "cap": raw_cap})
+                          "cap": raw_cap, "inventory": inventory})
+    print(f"[scan] estate inventory: {inventory['discovered']} file(s) discovered · "
+          f"{inventory['assessment_eligible']} assessment-eligible · "
+          f"by format {inventory['by_format']}", flush=True)
     # An audit trail of what this scan chose to ingest, and what it refused. Without it the
     # only place a file count exists is the UI, and "why 2 files?" can't be answered offline.
     print(f"[scan] discovery (whole-Drive): {raw_seen} raw · {listed} scannable · "
