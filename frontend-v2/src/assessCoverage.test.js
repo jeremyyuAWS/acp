@@ -94,13 +94,17 @@ describe('assessCoverage — two axes (ADR 0023), format-scoped', () => {
     // docx/pptx gain the ADR 0024 Tier-A review lanes: docx +1.4.10/1.4.12, pptx +1.4.4/1.4.10/1.4.12.
     // docx is 4🟢/13🟡 rather than 5/12 because 2.4.6 moved 🟢→🟡 in 997b7d0 (see the 2.4.6 test above).
     docx: { auto: 4, review: 13, human: 0, gap: 0, at: 0, na: 3, certifiable: 4 },
-    xlsx: { auto: 5, review: 9, human: 0, gap: 0, at: 0, na: 6, certifiable: 5 },
+    // xlsx is 10🟡/5⚪ rather than 9/6 because 1.4.11 moved ⚪ → 🟡: its non-text-contrast detector
+    // is now registry-backed (formats/xlsx, PARTIAL), so a clean workbook reads REVIEW not "not
+    // evaluated". 1.4.1 and 4.1.2 were already 🟡 via the controls-gated review overlay and stay so
+    // (now table-backed too). The criterion crosses buckets rather than leaving, so it sums to 20.
+    xlsx: { auto: 5, review: 10, human: 0, gap: 0, at: 0, na: 5, certifiable: 5 },
     pptx: { auto: 5, review: 13, human: 1, gap: 0, at: 0, na: 1, certifiable: 5 },
-    // pdf is 12🟡/5⚪ rather than 11/6 because 4.1.2 gained a remediation lane and, with it, a
-    // derived assessment cell — 🟡 not 🟢, since its detector covers AcroForm fields only.
-    // The criterion moved ⚪ → 🟡 (it was never out of scope, just undeclared), so the estate
-    // still sums to 20.
-    pdf: { auto: 3, review: 12, human: 0, gap: 0, at: 0, na: 5, certifiable: 3 },  // +1.4.12, +1.4.1, +1.4.11 (ADR 0025)
+    // pdf is 13🟡/4⚪ rather than 12/5 because 2.4.3 (focus order) moved ⚪ → 🟡: its /Tabs = /S
+    // detector is registry-backed now (formats/pdf, HEURISTIC), so it reads REVIEW — a proxy, not a
+    // certified pass. 4.1.2 earlier made the same ⚪ → 🟡 move (AcroForm-only, so 🟡 not 🟢). Each
+    // criterion crosses buckets rather than leaving, so the estate still sums to 20.
+    pdf: { auto: 3, review: 13, human: 0, gap: 0, at: 0, na: 4, certifiable: 3 },  // +1.4.12, +1.4.1, +1.4.11, +2.4.3 (ADR 0025)
     // html is 10🟢/8🟡 rather than 11/7 for the same reason docx moved: 2.4.6 went 🟢→🟡 once
     // HTML_HEADING_SKIP was recognised as a level check, not a descriptiveness one. The
     // criterion CROSSES buckets rather than leaving, so the estate still sums to 20.

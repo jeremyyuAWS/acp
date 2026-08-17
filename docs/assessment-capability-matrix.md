@@ -51,9 +51,9 @@ colour (1.4.1) are 🟡 — not 🟢 — even though ACP has detectors for them.
 | 1.4.12 | Text Spacing | AA | 🟡 | ⚪ | 🟡 | 🟡 | 🟢 |
 | 1.4.1 | Use of Color | A | 🟡 | 🟡 | ⚪ | 🟡 | 🟢 |
 | 1.4.3 | Contrast (Minimum) | AA | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 |
-| 1.4.11 | Non-text Contrast | AA | 🟡 | ⚪ | 🟡 | 🟡 | 🟡 |
+| 1.4.11 | Non-text Contrast | AA | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 |
 | 2.4.2 | Page Titled | A | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 |
-| 2.4.3 | Focus Order | A | ⚪ | ⚪ | 🟡 | ⚪ | 🟢 |
+| 2.4.3 | Focus Order | A | ⚪ | ⚪ | 🟡 | 🟡 | 🟢 |
 | 2.4.4 | Link Purpose (In Context) | A | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 |
 | 2.1.1 | Keyboard | A | ⚪ | ⚪ | 🔴 | ⚪ | 🔵 |
 | 2.1.2 | No Keyboard Trap | A | 🟡 | 🟡 | 🟡 | ⚪ | 🔵 |
@@ -67,9 +67,9 @@ evidence-backed flag (🟡). 🔴/⚪/🔵 are not ACP assessments.
 | Format | Assessable | 🟢 auto | 🟡 review | 🔴 human | ⚪ N/A | 🔵 AT |
 |--------|:----------:|:------:|:--------:|:-------:|:-----:|:-----:|
 | DOCX | **17 / 20** | 4 | 13 | 0 | 3 | — |
-| XLSX | **14 / 20** | 5 | 9 | 0 | 6 | — |
+| XLSX | **15 / 20** | 5 | 10 | 0 | 5 | — |
 | PPTX | **18 / 20** | 5 | 13 | 1 | 1 | — |
-| PDF | **15 / 20** | 3 | 12 | 0 | 5 | — |
+| PDF | **16 / 20** | 3 | 13 | 0 | 4 | — |
 | HTML | **18 / 20** | 10 | 8 | 0 | 0 | 2 |
 
 ## Why the ⚪ / 🔴 / 🔵 cells are honest, not gaps

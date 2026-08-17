@@ -46,16 +46,19 @@ export const CAPABILITY_FALLBACK = {
     "1.3.1": "auto",
     "1.3.2": "auto",
     "1.3.3": "assisted",
+    "1.4.1": "human",
     "1.4.3": "auto",
     "1.4.5": "assisted",
     "1.4.6": "auto",
     "1.4.9": "assisted",
+    "1.4.11": "human",
     "2.4.2": "auto",
     "2.4.4": "assisted",
     "2.4.6": "assisted",
     "3.1.1": "auto",
     "3.1.2": "human",
-    "3.1.5": "assisted"
+    "3.1.5": "assisted",
+    "4.1.2": "human"
   },
   "pptx": {
     "1.1.1": "assisted",
@@ -87,6 +90,7 @@ export const CAPABILITY_FALLBACK = {
     "1.4.9": "assisted",
     "2.4.1": "auto",
     "2.4.2": "auto",
+    "2.4.3": "auto",
     "2.4.4": "human",
     "2.4.6": "assisted",
     "3.1.1": "auto",
@@ -153,9 +157,10 @@ export const ASSESSMENT_FALLBACK = {
     "3.1.5": "review", "3.3.2": "auto", "4.1.2": "review"
   },
   "xlsx": {
-    "1.1.1": "review", "1.3.1": "auto", "1.3.2": "auto", "1.3.3": "review", "1.4.3": "auto",
-    "1.4.5": "review", "1.4.6": "auto", "1.4.9": "review", "2.4.2": "auto", "2.4.4": "review",
-    "2.4.6": "review", "3.1.1": "auto", "3.1.2": "review", "3.1.5": "review"
+    "1.1.1": "review", "1.3.1": "auto", "1.3.2": "auto", "1.3.3": "review", "1.4.1": "review",
+    "1.4.3": "auto", "1.4.5": "review", "1.4.6": "auto", "1.4.9": "review", "1.4.11": "review",
+    "2.4.2": "auto", "2.4.4": "review", "2.4.6": "review", "3.1.1": "auto", "3.1.2": "review",
+    "3.1.5": "review", "4.1.2": "review"
   },
   "pptx": {
     "1.1.1": "review", "1.3.1": "auto", "1.4.2": "review", "1.3.2": "auto", "1.3.3": "review",
@@ -166,8 +171,8 @@ export const ASSESSMENT_FALLBACK = {
   "pdf": {
     "1.1.1": "review", "1.3.1": "review", "1.3.2": "review", "1.3.3": "review", "1.4.3": "auto",
     "1.4.5": "review", "1.4.6": "auto", "1.4.9": "review", "2.4.1": "auto", "2.4.2": "auto",
-    "2.4.4": "review", "2.4.6": "review", "3.1.1": "auto", "3.1.2": "review", "3.1.5": "review",
-    "4.1.2": "review"
+    "2.4.3": "review", "2.4.4": "review", "2.4.6": "review", "3.1.1": "auto", "3.1.2": "review",
+    "3.1.5": "review", "4.1.2": "review"
   },
   "html": {
     "1.1.1": "review", "1.2.1": "review", "1.2.2": "review", "1.2.3": "review", "1.3.1": "auto",

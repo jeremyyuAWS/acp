@@ -28,9 +28,10 @@ describe('CoverageScorecard renders the two-axis capability view (ADR 0023)', ()
     // Remediation layer is a distinct row.
     expect(txt).toContain('Remediation')
     expect(txt).toContain('AI Generated Fix')
-    // xlsx: 5 🟢 auto-assessable + 9 🟡 review (Use of Color joined the review lane).
+    // xlsx: 5 🟢 auto-assessable + 10 🟡 review (Use of Color, Non-text Contrast and
+    // Name/Role/Value are all registry-backed review lanes now — see R8).
     expect(txt).toContain('5')
-    expect(txt).toContain('9')
+    expect(txt).toContain('10')
     // No implementation jargon leaked into the customer view.
     expect(txt).not.toContain('deterministic remediation')
   })
