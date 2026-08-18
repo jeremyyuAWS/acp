@@ -16,7 +16,11 @@ const msgColor = (m) => (m.startsWith('✓') ? '#3B6D11' : m.startsWith('SIM') ?
 
 // Danger zone — wipe scan results (Grafana + in-app charts) and/or Langfuse
 // traces so the dashboards start fresh. Settings are preserved. Typed-confirm.
-function ResetData() {
+//
+// EXPORTED, but no longer surfaced as a Settings tab (the panel is scoped to access management —
+// Owners + Users). Kept in the module so the feature and its tests survive; re-add a tab in
+// Settings() to bring it back. Same for DriveMirror and AIProvidersPanel below.
+export function ResetData() {
   const [scope, setScope] = useState('all')
   const [typed, setTyped] = useState('')
   const [busy, setBusy] = useState(false)
@@ -80,7 +84,7 @@ function ResetData() {
 // ADR 0010: Blob is always the primary, must-succeed write for a remediated file.
 // This controls whether it's ALSO auto-mirrored to Drive right after, and which
 // Drive folder that mirror lands in.
-function DriveMirror() {
+export function DriveMirror() {
   const [settings, setSettings] = useState(null)
   const [folder, setFolder] = useState('')
   const [busy, setBusy] = useState(false)
@@ -303,11 +307,10 @@ function DriveMirror() {
     </div>
   )
 }
-import Rubric from './Rubric.jsx'
-import ControlPlane from './ControlPlane.jsx'
-import Disposition from './Disposition.jsx'
+// Rubric / ControlPlane / Disposition / FileTypeConfig live in their own files and are no longer
+// imported here: their tabs were removed (this panel is now access-only). Re-import + re-add a tab
+// to surface one again — none of those files were deleted.
 import OwnerDelegate from './OwnerDelegate.jsx'
-import FileTypeConfig from './FileTypeConfig.jsx'
 import { useDialog } from './a11y.js'
 
 // Platform settings, behind the header cog — gated to the Platform Admin. Holds
@@ -327,6 +330,12 @@ function AllowList() {
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteBusy, setInviteBusy] = useState(false)
   const [inviteMsg, setInviteMsg] = useState('')
+  // Google onboarding — no backend invite exists for Google (Drive access is per-user OAuth), so
+  // "onboard" here is: whitelist the Gmail (persisted immediately, like the MS invite auto-adds),
+  // then the guided OAuth-test-user + sign-in steps. Kept symmetric with the Microsoft card.
+  const [gEmail, setGEmail] = useState('')
+  const [gBusy, setGBusy] = useState(false)
+  const [gMsg, setGMsg] = useState('')
 
   useEffect(() => {
     getAllowlist()
@@ -350,6 +359,22 @@ function AllowList() {
       })
       .catch((err) => setInviteMsg(`Invite failed: ${err.message || err}`))
       .finally(() => setInviteBusy(false))
+  }
+
+  // Whitelist a Google tester and PERSIST in one step — the parallel to the Microsoft invite's
+  // auto-add. The plain "+ Add user" below stages a change for the Save button; this commits it,
+  // so onboarding one Google tester is a single action.
+  const addGoogle = () => {
+    const e = gEmail.trim().toLowerCase()
+    if (!e.includes('@')) { setGMsg('Enter a valid email.'); return }
+    if (emails.includes(e)) { setGMsg('Already on the list.'); setGEmail(''); return }
+    const next = [...emails, e].sort()
+    setGBusy(true); setGMsg('')
+    setAllowlist(next)
+      .then((d) => { setEmails(d.emails || next); setGEmail('')
+                     setGMsg(`✓ Whitelisted ${e} — they sign in with Google and their Drive becomes a scannable source.`) })
+      .catch((err) => setGMsg(`Could not save: ${err.message || err}`))
+      .finally(() => setGBusy(false))
   }
 
   const add = () => {
@@ -419,27 +444,65 @@ function AllowList() {
         </div>
       </div>
 
-      {/* Invite a tester (ADR 0033) — hidden unless the Entra guest-invite credential is configured.
-          Sends a Microsoft B2B guest invitation AND adds the email to the list in one step, so a
-          tester needs no separate Entra step. Least-privilege: it invites a guest, never creates a
-          tenant user. */}
-      {inviteEnabled && (
-        <div style={{ margin: '14px 0 0', padding: '12px 14px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
-          <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>Invite a tester (Microsoft)</div>
-          <div className="muted" style={{ fontSize: 12, marginBottom: 8, lineHeight: 1.5 }}>
-            Sends an Entra guest invitation and adds them to the list below in one step. They sign in
-            with their own Microsoft account — no tenant account is created.
+      {/* Onboard a tester — two equal paths. Microsoft (SharePoint / OneDrive) and Google (Drive)
+          both end at the same allowlist; each also carries the source-specific step that makes that
+          person's own content scannable. The Microsoft card sends a real Entra B2B guest invite
+          when configured (ADR 0033); otherwise it falls back to the guided manual invite. */}
+      <div style={{ margin: '16px 0 0' }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>Onboard a tester</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 10 }}>
+
+          {/* Microsoft — SharePoint / OneDrive */}
+          <div style={{ padding: '12px 14px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>Microsoft <span className="muted" style={{ fontWeight: 400 }}>· SharePoint / OneDrive</span></div>
+            {inviteEnabled ? (
+              <>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 8, lineHeight: 1.5 }}>
+                  Sends an Entra guest invitation and adds them to the list below in one step. They sign in
+                  with their own Microsoft account — no tenant account is created.
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)}
+                         onKeyDown={(e) => e.key === 'Enter' && invite()}
+                         placeholder="tester@example.com" aria-label="Invite a Microsoft tester by email" type="email"
+                         style={{ flex: 1, padding: '8px 11px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'inherit', fontSize: 14 }} />
+                  <button onClick={invite} disabled={inviteBusy}>{inviteBusy ? 'Inviting…' : 'Invite'}</button>
+                </div>
+                {inviteMsg && <div role="status" aria-live="polite" className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>{inviteMsg}</div>}
+              </>
+            ) : (
+              <div className="muted" style={{ fontSize: 12, lineHeight: 1.55 }}>
+                One-click invite isn’t configured here (<code>ACP_INVITE_*</code> unset). To onboard a Microsoft
+                tester, invite them as a guest in{' '}
+                <a href="https://entra.microsoft.com/" target="_blank" rel="noopener noreferrer" style={{ color: '#2B6CB0', fontWeight: 600 }}>Entra admin center → Identity → Users → Invite external user ↗</a>,
+                then add their email below. They can then scan the SharePoint / OneDrive sites they’re granted access to.
+              </div>
+            )}
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)}
-                   onKeyDown={(e) => e.key === 'Enter' && invite()}
-                   placeholder="tester@example.com" aria-label="Invite a tester by email" type="email"
-                   style={{ flex: 1, padding: '8px 11px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'inherit', fontSize: 14 }} />
-            <button onClick={invite} disabled={inviteBusy}>{inviteBusy ? 'Inviting…' : 'Invite'}</button>
+
+          {/* Google — Drive */}
+          <div style={{ padding: '12px 14px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>Google <span className="muted" style={{ fontWeight: 400 }}>· Drive</span></div>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 8, lineHeight: 1.5 }}>
+              Whitelists a Gmail so they can sign in. After they sign in with Google, their own Drive becomes a
+              scannable source — no copy is taken, ACP reads it read-only.
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input value={gEmail} onChange={(e) => setGEmail(e.target.value)}
+                     onKeyDown={(e) => e.key === 'Enter' && addGoogle()}
+                     placeholder="tester@gmail.com" aria-label="Whitelist a Google tester by email" type="email"
+                     style={{ flex: 1, padding: '8px 11px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'inherit', fontSize: 14 }} />
+              <button onClick={addGoogle} disabled={gBusy}>{gBusy ? 'Adding…' : 'Whitelist'}</button>
+            </div>
+            <div className="muted" style={{ fontSize: 11.5, marginTop: 8, lineHeight: 1.5 }}>
+              Until the app is Google-verified, also add them once as a test user in{' '}
+              <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noopener noreferrer" style={{ color: '#2B6CB0', fontWeight: 600 }}>Google Cloud → OAuth consent screen ↗</a>.
+            </div>
+            {gMsg && <div role="status" aria-live="polite" className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>{gMsg}</div>}
           </div>
-          {inviteMsg && <div role="status" aria-live="polite" className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>{inviteMsg}</div>}
+
         </div>
-      )}
+      </div>
 
       {/* Add */}
       <div style={{ display: 'flex', gap: 8, margin: '14px 0 10px' }}>
@@ -502,7 +565,7 @@ const ADAPTER_READY = new Set(['azure_openai'])
 // ADR 0019 §6 — the admin's AI provider governance page. The KEY is never entered here: an admin's
 // ops team provisions it as a container/Key-Vault secret, and this stores only the secret's NAME
 // (key_secret_ref). The page shows whether the referenced secret is present, never its value.
-function AIProvidersPanel({ onAccess }) {
+export function AIProvidersPanel({ onAccess }) {
   const [providers, setProviders] = useState(null)
   const [draft, setDraft] = useState({})     // provider -> edited fields
   const [busy, setBusy] = useState('')
@@ -625,39 +688,31 @@ const SimNotice = () => (
 const INP = { display: 'block', width: '100%', padding: '4px 8px', marginTop: 4, border: '1px solid var(--line)', borderRadius: 6, boxSizing: 'border-box' }
 const L = ({ label, children }) => (<label style={{ fontSize: 12 }} className="muted">{label}{children}</label>)
 
-export default function Settings({ onClose, onRubricSaved, files = [], onDelegationChange, onFileTypeChange }) {
-  const [tab, setTab] = useState('rules')
+export default function Settings({ onClose, files = [], onDelegationChange }) {
+  const [tab, setTab] = useState('users')
   const panelRef = useRef(null)
   useDialog(panelRef, onClose)
   return (
     <div className="setoverlay" role="dialog" aria-modal="true" aria-label="Platform settings" onClick={onClose}>
       <div className="setpanel" ref={panelRef} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <div className="sethead">
-          <div><b>⚙ Platform settings</b><span className="muted"> · admin · rules &amp; validation</span></div>
+          <div><b>⚙ Platform settings</b><span className="muted"> · admin · access</span></div>
           <button className="ghost small" aria-label="Close settings" onClick={onClose}>✕</button>
         </div>
-        {/* Above the subtabs on purpose — it is true of every tab in this panel, not just the
-            settings write paths. Rubric, Users, Disposition and Reset data are SIM stubs too. */}
+        {/* Above the subtabs on purpose — the SIM badge is true of every write path in this panel
+            (the Users allowlist included), not only the panels reachable from a tab. */}
         {SIM && <SimNotice />}
+        {/* Scoped to access management: Owners + Users only. The other admin panels (Scoring rules,
+            Estate, File types, Remediated storage, Disposition, Data reset, AI-provider governance)
+            are still exported from this module and covered by tests — add a button + body to
+            resurface one. */}
         <div className="subtabs" role="tablist" aria-label="Settings sections">
-          <button role="tab" aria-selected={tab === 'rules'} className={tab === 'rules' ? 'fchip on' : 'fchip'} onClick={() => setTab('rules')}>Scoring rules</button>
-          <button role="tab" aria-selected={tab === 'estate'} className={tab === 'estate' ? 'fchip on' : 'fchip'} onClick={() => setTab('estate')}>Estate</button>
-          <button role="tab" aria-selected={tab === 'filetypes'} className={tab === 'filetypes' ? 'fchip on' : 'fchip'} onClick={() => setTab('filetypes')}>File types</button>
           <button role="tab" aria-selected={tab === 'owners'} className={tab === 'owners' ? 'fchip on' : 'fchip'} onClick={() => setTab('owners')}>Owners</button>
           <button role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'fchip on' : 'fchip'} onClick={() => setTab('users')}>Users</button>
-          <button role="tab" aria-selected={tab === 'drivemirror'} className={tab === 'drivemirror' ? 'fchip on' : 'fchip'} onClick={() => setTab('drivemirror')}>Remediated storage</button>
-          <button role="tab" aria-selected={tab === 'disposition'} className={tab === 'disposition' ? 'fchip on' : 'fchip'} onClick={() => setTab('disposition')}>Disposition</button>
-          <button role="tab" aria-selected={tab === 'data'} className={tab === 'data' ? 'fchip on' : 'fchip'} onClick={() => setTab('data')}>Data</button>
         </div>
         <div className="setbody">
-          {tab === 'rules' && <Rubric onSaved={onRubricSaved} />}
-          {tab === 'estate' && <ControlPlane />}
-          {tab === 'filetypes' && <FileTypeConfig onChanged={(cfg, custom) => onFileTypeChange?.(cfg, custom)} />}
           {tab === 'owners' && <OwnerDelegate files={files} onChanged={onDelegationChange} />}
           {tab === 'users' && <AllowList />}
-          {tab === 'drivemirror' && <DriveMirror />}
-          {tab === 'disposition' && <Disposition />}
-          {tab === 'data' && <ResetData />}
         </div>
       </div>
     </div>
