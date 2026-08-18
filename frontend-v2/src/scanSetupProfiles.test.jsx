@@ -1,18 +1,20 @@
 /**
- * Step 2, RENDERED — the profile-first checks configurator and its shortcuts into the one
- * `criteria` Set.
+ * The checks step, RENDERED — the profile-first criterion configurator and its shortcuts into the
+ * one `criteria` Set.
  *
- * scanSetupDom.test.jsx already holds the load-bearing invariant (an empty criteria × formats
- * intersection is refused, never saved). This file covers what was added on top: three profiles,
- * the bulk/tri-state controls, the file-type-narrowed rows, the lane filter, and the honest
- * footer. Every expectation is derived from the SAME generated data the component reads
- * (SCOPE_UNIVERSE, TRACKED_17, CAPABILITY_FALLBACK) — a hand-typed copy of "which docx checks are
- * automated" would be the second source of truth the codegen exists to prevent, and it would rot
- * the first time a lane moved (docx 4.1.2 moved auto only days ago).
+ * scanSetupDom.test.jsx holds the load-bearing invariant (an empty scope is refused, never saved).
+ * This file covers what sits on top: the three profiles, the bulk/tri-state controls, the lane
+ * filter, and the honest footer. Every expectation is derived from the SAME generated data the
+ * component reads (SCOPE_UNIVERSE, TRACKED_17, CAPABILITY_FALLBACK) — a hand-typed copy would be
+ * the second source of truth the codegen exists to prevent.
  *
- * DOM-level, not browser-level: the preview server runs vite rooted at the SHARED checkout
- * whatever worktree you are in, so a browser check of a worktree change exercises code that does
- * not contain it (CLAUDE.md). These assertions run against the component actually under edit.
+ * THE FORMAT AXIS MOVED TO ASSESS (Discover/Assess PRD §4.1). This screen no longer offers file
+ * types, so the default is "no format restriction" — every supported format. A stored scope is
+ * read back on mount and narrows the format set; the lane-filter case seeds a docx-only stored
+ * scope so it can assert docx capability lanes deterministically.
+ *
+ * DOM-level, not browser-level: the preview server runs vite rooted at the SHARED checkout whatever
+ * worktree you are in (CLAUDE.md). These assertions run against the component actually under edit.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createElement } from 'react'
@@ -28,11 +30,12 @@ vi.mock('./api.js', () => ({
 }))
 
 const { default: ScanSetup } = await import('./ScanSetup.jsx')
-const { SCOPE_UNIVERSE } = await import('./scopePresets.js')
+const { SCOPE_UNIVERSE, SCOPE_FORMATS } = await import('./scopePresets.js')
 const { TRACKED_17 } = await import('./ruleDetails.js')
 const { CAPABILITY_FALLBACK, modeFor } = await import('./capability.js')
 
 const OFFERED = SCOPE_UNIVERSE.filter((r) => TRACKED_17.has(r.sc))
+const ALL = new Set(SCOPE_FORMATS)
 
 // The component's own definitions, re-derived here so the tests track the data, not a snapshot.
 const availableOn = (fmts) => OFFERED.filter((r) => r.formats.some((f) => fmts.has(f)))
@@ -41,9 +44,14 @@ const autoOnlyOn = (fmts) => availableOn(fmts)
     .every((f) => modeFor(CAPABILITY_FALLBACK, f, r.sc) === 'auto'))
   .map((r) => r.sc).sort()
 const docxLane = (sc) => modeFor(CAPABILITY_FALLBACK, 'docx', sc)
+// A docx-only stored scope over every docx-lane criterion — seeds the component's format set to
+// {docx} on mount, so lane assertions can be made against a single deterministic format.
+const DOCX_SCOPE = JSON.stringify(Object.fromEntries(
+  OFFERED.filter((r) => r.formats.includes('docx')).map((r) => [r.sc, ['docx']]),
+))
 
-async function render(props = {}) {
-  settingsMock.get = vi.fn(async () => ({ scan_scope: '' }))
+async function render(props = {}, scanScope = '') {
+  settingsMock.get = vi.fn(async () => ({ scan_scope: scanScope }))
   settingsMock.put = vi.fn(async () => ({}))
   const onScan = vi.fn()
   const { root, container } = createTestRoot()
@@ -55,18 +63,11 @@ async function render(props = {}) {
 
 const click = async (el) => { await act(async () => { el.click() }) }
 const btn = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent))
-const chip = (c, fmt) => [...c.querySelectorAll('button')]
-  .find((b) => new RegExp(`\\b${fmt}\\b`, 'i').test(b.textContent))
 const box = (c, sc) => [...c.querySelectorAll('input[type=checkbox]')]
   .find((e) => (e.getAttribute('aria-label') || '').startsWith(sc + ' '))
 const catbox = (c, name) => [...c.querySelectorAll('input[type=checkbox]')]
   .find((e) => e.getAttribute('aria-label') === `Select all ${name}`)
-const rowFmt = (c, sc) => box(c, sc)?.closest('.setuprow')?.querySelector('.setuprow-f')?.textContent
 const savedScope = () => JSON.parse(settingsMock.put.mock.calls.at(-1)[0].scan_scope)
-const setFormat = async (c, fmt, on) => {
-  const el = chip(c, fmt)
-  if ((el.getAttribute('aria-pressed') === 'true') !== on) await click(el)
-}
 const enterCustom = async (c) => { await click(btn(c, /^Custom$/)) }
 
 
@@ -76,23 +77,11 @@ describe('profiles reach a correct scope in one click', () => {
     expect(btn(c, /Recommended/).getAttribute('aria-checked')).toBe('true')
   })
 
-  it('Automated only selects exactly the deterministic-first docx checks', async () => {
-    const { c } = await render()                 // default formats = docx
+  it('Automated only selects exactly the deterministic-first checks over all formats', async () => {
+    const { c } = await render()                 // default formats = every supported format
     await click(btn(c, /Automated only/))
     await click(btn(c, /Save scope only/))
-    expect(Object.keys(savedScope()).sort()).toEqual(autoOnlyOn(new Set(['docx'])))
-    // and every one of them really is automated on docx — the label is not decorative
-    for (const sc of Object.keys(savedScope())) expect(docxLane(sc)).toBe('auto')
-  })
-
-  it('Automated only RE-DERIVES when the file types change, so it keeps meaning its name', async () => {
-    const { c } = await render()
-    await click(btn(c, /Automated only/))
-    await setFormat(c, 'PDF', true)              // now docx + pdf
-    await click(btn(c, /Save scope only/))
-    // strict: a criterion automated on docx but not on pdf must drop out, because the scan it
-    // names would otherwise route something to a person
-    expect(Object.keys(savedScope()).sort()).toEqual(autoOnlyOn(new Set(['docx', 'pdf'])))
+    expect(Object.keys(savedScope()).sort()).toEqual(autoOnlyOn(ALL))
   })
 
   it('any per-criterion edit drops the profile to Custom', async () => {
@@ -113,7 +102,7 @@ describe('the bulk controls all write the one selection', () => {
 
     await click(btn(c, /Select all/))
     await click(btn(c, /Save scope only/))
-    const avail = availableOn(new Set(['docx'])).map((r) => r.sc).sort()
+    const avail = availableOn(ALL).map((r) => r.sc).sort()
     expect(Object.keys(savedScope()).sort()).toEqual(avail)
   })
 
@@ -124,30 +113,9 @@ describe('the bulk controls all write the one selection', () => {
     await click(catbox(c, 'Perceivable'))
     await click(btn(c, /Save scope only/))
     const saved = Object.keys(savedScope()).sort()
-    const perceivable = availableOn(new Set(['docx'])).filter((r) => r.sc.startsWith('1.')).map((r) => r.sc).sort()
+    const perceivable = availableOn(ALL).filter((r) => r.sc.startsWith('1.')).map((r) => r.sc).sort()
     expect(saved).toEqual(perceivable)
     expect(saved.every((sc) => sc.startsWith('1.'))).toBe(true)
-  })
-})
-
-
-describe('the row talks about the ticked file types, not all four', () => {
-  it('a Word-only scan shows DOCX on a criterion that also exists elsewhere', async () => {
-    const { c } = await render()
-    await enterCustom(c)
-    // 1.1.1 exists on all four formats; with only Word ticked the row must say just DOCX
-    expect(rowFmt(c, '1.1.1')).toBe('DOCX')
-    await setFormat(c, 'PDF', true)
-    expect(rowFmt(c, '1.1.1')).toBe('DOCX · PDF')
-  })
-
-  it('a criterion with no ticked-format lane is not offered at all', async () => {
-    const { c } = await render()
-    await enterCustom(c)
-    // 2.1.1 is pptx-only; on a Word scan there is nothing to tick, so no checkbox
-    expect(box(c, '2.1.1')).toBeFalsy()
-    await setFormat(c, 'PPTX', true)
-    expect(box(c, '2.1.1')).toBeTruthy()
   })
 })
 
@@ -158,7 +126,8 @@ describe('the lane filter answers "which checks need a person?"', () => {
     const auto = OFFERED.find((r) => r.formats.includes('docx') && docxLane(r.sc) === 'auto')
     expect(human && auto, 'expected both a human-review and an automated docx criterion').toBeTruthy()
 
-    const { c } = await render()
+    // Seed a docx-only stored scope so the lanes are computed over docx alone.
+    const { c } = await render({}, DOCX_SCOPE)
     await enterCustom(c)
     await click(btn(c, /Human review \d/))
     expect(box(c, human.sc), 'the human-review row should stay').toBeTruthy()
@@ -169,7 +138,9 @@ describe('the lane filter answers "which checks need a person?"', () => {
 
 describe('the footer says what the scan will actually do', () => {
   it('reports the running check count and a lane breakdown', async () => {
-    const { c } = await render()
+    // docx-seeded so the lanes resolve to concrete modes (docx carries deterministic 'auto'
+    // lanes), rather than the "varies by format" the all-format default mostly produces.
+    const { c } = await render({}, DOCX_SCOPE)
     const run = c.querySelector('.setuprun').textContent
     expect(run).toMatch(/\d+ checks will run/)
     expect(run.toLowerCase()).toContain('automated')

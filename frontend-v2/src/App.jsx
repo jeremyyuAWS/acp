@@ -22,6 +22,7 @@ import Monitor from './Monitor.jsx'
 import Publish from './Publish.jsx'
 import Overview from './Overview.jsx'
 import AssessRunner from './AssessRunner.jsx'
+import AssessScope from './AssessScope.jsx'
 import CoverageScorecard from './CoverageScorecard.jsx'
 import ConfidenceDashboard from './ConfidenceDashboard.jsx'
 import AccessibilityStatus from './AccessibilityStatus.jsx'
@@ -857,7 +858,7 @@ export default function App() {
         {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
           scanId={run?.id} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={requestScan} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} scope={run?.scope || null} decisions={decisions} setDecisions={setDecisions}
+        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={requestScan} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} delegations={delegations} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} scope={run?.scope || null} decisions={decisions} setDecisions={setDecisions}
           /* Upload lost its top-level tab in the v2 simplification, but not its capability:
              it is a secondary action inside Discover now, which is where "get files in front
              of ACP" already lives. Dropping it outright would have removed the only way to try
@@ -866,6 +867,14 @@ export default function App() {
 
         {view === 'assess' && (run ? (
           <>
+            {/* The assessment scope lives here now (Discover/Assess PRD §4.4): document types +
+                the Core-17 WCAG picker, with a live eligible-file count, written to scan_scope as
+                the single authority for the format axis. Collapsed by default so it does not
+                displace the run button, and left one click away for when the scope needs changing. */}
+            <details className="panel scopestep assessscopestep">
+              <summary><b>Choose what to assess</b><span className="muted"> · document types &amp; WCAG criteria, before you run</span></summary>
+              <AssessScope />
+            </details>
             <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy} onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase} />
             {/* Gated on assessPhase === 'done', not just `assessed` — `assessed` flips true the
                 instant Assess is clicked (before AssessRunner's own progress animation even

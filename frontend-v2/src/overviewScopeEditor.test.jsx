@@ -56,15 +56,16 @@ describe('the scan scope is editable from the first tab', () => {
     expect(scopePanel(c), 'no scan-scope editor on the Overview tab').toBeTruthy()
   })
 
-  it('renders the criterion and file-type controls inside it', async () => {
+  it('renders the criterion controls inside it', async () => {
     const c = await render({ onScan: vi.fn() })
     const panel = scopePanel(c)
     expect(panel).toBeTruthy()
-    // The two axes, by their controls rather than their prose: chips carry aria-pressed, and the
-    // criteria list is a set of checkboxes. Asserting on the heading text would pass against a
-    // heading with an empty editor under it.
-    expect(panel.querySelectorAll('[aria-pressed]').length,
-      'no file-type chips').toBeGreaterThan(0)
+    // The criterion axis, by its controls rather than its prose: the checks step leads with a
+    // profile radiogroup (Recommended / Automated only / Custom). The format axis moved to Assess
+    // (AssessScope.jsx), so this editor no longer carries file-type chips. Asserting on the heading
+    // text would pass against a heading with an empty editor under it.
+    expect(panel.querySelectorAll('[role="radio"]').length,
+      'no criterion-profile controls').toBeGreaterThan(0)
   })
 
   it('stays collapsed, so it does not displace the metrics', async () => {

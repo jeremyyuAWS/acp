@@ -535,6 +535,18 @@ input:focus-visible, [role="tab"]:focus-visible {
 .setupbulk { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
 .setupbulk-sel { display: flex; gap: 12px; }
 .setuplink { border: none; background: none; padding: 0; font: inherit; font-size: 12px; color: var(--plum); cursor: pointer; text-decoration: underline; }
+
+/* ── Assess-time scope picker (AssessScope.jsx) ────────────────────────────────────────────── */
+.assessscope { margin-bottom: 16px; }
+.assessscope-codes { border: 1px solid var(--line); border-radius: 10px; margin-top: 6px; background: var(--surface); max-height: 320px; overflow-y: auto; }
+.assessscope-code:first-child { border-top: none; }
+.assessscope-elig { margin-top: 4px; }
+.assessscope-elign { font-size: 15px; color: var(--ink); }
+.assessscope-elign b { font-size: 22px; color: var(--plum); }
+.assessscope-eligfmts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.assessscope-eligfmt { font-size: 12px; padding: 3px 10px; border-radius: 20px; border: 1px solid var(--line); color: var(--muted); }
+.assessscope-eligfmt.on { border-color: color-mix(in srgb, var(--plum) 45%, transparent); color: var(--plum); background: color-mix(in srgb, var(--plum) 8%, transparent); }
+.assessscopestep > summary { cursor: pointer; }
 .setupfilter { display: flex; gap: 6px; flex-wrap: wrap; }
 .setupfchip { font-size: 11.5px; padding: 3px 9px; border-radius: 20px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); cursor: pointer; font: inherit; }
 .setupfchip.on { font-weight: 600; color: var(--ink); border-color: color-mix(in srgb, var(--plum) 45%, transparent); }
@@ -840,6 +852,13 @@ input:focus-visible, [role="tab"]:focus-visible {
 .ratcard b { font-size: 22px; font-weight: 700; line-height: 1.1; }
 .ratcard .muted { font-size: 11px; }
 .linklike { background: none; border: none; padding: 0; color: var(--plum); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
+
+/* Document Location view filter (Discover.jsx) */
+.doclocbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; }
+.doclocbar-lbl { font-size: 12px; font-weight: 600; }
+.doclocbar select, .doclocbar input { font: inherit; font-size: 12.5px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: inherit; }
+.doclocbar input { min-width: 180px; }
+.doclocbar-count { font-size: 12px; }
 
 /* --- documents-to-remediate list (Remediate) --- */
 .remlist { display: flex; flex-direction: column; max-height: 420px; overflow-y: auto; }
