@@ -35,6 +35,16 @@ vi.mock('./api.js', () => ({
       match: [{ field: 'age_days', op: 'gt', value: 90 }] },
   ])),
   getInventoryDiff: vi.fn(async () => ({ no_baseline: true, summary: {} })),
+  previewDispositionPolicy: vi.fn(async (id) => ({
+    policy_id: id, would_match: 5,
+    documents: [
+      { doc_id: 'sp1', source: 'sharepoint', path: '/Finance/a.docx', department: 'Finance' },
+      { doc_id: 'sp2', source: 'sharepoint', path: '/Finance/b.docx', department: 'Finance' },
+      { doc_id: 'gd1', source: 'drive', path: '/HR/c.docx', department: 'HR' },
+      { doc_id: 'gd2', source: 'drive', path: '/HR/d.docx', department: 'HR' },
+      { doc_id: 'gd3', source: 'drive', path: '/HR/e.docx', department: 'HR' },
+    ],
+  })),
   getScanTraces: vi.fn(async () => []),
   getScanRemediationDiffs: vi.fn(async () => []),
   remediateFile: vi.fn(async () => ({})),
@@ -192,5 +202,75 @@ describe('the source operations drawer', () => {
     expect(c.textContent).toMatch(/1 discovered file is eligible for assessment/)
     await click([...c.querySelectorAll('button')].find((b) => /Open Assess/.test(b.textContent)))
     expect(onOpenAssess).toHaveBeenCalled()
+  })
+})
+
+describe('the Rules tab match counts and review queues', () => {
+  const link = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent))
+
+  it('does not run the preview scans until the Rules tab is opened', async () => {
+    // Each preview evaluates the policy over the WHOLE documents table in Python. Firing them on
+    // drawer open would make looking at Overview cost N full-table scans.
+    const api = await import('./api.js')
+    api.previewDispositionPolicy.mockClear()
+    const c = await mount()
+    expect(api.previewDispositionPolicy).not.toHaveBeenCalled()
+    await click(tab(c, 'Rules'))
+    expect(api.previewDispositionPolicy).toHaveBeenCalled()
+  })
+
+  it('splits the match count by boundary instead of reporting the estate total as the source’s', async () => {
+    // The preview matched 5 documents across all sources; 2 of them are this source's.
+    // "5 matched" under a per-source heading would be a true number saying a false thing.
+    const c = await mount()
+    await click(tab(c, 'Rules'))
+    expect(c.textContent).toMatch(/2 matched in OneDrive/)
+    expect(c.textContent).toMatch(/5 across all sources/)
+  })
+
+  it('lists this source’s matches only, on demand', async () => {
+    const c = await mount()
+    await click(tab(c, 'Rules'))
+    await click(link(c, /View matches/))
+    expect(c.textContent).toMatch(/\/Finance\/a\.docx/)
+    expect(c.textContent).not.toMatch(/\/HR\/c\.docx/)     // another source's match
+  })
+
+  it('surfaces archive and deletion review queues with what they mean', async () => {
+    const c = await mount({ files: [
+      FILE(),
+      FILE({ file: 'old.docx', ageDays: 900, views90d: 3 }),      // archive candidate
+    ] })
+    await click(tab(c, 'Rules'))
+    expect(c.textContent).toMatch(/1 Archive candidates/)
+    expect(c.textContent).toMatch(/Reversible/)
+  })
+
+  it('the queue counts agree with the Overview partition by construction', async () => {
+    const files = [FILE(), FILE({ file: 'o1.docx', ageDays: 900, views90d: 3 }),
+                   FILE({ file: 'o2.docx', ageDays: 950, views90d: 2 })]
+    const c = await mount({ files })
+    // Overview's partition row…
+    const overviewArchive = [...c.querySelectorAll('tr')]
+      .find((r) => /Tagged for archive/.test(r.textContent))
+      .querySelectorAll('td')[1].textContent
+    await click(tab(c, 'Rules'))
+    expect(overviewArchive).toBe('2')
+    expect(c.textContent).toMatch(/2 Archive candidates/)
+  })
+
+  it('says nothing is awaiting review rather than showing empty queues', async () => {
+    const c = await mount()
+    await click(tab(c, 'Rules'))
+    expect(c.textContent).toMatch(/Nothing is awaiting review/)
+  })
+
+  it('a failed preview loses the count, not the rule', async () => {
+    const api = await import('./api.js')
+    api.previewDispositionPolicy.mockRejectedValueOnce(new Error('boom'))
+    const c = await mount()
+    await click(tab(c, 'Rules'))
+    expect(c.textContent).toMatch(/Could not count matches/)
+    expect(c.textContent).toMatch(/Archive files not modified for 7 years/)
   })
 })
