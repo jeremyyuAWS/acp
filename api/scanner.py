@@ -157,6 +157,36 @@ def _sp_inventory_row(item: dict) -> dict:
                     owner=owner, parent_folder=parent)
 
 
+def _local_stat_meta(p: Path, corpus: Path) -> dict:
+    """Filesystem metadata for one local file — the local-source analogue of the size / createdTime
+    / modifiedTime / owner a Drive or SharePoint listing carries, so a local inventory is as rich as
+    a connector one. Best-effort: any field the OS won't give us comes back None rather than
+    aborting the walk. `parent_folder` is the file's directory relative to the scan root."""
+    import mimetypes
+    size = source_modified = created_at = None
+    try:
+        st = p.stat()
+        size = st.st_size
+        source_modified = datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat()
+        # st_birthtime is the true creation time on macOS/BSD; ctime is the closest stand-in elsewhere.
+        created_at = datetime.fromtimestamp(getattr(st, "st_birthtime", st.st_ctime),
+                                            timezone.utc).isoformat()
+    except OSError:
+        pass
+    try:
+        owner = p.owner()                 # POSIX login name; unavailable on Windows / dangling uid
+    except (KeyError, OSError, NotImplementedError):
+        owner = None
+    try:
+        parent = str(p.parent.relative_to(corpus))
+    except ValueError:
+        parent = p.parent.name
+    if parent in (".", ""):
+        parent = corpus.name or None
+    return {"size": size, "source_modified": source_modified, "created_at": created_at,
+            "owner": owner, "parent_folder": parent, "mime": mimetypes.guess_type(p.name)[0]}
+
+
 def _dedupe_inventory_files(rows: list[dict]) -> None:
     """Disambiguate colliding `file` names IN PLACE so store.add_inventory's (scan_id, file)
     primary key never silently upserts one estate file over another. First occurrence keeps its
@@ -1044,22 +1074,30 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         # ACP_LOCAL_CORPUS: point local scans at a different directory — the test
         # suite uses it to scan the frozen oracle corpus (test-corpus/oracle/)
         # instead of the demo estate, which changes with the demo's needs.
+        #
+        # rglob, not glob: a real estate is a nested tree, so discovery walks the whole subtree
+        # rather than a single level. Each file also carries the filesystem metadata a Drive /
+        # SharePoint listing would (size, modified, created, owner, parent) via _local_stat_meta,
+        # so the scannable rows are no longer path-only and the whole subtree is inventoried.
         corpus = Path(os.environ.get("ACP_LOCAL_CORPUS") or (ACP / "test-corpus/files"))
-        result = [{"name": p.name, "path": str(p)} for p in sorted(corpus.glob("*"))
-                   if p.suffix.lower() in OFFICE + (".pdf",) + HTML_EXTS]
-        if inventory_out is not None:
-            result_names = {it["name"] for it in result}
-            for p in sorted(corpus.glob("*")):
-                if not p.is_file() or p.name in result_names:
-                    continue
-                try:
-                    st = p.stat()
-                    size = st.st_size
-                    mtime = datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat()
-                except OSError:
-                    size, mtime = None, None
-                inventory_out.append(_inv_row(file=p.name, path=str(p), size=size,
-                                              source_modified=mtime))
+        scannable = OFFICE + (".pdf",) + HTML_EXTS
+        result: list[dict] = []
+        for p in sorted(corpus.rglob("*")):
+            if not p.is_file():
+                continue
+            meta = _local_stat_meta(p, corpus)
+            if p.suffix.lower() in scannable:
+                result.append({"name": p.name, "path": str(p),
+                               "size_kb": _inv_size_kb(meta["size"]),
+                               "source_mime": meta["mime"],
+                               "source_modified": meta["source_modified"],
+                               "created_at": meta["created_at"], "owner": meta["owner"],
+                               "parent_folder": meta["parent_folder"]})
+            elif inventory_out is not None:
+                inventory_out.append(_inv_row(
+                    file=p.name, path=str(p), mime=meta["mime"], size=meta["size"],
+                    source_modified=meta["source_modified"], created_at=meta["created_at"],
+                    owner=meta["owner"], parent_folder=meta["parent_folder"]))
         if scope_out is not None:
             scope_out.update({"kind": "local", "path": str(corpus), "kept": len(result),
                               "truncated": False})
