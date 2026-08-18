@@ -136,6 +136,18 @@ describe('evidence-based confidence model', () => {
       expect(confidenceForCoverage({ sc: '1.4.3', outcome: 'PASS' }).level).toBe(CONFIDENCE.HIGH)   // deterministic
       expect(confidenceForCoverage({ sc: '1.1.1', outcome: 'FAIL' }).level).toBe(CONFIDENCE.MEDIUM)  // heuristic
     })
+    it('(W4) a manually-attested dead-end criterion reads as a Low human attestation, not an automated pass', () => {
+      const c = confidenceForCoverage({ sc: '1.2.1', outcome: 'UNCHECKED', disposition: 'attested' })
+      expect(c.level).toBe(CONFIDENCE.LOW)
+      expect(c.short).toBe('Attested')
+      expect(c.basis).toMatch(/manually attested/)
+      // accepts the record object too, not just the kind string
+      expect(confidenceForCoverage({ sc: '1.2.1', outcome: 'AT', disposition: { kind: 'attested', reason: 'x' } }).short).toBe('Attested')
+    })
+    it('(W4) an out-of-scope criterion leaves the scope — the platform makes NO assertion (null)', () => {
+      expect(confidenceForCoverage({ sc: '1.2.1', outcome: 'UNCHECKED', disposition: 'out_of_scope' })).toBe(null)
+      expect(confidenceForCoverage({ sc: '1.2.1', outcome: 'GAP', disposition: { kind: 'out_of_scope', reason: 'x' } })).toBe(null)
+    })
   })
 
   describe('confClass', () => {

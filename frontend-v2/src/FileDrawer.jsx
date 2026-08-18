@@ -17,7 +17,9 @@ import ResizeHeadroomCheck from './ResizeHeadroomCheck.jsx'
 import PdfImageContrastCheck from './PdfImageContrastCheck.jsx'
 import AccessibilityStatus from './AccessibilityStatus.jsx'
 import EvidenceHeader, { fmtEvidence } from './EvidenceHeader.jsx'
-import { confirmCriterion, getFileStatus, getExamined } from './api.js'
+import { confirmCriterion, getFileStatus, getExamined, disposeCriterion, listDispositions } from './api.js'
+import DispositionControl from './DispositionControl.jsx'
+import { isDispositionable, normalizeDisposition, DISPOSITIONABLE_OUTCOMES } from './disposition.js'
 import { statusOf, isUnassessed, STATUS_BADGE, STATUS_TAG_LABEL, NOT_ASSESSED } from './docStatus.js'
 import { SCOPE_SCS, SCOPE_SIZE, SCOPE_LABEL, OUT_OF_SCOPE_SCS, CORE_SCS, DENOMINATOR, outOfScopeNote } from './activeScope.js'
 import { statusIn, remediationIn } from './assessCoverage.js'
@@ -434,6 +436,11 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   // hero's human_verified count uses, so the ✓ chips can never disagree with it), then extended
   // optimistically when the reviewer confirms in this session.
   const [confirmedScs, setConfirmedScs] = useState(() => new Set())   // coverage table: outcome groups filtered out (click a count chip to toggle). N/A hidden by default; 'clear filters' reveals it.
+  // W4 — a dead-end criterion (UNCHECKED / GAP / AT) resolved by a documented human disposition:
+  // { [sc]: { kind, reason, actor, at } }. Seeded from the persisted record, extended optimistically
+  // when the reviewer attests / marks out-of-scope in this session. (Backend persistence deferred —
+  // see api.disposeCriterion; until it lands, listDispositions returns [] and this stays session-local.)
+  const [dispositions, setDispositions] = useState({})
   useEffect(() => {
     let on = true
     getRules().then((r) => { if (on) setCatalogRules(r) }).catch(() => {})
@@ -453,10 +460,17 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   useEffect(() => {
     let on = true
     setConfirmedScs(new Set())
+    setDispositions({})
     setExamined(null)
     if (scanId && file?.file) {
       getExamined(scanId, file.file).then((m) => {
         if (on && m?.available) setExamined(m)
+      }).catch(() => {})
+      listDispositions(scanId, file.file).then((rows) => {
+        if (!on || !Array.isArray(rows)) return
+        const next = {}
+        rows.forEach((d) => { const n = normalizeDisposition(d); if (n && d.sc) next[d.sc] = n })
+        if (Object.keys(next).length) setDispositions(next)
       }).catch(() => {})
     }
     if (scanId && file?.file) {
@@ -534,6 +548,16 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
     return () => { live = false; window.removeEventListener('acp:hitl-changed', load) }
   }, [scanId, file?.file])
   const hitlItemFor = (sc) => hitlItems.find((h) => (scOfWcag(h.rule_id) || h.rule_id) === sc)
+  // W4 — record a documented disposition for a dead-end criterion. Returns a promise resolving
+  // truthy on success so DispositionControl can keep its form open on failure. Optimistically
+  // stores the normalized record so the row resolves immediately.
+  const disposeSc = (sc, kind, reason) =>
+    disposeCriterion(scanId, file.file, sc, kind, reason).then((res) => {
+      if (!res?.ok) return false
+      const n = normalizeDisposition({ kind, reason, actor: res.actor, at: res.at })
+      if (n) setDispositions((prev) => ({ ...prev, [sc]: n }))
+      return true
+    }).catch(() => false)
   // Same contract as the inbox's act(): the card carries the note/value/telemetry; a
   // success removes the item locally and tells the bell to reconcile.
   const drawerAct = (itemId, status, note = null, approvedValue = null, telemetry = {}) =>
@@ -820,6 +844,13 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           // payload (→ reportModel.js), so the two downloads can never disagree.
           const buildCertData = async () => {
             const rows = computeCoverageRows(file, { catalogRules, targetLevel, remediatedRuleIds, effectiveRemediated, aiEnabled, cap })
+            // W4 — carry each recorded disposition onto the exported row so the certification report
+            // shows the criterion resolved (attested) or excluded (out-of-scope) with its reason,
+            // instead of a terminal UNCHECKED. Only on dispositionable outcomes (never a real verdict).
+            rows.forEach((r) => {
+              const d = isDispositionable(r.outcome) ? normalizeDisposition(dispositions[r.id]) : null
+              if (d) r.disposition = d
+            })
             const now = new Date()
             const cfg = await getConfig().catch(() => null)
             // Real before→after evidence for the "Before → After" section — only present for a
@@ -1222,10 +1253,14 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
             : checkedSCs.has(c.sc) ? 'PASS'
             : (DOC_HUMAN_WHEN_UNCHECKED.has(c.sc) && fmt && fmt !== 'html') ? 'HUMAN'
             : 'PASS'   // a checked 🟢 auto lane found nothing → ACP certifies the pass
-          const confidence = confidenceForCoverage({ sc: c.sc, outcome, verifiedCleared: remediatedRuleIds.has(c.sc) })
+          // W4 — a documented human disposition (attest / out-of-scope) recorded against a
+          // dead-end outcome. Only honoured on dispositionable outcomes so it can never override a
+          // real FAIL/PASS/REVIEW verdict.
+          const disposition = isDispositionable(outcome) ? normalizeDisposition(dispositions[c.sc]) : null
+          const confidence = confidenceForCoverage({ sc: c.sc, outcome, verifiedCleared: remediatedRuleIds.has(c.sc), disposition: disposition?.kind })
           const fix = remLane !== 'na' ? fixOf(c) : '—'
           const fileIssues = count > 0 ? blockingIssues : reviewIssues
-          return { id: c.sc, name: c.name, plain: PLAIN_NAMES[c.sc] || c.name, req: c.req, level: c.level, fix, outcome, count, fileIssues, confidence,
+          return { id: c.sc, name: c.name, plain: PLAIN_NAMES[c.sc] || c.name, req: c.req, level: c.level, fix, outcome, count, fileIssues, confidence, disposition,
             // Coverage Manifest evidence counts (ADR 0026 Epic 1) — every number is a real count
             // from this file's findings/queue, never estimated (ADR 0016).
             reviewCount: reviewIssues.length, pending: hitlBySc[c.sc] || 0,
@@ -1240,7 +1275,9 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         const shown = rows.filter((r) => !hidden.has(r.outcome))
         // "What we did NOT check automatically" (ADR 0026 Epic 1): the automated boundary,
         // stated plainly — each unassessable criterion with its honest reason. Never hidden.
-        const notChecked = rows.filter((r) => ['HUMAN', 'AT', 'GAP', 'NA'].includes(r.outcome))
+        // W4 — a criterion the reviewer has dispositioned (attested / out-of-scope) is no longer a
+        // dead-end: it drops out of the "did NOT check" list into a resolved state on its row.
+        const notChecked = rows.filter((r) => ['HUMAN', 'AT', 'GAP', 'NA'].includes(r.outcome) && !r.disposition)
         const NOT_CHECKED_REASON = {
           HUMAN: 'Author intent / runtime behaviour — WCAG defines no objective automated test; a person verifies it.',
           AT: 'Only provable by interaction / assistive-technology testing — outside any static engine.',
@@ -1336,11 +1373,11 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                             ? <><span>{main}</span><span style={{ display: 'block', fontSize: 10, opacity: 0.7 }}>{note.join(' · ')}</span></>
                             : r.fix
                         })()}</td>
-                        <td className={`covoutcome ${r.outcome === 'FAIL' ? 'fail' : (r.outcome === 'PASS' || r.outcome === 'FIXED') ? 'pass' : r.outcome === 'REVIEW' ? 'review' : 'skip'}`} title={r.outcome === 'REVIEW' && r.fileIssues.length === 0 ? 'ACP found no issue, but cannot certify this criterion (it needs human judgement) — verify and sign off; not a certified pass (ADR 0023)' : OUT_TIP[r.outcome]}>
-                          {(r.outcome === 'PASS' || r.outcome === 'FIXED') ? '✓' : r.outcome === 'FAIL' ? `✕ ${r.count}` : r.outcome === 'REVIEW' ? '🟡' : r.outcome === 'HUMAN' ? '👤' : r.outcome === 'AT' ? '⌨' : r.outcome === 'GAP' ? '◔' : '⚪'}
+                        <td className={`covoutcome ${r.outcome === 'FAIL' ? 'fail' : (r.outcome === 'PASS' || r.outcome === 'FIXED' || r.disposition?.kind === 'attested') ? 'pass' : r.outcome === 'REVIEW' ? 'review' : 'skip'}`} title={r.disposition ? `Resolved by a recorded human disposition — ${r.disposition.kind === 'attested' ? 'manually attested' : 'marked out of scope'}` : r.outcome === 'REVIEW' && r.fileIssues.length === 0 ? 'ACP found no issue, but cannot certify this criterion (it needs human judgement) — verify and sign off; not a certified pass (ADR 0023)' : OUT_TIP[r.outcome]}>
+                          {r.disposition ? (r.disposition.kind === 'attested' ? '✓' : '—') : (r.outcome === 'PASS' || r.outcome === 'FIXED') ? '✓' : r.outcome === 'FAIL' ? `✕ ${r.count}` : r.outcome === 'REVIEW' ? '🟡' : r.outcome === 'HUMAN' ? '👤' : r.outcome === 'AT' ? '⌨' : r.outcome === 'GAP' ? '◔' : '⚪'}
                           {/* 🟡 with evidence → "review recommended"; 🟡 with a clean scan → "verify —
                               none found" (ACP can't certify it, so it is NOT a green pass). */}
-                          <span className="covouttxt">{r.outcome === 'PASS' && remediatedRuleIds.has(r.id) ? 'pass — remediated' : r.outcome === 'REVIEW' && r.fileIssues.length === 0 ? 'verify — none found' : OUT_TXT[r.outcome]}</span>
+                          <span className="covouttxt">{r.disposition ? (r.disposition.kind === 'attested' ? 'resolved · attested' : 'resolved · out of scope') : r.outcome === 'PASS' && remediatedRuleIds.has(r.id) ? 'pass — remediated' : r.outcome === 'REVIEW' && r.fileIssues.length === 0 ? 'verify — none found' : OUT_TXT[r.outcome]}</span>
                           {r.outcome === 'FAIL' && scanId && !exp && (
                             <button className="explain-btn" onClick={() => fetchExplanation(r.id)} title="Get AI explanation">Why?</button>
                           )}
@@ -1352,6 +1389,14 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                                 onClick={() => confirmCriterion(scanId, file.file, r.id).then((res) => {
                                   if (res?.ok) setConfirmedScs((prev) => new Set(prev).add(r.id))
                                 })}>✓ Confirm verified</button>)}
+                          {/* W4 — a dead-end criterion (UNCHECKED / GAP / AT) gets a documented resolution
+                              lane instead of sitting terminal: attest out-of-band, or mark out of scope,
+                              each with an audited reason. Shows the recorded disposition once set. */}
+                          {(isDispositionable(r.outcome) || r.disposition) && scanId && (
+                            <div style={{ marginTop: 4 }}>
+                              <DispositionControl sc={r.id} disposition={r.disposition} onSave={(kind, reason) => disposeSc(r.id, kind, reason)} disabled={readOnly} />
+                            </div>
+                          )}
                         </td>
                         <td className="covconf">
                           {r.confidence
