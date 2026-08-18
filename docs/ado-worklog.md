@@ -145,6 +145,14 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   `GET /me` and `/config` so the SPA can render scope read-only for non-owners; `PUT /rubric` gated to
   the owner; Langfuse now logs `completion_chars`, not the AI's text (PHI). Incremental-vs-scope
   behaviour deliberately deferred.
+- **Derived the blocking conformance level from the selected scope and dropped the A/AA/AAA
+  picker** (#279). The Assess step asked for a WCAG level a second time, after the user had already
+  chosen the success criteria in scope — one fact behind two controls that can disagree. The level
+  now follows `SCOPE_SCS` (any AAA criterion → AAA, otherwise AA, the legal ADA/EAA/508 floor the
+  standard docx scope resolves to); the radio, its `LEVELS` table, `setLevel` and the orphaned
+  `reset()` are gone, and the stale "the level controls which SCs count as blocking" explainer is
+  replaced by a derived-level line. Conformance computation and every downstream count are unchanged
+  (AA → 14 criteria block). Suite green at 1648.
 
 ## Feature: v2 frontend redesign
 
@@ -272,6 +280,18 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   the draft is treated as nothing usable and routed to a human — model-agnostic, so it holds whether
   the deploy runs moondream or qwen2.5vl once the GPU lane lands (qwen scored ~97% and needs no
   guarding; the floor costs a good model nothing). Tests cover the exact bake-off garbage.
+- **Gave the RunPod serverless vision lane a cold-start timeout, and stopped hiding the GPU miss**
+  (#286). R12 found GPU vision never engages in prod — alt-text falls back to the local CPU floor and
+  the cost panel reads "local, zero cloud" — and the failure was invisible without `az`. Two fixes:
+  `_vision_generate` called the scale-to-zero VL-7B provider with `OLLAMA_VISION_TIMEOUT` (120s), which a
+  first-call GPU boot + model load routinely exceeds, timing out into a silent local fallback — a
+  healthy endpoint read as broken; the serverless provider now gets `RUNPOD_VISION_TIMEOUT` (default
+  240s, env-tunable), the local path keeps 120s. And on a GPU failure the local fallback overwrote `res`,
+  so only the local row reached `ai_calls` — the failed cloud attempt lived only in worker stdout, which
+  is why "local 8/8" was inconclusive; the failed attempt is now its own `ai_calls` row (`zone=cloud`,
+  `ok=False`, with `providers.REASON_*`), so the miss and its reason show in the audit trail / cost
+  panel. Makes the remaining root cause (rotated key R3, or the worker env value) diagnosable from the UI
+  after deploy. 1.1.1 stays "assisted"; no capability change.
 
 ## Feature: Test corpus and CI
 
@@ -314,6 +334,25 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   `gen_todo_status` already listed all five formats. An omitted format list now means all five.
   Deliberately *not* changed: `gen_matrix_coverage` stays four formats — the matrix has no html column
   by design (document-format only), so html is read and discarded there; only the log needed it.
+- **An adversarial large/malformed corpus generator and a robustness smoke-test spec** (#284).
+  `scripts/robustness_corpus.py` builds ~14 files to stress ACP's known bounds — the OCR 30-image cap,
+  the vision 25-figure cap, the PDF reading-order 20-page sample, the .NET 180s CLI timeout, the
+  job-queue lease — with a manifest of each file's expected Discovery bucket, counted defects, the caps
+  it should trip and the assertions: big PDFs (120p text, 100p scanned, 50 images), big Office
+  (100-slide pptx, 30-sheet/100k-cell xlsx, 150p image+table docx, 500 tiny images), and edge cases
+  (password-protected, truncated, zero-byte, wrong-extension, empty workbook, non-document image, clean
+  control). Verified end-to-end (encrypted PDF genuinely encrypted, truncated PDF fails to parse,
+  buckets reconcile). `docs/robustness-smoke-test.md` is the checklist — robustness, not accuracy: no
+  crash/hang, counts reconcile, truncation surfaced, timeout → uncertain-not-fake-pass, unreadable ≠
+  passing. Generator libs are wheel-only test tooling, kept out of `api/requirements.txt`.
+- **A complex multi-issue corpus — one file per format with 50+ injected issues across the WCAG SCs
+  ACP assesses** (#287), the coverage/accuracy counterpart to the robustness corpus. Verified: docx 59
+  issues/10 SCs, xlsx 62/9, pptx 62/7, pdf 59/9, all opening cleanly (52 paras / 6 sheets / 13 slides /
+  16 pages), ~13 distinct SCs across the corpus, with a manifest mapping each file to its injected
+  {SC: count}. Honest by construction: SCs these libraries cannot author (a real AcroForm control for
+  4.1.2, a slide animation for 2.1.1, autoplay audio for 1.4.2, a true colour-only PDF link for 1.4.1)
+  are listed per file under `not_seeded` with the reason, so the manifest never claims coverage it did
+  not produce.
 
 ## Feature: Remediation reaching the file
 
@@ -454,6 +493,61 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   Observed from the connected-source→governed-content flow drawn as a diagram, *not* confirmed in
   source this session — each names the file to confirm in first, and the header flags them as distinct
   from the code-verified Phase R items. Summarised under Open items.
+- **Backlog correction: R12 verified FAILING in prod, R2 downgraded — RunPod GPU vision is not
+  engaged** (#276). A live end-to-end drive of `acp-app` on 2026.8.14.1: a real 1.1.1 alt-text draft
+  falls back to a local filename-guess template ("this text model cannot see the image") and the
+  AI-cost processing-zone counter reads local 8/8 with zero cloud calls — before *and* after clearing
+  the `ai_base_url`/`ai_vision_model` override, so the override was not the cause. R2: env *is* set on
+  `acp-app` (`az containerapp show`) but the runtime still lands on local, so
+  `active_vision_provider()` is not selecting RunPod — most likely the `runpod-api-key` secret not
+  resolving at runtime (ties to R3); downgraded to in-progress with the `az` secret-list re-check
+  steps. R12 moved from "unverified" to verified failing, with the objective re-test recorded (force a
+  1.1.1 draft, re-read the AI-cost zone; a real GPU call must show cloud + an image-derived draft).
+- **File-grounded engine architecture references for PDF and for Office + HTML, plus a
+  multimedia-captioning LOE** (#280, #282). `docs/pdf-assessment-remediation.md`: the three PDF
+  detection layers (vendored `engine/pdf-analyser`, `office_structure` measurement checks, `ocr.py`),
+  the in-process (not subprocess) invocation, the auto/assisted/human split, the 1.4.3 contrast fixer +
+  the dark-theme incident, OCR grounding, capability declarations and gaps. The Office/HTML companion:
+  the .NET analyser (`engine/office-analysers`, DocumentFormat.OpenXml 3.5.1, net10.0; docx 9 / pptx 9
+  / xlsx 11 rules) and how `scanner._analyse_office` shells out; first-party Python Office checks;
+  `remediate_office.py` as raw OOXML (zipfile + lxml + regex, no python-docx/pptx/openpyxl) with pptx
+  2.1.1 and xlsx 3.1.2 the only intentional human-only lanes; and the fact that two HTML analysers exist
+  — the control-plane lxml one the scanner uses, and a separate axe-core@4.9.1 + Playwright engine it
+  does *not* wire. `docs/loe-multimedia-captioning.md`: current state read from code (HTML `<track>`
+  detection only, 1.2.x human-only, no ASR pipeline); Phase 1 transcripts + captions (1.2.1/1.2.2)
+  ~10–14 pw, Phase 2 audio description (1.2.3) +8–16 pw; flags the GPU dependency (R2/R12) and the
+  PHI-driven local-ASR constraint.
+- **A shareable pilot scope & limitations one-pager** (#281) bounding the 3-user SharePoint pilot:
+  DOCX-led (full remediation) vs PDF/XLSX/PPTX assess-only, image alt-text human-reviewed (GPU vision
+  pending), no multimedia, English only, PHI stays local, no source write-back, ≤25 pages, one library
+  / staggered scans — each limit traced to its backlog item (R2/R3/R12, R8, R11, R5/W9) plus a pre-pilot
+  checklist.
+- **Discovery & triage spec — buckets, ROT triggers, signal availability, re-activation triggers**
+  (#283). Every file sorted into one reconciling bucket (assessable / already-archived / ROT /
+  filtered-by-type / unreadable) *before* assessment so remediation scope holds only files worth
+  certifying. Top recommendation: recognise and honour the customer's existing archive convention (the
+  17,512 files renamed `*_ARCHIVED` with "Archived on" metadata) so ACP never re-processes dispositioned
+  content. Plus the Redundant/Obsolete/Trivial trigger set, a matrix of what the read-only Graph scopes
+  expose vs need enabling, guardrails (recommendation not deletion, legal-hold exempt, explainable,
+  confidence tiers), and a code-grounded have-vs-need: the disposition engine and age/modifiedTime are
+  real, and modified-after-archive re-activation is already detectable via the source-staleness baseline
+  (#253); `_ARCHIVED` recognition, content-hash dedup, real version-supersession, views/access and sharing
+  signals are unbuilt.
+- **SharePoint support gaps mapped against the UTSW/MOV pilot SOW** (#285) — up to 30 SharePoint
+  locations, full scan, folder/date/user archival rules flagging-only, daily monitoring, MS SSO single
+  tenant — verified in `scanner.py` + `disposition.py`: site/library enumeration and one-site-per-scan
+  today (multi-site orchestration is the biggest gap); folder path is read but the disposition engine has
+  no folder match field (small build); native SharePoint column *write* needs `Sites.Manage.All` +
+  provisioning (out of scope by design — the pilot is flagging-only, ACP flags internally); reads of
+  native metadata (listItem/fields) as rule inputs are a bounded build within the read-only scopes.
+  Flags that image alt-text needs the vision model (R2/R12), not the downloaded Llama.
+- **The three-denominator model — the product spec behind the estate coverage view** (#297): three
+  distinct denominators (discovered / assessment-eligible / remediation-eligible), the capability-status
+  taxonomy, the nine-stage funnel, the format × capability coverage matrix grounded in
+  `remediation_capability`, how discovery works at scale (whole-estate listing, `FANOUT_MAX_FILES`, honest
+  truncation, dedup-by-identity), the scan-setup UX split, and the shipped/next roadmap. Central rule:
+  unsupported means NOT EVALUATED, never passed; never report the three as one percentage. Implemented
+  under the "Estate coverage" Feature below.
 
 ## Feature: docx Core-17 criterion coverage
 
@@ -511,6 +605,27 @@ shared `_docx_story_xmls` helper, so the checks cannot drift on which parts coun
   a detector added later is covered the day it registers, with a floor assertion (≥11 detectors)
   guarding against the imports silently ceasing to register. All 11 pass as shipped — the value is
   the ratchet, not a fix.
+- **Declared xlsx 1.4.1 / 1.4.11 / 4.1.2 and pdf 2.4.3 — four shipping detectors moved off "not
+  evaluated", behind a named emit-proof gate** (#288, #289; backlog R8 + R10). Four capability cells
+  had shipping, emit-proven detectors yet read N/A on the matrix because the registry never declared
+  them. The honesty rule is that a cell is declared only once a test proves its detector *emits* on a
+  targeted fixture; those proofs existed but were scattered, so #288 consolidates them into one named
+  R10 declare-gate (`office_color_only_checks` → XLSX_COLOR_ONLY_STATUS, `xlsx_nontext_contrast_checks`
+  → XLSX_NONTEXT_LOW_CONTRAST, `office_control_review_checks` → 4.1.2, `pdf_focus_order_checks` →
+  PDF_TAB_ORDER_NOT_STRUCTURE) that also guards the four cells against a future refactor silently
+  breaking a declared detector. #289 then declares them: xlsx 1.4.1 and 4.1.2 registered
+  (PARTIAL/MEDIUM; 4.1.2 requires nothing — BASELINE lists FORMS for docx/pdf and not xlsx on purpose,
+  and the detector confirms it by reporting a control whose name/role it *cannot* read, self-gating to
+  `[]`), xlsx 1.4.11's human remediation lane completed alongside its registration, pdf 2.4.3 with auto
+  remediation (`/Tabs = /S`) but a *review* assessment override — a deterministic `/Tabs` write is a
+  proxy for tab order, not proof. `REVIEW_FORMATS` drops xlsx from 1.4.1/4.1.2/1.4.11 so the registry
+  branch (clean → REVIEW) owns the verdict instead of the review lane shadowing it to NOT_EVALUATED — the
+  same lesson the docx 4.1.2 migration recorded. Frontend `capability.js` (both trees) synced; matrix
+  regenerated (XLSX 14→15, PDF 15→16 review cells; wizard counts xlsx 11→14, pdf 12→13; 2.4.3 leaves
+  the fully-not-ready set, 2.1.1 remains the lone example) — values computed from the tables, not
+  hand-typed. Honest note: frontend vitest was not runnable locally for #289 (no runner in that env);
+  the Python assess-coverage contract guard reimplements the JS rollup and passed, and CI vitest
+  surfaced and then confirmed the pinned-count fallout.
 
 ## Feature: PHI privacy and document access control
 
@@ -608,6 +723,14 @@ the write path actually does, and tells a reviewer when the source moved on unde
   looping `rescoreFile` over only the stale files (honest: it kicks off the re-scan, it does not block on
   the worker). Per-row badges show 'stale' and 'unreachable'; 'untracked'/'unchanged' render nothing, so
   the UI never claims a file is unchanged it could not verify.
+- **A real source-drift panel on the Monitor tab** (#278; closes backlog R5). Continuous Monitoring
+  showed only illustrative drift (`sourceWatch` from `sim.js`); the real per-file source-staleness the
+  Release Center already gates on (`getSourceStatus`, #253) never reached Monitor. A "Source drift ·
+  LIVE" panel now fetches it, derives the stale set from the *server* state, and shows how many files
+  changed at the source since the scan, the changed filenames, and a pointer to re-scan from the Release
+  Center. Honest by construction: gated to a real run (SIM/demo keeps its illustrative surfaces), an
+  error leaves the panel empty rather than inventing changes, and untrackable files are reported as
+  untrackable, never "unchanged". Suite green at 1642.
 
 ## Feature: Remediate review queue (AI Work Inbox)
 
@@ -656,6 +779,109 @@ existing data and the existing decision path; nothing adds a second write path.
   Deliberately *not* in this PR: a per-finding time estimate on the row ("~5 sec") — queue items carry
   no est-time and this codebase does not fabricate numbers; surfacing it needs `etaMin` threaded through
   the queue builder, a separate data change.
+- **Surfaced AI provenance on the review card from the real per-call zone, not the configured one**
+  (#277; closes backlog W6). The GPU→CPU vision fallback is silent: a reviewer approving an alt-text
+  draft never sees whether it came from the GPU model or the much weaker local CPU floor — they look
+  identical. A provenance badge existed, but only inside the collapsed "Detection, provenance & audit"
+  disclosure, and it read the *configured* provider zone from `/config` — exactly the value that lies
+  when a fallback happens. A compact 🟢 Local / 🟡 Cloud chip now sits on the always-visible card,
+  sourced from the actual `ai_calls` ledger: Remediate fetches `getScanAiCalls(scan_id)` once per scan
+  (not per card) and builds a file→zone map — any cloud call on a file wins (privacy-conservative), a
+  file with no AI call gets no badge (deterministic fix, nothing to claim); the actual zone wins over
+  `aiProvenance().zone`, which appears only as a labelled "(configured)" fallback, and no badge is
+  fabricated when neither is known. The buried provenance row and audit table read the same real zone,
+  so surface and disclosure never contradict. This is the R12 finding made visible at the point of
+  approval — verified live 2026-08-14. Suite green at 1645.
+- **Replaced the expand-in-place card inbox with an Outlook-style master/detail remediation inbox,
+  then retired the state it made dead** (#291, #299; backlog R4 Phase 2). Remediation is queue work —
+  select, understand, act, next — and vertically-expanded cards make a reviewer scroll one finding while
+  losing the rest of the workload. `remediationInboxModel.js` is the pure core: five remediation lanes
+  (green review-auto / blue apply-suggested / amber manual / gray recheck / red blocked) with rail
+  colours and actions, effort estimates, resolved-state, status tabs (All / Auto-fixed / Manual /
+  Blocked / Resolved) whose counts partition the queue, priority/document/newest/fastest sorts,
+  group-by-document, and `nextUnresolvedId()` for auto-advance. `RemediationInbox.jsx` is the two-pane
+  view — a 38% work queue, a 62% workspace: selecting a row populates the detail pane (do / changed /
+  act, in that order, with a sticky action bar and a before|after toggle) instead of expanding, acting
+  auto-advances to the next unresolved finding, and manual findings get a guided state reusing
+  `remediationGuide.fixSteps`. Wired into the live Remediate view with `onDecide` mapped onto the
+  existing `act()` approve/reject/defer flow — first wire-in deliberately does not pass
+  `onOpenWord`/`onRecheck` (their buttons are gated on the handlers). The old inbox's `renderCard`,
+  `evAct`, facet/filter helpers and the `EvidenceCard`/`reviewInboxFilter` imports were removed with it;
+  #299 then retired what #291 left constant — the single-open `openId` accordion (#273), the
+  search/severity/criterion/group filter state (#248/#251) and their `inboxPrefs.js` sessionStorage
+  rehydration, plus the orphaned module and test — no kept code references any removed symbol. Net: the
+  #248/#250/#251/#273 card-inbox mechanics above are superseded by this component (search and facets
+  now live inside it as render-tested behaviour). Frontend, not RULE_PATHS.
+- **Folded auto-applied fixes into the inbox as green review-lane rows** (#300). Review-of-auto-fixes
+  now shares the master/detail flow instead of a separate section. `autoFixRows(fixes, nameOf)` turns
+  ACP's applied fixes / remediation diffs into green REVIEW-lane rows ("ACP fixed it — review the change"
+  / Approve fix / ~5 sec) carrying before/after, with `af:…` ids that never collide with the human-queue
+  ids; Remediate feeds a combined `[...human queue, ...autoFixItems]` and merges a local `ackd` map into
+  the inbox decisions. An auto fix is already applied and re-scanned, so Approve *acknowledges* it
+  (resolve + advance) and never re-applies; the human lanes still route to the HITL `act()` flow. The
+  GroupedFixes summary stays for the at-a-glance count — slimming it is a follow-up.
+
+## Feature: Estate coverage — three denominators and discovery at scale
+
+A customer with a 30k-file estate could not see it: discovery listed the whole drive but the count the
+UI showed was the *assessable subset*, so "unsupported" read as "passed" by omission. This makes ACP
+count the whole estate honestly — discovered / assessment-eligible / remediation-eligible as three
+denominators, never one percentage — and proves the discovery path holds at hospital scale. Spec: the
+three-denominator model (#297, under Documentation).
+
+- **Inventoried the whole estate, not just the scannable subset** (#290). New `api/estate_inventory.py`
+  — a standalone capability-status classifier (assessable / metadata-only / unsupported / excluded) plus a
+  whole-estate summary (discovered, assessment-eligible, by-format, by-status). `_search_drive` now unions
+  *every* discovered file of any type and reports the summary via `scope_out['inventory']`, which already
+  rides into the persisted scan report, so the funnel and composition views have real data. ACP-generated
+  output is flagged EXCLUDED so it is not counted as the user's content. Assessment and remediation are
+  unchanged — still only the scannable subset: this changes what is *counted*, never what is scanned.
+  Follow-ups named: folder-scan parity (`_search_folder`), metadata enrichment via `DRIVE_FIELDS`
+  (owners/size/sharing), and the frontend wiring (landed as #298/#301).
+- **Made `run_scan` honour `FANOUT_MAX_FILES`, and made the inventory flag truncation** (#292). Two gaps a
+  30k-file UTSW estate would hit: `run_scan` called `_list` with no `max_files`, so its whole-Drive path
+  fell back to `_search_drive`'s 500-file / 2500-raw default — covering ~500 of a large estate while the
+  "raise `ACP_FANOUT_MAX_FILES`" hint pointed at a knob that never reached it (production already used
+  the fan-out path; this fixes the local/ADC path and makes the hint truthful). And
+  `estate_inventory.summarize` now carries a `truncated` flag from the listing's `hit_cap`, so an estate
+  larger than the ceiling is reported as a *floor*, never as a complete count — silent truncation is the
+  one failure the inventory exists to stop.
+- **A 30k-record synthetic Drive listing at UTSW hospital shape, for discovery/inventory scale testing**
+  (#293). `scripts/scale_corpus.py` generates ~30k metadata records — heavy PDF/Word with a large
+  image/video/loose-text tail — to exercise what only strains at scale: the inventory's composition and
+  capability-status split, the funnel top, the department/visibility/age cuts. *Not* 30k real documents;
+  assessment accuracy stays on the labeled corpus, and the docstring says so. The generator cross-checks
+  its by-construction intent against `estate_inventory.summarize()` on all 30k, so a classifier that
+  misbuckets a format at scale (a `.heic` as 'other', a native Google Doc missed) fails right there — the
+  generator is itself a scale test of the classifier. A run yields ~62% assessable / ~38%
+  metadata-only + unsupported — the honest blind spot the whole-estate view exists to surface.
+- **Accuracy-at-scale: the labeled complex corpus embedded in the 30k estate** (#294). Detection is
+  per-file and isolated, so it is scale-invariant; what scale can break is discovery + attribution — are
+  the labeled files found among the estate, unique, assessable, labels intact, findings tied to the right
+  file. `scripts/scale_accuracy.py` scatters `complex_corpus`'s labeled files (#287, known {SC: count})
+  through the synthetic estate, proves discovery accounts for every one among the 30k, then scores each
+  against its injected-SC floor by reusing the shipped `score_assessment.scan` path — the same measurement
+  the docx scorecard makes, now on files inside a large estate. Metadata layer pinned engine-free (none
+  dropped/deduped; embedding raises the assessable count by exactly the labeled files; deterministic);
+  per-file engine scoring runs via CLI/CI where the analyser exists.
+- **Pinned the scale invariants end-to-end: truncation fires past the cap, shared-drive dedup, and
+  per-operator isolation** (#295, #296). #295 drives the real paging path (`_search_drive` →
+  `_list_drive_page_all`) with a mocked Drive that pages past the raw cap (3000 files > the 2500 floor)
+  and asserts both `scope['truncated']` and `scope['inventory']['truncated']` fire — and that a small
+  estate is *not* falsely flagged. #296 (~50 identities; toward backlog R11/R13): a file surfaced 50×
+  (multi-parent / Shared Drive / paging overlap) collapses to one document — 2000 sightings of 40 files →
+  40 discovered, not 2000; and because ACP scans as the signed-in operator (delegated token), two
+  operators' estates stay disjoint — A's scan never surfaces B's files. Both engine-free.
+- **An estate coverage view rendered from the scan's real inventory, on the Overview dashboard** (#298,
+  #301). `estateFunnel.js` (pure, node-verified) models the nine-stage funnel, composition rows
+  largest-first with an assessable/blind-spot flag, the status breakdown, assessable %, and truncation;
+  `EstateCoverage.jsx` renders the funnel + format composition + capability-status split. Truncated
+  estates render as a *floor* (≥ N, TRUNCATED badge), never as complete; unsupported is its own status,
+  never folded into passed. #301 gives it a home: the Overview renders it from `run.scope.inventory`,
+  guarded to appear only once discovery has inventoried the estate. Funnel stages 1–3 (discovered /
+  inventoried / assessment-eligible) are real from the inventory; stages 4–6/7 (assessed, issues,
+  remediation-eligible, remediated) derive from the file rows; human-review and published stay
+  'pending' rather than showing a guessed number until that workflow state is threaded through.
 
 ---
 
@@ -709,11 +935,37 @@ existing data and the existing decision path; nothing adds a second write path.
   + 3 appliers), optional Archive auto-fire. Testing (R10–R13): the CI fixture-verification harness for
   the understated cells (capability counts are source-verified, not fixture-run), a multi-user
   concurrency load test, RunPod E2E verification, an isolation-off invariant test.
+  *(Status after #276–#301, 2026-08-18 second pass:* **R2** downgraded to in-progress — env is set on
+  `acp-app` but the runtime still selects local; most likely the `runpod-api-key` secret not resolving,
+  ties to R3 (#276); #286 gives the lane a 240s cold-start timeout and records the failed cloud attempt
+  in `ai_calls` so the remaining cause is diagnosable from the UI after deploy. **R12** moved from
+  unverified to *verified failing* in prod on 2026.8.14.1 (#276), with the objective re-test recorded;
+  #277 makes the miss visible on the review card. **R4** advanced: the master/detail inbox is built and
+  wired (#291), dead accordion state retired (#299), auto-fixes folded in as green rows (#300); the
+  AI-Work-Inbox → Review-queue rename and a grounded per-finding time estimate remain (#300's "~5 sec"
+  is the auto-fix lane's fixed effort, not a measured estimate). **R5** closed — Monitor tab reads the
+  real `/source-status` (#278). **R8** closed for four of the 12 cells — xlsx 1.4.1/1.4.11/4.1.2 and pdf
+  2.4.3 declared (#289); eight remain. **R10** partly met — a named declare-gate proves those four
+  detectors emit (#288); the general fixture-verification harness for understated cells is still open.
+  **R11/R13** partly met — a ~50-identity dedup + per-operator isolation test lands engine-free (#296);
+  a real multi-user *load* test and the isolation-*off* invariant remain. R1 (wedged deploy), R3 (key
+  rotation), R6 (3b scope chip), R7 (3c per-user config), R9 (Archive auto-fire) unchanged.)*
 - **Backlog Phase W — nine workflow-completeness gaps** (#274, 2026-08-14), observed from drawing the
   connected-source→governed-content flow and *not yet confirmed in source*. W1–W3 are dead ends a
   released file cannot route around: no publish target for the fixed copy, rejected fixes dead-end,
   re-validate may not re-score the whole file. W4–W9 are scale/honesty polish. Each names the file to
-  confirm in first — confirm before estimating.
+  confirm in first — confirm before estimating. *(2026-08-18 second pass:* **W6** closed — AI provenance
+  on the review card now reads the real per-call zone (#277), and #286 applies the same honesty to the
+  provenance ledger itself. The pilot one-pager (#281) traces "one library / staggered scans" to R5/W9.
+  W1–W5, W7–W9 otherwise unchanged and still unconfirmed in source.)*
+- **New from the 2026-08-14 docs sweep, not yet in the backlog phases** — the pilot-SOW SharePoint gaps
+  (#285: multi-site orchestration is the biggest; a folder match field in the disposition engine is a
+  small build; native-column write is out of scope by design), the discovery & triage build order (#283:
+  `_ARCHIVED` recognition of the customer's 17,512 already-archived files, content-hash dedup,
+  version-supersession, sharing/access signals — all unbuilt), the estate-inventory follow-ups named in
+  #290 (folder-scan parity in `_search_folder`, `DRIVE_FIELDS` metadata enrichment), the funnel's
+  human-review/published stages still 'pending' (#301), and the multimedia-captioning LOE (#280: ~10–14
+  pw Phase 1, +8–16 pw Phase 2, GPU-dependent). Candidates for ADO Tasks once scoped.
 - **Two roadmap corrections this sweep worth carrying into ADO rather than re-estimating**: the live
   Drive write-back "bug" was verified stale and its ~2–3.5 person-day estimate corrected to ≈ zero
   (#258); and the `deva-final` → `engagement-14` preset rename means any environment still persisting
@@ -778,3 +1030,20 @@ existing data and the existing decision path; nothing adds a second write path.
   `055b01ac` bind ADO work items) are skipped as non-feature, as earlier log commits were. No `· #id`
   bindings were changed and none were invented for the new Features. Sync marker to be advanced from
   `1b49608` to `055b01ac`.
+- **2026-08-18 (second pass)** — After the first pass was committed as `47c3bda4`, a fetch surfaced 26
+  more commits already on `origin/main` (#276–#301; dated 2026-08-14 → 2026-08-17, not all 08-14).
+  Added as 21 Tasks. One new Feature: **Estate coverage — three denominators and discovery at scale**
+  (6 Tasks — #290 whole-estate inventory, #292 `FANOUT_MAX_FILES` + truncation flag, #293 30k synthetic
+  listing, #294 accuracy-at-scale, #295/#296 scale invariants, #298/#301 EstateCoverage view; spec #297
+  filed under Documentation). Tasks appended to existing Features: Documentation +6 (#276 R12/R2
+  correction, #280/#282 engine architecture refs + captioning LOE, #281 pilot one-pager, #283 discovery
+  & triage spec, #285 SharePoint-vs-SOW gaps, #297 three-denominator model), Remediate review queue +3
+  (#277 provenance chip, #291/#299 master/detail inbox — recorded as superseding the #248–#273 card-inbox
+  mechanics, #300 auto-fix rows), Test corpus and CI +2 (#284 robustness corpus, #287 complex corpus),
+  and one each to Operator scan scope (#279 derived level), Alt-text generation and grounding (#286
+  RunPod timeout + surfaced miss), Capability registry (#288/#289 four cells declared behind the R10
+  gate) and Release Center (#278 Monitor source-drift panel). Open items edited in place: Phase R
+  status per item (R2 downgraded, R12 verified failing, R4 advanced, R5 closed, R8 four-of-twelve, R10
+  and R11/R13 partial), Phase W (W6 closed), plus a new item collecting the gaps the 2026-08-14 docs
+  sweep named that are not yet in a backlog phase. Untracked files unchanged from the first pass. No
+  `· #id` bindings changed or invented. Sync marker to be advanced from `055b01ac` to `47c3bda4`.
