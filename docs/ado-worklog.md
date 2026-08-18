@@ -47,6 +47,38 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   `Integrations.jsx` and the new login button all read through one `getSpAuth()`, so the three
   sign-in paths cannot request a different app; a deployment (or each customer's tenant) is now an
   env var, no rebuild.
+- **Made the "Sign in with Microsoft" button actually sign a user in — three fixes, three root
+  causes** (#241, #242, #243). #239 shipped the button dead: `index.html` loaded MSAL v3 from
+  `alcdn.msauth.net`, which publishes only through v2.38.1 (probed: 2.38.1 → 200, every 3.x → 404),
+  so `window.msal` never loaded and every user saw "Microsoft sign-in isn't ready yet — please
+  refresh" forever; a green `vite build` cannot catch a runtime script fetch. #241 loads the v3 UMD
+  from jsDelivr, pinned to a digest with SRI (a PHI deployment loading third-party auth JS should
+  verify the bytes), and a test pins major ≥3 / not-alcdn / SRI present. #242 replaces the fresh
+  `new PublicClientApplication()` per click (duplicated in `SignIn.jsx` and `Integrations.jsx`) with
+  one `msalClient.js` instance per (clientId, tenant) whose `signInForScopes()` clears a stuck
+  `*.interaction.status` lock and retries exactly once — a closed/blocked/double-clicked popup left
+  MSAL's `interaction_in_progress` lock set permanently, and "clear your browser storage" is not an
+  instruction to give a rollout group. #243 fixes the backend: the access gate only ever verified
+  Google tokens, so a Microsoft user was bounced with "session expired" on their first authed call —
+  Google worked, Microsoft was cosmetic. New `core.verify_ms_token` asks Graph `/me` (same
+  ask-the-provider shape as `verify_gis_token`, cached 9 min) and the gate routes on
+  `X-Auth-Provider: microsoft`; the SPA sends the Entra token as the bearer via `setMsToken` (not
+  `setGoogleToken`, whose tokeninfo would reject it). Deliberately no audience-pinned check the Google
+  lane lacks — tighten one, tighten both.
+- **Stopped `/sources` 401'ing a signed-in Microsoft user who has no Google Drive** (#245). Found
+  live 2026-08-11 as the last thing standing between a Microsoft user and the app: sign-in and every
+  authed call were 200, but `/sources` is Drive-specific and `core.drive_service` raised 401 with no
+  `X-Drive-Token` — and the SPA read any 401 as an expired session, bouncing the user to sign-in and
+  clearing the bearer, which cascaded a second 401 onto the concurrent `/scans/active`. Having no
+  Drive is the normal state of a SharePoint user, not an error: `/sources` now returns `[]` (200) in
+  GIS mode with no Drive token; Google users and demo/ADC mode are unchanged.
+- **A route-level 401 no longer signs the user out, and sign-in errors read as plain language**
+  (#247). The access gate now marks its own 401s with `X-Acp-Auth: session`; `api.js` clears the
+  bearer only on that marker, so a route refusing for its own reason surfaces as a normal error with
+  the session intact (a 403 allow-list refusal is deliberately unmarked). `authErrors.friendlyAuthError`
+  maps the common MSAL/Entra strings — wrong tenant → "use the ACP work account", 700016 → "use another
+  account", blocked popup, consent needed — to one actionable sentence, keeping the AADSTS code for an
+  admin on anything unrecognised rather than the raw wall; used by both entry points.
 
 ## Feature: Operator scan scope
 
@@ -67,6 +99,52 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
 - Fixed the SPA rendering a scope from its bundle rather than the one the server gates on (#138).
 - Generated `scopePresets` into both SPAs so the two cannot disagree (#150).
 - Fixed a scope grid that was hiding four pairs the engine actually judges (#152).
+- **De-identified the customer from the shipped app** (#259). The customer's name reached the SPA
+  bundle and the API two ways: personal-name comments, and the `deva-final` scope-preset slug
+  (compiled into `scopePresets.js` and stored as the `scan_scope` setting value). Renamed the preset
+  to `engagement-14` at its source of truth and regenerated both SPAs; criteria × format contents
+  are identical, so no coverage change. Operational note recorded: any environment still persisting
+  `scan_scope=deva-final` must be re-set (an unknown preset fails open and shows on `/config`).
+- Rendered the shared SC/format scope editor inside the connected Google Drive browse panel,
+  collapsed above "Scan selected", persisting to `scan_scope` so the scan inherits it server-side
+  (#260). v1 kept byte-identical for the driveArchive parity guard, with a source-level test locking
+  that in. Superseded the same day by the wizard below, which retired this Drive-panel copy.
+- **Rebuilt scope selection as a wizard with a required confirm-before-scan modal, and redesigned
+  the detailed matrix behind it** (#261, #262). Phase 1: a `ScanScopeWizard` (profile picker, format
+  cards with live registry counts, summary, collapsed grid) owning its own scope state; "Scan all
+  sources" now opens a required scope modal instead of scanning on a scope the operator may never
+  have looked at. Phase 2: the grid inside Customize gets a sticky header + criterion column,
+  WCAG-principle grouping with group All/None, per-format column and row All/None controls, three
+  cell states (Selected / Excluded / Not-supported), and view-only search + filters (text, Selected
+  only, Level A/AA, Supported-by-all-formats, fix-mode) — filters never mutate scope, so narrowing the
+  view cannot silently change what a scan does. Frontend only; suite green at 1595.
+- **Greyed out and disabled the criterion × format cells ACP cannot yet assess** (#268). The matrix
+  offered `SCOPE_UNIVERSE` — every pair the engine can *reach* — which is broader than what it can
+  *assess*: 12 offered pairs (Keyboard on PPTX, Name/Role/Value on XLSX/PPTX, Non-text Contrast on
+  XLSX/PPTX/PDF, Focus Order on PPTX/PDF, …) have no assessment verdict, so a tester could tick them
+  and get nothing back. Readiness is keyed on the CI-locked assessment axis (`capability.js`, ADR
+  0023): 'auto' or 'review' lane is ready, 'human'/absent is not. Not-ready cells carry no checkbox
+  and drop out of selection, presets and every count; 2.1.1 Keyboard and 2.4.3 Focus Order have no
+  ready format and render NOT READY. Honest side effects intended: format cards now show assessable
+  counts (docx 15, xlsx 11, pptx 11, pdf 12 — down from reachable 15/15/16/15) and Core 17 selects 49
+  ready checks, not 61 reachable pairs. A stored scope naming not-ready pairs is projected through
+  `readyOnly` on load so it does not read as dirty.
+- **Froze each scan's scope — Remediate and score now read the scan's recorded boundary, not the
+  live global** (#267, Phase 3a). Assess/coverage were already frozen (they count stored rule
+  traces) but the score and the Remediate gate resolved the *live* `active_scope(store)`, so changing
+  the operator scope after a scan silently altered what an old scan would remediate and re-scored it
+  while its Assess counts stayed put — a Remediate/Assess contradiction. Every per-scan read now goes
+  through `scan_runs.scope["scan_scope"]` recorded at scan start, rehydrated by one shared
+  `scope_from_json` so score and traces cannot diverge on how the same JSON is read;
+  `store.get_scan_scope` fails loud on a corrupt stored scope (never silently widens) and returns
+  `None` only for legacy scans, which read as unrestricted everywhere — never the live global, which
+  would reintroduce the drift. `rescore_reused` threads it too, a deliberate ADR-0011 reinterpretation
+  ("scope in force now" = this run's frozen scope). Run payload projects `scan_scope` additively for the
+  3b scope chip.
+- **Pre-release backend hardening from the live smoke test** (#266): `is_scope_owner` returned on
+  `GET /me` and `/config` so the SPA can render scope read-only for non-owners; `PUT /rubric` gated to
+  the owner; Langfuse now logs `completion_chars`, not the AI's text (PHI). Incremental-vs-scope
+  behaviour deliberately deferred.
 
 ## Feature: v2 frontend redesign
 
@@ -125,6 +203,30 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   expanded. Each card collapses via a native `<details>` (keyboard-operable, self-announcing, no
   `aria-expanded` to drift), the same reasoning the RemSection helper follows — the search logic is
   a pure function so it is unit-tested directly rather than through a mount.
+- **Redesigned Integrations into a Sources page, and routed every scan through one New-scan review
+  modal** (#263). The tab is now "Sources", the bottom workflow nav there is gone, and Connected /
+  Available sources are split into truthful status cards — one dominant health state, read-only
+  demoted to a detail, honest "{n} in Drive / {n} in last scan" counts with no fabricated "excluded"
+  bucket. Every scan start opens a single review modal (sources + behaviour toggles + estimate + the
+  `ScanScopeWizard`), so there is one place a scan's inputs are confirmed. Frontend only; suite green
+  at 1610.
+- **Put a universal scan gate in front of every scan start** (#264). An App-level `requestScan` wraps
+  `doScan`, so Discover, Overview, single-file, Sources and browse all open the review modal before a
+  scan begins — no path left that scans without showing what it is about to do. The shared
+  `ScanReviewModal` widened to 940px (~1.5×), and the sticky scope-matrix header no longer overlaps
+  its rows (`--surface` was undefined → transparent; now aliased to `--card`). Suite green at 1630.
+- **Pre-release polish batch from the live smoke test** (#265): scope renders read-only for a
+  non-owner (reads `me.is_scope_owner`, fail-open — also fixes a latent `setCanEdit` crash);
+  session-scoped scan default; accurate source label; a ~0 time estimate is suppressed rather than
+  shown; browse scans don't persist scope; `AssessRunner` literal-ellipsis fix; error-banner prefix.
+  Frontend only; vitest 1637/150.
+- Swapped the simplified white-cloud OneDrive tile for the official full-colour OneDrive mark on a
+  white tile, matching how the Google Drive logo directly above it is rendered (#271). Icon only.
+- **Dropped the Coverage-matrix (xlsx) and Method-deck (pptx) deliverable downloads from the
+  Platform-settings header** (#275), with their now-dead plumbing (`exportDeliverables` import,
+  `dl`/`dlErr` state, `grab()`) and the test that asserted the download-error UI. `exportDeliverables.js`
+  itself stays — `pdfReport.js` still imports `statusFor` from it and its two tests still pass. Suite
+  green at 1639.
 
 ## Feature: Dependency security
 
@@ -160,6 +262,16 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   → a correct rewrite in 14.0s. `num_predict` is a ceiling, so raising it costs a non-reasoning
   model nothing (llama3.1:8b answers 2.4.4 in 0.3s). Every prior benchmark of a reasoning model
   against the assisted lanes had been measuring the cap.
+- **Deferred alt-text to a human when the vision model returns garbage, not only when it returns
+  nothing** (#255). The 2026-08-12 bake-off (qwen2.5vl:7b vs moondream, llama3.2-vision, minicpm-v,
+  granite3.2-vision, eight real document images with ground truth) showed moondream — the CPU-deploy
+  default — returning empty on some images and non-empty garbage on others ("~~~~~~Moviaio~~~~~~"
+  for a logo, "!!!Readings #1!" for a scatter plot). `describe_image` already deferred an empty reply;
+  garbage slipped through and became the alt text in a compliance artifact. New `_is_usable_alt`
+  requires a floor of real alphabetic content (min length, alphabetic majority, ≥2 content words) or
+  the draft is treated as nothing usable and routed to a human — model-agnostic, so it holds whether
+  the deploy runs moondream or qwen2.5vl once the GPU lane lands (qwen scored ~97% and needs no
+  guarding; the floor costs a good model nothing). Tests cover the exact bake-off garbage.
 
 ## Feature: Test corpus and CI
 
@@ -195,6 +307,13 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   runnable on demand. The repo change proved itself on its own PR: Azure read `pr: none` from the
   branch and skipped it, so the PR merged `CLEAN`. Fully stopping the two pipelines needs an Azure
   DevOps-side disable/delete, which a commit cannot reach — recorded as an open item.
+- **Made the Progress Log generator accept an `html` capability change in the WCAG trailer**
+  (#257, closes #52). `gen_progress_log.FORMATS` omitted `html`, so a commit declaring `WCAG: 1.3.1
+  (html)` with a real Matrix-Note failed format validation and its Progress Log entry was silently
+  skipped — while html is a real ACP engine (#37, #41 already wrote `(html)` trailers) and the sibling
+  `gen_todo_status` already listed all five formats. An omitted format list now means all five.
+  Deliberately *not* changed: `gen_matrix_coverage` stays four formats — the matrix has no html column
+  by design (document-format only), so html is read and discarded there; only the log needed it.
 
 ## Feature: Remediation reaching the file
 
@@ -217,6 +336,18 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   a document whose structure was fine came back restructured. Nothing on screen said so, and the
   exposed population is documents already enlarged for low vision — the readers this product
   exists for.
+- **Correction: the live "Couldn't remediate this file" Drive write-back bug was verified stale, and
+  the residual token-expiry path pinned by test** (#258). Roadmap item #1 (est. ~2–3.5 person-days)
+  diagnosed a missing write scope and a Blob fallback that did not catch the failure. Neither holds:
+  `DRIVE_SCOPES` grants `drive.file`; the Blob copy is written first and unconditionally
+  (`handlers.py:617`, ADR 0010) and the Drive-mirror 403 is caught (`handlers.py:679`), so a write-back
+  denial never fails the job; the message only fires on a genuine job error; live `acp-worker` logs
+  show the mirror succeeding with zero failure signatures. The one real residual — an expired GIS
+  token before a queued job runs — was already mitigated (the token rides the durable job payload,
+  `handlers.py:448`); new `tests/test_remediate_token_resolution.py` pins that the payload token is
+  used when the in-memory store is wiped and that total absence fails cleanly with the honest
+  "re-trigger" message, never a partial write. `docs/TODO.md` item #1 struck with the evidence and the
+  "engineering left ≈ 2–3.5 person-days" summary corrected to ≈ near zero.
 
 ## Feature: Assessment correctness
 
@@ -242,6 +373,19 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   `<w:del>` runs — content the author had deleted under tracked changes — so struck-through text
   fed the detectors and could be judged, counted and even quoted back in a finding. Extraction now
   drops deleted runs, so the checks see the document as it reads, not as it was.
+- **Surfaced a .docx with an unreadable body instead of reporting it nearly-clean** (#246). Found by
+  edge-case testing 2026-08-11: a .docx whose `word/document.xml` is missing or malformed still opens
+  as a zip and still yields `docProps/core.xml`, so the office CLI reported whatever metadata findings
+  it could (typically a lone "no document title") and no error, landing the file as a nearly-clean
+  `uncertain` — "almost fine, missing a title" when the entire body could not be read. Every docx
+  detector self-gates to silence on an unreadable part (the deliberate one-bad-part-must-not-kill-
+  the-assessment posture), so nothing affirmatively flagged it. `_docx_body_readable` +
+  `_flag_unreadable_docx` now append an explicit engine error ("main content could not be read; the
+  file may be corrupt, incomplete, or password-protected") through the same errors channel a CLI abort
+  uses, so the file stays non-certifiable with a reason. A non-zip (zero-byte, truncated, renamed .txt,
+  encrypted) is left to the existing engine-error path rather than double-reported. Verified on the
+  edge corpus: 07-malformed-xml and 08-missing-document-xml flagged; good, tracked-changes, empty and
+  unicode/RTL controls not.
 
 ## Feature: Multi-tenancy and the control plane
 
@@ -289,6 +433,27 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   marked P5.1/P5.2/P5.5 done with P5.3/P5.4 blocked on installs (#217).
 - Recorded that Chain B is automatic now, with the backlog capturing the 21 PRs that landed that
   day (#225).
+- **Recorded the 2026-08-12 vision-model bake-off and the alt-text usability guard** (#256): why
+  qwen2.5vl:7b is the vision model (~97% vs minicpm-v 59%, granite3.2-vision 47%, moondream 19%,
+  llama3.2-vision DNF on eight document images with ground truth), why moondream is not relied on
+  for alt text, and what `_is_usable_alt` (#255) does. Written so the decision is not re-litigated.
+- **A detailed, file:line-grounded system architecture reference** (#269) complementing the slide
+  deck (dated 2026-07-29, pre-Actions-deploy / pre-RunPod-serverless, and stale — it still shows
+  `acp-redis` and `acp-ollama` as Container Apps). Ten Mermaid diagrams: component topology
+  (acp-app / acp-worker / Postgres / Redis / Blob / RunPod / Grafana), the two-shape worker model
+  (in-process threads vs the split `acp-worker` tier), the durable Postgres job queue (jobs schema,
+  `claim_job` compare-and-swap — not `SKIP LOCKED` — lifecycle, jittered backoff, sweeper, all 8 job
+  types, fan-out vs monolithic), the Discover→Assess→Remediate→Review→Release→Monitor lifecycle (ADR
+  0020), the ~25-table data model, the three document engines, the two-axis capability matrix (ADR
+  0023), the AI lanes (RunPod serverless Qwen2.5-VL with CPU floor fallback), auth/multi-tenancy,
+  build & deploy.
+- **Backlog Phase R — 13 pilot-readiness gaps ahead of the 3-user pilot** (#270), in the backlog's
+  evidence-named, status-key convention; each item names what to re-run. Capability counts are
+  source-verified, not fixture-run (that gap is R10 itself). Summarised under Open items.
+- **Backlog Phase W — nine workflow-completeness gaps from walking the end-to-end flow** (#274).
+  Observed from the connected-source→governed-content flow drawn as a diagram, *not* confirmed in
+  source this session — each names the file to confirm in first, and the header flags them as distinct
+  from the code-verified Phase R items. Summarised under Open items.
 
 ## Feature: docx Core-17 criterion coverage
 
@@ -394,6 +559,103 @@ reach production, safely.
   longer post the ~50-minute `UNSTABLE` checks on every PR. `acp-ci` (id 10) was deliberately left
   enabled: its source is an Azure Repos (TfsGit) `acp` repo on branch `fix/hitl-auto-verify`, not the
   GitHub repo, so it never posted GitHub checks.
+- **Made the SPA revalidate `index.html` so a deploy cannot strand clients on stale JS** (#244).
+  Plain `StaticFiles` sent an ETag but no `Cache-Control`, so a browser could serve a cached
+  `index.html` without re-checking and keep loading the *old* content-hashed bundle it named. That is
+  what happened on 2026-08-10: after the Microsoft-auth fix (#243) landed, a signed-in Microsoft user
+  stayed on pre-fix JS that never sent `X-Auth-Provider`, so every request 401'd against a backend that
+  could by then authenticate them; only a manual hard-refresh cleared it — untenable for a team
+  rollout. `SpaStaticFiles` now sets `Cache-Control: no-cache` on text/html (a cheap 304 via the
+  existing ETag when unchanged) and `public, max-age=31536000, immutable` on `/assets/*` (safe: a new
+  build is a new filename). Pinned by `tests/test_spa_cache_headers.py`.
+
+## Feature: Release Center
+
+The Publish tab presented itself as a conformance report — an estate score, a "certifiable" queue,
+"Original preserved" — language ACP's automated checks cannot back: they verify the criteria in scope,
+not overall WCAG conformance. This turns it into a controlled-release surface that claims only what
+the write path actually does, and tells a reviewer when the source moved on under a fix.
+
+- **Renamed Publish → Release Center and removed every claim ACP cannot prove; then made release a
+  confirmed, policy-visible act** (#249, #252). Phase 1 (labels/copy/layout only, no behaviour change):
+  nav "Publish · certify" → "Release · approve & deploy"; the 42px estate score and four-counter row
+  are gone, replaced by "X of Y documents were automatically verified within the selected scope … ACP
+  verifies the criteria in scope — it does not certify overall conformance"; "certifiable" → "verified
+  in scope"; "Original preserved" → "Original untouched · the fixed copy is written to a separate
+  'remediated' folder — the source file is never overwritten" (a claim the Blob write path actually
+  backs); the conformance PDF demoted to a secondary "Evidence & reports" link. Phase 2: an honest
+  release-policy *panel* (not a selector for a behaviour the backend lacks — `POST /publish` only ever
+  writes a corrected copy; replace-in-place is roadmap) that reads the real `GET /settings` and states
+  where a copy lands ("remediated copy → Drive '<folder>' + Blob", or Blob alone), with a "Why can't I
+  replace the original?" explainer that says plainly it is not built and SharePoint is read-only; a
+  confirmation modal before Release / Release-all stating the checkable consequences (destination,
+  originals never overwritten, the audit entry, *not* a conformance certificate); a per-row destination
+  chip. The honesty-critical copy lives in a pure `releasePolicy.js` so tests can assert the confirm
+  lines never say "certify".
+- **Warned the reviewer when a source changed in Drive since the scan — baseline, endpoint, and
+  surface** (#253, #254; Phase 3). Backend (#253): `provenance.DRIVE_FIELDS` gains `modifiedTime` (one
+  edit reaching all three `files().list()` masks); the scanner carries `source_modified` through both
+  persistence paths (fan-out and in-process `run_scan`) into a new nullable `file_records.source_modified`
+  column (additive migration, written at both INSERT sites, refreshed on re-scan via `EXCLUDED`) —
+  NULL for pre-existing scans and non-Drive files, which read downstream as "untracked", never
+  "unchanged". Native Docs/Sheets/Slides have no md5 but do carry `modifiedTime`, so they are tracked
+  too. New owner-scoped `GET /scans/{sid}/source-status` fetches each tracked file's current
+  `modifiedTime` with the caller's read-only creds and classifies via a pure `api/source_staleness.py`
+  (RFC3339 parse + classify; a precision-only diff is not a change): 'stale' / 'unchanged' / 'untracked'
+  / 'unavailable' (a per-file 404/403/parse failure never fails the batch). UI (#254): `Publish.jsx`
+  fetches it on mount; a red banner appears *only* when something changed — "⚠ N documents changed at
+  the source in Drive since this scan — re-scan before releasing" — with "↻ Re-scan changed sources (N)"
+  looping `rescoreFile` over only the stale files (honest: it kicks off the re-scan, it does not block on
+  the worker). Per-row badges show 'stale' and 'unreachable'; 'untracked'/'unchanged' render nothing, so
+  the UI never claims a file is unchanged it could not verify.
+
+## Feature: Remediate review queue (AI Work Inbox)
+
+The Remediate tab's AI Work Inbox stacks a rich EvidenceCard per finding; a 50-file scan opened as a
+wall of expanded evidence a reviewer had to scroll past to find where to start. Continues #232 (search
++ per-card collapse, under v2 redesign) into a guided review queue — everything here is UI over
+existing data and the existing decision path; nothing adds a second write path.
+
+- **Severity + criterion facet filters for the inbox** (#248). A reviewer facing a dozen-plus items
+  wants to chunk them — "just the critical ones", "just the 1.1.1s". `reviewInboxFilter.js` gains
+  `itemSeverity` / `itemCriterion` (read off fields already on the item), `reviewFacets` (values
+  actually present, each with a count — severities worst-first, criteria numeric) and
+  `applyReviewFilters` composing search + severity + criterion while preserving the queue's priority
+  order. The filter row renders only when there is more than one value to choose between.
+- **Inbox opens collapsed — a scannable list, expand what you work** (#250). Cards default to
+  collapsed so the inbox opens as headers (file · rule · severity). Mechanism matters: a seeding
+  effect marks each card collapsed the first time its id appears and never again — it merges only ids
+  *absent* from the collapse map, so a card the reviewer expanded survives the queue's background
+  refetches instead of snapping shut under them; keyed off the id set, not queue identity.
+- **Inline triage from the collapsed row, group-by-file, and a view that survives leaving the tab**
+  (#251). The collapsed row now carries the AI's proposed fix (the literal `after` value or the shorter
+  action hint) with inline ✓ Approve / ✗ Reject that go through the *same* `evAct` path as the expanded
+  EvidenceCard — no second, divergent write path — with `preventDefault`/`stopPropagation` so a click
+  acts on the item rather than toggling the `<details>`; hidden entirely in read-only replay. A "Group
+  by file" toggle turns the flat list into per-document sections (one collapsible header carrying the
+  file's worst severity and count, the same cards nested — `renderCard` extracted and reused verbatim
+  so there is no second card markup to drift); `groupReviewByFile`/`worstSeverity` are pure and tested.
+  Search, filters and the group toggle now persist in `sessionStorage` (`inboxPrefs.js`, keyed by run
+  id so two scans don't share a filter); the per-card collapse map deliberately is not persisted. Both
+  gaps surfaced dogfooding a 50-file scan.
+- **Phase 1 clarity — one dominant review summary, inspect-only rows, scope disclosure** (#272; first
+  slice of the Remediate redesign R4, `docs/remediate-redesign-spec.md`). The duplicated review
+  counters collapse into one statement — "N findings need review across M documents" (both real counts;
+  the hero no longer repeats it and its numeric pill is gone; no fabricated time estimate). Approve/Reject
+  removed from the collapsed row: a decision needs the evidence, so the row is inspect-only and the
+  controls stay in the expanded card. Progress label "reviewed" → "resolved". The scope-counting banner
+  moves behind an "Assessment scope" disclosure so it no longer occupies the work surface.
+- **Single-open accordion — default collapsed, guided sequence** (#273). The multi-open accordion
+  auto-expanded the first card, burying the queue below the fold (an expanded card carries a document
+  preview). Now: all collapsed by default with a single `openId`; clicking a row opens it and closes the
+  previous (guarded so opening B is not clobbered by A's closing toggle); "Review N remaining issues"
+  opens the highest-priority finding and scrolls to it (the old CTA fired a dead `acp:open-inbox` event
+  nothing listened to); Save-and-continue auto-advances to the next finding; a lone finding auto-opens;
+  the open finding persists per scan (`inboxPrefs.openId`) so returning to the tab reopens it. Bulk
+  Collapse-all/Expand-all removed — "expand all" is the buried-queue state this exists to remove.
+  Deliberately *not* in this PR: a per-finding time estimate on the row ("~5 sec") — queue items carry
+  no est-time and this codebase does not fabricate numbers; surfacing it needs `etaMin` threaded through
+  the queue builder, a separate data change.
 
 ---
 
@@ -415,7 +677,10 @@ reach production, safely.
 - **`#UTSW` is used as a customer tag in commit subjects**, not a PR number. If UT Southwestern
   work is tracked in ADO, that is a candidate linkage.
 - **Uncommitted worktree state** — `.claude/worktrees/`, `ACP_DOCX_WCAG_Fixtures/` and its zip
-  are untracked in the working tree.
+  are untracked in the working tree. *(2026-08-18: still untracked — `ACP_DOCX_WCAG_Fixtures.zip`,
+  `ACP_DOCX_WCAG_Fixtures/`, plus two new ones, `Radnet-logo.png` and `docs/Archive.zip`;
+  `.claude/worktrees/` no longer shows in `git status`. Decide whether the fixtures belong in
+  `test-corpus/`, and whether the logo and archive belong in the repo at all.)*
 - **Two corpus generators disagree about field names** (#188) — both readers now tolerate either,
   but which generator is authoritative is an open decision, not a resolved one.
 - **RESOLVED — the two redundant Azure Pipelines are disabled.** `acp-ci-github` and
@@ -432,6 +697,27 @@ reach production, safely.
 - **This log was lost once already.** It was committed locally on 2026-08-08 and discarded by a
   `git reset --hard origin/main` in a parallel session, because it had never been pushed. It was
   recovered from the dangling object. Push it, or it will happen again.
+- **Backlog Phase R — 13 pilot-readiness gaps** (#270, 2026-08-14), ahead of the 3-user pilot.
+  Ops-blocking (R1–R3): the wedged 3a/readiness GitHub Actions deploy — merged green but not live
+  (this is the same class of drift the production-probe item above tracks; confirm the probe and the
+  live sha together); the unwired RunPod serverless vision lane; rotating the exposed RunPod key.
+  Features (R4–R9): the Remediate drawer redesign (Phase 1 shipped as #272/#273; the queue + right
+  drawer, the AI-Work-Inbox → Review-queue rename across surfaces, and a grounded per-finding time
+  estimate remain), Monitor tab → real `/source-status` wiring, the Phase 3b scope chip (the run
+  payload already projects `scan_scope` for it, #267), Phase 3c per-user config, WCAG capability
+  completion for the 12 not-ready cells (#268 greys them out; split 4 quick-fixes / 4 builds / 4 N/A
+  + 3 appliers), optional Archive auto-fire. Testing (R10–R13): the CI fixture-verification harness for
+  the understated cells (capability counts are source-verified, not fixture-run), a multi-user
+  concurrency load test, RunPod E2E verification, an isolation-off invariant test.
+- **Backlog Phase W — nine workflow-completeness gaps** (#274, 2026-08-14), observed from drawing the
+  connected-source→governed-content flow and *not yet confirmed in source*. W1–W3 are dead ends a
+  released file cannot route around: no publish target for the fixed copy, rejected fixes dead-end,
+  re-validate may not re-score the whole file. W4–W9 are scale/honesty polish. Each names the file to
+  confirm in first — confirm before estimating.
+- **Two roadmap corrections this sweep worth carrying into ADO rather than re-estimating**: the live
+  Drive write-back "bug" was verified stale and its ~2–3.5 person-day estimate corrected to ≈ zero
+  (#258); and the `deva-final` → `engagement-14` preset rename means any environment still persisting
+  `scan_scope=deva-final` must be re-set by hand (#259).
 
 ---
 
@@ -474,3 +760,21 @@ reach production, safely.
   resolved its Open item. #236 (log commit `9ad4c4f`) excluded as non-feature. A local shell-PATH fix
   (`~/.bash_profile`/`~/.bashrc` for `gh`/`az` in VS Code) is dev-environment tooling, not project
   work, so it is not logged. Sync marker advanced from `d9b5f14` to `1b49608`.
+- **2026-08-18** — Standup sweep, mode `clean`. 35 commits added (#241–#275, 2026-08-10 → 2026-08-14)
+  as 30 Tasks. Two new Features: **Release Center** (2 Tasks — #249/#252 rename + honest policy panel
+  and confirm-before-release; #253/#254 source-staleness baseline, `/source-status` endpoint and the
+  Release Center warning) and **Remediate review queue (AI Work Inbox)** (5 Tasks — #248, #250, #251,
+  #272, #273; continues #232 from the v2 redesign). Tasks appended to existing Features: Operator scan
+  scope +6 (#259, #260, #261/#262, #266, #267, #268), v2 frontend redesign +5 (#263, #264, #265, #271,
+  #275), SharePoint as a document source +3 (#241/#242/#243, #245, #247), Documentation +4 (#256,
+  #269, #270, #274), and one each to Alt-text generation and grounding (#255), Test corpus and CI
+  (#257), Remediation reaching the file (#258 — recorded as a correction: the Drive write-back bug was
+  verified stale), Assessment correctness (#246) and Continuous deployment to Azure (#244). Open items:
+  the Phase R (13 pilot-readiness) and Phase W (nine workflow-completeness, unconfirmed in source) gap
+  lists summarised; the two roadmap corrections (#258, #259) noted; the existing "Uncommitted worktree
+  state" item updated in place rather than duplicated — `ACP_DOCX_WCAG_Fixtures.zip`,
+  `ACP_DOCX_WCAG_Fixtures/`, `Radnet-logo.png` and `docs/Archive.zip` remain untracked and uncommitted
+  in the working tree. The two log-maintenance commits in the range (`c0be3ccb` #240 log #237–#239;
+  `055b01ac` bind ADO work items) are skipped as non-feature, as earlier log commits were. No `· #id`
+  bindings were changed and none were invented for the new Features. Sync marker to be advanced from
+  `1b49608` to `055b01ac`.
