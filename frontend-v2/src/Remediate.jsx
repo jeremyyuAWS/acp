@@ -2,12 +2,11 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
-import EvidenceCard from './EvidenceCard.jsx'
+import RemediationInbox from './RemediationInbox.jsx'
 import FileDrawer, { REC_STYLE, fmtEffort, EFFORT_BASIS, SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
-import { applyReviewFilters, reviewFacets, groupReviewByFile } from './reviewInboxFilter.js'
 import { loadInboxPrefs, saveInboxPrefs } from './inboxPrefs.js'
 import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl } from './api.js'
 import { SIM, simProposalsFor } from './sim.js'
@@ -566,19 +565,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       )
     }
   }
-  // Adapter for the unified EvidenceCard: it calls onAct(id, status, note, finalValue, telemetry);
-  // map to this tab's act(id, kind, editedValue, approvedValues). EvidenceCard's "I'll fix it" sends
-  // status='skipped' → this tab's self-fix lane. The per-image approved values ride in telemetry.
-  const evAct = (id, status, _note, finalValue, tel) => {
-    if (readOnly) return   // time-travel replay is look-only — never mutate a historical scan
-    // Auto-advance the accordion: after a decision, open the NEXT finding so review flows as a guided
-    // sequence (Save and continue → the next card). Computed from the current order BEFORE act()
-    // refetches (which drops this resolved item); null when it was the last one, leaving all collapsed.
-    const idx = queue.findIndex((q) => q.id === id)
-    setOpenId((idx >= 0 && idx + 1 < queue.length) ? queue[idx + 1].id : null)
-    act(id, status === 'skipped' ? 'self' : status, finalValue, tel && tel.approvedValues)
-  }
-
   const draftAi = (item) => suggestFix(item.scanId || runId, item.file, item.ruleId).then((r) => r?.suggestion)
   const rescan = (id) => {
     const item = self.find((x) => x.id === id)
@@ -610,43 +596,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const reVerified = verified + serverFixed + liveFixed
   const remLive = !!remProg || remBusy
   const pendingHitlFiles = new Set(queue.map((q) => q.file))
-  // Search + facets (severity, WCAG criterion) filter the inbox without reshuffling it — priority
-  // order is already baked into `queue`. Facets offer only the values actually present, with counts.
-  const facets = useMemo(() => reviewFacets(queue), [queue])
-  const filteredQueue = useMemo(
-    () => applyReviewFilters(queue, { query: reviewQuery, severity: sevFilter, criterion: critFilter }),
-    [queue, reviewQuery, sevFilter, critFilter])
-  const anyFilter = !!(reviewQuery.trim() || sevFilter || critFilter)
-  const clearFilters = () => { setReviewQuery(''); setSevFilter(null); setCritFilter(null) }
-  // Bulk collapse/expand is gone: the queue is single-open, so at most one card is ever expanded and
-  // "expand all" (six tall cards) is exactly the unusable state this redesign removes.
-  // One review card, rendered the same whether the list is flat or grouped by file. Extracted so
-  // the grouped view reuses it verbatim rather than forking the card markup (and drifting from it).
-  const renderCard = (q) => (
-    <details key={q.id} className="revcard" open={openId === q.id}
-             onToggle={(e) => { if (e.target.open) setOpenId(q.id); else setOpenId((cur) => cur === q.id ? null : cur) }}>
-      <summary className="revcard-sum">
-        <span className="revcard-sum-file"><span aria-hidden="true">{q.icon}</span> {q.file}</span>
-        <span className="revcard-sum-rule muted">{q.rule}</span>
-        {/* The AI's proposed fix, on the collapsed row: enough to approve the obvious ones without
-            expanding. `after` is the literal proposed value (e.g. the alt text); `meta` is the
-            shorter action hint when there is no single value. */}
-        {(typeof q.after === 'string' && q.after.trim())
-          ? <span className="revcard-sum-rec muted" title={q.after}
-                  style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 12 }}>→ {q.after.trim()}</span>
-          : q.meta
-            ? <span className="revcard-sum-rec muted" title={q.meta}
-                    style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 12 }}>{q.meta}</span>
-            : null}
-        {q.severity && <span className={`revcard-sev sev-${String(q.severity).toLowerCase()}`}>{q.severity}</span>}
-        {/* Redesign R4: no Approve/Reject on the collapsed row. A decision needs the evidence first,
-            so the row is inspect-only — it opens the finding, and the decision controls live in the
-            expanded card below (EvidenceCard's onAct, the same evAct path). */}
-      </summary>
-      <EvidenceCard item={q._raw || q} onAct={evAct} actualZone={aiZoneByFile[q.file]}
-        traceUrl={q._raw?.scan_id ? openTraceUrl(q._raw.scan_id, 'file', q._raw.file) : null} />
-    </details>
-  )
   const totalHitl = queue.length + acted.approved + acted.rejected + acted.deferred + self.length
   const hitlProgress = totalHitl > 0 ? Math.round(((totalHitl - queue.length) / totalHitl) * 100) : 0
   // Redesign R4: the ONE dominant statement — how many findings across how many documents. Both are
@@ -941,97 +890,15 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             ? 'Nothing needs your review — every fix was applied automatically. Items needing an AI-assisted fix or human sign-off will appear here.'
             : `All reviewed — ${acted.approved} approved, ${acted.rejected} rejected${acted.deferred ? `, ${acted.deferred} deferred` : ''}. Verification runs on the approved fixes.`}</p>
         ) : (
-          <>
-            {/* Inbox navigation (searchable): a search over filename, WCAG criterion and the AI
-                recommendation. UI-only — nothing here changes a decision. The queue is a single-open
-                accordion: it opens as a scannable list of collapsed headers and the reviewer expands
-                one finding at a time (opening one closes the last). No bulk expand — six tall cards is
-                the buried-queue state this removes. */}
-            <div className="revtoolbar">
-              <input type="search" className="revsearch" value={reviewQuery}
-                     onChange={(e) => setReviewQuery(e.target.value)}
-                     placeholder="Search by file, WCAG criterion, or recommendation…"
-                     aria-label="Search the AI Work Inbox" />
-              {anyFilter && (
-                <span className="revtoolbar-count muted">{filteredQueue.length} of {queue.length}</span>
-              )}
-              <label className="revgroup-toggle" title="Group findings by document"
-                     style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                <input type="checkbox" checked={groupByFile} onChange={(e) => setGroupByFile(e.target.checked)} />
-                Group by file
-              </label>
-            </div>
-            {/* Faceted filters: chunk the queue by severity ("just the critical ones") or by WCAG
-                criterion ("just the 1.1.1s"). Only facets present in the queue are offered, each with
-                its count. UI-only, and shown only when there's more than one value to choose between. */}
-            {queue.length > 0 && (facets.severities.length > 1 || facets.criteria.length > 1) && (
-              <div className="revfilters" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', margin: '2px 0 12px' }}>
-                {facets.severities.length > 1 && (
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <span className="muted" style={{ fontSize: 11.5 }}>Severity</span>
-                    <button type="button" aria-pressed={!sevFilter} onClick={() => setSevFilter(null)}
-                            style={{ fontSize: 11.5, padding: '2px 10px', borderRadius: 20, cursor: 'pointer',
-                                     border: `1px solid ${!sevFilter ? 'var(--ink)' : 'var(--line,#e2dce4)'}`,
-                                     background: !sevFilter ? 'var(--ink)' : 'transparent',
-                                     color: !sevFilter ? '#fff' : 'var(--ink)', fontWeight: !sevFilter ? 700 : 500 }}>All</button>
-                    {facets.severities.map((s) => {
-                      const on = sevFilter === s.key
-                      return (
-                        <button key={s.key} type="button" aria-pressed={on}
-                                onClick={() => setSevFilter(on ? null : s.key)}
-                                style={{ fontSize: 11.5, padding: '2px 10px', borderRadius: 20, cursor: 'pointer',
-                                         border: `1px solid ${on ? 'var(--ink)' : 'var(--line,#e2dce4)'}`,
-                                         background: on ? 'var(--ink)' : 'transparent',
-                                         color: on ? '#fff' : 'var(--ink)', fontWeight: on ? 700 : 500 }}>
-                          {s.key.charAt(0) + s.key.slice(1).toLowerCase()} {s.count}
-                        </button>
-                      )
-                    })}
-                  </div>
-                )}
-                {facets.criteria.length > 1 && (
-                  <label className="muted" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11.5 }}>
-                    Criterion
-                    <select value={critFilter || ''} onChange={(e) => setCritFilter(e.target.value || null)}
-                            aria-label="Filter by WCAG criterion"
-                            style={{ fontSize: 11.5, padding: '3px 6px', borderRadius: 6, border: '1px solid var(--line,#e2dce4)' }}>
-                      <option value="">All criteria</option>
-                      {facets.criteria.map((c) => <option key={c.key} value={c.key}>{c.key} ({c.count})</option>)}
-                    </select>
-                  </label>
-                )}
-                {anyFilter && (
-                  <button type="button" className="linklike" onClick={clearFilters} style={{ fontSize: 11.5 }}>Clear filters</button>
-                )}
-              </div>
-            )}
-            {filteredQueue.length === 0 ? (
-              <p className="muted">No items match the current filters.{' '}
-                <button type="button" className="linklike" onClick={clearFilters}>Clear filters</button>
-              </p>
-            ) : groupByFile ? (
-              /* Grouped by document: one collapsible file header (worst severity + finding count)
-                 per file, its findings — the same cards — nested inside. Files keep the queue's
-                 priority order; the group is open by default so the findings read as headers. */
-              <div className="reviewlist reviewlist-grouped">
-                {groupReviewByFile(filteredQueue).map((g) => (
-                  <details key={g.file} className="revfile-group" open
-                           style={{ border: '1px solid var(--line, #e2dce4)', borderRadius: 8, marginBottom: 8 }}>
-                    <summary style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', cursor: 'pointer', fontWeight: 600 }}>
-                      <span style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><span aria-hidden="true">📄</span> {g.file}</span>
-                      <span className="muted" style={{ fontWeight: 400, fontSize: 12, flexShrink: 0 }}>{g.count} finding{g.count === 1 ? '' : 's'}</span>
-                      {g.worst && <span className={`revcard-sev sev-${g.worst.toLowerCase()}`} style={{ flexShrink: 0 }}>{g.worst}</span>}
-                    </summary>
-                    <div style={{ padding: '2px 8px 8px' }}>{g.items.map(renderCard)}</div>
-                  </details>
-                ))}
-              </div>
-            ) : (
-              /* Flat list. The card itself (renderCard) is the SAME rich EvidenceCard wrapped in a
-                 native <details>, whether flat or grouped — no forked markup to drift. */
-              <div className="reviewlist">{filteredQueue.map(renderCard)}</div>
-            )}
-          </>
+          <RemediationInbox
+            queue={queue}
+            decisions={decisions}
+            onDecide={(f, d) => {
+              if (d.state === 'accepted') act(f.id, 'approved', f.after ?? null)
+              else if (d.state === 'rejected') act(f.id, 'rejected')
+              else if (d.state === 'assigned') act(f.id, 'deferred')
+            }}
+          />
         )}
       </section>
 
