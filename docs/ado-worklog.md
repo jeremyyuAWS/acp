@@ -943,6 +943,20 @@ three-denominator model (#297, under Documentation).
 - Local source walks the nested tree with filesystem metadata (#325) — recursive discovery for a local
   source now descends subfolders and captures per-file metadata, matching the Drive/SharePoint inventory
   shape for local-mounted content. Another session's change, in this window.
+- SharePoint estate samples carry triage metadata, at parity with Drive (#345) — a review follow-up to
+  another session's SharePoint three-denominator summary (#337). That summary reached parity on the funnel
+  *counts* but its drill-down samples were blank: the estate rows carried only {id, name, mimeType}, and
+  `estate_inventory._sample_meta` reads a Drive file object's `owners[]`/`size`/`shared`/`modifiedTime`, so
+  the #304 owner / biggest-first / externally-shared lenses came back empty for SharePoint. #345 maps the
+  Graph item's own field names into those keys (and dedupes the owner extraction the scannable path
+  repeated). A second review finding — ACP output not excluded by provenance — was verified a non-issue and
+  left unchanged: `provenance.is_acp_generated` reads a Drive property a Graph item never carries, and
+  SharePoint already excludes ACP output by folder (mirror + archive in `skip_folders`).
+- Covered the SharePoint multi-library truncation branch (#346) — the estate-summary tests all exercised
+  OneDrive (a single target), leaving the arm that flags a floor when a later document library is never
+  reached (`i < len(targets) - 1`) untested; a regression could make a multi-library site silently report
+  `truncated=false`. Two tests now drive a site with two libraries — cap hit in the first (second never
+  fetched → truncated), and both fully listed (→ not truncated). Test-only.
 
 ---
 
@@ -1291,3 +1305,11 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   **Sync marker deliberately NOT advanced** (left at `fad0dfbe`): the sole new feature commit in the delta,
   #337 (SharePoint three-denominator estate summary), belongs to another session's estate-coverage sweep and
   is left for it to characterise — advancing the marker would swallow it. #339 is a delivery-log commit.
+- **2026-08-18 (#337 review follow-ups)** — Added #345 and #346 under Estate coverage — my review of another
+  session's #337 (SharePoint three-denominator summary): #345 fixes the blank drill-down samples (triage
+  metadata parity with Drive), #346 covers the multi-library truncation branch. #337 itself is still left for
+  its author's sweep (per the entry above), so these are recorded as follow-ups referencing it, not a
+  re-characterisation of #337. **Marker still NOT advanced** (`fad0dfbe`): the range also holds undocumented
+  feature work from other sessions — #340 (rejected-fix lane W2/W8), #341 (per-scan scope chip R6), #343
+  (inventory-grain new/changed/removed + Discover tracing), #344 (report scope-of-assertion funnel) — left
+  for their own sessions to characterise, the same way #337 is. #342 is a delivery-log commit.
