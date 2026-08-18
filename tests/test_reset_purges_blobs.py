@@ -31,6 +31,7 @@ _CONFIG_SURVIVORS = {
     "ai_provider_config",  # provider endpoints + secret-REFs (never secret values)
     "campaign",            # admin-authored remediation programs
     "campaign_batch",
+    "scope_rule",          # per-file WCAG scope RULES (config, like disposition_policy)
 }
 
 

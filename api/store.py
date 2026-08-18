@@ -365,6 +365,16 @@ _SCHEMA = [
       id TEXT PRIMARY KEY, ts TEXT, doc_id TEXT, policy_id TEXT,
       action TEXT, result TEXT, detail TEXT
     )""",
+    # Per-file WCAG scope rules (Discover/Assess Lifecycle PRD §4.4 / AC-09, "C4"). A rule
+    # targets files by folder / owner / department and assigns a Core-17 subset; the effective
+    # code-set for a file is resolved from matching rules (union, or a higher-priority override
+    # replaces — see api/scope_resolver.py). `codes` is a JSON array of SC ids; `is_override`
+    # and `enabled` are 0/1; `priority` orders overlapping overrides. Config, not scan output —
+    # a survivor of RESET (see _ANALYTICS_TABLES).
+    """CREATE TABLE IF NOT EXISTS scope_rule (
+      rule_id TEXT PRIMARY KEY, name TEXT, selector TEXT, value TEXT, codes TEXT,
+      priority INT, is_override INT, enabled INT, created_at TEXT, created_by TEXT
+    )""",
     # Phased remediation campaigns (ADR 0003, Phase 4). "Remediation Programs" existed
     # only as a client-derived view (Monitor.jsx useProgramBatches, computed fresh from
     # files/decisions props on every render, nothing persisted) -- these tables make a
@@ -4159,6 +4169,57 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT * FROM documents")
             return self._db.fetchall(cur)
+
+    # ── Per-file WCAG scope rules (PRD §4.4 / AC-09 — C4) ───────────────────────
+    def create_scope_rule(self, rule_id: str, *, name: str, selector: str, value: str,
+                          codes: list[str], priority: int = 0, is_override: bool = False,
+                          enabled: bool = True, created_by: str | None = None) -> None:
+        """Persist a scope rule. `codes` is stored as a JSON array. Caller validates the rule
+        (api/scope_resolver.validate_scope_rule) before this."""
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO scope_rule(rule_id,name,selector,value,codes,priority,is_override,"
+                "enabled,created_at,created_by) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (rule_id, name, selector, value, _json.dumps(list(codes)), int(priority),
+                 int(is_override), int(enabled), self._now(), created_by))
+
+    def list_scope_rules(self, enabled_only: bool = False) -> list[dict]:
+        """All scope rules, codes decoded to a list, ordered by priority desc then name.
+        `is_override`/`enabled` come back as bools for the resolver."""
+        import json as _json
+        q = "SELECT * FROM scope_rule"
+        if enabled_only:
+            q += " WHERE enabled=1"
+        q += " ORDER BY priority DESC, name"
+        with self._db.cursor() as cur:
+            self._db.execute(cur, q)
+            rows = self._db.fetchall(cur)
+        for r in rows:
+            r["codes"] = _json.loads(r.get("codes") or "[]")
+            r["is_override"] = bool(r.get("is_override"))
+            r["enabled"] = bool(r.get("enabled"))
+        return rows
+
+    def get_scope_rule(self, rule_id: str) -> dict | None:
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM scope_rule WHERE rule_id=%s", (rule_id,))
+            r = self._db.fetchone(cur)
+        if r:
+            r["codes"] = _json.loads(r.get("codes") or "[]")
+            r["is_override"] = bool(r.get("is_override"))
+            r["enabled"] = bool(r.get("enabled"))
+        return r
+
+    def set_scope_rule_enabled(self, rule_id: str, enabled: bool) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "UPDATE scope_rule SET enabled=%s WHERE rule_id=%s",
+                             (int(enabled), rule_id))
+
+    def delete_scope_rule(self, rule_id: str) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "DELETE FROM scope_rule WHERE rule_id=%s", (rule_id,))
 
     # ── Disposition audit (ADR 0003 Phase 3 — execute path) ─────────────────────
     def create_disposition_audit(self, audit_id: str, *, doc_id: str, policy_id: str,
