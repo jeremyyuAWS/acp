@@ -683,6 +683,14 @@ reach production, safely.
   rollout. `SpaStaticFiles` now sets `Cache-Control: no-cache` on text/html (a cheap 304 via the
   existing ETag when unchanged) and `public, max-age=31536000, immutable` on `/assets/*` (safe: a new
   build is a new filename). Pinned by `tests/test_spa_cache_headers.py`.
+- **Root cause of the vision lane never running in production**: the `ollama/ollama` base
+  image declares `VOLUME /root/.ollama`, so under ACA's empty volume mount the models baked
+  into that path were shadowed — a ~13 GB push booted with an empty model list and vision
+  silently fell back to a template. Models now bake to and serve from `/models`
+  (`OLLAMA_MODELS`), a non-volume path; build hardened with `set -e`, the error-swallowing
+  `wait … || true` dropped so a failed pull fails the build, and `ollama list` /
+  `test -d /models/manifests` asserted. Applies to GPU (llava:13b + llama3.1:8b) and CPU
+  (moondream + llama3.1:8b) images (#302).
 
 ## Feature: Release Center · #4599
 
@@ -884,6 +892,15 @@ three-denominator model (#297, under Documentation).
   'pending' rather than showing a guessed number until that workflow state is threaded through.
 
 ---
+- Drill a capability-status count down to the files behind it: `summarize()` emits a
+  capped per-status sample into `scope.inventory.samples` and EstateCoverage renders a
+  click-to-expand list under each chip. `by_status` stays the TRUE total so the drill-down
+  reads "Showing N of <total>" — an unsupported bucket of thousands is never mistaken for
+  the handful sampled; a paginated per-file export is a separate follow-up (#303).
+- Owner / size / sharing on the drill-down, sortable for triage: `size`, `owners`, `shared`
+  added to `DRIVE_FIELDS` (same list page, no extra call); externally shared files get a
+  SHARED badge; sorts biggest-first, shared-first, or by name — the three lenses that matter
+  at 30k-file PHI-estate scale. Missing metadata degrades to null/false, never a wrong value (#304).
 
 ## Open items (backlog candidates)
 
@@ -1050,3 +1067,8 @@ three-denominator model (#297, under Documentation).
 - **2026-08-18** — Created ADO Features under Epic #3664 for the three unbound Features from
   the sweep: **#4597** Estate coverage, **#4598** Remediate review queue, **#4599** Release
   Center (Feature type, Iteration 10, MovaIO-Build, Active). IDs bound to the headings above.
+- **2026-08-18** — Three commits (#302–#304, 2026-08-18) landed while the previous mark was
+  being pushed and were briefly covered-but-unlogged; recorded now: two under Estate
+  coverage (#303 status drill-down with honest cap, #304 owner/size/sharing triage lenses),
+  one under Continuous deployment to Azure (#302 ollama models baked to `/models` — the root
+  cause of the production vision lane never running).
