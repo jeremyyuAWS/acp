@@ -81,6 +81,36 @@ def test_a_cancelled_scan_keeps_its_point_but_leaves_the_score_series():
     assert mid["score"] is None and mid["certifiable_pct"] is None
 
 
+def test_by_source_splits_a_rising_drive_from_a_declining_sharepoint():
+    # The blended trend can hide a declining source behind a rising one — by_source is what stops
+    # a multi-source estate from reading one number and missing that SharePoint is getting worse.
+    r = at.compliance_trend([
+        _s("d1", "2026-08-10T00:00:00Z", 60, source="drive"),
+        _s("d2", "2026-08-18T00:00:00Z", 90, source="drive"),
+        _s("p1", "2026-08-11T00:00:00Z", 95, source="sharepoint"),
+        _s("p2", "2026-08-17T00:00:00Z", 80, source="sharepoint"),
+    ])
+    assert list(r["by_source"].keys()) == ["drive", "sharepoint"]        # first-seen (d1 is earliest)
+    assert r["by_source"]["drive"]["direction"] == "improving" and r["by_source"]["drive"]["delta"] == 30
+    assert r["by_source"]["sharepoint"]["direction"] == "declining" and r["by_source"]["sharepoint"]["delta"] == -15
+
+
+def test_by_source_shares_the_summary_shape_with_the_overall_trend():
+    r = at.compliance_trend([_s("a", "2026-01-01T00:00:00Z", 70), _s("b", "2026-01-05T00:00:00Z", 82)])
+    assert set(r["by_source"]["drive"]) == set(r["summary"])             # identical shape, no divergence
+    assert r["by_source"]["drive"] == r["summary"]                       # single source ⇒ equal to blend
+
+
+def test_a_missing_source_buckets_under_unknown_never_dropped():
+    r = at.compliance_trend([_s("x", "2026-01-01T00:00:00Z", 50, source=None),
+                             _s("y", "2026-01-03T00:00:00Z", 55, source=None)])
+    assert r["by_source"]["unknown"]["n"] == 2 and r["by_source"]["unknown"]["delta"] == 5
+
+
+def test_by_source_is_empty_for_an_empty_history():
+    assert at.compliance_trend([])["by_source"] == {}
+
+
 # ── the route (owner-scoped, through the real app) ──────────────────────────────
 @pytest.fixture()
 def client(monkeypatch, isolated_store):
