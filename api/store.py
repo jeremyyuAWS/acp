@@ -941,6 +941,16 @@ class Store:
             row = self._db.fetchone(cur)
         return (row or {}).get("n", 0) or 0
 
+    def list_inventory_page(self, scan_id: str, *, limit: int, offset: int = 0) -> list[dict]:
+        """One page of the per-file discover inventory, ORDER BY file (stable paging). The
+        whole-estate list/export API runs off this + count_inventory so a 30k-file estate is paged
+        from the DB, never pulled whole into memory."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT {self._INV_COLS} FROM scan_inventory WHERE scan_id=%s "
+                "ORDER BY file LIMIT %s OFFSET %s", (scan_id, int(limit), int(offset)))
+            return self._db.fetchall(cur)
+
     # ── Lifecycle status (Discover-completeness PRD §4.3 / §4.5) ─────────────────
     # The 7 statuses a discovered file can hold. Active is the default; a rule run or a manual
     # action moves it. Kept here (not an enum type) so the sqlite/postgres split needs no DDL.
