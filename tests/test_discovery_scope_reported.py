@@ -212,7 +212,8 @@ def test_local_and_sharepoint_scopes_are_named_too(tmp_path, monkeypatch):
     # `site=None` — _sp_list takes an optional SharePoint site id now (None = OneDrive,
     # which is what this test exercises).
     monkeypatch.setattr(scanner, "_sp_list",
-                        lambda tok, n, site=None, exclude_remediated=False, inventory_out=None:
+                        lambda tok, n, site=None, exclude_remediated=False, inventory_out=None,
+                        scope_out=None:
                         [{"name": "a.docx", "id": "1"}])
     sp: dict = {}
     scanner._list("sharepoint", sp_token="t", scope_out=sp)
@@ -230,7 +231,8 @@ def _stub_sp(monkeypatch, names=None, raises=None):
     """
     calls: list = []
     monkeypatch.setattr(scanner, "_sp_list",
-                        lambda tok, n, site=None, exclude_remediated=False, inventory_out=None:
+                        lambda tok, n, site=None, exclude_remediated=False, inventory_out=None,
+                        scope_out=None:
                         [{"name": "a.docx", "id": "1"}])
 
     def fake_get(token, url, timeout=30):

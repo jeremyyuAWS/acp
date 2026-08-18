@@ -660,7 +660,8 @@ def _sp_site_name(token: str, site_id: str) -> str | None:
 
 
 def _sp_list(token: str, max_files: int = 200, site: str | None = None,
-             exclude_remediated: bool = False, inventory_out: list | None = None) -> list[dict]:
+             exclude_remediated: bool = False, inventory_out: list | None = None,
+             scope_out: dict | None = None) -> list[dict]:
     """List scannable files from OneDrive, or from every document library on a SharePoint site.
 
     The RETURN value is the scannable analysis set (the six supported extensions) — unchanged, so
@@ -724,6 +725,13 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
     # collapse two genuinely different documents from two libraries into one.
     seen: set[tuple[str | None, str]] = set()
     relisted = 0
+    # Every FILE item (scannable or not) as a classify input, so SharePoint reports the same
+    # three-denominator estate summary _search_drive builds for Drive — the parity gap this closes.
+    # `hit_cap` is set ONLY when the scannable cap stops paging with items still unlisted (a
+    # remaining nextLink or an unvisited library); a single page fully lists its estate even when the
+    # analysis set exceeds the cap, so that is NOT truncation.
+    est_files: list[dict] = []
+    hit_cap = False
 
     if site:
         drives = _sp_drives(token, site)
@@ -738,7 +746,7 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
         targets = [(None, f"{GRAPH}/me/drive/root/search(q='')"
                           f"?$select={_SP_ITEM_SELECT}&$top=200")]
 
-    for drive_id, start in targets:
+    for i, (drive_id, start) in enumerate(targets):
         url = start
         while url and len(files) < max_files:
             data = _sp_get(token, url)
@@ -760,6 +768,10 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 segments = parent.split(":", 1)[-1].strip("/").split("/")
                 if skip_folders.intersection(segments):
                     continue
+                # The estate row for EVERY file (scannable or not), classified the same way the Drive
+                # inventory is. Placed after dedup + folder-skip so it counts exactly what a scan sees.
+                est_files.append({"id": item_id, "name": name,
+                                  "mimeType": (item.get("file") or {}).get("mimeType")})
                 if Path(name).suffix.lower() in exts:
                     fmeta = item.get("file") or {}
                     cb = (item.get("createdBy") or {}).get("user") or {}
@@ -782,12 +794,20 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                     inventory_out.append(_sp_inventory_row(item))
             url = data.get("@odata.nextLink")
         if len(files) >= max_files:
+            # Truncated only if the cap left something unlisted: this library still has a page (`url`)
+            # or a later library was never reached. A page fully read is not truncation.
+            if url or i < len(targets) - 1:
+                hit_cap = True
             break
 
     if relisted:
         where = f"site {site}" if site else "OneDrive"
         print(f"[scan] {relisted} duplicate listing(s) of the same {where} item id collapsed "
               f"(paged /search overlap) — not extra documents", flush=True)
+    if scope_out is not None:
+        # Parity with _search_drive: the whole-estate three-denominator summary, so SharePoint's
+        # coverage dashboard is populated and its truncation is honest (a floor when hit_cap).
+        scope_out["inventory"] = estate_inventory.summarize(est_files, truncated=hit_cap)
     return files[:max_files]
 
 
@@ -1107,16 +1127,20 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         # Drive's own sentinel for "no narrowing" and means the same thing here: OneDrive.
         site = None if folder in (None, "", "root") else folder
         result = _sp_list(sp_token, max_files or 200, site=site,
-                          exclude_remediated=exclude_remediated, inventory_out=inventory_out)
+                          exclude_remediated=exclude_remediated, inventory_out=inventory_out,
+                          scope_out=scope_out)
         if scope_out is not None:
             # `site_name` for the same reason `folder_name` exists on the Drive branch: a Graph
             # site id is `contoso.sharepoint.com,<guid>,<guid>`, and a boundary the reader cannot
             # recognise is not a boundary they can check the count against. Resolved only when a
             # site was actually chosen — OneDrive has no id to name, and an unasked-for lookup is
             # a Graph round trip spent on nothing.
+            # `truncated` now comes from the estate inventory's honest hit_cap (set by _sp_list) — the
+            # old `len(result) >= max_files` flagged a fully-listed estate whose analysis set merely
+            # equalled the cap. `inventory` was already placed on scope_out by _sp_list.
             scope_out.update({"kind": "sharepoint", "site": site, "kept": len(result),
                               "site_name": _sp_site_name(sp_token, site) if site else None,
-                              "truncated": len(result) >= (max_files or 200)})
+                              "truncated": bool((scope_out.get("inventory") or {}).get("truncated"))})
     elif folder and folder != "root":
         # Specific folder: recursive BFS
         result = _search_folder(svc, folder, max_files or 1000,
