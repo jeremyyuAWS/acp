@@ -13,6 +13,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request
 
 import core
+import estate_inventory
+import scope_resolver
 import wcag_codeset
 
 router = APIRouter()
@@ -62,3 +64,85 @@ def assess_eligibility(request: Request, codes: str | None = Query(None)):
     selected = wcag_codeset.parse_codes(codes)
     inventory = _latest_inventory(_owner(request))
     return wcag_codeset.eligibility(inventory, selected)
+
+
+def _latest_scan_id_with_inventory(owner: str) -> str | None:
+    """The id of this owner's most recent completed scan that carries per-file inventory
+    rows, or None. `list_scans` is newest-first, so the first scan whose `scan_inventory`
+    is non-empty is the current per-file estate. Read-only; never triggers a scan."""
+    try:
+        scans = core.store.list_scans(owner)
+    except Exception:
+        return None
+    for s in scans:
+        sid = s.get("id")
+        if not sid:
+            continue
+        try:
+            if core.store.list_inventory(sid):
+                return sid
+        except Exception:
+            continue
+    return None
+
+
+@router.get("/assess/eligibility/scoped")
+def assess_eligibility_scoped(request: Request, codes: str | None = Query(None)):
+    """Scope-aware eligibility: how many discovered files are eligible once enabled scope
+    rules apply, per file.
+
+    `codes` — optional comma-separated SC list; default = Core 17. This is the
+    `default_codes` a file keeps when NO scope rule matches it. For each file in the latest
+    discovery's per-file inventory we resolve its effective code-set from the enabled scope
+    rules (folder / owner / department), then count it eligible when its format has an
+    assessment lane for at least one code in that RESOLVED set.
+
+    Returns `{discovered, eligible, by_format, rules_applied}`. Zeros (never a 500) when no
+    discovery run exists yet. Reads only — starts no scan and mutates nothing.
+    """
+    default_codes = wcag_codeset.parse_codes(codes)
+    owner = _owner(request)
+
+    try:
+        rules = core.store.list_scope_rules(enabled_only=True)
+    except Exception:
+        rules = []
+
+    sid = _latest_scan_id_with_inventory(owner)
+    if not sid:
+        return {"discovered": 0, "eligible": 0, "by_format": {}, "rules_applied": 0}
+
+    try:
+        inventory = core.store.list_inventory(sid)
+    except Exception:
+        inventory = []
+
+    discovered = len(inventory)
+    by_format: dict[str, int] = {}
+    matched_rule_ids: set = set()
+
+    for row in inventory:
+        file = {
+            "path": row.get("path"),
+            "parent_folder": row.get("parent_folder"),
+            "owner": row.get("owner"),
+        }
+        resolved = scope_resolver.resolve(file, rules, default_codes)
+        # Which enabled rules actually reach a file — reported as rules_applied.
+        for r in rules:
+            if scope_resolver.matches(file, r):
+                matched_rule_ids.add(r.get("rule_id"))
+
+        fmt = estate_inventory._format_of(row.get("file") or "", row.get("mime") or "")
+        # Eligible iff the file's format has a lane for at least one resolved code. The
+        # lane union for a code-set is drawn from the same Core-17 catalog the resolver
+        # validated against, so image/av/other formats can never be counted eligible.
+        if fmt in wcag_codeset.formats_for_codes(resolved):
+            by_format[fmt] = by_format.get(fmt, 0) + 1
+
+    return {
+        "discovered": discovered,
+        "eligible": sum(by_format.values()),
+        "by_format": dict(sorted(by_format.items())),
+        "rules_applied": len(matched_rule_ids),
+    }
