@@ -14,6 +14,7 @@ import Insight from './Insight.jsx'
 import { TraceChip } from './Transparency.jsx'
 import PiiPanel from './PiiPanel.jsx'
 import { scopeChip, scopeSentence, isNarrowScope } from './scanScope.js'
+import EstateCoverage from './EstateCoverage.jsx'
 
 // The estate dashboard — doubles as the exportable compliance report.
 export default function Overview({ run, files, trend, trendDates, onGo, scanList = [], onPickScan, me,
@@ -104,6 +105,16 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   // inventory without analysing it, and a cancelled/interrupted one stops partway, so `n` is
   // the documents we KNOW ABOUT while `analysed` is the documents we know ANYTHING about.
   const analysed = analysedCount(files)
+  // Estate-coverage funnel progress (stages 4-9). Discovery denominators (1-3) come from
+  // run.scope.inventory; these come from the file rows. Only the cleanly-derivable ones are passed —
+  // human-review + published stay "pending" until that workflow state is threaded through, rather
+  // than showing a guessed number.
+  const estateProgress = {
+    assessed: analysed,
+    issues: files.filter((f) => (f.issues || []).length).length,
+    remediation_eligible: needFix,
+    remediated: files.filter((f) => f.remediated_at || f.drive_write_url).length,
+  }
   // audit-ready is a rate, and a rate needs a denominator that was measured. Over an estate
   // nobody analysed it is not 0% — it is unknown, and printing "0%" asserts that every one of
   // 258 documents was checked and none passed. Both this and the certifiable tile render '—'
@@ -306,6 +317,13 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           {run.status === 'cancelled' || run.status === 'interrupted' ? ` — this scan was ${run.status} before it finished` : ' — the rest were discovered but not yet assessed'}.
           Findings, certifiable and audit-ready describe the analysed documents only.
         </p>
+      )}
+
+      {/* Whole-estate coverage: the three denominators (discovered / assessment-eligible /
+          remediation-eligible) as a funnel + format composition + capability-status split, from the
+          scan's real scope.inventory. Only shown once discovery has inventoried the estate. */}
+      {run.scope?.inventory?.discovered > 0 && (
+        <EstateCoverage report={run} progress={estateProgress} />
       )}
 
       {ontDocs.length > 0 && (
