@@ -62,38 +62,20 @@ def _point(scan: dict) -> dict | None:
     }
 
 
-def compliance_trend(scans: list[dict] | None) -> dict:
-    """The estate's compliance trajectory from its scan history.
+def _summary_of(points: list[dict]) -> dict:
+    """The first-vs-latest movement summary for an already-chronological list of trend points.
 
-    `scans` is `store.list_scans(owner)` output (any order; that method returns newest-first). Returns
-    `points` in CHRONOLOGICAL order (oldest → newest) for a line chart, and a `summary`:
-
-      * n                — points placed in time
-      * scored           — points that carried a score (the trend line's real length)
-      * first / latest   — the oldest and newest SCORED values, the endpoints of the movement
-      * delta            — latest − first, the headline "are we improving" number (None if < 2 scored)
-      * direction        — improving | declining | flat (within a half-point band) | insufficient
-      * best             — the highest score reached, so a regression from a past peak is visible
-      * span_days        — calendar days from first to last point
-
-    Every number is COUNTED from stored rows; none is estimated. An empty or single-scan history
-    returns a well-formed summary with direction 'insufficient', never a fabricated slope.
+    Shared by the overall trend and each per-source trend so the two can never disagree on what
+    'improving' means. `points` must already be sorted oldest → newest.
     """
-    points = [p for p in (_point(s) for s in (scans or [])) if p is not None]
-    points.sort(key=lambda p: p["_at"])
-    for p in points:
-        p.pop("_at", None)
-
     scored = [p for p in points if p["score"] is not None]
     summary: dict = {
-        "n": len(points),
-        "scored": len(scored),
+        "n": len(points), "scored": len(scored),
         "first": None, "latest": None, "delta": None,
         "direction": "insufficient", "best": None, "span_days": None,
     }
     if points:
-        span = _parse(points[-1]["at"]) - _parse(points[0]["at"])
-        summary["span_days"] = span.days
+        summary["span_days"] = (_parse(points[-1]["at"]) - _parse(points[0]["at"])).days
     if scored:
         summary["best"] = max(p["score"] for p in scored)
     if len(scored) >= 2:
@@ -109,5 +91,50 @@ def compliance_trend(scans: list[dict] | None) -> dict:
         # movement. Saying "improving" off a single point is the trend indicator's cardinal lie.
         only = scored[0]["score"]
         summary.update({"first": only, "latest": only, "delta": None, "direction": "insufficient"})
+    return summary
 
-    return {"points": points, "summary": summary}
+
+def compliance_trend(scans: list[dict] | None) -> dict:
+    """The estate's compliance trajectory from its scan history.
+
+    `scans` is `store.list_scans(owner)` output (any order; that method returns newest-first). Returns
+    `points` in CHRONOLOGICAL order (oldest → newest) for a line chart, and a `summary`:
+
+      * n                — points placed in time
+      * scored           — points that carried a score (the trend line's real length)
+      * first / latest   — the oldest and newest SCORED values, the endpoints of the movement
+      * delta            — latest − first, the headline "are we improving" number (None if < 2 scored)
+      * direction        — improving | declining | flat (within a half-point band) | insufficient
+      * best             — the highest score reached, so a regression from a past peak is visible
+      * span_days        — calendar days from first to last point
+
+    `by_source` carries the SAME summary shape per connector (drive / sharepoint / local), so a
+    multi-source estate can see which source is improving and which is lagging rather than only the
+    blended figure — the blend can hide a declining SharePoint behind a rising Drive. Keyed by the
+    source string, sources in first-seen chronological order.
+
+    Every number is COUNTED from stored rows; none is estimated. An empty or single-scan history
+    returns a well-formed summary with direction 'insufficient', never a fabricated slope.
+    """
+    points = [p for p in (_point(s) for s in (scans or [])) if p is not None]
+    points.sort(key=lambda p: p["_at"])
+    for p in points:
+        p.pop("_at", None)
+
+    # Per-source trends, sources in first-seen order (points are already chronological). A None
+    # source is bucketed under "unknown" rather than dropped — a scan with no recorded source still
+    # happened and still moved the blended number.
+    by_source: dict = {}
+    order: list = []
+    for p in points:
+        src = p.get("source") or "unknown"
+        if src not in by_source:
+            by_source[src] = []
+            order.append(src)
+        by_source[src].append(p)
+
+    return {
+        "points": points,
+        "summary": _summary_of(points),
+        "by_source": {src: _summary_of(by_source[src]) for src in order},
+    }
