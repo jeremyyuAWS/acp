@@ -943,3 +943,103 @@ export const fetchEligibility = (codes = null) => {
   const q = list.join(',')
   return fetch(`${BASE}/assess/eligibility${q ? `?codes=${encodeURIComponent(q)}` : ''}`, { headers: headers() }).then(j)
 }
+
+// ── Scope rules (Phase C4d, Discover/Assess PRD §4.4 / AC-09) ────────────────────────
+// Per-file WCAG scope rules: admins target files by folder / owner / department and assign a
+// Core-17 subset, with union / override precedence (see api/scope_resolver.py). The editor UI
+// (ScopeRules.jsx) reads the selector+catalog from /scope/selectors, lists/creates/toggles/deletes
+// rules over /scope/rules, and shows the scope-aware eligible-file count from
+// /assess/eligibility/scoped. Writes are owner-gated server-side; a validation failure is a 400
+// whose `detail` (the resolver's own message) `j` surfaces as the thrown Error — the form renders
+// it inline. SIM has no backend, so it keeps an in-memory rule store that validates the same way
+// the server does, so the demo behaves offline exactly as it does against the API.
+
+// The Core-17 catalog the SIM selector endpoint serves — same generated tables the rest of the UI
+// reads, so the picker shows "1.4.3 — Contrast (Minimum)" identically online and offline.
+const _SIM_SCOPE_SELECTORS = ['folder', 'owner', 'department']
+let _simScopeRules = []          // in-memory rule store for the demo build
+let _simScopeSeq = 0
+const _simAllowedCodes = () => new Set(_SIM_CORE17.map((c) => c.code))
+// Mirror api/scope_resolver.validate_scope_rule so a SIM create surfaces the same inline 400s.
+const _simValidateRule = (r) => {
+  if (!_SIM_SCOPE_SELECTORS.includes(r.selector))
+    throw new Error(`selector must be one of ${JSON.stringify(_SIM_SCOPE_SELECTORS)}, got ${JSON.stringify(r.selector)}`)
+  if (!String(r.value || '').trim()) throw new Error('scope rule value must be non-empty')
+  const codes = Array.isArray(r.codes) ? r.codes : []
+  if (!codes.length) throw new Error('scope rule must select at least one WCAG code')
+  const allowed = _simAllowedCodes()
+  const bad = codes.filter((c) => !allowed.has(c))
+  if (bad.length) throw new Error(`codes not in the allowed Core-17 set: ${JSON.stringify(bad.sort())}`)
+}
+
+// The building blocks the rule editor renders: the allowed selectors + the Core-17 catalog to
+// pick codes from. Read-only, no gate. Shape: {selectors:[...], codes:[{code, name, formats}]}.
+export const fetchScopeSelectors = () => (SIM
+  ? sim({ selectors: [..._SIM_SCOPE_SELECTORS], codes: _SIM_CORE17 })
+  : fetch(`${BASE}/scope/selectors`, { headers: headers() }).then(j))
+
+// All scope rules, priority-desc / name order (the store's ordering, passed through). Read-only.
+export const fetchScopeRules = () => (SIM
+  ? sim({ rules: [..._simScopeRules].sort((a, b) => (b.priority - a.priority) || String(a.name).localeCompare(b.name)) })
+  : fetch(`${BASE}/scope/rules`, { headers: headers() }).then(j)
+).then((r) => (Array.isArray(r) ? r : (r?.rules || [])))
+
+// Create a rule (owner-only). Validates against Core-17 before persisting; a malformed rule is a
+// 400 whose message `j` throws — the form catches and renders it inline. Resolves to the new rule.
+export const createScopeRule = (body) => {
+  if (SIM) {
+    return new Promise((res, rej) => setTimeout(() => {
+      try { _simValidateRule(body) } catch (e) { rej(e); return }
+      const rule = {
+        rule_id: `sim-rule-${++_simScopeSeq}`, name: body.name || '', selector: body.selector,
+        value: body.value, codes: [...(body.codes || [])], priority: Number(body.priority) || 0,
+        is_override: !!body.is_override, enabled: body.enabled !== false,
+        created_at: new Date().toISOString(), created_by: 'demo',
+      }
+      _simScopeRules.push(rule); res(rule)
+    }, 180))
+  }
+  return fetch(`${BASE}/scope/rules`, {
+    method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({
+      name: body.name || '', selector: body.selector, value: body.value,
+      codes: [...(body.codes || [])], priority: Number(body.priority) || 0,
+      is_override: !!body.is_override, enabled: body.enabled !== false,
+    }),
+  }).then(j)
+}
+
+// Enable / disable one rule (owner-only). 404 if it does not exist. Resolves to the updated rule.
+export const setScopeRuleEnabled = (id, enabled) => {
+  if (SIM) {
+    return sim((() => { const r = _simScopeRules.find((x) => x.rule_id === id); if (r) r.enabled = !!enabled; return r || { rule_id: id, enabled: !!enabled } })())
+  }
+  return fetch(`${BASE}/scope/rules/${encodeURIComponent(id)}`, {
+    method: 'PATCH', headers: headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ enabled: !!enabled }),
+  }).then(j)
+}
+
+// Delete one rule (owner-only). 404 if it does not exist.
+export const deleteScopeRule = (id) => {
+  if (SIM) { _simScopeRules = _simScopeRules.filter((x) => x.rule_id !== id); return sim({ deleted: id }) }
+  return fetch(`${BASE}/scope/rules/${encodeURIComponent(id)}`, { method: 'DELETE', headers: headers() }).then(j)
+}
+
+// Scope-aware eligibility: how many discovered files are eligible once enabled scope rules apply,
+// per file. Shape: {discovered, eligible, by_format, rules_applied}. Read-only; zeros when there is
+// no discovery run yet. SIM projects the demo inventory and counts how many rules would reach a file.
+export const fetchScopedEligibility = (codes = null) => {
+  const list = (Array.isArray(codes) ? codes : (codes ? String(codes).split(',') : []))
+    .map((c) => String(c).trim()).filter(Boolean)
+  if (SIM) {
+    const base = _simEligibility(list)
+    const enabled = _simScopeRules.filter((r) => r.enabled)
+    return sim({
+      discovered: base.discovered, eligible: base.eligible, by_format: base.by_format,
+      rules_applied: enabled.length,
+    })
+  }
+  const q = list.join(',')
+  return fetch(`${BASE}/assess/eligibility/scoped${q ? `?codes=${encodeURIComponent(q)}` : ''}`, { headers: headers() }).then(j)
+}
