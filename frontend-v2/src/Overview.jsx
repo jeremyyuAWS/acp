@@ -106,14 +106,21 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
   // the documents we KNOW ABOUT while `analysed` is the documents we know ANYTHING about.
   const analysed = analysedCount(files)
   // Estate-coverage funnel progress (stages 4-9). Discovery denominators (1-3) come from
-  // run.scope.inventory; these come from the file rows. Only the cleanly-derivable ones are passed —
-  // human-review + published stay "pending" until that workflow state is threaded through, rather
-  // than showing a guessed number.
+  // run.scope.inventory; these come from the file rows — each a REAL count, never a projection.
+  //   human_review = documents carrying at least one REVIEW-lane finding (ADR 0023: assessed-for-
+  //     review, a person must clear them before they can certify) — the estate's human-review load.
+  //   published    = documents with an actual published record (file_records.published_at), already
+  //     computed above as `publish` and used by the horizontal funnel — it was the one number left
+  //     reading "pending" while sitting one variable away.
+  const humanReview = files.filter((f) =>
+    (f.issues || []).some((i) => String(i.severity || '').toUpperCase() === 'REVIEW')).length
   const estateProgress = {
     assessed: analysed,
     issues: files.filter((f) => (f.issues || []).length).length,
     remediation_eligible: needFix,
     remediated: files.filter((f) => f.remediated_at || f.drive_write_url).length,
+    human_review: humanReview,
+    published: publish,
   }
   // audit-ready is a rate, and a rate needs a denominator that was measured. Over an estate
   // nobody analysed it is not 0% — it is unknown, and printing "0%" asserts that every one of
