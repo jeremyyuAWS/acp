@@ -357,6 +357,9 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   the four matrix/todo/progress-log guards) was the long pole on every PR; splitting it across four
   standard GitHub-hosted runners cuts wall-clock at no added cost (free-tier runners, not larger paid
   ones). Another session's change, recorded here since it landed on `main` in this window.
+- **Balanced the four shards by measured time, not test count** (#322). Added `.test_durations` so the
+  suite splits across the four runners by wall-clock, not an even count — a few slow modules no longer
+  pin one shard. Another session's follow-up to #321, recorded here as it landed in this window.
 
 ## Feature: Remediation reaching the file · #4606
 
@@ -900,15 +903,27 @@ three-denominator model (#297, under Documentation).
   capped per-status sample into `scope.inventory.samples` and EstateCoverage renders a
   click-to-expand list under each chip. `by_status` stays the TRUE total so the drill-down
   reads "Showing N of <total>" — an unsupported bucket of thousands is never mistaken for
-  the handful sampled; a paginated per-file export is a separate follow-up (#303).
+  the handful sampled; a paginated per-file export was a separate follow-up (#303), since delivered (#332).
 - Owner / size / sharing on the drill-down, sortable for triage: `size`, `owners`, `shared`
   added to `DRIVE_FIELDS` (same list page, no extra call); externally shared files get a
   SHARED badge; sorts biggest-first, shared-first, or by name — the three lenses that matter
   at 30k-file PHI-estate scale. Missing metadata degrades to null/false, never a wrong value (#304).
+- Wired the funnel's Published + Human-review stages, which had been stuck showing 'pending' (#327).
+  Stages 4–9 now derive from real progress state instead of a placeholder, so the estate funnel reads
+  end-to-end (discovered → … → remediated → human-review → published) rather than trailing off into
+  guessed zeros. Closes the Open item below that flagged these two stages as unthreaded. Another
+  session's change, recorded here as it landed in this window.
+- Paginated per-file estate API + CSV export (#332) — the follow-up #303 named. The whole-estate
+  inventory (all types, full metadata) is now exportable per file, not just as counts + a capped
+  sample, so a hospital can pull the complete list. Delivers the missing half of the three-denominator
+  view (the per-file estate, beside the aggregate). Another session's change, in this window.
+- Local source walks the nested tree with filesystem metadata (#325) — recursive discovery for a local
+  source now descends subfolders and captures per-file metadata, matching the Drive/SharePoint inventory
+  shape for local-mounted content. Another session's change, in this window.
 
 ---
 
-## Feature: Discover & Assess lifecycle rules
+## Feature: Discover & Assess lifecycle rules · #4618
 
 Two conflated scopes pulled apart, per the "Discover & Assess Lifecycle Rules" PRD (Deva). Discover must
 inventory *every* file so nothing is invisible by omission; Assess is narrowed on purpose to supported
@@ -966,6 +981,45 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   going green, and I switched the merge watch to the required Actions jobs so a stuck Netlify preview could
   not hang it. (A second session fixed the same bug in parallel as #313, leaving a duplicate list entry —
   harmless; cleanup flagged.)
+- **Per-file WCAG scope: the resolver + rule store** (#326, "C4a"). `api/scope_resolver.py` — pure logic
+  (mirrors the disposition seam): a scope rule targets files by folder / owner / department and assigns a
+  Core-17 subset; a file's effective code-set is the UNION of matching rules' codes UNLESS a higher-priority
+  override replaces it (deterministic tie-break by rule_id, AC-09). No rule matches → the caller's default
+  (the global Assess selection), so rules only ever refine, never silently empty the scope. `scope_rule`
+  table + accessors, classified a RESET config-survivor (a rule, not scan output) — the exact trap #312
+  caught for file_tags, avoided by declaring it up front.
+- **Per-file scope resolved at the scoring gate** (#330, "C4b"). `assessment_policy.resolve_file_scope` is
+  the single seam: it returns the global scope UNCHANGED (same object, incl. None = unrestricted) when no
+  rule targets a file — so a scan with no rules is byte-for-byte pre-C4 — and narrows to the resolved
+  code-set on a match, keeping each code's lane from the global scope or falling back to `RULE_FORMATS`.
+  Frozen, not live: `_scan_discover` freezes the enabled rules into `scan_runs.scope` beside `scan_scope`,
+  and `store.scope_for_file` is the ONE method both the score and trace paths call — threaded into
+  `save_file_result`, `analyse_and_assess` and `rescore_reused` in lockstep, so an admin editing rules
+  mid-scan can never make a file's score and its stored traces disagree (the frozen-scope discipline
+  `scan_scope` already follows). The local monolithic `run_scan` path stays on global scope — internally
+  consistent, a documented v1 boundary; department-selector rules do not resolve yet (inventory carries
+  path/owner, not department).
+- **Scope-rule CRUD API + scope-aware eligibility** (#329, "C4c"). Owner-gated `api/routes/scope.py`
+  (`GET/POST /scope/rules`, `PATCH`/`DELETE /scope/rules/{id}`, `GET /scope/selectors`), every mutation
+  validated against Core-17 before persisting (400 with the message on a bad rule). `GET
+  /assess/eligibility/scoped` resolves each discovered file's effective code-set from the enabled rules and
+  counts it eligible when its format has a lane for any resolved code — `{discovered, eligible, by_format,
+  rules_applied}`, zeros on an empty estate; the pre-C4 `/assess/eligibility` is left untouched.
+- **Scope-rule editor UI** (#331, "C4d"). `ScopeRules.jsx` — a create form (selector, per-selector-labelled
+  value, Core-17 "code — name" multi-select, priority, override + hint, enabled), a priority-desc rule list
+  with an OVERRIDE badge and enable/disable + delete, and the scope-aware eligible-file count refreshed on
+  every change; wired as a panel beside `AssessScope` (untouched). Completes **AC-09** — WCAG selections
+  scoped by folder/owner/department with deterministic precedence.
+- **Disambiguated WCAG scope rules from lifecycle rules** (#338). A parallel session's #328 added a
+  per-source "Manage" drawer with Scope / Rules tabs at the same time C4d landed a "Scope rules" editor —
+  two different systems whose names collided (the drawer's Rules tab is lifecycle/disposition tag-archive-
+  deletion, its Scope tab is discovery *visibility*; C4d is per-file WCAG assessment scoping). Not
+  duplicates — merging would have been the regression — so the reconciliation names them apart: the editor
+  is now "**WCAG scope rules**" with a line separating it from lifecycle rules, and the drawer's Rules tab
+  points to Assess → WCAG scope rules for the WCAG axis. #328's tab labels and tests untouched.
+- **Closed the `file_tags` RESET-classification duplicate** (#318). #312 and #313 had each added `file_tags`
+  to `_ANALYTICS_TABLES` (two sessions fixing the same miss), leaving it listed twice — harmless but untidy;
+  #318 drops the duplicate. Closes the cleanup flagged on the RESET-fix bullet above.
 
 ## Open items (backlog candidates)
 
@@ -1045,8 +1099,9 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   small build; native-column write is out of scope by design), the discovery & triage build order (#283:
   `_ARCHIVED` recognition of the customer's 17,512 already-archived files, content-hash dedup,
   version-supersession, sharing/access signals — all unbuilt), the estate-inventory follow-ups named in
-  #290 (folder-scan parity in `_search_folder`, `DRIVE_FIELDS` metadata enrichment), the funnel's
-  human-review/published stages still 'pending' (#301), and the multimedia-captioning LOE (#280: ~10–14
+  #290 (folder-scan parity in `_search_folder`, `DRIVE_FIELDS` metadata enrichment), ~~the funnel's
+  human-review/published stages still 'pending' (#301)~~ *(RESOLVED — #327 wired both stages, they now
+  derive from real progress)*, and the multimedia-captioning LOE (#280: ~10–14
   pw Phase 1, +8–16 pw Phase 2, GPU-dependent). Candidates for ADO Tasks once scoped.
 - **Two roadmap corrections this sweep worth carrying into ADO rather than re-estimating**: the live
   Drive write-back "bug" was verified stale and its ~2–3.5 person-day estimate corrected to ≈ zero
@@ -1169,3 +1224,24 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   corpus and CI. Two Open items added: the deferred C4 location/owner/department scoping (AC-09) and the
   lifecycle thin-UI/semantics follow-ups. Excluded as non-feature: the parallel duplicate reset-fix (#313,
   same bug as #312). Sync marker advanced from `d7c7a055` to `27827405`.
+- **2026-08-18 (bind)** — Created ADO Feature **#4618** "Discover & Assess lifecycle rules" under Epic
+  #3664 (Feature, `AI-Foundry\MovaIO-Build`, Iteration 10, Active; description carries the eight PR
+  Tasks + the deferred C4), and bound it to the heading above. No new commits documented.
+- **2026-08-18 (C4)** — Documented C4, the deferred location/owner/department scoping, as four Tasks under
+  Feature **#4618**: the scope resolver + rule store (#326), per-file scope at the scoring gate (#330), the
+  CRUD API + scope-aware eligibility (#329), and the editor UI (#331) — which completes **AC-09**. Also
+  folded in three other sessions' commits that landed in this window: #327 (funnel Published/Human-review
+  stages wired — resolves the Open item that flagged them) under Estate coverage, and #322 (shard-by-time
+  CI balance) under Test corpus and CI. **#328** (a "source operations panel — Overview/Scope/Rules/
+  Activity" UI reorg by another session) is covered by this marker but only lightly characterised from its
+  subject — it touches the same scope surfaces as C4d and may warrant a reconciliation pass; left for its
+  author to bind. Excluded as non-feature: the two delivery-log commits (#323, #324). Sync marker advanced
+  from `27827405` to `4d176d36`.
+- **2026-08-18 (reconcile + batch)** — Resolved the #328/C4d overlap flagged last sync: #328 and C4d are
+  distinct systems (source-drawer lifecycle/discovery vs per-file WCAG scoping), so #338 names them apart
+  rather than merging them — added under Feature #4618. Folded in three more commits that landed since the
+  last mark: #318 (drops the duplicate `file_tags` RESET entry from the #312/#313 collision — under #4618,
+  closes that cleanup), and under Estate coverage #332 (paginated per-file estate export + CSV — delivers
+  the #303 follow-up, whose note is updated) and #325 (local source recursive walk with filesystem
+  metadata). Excluded as non-feature: the C4 delivery-log commit (#336). Sync marker advanced from
+  `4d176d36` to `fad0dfbe`.

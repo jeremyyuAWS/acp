@@ -157,6 +157,36 @@ def _sp_inventory_row(item: dict) -> dict:
                     owner=owner, parent_folder=parent)
 
 
+def _local_stat_meta(p: Path, corpus: Path) -> dict:
+    """Filesystem metadata for one local file — the local-source analogue of the size / createdTime
+    / modifiedTime / owner a Drive or SharePoint listing carries, so a local inventory is as rich as
+    a connector one. Best-effort: any field the OS won't give us comes back None rather than
+    aborting the walk. `parent_folder` is the file's directory relative to the scan root."""
+    import mimetypes
+    size = source_modified = created_at = None
+    try:
+        st = p.stat()
+        size = st.st_size
+        source_modified = datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat()
+        # st_birthtime is the true creation time on macOS/BSD; ctime is the closest stand-in elsewhere.
+        created_at = datetime.fromtimestamp(getattr(st, "st_birthtime", st.st_ctime),
+                                            timezone.utc).isoformat()
+    except OSError:
+        pass
+    try:
+        owner = p.owner()                 # POSIX login name; unavailable on Windows / dangling uid
+    except (KeyError, OSError, NotImplementedError):
+        owner = None
+    try:
+        parent = str(p.parent.relative_to(corpus))
+    except ValueError:
+        parent = p.parent.name
+    if parent in (".", ""):
+        parent = corpus.name or None
+    return {"size": size, "source_modified": source_modified, "created_at": created_at,
+            "owner": owner, "parent_folder": parent, "mime": mimetypes.guess_type(p.name)[0]}
+
+
 def _dedupe_inventory_files(rows: list[dict]) -> None:
     """Disambiguate colliding `file` names IN PLACE so store.add_inventory's (scan_id, file)
     primary key never silently upserts one estate file over another. First occurrence keeps its
@@ -630,7 +660,8 @@ def _sp_site_name(token: str, site_id: str) -> str | None:
 
 
 def _sp_list(token: str, max_files: int = 200, site: str | None = None,
-             exclude_remediated: bool = False, inventory_out: list | None = None) -> list[dict]:
+             exclude_remediated: bool = False, inventory_out: list | None = None,
+             scope_out: dict | None = None) -> list[dict]:
     """List scannable files from OneDrive, or from every document library on a SharePoint site.
 
     The RETURN value is the scannable analysis set (the six supported extensions) — unchanged, so
@@ -694,6 +725,13 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
     # collapse two genuinely different documents from two libraries into one.
     seen: set[tuple[str | None, str]] = set()
     relisted = 0
+    # Every FILE item (scannable or not) as a classify input, so SharePoint reports the same
+    # three-denominator estate summary _search_drive builds for Drive — the parity gap this closes.
+    # `hit_cap` is set ONLY when the scannable cap stops paging with items still unlisted (a
+    # remaining nextLink or an unvisited library); a single page fully lists its estate even when the
+    # analysis set exceeds the cap, so that is NOT truncation.
+    est_files: list[dict] = []
+    hit_cap = False
 
     if site:
         drives = _sp_drives(token, site)
@@ -708,7 +746,7 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
         targets = [(None, f"{GRAPH}/me/drive/root/search(q='')"
                           f"?$select={_SP_ITEM_SELECT}&$top=200")]
 
-    for drive_id, start in targets:
+    for i, (drive_id, start) in enumerate(targets):
         url = start
         while url and len(files) < max_files:
             data = _sp_get(token, url)
@@ -730,6 +768,10 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 segments = parent.split(":", 1)[-1].strip("/").split("/")
                 if skip_folders.intersection(segments):
                     continue
+                # The estate row for EVERY file (scannable or not), classified the same way the Drive
+                # inventory is. Placed after dedup + folder-skip so it counts exactly what a scan sees.
+                est_files.append({"id": item_id, "name": name,
+                                  "mimeType": (item.get("file") or {}).get("mimeType")})
                 if Path(name).suffix.lower() in exts:
                     fmeta = item.get("file") or {}
                     cb = (item.get("createdBy") or {}).get("user") or {}
@@ -752,12 +794,20 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                     inventory_out.append(_sp_inventory_row(item))
             url = data.get("@odata.nextLink")
         if len(files) >= max_files:
+            # Truncated only if the cap left something unlisted: this library still has a page (`url`)
+            # or a later library was never reached. A page fully read is not truncation.
+            if url or i < len(targets) - 1:
+                hit_cap = True
             break
 
     if relisted:
         where = f"site {site}" if site else "OneDrive"
         print(f"[scan] {relisted} duplicate listing(s) of the same {where} item id collapsed "
               f"(paged /search overlap) — not extra documents", flush=True)
+    if scope_out is not None:
+        # Parity with _search_drive: the whole-estate three-denominator summary, so SharePoint's
+        # coverage dashboard is populated and its truncation is honest (a floor when hit_cap).
+        scope_out["inventory"] = estate_inventory.summarize(est_files, truncated=hit_cap)
     return files[:max_files]
 
 
@@ -1044,22 +1094,30 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         # ACP_LOCAL_CORPUS: point local scans at a different directory — the test
         # suite uses it to scan the frozen oracle corpus (test-corpus/oracle/)
         # instead of the demo estate, which changes with the demo's needs.
+        #
+        # rglob, not glob: a real estate is a nested tree, so discovery walks the whole subtree
+        # rather than a single level. Each file also carries the filesystem metadata a Drive /
+        # SharePoint listing would (size, modified, created, owner, parent) via _local_stat_meta,
+        # so the scannable rows are no longer path-only and the whole subtree is inventoried.
         corpus = Path(os.environ.get("ACP_LOCAL_CORPUS") or (ACP / "test-corpus/files"))
-        result = [{"name": p.name, "path": str(p)} for p in sorted(corpus.glob("*"))
-                   if p.suffix.lower() in OFFICE + (".pdf",) + HTML_EXTS]
-        if inventory_out is not None:
-            result_names = {it["name"] for it in result}
-            for p in sorted(corpus.glob("*")):
-                if not p.is_file() or p.name in result_names:
-                    continue
-                try:
-                    st = p.stat()
-                    size = st.st_size
-                    mtime = datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat()
-                except OSError:
-                    size, mtime = None, None
-                inventory_out.append(_inv_row(file=p.name, path=str(p), size=size,
-                                              source_modified=mtime))
+        scannable = OFFICE + (".pdf",) + HTML_EXTS
+        result: list[dict] = []
+        for p in sorted(corpus.rglob("*")):
+            if not p.is_file():
+                continue
+            meta = _local_stat_meta(p, corpus)
+            if p.suffix.lower() in scannable:
+                result.append({"name": p.name, "path": str(p),
+                               "size_kb": _inv_size_kb(meta["size"]),
+                               "source_mime": meta["mime"],
+                               "source_modified": meta["source_modified"],
+                               "created_at": meta["created_at"], "owner": meta["owner"],
+                               "parent_folder": meta["parent_folder"]})
+            elif inventory_out is not None:
+                inventory_out.append(_inv_row(
+                    file=p.name, path=str(p), mime=meta["mime"], size=meta["size"],
+                    source_modified=meta["source_modified"], created_at=meta["created_at"],
+                    owner=meta["owner"], parent_folder=meta["parent_folder"]))
         if scope_out is not None:
             scope_out.update({"kind": "local", "path": str(corpus), "kept": len(result),
                               "truncated": False})
@@ -1069,16 +1127,20 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         # Drive's own sentinel for "no narrowing" and means the same thing here: OneDrive.
         site = None if folder in (None, "", "root") else folder
         result = _sp_list(sp_token, max_files or 200, site=site,
-                          exclude_remediated=exclude_remediated, inventory_out=inventory_out)
+                          exclude_remediated=exclude_remediated, inventory_out=inventory_out,
+                          scope_out=scope_out)
         if scope_out is not None:
             # `site_name` for the same reason `folder_name` exists on the Drive branch: a Graph
             # site id is `contoso.sharepoint.com,<guid>,<guid>`, and a boundary the reader cannot
             # recognise is not a boundary they can check the count against. Resolved only when a
             # site was actually chosen — OneDrive has no id to name, and an unasked-for lookup is
             # a Graph round trip spent on nothing.
+            # `truncated` now comes from the estate inventory's honest hit_cap (set by _sp_list) — the
+            # old `len(result) >= max_files` flagged a fully-listed estate whose analysis set merely
+            # equalled the cap. `inventory` was already placed on scope_out by _sp_list.
             scope_out.update({"kind": "sharepoint", "site": site, "kept": len(result),
                               "site_name": _sp_site_name(sp_token, site) if site else None,
-                              "truncated": len(result) >= (max_files or 200)})
+                              "truncated": bool((scope_out.get("inventory") or {}).get("truncated"))})
     elif folder and folder != "root":
         # Specific folder: recursive BFS
         result = _search_folder(svc, folder, max_files or 1000,
@@ -2207,6 +2269,9 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
     if scan_id:
         import core
         _frozen_scope = core.store.get_scan_scope(scan_id)
+        # PRD §4.4 / C4 — narrow to this file's per-file scope rules, the SAME resolution
+        # save_file_result applies to the traces, so the score and traces read one scope.
+        _frozen_scope = core.store.scope_for_file(scan_id, name, _frozen_scope)
     assessed = rb.assess(raw["succeeded"], _scoped_for_scoring(raw["issues"], name, _frozen_scope),
                          raw["errors"])
     fdict = {"file": name, "engine": raw["engine"], **assessed, "issues": raw["issues"],

@@ -959,6 +959,18 @@ def _scan_discover(payload: dict, job: dict) -> None:
     started = _dt.datetime.now(_dt.timezone.utc).isoformat()
     defer = _defer_analysis_to_assess()
     incremental = bool(payload.get("incremental", True))
+    # Freeze the enabled per-file WCAG scope rules into this scan alongside scan_scope (PRD §4.4 /
+    # C4). The score and trace paths both resolve each file against THIS frozen set, so an admin
+    # editing rules mid-scan can never make a file's score and its stored traces disagree — the
+    # same frozen-scope discipline scan_scope already follows (Phase 3a).
+    try:
+        scope["scope_rules"] = [
+            {k: r.get(k) for k in ("rule_id", "selector", "value", "codes",
+                                   "priority", "is_override", "enabled")}
+            for r in core.store.list_scope_rules(enabled_only=True)
+        ]
+    except Exception:
+        scope["scope_rules"] = []
     core.store.init_scan_run(scan_id, source, len(items), started, rb.name, rb.hash, owner=user,
                              status="discovered" if defer else "running", scope=scope)
     # Normalise the source listing to the common analysis-item shape. `mime` stays the Google-
@@ -1137,9 +1149,12 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                 # PHASE 3a — re-score the reused analysis under THIS scan's FROZEN scope
                 # (get_scan_scope), not the live global, so the reused score matches the scope the
                 # run was started under and the traces save_file_result writes for it below.
+                # C4 — resolve this file's per-file scope, the same as save_file_result and
+                # analyse_and_assess, so a reused score also honours folder/owner scope rules.
                 fdict.update(rescore_reused(fdict.get("issues") or [], name,
                                             fdict.get("status"),
-                                            scope=core.store.get_scan_scope(scan_id)))
+                                            scope=core.store.scope_for_file(
+                                                scan_id, name, core.store.get_scan_scope(scan_id))))
             except Exception:
                 # Deliberately narrow: a rescore failure leaves the reused score in place rather
                 # than failing the file. Logged, because a silent fallback here is how the stale

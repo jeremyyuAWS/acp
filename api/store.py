@@ -365,6 +365,16 @@ _SCHEMA = [
       id TEXT PRIMARY KEY, ts TEXT, doc_id TEXT, policy_id TEXT,
       action TEXT, result TEXT, detail TEXT
     )""",
+    # Per-file WCAG scope rules (Discover/Assess Lifecycle PRD §4.4 / AC-09, "C4"). A rule
+    # targets files by folder / owner / department and assigns a Core-17 subset; the effective
+    # code-set for a file is resolved from matching rules (union, or a higher-priority override
+    # replaces — see api/scope_resolver.py). `codes` is a JSON array of SC ids; `is_override`
+    # and `enabled` are 0/1; `priority` orders overlapping overrides. Config, not scan output —
+    # a survivor of RESET (see _ANALYTICS_TABLES).
+    """CREATE TABLE IF NOT EXISTS scope_rule (
+      rule_id TEXT PRIMARY KEY, name TEXT, selector TEXT, value TEXT, codes TEXT,
+      priority INT, is_override INT, enabled INT, created_at TEXT, created_by TEXT
+    )""",
     # Phased remediation campaigns (ADR 0003, Phase 4). "Remediation Programs" existed
     # only as a client-derived view (Monitor.jsx useProgramBatches, computed fresh from
     # files/decisions props on every render, nothing persisted) -- these tables make a
@@ -931,6 +941,16 @@ class Store:
             row = self._db.fetchone(cur)
         return (row or {}).get("n", 0) or 0
 
+    def list_inventory_page(self, scan_id: str, *, limit: int, offset: int = 0) -> list[dict]:
+        """One page of the per-file discover inventory, ORDER BY file (stable paging). The
+        whole-estate list/export API runs off this + count_inventory so a 30k-file estate is paged
+        from the DB, never pulled whole into memory."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT {self._INV_COLS} FROM scan_inventory WHERE scan_id=%s "
+                "ORDER BY file LIMIT %s OFFSET %s", (scan_id, int(limit), int(offset)))
+            return self._db.fetchall(cur)
+
     # ── Lifecycle status (Discover-completeness PRD §4.3 / §4.5) ─────────────────
     # The 7 statuses a discovered file can hold. Active is the default; a rule run or a manual
     # action moves it. Kept here (not an enum type) so the sqlite/postgres split needs no DDL.
@@ -1021,6 +1041,10 @@ class Store:
         # reads the committed value — the SAME value analyse_and_assess / rescore_reused thread into
         # the score for this scan, so the traces written here and that score read one frozen scope.
         scope = self.get_scan_scope(scan_id)
+        # PRD §4.4 / C4 — narrow to THIS file's per-file WCAG scope rules (folder/owner) if any
+        # frozen rule targets it; unchanged otherwise. The score path (scanner.analyse_and_assess /
+        # rescore_reused) applies the SAME resolution, so this file's traces and its score agree.
+        scope = self.scope_for_file(scan_id, f["file"], scope)
         import json as _json
         catalog = _json.loads(
             (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text())
@@ -1268,8 +1292,7 @@ class Store:
                          "scan_file_manifests", "scan_inventory", "file_tags", "scan_decisions",
                          "pii_findings", "hitl_queue", "hitl_events", "disposition_audit",
                          "decision_log", "inventory", "jobs", "documents", "org_memory",
-                         "remediation_state", "remediation_diff", "applied_fixes", "ai_calls",
-                         "file_tags"]
+                         "remediation_state", "remediation_diff", "applied_fixes", "ai_calls"]
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
@@ -1637,6 +1660,45 @@ class Store:
         # NOT guarded: a stored-but-corrupt scope raises here rather than reading as unrestricted.
         data = _json.loads(raw) if isinstance(raw, str) else raw
         return scope_from_json((data or {}).get("scan_scope"))
+
+    def get_scan_scope_rules(self, scan_id: str) -> list[dict]:
+        """The per-file WCAG scope rules FROZEN into this scan at discover (PRD §4.4 / C4), or []
+        for a scan with none (including legacy scans predating the field). Read by the score and
+        trace paths so both resolve every file against the same rule set — the frozen-scope
+        discipline get_scan_scope follows, applied to C4's rule layer."""
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT scope FROM scan_runs WHERE id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+        if not row:
+            return []
+        raw = row.get("scope")
+        if not raw:
+            return []
+        data = _json.loads(raw) if isinstance(raw, str) else raw
+        rules = (data or {}).get("scope_rules") or []
+        return rules if isinstance(rules, list) else []
+
+    def _inventory_attrs(self, scan_id: str, file: str) -> dict:
+        """The file's path / owner / parent_folder from its scan_inventory row — the attributes a
+        per-file scope rule matches on (department is not on scan_inventory today, so
+        department-selector rules do not resolve at this layer; folder/owner do)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT path, owner, parent_folder FROM scan_inventory WHERE scan_id=%s AND file=%s",
+                (scan_id, file))
+            return self._db.fetchone(cur) or {}
+
+    def scope_for_file(self, scan_id: str, file: str, global_scope):
+        """This file's effective criterion×format scope: `global_scope` narrowed to the WCAG
+        code-set resolved from the scan's FROZEN per-file scope rules (PRD §4.4 / C4), or
+        `global_scope` unchanged when no rule targets the file (byte-for-byte pre-C4 behaviour).
+        Both the score and trace paths call this so a file's score and traces read one scope."""
+        rules = self.get_scan_scope_rules(scan_id)
+        if not rules:
+            return global_scope
+        from assessment_policy import resolve_file_scope
+        return resolve_file_scope(self._inventory_attrs(scan_id, file), global_scope, rules)
 
     def get_scan_diff(self, cur_id: str, prev_id: str, owner: str | None = None) -> dict | None:
         """Diff two scans (ADR 0009) → per-file score regressions / improvements + the WCAG
@@ -4159,6 +4221,57 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT * FROM documents")
             return self._db.fetchall(cur)
+
+    # ── Per-file WCAG scope rules (PRD §4.4 / AC-09 — C4) ───────────────────────
+    def create_scope_rule(self, rule_id: str, *, name: str, selector: str, value: str,
+                          codes: list[str], priority: int = 0, is_override: bool = False,
+                          enabled: bool = True, created_by: str | None = None) -> None:
+        """Persist a scope rule. `codes` is stored as a JSON array. Caller validates the rule
+        (api/scope_resolver.validate_scope_rule) before this."""
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO scope_rule(rule_id,name,selector,value,codes,priority,is_override,"
+                "enabled,created_at,created_by) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (rule_id, name, selector, value, _json.dumps(list(codes)), int(priority),
+                 int(is_override), int(enabled), self._now(), created_by))
+
+    def list_scope_rules(self, enabled_only: bool = False) -> list[dict]:
+        """All scope rules, codes decoded to a list, ordered by priority desc then name.
+        `is_override`/`enabled` come back as bools for the resolver."""
+        import json as _json
+        q = "SELECT * FROM scope_rule"
+        if enabled_only:
+            q += " WHERE enabled=1"
+        q += " ORDER BY priority DESC, name"
+        with self._db.cursor() as cur:
+            self._db.execute(cur, q)
+            rows = self._db.fetchall(cur)
+        for r in rows:
+            r["codes"] = _json.loads(r.get("codes") or "[]")
+            r["is_override"] = bool(r.get("is_override"))
+            r["enabled"] = bool(r.get("enabled"))
+        return rows
+
+    def get_scope_rule(self, rule_id: str) -> dict | None:
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM scope_rule WHERE rule_id=%s", (rule_id,))
+            r = self._db.fetchone(cur)
+        if r:
+            r["codes"] = _json.loads(r.get("codes") or "[]")
+            r["is_override"] = bool(r.get("is_override"))
+            r["enabled"] = bool(r.get("enabled"))
+        return r
+
+    def set_scope_rule_enabled(self, rule_id: str, enabled: bool) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "UPDATE scope_rule SET enabled=%s WHERE rule_id=%s",
+                             (int(enabled), rule_id))
+
+    def delete_scope_rule(self, rule_id: str) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "DELETE FROM scope_rule WHERE rule_id=%s", (rule_id,))
 
     # ── Disposition audit (ADR 0003 Phase 3 — execute path) ─────────────────────
     def create_disposition_audit(self, audit_id: str, *, doc_id: str, policy_id: str,

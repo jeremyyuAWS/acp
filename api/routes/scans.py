@@ -22,6 +22,16 @@ def _owner(request: Request) -> str:
     return getattr(request.state, "user_email", None) or "demo"
 
 
+def _inv_capability(row: dict) -> dict:
+    """Add the estate capability {format, status} to a scan_inventory row, derived from its mime/name
+    the same way estate_inventory.summarize classifies the whole estate — so the per-file list/export
+    carries the identical assessable/metadata-only/unsupported label the dashboard shows."""
+    import estate_inventory as ei
+    c = ei.classify({"id": row.get("drive_file_id"), "name": row.get("file"),
+                     "mimeType": row.get("mime")})
+    return {**row, "format": c["format"], "status": c["status"]}
+
+
 @router.post("/scans")
 def start_scan(request: Request, source: str = Query("local", pattern="^(local|drive|sharepoint)$"),
                sync: bool = False, folder: str | None = Query(None),
@@ -529,6 +539,45 @@ def source_status(sid: str, request: Request):
     count = lambda st: sum(1 for r in rows if r["state"] == st)
     return {"scan_id": sid, "stale_count": count("stale"), "untracked_count": count("untracked"),
             "unavailable_count": count("unavailable"), "files": rows}
+
+
+@router.get("/scans/{sid}/inventory")
+def scan_inventory_list(sid: str, request: Request,
+                        offset: int = Query(0, ge=0),
+                        limit: int = Query(200, ge=1, le=1000)):
+    """The whole per-file discover inventory, paginated — EVERY discovered file with its source
+    metadata (owner, size, path, dates, lifecycle) plus the estate capability (format/status),
+    owner-scoped. This is the full list the capped 200/status dashboard sample could not provide
+    (ADR 0020): `total` is the real count, page through it with offset/limit. Export via the
+    `.csv` sibling. NB: the estate `status` is derived per row, so filtering by it is a client
+    concern for now — a server-side status filter needs the classification persisted (follow-up)."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    rows = core.store.list_inventory_page(sid, limit=limit, offset=offset)
+    return {"scan_id": sid, "total": core.store.count_inventory(sid),
+            "offset": offset, "limit": limit,
+            "rows": [_inv_capability(r) for r in rows]}
+
+
+@router.get("/scans/{sid}/inventory.csv")
+def scan_inventory_csv(sid: str, request: Request):
+    """The whole per-file estate inventory as CSV (owner-scoped) — every discovered file, source
+    metadata + capability, for offline analysis / an auditor. Not paginated: it IS the export."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    import csv
+    import io
+    cols = ["file", "owner", "size_kb", "mime", "format", "status", "doc_class",
+            "lifecycle_status", "path", "parent_folder", "created_at", "source_modified",
+            "discovered_at", "drive_file_id"]
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(cols)
+    for r in core.store.list_inventory(sid):
+        e = _inv_capability(r)
+        w.writerow([e.get(c, "") if e.get(c) is not None else "" for c in cols])
+    return Response(buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="inventory-{sid}.csv"'})
 
 
 @router.get("/scans/{sid}/files/{filename:path}/remediation-state")

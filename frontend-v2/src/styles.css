@@ -2300,3 +2300,37 @@ button.vfrow { background: none; border: none; font: inherit; color: inherit; wi
 /* "What we did NOT check automatically" (ADR 0026 Epic 1) — the honest boundary list. */
 .notchecked { list-style: none; margin: 8px 0 0; padding: 0; }
 .notchecked li { padding: 4px 0 4px 10px; border-left: 2px solid var(--line); font-size: 12.5px; line-height: 1.45; }
+
+/* Scope-rule editor (Discover/Assess PRD §4.4 / AC-09, Phase C4d). */
+.scoperules-form { display: flex; flex-direction: column; gap: 12px; }
+.scoperules-frow { display: flex; flex-wrap: wrap; gap: 12px; }
+.scoperules-frow-opts { align-items: center; }
+.scoperules-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 180px; }
+.scoperules-field-sm { flex: 0 0 110px; }
+.scoperules-flabel { font-size: 12px; font-weight: 600; }
+.scoperules-field input, .scoperules-field select { padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+.scoperules-codes { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 0; }
+.scoperules-codegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 4px 14px; margin-top: 6px; }
+.scoperules-code { display: flex; align-items: baseline; gap: 7px; font-size: 12.5px; line-height: 1.4; }
+.scoperules-check { display: flex; align-items: baseline; gap: 7px; font-size: 12.5px; flex: 1 1 260px; }
+.scoperules-err { background: #FBEAEA; color: #A32D2D; border-radius: 8px; padding: 9px 13px; margin: 0; font-size: 13px; }
+
+.scoperules-list { margin-top: 18px; display: flex; flex-direction: column; gap: 8px; }
+.scoperules-listh { font-size: 13px; }
+.scoperule { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.scoperule.off { opacity: .58; }
+.scoperule-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.scoperule-name { font-size: 13.5px; }
+.scoperule-target { font-size: 13px; }
+.scoperule-target code { background: var(--line); border-radius: 5px; padding: 1px 6px; font-size: 12px; }
+.scoperule-override { font-size: 10px; font-weight: 700; letter-spacing: .04em; color: #854F0B; background: #FAEEDA; border-radius: 5px; padding: 2px 7px; }
+.scoperule-prio { font-size: 11.5px; }
+.scoperule-codes { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.scoperule-codechip { font-size: 11px; background: #E7F0FB; color: #1F5FA8; border-radius: 6px; padding: 2px 8px; white-space: nowrap; }
+.scoperule-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.scoperule-actions button { font-size: 12px; padding: 5px 10px; }
+.scoperule-del { color: #A32D2D; }
+
+.scoperules-elig { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.scoperules-elign { font-size: 14px; }
