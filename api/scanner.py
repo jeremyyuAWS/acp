@@ -86,6 +86,92 @@ def _safe_name(name: str) -> str:
     return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
 
 
+# ── Whole-estate per-file inventory (PRD Phase A2) ──────────────────────────────────────────────
+# Discovery inventories EVERY accessible file — supported docs AND media/unsupported/extensionless
+# — with its source metadata, even though only the assessable subset is ever downloaded and
+# analysed (handlers._scan_assess re-filters to assessable). These helpers build one inventory row
+# from a raw source object; the row shape matches store.add_inventory's accepted keys.
+
+def _inv_size_kb(size) -> int | None:
+    """Bytes → whole KiB, or None when the source didn't report a size."""
+    try:
+        return round(int(size) / 1024) if size is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_owner(owners) -> str | None:
+    """First owner's display name (falling back to email), or None."""
+    owners = owners or []
+    if not owners:
+        return None
+    o = owners[0]
+    return o.get("displayName") or o.get("emailAddress")
+
+
+def _estate_doc_class(name: str, mime: str | None) -> str:
+    """A doc_class for the inventory row that is honest about capability, uniform across formats.
+
+    Assessable formats keep their document class (slide-deck / text-document / pdf-document /
+    spreadsheet / web-page — the existing metadata classification); media and unsupported files
+    report their estate bucket (image / audio-video / unsupported) so a reader can see WHY ACP
+    will not assess the file rather than reading a blank as 'passed'.
+    """
+    row = estate_inventory.classify({"name": name, "mimeType": mime or ""})
+    if row["status"] == estate_inventory.ASSESSABLE:
+        import classify as _cls
+        return _cls.classify_from_metadata(name, mime)["doc_class"]
+    return {"image": "image", "av": "audio-video"}.get(row["format"], "unsupported")
+
+
+def _inv_row(*, file: str, drive_file_id=None, mime=None, size=None, checksum=None, path=None,
+             created_at=None, source_modified=None, owner=None, parent_folder=None) -> dict:
+    """One store.add_inventory row, with size normalised to KiB and doc_class derived."""
+    return {"file": file, "drive_file_id": drive_file_id, "mime": mime or None,
+            "size_kb": _inv_size_kb(size), "doc_class": _estate_doc_class(file, mime),
+            "checksum": checksum, "path": path, "created_at": created_at,
+            "source_modified": source_modified, "owner": owner, "parent_folder": parent_folder}
+
+
+def _drive_inventory_row(f: dict) -> dict:
+    """Inventory row from a raw Drive file object (any type)."""
+    parents = f.get("parents") or []
+    return _inv_row(file=_safe_name(f.get("name", "") or ""), drive_file_id=f.get("id"),
+                    mime=f.get("mimeType"), size=f.get("size"), checksum=f.get("md5Checksum"),
+                    created_at=f.get("createdTime"), source_modified=f.get("modifiedTime"),
+                    owner=_first_owner(f.get("owners")),
+                    parent_folder=parents[0] if parents else None)
+
+
+def _sp_inventory_row(item: dict) -> dict:
+    """Inventory row from a raw MS Graph driveItem (any type)."""
+    fmeta = item.get("file") or {}
+    cb = (item.get("createdBy") or {}).get("user") or {}
+    lb = (item.get("lastModifiedBy") or {}).get("user") or {}
+    owner = cb.get("displayName") or cb.get("email") or lb.get("displayName") or lb.get("email")
+    parent = (item.get("parentReference") or {}).get("path")
+    return _inv_row(file=_safe_name(item.get("name", "") or ""), drive_file_id=item.get("id"),
+                    mime=fmeta.get("mimeType"), size=item.get("size"),
+                    created_at=item.get("createdDateTime"),
+                    source_modified=item.get("lastModifiedDateTime"),
+                    owner=owner, parent_folder=parent)
+
+
+def _dedupe_inventory_files(rows: list[dict]) -> None:
+    """Disambiguate colliding `file` names IN PLACE so store.add_inventory's (scan_id, file)
+    primary key never silently upserts one estate file over another. First occurrence keeps its
+    name (so the assessable rows, added first by the caller, stay canonical); a later collision
+    gets a ' (N)' suffix, mirroring _dedupe_names."""
+    seen: dict[str, int] = {}
+    for r in rows:
+        name = r.get("file") or ""
+        n = seen.get(name, 0)
+        seen[name] = n + 1
+        if n:
+            stem, dot, ext = name.rpartition(".")
+            r["file"] = f"{stem or name} ({n}){dot}{ext}" if dot else f"{name} ({n})"
+
+
 def _drive_service(drive_token: str | None = None):
     """Drive client for THIS scan. A per-user token (from GIS 'Sign in with Google')
     scans that user's Drive; with no token it falls back to ADC (the demo identity)."""
@@ -161,8 +247,18 @@ def _normalize(files: list[dict]) -> list[dict]:
         # have no fixed byte representation — exported on each request) so it's only
         # ever present for real binary uploads, which is exactly the case checksum
         # dedup cares about.
+        # `source_mime` is the REAL source MIME (application/pdf, a Google-native type, …), kept
+        # for the inventory row's `mime` column. It is deliberately SEPARATE from `mime`, which
+        # stays the Google-native EXPORT selector _download keys off — overloading one field would
+        # send a plain PDF's "application/pdf" into EXPORT_MAP and KeyError the download.
+        parents = f.get("parents") or []
         result.append({"name": unique, "id": f["id"], "checksum": f.get("md5Checksum"),
                        "source_modified": f.get("modifiedTime"),
+                       "source_mime": mime or None,
+                       "created_at": f.get("createdTime"),
+                       "owner": _first_owner(f.get("owners")),
+                       "parent_folder": parents[0] if parents else None,
+                       "size_kb": _inv_size_kb(f.get("size")),
                        **({"mime": mime} if mime in EXPORT_MAP else {})})
     if skipped:
         # Not silent anymore: unsupported types (images, .txt/.csv, legacy .doc/.ppt/.xls,
@@ -259,7 +355,7 @@ def _is_scannable_mime(f: dict) -> bool:
 
 
 def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
-                  scope_out: dict | None = None) -> list[dict]:
+                  scope_out: dict | None = None, inventory_out: list | None = None) -> list[dict]:
     """Whole-Drive discovery — returns all scannable files regardless of folder.
 
     `scope_out`, when given, is filled in with WHAT THIS LISTING COVERED — see `_list`. The
@@ -338,6 +434,17 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
     for f in inv_files:
         if provenance.is_acp_generated(f):
             f["_excluded"] = True
+    # Per-file inventory of the NON-scannable estate (media / unsupported / extensionless). The
+    # scannable files are inventoried by the caller from the analysis set (canonical names), so
+    # skip anything already in `result`; skip folders (not content) and ACP's own output.
+    if inventory_out is not None:
+        result_ids = {it.get("id") for it in result}
+        for f in inv_files:
+            if f.get("mimeType") == estate_inventory.FOLDER_MIME or f.get("_excluded"):
+                continue
+            if f.get("id") in result_ids:
+                continue
+            inventory_out.append(_drive_inventory_row(f))
     # hit_cap means the raw listing stopped at raw_cap before the end of the estate, so the
     # inventory counts are a floor — flag it so a >ceiling estate is never reported as complete.
     inventory = estate_inventory.summarize(inv_files, truncated=hit_cap)
@@ -359,7 +466,7 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
 
 
 def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediated: bool = False,
-                   scope_out: dict | None = None) -> list[dict]:
+                   scope_out: dict | None = None, inventory_out: list | None = None) -> list[dict]:
     """BFS over a folder subtree — returns all scannable files in the folder AND
     every nested subfolder. Bounded by max_files (newest folders may be skipped
     once the cap is hit) and a cycle guard, so a huge tree can't run unbounded.
@@ -428,6 +535,13 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
         print(f"[scan] folder listing hit the {max_files}-file cap — not all files were "
               f"scanned; raise ACP_FANOUT_MAX_FILES to cover the full subtree", flush=True)
     result = _normalize(raw[:max_files])
+    # Inventory the NON-scannable files in this subtree (scannable ones are inventoried by the
+    # caller from the analysis set). `raw` already excludes folders and ACP output.
+    if inventory_out is not None:
+        result_ids = {it.get("id") for it in result}
+        for f in raw[:max_files]:
+            if f.get("id") not in result_ids:
+                inventory_out.append(_drive_inventory_row(f))
     if scope_out is not None:
         scope_out.update({"kind": "folder", "folder_id": folder_id,
                           "folders_walked": len(seen_folders), "listed": listed,
@@ -440,6 +554,12 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
 
 
 GRAPH = "https://graph.microsoft.com/v1.0"
+
+# The driveItem fields the estate inventory needs — the source metadata columns (size, created /
+# modified time, owner via createdBy, parent path) on top of the id/name/file/parentReference the
+# scan always needed. Requesting them is free for the scannable set and populates the inventory
+# rows for the rest; a Graph stub that omits any of them just yields None for that column.
+_SP_ITEM_SELECT = "id,name,file,parentReference,size,createdDateTime,lastModifiedDateTime,createdBy,lastModifiedBy"
 
 
 def _sp_get(token: str, url: str, timeout: int = 30):
@@ -510,8 +630,14 @@ def _sp_site_name(token: str, site_id: str) -> str | None:
 
 
 def _sp_list(token: str, max_files: int = 200, site: str | None = None,
-             exclude_remediated: bool = False) -> list[dict]:
+             exclude_remediated: bool = False, inventory_out: list | None = None) -> list[dict]:
     """List scannable files from OneDrive, or from every document library on a SharePoint site.
+
+    The RETURN value is the scannable analysis set (the six supported extensions) — unchanged, so
+    the SEARCH/analysis scope stays exactly as it was. `inventory_out`, when given, is additionally
+    filled with an inventory row for every NON-scannable item the API returned (media / unsupported
+    / extensionless), so Discover can report the whole estate while Assess still only opens
+    supported types.
 
     `site` is a Graph site id. Absent, this behaves exactly as it always has (the signed-in
     user's OneDrive), so an existing scan is unchanged by this function growing a second mode.
@@ -575,12 +701,12 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
             print(f"[scan] SharePoint site {site} has no document libraries visible to this "
                   f"token — nothing to scan", flush=True)
         targets = [(d["id"], f"{GRAPH}/drives/{d['id']}/root/search(q='')"
-                              "?$select=id,name,file,parentReference&$top=200") for d in drives]
+                              f"?$select={_SP_ITEM_SELECT}&$top=200") for d in drives]
     else:
         # None, not a resolved id: the download path reads a missing driveId as /me/drive, which
         # is what every item stored before this change looks like.
         targets = [(None, f"{GRAPH}/me/drive/root/search(q='')"
-                          "?$select=id,name,file,parentReference&$top=200")]
+                          f"?$select={_SP_ITEM_SELECT}&$top=200")]
 
     for drive_id, start in targets:
         url = start
@@ -605,10 +731,25 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 if skip_folders.intersection(segments):
                     continue
                 if Path(name).suffix.lower() in exts:
-                    rec = {"name": _safe_name(name), "id": item_id, "sp": True}
+                    fmeta = item.get("file") or {}
+                    cb = (item.get("createdBy") or {}).get("user") or {}
+                    lb = (item.get("lastModifiedBy") or {}).get("user") or {}
+                    rec = {"name": _safe_name(name), "id": item_id, "sp": True,
+                           # Source metadata for the inventory row (see _scan_discover). None-safe:
+                           # a Graph stub without these fields just yields None.
+                           "source_mime": fmeta.get("mimeType"),
+                           "size_kb": _inv_size_kb(item.get("size")),
+                           "created_at": item.get("createdDateTime"),
+                           "source_modified": item.get("lastModifiedDateTime"),
+                           "owner": (cb.get("displayName") or cb.get("email")
+                                     or lb.get("displayName") or lb.get("email")),
+                           "parent_folder": (item.get("parentReference") or {}).get("path")}
                     if drive_id:
                         rec["driveId"] = drive_id
                     files.append(rec)
+                elif inventory_out is not None:
+                    # Non-scannable item — inventoried with metadata, never analysed.
+                    inventory_out.append(_sp_inventory_row(item))
             url = data.get("@odata.nextLink")
         if len(files) >= max_files:
             break
@@ -865,8 +1006,15 @@ def _dedupe_names(items: list[dict]) -> list[dict]:
 
 def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None = None,
           max_files: int | None = None, exclude_remediated: bool = False,
-          scope_out: dict | None = None, scope_files: dict | None = None) -> list[dict]:
+          scope_out: dict | None = None, scope_files: dict | None = None,
+          inventory_out: list | None = None) -> list[dict]:
     """List the source. `scope_out`, when given, is filled in with WHAT WAS COVERED.
+
+    `inventory_out`, when given, is filled with per-file inventory rows for the NON-scannable
+    estate (media / unsupported / extensionless) — every accessible file that is NOT in the
+    returned analysis set. The caller inventories the scannable set itself (from the returned
+    items, which carry canonical names + source metadata) and appends these, so the whole estate
+    is recorded per-file while only the supported subset is ever downloaded and analysed.
 
     `scope_files` is the operator's resolved `scan_scope` map. Given, files whose format no
     in-scope criterion applies to are dropped from the listing and never read — see the block at
@@ -899,6 +1047,19 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         corpus = Path(os.environ.get("ACP_LOCAL_CORPUS") or (ACP / "test-corpus/files"))
         result = [{"name": p.name, "path": str(p)} for p in sorted(corpus.glob("*"))
                    if p.suffix.lower() in OFFICE + (".pdf",) + HTML_EXTS]
+        if inventory_out is not None:
+            result_names = {it["name"] for it in result}
+            for p in sorted(corpus.glob("*")):
+                if not p.is_file() or p.name in result_names:
+                    continue
+                try:
+                    st = p.stat()
+                    size = st.st_size
+                    mtime = datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat()
+                except OSError:
+                    size, mtime = None, None
+                inventory_out.append(_inv_row(file=p.name, path=str(p), size=size,
+                                              source_modified=mtime))
         if scope_out is not None:
             scope_out.update({"kind": "local", "path": str(corpus), "kept": len(result),
                               "truncated": False})
@@ -908,7 +1069,7 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         # Drive's own sentinel for "no narrowing" and means the same thing here: OneDrive.
         site = None if folder in (None, "", "root") else folder
         result = _sp_list(sp_token, max_files or 200, site=site,
-                          exclude_remediated=exclude_remediated)
+                          exclude_remediated=exclude_remediated, inventory_out=inventory_out)
         if scope_out is not None:
             # `site_name` for the same reason `folder_name` exists on the Drive branch: a Graph
             # site id is `contoso.sharepoint.com,<guid>,<guid>`, and a boundary the reader cannot
@@ -921,13 +1082,14 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
     elif folder and folder != "root":
         # Specific folder: recursive BFS
         result = _search_folder(svc, folder, max_files or 1000,
-                                exclude_remediated=exclude_remediated, scope_out=scope_out)
+                                exclude_remediated=exclude_remediated, scope_out=scope_out,
+                                inventory_out=inventory_out)
         if scope_out is not None:
             scope_out["folder_name"] = _folder_name(svc, folder)
     elif folder == "root" or folder is None:
         # No specific folder chosen: search the whole Drive
         result = _search_drive(svc, max_files or 500, exclude_remediated=exclude_remediated,
-                               scope_out=scope_out)
+                               scope_out=scope_out, inventory_out=inventory_out)
     else:
         # ADC/demo mode with a pinned folder. Requests provenance.DRIVE_FIELDS and honours
         # exclude_remediated like the two GIS paths above: this branch asked for a narrower
@@ -941,6 +1103,13 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         if exclude_remediated:
             batch = [f for f in batch if not provenance.is_acp_generated(f)]
         result = _normalize(batch)
+        if inventory_out is not None:
+            result_ids = {it.get("id") for it in result}
+            for f in batch:
+                if f.get("mimeType") == estate_inventory.FOLDER_MIME:
+                    continue
+                if f.get("id") not in result_ids:
+                    inventory_out.append(_drive_inventory_row(f))
         if scope_out is not None:
             scope_out.update({"kind": "folder", "folder_id": _DEMO_FOLDER,
                               "folder_name": _folder_name(svc, _DEMO_FOLDER),

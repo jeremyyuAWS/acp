@@ -813,13 +813,18 @@ def _scan_discover(payload: dict, job: dict) -> None:
     svc = None if source in ("local", "sharepoint") else _drive_service(toks.get("drive"))
     effective_folder = folder if folder else ("root" if toks.get("drive") else None)
     scope: dict = {}
+    # `inventory` collects per-file rows for the NON-scannable estate (media / unsupported /
+    # extensionless) — every accessible file that is NOT in the assessable `items` set. The
+    # scannable rows are built from `items` below; together they inventory the WHOLE estate
+    # (PRD Phase A2) while only the assessable subset is ever downloaded and analysed.
+    inventory: list[dict] = []
     # scope_files gates what is READ, not what is scored. This is the PRODUCTION listing path
     # (ADR 0007 fan-out); run_scan's is the local one, and wiring only that would leave a
     # hospital's PDFs being downloaded and OCR'd in the deployment that matters.
     items = _list(source, svc, folder=effective_folder, sp_token=toks.get("sp"),
                   max_files=FANOUT_MAX_FILES,
                   exclude_remediated=bool(payload.get("exclude_remediated", False)),
-                  scope_out=scope, scope_files=_scope_for_listing())
+                  scope_out=scope, scope_files=_scope_for_listing(), inventory_out=inventory)
     # shadow_candidate (a file sharing a logical name with another — possibly ACP's own output
     # shadowing its source) is computed inside _enqueue_analysis from the item list, so the same
     # rule applies whether the fan-out runs now or later at Assess.
@@ -830,30 +835,52 @@ def _scan_discover(payload: dict, job: dict) -> None:
     incremental = bool(payload.get("incremental", True))
     core.store.init_scan_run(scan_id, source, len(items), started, rb.name, rb.hash, owner=user,
                              status="discovered" if defer else "running", scope=scope)
-    if not items:
-        core.store.enqueue_job("scan_finalize",
-                               {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)
-        return
-    # Normalise the source listing to the common analysis-item shape.
+    # Normalise the source listing to the common analysis-item shape. `mime` stays the Google-
+    # native EXPORT selector _download keys off; `source_mime` (the real MIME) is carried for the
+    # inventory row's `mime` column, along with the source metadata each listing now surfaces.
     norm = [{"file": it["name"], "drive_file_id": it.get("id"), "mime": it.get("mime"),
              "path": it.get("path"), "checksum": it.get("checksum"),
-             "source_modified": it.get("source_modified")} for it in items]
+             "source_modified": it.get("source_modified"),
+             "source_mime": it.get("source_mime"), "created_at": it.get("created_at"),
+             "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
+             "size_kb": it.get("size_kb")} for it in items]
     if defer:
         # ADR 0020 stage 3/4 — Discover LISTS only: classify from metadata (no file opened),
         # persist the inventory + the scan-level params, and STOP. The estate is browsable in
         # seconds; the download + WCAG analysis happen at Assess (scan_assess), which rebuilds
-        # identical fan-out work from this inventory. file_records stay empty until then, so the
-        # finalize counter (count_files_done) is untouched by deferral.
+        # identical fan-out work from this inventory — filtered back to the assessable subset, so
+        # the non-scannable rows persisted here are never downloaded. file_records stay empty
+        # until then, so the finalize counter (count_files_done) is untouched by deferral.
         import classify as _cls
-        inv = [{**it, "size_kb": None,
-                "doc_class": _cls.classify_from_metadata(it["file"], it.get("mime"))["doc_class"]}
-               for it in norm]
-        core.store.add_inventory(scan_id, inv)
+        from scanner import _dedupe_inventory_files
+        # Scannable rows FIRST (canonical names, from the analysis set) so _dedupe_inventory_files
+        # keeps their names intact; the non-scannable estate rows follow.
+        inv = [{"file": it["file"], "drive_file_id": it.get("drive_file_id"),
+                "mime": it.get("source_mime"), "size_kb": it.get("size_kb"),
+                "doc_class": _cls.classify_from_metadata(it["file"], it.get("source_mime"))["doc_class"],
+                "checksum": it.get("checksum"), "path": it.get("path"),
+                "created_at": it.get("created_at"), "source_modified": it.get("source_modified"),
+                "owner": it.get("owner"), "parent_folder": it.get("parent_folder")}
+               for it in norm] + inventory
+        _dedupe_inventory_files(inv)
+        if inv:
+            core.store.add_inventory(scan_id, inv)
+        if not items:
+            # The estate is inventoried, but nothing in it is assessable — close the run rather
+            # than leave it waiting for an Assess that would enqueue zero files.
+            core.store.enqueue_job("scan_finalize",
+                                   {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)
+            return
         core.store.set_setting(f"assess_params:{scan_id}", _json.dumps(
             {"source": source, "ai": ai, "pii": pii, "incremental": incremental,
              "exclude_remediated": _exclude_rem, "batch": bool(payload.get("batch"))}))
         core.store.log_decision("system", "scan.discovered", scan_id=scan_id,
-                                detail=f"{len(inv)} file(s) inventoried from metadata (no file opened) — awaiting Assess")
+                                detail=f"{len(inv)} file(s) inventoried from metadata (no file opened) — "
+                                       f"{len(items)} assessable, awaiting Assess")
+        return
+    if not items:
+        core.store.enqueue_job("scan_finalize",
+                               {"scan_id": scan_id, "source": source, "ai": ai, "pii": pii}, scan_id=scan_id)
         return
     # Immediate path (default today): fan out the analysis now. ADR 0008 batches large estates.
     _enqueue_analysis(scan_id, source, norm, ai=ai, pii=pii, user=user,
@@ -880,8 +907,23 @@ def _scan_assess(payload: dict, job: dict) -> None:
     incremental = bool(params.get("incremental", True))
     exclude_rem = bool(params.get("exclude_remediated", False))
     core.store.set_scan_status(scan_id, "running")
-    items = [{"file": r["file"], "drive_file_id": r.get("drive_file_id"), "mime": r.get("mime"),
-              "path": r.get("path"), "checksum": r.get("checksum")} for r in inv]
+    # CRITICAL — the inventory now records the WHOLE estate, including media / unsupported /
+    # extensionless files that must NEVER be downloaded or analysed. Rebuild the fan-out from the
+    # ASSESSABLE rows only (a supported doc format with at least one applicable WCAG test); the
+    # rest stay inventory-only. Estate capability is re-derived from name + real MIME so the gate
+    # holds regardless of what doc_class label a row happens to carry.
+    import estate_inventory as _est
+    from scanner import EXPORT_MAP as _EXPORT_MAP
+    items = []
+    for r in inv:
+        if _est.classify({"name": r.get("file"), "mimeType": r.get("mime")})["status"] != _est.ASSESSABLE:
+            continue
+        # `mime` on the analysis item is the Google-native EXPORT selector, NOT the stored source
+        # MIME — feeding a real "application/pdf" here would KeyError in _download's EXPORT_MAP.
+        src_mime = r.get("mime")
+        items.append({"file": r["file"], "drive_file_id": r.get("drive_file_id"),
+                      "mime": src_mime if src_mime in _EXPORT_MAP else None,
+                      "path": r.get("path"), "checksum": r.get("checksum")})
     _enqueue_analysis(scan_id, source, items, ai=ai, pii=pii, user=user,
                       incremental=incremental, exclude_remediated=exclude_rem,
                       force_batch=bool(params.get("batch")))
