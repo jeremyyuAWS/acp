@@ -134,7 +134,14 @@ def test_onedrive_mode_is_unchanged_and_records_no_drive(monkeypatch):
             {"id": "i1", "name": "mine.docx", "file": {}}]},
     }, seen))
     files = scanner._sp_list("tok", 50)
-    assert files == [{"name": "mine.docx", "id": "i1", "sp": True}]
+    assert len(files) == 1
+    rec = files[0]
+    # Identity + the /me/drive sentinel are unchanged; NO driveId (the pre-site shape).
+    assert rec["name"] == "mine.docx" and rec["id"] == "i1" and rec["sp"] is True
+    assert "driveId" not in rec
+    # The scannable rec now also carries source metadata for the inventory row (None-safe when the
+    # Graph payload omits it, as this minimal stub does).
+    assert rec["source_mime"] is None and rec["owner"] is None and rec["size_kb"] is None
     assert all("me/drive" in u for u in seen)
 
 
@@ -162,7 +169,7 @@ def test_the_scan_dispatcher_treats_root_as_no_site(monkeypatch):
     site literally named "root"."""
     calls: list = []
     monkeypatch.setattr(scanner, "_sp_list",
-                        lambda tok, mx, site=None, exclude_remediated=False:
+                        lambda tok, mx, site=None, exclude_remediated=False, inventory_out=None:
                         calls.append(site) or [])
     for folder in (None, "", "root"):
         scanner._list("sharepoint", None, folder=folder, sp_token="t", scope_out={})
