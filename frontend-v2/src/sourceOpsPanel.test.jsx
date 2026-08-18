@@ -34,6 +34,7 @@ vi.mock('./api.js', () => ({
     { policy_id: 'p2', name: 'Temporary files older than 90 days', action: 'delete', enabled: true,
       match: [{ field: 'age_days', op: 'gt', value: 90 }] },
   ])),
+  getInventoryDiff: vi.fn(async () => ({ no_baseline: true, summary: {} })),
   getScanTraces: vi.fn(async () => []),
   getScanRemediationDiffs: vi.fn(async () => []),
   remediateFile: vi.fn(async () => ({})),

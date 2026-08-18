@@ -579,6 +579,120 @@ def remediate_span(trace, drive_write_url: str | None):
         pass
 
 
+
+# ── Discover-phase tracing (ADR 0020) ─────────────────────────────────────────
+#
+# THE GAP THIS CLOSES. `discover_span` above hangs a "Discover" span on a file's trace, and it
+# reads like the Discover phase is traced. It is not. Its only caller is
+# `handlers._analyse_and_persist_one`, which runs on the ANALYSE path — and under ADR 0020 that
+# path runs at ASSESS time, not at discovery. `_scan_discover`, the handler that lists the source,
+# persists `scan_inventory`, evaluates the lifecycle rules and stops, emitted nothing at all.
+#
+# So a Discover-only run produced NO trace: not an empty one, not a thin one — nothing to open.
+# What was labelled "Discover" was the discover portion of opening a file, which happens later and
+# only for the assessable subset. The estate rows Discover inventories and never opens were
+# invisible in Langfuse by construction.
+#
+# Two observations close it, and they answer different questions:
+#
+#   `discover_run_trace`  — what this RUN did: how many files it listed and inventoried, the
+#                           boundary it listed within, whether it hit its cap. One trace per run,
+#                           cheap, always emitted. This is the one that makes a discovery visible
+#                           at all, and the counts carry their boundary with them for the same
+#                           reason scanScope.js insists on it in the UI.
+#
+#   `discover_file_spans` — per-file Discover spans, so a document's trace shows Discover →
+#                           Assess → Remediate rather than starting mid-story. Emitted from the
+#                           inventory, so a file that is inventoried and never assessed still has
+#                           a trace.
+#
+# WHY THE PER-FILE HALF IS CAPPED. A hospital estate is tens of thousands of files and Discover
+# lists all of them by design; emitting a trace + span each would make tracing the most expensive
+# part of a phase that opens no files. The cap is stated, not silent: the run trace carries
+# `file_spans_emitted` alongside `files_inventoried`, so a reader can see the difference rather
+# than conclude the estate is smaller than it is. ACP_TRACE_DISCOVER_FILES raises or disables it.
+def _discover_file_cap() -> int:
+    raw = os.environ.get("ACP_TRACE_DISCOVER_FILES", "").strip()
+    if not raw:
+        return 500
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 500
+
+
+def discover_run_trace(scan_id: str, source: str, *, listed: int, inventoried: int,
+                       scope: dict | None = None, user: str | None = None,
+                       file_spans_emitted: int | None = None, deferred: bool = True):
+    """One trace for the discovery run itself. Safe to call repeatedly — the id is deterministic,
+    so a worker retry updates the same trace instead of adding a sibling."""
+    lf = _lf()
+    if lf is None:
+        return _Noop()
+    sc = scope or {}
+    who = user or "demo"
+    label = _SOURCE_LABEL.get(source, source)
+    # The boundary, carried WITH the count. "12,486 files" and "12,486 files in /Finance" are
+    # different facts, and a trace that records only the first cannot tell them apart later.
+    boundary = {"kind": sc.get("kind"), "folder": sc.get("folder"), "site": sc.get("site"),
+                "truncated": bool(sc.get("truncated"))}
+    try:
+        trace = lf.trace(
+            id=_det_id(scan_id, "discover-run"),
+            session_id=scan_id,
+            name=f"{who} · Discover · {label}",
+            user_id=who,
+            tags=["accessibility-discover", f"user:{who}", f"source:{source}"],
+            metadata={"scan_id": scan_id, "source": source, "phase": "discover",
+                      "deferred_assess": deferred},
+            input=boundary,
+            output={"files_listed": listed, "files_inventoried": inventoried,
+                    "file_spans_emitted": file_spans_emitted,
+                    "truncated": boundary["truncated"]},
+        )
+        return trace
+    except Exception:
+        return _Noop()
+
+
+def discover_file_spans(scan_id: str, items, user: str | None = None) -> int:
+    """A Discover span on each inventoried file's own trace. Returns how many were emitted, which
+    the caller records on the run trace — a cap nobody can see is indistinguishable from a small
+    estate.
+
+    `items` are inventory dicts (file / doc_class / size_kb). No file is opened here, so the span
+    records what LISTING knew: the classification taken from metadata, and the size.
+    """
+    lf = _lf()
+    if lf is None:
+        return 0
+    cap = _discover_file_cap()
+    if cap == 0:
+        return 0
+    n = 0
+    for it in items:
+        if n >= cap:
+            break
+        name = it.get("file")
+        if not name:
+            continue
+        try:
+            trace = file_trace(scan_id, name, user=user)
+            if isinstance(trace, _Noop):
+                continue
+            span = trace.span(
+                id=_det_id(_trace_id(scan_id, name), "discover-listed"),
+                name="Discover",
+                input={"listed_from": "source metadata", "opened": False},
+                output={"doc_class": it.get("doc_class"), "size_kb": it.get("size_kb")},
+            )
+            span.end()
+            n += 1
+        except Exception:
+            # One file's tracing must never stop the inventory being written.
+            continue
+    return n
+
 def file_score(scan_id: str, file: str, score: float | None) -> None:
     """Attach this file's own compliance score to its trace — replaces the old scan-wide
     aggregate score (finish_assess_trace's lf.score call), which has no natural home once

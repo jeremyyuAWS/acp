@@ -202,6 +202,35 @@ export function needsAttention({ files = [], runs = [], labelOf = defaultLabelOf
   return out
 }
 
+
+// ── What changed since the previous run of this source ────────────────────────
+//
+// Renders `GET /scans/{id}/inventory-diff`. Returns null whenever there is nothing honest to
+// say, so the caller OMITS the line rather than printing "0 new · 0 changed · 0 removed" — three
+// zeros read as "we checked and nothing moved", which is a different claim from "we had nothing
+// to compare against" and the one a reader will believe.
+export function inventoryChangeLine(diff) {
+  if (!diff || diff.no_baseline) return null
+  const s = diff.summary || {}
+  const parts = []
+  if (s.new) parts.push(`${Number(s.new).toLocaleString()} new`)
+  if (s.changed) parts.push(`${Number(s.changed).toLocaleString()} changed`)
+  // "Removed" is only ever said when the diff was allowed to say it — see get_inventory_diff:
+  // a moved listing boundary or a truncated listing routes absent files to not_listed instead.
+  if (s.removed) parts.push(`${Number(s.removed).toLocaleString()} no longer present`)
+  // A note, not a suppressed line: the new/changed halves are still valid when the boundary
+  // moved, and dropping the whole line would hide them.
+  const note = diff.boundary_changed
+    ? 'Discovery scope changed since the previous run, so files it did not cover are not counted as removed.'
+    : diff.truncated
+      ? 'The listing hit its cap, so files it did not reach are not counted as removed.'
+      : s.indeterminate
+        ? `${Number(s.indeterminate).toLocaleString()} file${s.indeterminate === 1 ? '' : 's'} could not be compared — no checksum or modified time.`
+        : null
+  if (!parts.length && !note) return null
+  return { text: parts.join(' · ') || 'No additions or removals', note, since: diff.prev_at || null }
+}
+
 // ── Connection identity ───────────────────────────────────────────────────────
 
 /** The authorised boundary of the connection, as label/value pairs. A `null` value is the
