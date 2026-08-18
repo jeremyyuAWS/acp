@@ -618,6 +618,39 @@ def formats_in_scope(scope: dict | None = None) -> frozenset[str] | None:
     return frozenset(out) or None
 
 
+def resolve_file_scope(file_attrs: dict | None, global_scope: dict | None,
+                       scope_rules: list[dict] | None) -> dict | None:
+    """The effective scope map for ONE file, given per-file scope rules (Discover/Assess
+    Lifecycle PRD §4.4 / AC-09 — "C4"). This is the single seam per-file scoping hooks into:
+    the returned map is passed to `in_scope` / `filter_issues_to_scope` exactly like the global
+    one, so no gate signature changes.
+
+    Returns `global_scope` UNCHANGED when there are no rules or none match this file — so a scan
+    with no scope rules, or a file no rule targets, behaves byte-for-byte as before C4 (including
+    the `None` = unrestricted case).
+
+    When a rule matches, the file's WCAG code-set is resolved (union of matching rules, or a
+    higher-priority override replaces — see api/scope_resolver.py) and the returned map restricts
+    scoring to those codes: each code keeps its lane from `global_scope` where present, else falls
+    back to the criterion's full RULE_FORMATS lane, so a rule may legitimately ADD a code the
+    global default omitted, for the files it targets.
+    """
+    if not scope_rules or not file_attrs:
+        return global_scope
+    import scope_resolver as _sr
+    enabled = [r for r in scope_rules if r.get("enabled", True)]
+    if not any(_sr.matches(file_attrs, r) for r in enabled):
+        return global_scope
+    codes = _sr.resolve(file_attrs, enabled, set())
+    eff: dict[str, frozenset[str]] = {}
+    for c in codes:
+        if global_scope is not None and c in global_scope:
+            eff[c] = global_scope[c]
+        else:
+            eff[c] = RULE_FORMATS.get(c, frozenset())
+    return eff
+
+
 def scope_as_json(scope: dict | None) -> dict[str, list[str]] | None:
     """The scope map in a JSON-serialisable, canonically-ordered shape, or None.
 
