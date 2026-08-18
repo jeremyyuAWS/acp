@@ -684,7 +684,7 @@ reach production, safely.
   existing ETag when unchanged) and `public, max-age=31536000, immutable` on `/assets/*` (safe: a new
   build is a new filename). Pinned by `tests/test_spa_cache_headers.py`.
 
-## Feature: Release Center
+## Feature: Release Center · #4599
 
 The Publish tab presented itself as a conformance report — an estate score, a "certifiable" queue,
 "Original preserved" — language ACP's automated checks cannot back: they verify the criteria in scope,
@@ -732,7 +732,7 @@ the write path actually does, and tells a reviewer when the source moved on unde
   error leaves the panel empty rather than inventing changes, and untrackable files are reported as
   untrackable, never "unchanged". Suite green at 1642.
 
-## Feature: Remediate review queue (AI Work Inbox)
+## Feature: Remediate review queue (AI Work Inbox) · #4598
 
 The Remediate tab's AI Work Inbox stacks a rich EvidenceCard per finding; a 50-file scan opened as a
 wall of expanded evidence a reviewer had to scroll past to find where to start. Continues #232 (search
@@ -821,7 +821,7 @@ existing data and the existing decision path; nothing adds a second write path.
   (resolve + advance) and never re-applies; the human lanes still route to the HITL `act()` flow. The
   GroupedFixes summary stays for the at-a-glance count — slimming it is a follow-up.
 
-## Feature: Estate coverage — three denominators and discovery at scale
+## Feature: Estate coverage — three denominators and discovery at scale · #4597
 
 A customer with a 30k-file estate could not see it: discovery listed the whole drive but the count the
 UI showed was the *assessable subset*, so "unsupported" read as "passed" by omission. This makes ACP
@@ -1047,3 +1047,6 @@ three-denominator model (#297, under Documentation).
   and R11/R13 partial), Phase W (W6 closed), plus a new item collecting the gaps the 2026-08-14 docs
   sweep named that are not yet in a backlog phase. Untracked files unchanged from the first pass. No
   `· #id` bindings changed or invented. Sync marker to be advanced from `055b01ac` to `47c3bda4`.
+- **2026-08-18** — Created ADO Features under Epic #3664 for the three unbound Features from
+  the sweep: **#4597** Estate coverage, **#4598** Remediate review queue, **#4599** Release
+  Center (Feature type, Iteration 10, MovaIO-Build, Active). IDs bound to the headings above.
