@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { getSettings, updateSettings, fetchCodeset, fetchEligibility } from './api.js'
 import { SCOPE_FORMATS } from './scopePresets.js'
 import { parseStoredScope } from './ScanScope.jsx'
+import ScopeImpact from './ScopeImpact.jsx'
 
 // The Assess-time scope picker (Discover/Assess PRD §4.4).
 //
@@ -217,6 +218,8 @@ export default function AssessScope({ onSaved }) {
             <span className="muted" style={{ fontSize: 13 }}>{eligLoading ? 'Counting eligible files…' : '—'}</span>
           )}
         </div>
+        {/* Live population funnel — the narrowing behind the single count above, with each drop named. */}
+        <ScopeImpact elig={elig} formats={formats} loading={eligLoading} />
       </div>
 
       <div className="emptyactions" style={{ marginTop: 8 }}>
