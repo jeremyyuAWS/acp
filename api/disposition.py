@@ -19,7 +19,7 @@ from __future__ import annotations
 import posixpath
 from datetime import datetime, timezone
 
-ACTIONS = {"leave", "archive", "rename", "move", "delete"}
+ACTIONS = {"leave", "archive", "rename", "move", "delete", "tag"}
 
 FIELDS = {"department", "business_criticality", "regulatory_tags", "triage_score",
          "source", "owner", "age_days",
@@ -62,6 +62,28 @@ def validate_match(match: list[dict]) -> None:
             raise ValueError(f"unknown field: {cond['field']!r} (allowed: {sorted(FIELDS)})")
         if cond["op"] not in _OPS:
             raise ValueError(f"unknown op: {cond['op']!r} (allowed: {sorted(_OPS)})")
+
+
+def tag_list(action_config: dict | None) -> list[str]:
+    """The non-empty tags in a tag policy's action_config, in order, deduped.
+    Central so the validator, the executor and the persistence path all agree on
+    exactly which strings count as tags."""
+    seen, out = set(), []
+    for t in (action_config or {}).get("tags") or []:
+        t = str(t).strip()
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
+def validate_action_config(action: str, action_config: dict | None) -> None:
+    """Raise ValueError when an action's config is malformed. Called on the same
+    seam as validate_match (before a policy is persisted). Today only 'tag' has a
+    required shape: action_config.tags must be a non-empty list of strings — a tag
+    policy with nothing to attach is a no-op that would silently apply to every match."""
+    if action == "tag" and not tag_list(action_config):
+        raise ValueError("tag action requires a non-empty 'tags' list in action_config")
 
 
 def _parse_iso(value: str | None) -> datetime | None:
@@ -158,6 +180,15 @@ def execute_action(doc: dict, action: str, action_config: dict | None, svc) -> t
     cfg = action_config or {}
     if action == "leave":
         return "applied", "left in place — decision recorded"
+    if action == "tag":
+        # Metadata-only: attaches tags to the document, never touches Drive — so it
+        # works for any source and needs no svc (unlike archive/rename/move/delete).
+        # The actual persistence (store.add_file_tags) is the route's job, keyed to
+        # the caller's tenant/scan grain; here we only decide applied/failed + detail.
+        tags = tag_list(cfg)
+        if not tags:
+            return "failed", "tag action has no tags configured"
+        return "applied", "tagged: " + ", ".join(tags)
     fid = _drive_file_id(doc)
     if not fid:
         return "failed", (f"unsupported source '{doc.get('source')}' — only Drive-backed "
