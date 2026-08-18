@@ -17,10 +17,17 @@ describe('tester guest-invite (ADR 0033)', () => {
     expect(api).toMatch(/inviteTester[\s\S]{0,220}method: 'POST'/)
   })
 
-  it('Settings imports inviteTester and hides the UI until the credential is configured', () => {
+  it('Settings imports inviteTester and gates the one-click invite until the credential is configured', () => {
     expect(settings).toMatch(/import \{[^}]*inviteTester[^}]*\} from '\.\/api\.js'/)
     expect(settings).toMatch(/invite_enabled/)        // read from the allowlist payload
-    expect(settings).toMatch(/\{inviteEnabled && \(/) // the block renders only when enabled → ships dark
+    // Ships dark: the automated invite affordance renders only when `inviteEnabled`. The card now
+    // falls back to GUIDANCE (a manual-Entra link, no invite button) when unconfigured — that path
+    // holds no Graph permission and calls no endpoint, so ADR 0033's property is preserved. Pin the
+    // property that matters: there is exactly ONE invite button and it sits after the enabled gate.
+    const gate = settings.indexOf('inviteEnabled ? (')
+    expect(gate).toBeGreaterThan(-1)
+    expect(settings.match(/onClick=\{invite\}/g) || []).toHaveLength(1)  // one automated invite affordance
+    expect(settings.indexOf('onClick={invite}')).toBeGreaterThan(gate)   // …inside the enabled branch
   })
 
   it('inviting calls the endpoint and reflects the auto-add back into the visible list', () => {

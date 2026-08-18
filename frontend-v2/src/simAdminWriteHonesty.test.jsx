@@ -36,7 +36,7 @@ afterEach(unmountAll)
 // ── The panel, driven for real under SIM ──────────────────────────────────────────
 // No api.js mock on purpose. The defect lived in the SIM stub itself, so a test that replaces it
 // tests the wrong thing; SIM is also the default (VITE_SIM unset here), which is the whole point.
-const { default: Settings } = await import('./Settings.jsx')
+const { default: Settings, DriveMirror } = await import('./Settings.jsx')
 
 // api.js's sim() resolves after 220ms of REAL time, so settling here has to cross the clock —
 // flushing microtasks alone leaves the panel on "Loading…" and every query below finds nothing.
@@ -47,20 +47,21 @@ const settle = async (ms = 320) => {
 const click = async (el) => { await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }
 const byText = (root, sel, t) => [...root.querySelectorAll(sel)].find((e) => e.textContent.trim() === t)
 
-const openStorageTab = async () => {
+// The AI-endpoint / storage panel is no longer surfaced as a Settings tab (the panel is scoped to
+// access management — Owners + Users). It is still EXPORTED, and still the write path the honesty
+// guard protects, so render it directly rather than through a tab that intentionally no longer exists.
+const renderStorage = async () => {
   const { container, root } = createTestRoot()
-  await act(async () => { root.render(createElement(Settings, { onClose: () => {} })) })
-  await settle()
-  await click(byText(container, 'button[role="tab"]', 'Remediated storage'))
+  await act(async () => { root.render(createElement(DriveMirror)) })
   await settle()
   return container
 }
 
 describe('the SIM build cannot report a platform write it did not make', () => {
   it('answers Apply with "nothing was written" instead of "✓ endpoint switched"', async () => {
-    const container = await openStorageTab()
+    const container = await renderStorage()
     const apply = byText(container, 'button', 'Apply')
-    expect(apply, 'the AI-endpoint Apply button should be on the Remediated storage tab').toBeTruthy()
+    expect(apply, 'the AI-endpoint Apply button should be on the storage panel').toBeTruthy()
 
     await click(apply)
     await settle()
@@ -80,7 +81,11 @@ describe('the SIM build cannot report a platform write it did not make', () => {
   })
 
   it('badges the whole admin panel before any button is pressed', async () => {
-    const container = await openStorageTab()
+    // The panel-level SIM badge lives on Settings (above the subtabs), so render the panel itself —
+    // it must carry the badge regardless of which tab, or panel, is showing.
+    const { container, root } = createTestRoot()
+    await act(async () => { root.render(createElement(Settings, { onClose: () => {} })) })
+    await settle()
     // Before the first save, not only in the outcome line — the outcome line was the liar.
     expect(container.textContent).toContain('every setting here is simulated')
     expect(container.textContent).toMatch(/no production endpoint, vision model/)
@@ -90,12 +95,12 @@ describe('the SIM build cannot report a platform write it did not make', () => {
     const { container, root } = createTestRoot()
     await act(async () => { root.render(createElement(Settings, { onClose: () => {} })) })
     await settle()
-    // Default tab is Scoring rules — never went near the settings write paths.
+    // Default tab is Users — never went near the settings write paths.
     expect(container.textContent).toContain('every setting here is simulated')
   })
 
   it('renders the simulated outcome in its own tone, not as a platform error', async () => {
-    const container = await openStorageTab()
+    const container = await renderStorage()
     await click(byText(container, 'button', 'Apply'))
     await settle()
     const p = [...container.querySelectorAll('p[role="status"]')].find((e) => e.textContent.includes('SIM'))
