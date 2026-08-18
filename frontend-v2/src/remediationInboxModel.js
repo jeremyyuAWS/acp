@@ -218,6 +218,31 @@ export function progress(list, decisions = {}) {
   return { resolved, total: list.length }
 }
 
+/** A "About N min remaining" label from a summed effort in seconds. Empty when nothing remains. */
+export function remainingLabel(sec) {
+  if (!(sec > 0)) return ''
+  return sec < 60 ? `About ${sec} sec remaining` : `About ${Math.round(sec / 60)} min remaining`
+}
+
+/** Progress through ONE document's findings, for the persistent workspace bar. `file` is the
+ *  document to report on (pass the selected finding's file). Returns resolved/total, a 0–100 percent,
+ *  the remaining reviewer effort in seconds (unresolved findings only), and a human ETA label. When
+ *  `file` is null/absent it reports the whole queue, so the bar has a sensible run-level fallback
+ *  before anything is selected. */
+export function docProgress(queue = [], file = null, decisions = {}) {
+  const items = file == null ? queue : queue.filter((f) => (f?.file || '') === file)
+  const total = items.length
+  const resolved = items.filter((f) => isResolved(f, decisions)).length
+  const remainingSec = items.reduce((s, f) => s + (isResolved(f, decisions) ? 0 : effortSecOf(f)), 0)
+  return {
+    file, resolved, total,
+    pct: total ? Math.round((resolved / total) * 100) : 0,
+    remainingSec,
+    remainingLabel: remainingLabel(remainingSec),
+    done: total > 0 && resolved >= total,
+  }
+}
+
 // ── The auto-applied fixes, as green review-lane rows ────────────────────────────────────────────
 /** Normalize a WCAG id ("SC_1_1_1", "WCAG_1.1.1", "1.1.1") to a bare "1.1.1". */
 export function normSc(v) {
