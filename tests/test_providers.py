@@ -94,3 +94,130 @@ def test_selector_unknown_provider_falls_back_to_ollama(monkeypatch):
 def test_conforms_to_protocol():
     p = providers.OllamaVisionProvider("http://localhost:11434", "m")
     assert isinstance(p, providers.VisionProvider)
+
+
+# ── OpenAI + Anthropic cloud vision adapters (ADR 0019 — HITL escalation) ────────────────────
+
+def test_openai_adapter_posts_and_normalizes(monkeypatch):
+    seen = {}
+
+    class _R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content": "  A pie chart of payer mix  "},
+                                 "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1000, "completion_tokens": 500}}
+
+    import httpx
+    def fake_post(url, json=None, headers=None, timeout=None):
+        seen.update(url=url, json=json, headers=headers, timeout=timeout)
+        return _R()
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    p = providers.OpenAIVisionProvider("sk-abc", model="gpt-4o")
+    res = p.generate("describe", b"IMG", timeout=42.0)
+
+    assert seen["url"] == "https://api.openai.com/v1/chat/completions"
+    assert seen["headers"] == {"Authorization": "Bearer sk-abc"}      # key rides only in the header
+    assert seen["json"]["model"] == "gpt-4o"
+    content = seen["json"]["messages"][0]["content"]
+    assert content[0]["type"] == "text" and content[1]["type"] == "image_url"
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert res["ok"] is True and res["provider"] == "openai" and res["zone"] == "cloud"
+    assert res["text"] == "A pie chart of payer mix"                  # stripped, raw
+    assert res["cost_usd"] == round(1000 / 1e6 * 2.50 + 500 / 1e6 * 10.00, 6)  # measured, not invented
+
+
+def test_anthropic_adapter_parses_blocks_and_costs(monkeypatch):
+    seen = {}
+
+    class _R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"stop_reason": "end_turn",
+                    "content": [{"type": "text", "text": "A "}, {"type": "text", "text": "bar chart."}],
+                    "usage": {"input_tokens": 1000, "output_tokens": 200}}
+
+    import httpx
+    def fake_post(url, json=None, headers=None, timeout=None):
+        seen.update(url=url, json=json, headers=headers)
+        return _R()
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    p = providers.AnthropicVisionProvider("sk-ant", model="claude-opus-4-8")
+    res = p.generate("describe", b"IMG")
+
+    assert seen["url"] == "https://api.anthropic.com/v1/messages"
+    assert seen["headers"] == {"x-api-key": "sk-ant", "anthropic-version": "2023-06-01"}
+    assert seen["json"]["thinking"] == {"type": "disabled"}           # budget goes to the caption
+    content = seen["json"]["messages"][0]["content"]
+    assert content[0]["source"]["type"] == "base64" and content[0]["source"]["media_type"] == "image/png"
+    assert res["ok"] is True and res["provider"] == "anthropic" and res["zone"] == "cloud"
+    assert res["text"] == "A bar chart."                             # text blocks joined
+    assert res["cost_usd"] == round(1000 / 1e6 * 5.00 + 200 / 1e6 * 25.00, 6)  # input/output usage
+
+
+def test_anthropic_refusal_degrades_to_not_ok(monkeypatch):
+    class _R:
+        def raise_for_status(self): pass
+        def json(self): return {"stop_reason": "refusal", "content": []}
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", lambda url, json=None, headers=None, timeout=None: _R())
+    res = providers.AnthropicVisionProvider("sk-ant", model="claude-opus-4-8").generate("d", b"B")
+    assert res["ok"] is False and res["text"] is None                 # a safety refusal is not an answer
+
+
+def test_cloud_adapters_never_raise_on_transport_error(monkeypatch):
+    import httpx
+    def boom(*a, **k): raise RuntimeError("connection refused")
+    monkeypatch.setattr(httpx, "post", boom)
+    for p in (providers.OpenAIVisionProvider("k", model="gpt-4o"),
+              providers.AnthropicVisionProvider("k", model="claude-opus-4-8")):
+        res = p.generate("d", b"B")
+        assert res["ok"] is False and res["text"] is None             # degraded, not raised
+
+
+def _store(setting=None, configs=None):
+    import types
+    configs = configs or {}
+    return types.SimpleNamespace(get_setting=lambda k: setting if k == "ai_vision_provider" else None,
+                                 get_ai_provider_config=lambda name: configs.get(name))
+
+
+def test_selector_routes_to_anthropic(monkeypatch):
+    import ai, core
+    monkeypatch.setattr(ai, "_maybe_refresh_endpoint", lambda: None)
+    monkeypatch.setattr(ai, "OLLAMA_BASE_URL", "http://localhost:11434")
+    monkeypatch.setattr(ai, "OLLAMA_VISION_MODEL", "moondream")
+    monkeypatch.setenv("ANTHROPIC_KEY", "sk-ant")
+    cfg = {"provider": "anthropic", "enabled": True, "model": "claude-opus-4-8",
+           "key_secret_ref": "ANTHROPIC_KEY"}
+    monkeypatch.setattr(core, "store", _store(setting="anthropic", configs={"anthropic": cfg}))
+    p = providers.active_vision_provider()
+    assert isinstance(p, providers.AnthropicVisionProvider) and p.model == "claude-opus-4-8"
+
+
+def test_selector_openai_without_key_falls_back_to_ollama(monkeypatch):
+    import ai, core
+    monkeypatch.setattr(ai, "_maybe_refresh_endpoint", lambda: None)
+    monkeypatch.setattr(ai, "OLLAMA_BASE_URL", "http://localhost:11434")
+    monkeypatch.setattr(ai, "OLLAMA_VISION_MODEL", "moondream")
+    monkeypatch.delenv("OPENAI_KEY", raising=False)                   # secret not provisioned
+    cfg = {"provider": "openai", "enabled": True, "model": "gpt-4o", "key_secret_ref": "OPENAI_KEY"}
+    monkeypatch.setattr(core, "store", _store(setting="openai", configs={"openai": cfg}))
+    p = providers.active_vision_provider()
+    assert isinstance(p, providers.OllamaVisionProvider)             # under-configured never breaks local
+
+
+def test_cloud_vision_provider_picks_enabled(monkeypatch):
+    import core
+    monkeypatch.setenv("OAI_KEY", "sk-oai")
+    cfg = {"provider": "openai", "enabled": True, "model": "gpt-4o", "key_secret_ref": "OAI_KEY"}
+    monkeypatch.setattr(core, "store", _store(setting="openai", configs={"openai": cfg}))
+    assert isinstance(providers.cloud_vision_provider(), providers.OpenAIVisionProvider)
+
+
+def test_cloud_adapters_conform_to_protocol():
+    assert isinstance(providers.OpenAIVisionProvider("k", model="gpt-4o"), providers.VisionProvider)
+    assert isinstance(providers.AnthropicVisionProvider("k", model="claude-opus-4-8"), providers.VisionProvider)

@@ -259,6 +259,13 @@ _PRICE_PER_1M = {
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4.1": (2.00, 8.00),
     "gpt-4.1-mini": (0.40, 1.60),
+    # Anthropic (Claude) — first-party list prices per 1M tokens (input, output). Matched by
+    # substring like the rest, so keep the full version ids; an unknown Claude model → cost 0.
+    "claude-opus-4-8": (5.00, 25.00),
+    "claude-opus-5": (5.00, 25.00),
+    "claude-sonnet-5": (3.00, 15.00),
+    "claude-haiku-4-5": (1.00, 5.00),
+    "claude-fable-5": (10.00, 50.00),
 }
 
 
@@ -338,6 +345,142 @@ class AzureOpenAIVisionProvider:
         return _result(text=text, model=self.model, provider=self.name,
                        zone=self.zone, latency_ms=int((time.monotonic() - t0) * 1000),
                        ok=True, cost_usd=cost)
+
+
+class OpenAIVisionProvider:
+    """OpenAI vision via the chat-completions API — api.openai.com, or an OpenAI-compatible
+    endpoint the admin points at. `zone` is derived from the endpoint (public api.openai.com is
+    'cloud': bytes leave the network, so the 🟡 badge stays honest — ADR 0016). The key rides only
+    in the Authorization header (never stored/logged/returned); cost is computed from the real
+    token usage the API returns. Never raises → ok=False on failure."""
+
+    def __init__(self, api_key: str, *, model: str, endpoint: str | None = None):
+        self.endpoint = (endpoint or "https://api.openai.com/v1").rstrip("/")
+        self._key = api_key
+        self.model = model
+        self.name = "openai"
+        self.zone = zone_for_url(self.endpoint)
+
+    def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
+                 timeout: float = 120.0) -> dict:
+        import base64
+        mdl = model or self.model
+        t0 = time.monotonic()
+        url = f"{self.endpoint}/chat/completions"
+
+        def _fail(reason: str) -> dict:
+            return _result(text=None, model=mdl, provider=self.name, zone=self.zone,
+                           latency_ms=int((time.monotonic() - t0) * 1000), ok=False, reason=reason)
+
+        try:
+            import httpx
+            b64 = base64.b64encode(image_bytes).decode("ascii")
+            body = {
+                "model": mdl,
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ]}],
+                "max_tokens": 128, "temperature": 0.2,
+            }
+            # The key rides only in the Authorization header; the URL carries no secret, so naming
+            # the endpoint on failure is safe and distinguishes a 404 (wrong path) from a 401 (key).
+            r = httpx.post(url, json=body, headers={"Authorization": f"Bearer {self._key}"},
+                           timeout=timeout)
+            r.raise_for_status()
+            data = r.json() or {}
+            choice = (data.get("choices") or [{}])[0]
+            text = ((choice.get("message") or {}).get("content", "") or "").strip()
+        except Exception as e:                       # cases 1 and 2 — see the reason constants
+            reason, detail = _classify(e)
+            _log_failure(self.name, mdl, url, detail)
+            return _fail(reason)
+        if not text:
+            _log_failure(self.name, mdl, url,
+                         "model returned empty — HTTP 200 with empty content "
+                         f"(finish_reason={choice.get('finish_reason')!r}, "
+                         f"usage={data.get('usage') or {}}).")
+            return _fail(REASON_EMPTY)
+        usage = data.get("usage") or {}
+        price = _price_for(mdl)
+        cost = 0.0
+        if price:
+            cost = round(usage.get("prompt_tokens", 0) / 1e6 * price[0]
+                         + usage.get("completion_tokens", 0) / 1e6 * price[1], 6)
+        return _result(text=text, model=mdl, provider=self.name, zone=self.zone,
+                       latency_ms=int((time.monotonic() - t0) * 1000), ok=True, cost_usd=cost)
+
+
+class AnthropicVisionProvider:
+    """Anthropic (Claude) vision via the Messages API (api.anthropic.com). `zone='cloud'`: a
+    third-party host, so bytes leave the network and the 🟡 badge stays honest (ADR 0016). Thinking
+    is disabled — alt text is a short, direct caption, so the token budget goes to the answer, not
+    to reasoning. A safety refusal (HTTP 200, stop_reason='refusal') is treated as an empty answer.
+    The key rides only in the x-api-key header (never stored/logged/returned); cost is computed from
+    the real input/output token usage the API returns. Never raises → ok=False on failure."""
+
+    _API_VERSION = "2023-06-01"
+
+    def __init__(self, api_key: str, *, model: str, endpoint: str | None = None):
+        self.endpoint = (endpoint or "https://api.anthropic.com/v1").rstrip("/")
+        self._key = api_key
+        self.model = model
+        self.name = "anthropic"
+        self.zone = "cloud"
+
+    def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
+                 timeout: float = 120.0) -> dict:
+        import base64
+        mdl = model or self.model
+        t0 = time.monotonic()
+        url = f"{self.endpoint}/messages"
+
+        def _fail(reason: str) -> dict:
+            return _result(text=None, model=mdl, provider=self.name, zone=self.zone,
+                           latency_ms=int((time.monotonic() - t0) * 1000), ok=False, reason=reason)
+
+        try:
+            import httpx
+            b64 = base64.b64encode(image_bytes).decode("ascii")
+            body = {
+                "model": mdl, "max_tokens": 128,
+                # Disabling thinking is accepted at the default effort; it keeps the 128-token
+                # budget for the caption rather than spending it on (billed) reasoning.
+                "thinking": {"type": "disabled"},
+                "messages": [{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
+                    {"type": "text", "text": prompt},
+                ]}],
+            }
+            r = httpx.post(url, json=body,
+                           headers={"x-api-key": self._key, "anthropic-version": self._API_VERSION},
+                           timeout=timeout)
+            r.raise_for_status()
+            data = r.json() or {}
+        except Exception as e:                       # cases 1 and 2 — see the reason constants
+            reason, detail = _classify(e)
+            _log_failure(self.name, mdl, url, detail)
+            return _fail(reason)
+        if data.get("stop_reason") == "refusal":
+            # Case 3 — a 200 the safety classifier declined. The model is healthy; it refused THIS
+            # image. Nothing to certify from, so degrade to empty rather than emit a partial.
+            _log_failure(self.name, mdl, url, "model refused — HTTP 200 with stop_reason='refusal'.")
+            return _fail(REASON_EMPTY)
+        text = "".join(b.get("text", "") for b in (data.get("content") or [])
+                       if isinstance(b, dict) and b.get("type") == "text").strip()
+        if not text:
+            _log_failure(self.name, mdl, url,
+                         "model returned empty — HTTP 200 with no text block "
+                         f"(stop_reason={data.get('stop_reason')!r}, usage={data.get('usage') or {}}).")
+            return _fail(REASON_EMPTY)
+        usage = data.get("usage") or {}
+        price = _price_for(mdl)
+        cost = 0.0
+        if price:
+            cost = round(usage.get("input_tokens", 0) / 1e6 * price[0]
+                         + usage.get("output_tokens", 0) / 1e6 * price[1], 6)
+        return _result(text=text, model=mdl, provider=self.name, zone=self.zone,
+                       latency_ms=int((time.monotonic() - t0) * 1000), ok=True, cost_usd=cost)
 
 
 class RunPodServerlessVisionProvider:
@@ -432,23 +575,55 @@ def local_vision_provider() -> VisionProvider:
     return OllamaVisionProvider(_ai.OLLAMA_BASE_URL, _ai.OLLAMA_VISION_MODEL)
 
 
+def _adapter_for(provider: str, cfg: dict) -> VisionProvider | None:
+    """Build the adapter for one configured cloud provider from its stored config, or None when it
+    is under-configured (missing key or a required field). The single place that knows each cloud
+    provider's required fields, so both the escalation path and the selector agree."""
+    key = _resolve_key(cfg)
+    if provider == "azure_openai":
+        endpoint, deployment = cfg.get("endpoint"), cfg.get("deployment")
+        if not (key and endpoint and deployment):
+            return None
+        return AzureOpenAIVisionProvider(endpoint, deployment, key, model=cfg.get("model"))
+    if provider == "openai":
+        if not (key and cfg.get("model")):
+            return None
+        return OpenAIVisionProvider(key, model=cfg.get("model"), endpoint=cfg.get("endpoint"))
+    if provider == "anthropic":
+        if not (key and cfg.get("model")):
+            return None
+        return AnthropicVisionProvider(key, model=cfg.get("model"), endpoint=cfg.get("endpoint"))
+    return None
+
+
 def cloud_vision_provider() -> VisionProvider | None:
     """The configured, ENABLED, key-present cloud vision provider for escalation, or None (ADR 0019
     §2/§3c). None is the out-of-box state: with no cloud configured, escalation never fires and the
-    product stays exactly the keyless local build. Azure OpenAI is the only wired cloud adapter in
-    Phase 1; a mis/under-configured provider returns None rather than erroring."""
+    product stays exactly the keyless local build. When several are enabled, the admin's
+    `ai_vision_provider` selection wins; otherwise the first configured one is used. A mis/under-
+    configured provider is skipped rather than erroring."""
     try:
         import core
-        cfg = core.store.get_ai_provider_config("azure_openai")
     except Exception:
         return None
-    if not cfg or not cfg.get("enabled"):
-        return None
-    key = _resolve_key(cfg)
-    endpoint, deployment = cfg.get("endpoint"), cfg.get("deployment")
-    if not (key and endpoint and deployment):
-        return None
-    return AzureOpenAIVisionProvider(endpoint, deployment, key, model=cfg.get("model"))
+    # The admin selection is a best-effort hint; a store that doesn't expose it (or errors) just
+    # means "no preference" — it must not disable escalation on its own.
+    try:
+        setting = (core.store.get_setting("ai_vision_provider") or "").strip().lower()
+    except Exception:
+        setting = ""
+    order = ([setting] if setting in CLOUD_PROVIDERS else []) + \
+            [p for p in ("azure_openai", "openai", "anthropic") if p != setting]
+    for name in order:
+        try:
+            cfg = core.store.get_ai_provider_config(name)
+        except Exception:
+            continue
+        if cfg and cfg.get("enabled"):
+            adapter = _adapter_for(name, cfg)
+            if adapter is not None:
+                return adapter
+    return None
 
 
 def active_vision_provider() -> VisionProvider:
@@ -479,5 +654,17 @@ def active_vision_provider() -> VisionProvider:
         sp = serverless_vision_provider()
         if sp is not None:
             return sp
-    # Future: elif choice == "azure_openai" and configured → AzureOpenAIVisionProvider(...)
+    # A configured, enabled cloud provider (Azure OpenAI / OpenAI / Anthropic) is selected here; an
+    # under-configured or unreachable-config selection falls through to the local floor so a stale
+    # selection can never break the keyless local path.
+    if choice in CLOUD_PROVIDERS:
+        try:
+            import core
+            cfg = core.store.get_ai_provider_config(choice)
+            if cfg and cfg.get("enabled"):
+                adapter = _adapter_for(choice, cfg)
+                if adapter is not None:
+                    return adapter
+        except Exception:
+            pass
     return OllamaVisionProvider(base_url, model)
