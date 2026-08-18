@@ -53,7 +53,15 @@ concurrency:
 
 jobs:
   backend:
-    name: Backend suite (incl. Office engine + matrix guards)
+    # Sharded across free runners (matrix) — pytest-split gives each shard a subset, so the ~12-min
+    # suite runs in parallel groups (~3-4 min wall). The WCAG-matrix + backlog guards run once, in
+    # shard 1 only (they're not tests — they parse the repo). Public repo → free minutes, so this is
+    # the larger-runner speedup without a paid org runner.
+    name: Backend suite (shard ${{ matrix.group }})
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3, 4]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -123,7 +131,13 @@ jobs:
         # that ~12 test modules use to build fixtures on the fly. Without them the suite
         # aborts during collection, not merely at runtime.
 
-      - name: Backend suite
+      - name: Backend suite (shard ${{ matrix.group }}/4)
+        # --splits/--group (pytest-split) runs a quarter of the suite on this shard; -n auto +
+        # loadfile parallelise within it. Cross-shard file splits are safe — each shard is its own
+        # runner with its own checkout, so the fs-mutation race loadfile guards against (a test that
+        # corrupts a generated file and restores it) can't span shards; within a shard, loadfile
+        # still keeps a file's tests on one worker.
+        #
         # -n auto: the suite is ~2,380 tests and was 77s of this job's 118s — the whole critical
         # path, since the two frontend jobs finish sooner and run in parallel. Measured 47.9s →
         # 15.5s locally.
@@ -138,7 +152,7 @@ jobs:
         # loadfile keeps every test in a file on one worker, so the mutation and its readers are
         # serial with respect to each other. Verified: plain -n auto fails 3; with loadfile,
         # 2,381 pass.
-        run: python -m pytest tests/ -q -n auto --dist loadfile --junitxml=test-results.xml
+        run: python -m pytest tests/ -q -n auto --dist loadfile --splits 4 --group ${{ matrix.group }} --junitxml=test-results-${{ matrix.group }}.xml
 
       # ── WCAG-matrix + backlog guards ──────────────────────────────────────────────
       # Mirrors azure-pipelines.yml. Each one exists because something drifted silently
@@ -146,16 +160,19 @@ jobs:
       # this workflow is the gate that actually executes on every PR here.
 
       - name: Matrix guard — capability ceiling still derivable
+        if: ${{ matrix.group == 1 }}
         run: python scripts/gen_matrix_coverage.py --check
         # Every source a per-cell ceiling is derived from is parsed structurally. When one
         # moves, the generator raises rather than quietly producing a wrong ceiling.
 
       - name: Backlog guard — docs/TODO.md coverage block is current
+        if: ${{ matrix.group == 1 }}
         run: python scripts/gen_todo_status.py --check
         # docs/TODO.md carries generated coverage facts beside its authored backlog. They went
         # 387 commits stale because nothing checked them, and read as current the whole time.
 
       - name: Matrix guard — rule changes declare their matrix impact
+        if: ${{ matrix.group == 1 }}
         run: |
           set -euo pipefail
           # On a PR the checkout is the merge commit, so origin/<base>..HEAD is the PR's own
@@ -185,8 +202,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: backend-test-results
-          path: test-results.xml
+          name: backend-test-results-${{ matrix.group }}
+          path: test-results-${{ matrix.group }}.xml
           if-no-files-found: warn
 
   frontend:
