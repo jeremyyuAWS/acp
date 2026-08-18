@@ -338,7 +338,9 @@ def _search_drive(svc, max_files: int = 500, exclude_remediated: bool = False,
     for f in inv_files:
         if provenance.is_acp_generated(f):
             f["_excluded"] = True
-    inventory = estate_inventory.summarize(inv_files)
+    # hit_cap means the raw listing stopped at raw_cap before the end of the estate, so the
+    # inventory counts are a floor — flag it so a >ceiling estate is never reported as complete.
+    inventory = estate_inventory.summarize(inv_files, truncated=hit_cap)
     if scope_out is not None:
         scope_out.update({"kind": "drive", "raw": raw_seen, "scannable": listed,
                           "skipped_acp": skipped_acp, "kept": len(result),
@@ -2121,7 +2123,12 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         progress({"phase": "connecting", "files_found": 0, "files_done": 0, "current": None})
         svc = None if source in ("local", "sharepoint") else _drive_service(drive_token)
         scope: dict = {}
+        # Honour the configured estate ceiling here too, matching the production fan-out path
+        # (handlers._scan_discover). Without this run_scan fell back to _search_drive's 500-file
+        # default, so a whole-Drive scan on this path silently covered ~500 of a large estate while
+        # the "raise ACP_FANOUT_MAX_FILES" hint pointed at a knob that never reached it.
         items = _list(source, svc, folder=effective_folder, sp_token=sp_token,
+                     max_files=FANOUT_MAX_FILES,
                      exclude_remediated=exclude_remediated, scope_out=scope,
                      scope_files=_scope_for_listing())
         n = len(items)

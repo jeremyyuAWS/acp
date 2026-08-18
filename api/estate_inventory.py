@@ -110,12 +110,16 @@ def classify(f: dict) -> dict:
     }
 
 
-def summarize(files: list[dict]) -> dict:
+def summarize(files: list[dict], *, truncated: bool = False) -> dict:
     """The whole-estate summary the dashboard funnel and composition read.
 
     `files` is the raw Drive listing (every type, folders already removed by the caller — a folder
     is not content). Returns discovered totals plus by-format and by-status breakdowns, and the
     assessment-eligible count — the honest split between "found" and "can act on".
+
+    `truncated` is True when the listing hit its cap before reaching the end of the estate: the
+    counts are then a FLOOR, not the whole estate, and a consumer must say so rather than present
+    the number as complete. Silent truncation is the one failure this inventory exists to prevent.
     """
     by_format: dict[str, int] = {}
     by_status: dict[str, int] = {}
@@ -128,4 +132,5 @@ def summarize(files: list[dict]) -> dict:
         "assessment_eligible": by_status.get(ASSESSABLE, 0),
         "by_format": by_format,
         "by_status": by_status,
+        "truncated": bool(truncated),
     }
