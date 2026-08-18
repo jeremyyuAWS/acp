@@ -11,7 +11,7 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
 
 ---
 
-## Feature: SharePoint as a document source
+## Feature: SharePoint as a document source · #4600
 
 - Extended scanning from the signed-in user's OneDrive to full team sites (#156).
 - Made remediated copies write back to SharePoint (#157). `SharePoint.jsx` imported
@@ -80,7 +80,7 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   account", blocked popup, consent needed — to one actionable sentence, keeping the AADSTS code for an
   admin on anything unrecognised rather than the raw wall; used by both entry points.
 
-## Feature: Operator scan scope
+## Feature: Operator scan scope · #4601
 
 - Closed the gap where operator scope gated assessment and scoring but **nothing gated
   remediation** (#137). Zero scope references existed across `handlers.py`, `remediate.py`,
@@ -154,7 +154,7 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   replaced by a derived-level line. Conformance computation and every downstream count are unchanged
   (AA → 14 criteria block). Suite green at 1648.
 
-## Feature: v2 frontend redesign
+## Feature: v2 frontend redesign · #4602
 
 - Forked the SPA so the redesign can move without risking the live one (#139).
 - Gave the fork a CI gate — it shipped with none at all, and the gate had no manual
@@ -236,7 +236,7 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   itself stays — `pdfReport.js` still imports `statusFor` from it and its two tests still pass. Suite
   green at 1639.
 
-## Feature: Dependency security
+## Feature: Dependency security · #4603
 
 - **Upgraded pdfjs-dist to 6.2.108, closing arbitrary JavaScript execution on opening a
   malicious PDF** (#194, GHSA-hq66-cqwq-w95j, HIGH). Also dompurify ≤3.4.12, where
@@ -246,7 +246,7 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   are not build tooling: they ship to the browser. A platform whose entire purpose is ingesting
   untrusted documents cannot carry a parse-a-PDF-and-run-JS bug.
 
-## Feature: Alt-text generation and grounding
+## Feature: Alt-text generation and grounding · #4604
 
 - **Made a missing OCR binary say so instead of quietly degrading** (#190). `requirements.txt`
   installs `pytesseract`, which is a *wrapper*; the tesseract binary comes from the Dockerfile,
@@ -293,7 +293,7 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   panel. Makes the remaining root cause (rotated key R3, or the worker env value) diagnosable from the UI
   after deploy. 1.1.1 stays "assisted"; no capability change.
 
-## Feature: Test corpus and CI
+## Feature: Test corpus and CI · #4605
 
 - **Gave the corpus manifest actual expectations** (#188). `test-corpus/manifest.json` now
   carries `expected_rule_ids` from the generator that calls itself an oracle; the file it
@@ -354,7 +354,7 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   are listed per file under `not_seeded` with the reason, so the manifest never claims coverage it did
   not produce.
 
-## Feature: Remediation reaching the file
+## Feature: Remediation reaching the file · #4606
 
 - Built `api/apply_text_values.py`, the write-back that never existed for the two text-span
   criteria (#146): an approved 1.3.3 sensory rewrite or 3.1.2 language mark now reaches the
@@ -388,7 +388,7 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   "re-trigger" message, never a partial write. `docs/TODO.md` item #1 struck with the evidence and the
   "engineering left ≈ 2–3.5 person-days" summary corrected to ≈ near zero.
 
-## Feature: Assessment correctness
+## Feature: Assessment correctness · #4607
 
 - Fixed a clean Word file reporting NOT_EVALUATED — "we did not look" — for 4.1.2 (#149).
   #144 had put docx 4.1.2 into `RULE_FORMATS`, so a *failing* document reported FAIL correctly
@@ -426,7 +426,7 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   edge corpus: 07-malformed-xml and 08-missing-document-xml flagged; good, tracked-changes, empty and
   unicode/RTL controls not.
 
-## Feature: Multi-tenancy and the control plane
+## Feature: Multi-tenancy and the control plane · #4608
 
 - Gave `documents` its own tenant column, separate from the business owner (#159). The table
   was not missing a tenant — `save_scan` and `handlers` were both landing one in `owner`. But
@@ -437,7 +437,7 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
 - Added tenant-scoped estate aggregates for the control plane (#160).
 - Built an estate view for a single tenant, and a Settings tab to read it (#165).
 
-## Feature: Local model benchmarking
+## Feature: Local model benchmarking · #4609
 
 - Added an ollama service to the local compose stack on a named volume rather than a baked
   image (#161), to find out whether a larger local model does better on the .docx surfaces ACP
@@ -549,7 +549,7 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   unsupported means NOT EVALUATED, never passed; never report the three as one percentage. Implemented
   under the "Estate coverage" Feature below.
 
-## Feature: docx Core-17 criterion coverage
+## Feature: docx Core-17 criterion coverage · #4610
 
 Closing the last .docx accessibility criteria that had no lane, so a Word document can be judged on
 the full Core-17 rather than a subset. Each is declared with the honest lane it can support.
@@ -568,7 +568,7 @@ the full Core-17 rather than a subset. Each is declared with the honest lane it 
   rather than reading the code — each ran on .docx and quietly did nothing on the other office
   formats it was assumed to cover.
 
-## Feature: docx running header/footer parity
+## Feature: docx running header/footer parity · #4611
 
 The recurring blind spot that a content check reads `word/document.xml` alone while the same defect
 lives in a running header, footer or note — where clinical documents routinely put banners, rule
@@ -587,7 +587,7 @@ shared `_docx_story_xmls` helper, so the checks cannot drift on which parts coun
   worst shape, so widening the scan cannot multiply findings, and it stays a Review lane that
   defers the decorative call to a human.
 
-## Feature: Capability registry (ADR 0031)
+## Feature: Capability registry (ADR 0031) · #4612
 
 - **Migrated docx 1.1.1, 2.4.4 and 3.1.2 onto the registry's coverage gate** (#219), retiring the
   older `store.RULE_FORMATS` + `_certify` path they reached REVIEW through. The two mechanisms
@@ -627,7 +627,7 @@ shared `_docx_story_xmls` helper, so the checks cannot drift on which parts coun
   the Python assess-coverage contract guard reimplements the JS rollup and passed, and CI vitest
   surfaced and then confirmed the pinned-count fallout.
 
-## Feature: PHI privacy and document access control
+## Feature: PHI privacy and document access control · #4613
 
 Work specific to a hospital deployment where the documents are patient health information — what
 leaks into a trace, and who can reach a remediated file.
@@ -643,7 +643,7 @@ leaks into a trace, and who can reach a remediated file.
   control creating the path to an incorrect one. Found by re-checking the two routes the
   2026-08-08 owner-derivation audit had listed as not covered.
 
-## Feature: Continuous deployment to Azure
+## Feature: Continuous deployment to Azure · #4614
 
 The live app had sat on the 2026-08-08 build while `main` moved on; this makes a merge to `main`
 reach production, safely.
@@ -1072,3 +1072,11 @@ three-denominator model (#297, under Documentation).
   coverage (#303 status drill-down with honest cap, #304 owner/size/sharing triage lenses),
   one under Continuous deployment to Azure (#302 ollama models baked to `/models` — the root
   cause of the production vision lane never running).
+- **2026-08-18** — Created ADO Features under Epic #3664 for the fifteen remaining unbound
+  Feature headings (#4600–#4614: SharePoint, Operator scan scope, v2 redesign, Dependency
+  security, Alt-text, Test corpus & CI, Remediation reaching the file, Assessment
+  correctness, Multi-tenancy, Local model benchmarking, docx Core-17, docx header/footer,
+  Capability registry, PHI privacy, Continuous deployment). Feature type, Iteration 10,
+  MovaIO-Build, Active; each description carries the heading's first 12 Tasks. IDs bound
+  above. `## Documentation` deliberately left unbound — it is cross-cutting, not a capability.
+  Every Feature heading in this log is now bound.
