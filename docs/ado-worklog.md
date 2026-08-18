@@ -908,7 +908,7 @@ three-denominator model (#297, under Documentation).
 
 ---
 
-## Feature: Discover & Assess lifecycle rules
+## Feature: Discover & Assess lifecycle rules · #4618
 
 Two conflated scopes pulled apart, per the "Discover & Assess Lifecycle Rules" PRD (Deva). Discover must
 inventory *every* file so nothing is invisible by omission; Assess is narrowed on purpose to supported
@@ -1169,3 +1169,6 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   corpus and CI. Two Open items added: the deferred C4 location/owner/department scoping (AC-09) and the
   lifecycle thin-UI/semantics follow-ups. Excluded as non-feature: the parallel duplicate reset-fix (#313,
   same bug as #312). Sync marker advanced from `d7c7a055` to `27827405`.
+- **2026-08-18 (bind)** — Created ADO Feature **#4618** "Discover & Assess lifecycle rules" under Epic
+  #3664 (Feature, `AI-Foundry\MovaIO-Build`, Iteration 10, Active; description carries the eight PR
+  Tasks + the deferred C4), and bound it to the heading above. No new commits documented.
