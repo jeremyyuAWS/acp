@@ -60,6 +60,12 @@ def test_acp_generated_is_excluded_regardless_of_format():
 
 
 # ── summarize ────────────────────────────────────────────────────────────────────────────────
+def test_summary_flags_truncation_so_a_capped_estate_is_never_reported_complete():
+    files = [_f("1", "a.docx", DOC)]
+    assert inv.summarize(files)["truncated"] is False              # default: complete
+    assert inv.summarize(files, truncated=True)["truncated"] is True  # capped: a floor, say so
+
+
 def test_summary_counts_by_format_and_status_and_drops_folders():
     files = [
         _f("1", "a.docx", DOC), _f("2", "b.docx", DOC), _f("3", "c.pdf", PDF),
@@ -99,6 +105,20 @@ class _FakeSvc:
 
     def files(self):
         return self._files
+
+
+def test_run_scan_drive_path_honours_the_configured_estate_ceiling():
+    """Wiring pin: run_scan's whole-Drive _list call must pass max_files=FANOUT_MAX_FILES, not fall
+    back to _search_drive's 500-file default. A 30k-file estate covered ~500 deep — while the
+    "raise ACP_FANOUT_MAX_FILES" hint points at a knob that never reached this path — is the failure
+    this prevents. Source-level, matching the guard style the repo uses for handlers._scan_discover;
+    a mount of run_scan would need the whole rubric/store/token fixture stack."""
+    import re
+    src = (Path(__file__).resolve().parent.parent / "api" / "scanner.py").read_text()
+    m = re.search(r"items = _list\(source, svc,.*?\)", src, re.S)
+    assert m, "run_scan's _list call was not found — did it move?"
+    assert "max_files=FANOUT_MAX_FILES" in m.group(0), \
+        "run_scan must pass max_files=FANOUT_MAX_FILES to _list, else the whole-Drive scan caps at 500"
 
 
 def test_discovery_inventories_all_but_scans_only_scannable():
