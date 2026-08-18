@@ -1268,8 +1268,7 @@ class Store:
                          "scan_file_manifests", "scan_inventory", "file_tags", "scan_decisions",
                          "pii_findings", "hitl_queue", "hitl_events", "disposition_audit",
                          "decision_log", "inventory", "jobs", "documents", "org_memory",
-                         "remediation_state", "remediation_diff", "applied_fixes", "ai_calls",
-                         "file_tags"]
+                         "remediation_state", "remediation_diff", "applied_fixes", "ai_calls"]
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
