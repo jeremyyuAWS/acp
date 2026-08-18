@@ -76,6 +76,13 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Cache .NET (NuGet) packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('spike/dotnet/**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
       - name: Build the Office analyser CLI
         env:
           DOTNET_CLI_TELEMETRY_OPTOUT: '1'
@@ -85,7 +92,22 @@ jobs:
         # the exact path tests/engines.py probes. bin/ stays gitignored: built, not committed.
 
       - name: Install tesseract (OCR)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr
+        # Bounded + retried so a slow or unreachable apt mirror can't hang the job. The plain
+        # `apt-get install` stalled for up to an HOUR on a bad mirror on 2026-08-18, blocking every
+        # deploy that gates on this suite. Each attempt is capped (`timeout`) and retried with
+        # backoff; a genuine outage now fails fast after three tries instead of hanging forever.
+        # Same package set as before (recommends kept) — reliability only, no behaviour change.
+        run: |
+          for i in 1 2 3; do
+            if sudo timeout 90 apt-get update -qq \
+               && sudo DEBIAN_FRONTEND=noninteractive timeout 150 apt-get install -y -qq tesseract-ocr; then
+              exit 0
+            fi
+            echo "::warning::tesseract apt install attempt $i failed or timed out; retrying"
+            sleep $((i * 10))
+          done
+          echo "::error::tesseract install failed after 3 attempts (apt mirror unreachable?)"
+          exit 1
         # Turns ON coverage rather than merely adding a dependency. ocr.is_available() gates
         # 1.4.5 / 1.4.9 (images of text) and every test that drives them self-skips without it —
         # so the OCR criteria were never exercised in CI at all, and the skips said so quietly
