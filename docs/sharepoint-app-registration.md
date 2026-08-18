@@ -72,6 +72,34 @@ single-tenant.
 
 ---
 
+## Troubleshooting
+
+### 403 on a SharePoint **site** scan (OneDrive works, sites don't)
+
+> `Microsoft Graph refused this request (403). SharePoint SITES need the Sites.Read.All delegated
+> permission on the Azure app registration, granted with tenant admin consent; Files.Read.All alone
+> only reaches the signed-in user's OneDrive.`
+
+**Cause.** The signed-in token isn't carrying `Sites.Read.All`. ACP *requests* it at sign-in, but
+`Sites.Read.All` is an **admin-consent-required** scope — requesting is not the same as granting.
+Either the permission was never added to the app registration, or admin consent was never given.
+`Files.Read.All` alone only reaches the signed-in user's OneDrive, so a **site's** drives 403 while
+that user's OneDrive scans fine.
+
+**Fix (a tenant admin, ~2 min):**
+
+1. **Entra admin center → App registrations →** the ACP app → **API permissions**.
+2. Confirm **Microsoft Graph → Delegated → `Sites.Read.All`** is listed. If it's missing, add it (step
+   5 above).
+3. **Grant admin consent** for the tenant (the button on the API permissions page). Both `.All` scopes
+   must show the green **"Granted"** check — *"Not granted"* means the token still won't include it.
+4. Have the user **sign out of ACP and sign back in.** A token cached *before* consent will not gain
+   the scope on its own; a fresh sign-in issues one that carries `Sites.Read.All`. If MSAL keeps
+   returning the cached token, a one-time `prompt=consent` on sign-in clears it.
+
+**Verify.** After re-consent + a fresh sign-in, the site's drives list. If it still 403s, the token is
+stale (step 4) — not the permission.
+
 ## Security summary (for your records)
 
 - **Read-only** — `Read.All`, never `ReadWrite`. ACP cannot change anything in SharePoint.
