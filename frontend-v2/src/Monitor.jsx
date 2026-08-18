@@ -4,6 +4,7 @@ import { getSchedule, putSchedule, listCampaigns, createCampaign, setCampaignSta
 import { prefersReducedMotion } from './a11y.js'
 import RegressionRadar from './RegressionRadar.jsx'
 import ComplianceDigest from './ComplianceDigest.jsx'
+import FailureLane from './FailureLane.jsx'
 
 // Step 10 · Monitor — the always-on surface. Shows every connected source being
 // continuously watched for new files and changes, a live event stream (with demo
@@ -348,6 +349,11 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
       </section>
 
       <ComplianceDigest run={run} />
+
+      {/* W7 — operational-failure lane. Corrupt files, expired source sign-ins, unreachable
+          sources and worker errors show up here (retry → dead-letter) instead of vanishing.
+          Owner-scoped and self-polling, so it needs no run/scan context. */}
+      <FailureLane />
 
       <PublishedWatchdog run={run} scanList={scanList} publishedFiles={publishedFiles} />
 

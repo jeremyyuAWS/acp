@@ -705,6 +705,34 @@ export const confirmCriterion = (scanId, file, sc, note) => (SIM || !scanId || !
     }).then((r) => (r.ok ? r.json() : { ok: false, reason: 'error' }))
       .catch(() => ({ ok: false, reason: 'error' })))
 
+// W4 — disposition lane for a dead-end criterion (UNCHECKED / GAP / AT). Records a human's
+// documented resolution: either a manual attestation ("verified out-of-band — reason") or an
+// out-of-scope decision ("not in this engagement's target — reason"), so the item reaches a
+// recorded, resolved state instead of sitting terminal. Mirrors confirmCriterion's shape.
+//
+// BACKEND DEFERRED: the persistence endpoint (POST /scans/{sid}/files/{file}/dispose, and its
+// read side below) is NOT yet implemented server-side. Against a real backend this call returns
+// { ok: false } and the disposition is not persisted across reload; in SIM it resolves ok so the
+// demo flow is complete. This is deliberately not faked — see the PR body for what the backend
+// needs (an immutable decision written via store.log_decision, guarded to dispositionable
+// outcomes, echoed back by a /dispositions read).
+export const disposeCriterion = (scanId, file, sc, kind, reason) => (SIM || !scanId || !file
+  ? sim({ ok: true, sc, kind, reason, actor: 'you', at: new Date().toISOString() })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/dispose`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ sc, kind, reason }),
+    }).then((r) => (r.ok ? r.json() : { ok: false, reason: 'error' }))
+      .catch(() => ({ ok: false, reason: 'error' })))
+
+// Read the recorded dispositions for a file so they survive a drawer reopen. Backend deferred
+// (see disposeCriterion): returns [] until the endpoint exists, so the drawer simply shows no
+// recorded dispositions rather than erroring.
+export const listDispositions = (scanId, file) => (SIM || !scanId || !file
+  ? sim([])
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/dispositions`, { headers: headers() })
+      .then((r) => (r.ok ? r.json() : []))
+      .catch(() => []))
+
 export const uploadToDrive = (scanId, file, blob, contentType) => {
   if (SIM) return sim({ url: 'https://drive.google.com/file/d/sim/view', file_id: 'sim' })
   const fd = new FormData()

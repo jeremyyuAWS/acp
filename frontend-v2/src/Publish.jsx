@@ -5,6 +5,7 @@ import FileDrawer from './FileDrawer.jsx'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import { openReport, publishFile, publishAllFiles, listHitlQueue, getSettings, getSourceStatus, rescoreFile } from './api.js'
 import { releaseDestination, releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
+import { SET_STATUS, certificationUniverse, releaseSetStatus } from './graduation.js'
 
 // Step 9 · Publish. Marks re-validated documents as published: the conformance status
 // is recorded in the audit trail and the fixed copy (already in Blob + the Drive
@@ -118,6 +119,28 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     ready.forEach((f) => onPublish?.(f.file))
     setPublishing(false)
   }
+  // W5 — set-level certification status (graduation.js). A release can go out CONDITIONALLY while
+  // some in-scope documents are still held; once those held documents are remediated (each is
+  // re-validated on its own remediation path — no whole-estate re-scan), the set can GRADUATE to
+  // full by releasing the now-verified formerly-held documents. Derived purely from what's already
+  // on screen: the certification universe, the session's released map, and externally-certified
+  // files. `files` refreshes after a remediation (App refetches on acp:file-remediated), so this
+  // recomputes and the graduation offer appears without a reload.
+  const setStatus = releaseSetStatus(certificationUniverse(files), done, certified)
+  const graduate = async () => {
+    if (publishing || setStatus.status !== SET_STATUS.GRADUATABLE || !setStatus.graduatable.length) return
+    setPublishing(true)
+    const targets = setStatus.graduatable
+    try {
+      const res = await publishAllFiles(run?.id, targets)
+      const urls = {}
+      ;(res?.published || []).forEach((x) => { if (x.published_url) urls[x.file] = x.published_url })
+      if (Object.keys(urls).length) setPubUrls((m) => ({ ...m, ...urls }))
+    } catch { /* best-effort — local state still updates */ }
+    setDone((d) => ({ ...d, ...Object.fromEntries(targets.map((f) => [f, true])) }))
+    targets.forEach((f) => onPublish?.(f))
+    setPublishing(false)
+  }
   const publishedCount = Object.keys(done).length + certified.length
   const pubStarted = Object.keys(done).length > 0   // zero the outcome cards until the user releases
   const reportDate = new Date(run?.completed_at || Date.now()).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -172,6 +195,48 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <button className="linklike" onClick={() => run?.id && openReport(run.id)}>⤓ Download scope-limited report (PDF)</button>
         </div>
       </section>
+
+      {/* W5 — conditional-release → full-certification graduation. Shown only once a release has
+          started (setStatus is NONE before that, and this renders nothing). */}
+      {setStatus.status === SET_STATUS.CONDITIONAL && (
+        <section className="panel" style={{ borderLeft: '4px solid #854F0B' }} aria-label="Conditional release status">
+          <b style={{ fontSize: 13.5, color: '#854F0B' }}>◐ Conditionally released</b>
+          <p style={{ fontSize: 13, lineHeight: 1.6, margin: '8px 0 0', maxWidth: 680 }}>
+            <b>{setStatus.released}</b> of <b>{setStatus.total}</b> in-scope documents are released.
+            {setStatus.heldOpen > 0 && <> <b>{setStatus.heldOpen}</b> {setStatus.heldOpen === 1 ? 'document is' : 'documents are'} still <b>held</b> pending remediation.</>}
+            {setStatus.verifiedUnreleased > 0 && <> <b>{setStatus.verifiedUnreleased}</b> previously-held {setStatus.verifiedUnreleased === 1 ? 'document has' : 'documents have'} been remediated and can be graduated in below.</>}
+          </p>
+          <p className="muted" style={{ fontSize: 12.5, marginTop: 8, maxWidth: 680 }}>
+            Remediate the held documents (each is re-validated on its own remediation path). This release graduates to <b>fully certified</b> once every held document passes — <b>no whole-estate re-scan required</b>.
+          </p>
+          {setStatus.verifiedUnreleased > 0 && (
+            <button className="qbtn approve" style={{ marginTop: 10 }} disabled={readOnly || publishing}
+                    title={readOnly ? 'Time-travel replay — switch to the latest scan to release' : 'Release the remediated formerly-held documents'}
+                    onClick={graduate}>
+              {publishing ? 'Releasing…' : `↑ Release ${setStatus.verifiedUnreleased} remediated document${setStatus.verifiedUnreleased === 1 ? '' : 's'}`}
+            </button>
+          )}
+        </section>
+      )}
+      {setStatus.status === SET_STATUS.GRADUATABLE && (
+        <section className="panel" style={{ borderLeft: '4px solid #3B6D11', background: '#F3F8EC' }} aria-label="Ready to graduate to full certification">
+          <b style={{ fontSize: 13.5, color: '#3B6D11' }}>✓ Ready to graduate to full certification</b>
+          <p style={{ fontSize: 13, lineHeight: 1.6, margin: '8px 0 0', maxWidth: 680 }}>
+            Every previously-held document has been remediated and re-validated. Release the remaining <b>{setStatus.verifiedUnreleased}</b> {setStatus.verifiedUnreleased === 1 ? 'document' : 'documents'} to promote this conditional release to <b>fully certified</b> — <b>no whole-estate re-scan required</b>.
+          </p>
+          <button className="qbtn approve" style={{ marginTop: 10 }} disabled={readOnly || publishing}
+                  title={readOnly ? 'Time-travel replay — switch to the latest scan to release' : undefined}
+                  onClick={graduate}>
+            {publishing ? 'Graduating…' : `🎓 Graduate to full certification (release ${setStatus.verifiedUnreleased})`}
+          </button>
+        </section>
+      )}
+      {setStatus.status === SET_STATUS.FULL && setStatus.total > 0 && (
+        <section className="panel" style={{ borderLeft: '4px solid #3B6D11' }} aria-label="Fully certified">
+          <b style={{ fontSize: 13.5, color: '#3B6D11' }}>🎓 Fully certified</b>
+          <span className="muted" style={{ fontSize: 13, marginLeft: 8 }}>all {setStatus.total} in-scope documents released.</span>
+        </section>
+      )}
 
       {/* Release policy — an HONEST description of what the platform actually does, read from the
           real settings, not a selector for a behaviour ACP can't perform. There is one policy:

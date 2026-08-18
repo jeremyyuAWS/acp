@@ -5,6 +5,7 @@ import {
 } from './remediationInboxModel.js'
 import { fixSteps, appName } from './remediationGuide.js'
 import { scOf } from './fixSummary.js'
+import RemediationPreview from './RemediationPreview.jsx'
 
 // Master/detail Remediation inbox. Remediation is queue work — select an item, understand it, act,
 // move to the next — so the layout is an email-style split: a 38% work queue on the left, a 62%
@@ -225,7 +226,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
 
 export default function RemediationInbox({
   queue = [], decisions = {}, onDecide, onOpenWord, onRecheck,
-  initialSort = 'priority', initialTab = 'all',
+  initialSort = 'priority', initialTab = 'all', scanId = null, aiEnabled = true,
 }) {
   const [selectedId, setSelectedId] = useState(null)
   const [tab, setTab] = useState(initialTab)
@@ -287,8 +288,8 @@ export default function RemediationInbox({
 
   return (
     <div className="rinbox" style={{ display: 'flex', gap: 0, border: '1px solid var(--line,#e2dce4)', borderRadius: 12, overflow: 'hidden', minHeight: 480 }}>
-      {/* ── Left: the work queue (38%) ── */}
-      <div style={{ flex: '0 0 38%', maxWidth: '38%', borderRight: '1px solid var(--line,#e2dce4)', display: 'flex', flexDirection: 'column', minHeight: 480 }}>
+      {/* ── Left: the work queue (28%) ── */}
+      <div style={{ flex: '0 0 28%', maxWidth: '28%', borderRight: '1px solid var(--line,#e2dce4)', display: 'flex', flexDirection: 'column', minHeight: 480 }}>
         <div style={{ flex: '0 0 auto', padding: '10px 12px', borderBottom: '1px solid var(--line,#e2dce4)' }}>
           <input type="search" value={search} onChange={(e) => setSearch(e.target.value)}
                  placeholder="Search findings…" aria-label="Search findings"
@@ -335,10 +336,15 @@ export default function RemediationInbox({
         </div>
       </div>
 
-      {/* ── Right: the remediation workspace (62%) ── */}
-      <div style={{ flex: '1 1 62%', minWidth: 0 }}>
+      {/* ── Centre: guided remediation — one decision at a time (34%) ── */}
+      <div style={{ flex: '0 0 34%', maxWidth: '34%', minWidth: 0, borderRight: '1px solid var(--line,#e2dce4)' }}>
         <DetailPane f={selected} decisions={decisions} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
                     matchingCount={matchingCount} onApplyToMatching={applyToMatching} />
+      </div>
+
+      {/* ── Right: contextual document preview (38%) ── */}
+      <div style={{ flex: '1 1 38%', minWidth: 0 }}>
+        <RemediationPreview finding={selected} scanId={selected?.scanId || scanId} aiEnabled={aiEnabled} />
       </div>
     </div>
   )

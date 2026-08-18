@@ -106,7 +106,15 @@ export function confidenceForPii(type) {
 //   sc              — bare SC id
 //   outcome         — 'PASS' | 'FAIL' | 'FIXED' | 'HUMAN' | 'UNCHECKED' | 'WEB'
 //   verifiedCleared — the criterion's fix cleared the residual re-scan
-export function confidenceForCoverage({ sc, outcome, verifiedCleared = false } = {}) {
+//   disposition     — (W4) a human's recorded resolution of an otherwise dead-end criterion
+//                     (disposition.js): 'attested' | 'out_of_scope', or the record object. An
+//                     attestation is a HUMAN signal, never an automated pass, so it is shown as
+//                     Low confidence with an attestation basis; an out-of-scope criterion leaves
+//                     the scope entirely, so the platform makes NO assertion (null).
+export function confidenceForCoverage({ sc, outcome, verifiedCleared = false, disposition = null } = {}) {
+  const dkind = typeof disposition === 'string' ? disposition : (disposition && disposition.kind)
+  if (dkind === 'out_of_scope') return null
+  if (dkind === 'attested') return { level: CONFIDENCE.LOW, short: 'Attested', basis: 'manually attested by a human — verified out-of-band' }
   if (outcome === 'UNCHECKED' || outcome === 'WEB') return null
   // A 🟡 Review verdict (ADR 0023): ACP surfaced concrete evidence of a likely issue but did
   // NOT verify conformance — a human adjudicates. Medium: the evidence is real (deterministic
