@@ -14,6 +14,7 @@ import Insight from './Insight.jsx'
 import { TraceChip } from './Transparency.jsx'
 import PiiPanel from './PiiPanel.jsx'
 import { scopeChip, scopeSentence, isNarrowScope } from './scanScope.js'
+import ScanScopeChip from './ScanScopeChip.jsx'
 import EstateCoverage from './EstateCoverage.jsx'
 
 // The estate dashboard — doubles as the exportable compliance report.
@@ -315,6 +316,11 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
           {isNarrowScope(run.scope) ? '⚠ ' : ''}{scopeSentence(run.scope, n)}
         </p>
       )}
+      {/* WHICH CRITERIA this scan covered, from its FROZEN scan_scope (R6 / Phase 3b) — beside the
+          file boundary above, which says which FILES. Both are read from the run, not the live
+          global scope, so an operator who changed the global scope after this scan still sees what
+          THIS scan assessed. Carries the change-scope-&-re-scan affordance and its impact estimate. */}
+      <ScanScopeChip run={run} fileCount={n} onScan={onScan} busy={busy} />
       {/* Say it on screen when the tiles above describe a different set of documents than the
           estate total does — a partly-analysed scan is the case that made every panel look
           like it was contradicting the others. */}
