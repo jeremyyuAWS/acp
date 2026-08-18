@@ -7,7 +7,6 @@ import FileDrawer, { REC_STYLE, fmtEffort, EFFORT_BASIS, SOURCE_URL } from './Fi
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
-import { loadInboxPrefs, saveInboxPrefs } from './inboxPrefs.js'
 import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl } from './api.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
@@ -297,43 +296,9 @@ function VerifyState({ state, pct, remaining, ready, latest }) {
 // are the time-travel feature itself).
 export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, aiEnabled = true, readOnly = false, onRefresh, onHitlCount, onNavigate }) {
   const [queue, setQueue] = useState([])
-  // AI Work Inbox navigation: a search query and a per-card collapse map (id -> true when
-  // collapsed). Both are UI-only; nothing here touches a decision. Cards default to COLLAPSED —
-  // the inbox opens as a scannable list of headers (file · rule · severity) and the reviewer
-  // expands only the one they're working, which is what "let me choose what to tackle first"
-  // asked for. The seeding effect below marks each card collapsed the first time it appears and
-  // never again, so a card a reviewer expands stays expanded across the queue's background
-  // refetches (it already has an entry in the map, so it is not re-seeded).
-  // Rehydrate the view controls from the last time this scan's inbox was open (sessionStorage,
-  // keyed by run id) so leaving the tab and coming back doesn't reset the reviewer's search,
-  // filters and grouping. The per-card collapse map is NOT restored — it seeds fresh below.
-  const _prefs0 = loadInboxPrefs(run?.id)
-  const [reviewQuery, setReviewQuery] = useState(_prefs0.query)
-  const [sevFilter, setSevFilter] = useState(_prefs0.severity)     // one severity, or null for all
-  const [critFilter, setCritFilter] = useState(_prefs0.criterion)  // one WCAG criterion, or null for all
-  const [groupByFile, setGroupByFile] = useState(_prefs0.groupByFile)  // per-document grouping
-  // Review queue is a SINGLE-OPEN accordion: at most ONE finding is expanded, so opening one closes
-  // the previously open one and the queue stays scannable instead of being pushed below the fold (a
-  // single expanded card — with its document preview — is tall). Default: all collapsed (openId null).
-  // Persisted per scan so returning to the tab reopens the finding you were working.
-  const [openId, setOpenId] = useState(_prefs0.openId ?? null)
-  const queueIds = queue.map((q) => q.id).join(',')
-  useEffect(() => {
-    setOpenId((cur) => {
-      const ids = queue.map((q) => q.id)
-      if (cur != null && !ids.includes(cur)) cur = null   // the open finding was resolved/removed → collapse
-      // Exactly ONE unresolved finding → open it (one card can't bury a queue). Two or more START
-      // collapsed so the reviewer sees the whole workload before choosing what to handle first.
-      if (cur == null && queue.length === 1) return queue[0].id
-      return cur
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queueIds])
-  // Persist the view controls + the open finding whenever they change, so the next mount (returning
-  // to this tab) rehydrates them. sessionStorage-scoped and best-effort — see inboxPrefs.js.
-  useEffect(() => {
-    saveInboxPrefs(run?.id, { query: reviewQuery, severity: sevFilter, criterion: critFilter, groupByFile, openId })
-  }, [run?.id, reviewQuery, sevFilter, critFilter, groupByFile, openId])
+  // The master/detail RemediationInbox owns its own view state (search, tabs, sort, selection),
+  // so the old accordion/prefs plumbing (single-open openId, the search/severity/criterion/group
+  // filters, and their sessionStorage rehydration) is gone with it.
   const [acted, setActed] = useState({ approved: 0, rejected: 0, deferred: 0 })
   const [deferredItems, setDeferredItems] = useState([])
   // Real applied-fix evidence: scan-wide before→after (all fix types, verified-cleared) +
