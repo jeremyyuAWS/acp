@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   assessablePct, isTruncated, compositionRows, statusRows, funnelStages, estateModel,
-  statusFiles, ASSESSABLE_FORMATS,
+  statusFiles, formatBytes, ASSESSABLE_FORMATS,
 } from './estateFunnel.js'
 
 const INV = {
@@ -49,11 +49,14 @@ describe('estateFunnel model', () => {
     expect(estateModel({ discovered: 5, truncated: true }).truncated).toBe(true)
   })
 
-  it('statusFiles drills into a bucket and is honest when the sample is capped', () => {
+  it('statusFiles drills into a bucket, is honest about the cap, and carries triage metadata', () => {
     const inv = {
       by_status: { unsupported: 2374, excluded: 1 },
       samples: {
-        unsupported: [{ id: 'a', name: 'notes.txt', format: 'other' }, { id: 'b', name: 'clip.mp3', format: 'av' }],
+        unsupported: [
+          { id: 'a', name: 'notes.txt', format: 'other', size: 2048, owner: 'Ann', shared: false },
+          { id: 'b', name: 'clip.mp3', format: 'av', size: 9000000, owner: 'Bo', shared: true },
+        ],
         excluded: [{ id: 'z', name: 'remediated_report.pdf', format: 'pdf' }],
       },
     }
@@ -61,13 +64,32 @@ describe('estateFunnel model', () => {
     expect(big.total).toBe(2374)          // the TRUE bucket size, not the sample
     expect(big.shown).toBe(2)
     expect(big.capped).toBe(true)         // 2 shown of 2374 — say so
-    expect(big.files[0]).toMatchObject({ name: 'notes.txt', format: 'other', label: 'Other' })
+    expect(big.files.map((f) => f.name)).toEqual(['clip.mp3', 'notes.txt'])   // default sort: biggest first
+    expect(big.files[0]).toMatchObject({ name: 'clip.mp3', size: 9000000, owner: 'Bo', shared: true, label: 'Video / audio' })
 
     const small = statusFiles(inv, 'excluded')
     expect(small.capped).toBe(false)      // whole bucket fits in the sample
-    expect(small.shown).toBe(1)
+    expect(small.files[0]).toMatchObject({ size: null, owner: null, shared: false })  // absent metadata → safe defaults
 
     const empty = statusFiles(inv, 'assessable')   // no samples/total for this status
     expect(empty).toMatchObject({ files: [], shown: 0, total: 0, capped: false })
+  })
+
+  it('statusFiles sorts by size (default), shared-first, or name', () => {
+    const inv = { by_status: { unsupported: 3 }, samples: { unsupported: [
+      { id: '1', name: 'zeta.txt', format: 'other', size: 100, shared: false },
+      { id: '2', name: 'alpha.txt', format: 'other', size: 500, shared: true },
+      { id: '3', name: 'mid.txt', format: 'other', size: 300, shared: false },
+    ] } }
+    expect(statusFiles(inv, 'unsupported', 'size').files.map((f) => f.size)).toEqual([500, 300, 100])
+    expect(statusFiles(inv, 'unsupported', 'name').files.map((f) => f.name)).toEqual(['alpha.txt', 'mid.txt', 'zeta.txt'])
+    expect(statusFiles(inv, 'unsupported', 'shared').files[0].name).toBe('alpha.txt')   // externally-shared first
+  })
+
+  it('formatBytes renders human sizes and an em dash for unknown', () => {
+    expect(formatBytes(null)).toBe('—')
+    expect(formatBytes(512)).toBe('512 B')
+    expect(formatBytes(2048)).toBe('2.0 KB')
+    expect(formatBytes(10485760)).toBe('10 MB')
   })
 })

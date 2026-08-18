@@ -38,7 +38,10 @@ ACP_SOURCE_KEY = "acpSourceFile"
 
 # Ask for this in every files.list `fields` mask that feeds discovery — without it Drive
 # omits `properties` entirely and `is_acp_generated` silently answers False for everything.
-DRIVE_FIELDS = "id,name,mimeType,md5Checksum,modifiedTime,properties"
+# size / owners / shared feed the estate drill-down's triage metadata (biggest-first, by owner,
+# externally-shared-first); all are cheap list fields, so they ride the same page with no extra call.
+DRIVE_FIELDS = ("id,name,mimeType,md5Checksum,modifiedTime,properties,"
+                "size,owners(displayName,emailAddress),shared")
 
 
 def stamp(source_filename: str | None = None) -> dict[str, str]:

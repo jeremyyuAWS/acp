@@ -110,6 +110,22 @@ def classify(f: dict) -> dict:
     }
 
 
+def _sample_meta(f: dict) -> dict:
+    """Triage metadata for a drill-down sample row, pulled from the raw Drive file. Only the capped
+    sample carries this (never all 30k) — size to sort biggest-first, owner to group, shared to flag
+    the externally-visible files that matter most for a PHI estate. Missing/unparseable → None/False,
+    never a wrong value."""
+    owners = f.get("owners") or []
+    owner = (owners[0].get("displayName") or owners[0].get("emailAddress")) if owners else None
+    size = f.get("size")
+    try:
+        size = int(size) if size is not None else None
+    except (TypeError, ValueError):
+        size = None
+    return {"size": size, "owner": owner, "shared": bool(f.get("shared")),
+            "modified": f.get("modifiedTime")}
+
+
 def summarize(files: list[dict], *, truncated: bool = False, sample_per_status: int = 200) -> dict:
     """The whole-estate summary the dashboard funnel and composition read.
 
@@ -118,8 +134,9 @@ def summarize(files: list[dict], *, truncated: bool = False, sample_per_status: 
     assessment-eligible count — the honest split between "found" and "can act on".
 
     `samples` carries, per capability status, up to `sample_per_status` of the actual files in that
-    bucket ({id, name, format}) so the dashboard can drill from an aggregate ("unsupported: 4,231")
-    into the files behind it. It is a CAP, not the whole list: `by_status[status]` is the true total,
+    bucket ({id, name, format} + triage metadata {size, owner, shared, modified}) so the dashboard can
+    drill from an aggregate ("unsupported: 4,231") into the files behind it, sorted biggest-first or by
+    owner. It is a CAP, not the whole list: `by_status[status]` is the true total,
     so a consumer renders "showing N of <total>" and never mistakes the sample for the estate. The
     cap bounds the report size at 30k-file scale (4 statuses x cap rows), and the per-file paginated
     export is a separate follow-up.
@@ -131,13 +148,14 @@ def summarize(files: list[dict], *, truncated: bool = False, sample_per_status: 
     by_format: dict[str, int] = {}
     by_status: dict[str, int] = {}
     samples: dict[str, list[dict]] = {}
-    rows = [classify(f) for f in files if f.get("mimeType") != FOLDER_MIME]
-    for r in rows:
+    pairs = [(classify(f), f) for f in files if f.get("mimeType") != FOLDER_MIME]
+    rows = [r for r, _ in pairs]
+    for r, f in pairs:
         by_format[r["format"]] = by_format.get(r["format"], 0) + 1
         by_status[r["status"]] = by_status.get(r["status"], 0) + 1
         bucket = samples.setdefault(r["status"], [])
         if len(bucket) < sample_per_status:
-            bucket.append({"id": r["id"], "name": r["name"], "format": r["format"]})
+            bucket.append({"id": r["id"], "name": r["name"], "format": r["format"], **_sample_meta(f)})
     return {
         "discovered": len(rows),
         "assessment_eligible": by_status.get(ASSESSABLE, 0),

@@ -95,6 +95,22 @@ def test_summary_samples_the_files_behind_each_status_capped_with_true_totals():
     assert row["name"] == "a.docx" and row["format"] == "docx" and "id" in row
 
 
+def test_sample_rows_carry_triage_metadata_for_the_drilldown():
+    # size / owner / shared let the drill-down sort biggest-first and flag externally-visible files.
+    f = _f("1", "big.pdf", PDF, size="10485760",
+           owners=[{"displayName": "Dr. Vega", "emailAddress": "vega@hosp.org"}], shared=True)
+    row = inv.summarize([f])["samples"][inv.ASSESSABLE][0]
+    assert row["size"] == 10485760        # Drive gives size as a string; coerced to int for sorting
+    assert row["owner"] == "Dr. Vega"     # displayName preferred over email
+    assert row["shared"] is True
+
+
+def test_sample_metadata_never_becomes_a_wrong_value_when_absent_or_garbage():
+    g = _f("2", "x.pdf", PDF, size="not-a-number")   # unparseable size, no owners, no shared
+    row = inv.summarize([g])["samples"][inv.ASSESSABLE][0]
+    assert row["size"] is None and row["owner"] is None and row["shared"] is False
+
+
 # ── discovery integration: report the whole estate, scan only the scannable ───────────────────
 class _Exec:
     def __init__(self, payload):
