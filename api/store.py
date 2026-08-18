@@ -394,6 +394,39 @@ _SCHEMA = [
       doc_class TEXT, checksum TEXT, path TEXT,
       PRIMARY KEY (scan_id, file)
     )""",
+    # Discover-completeness PRD (ADR 0003 lifecycle). The inventory must record EVERY file with
+    # full source metadata so lifecycle rules (folder/path, created/modified date) and the estate
+    # export can run off a durable per-file row — not just a capped sample. All additive, all
+    # source-metadata (no file opened). `discovered_at` is the per-file discovery timestamp (the
+    # scan's started_at is not per-row). `parent_folder` is the folder id/name lineage for the
+    # Document Location filter and folder-scoped rules. `source_modified` is the file's own modified
+    # time (distinct from ACP's discovery time); `created_at` its source creation time.
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS created_at TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS source_modified TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS owner TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS parent_folder TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS discovered_at TEXT",
+    # Per-document lifecycle status (PRD §4.3). One of: Active, Archive Candidate, Archived,
+    # Delete Candidate, Deleted, Failed, Exempted. Defaults to Active on first discovery; a rule
+    # run (Discover) or a manual action moves it. `lifecycle_rule_id`/`lifecycle_reason` record
+    # WHICH rule produced the status and why (PRD §4.3 "record the matching rule ID and reason").
+    # `exclusion_reason` is the human-readable reason Assess skipped the file (PRD §4.5).
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS lifecycle_status TEXT DEFAULT 'Active'",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS lifecycle_rule_id TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS lifecycle_reason TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS exclusion_reason TEXT",
+    # The file's own source-modified time on the governed document (mirrors scan_inventory.
+    # source_modified). The disposition rules engine reads this for "modified before <date>"
+    # conditions — documents.created_at already exists; this adds the modified axis.
+    "ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_modified TEXT",
+    # Per-file tags (PRD §4.2 Tag action + §3 auto-tagging). kind: 'system' (rule-applied) or
+    # 'user' (manual). rule_id names the lifecycle rule that applied a system tag (NULL for user
+    # tags). Keyed per (scan_id, file, tag) to match scan_inventory's grain; idempotent re-tagging
+    # (PRD §4.3 idempotent re-runs) falls out of the primary key.
+    """CREATE TABLE IF NOT EXISTS file_tags (
+      scan_id TEXT, file TEXT, tag TEXT, kind TEXT, rule_id TEXT, created_at TEXT,
+      PRIMARY KEY (scan_id, file, tag)
+    )""",
     # ADR 0021 — enterprise review memory. Org-scoped guidance that shapes AI draft PROMPTS
     # (never model weights). kind: 'style'/'glossary' (admin-authored, apply when status
     # 'active') or 'derived' (behaviour-proposed, inert until an admin accepts it). guidance
@@ -858,24 +891,37 @@ class Store:
             self._db.execute(cur, "UPDATE scan_runs SET status=%s WHERE id=%s", (status, scan_id))
 
     def add_inventory(self, scan_id: str, items: list[dict]) -> None:
-        """Persist the Discover-phase inventory (ADR 0020) — metadata only, no file opened.
-        Idempotent per (scan_id, file) so a re-listed discover doesn't duplicate."""
+        """Persist the Discover-phase inventory (ADR 0020 / lifecycle PRD) — source metadata
+        only, no file opened. Idempotent per (scan_id, file) so a re-listed discover doesn't
+        duplicate. `lifecycle_status` is deliberately NOT written here: it defaults to 'Active'
+        on first insert (column DEFAULT) and is owned by the rule evaluator / manual actions, so
+        a re-list must not reset a status already assigned this run."""
         if not items:
             return
+        now = self._now()
         with self._db.cursor() as cur:
             for it in items:
                 self._db.execute(cur,
-                    "INSERT INTO scan_inventory(scan_id,file,drive_file_id,mime,size_kb,doc_class,checksum,path) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
+                    "INSERT INTO scan_inventory(scan_id,file,drive_file_id,mime,size_kb,doc_class,"
+                    "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
                     "drive_file_id=EXCLUDED.drive_file_id, mime=EXCLUDED.mime, size_kb=EXCLUDED.size_kb, "
-                    "doc_class=EXCLUDED.doc_class, checksum=EXCLUDED.checksum, path=EXCLUDED.path",
+                    "doc_class=EXCLUDED.doc_class, checksum=EXCLUDED.checksum, path=EXCLUDED.path, "
+                    "created_at=EXCLUDED.created_at, source_modified=EXCLUDED.source_modified, "
+                    "owner=EXCLUDED.owner, parent_folder=EXCLUDED.parent_folder",
                     (scan_id, it.get("file"), it.get("drive_file_id"), it.get("mime"),
-                     it.get("size_kb"), it.get("doc_class"), it.get("checksum"), it.get("path")))
+                     it.get("size_kb"), it.get("doc_class"), it.get("checksum"), it.get("path"),
+                     it.get("created_at"), it.get("source_modified"), it.get("owner"),
+                     it.get("parent_folder"), it.get("discovered_at") or now))
+
+    _INV_COLS = ("scan_id,file,drive_file_id,mime,size_kb,doc_class,checksum,path,"
+                 "created_at,source_modified,owner,parent_folder,discovered_at,"
+                 "lifecycle_status,lifecycle_rule_id,lifecycle_reason,exclusion_reason")
 
     def list_inventory(self, scan_id: str) -> list[dict]:
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT scan_id,file,drive_file_id,mime,size_kb,doc_class,checksum,path "
+                f"SELECT {self._INV_COLS} "
                 "FROM scan_inventory WHERE scan_id=%s ORDER BY file", (scan_id,))
             return self._db.fetchall(cur)
 
@@ -884,6 +930,87 @@ class Store:
             self._db.execute(cur, "SELECT COUNT(*) AS n FROM scan_inventory WHERE scan_id=%s", (scan_id,))
             row = self._db.fetchone(cur)
         return (row or {}).get("n", 0) or 0
+
+    # ── Lifecycle status (Discover-completeness PRD §4.3 / §4.5) ─────────────────
+    # The 7 statuses a discovered file can hold. Active is the default; a rule run or a manual
+    # action moves it. Kept here (not an enum type) so the sqlite/postgres split needs no DDL.
+    LIFECYCLE_STATUSES = ("Active", "Archive Candidate", "Archived", "Delete Candidate",
+                          "Deleted", "Failed", "Exempted")
+    # Statuses Assess excludes by default (PRD §4.5): archive/delete-flagged and terminal.
+    LIFECYCLE_EXCLUDED_DEFAULT = ("Archive Candidate", "Archived", "Delete Candidate", "Deleted")
+
+    def set_lifecycle_status(self, scan_id: str, file: str, status: str, *,
+                             rule_id: str | None = None, reason: str | None = None,
+                             exclusion_reason: str | None = None) -> None:
+        """Move one inventory row to `status`, recording the rule + reason that produced it
+        (PRD §4.3). Unknown statuses raise — the set is closed. Idempotent."""
+        if status not in self.LIFECYCLE_STATUSES:
+            raise ValueError(f"unknown lifecycle status {status!r} "
+                             f"(allowed: {list(self.LIFECYCLE_STATUSES)})")
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE scan_inventory SET lifecycle_status=%s, lifecycle_rule_id=%s, "
+                "lifecycle_reason=%s, exclusion_reason=%s WHERE scan_id=%s AND file=%s",
+                (status, rule_id, reason, exclusion_reason, scan_id, file))
+
+    def get_lifecycle_status(self, scan_id: str, file: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT lifecycle_status,lifecycle_rule_id,lifecycle_reason,exclusion_reason "
+                "FROM scan_inventory WHERE scan_id=%s AND file=%s", (scan_id, file))
+            return self._db.fetchone(cur)
+
+    def count_lifecycle_by_status(self, scan_id: str) -> dict:
+        """{status: count} across the scan's inventory — the reconciliation Reports need
+        (PRD §4.3/AC-14: discovered → active/archived/deletion-flagged/deleted/failed/exempted).
+        Rows predating the lifecycle columns read NULL; report those as 'Active'."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COALESCE(lifecycle_status,'Active') AS s, COUNT(*) AS n "
+                "FROM scan_inventory WHERE scan_id=%s GROUP BY COALESCE(lifecycle_status,'Active')",
+                (scan_id,))
+            return {r["s"]: r["n"] for r in self._db.fetchall(cur)}
+
+    # ── Per-file tags (PRD §4.2 Tag action / §3 auto-tagging) ───────────────────
+    def add_file_tags(self, scan_id: str, file: str, tags: list[str], *,
+                      kind: str = "system", rule_id: str | None = None) -> None:
+        """Attach tags to one file. kind: 'system' (rule-applied) or 'user' (manual).
+        Idempotent per (scan_id, file, tag) — re-running a tagging rule adds nothing new."""
+        if not tags:
+            return
+        now = self._now()
+        with self._db.cursor() as cur:
+            for tag in tags:
+                if not tag:
+                    continue
+                self._db.execute(cur,
+                    "INSERT INTO file_tags(scan_id,file,tag,kind,rule_id,created_at) "
+                    "VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file,tag) DO UPDATE SET "
+                    "kind=EXCLUDED.kind, rule_id=EXCLUDED.rule_id",
+                    (scan_id, file, tag, kind, rule_id, now))
+
+    def list_file_tags(self, scan_id: str, file: str) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT tag,kind,rule_id,created_at FROM file_tags "
+                "WHERE scan_id=%s AND file=%s ORDER BY tag", (scan_id, file))
+            return self._db.fetchall(cur)
+
+    def list_tags_for_scan(self, scan_id: str) -> dict:
+        """{file: [tag,...]} for the whole scan — one query so the Discover grid can render
+        tags without N calls."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT file,tag FROM file_tags WHERE scan_id=%s ORDER BY file,tag", (scan_id,))
+            out: dict = {}
+            for r in self._db.fetchall(cur):
+                out.setdefault(r["file"], []).append(r["tag"])
+            return out
+
+    def remove_file_tag(self, scan_id: str, file: str, tag: str) -> None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "DELETE FROM file_tags WHERE scan_id=%s AND file=%s AND tag=%s",
+                             (scan_id, file, tag))
 
     def save_file_result(self, scan_id: str, f: dict, completed_at: str) -> None:
         """Persist one assessed file (same shape save_scan writes). Idempotent so a
