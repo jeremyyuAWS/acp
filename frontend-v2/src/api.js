@@ -819,9 +819,22 @@ export const executeDispositionPolicy = (policyId) => {
 export const listDispositionApprovals = () => (SIM
   ? sim(_simDisp.approvals.filter((a) => a.result === 'pending_approval'))
   : fetch(`${BASE}/disposition/approvals`, { headers: headers() }).then(j))
-export const approveDisposition = (auditId) => (SIM
-  ? sim((() => { const a = _simDisp.approvals.find((x) => x.id === auditId); if (a) { a.result = 'applied'; a.detail = 'applied (simulated)' } return a })())
-  : fetch(`${BASE}/disposition/approvals/${encodeURIComponent(auditId)}/approve`, { method: 'POST', headers: headers() }).then(j))
+// `execute` decides whether the FILE is touched. The source panel passes false: it records the
+// decision and leaves the document alone, because execute_action is Drive-only (a SharePoint row
+// cannot execute at all) and ACP holds read-only scopes — an Approve button that claimed to move
+// a file would describe a capability the deployment does not have. Default stays true so existing
+// callers keep the behaviour they were written against.
+export const approveDisposition = (auditId, { execute = true } = {}) => (SIM
+  ? sim((() => {
+      const a = _simDisp.approvals.find((x) => x.id === auditId)
+      if (a) {
+        a.result = execute ? 'applied' : 'approved'
+        a.detail = execute ? 'applied (simulated)' : 'approved by admin — decision recorded, file not touched'
+      }
+      return a
+    })())
+  : fetch(`${BASE}/disposition/approvals/${encodeURIComponent(auditId)}/approve?execute=${execute}`,
+          { method: 'POST', headers: headers() }).then(j))
 export const rejectDisposition = (auditId) => (SIM
   ? sim((() => { const a = _simDisp.approvals.find((x) => x.id === auditId); if (a) { a.result = 'rejected'; a.detail = 'declined by admin' } return a })())
   : fetch(`${BASE}/disposition/approvals/${encodeURIComponent(auditId)}/reject`, { method: 'POST', headers: headers() }).then(j))

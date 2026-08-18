@@ -164,18 +164,63 @@ def disposition_audit(request: Request, limit: int = Query(200, ge=1, le=1000)):
 @router.get("/disposition/approvals")
 def list_approvals(request: Request):
     """The pending-approval queue — every doc a requires_approval policy selected
-    that no admin has decided on yet."""
+    that no admin has decided on yet.
+
+    ENRICHED FROM `documents`, for two reasons. An audit row carries only `doc_id`, which is
+    not something a reviewer can act on — approving "drive:1a2b3c" asks somebody to authorise a
+    string. And without `source` the queue cannot be split by connector, so a per-source panel
+    would have to render the whole estate's approvals under a heading naming one source: the
+    same count-without-its-boundary defect the rule match counts avoid.
+
+    `source`/`path` are None when the document has since disappeared. That is left visible
+    rather than filtered out — a queued action against a document that no longer exists is
+    exactly what a reviewer should see before deciding, and approve() already fails it with 410.
+    """
     _require_admin(request)
-    return core.store.list_disposition_audit(result="pending_approval")
+    rows = core.store.list_disposition_audit(result="pending_approval")
+    docs = {d["doc_id"]: d for d in core.store.list_all_documents()}
+    out = []
+    for r in rows:
+        d = docs.get(r.get("doc_id")) or {}
+        out.append({**r, "source": d.get("source"), "path": d.get("path"),
+                    "department": d.get("department"),
+                    "document_exists": bool(d)})
+    return out
 
 
 @router.post("/disposition/approvals/{audit_id}/approve")
-def approve_disposition(audit_id: str, request: Request):
-    """Perform the queued action. The audit row moves to applied or failed."""
+def approve_disposition(audit_id: str, request: Request,
+                        execute: bool = Query(True)):
+    """Approve the queued action. `execute` decides whether the file is TOUCHED.
+
+    execute=true (default, unchanged): perform the action now — the audit row moves to applied
+    or failed. This is what the route has always done, and callers that relied on it still get it.
+
+    execute=false: RECORD THE DECISION ONLY. The row moves to 'approved' and no Drive call is
+    made. Two reasons this is a distinct outcome rather than a client-side nicety:
+
+      • `disposition.execute_action` supports Drive-backed documents ONLY (it returns
+        "unsupported source" for anything else), so an approval on a SharePoint/OneDrive
+        document cannot execute today whatever the caller asks for. Recording the decision is
+        the honest half of the operation, and it is the half a compliance reviewer needs.
+      • ACP holds READ-ONLY scopes (sharepointScopes.CAN_WRITE_BACK is false). A UI whose
+        Approve button claimed to move a file would be describing a capability the deployment
+        does not have.
+
+    'approved' counts as a LIVE outcome in doc_has_disposition, so an approved-but-unexecuted
+    decision is not re-proposed on the next execute run — asking a reviewer the same question
+    twice is how an approval queue stops being trusted.
+    """
     _require_admin(request)
     row = core.store.get_disposition_audit(audit_id)
     if row is None or row["result"] != "pending_approval":
         raise HTTPException(404, "no pending approval with that id")
+    if not execute:
+        core.store.set_disposition_audit_result(audit_id, "approved",
+                                                "approved by admin — decision recorded, file not touched")
+        core.store.log_decision("admin", "disposition.approved",
+                                detail=f"{row['action']} {row['doc_id']}: recorded, not executed")
+        return core.store.get_disposition_audit(audit_id)
     policy = core.store.get_disposition_policy(row["policy_id"]) or {}
     cfg = json.loads(policy.get("action_config") or "{}")
     docs = {d["doc_id"]: d for d in core.store.list_all_documents()}

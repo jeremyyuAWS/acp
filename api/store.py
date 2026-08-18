@@ -4496,11 +4496,17 @@ class Store:
 
     def doc_has_disposition(self, doc_id: str, policy_id: str) -> bool:
         """True if this policy already produced a live outcome for this doc — used to
-        make execute idempotent (rejected/failed rows don't block a re-run)."""
+        make execute idempotent (rejected/failed rows don't block a re-run).
+
+        'approved' is LIVE. A decision recorded without execution (approve?execute=false) is
+        still a decision: leaving it out would let the next execute run re-propose the same
+        document, asking the reviewer a question they have already answered. rejected/failed
+        stay non-live deliberately — those are the cases a re-run should be free to raise again.
+        """
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT 1 FROM disposition_audit WHERE doc_id=%s AND policy_id=%s "
-                "AND result IN ('pending_approval','applied') LIMIT 1",
+                "AND result IN ('pending_approval','applied','approved') LIMIT 1",
                 (doc_id, policy_id))
             return self._db.fetchone(cur) is not None
 

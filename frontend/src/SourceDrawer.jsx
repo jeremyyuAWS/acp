@@ -1,11 +1,14 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import Drawer from './Drawer.jsx'
 import { retentionOf } from './FileDrawer.jsx'
-import { listDispositionPolicies, getInventoryDiff, previewDispositionPolicy } from './api.js'
+import {
+  listDispositionPolicies, getInventoryDiff, previewDispositionPolicy,
+  listDispositionApprovals, approveDisposition, rejectDisposition,
+} from './api.js'
 import {
   filesForSource, runsForSource, inventoryFacts, dispositionRows, dispositionOf,
   runOutcome, runDurationMs, needsAttention, scopeFacts, folderOf, inventoryChangeLine,
-  matchCounts, matchedFilesForSource,
+  matchCounts, matchedFilesForSource, sourceKeys,
   fmtSize, fmtDuration, fmtWhen, fmtCount, orAbsent, NOT_AVAILABLE, NOT_CONFIGURED,
 } from './sourceOps.js'
 
@@ -63,6 +66,8 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
   const [invDiff, setInvDiff] = useState(null)     // null = none to show; the line is omitted
   const [previews, setPreviews] = useState({})     // policy_id -> preview | 'error'
   const [openRule, setOpenRule] = useState(null)   // policy_id whose matches are expanded
+  const [approvals, setApprovals] = useState(null) // null = not loaded; 'error' = failed
+  const [deciding, setDeciding] = useState(null)   // audit id mid-decision
 
   // Discovery rules are a real backend resource (disposition policies), so they are fetched, not
   // described. A failed fetch says so; it does not fall back to an encouraging empty list, which
@@ -96,6 +101,18 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
   // evaluates the policy over the whole `documents` table in Python. So they are fetched when the
   // RULES TAB is opened, not when the drawer is — a per-source panel should not run N full-table
   // scans just because somebody looked at Overview.
+  // The pending-approval queue loads with the Rules tab too. Cheap (one query), unlike the
+  // per-policy previews beside it.
+  const loadApprovals = useCallback(() => {
+    listDispositionApprovals()
+      .then((a) => setApprovals(Array.isArray(a) ? a : []))
+      .catch(() => setApprovals('error'))
+  }, [])
+  useEffect(() => {
+    if (tab !== 'Rules') return
+    loadApprovals()
+  }, [tab, loadApprovals])
+
   useEffect(() => {
     if (tab !== 'Rules' || !policies || !policies.length) return
     let live = true
@@ -292,6 +309,27 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
                   ))}
                 </div>
               )}
+          <h4 className="drawerh">
+            Pending approvals
+            {Array.isArray(approvals) && (
+              <span style={{ float: 'right' }}>{approvals.filter((a) => matchesThisSource(a, source)).length}</span>
+            )}
+          </h4>
+          <ApprovalQueue approvals={approvals} source={source} deciding={deciding}
+                         onDecide={async (id, decision) => {
+                           setDeciding(id)
+                           try {
+                             // execute:false — record the decision, never touch the file. See api.js.
+                             if (decision === 'approve') await approveDisposition(id, { execute: false })
+                             else await rejectDisposition(id)
+                             loadApprovals()
+                           } catch {
+                             setApprovals('error')
+                           } finally {
+                             setDeciding(null)
+                           }
+                         }} />
+
           <h4 className="drawerh">Review queues</h4>
           {/* Counted from the SAME partition Overview renders, not recomputed — two tabs
               disagreeing about how many files await review is worse than neither showing it. */}
@@ -354,6 +392,93 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
         <button className="ghost small" onClick={onClose}>Close</button>
       </div>
     </Drawer>
+  )
+}
+
+// Does this pending approval belong to the source whose drawer this is? The queue is
+// estate-wide in the backend (disposition_audit has no source column; the route joins it in
+// from `documents`), so rendering all of it under a heading naming one source would be the
+// same boundary error the rule match counts avoid.
+//
+// A row whose document has vanished belongs to NO source and is shown to everyone: it is the
+// row most in need of a decision, and hiding it from every drawer would hide it entirely.
+function matchesThisSource(a, source) {
+  if (a && a.document_exists === false) return true
+  const keys = new Set(sourceKeys(source))
+  return keys.has(String((a && a.source) || '').toLowerCase())
+}
+
+// Decisions waiting on a person. Rendered above the candidate lists, because something asking
+// for a human now outranks a list of things that might one day need one.
+function ApprovalQueue({ approvals, source, deciding, onDecide }) {
+  if (approvals === null) return <p className="muted" style={{ fontSize: 13 }}>Loading…</p>
+  if (approvals === 'error') {
+    return (
+      <p style={{ fontSize: 13, color: TONE.fail[0] }}>
+        Could not load the approval queue. Pending actions are unaffected — none of them run
+        without a decision.
+      </p>
+    )
+  }
+  const mine = approvals.filter((a) => matchesThisSource(a, source))
+  const elsewhere = approvals.length - mine.length
+  if (!mine.length) {
+    return (
+      <p className="muted" style={{ fontSize: 13 }}>
+        Nothing is awaiting approval for this source.
+        {elsewhere > 0 && ` ${elsewhere.toLocaleString()} pending on other sources.`}
+      </p>
+    )
+  }
+  return (
+    <>
+      <div style={{ display: 'grid', gap: 8 }}>
+        {mine.map((a) => {
+          const busy = deciding === a.id
+          const destructive = a.action === 'delete'
+          return (
+            <div key={a.id} style={{ border: '1px solid var(--line)', borderRadius: 9, padding: '9px 11px' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Pill tone={destructive ? 'review' : 'muted'}>
+                  {destructive ? 'deletion review' : orAbsent(a.action)}
+                </Pill>
+                <span className="fname" style={{ fontSize: 13, flex: 1, minWidth: 0 }}>
+                  {a.document_exists === false
+                    ? <span className="muted">document no longer exists ({orAbsent(a.doc_id)})</span>
+                    : orAbsent(a.path || a.doc_id)}
+                </span>
+              </div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>
+                {orAbsent(a.detail, '')}
+                {a.ts && ` · queued ${fmtWhen(a.ts)}`}
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 7, alignItems: 'center' }}>
+                <button className="ghost small" disabled={busy}
+                        onClick={() => onDecide(a.id, 'approve')}>
+                  {busy ? 'Recording…' : 'Approve'}
+                </button>
+                <button className="ghost small" disabled={busy}
+                        onClick={() => onDecide(a.id, 'reject')}>Reject</button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      {/* Said once, under the buttons, rather than per row: Approve here is a RECORDED DECISION,
+          not a file operation. ACP's connectors are read-only (CAN_WRITE_BACK is false) and the
+          executor is Drive-only, so a button implying otherwise would promise what the
+          deployment cannot do. */}
+      <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+        <b>Approve records the decision and leaves the file untouched.</b> ACP holds read-only
+        access to this source, so nothing is moved or trashed from here — the approval and its
+        audit record are what a later, separately-authorised run acts on.
+      </p>
+      {elsewhere > 0 && (
+        <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          {elsewhere.toLocaleString()} more pending on other sources.
+        </p>
+      )}
+    </>
   )
 }
 
