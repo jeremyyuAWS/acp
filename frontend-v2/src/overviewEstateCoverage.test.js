@@ -21,11 +21,15 @@ describe('Overview wires in EstateCoverage', () => {
     expect(src).toMatch(/run\.scope\?\.inventory\?\.discovered > 0 &&/)
   })
 
-  it('passes only cleanly-derivable funnel progress; the rest stay pending', () => {
-    // assessed/issues/remediation_eligible/remediated come from real file rows; human-review and
-    // published are deliberately absent (pending) rather than guessed.
+  it('passes the full funnel progress — every stage a real count, none guessed', () => {
+    // assessed/issues/remediation_eligible/remediated + human_review and published all come from
+    // real file rows. human_review = docs with a REVIEW-lane finding (a person must clear them);
+    // published = docs with a published_at record. Both were previously stuck rendering "pending".
     expect(src).toMatch(/assessed: analysed/)
     expect(src).toMatch(/remediated: files\.filter\(\(f\) => f\.remediated_at \|\| f\.drive_write_url\)\.length/)
-    expect(src).not.toMatch(/estateProgress[\s\S]{0,200}published:/)
+    expect(src).toMatch(/human_review: humanReview/)
+    expect(src).toMatch(/published: publish/)
+    // human_review is derived, not guessed: REVIEW-severity findings per file
+    expect(src).toMatch(/severity[\s\S]{0,40}REVIEW/)
   })
 })
