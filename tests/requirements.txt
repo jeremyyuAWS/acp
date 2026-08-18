@@ -12,3 +12,7 @@ python-pptx
 openpyxl
 pytest
 pytest-xdist
+# Splits the suite across CI runners (matrix) — each shard runs `--splits N --group i`.
+# Composes with -n auto/--dist loadfile: pytest-split selects the shard's subset, xdist
+# parallelises within it. Free-runner equivalent of a larger runner.
+pytest-split
