@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   laneOf, LANES, effortSecOf, effortLabel, isResolved, issueLabel, locationLabel, rowModel,
   tabOf, tabCounts, matchesTab, sortQueue, groupByDocument, nextUnresolvedId, progress,
+  normSc, autoFixRows,
 } from './remediationInboxModel.js'
 
 const F = {
@@ -106,5 +107,42 @@ describe('auto-advance — the behaviour that makes it feel fast', () => {
   })
   it('progress reports resolved of total', () => {
     expect(progress(ALL, { 1: { state: 'accepted' }, 4: { state: 'rejected' } })).toEqual({ resolved: 2, total: 5 })
+  })
+})
+
+describe('auto-applied fixes fold into the green review lane', () => {
+  const NAME = { '1.4.3': 'Contrast (Minimum)', '1.1.1': 'Non-text Content' }
+  const FIXES = [
+    { file: 'Brief.docx', rule_id: 'SC_1_4_3', before: '#D9D9D9', after: '#2F6FED' },
+    { file: 'Policy.pdf', sc: '1.1.1', value: 'A bar chart of revenue' },  // applied_fixes shape
+  ]
+
+  it('normSc strips SC_/WCAG_ prefixes and underscores', () => {
+    expect(normSc('SC_1_4_3')).toBe('1.4.3')
+    expect(normSc('WCAG_2.4.6')).toBe('2.4.6')
+    expect(normSc('1.1.1')).toBe('1.1.1')
+  })
+
+  it('each auto fix becomes a green review-lane row with before/after and a namespaced id', () => {
+    const rows = autoFixRows(FIXES, (sc) => NAME[sc] || sc)
+    expect(rows).toHaveLength(2)
+    expect(laneOf(rows[0])).toBe(LANES.review)                     // green
+    expect(rows[0].id).toMatch(/^af:Brief\.docx:1\.4\.3/)          // namespaced, no collision with numeric ids
+    expect(rowModel(rows[0]).issue).toBe('Contrast (Minimum)')     // plain criterion name
+    expect(rowModel(rows[0]).did).toBe('ACP fixed it — review the change')
+    expect(rowModel(rows[0]).action).toBe('Approve fix')
+    expect(rows[0].before).toBe('#D9D9D9')
+    expect(rows[0].after).toBe('#2F6FED')
+    // applied_fixes shape: `value` is the after when there is no diff `after`
+    expect(rows[1].after).toBe('A bar chart of revenue')
+    expect(effortLabel(rows[1])).toBe('~5 sec')                    // reviewing an auto fix is quick
+  })
+
+  it('auto-fix rows land in the Auto-fixed tab and resolve on acknowledgement', () => {
+    const rows = autoFixRows(FIXES, (sc) => NAME[sc] || sc)
+    expect(rows.every((r) => tabOf(r) === 'auto-fixed')).toBe(true)
+    const acked = { [rows[0].id]: { state: 'accepted' } }
+    expect(isResolved(rows[0], acked)).toBe(true)                  // ack marks it resolved (Resolved tab)
+    expect(isResolved(rows[1], acked)).toBe(false)
   })
 })

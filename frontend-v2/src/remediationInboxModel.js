@@ -202,3 +202,37 @@ export function progress(list, decisions = {}) {
   const resolved = list.filter((f) => isResolved(f, decisions)).length
   return { resolved, total: list.length }
 }
+
+// ── The auto-applied fixes, as green review-lane rows ────────────────────────────────────────────
+/** Normalize a WCAG id ("SC_1_1_1", "WCAG_1.1.1", "1.1.1") to a bare "1.1.1". */
+export function normSc(v) {
+  return String(v || '').replace(/^(WCAG_?|SC_)/i, '').replace(/_/g, '.')
+}
+
+/** Turn ACP's auto-applied fixes (applied_fixes / remediation diffs) into green REVIEW-lane inbox
+ *  rows, so review-of-auto-fixes shares the master/detail flow instead of living in a separate
+ *  section. Each row is `autoApplied`, so laneOf() puts it in the green lane ("ACP fixed it — review
+ *  the change" · Approve fix · ~5 sec). before/after come from the diff, falling back to the applied
+ *  value. `nameOf(sc)` supplies the plain criterion name — injected so this file stays dependency-free
+ *  (Remediate passes its ITEM_NAME lookup; a test passes a stub). Ids are namespaced `af:…` so they
+ *  never collide with the human-queue's numeric/db ids. */
+export function autoFixRows(fixes = [], nameOf = (sc) => sc) {
+  return fixes.map((a, i) => {
+    const sc = normSc(a.sc ?? a.rule_id ?? a.wcag)
+    const fmt = (String(a.file || '').split('.').pop() || 'DOC').toUpperCase()
+    return {
+      id: `af:${a.file || ''}:${sc}:${i}`,
+      file: a.file || '',
+      page: a.page ?? null,
+      ruleId: sc,
+      rule_id: sc,
+      plainIssue: nameOf(sc),
+      title: `${fmt} · ${nameOf(sc)}`,
+      before: a.before ?? null,
+      after: a.after ?? a.value ?? a.approved_value ?? null,
+      autoApplied: true,
+      severity: null,
+      effortSec: 5,
+    }
+  })
+}
