@@ -589,7 +589,12 @@ GRAPH = "https://graph.microsoft.com/v1.0"
 # modified time, owner via createdBy, parent path) on top of the id/name/file/parentReference the
 # scan always needed. Requesting them is free for the scannable set and populates the inventory
 # rows for the rest; a Graph stub that omits any of them just yields None for that column.
-_SP_ITEM_SELECT = "id,name,file,parentReference,size,createdDateTime,lastModifiedDateTime,createdBy,lastModifiedBy"
+# `shared` is the driveItem sharing facet (present when the item is shared, with a `scope` of
+# anonymous | organization | users). Without it in the $select, Graph never returns it, so every
+# `item.get("shared")` below is None and the estate drill-down's "shared" lens — the security-
+# relevant one for a PHI estate — is dark for SharePoint while the Drive path (DRIVE_FIELDS carries
+# `shared`) lights up. It is a list-level facet, so this costs no extra call.
+_SP_ITEM_SELECT = "id,name,file,parentReference,size,createdDateTime,lastModifiedDateTime,createdBy,lastModifiedBy,shared"
 
 
 def _sp_get(token: str, url: str, timeout: int = 30):
