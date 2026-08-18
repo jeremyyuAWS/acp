@@ -903,7 +903,7 @@ three-denominator model (#297, under Documentation).
   capped per-status sample into `scope.inventory.samples` and EstateCoverage renders a
   click-to-expand list under each chip. `by_status` stays the TRUE total so the drill-down
   reads "Showing N of <total>" — an unsupported bucket of thousands is never mistaken for
-  the handful sampled; a paginated per-file export is a separate follow-up (#303).
+  the handful sampled; a paginated per-file export was a separate follow-up (#303), since delivered (#332).
 - Owner / size / sharing on the drill-down, sortable for triage: `size`, `owners`, `shared`
   added to `DRIVE_FIELDS` (same list page, no extra call); externally shared files get a
   SHARED badge; sorts biggest-first, shared-first, or by name — the three lenses that matter
@@ -913,6 +913,13 @@ three-denominator model (#297, under Documentation).
   end-to-end (discovered → … → remediated → human-review → published) rather than trailing off into
   guessed zeros. Closes the Open item below that flagged these two stages as unthreaded. Another
   session's change, recorded here as it landed in this window.
+- Paginated per-file estate API + CSV export (#332) — the follow-up #303 named. The whole-estate
+  inventory (all types, full metadata) is now exportable per file, not just as counts + a capped
+  sample, so a hospital can pull the complete list. Delivers the missing half of the three-denominator
+  view (the per-file estate, beside the aggregate). Another session's change, in this window.
+- Local source walks the nested tree with filesystem metadata (#325) — recursive discovery for a local
+  source now descends subfolders and captures per-file metadata, matching the Drive/SharePoint inventory
+  shape for local-mounted content. Another session's change, in this window.
 
 ---
 
@@ -1003,6 +1010,16 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   with an OVERRIDE badge and enable/disable + delete, and the scope-aware eligible-file count refreshed on
   every change; wired as a panel beside `AssessScope` (untouched). Completes **AC-09** — WCAG selections
   scoped by folder/owner/department with deterministic precedence.
+- **Disambiguated WCAG scope rules from lifecycle rules** (#338). A parallel session's #328 added a
+  per-source "Manage" drawer with Scope / Rules tabs at the same time C4d landed a "Scope rules" editor —
+  two different systems whose names collided (the drawer's Rules tab is lifecycle/disposition tag-archive-
+  deletion, its Scope tab is discovery *visibility*; C4d is per-file WCAG assessment scoping). Not
+  duplicates — merging would have been the regression — so the reconciliation names them apart: the editor
+  is now "**WCAG scope rules**" with a line separating it from lifecycle rules, and the drawer's Rules tab
+  points to Assess → WCAG scope rules for the WCAG axis. #328's tab labels and tests untouched.
+- **Closed the `file_tags` RESET-classification duplicate** (#318). #312 and #313 had each added `file_tags`
+  to `_ANALYTICS_TABLES` (two sessions fixing the same miss), leaving it listed twice — harmless but untidy;
+  #318 drops the duplicate. Closes the cleanup flagged on the RESET-fix bullet above.
 
 ## Open items (backlog candidates)
 
@@ -1220,3 +1237,11 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   subject — it touches the same scope surfaces as C4d and may warrant a reconciliation pass; left for its
   author to bind. Excluded as non-feature: the two delivery-log commits (#323, #324). Sync marker advanced
   from `27827405` to `4d176d36`.
+- **2026-08-18 (reconcile + batch)** — Resolved the #328/C4d overlap flagged last sync: #328 and C4d are
+  distinct systems (source-drawer lifecycle/discovery vs per-file WCAG scoping), so #338 names them apart
+  rather than merging them — added under Feature #4618. Folded in three more commits that landed since the
+  last mark: #318 (drops the duplicate `file_tags` RESET entry from the #312/#313 collision — under #4618,
+  closes that cleanup), and under Estate coverage #332 (paginated per-file estate export + CSV — delivers
+  the #303 follow-up, whose note is updated) and #325 (local source recursive walk with filesystem
+  metadata). Excluded as non-feature: the C4 delivery-log commit (#336). Sync marker advanced from
+  `4d176d36` to `fad0dfbe`.
