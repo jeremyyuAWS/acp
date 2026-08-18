@@ -2207,6 +2207,9 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
     if scan_id:
         import core
         _frozen_scope = core.store.get_scan_scope(scan_id)
+        # PRD §4.4 / C4 — narrow to this file's per-file scope rules, the SAME resolution
+        # save_file_result applies to the traces, so the score and traces read one scope.
+        _frozen_scope = core.store.scope_for_file(scan_id, name, _frozen_scope)
     assessed = rb.assess(raw["succeeded"], _scoped_for_scoring(raw["issues"], name, _frozen_scope),
                          raw["errors"])
     fdict = {"file": name, "engine": raw["engine"], **assessed, "issues": raw["issues"],

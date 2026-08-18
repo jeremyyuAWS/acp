@@ -1031,6 +1031,10 @@ class Store:
         # reads the committed value — the SAME value analyse_and_assess / rescore_reused thread into
         # the score for this scan, so the traces written here and that score read one frozen scope.
         scope = self.get_scan_scope(scan_id)
+        # PRD §4.4 / C4 — narrow to THIS file's per-file WCAG scope rules (folder/owner) if any
+        # frozen rule targets it; unchanged otherwise. The score path (scanner.analyse_and_assess /
+        # rescore_reused) applies the SAME resolution, so this file's traces and its score agree.
+        scope = self.scope_for_file(scan_id, f["file"], scope)
         import json as _json
         catalog = _json.loads(
             (Path(__file__).resolve().parent.parent / "config" / "rule-catalog.json").read_text())
@@ -1647,6 +1651,45 @@ class Store:
         # NOT guarded: a stored-but-corrupt scope raises here rather than reading as unrestricted.
         data = _json.loads(raw) if isinstance(raw, str) else raw
         return scope_from_json((data or {}).get("scan_scope"))
+
+    def get_scan_scope_rules(self, scan_id: str) -> list[dict]:
+        """The per-file WCAG scope rules FROZEN into this scan at discover (PRD §4.4 / C4), or []
+        for a scan with none (including legacy scans predating the field). Read by the score and
+        trace paths so both resolve every file against the same rule set — the frozen-scope
+        discipline get_scan_scope follows, applied to C4's rule layer."""
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT scope FROM scan_runs WHERE id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+        if not row:
+            return []
+        raw = row.get("scope")
+        if not raw:
+            return []
+        data = _json.loads(raw) if isinstance(raw, str) else raw
+        rules = (data or {}).get("scope_rules") or []
+        return rules if isinstance(rules, list) else []
+
+    def _inventory_attrs(self, scan_id: str, file: str) -> dict:
+        """The file's path / owner / parent_folder from its scan_inventory row — the attributes a
+        per-file scope rule matches on (department is not on scan_inventory today, so
+        department-selector rules do not resolve at this layer; folder/owner do)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT path, owner, parent_folder FROM scan_inventory WHERE scan_id=%s AND file=%s",
+                (scan_id, file))
+            return self._db.fetchone(cur) or {}
+
+    def scope_for_file(self, scan_id: str, file: str, global_scope):
+        """This file's effective criterion×format scope: `global_scope` narrowed to the WCAG
+        code-set resolved from the scan's FROZEN per-file scope rules (PRD §4.4 / C4), or
+        `global_scope` unchanged when no rule targets the file (byte-for-byte pre-C4 behaviour).
+        Both the score and trace paths call this so a file's score and traces read one scope."""
+        rules = self.get_scan_scope_rules(scan_id)
+        if not rules:
+            return global_scope
+        from assessment_policy import resolve_file_scope
+        return resolve_file_scope(self._inventory_attrs(scan_id, file), global_scope, rules)
 
     def get_scan_diff(self, cur_id: str, prev_id: str, owner: str | None = None) -> dict | None:
         """Diff two scans (ADR 0009) → per-file score regressions / improvements + the WCAG
