@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest'
 import {
   sourceKeys, filesForSource, runsForSource, inventoryFacts, dispositionOf, dispositionRows,
   runOutcome, runDurationMs, needsAttention, scopeFacts, inventoryChangeLine,
+  matchCounts, matchedFilesForSource,
   fmtSize, fmtDuration, fmtWhen, fmtCount, orAbsent, NOT_AVAILABLE, NOT_CONFIGURED,
 } from './sourceOps.js'
 
@@ -228,5 +229,56 @@ describe('the “what changed since last time” line', () => {
 
   it('still renders when only additions happened', () => {
     expect(inventoryChangeLine(D({ new: 3 })).text).toBe('3 new')
+  })
+})
+
+describe('rule match counts carry their boundary', () => {
+  const PREVIEW = {
+    would_match: 5,
+    documents: [
+      { doc_id: 'a', source: 'sharepoint' }, { doc_id: 'b', source: 'sharepoint' },
+      { doc_id: 'c', source: 'drive' }, { doc_id: 'd', source: 'drive' },
+      { doc_id: 'e', source: 'drive' },
+    ],
+  }
+
+  it('splits the estate-wide preview into this source and the total', () => {
+    // The preview evaluates over list_all_documents() — EVERY source. Rendering `would_match`
+    // under a per-source heading would be a true number saying a false thing.
+    expect(matchCounts(PREVIEW, ONEDRIVE)).toMatchObject({ forSource: 2, total: 5 })
+    expect(matchCounts(PREVIEW, { id: '_gdrive', type: 'google_drive' }))
+      .toMatchObject({ forSource: 3, total: 5 })
+  })
+
+  it('does not reimplement the predicate — it filters the backend’s own matches', () => {
+    // Every returned row is already a match; the only thing done here is the source join. A rule
+    // whose predicate this code knows nothing about still counts correctly.
+    const opaque = { would_match: 1, documents: [{ doc_id: 'x', source: 'sharepoint',
+                                                   mystery_field: 'whatever' }] }
+    expect(matchCounts(opaque, ONEDRIVE).forSource).toBe(1)
+  })
+
+  it('reports an unsplittable preview as unknown, not as zero', () => {
+    // A total with no rows cannot be broken down. "0 in OneDrive" would report a missing
+    // breakdown as an empty one — the same null-vs-zero rule as folders.
+    const capped = { would_match: 900, documents: [] }
+    expect(matchCounts(capped, ONEDRIVE)).toMatchObject({ forSource: null, total: 900, splitKnown: false })
+  })
+
+  it('a genuinely empty match is zero, not unknown', () => {
+    expect(matchCounts({ would_match: 0, documents: [] }, ONEDRIVE))
+      .toMatchObject({ forSource: 0, total: 0, splitKnown: true })
+  })
+
+  it('falls back to the row count when would_match is absent', () => {
+    expect(matchCounts({ documents: PREVIEW.documents }, ONEDRIVE).total).toBe(5)
+  })
+
+  it('survives a missing or failed preview', () => {
+    expect(matchCounts(null, ONEDRIVE)).toMatchObject({ forSource: 0, total: 0 })
+  })
+
+  it('lists the matched rows for this source only', () => {
+    expect(matchedFilesForSource(PREVIEW, ONEDRIVE).map((d) => d.doc_id)).toEqual(['a', 'b'])
   })
 })

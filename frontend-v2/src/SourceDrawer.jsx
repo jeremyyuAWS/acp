@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
 import Drawer from './Drawer.jsx'
 import { retentionOf } from './FileDrawer.jsx'
-import { listDispositionPolicies, getInventoryDiff } from './api.js'
+import { listDispositionPolicies, getInventoryDiff, previewDispositionPolicy } from './api.js'
 import {
   filesForSource, runsForSource, inventoryFacts, dispositionRows, dispositionOf,
   runOutcome, runDurationMs, needsAttention, scopeFacts, folderOf, inventoryChangeLine,
+  matchCounts, matchedFilesForSource,
   fmtSize, fmtDuration, fmtWhen, fmtCount, orAbsent, NOT_AVAILABLE, NOT_CONFIGURED,
 } from './sourceOps.js'
 
@@ -60,6 +61,8 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
   const [policies, setPolicies] = useState(null)   // null = still loading / unavailable
   const [policyErr, setPolicyErr] = useState('')
   const [invDiff, setInvDiff] = useState(null)     // null = none to show; the line is omitted
+  const [previews, setPreviews] = useState({})     // policy_id -> preview | 'error'
+  const [openRule, setOpenRule] = useState(null)   // policy_id whose matches are expanded
 
   // Discovery rules are a real backend resource (disposition policies), so they are fetched, not
   // described. A failed fetch says so; it does not fall back to an encouraging empty list, which
@@ -88,6 +91,32 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
       .catch(() => { if (live) setInvDiff(null) })
     return () => { live = false }
   }, [curId, prevId])
+
+  // Rule match counts come from the real preview endpoint, and it is not cheap: each call
+  // evaluates the policy over the whole `documents` table in Python. So they are fetched when the
+  // RULES TAB is opened, not when the drawer is — a per-source panel should not run N full-table
+  // scans just because somebody looked at Overview.
+  useEffect(() => {
+    if (tab !== 'Rules' || !policies || !policies.length) return
+    let live = true
+    const pending = policies.filter((p) => p.policy_id && previews[p.policy_id] === undefined)
+    if (!pending.length) return
+    // Sequential, not Promise.all: these are full scans, and firing six at once at a database is
+    // how a "just showing a count" panel becomes the reason a scan times out.
+    ;(async () => {
+      for (const p of pending) {
+        try {
+          const r = await previewDispositionPolicy(p.policy_id)
+          if (!live) return
+          setPreviews((s) => ({ ...s, [p.policy_id]: r }))
+        } catch {
+          if (!live) return
+          setPreviews((s) => ({ ...s, [p.policy_id]: 'error' }))
+        }
+      }
+    })()
+    return () => { live = false }
+  }, [tab, policies])
 
   if (!source) return null
 
@@ -256,10 +285,18 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
                       <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>
                         {(p.match || []).map((m) => `${m.field} ${m.op} ${m.value}`).join(' · ') || NOT_AVAILABLE}
                       </div>
+                      <RuleMatches source={source} policy={p} preview={previews[p.policy_id]}
+                                   open={openRule === p.policy_id}
+                                   onToggle={() => setOpenRule(openRule === p.policy_id ? null : p.policy_id)} />
                     </div>
                   ))}
                 </div>
               )}
+          <h4 className="drawerh">Review queues</h4>
+          {/* Counted from the SAME partition Overview renders, not recomputed — two tabs
+              disagreeing about how many files await review is worse than neither showing it. */}
+          <ReviewQueues rows={rows} files={mine} labelOf={labelOf} onPickFile={onPickFile} />
+
           <p className="muted" style={{ fontSize: 12, marginTop: 12 }}>
             A delete rule tags files for <b>deletion review</b>. ACP never deletes on a rule alone —
             an approval is recorded first, and the action is a recoverable trash move.
@@ -322,6 +359,111 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
         <button className="ghost small" onClick={onClose}>Close</button>
       </div>
     </Drawer>
+  )
+}
+
+// A rule's match count, split by boundary. The preview endpoint evaluates over the WHOLE
+// documents table, so "284 files" under a per-source heading would be a true number placed
+// where it says something false. Both halves are shown, each labelled.
+function RuleMatches({ source, policy, preview, open, onToggle }) {
+  const label = source.name || source.type || 'this source'
+  if (preview === undefined) {
+    return <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Counting matches…</div>
+  }
+  if (preview === 'error') {
+    return (
+      <div style={{ fontSize: 12, marginTop: 4, color: TONE.fail[0] }}>
+        Could not count matches — the rule is still active; only this count is missing.
+      </div>
+    )
+  }
+  const { forSource, total, splitKnown } = matchCounts(preview, source)
+  const rows = matchedFilesForSource(preview, source)
+  return (
+    <div style={{ marginTop: 5 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap', fontSize: 12 }}>
+        <span>
+          {splitKnown
+            ? <><b>{forSource.toLocaleString()}</b> matched in {label}</>
+            : <span className="muted">Match count for {label} {NOT_AVAILABLE.toLowerCase()}</span>}
+        </span>
+        <span className="muted">· {total.toLocaleString()} across all sources</span>
+        {splitKnown && forSource > 0 && (
+          <button className="linklike" style={{ fontSize: 12 }} onClick={onToggle}>
+            {open ? 'Hide matches' : 'View matches'}
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="findings" style={{ marginTop: 5 }}>
+          {rows.slice(0, 25).map((d) => (
+            <div key={d.doc_id} className="filelistrow" style={{ cursor: 'default' }}>
+              <span className="fname" style={{ fontSize: 12.5, flex: 1, minWidth: 0 }}>
+                {orAbsent(d.path || d.doc_id)}
+              </span>
+              <span className="muted" style={{ fontSize: 11.5 }}>{orAbsent(d.department, '')}</span>
+            </div>
+          ))}
+          {rows.length > 25 && (
+            <div className="muted" style={{ fontSize: 11.5, padding: '4px 0' }}>
+              +{(rows.length - 25).toLocaleString()} more not listed
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// The two queues that need a human before anything moves. Counts come from the disposition
+// partition, so they are this source's own files and agree with Overview by construction.
+function ReviewQueues({ rows, files, labelOf, onPickFile }) {
+  const [open, setOpen] = useState(null)
+  const count = (k) => rows.find((r) => r.key === k)?.count || 0
+  const QUEUES = [
+    ['archive', 'Archive candidates', 'Reversible — the file is moved, not removed.'],
+    ['delete', 'Deletion review', 'An approval is recorded before anything is trashed, and the trash is recoverable.'],
+  ]
+  const any = QUEUES.some(([k]) => count(k) > 0)
+  if (!any) {
+    return <p className="muted" style={{ fontSize: 13 }}>Nothing is awaiting review from this source.</p>
+  }
+  return (
+    <div style={{ display: 'grid', gap: 8 }}>
+      {QUEUES.filter(([k]) => count(k) > 0).map(([k, title, why]) => {
+        const n = count(k)
+        const listed = files.filter((f) => dispositionOf(f, labelOf) === k)
+        return (
+          <div key={k} style={{ background: TONE.review[1], borderRadius: 9, padding: '9px 11px' }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: TONE.review[0] }}>
+                {n.toLocaleString()} {title}
+              </span>
+              <button className="linklike" style={{ fontSize: 12 }}
+                      onClick={() => setOpen(open === k ? null : k)}>
+                {open === k ? 'Hide' : 'Review'}
+              </button>
+            </div>
+            <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>{why}</div>
+            {open === k && (
+              <div className="findings" style={{ marginTop: 6 }}>
+                {listed.slice(0, 25).map((f) => (
+                  <button className="filelistrow" key={f.file} onClick={() => onPickFile && onPickFile(f)}>
+                    <span className="fname" style={{ fontSize: 12.5, flex: 1, minWidth: 0 }}>{f.file}</span>
+                    <span className="muted" style={{ fontSize: 11.5 }}>{orAbsent(f.modifiedAge, '')}</span>
+                  </button>
+                ))}
+                {listed.length > 25 && (
+                  <div className="muted" style={{ fontSize: 11.5, padding: '4px 0' }}>
+                    +{(listed.length - 25).toLocaleString()} more not listed
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
   )
 }
 

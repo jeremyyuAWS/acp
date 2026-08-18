@@ -231,6 +231,40 @@ export function inventoryChangeLine(diff) {
   return { text: parts.join(' · ') || 'No additions or removals', note, since: diff.prev_at || null }
 }
 
+// ── Rule match counts ─────────────────────────────────────────────────────────
+//
+// `POST /disposition/policies/{id}/preview` evaluates a rule over `list_all_documents()` — the
+// ESTATE-WIDE documents table, every source at once. Its `would_match` is therefore NOT a fact
+// about the source whose drawer this is, and rendering it under a per-source heading as
+// "Matched: 284 files" would be the count-without-its-boundary defect this codebase keeps
+// re-learning: the number is correct and, placed there, says something false.
+//
+// The fix is not to reimplement the predicate here — that would be a second source of truth that
+// silently diverges from api/disposition.matches. The preview already RETURNS the matched rows,
+// and `documents.source` is on each one, so the split is a filter over the backend's own answer.
+//
+// Both halves are returned, and callers render both: the per-source count is what the drawer is
+// about, and the estate-wide total is why the two numbers differ.
+export function matchCounts(preview, source) {
+  const docs = (preview && preview.documents) || []
+  const total = preview && preview.would_match != null ? preview.would_match : docs.length
+  const keys = new Set(sourceKeys(source))
+  // `documents.source` holds the backend source key ('drive' / 'sharepoint'), which is exactly
+  // what sourceKeys already resolves for a connector card — the same join filesForSource does.
+  const forSource = docs.filter((d) => keys.has(String(d.source || '').toLowerCase())).length
+  // A preview that returned a total but no rows cannot be split. Saying "0 in OneDrive" there
+  // would report a missing breakdown as an empty one.
+  const splitKnown = docs.length > 0 || total === 0
+  return { forSource: splitKnown ? forSource : null, total, splitKnown }
+}
+
+/** The matched rows belonging to this source — what [View matches] lists. */
+export function matchedFilesForSource(preview, source) {
+  const keys = new Set(sourceKeys(source))
+  return ((preview && preview.documents) || [])
+    .filter((d) => keys.has(String(d.source || '').toLowerCase()))
+}
+
 // ── Connection identity ───────────────────────────────────────────────────────
 
 /** The authorised boundary of the connection, as label/value pairs. A `null` value is the
