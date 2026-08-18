@@ -38,9 +38,19 @@ export const LANES = {
     label: 'Blocked', action: 'Review block',
     didLine: 'Blocked — cannot be remediated as-is',
   },
+  // W2 — the destination for a rejected AI fix. Rejecting an AI proposal used to just remove the
+  // finding from the queue and bump a counter; now it lands here, a visible follow-up lane where a
+  // person picks the work up by hand. Distinct from `manual` (which was manual from the start) so
+  // the reviewer can see what they bounced back, and distinct from `blocked` (which is unfixable) —
+  // this one is fixable, just not by the AI's rejected attempt.
+  handoff: {
+    key: 'handoff', rail: 'orange', color: '#b1622b',
+    label: 'Rejected — needs manual handling', action: 'Mark as assigned',
+    didLine: 'AI fix rejected — a person must handle this',
+  },
 }
 
-export const LANE_ORDER = ['review', 'apply', 'manual', 'recheck', 'blocked']
+export const LANE_ORDER = ['review', 'apply', 'manual', 'handoff', 'recheck', 'blocked']
 
 const RESOLVED_STATUSES = new Set(['approved', 'applied', 'accepted', 'rejected', 'resolved', 'verified'])
 
@@ -49,6 +59,9 @@ export function laneOf(f) {
   const st = String(f?.status || '').toLowerCase()
   if (st === 'blocked' || st === 'rejected') return LANES.blocked
   if (st === 'recheck' || st === 'rechecking' || st === 'scanning') return LANES.recheck
+  // A rejected AI fix routed back for human handling (the handoff lane). Wins over the
+  // remediation-shape checks below — the AI's proposal was declined, so it is no longer offered.
+  if (f?.rejectedFix) return LANES.handoff
   // A deterministic fix ACP already wrote: the reviewer confirms it (the green lane).
   if (f?.autoApplied || f?.applied || f?.rec?.action === 'auto') return LANES.review
   // ACP drafted a value for a person to approve (the blue lane).
@@ -66,6 +79,7 @@ export function effortSecOf(f) {
     case 'apply': return 15
     case 'recheck': return 10
     case 'blocked': return 0
+    case 'handoff': return 120 // rejected AI fix → a person re-authors it, same cost as manual
     default: return 120 // manual
   }
 }
@@ -125,12 +139,13 @@ export function rowModel(f, decisions = {}) {
 // ── Inbox top-bar tabs ──────────────────────────────────────────────────────────────────────────
 // Status buckets the toolbar offers. A finding belongs to exactly one, derived from its lane +
 // resolved state, so the tab counts always sum to the queue length.
-export const TABS = ['all', 'auto-fixed', 'manual', 'blocked', 'resolved']
+export const TABS = ['all', 'auto-fixed', 'needs-attention', 'manual', 'blocked', 'resolved']
 
 export function tabOf(f, decisions = {}) {
   if (isResolved(f, decisions)) return 'resolved'
   const k = laneOf(f).key
   if (k === 'blocked') return 'blocked'
+  if (k === 'handoff') return 'needs-attention' // W2 — rejected AI fixes awaiting a person
   if (k === 'manual') return 'manual'
   return 'auto-fixed' // review + apply + recheck are all "ACP did something" work
 }
@@ -141,7 +156,7 @@ export function matchesTab(f, tab, decisions = {}) {
 }
 
 export function tabCounts(list, decisions = {}) {
-  const counts = { all: list.length, 'auto-fixed': 0, manual: 0, blocked: 0, resolved: 0 }
+  const counts = { all: list.length, 'auto-fixed': 0, 'needs-attention': 0, manual: 0, blocked: 0, resolved: 0 }
   for (const f of list) counts[tabOf(f, decisions)] += 1
   return counts
 }

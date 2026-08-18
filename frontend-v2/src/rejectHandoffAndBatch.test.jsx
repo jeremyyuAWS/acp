@@ -1,0 +1,103 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { createElement } from 'react'
+import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
+import {
+  laneOf, LANES, tabOf, tabCounts, isResolved, effortSecOf, TABS,
+} from './remediationInboxModel.js'
+
+const { default: RemediationInbox } = await import('./RemediationInbox.jsx')
+
+afterEach(unmountAll)
+
+// ── W2 · the rejected-fix handoff lane (pure model) ────────────────────────────────────────────
+describe('W2 — a rejected AI fix has a destination (handoff lane)', () => {
+  const rejected = { id: 9, file: 'brief.docx', title: 'DOCX · Image needs alt text', rejectedFix: true }
+
+  it('routes a rejected AI fix to the amber handoff lane, not blocked/manual', () => {
+    expect(laneOf(rejected)).toBe(LANES.handoff)
+    expect(LANES.handoff.label).toMatch(/needs manual handling/i)
+  })
+  it('handoff is a visible follow-up tab, not "resolved"', () => {
+    expect(TABS).toContain('needs-attention')
+    expect(tabOf(rejected)).toBe('needs-attention')
+    // It is NOT resolved — the whole point is that a person still has to do the work.
+    expect(isResolved(rejected)).toBe(false)
+  })
+  it('counts handoff findings under needs-attention', () => {
+    const counts = tabCounts([rejected, { id: 1, autoApplied: true }])
+    expect(counts['needs-attention']).toBe(1)
+    expect(counts['auto-fixed']).toBe(1)
+  })
+  it('estimates handoff effort at the manual (slow) cost', () => {
+    expect(effortSecOf(rejected)).toBe(120)
+  })
+})
+
+// ── component harness ──────────────────────────────────────────────────────────────────────────
+let container, root
+beforeEach(() => { ;({ container, root } = createTestRoot()) })
+const render = async (props) => { await act(async () => { root.render(createElement(RemediationInbox, { initialSort: 'document', ...props })) }) }
+const click = async (el) => { await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }
+const btnByText = (t) => [...container.querySelectorAll('button')].find((b) => b.textContent.includes(t))
+const detailHeading = () => container.querySelector('h3')?.textContent
+
+// ── W2 · the handoff item in the detail pane ───────────────────────────────────────────────────
+describe('W2 — rejected fix appears in the inbox as manual-handling work', () => {
+  const QUEUE = [
+    { id: 9, file: 'brief.docx', title: 'DOCX · Image needs alt text', rule_id: '1.1.1', rejectedFix: true },
+  ]
+  it('shows the needs-manual-handling treatment, not an approve button', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    expect(detailHeading()).toBe('Image needs alt text')
+    expect(container.textContent).toContain('Needs manual handling')   // eyebrow + tab
+    expect(container.textContent).toContain('Fix this in Word')          // guided manual steps (docx → Word)
+    expect(btnByText('Mark as assigned')).toBeTruthy()
+    expect(btnByText('Approve fix')).toBeFalsy()
+  })
+  it('acting on it clears it via onDecide(assigned)', async () => {
+    const calls = []
+    await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
+    await click(btnByText('Mark as assigned'))
+    expect(calls).toEqual([[9, 'assigned']])
+  })
+})
+
+// ── W8 · apply-to-all-matching ───────────────────────────────────────────────────────────────
+describe('W8 — apply a decision to every matching finding of the same rule', () => {
+  // Three "missing alt text" (1.1.1) findings across three files, all in the actionable apply lane.
+  const QUEUE = [
+    { id: 1, file: 'a.docx', title: 'DOCX · Image needs alt text', rule_id: '1.1.1', hasProposal: true, after: 'alt A' },
+    { id: 2, file: 'b.docx', title: 'DOCX · Image needs alt text', rule_id: 'SC_1_1_1', hasProposal: true, after: 'alt B' },
+    { id: 3, file: 'c.pdf', title: 'PDF · Image needs alt text', rule_id: 'WCAG 1.1.1', hasProposal: true, after: 'alt C' },
+    // A different rule — must never be swept into the 1.1.1 batch.
+    { id: 4, file: 'd.docx', title: 'DOCX · Document has no title', rule_id: '2.4.2', hasProposal: true, after: 'A title' },
+  ]
+
+  it('offers a batch action naming the matching count', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    expect(detailHeading()).toBe('Image needs alt text')
+    // 2 OTHER 1.1.1 findings share this issue (ids 2 and 3), across the normalised rule forms.
+    expect(container.textContent).toContain('2 other findings share this issue')
+    expect(container.textContent).toContain('(WCAG 1.1.1)')
+    expect(btnByText('Approve all 3')).toBeTruthy()
+    expect(btnByText('Reject all 3')).toBeTruthy()
+  })
+
+  it('applies the decision to the current finding and every matching one — but not other rules', async () => {
+    const calls = []
+    await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
+    await click(btnByText('Approve all 3'))
+    // ids 1,2,3 (all 1.1.1) approved; id 4 (2.4.2) untouched.
+    expect(calls.map((c) => c[0]).sort()).toEqual([1, 2, 3])
+    expect(calls.every((c) => c[1] === 'accepted')).toBe(true)
+  })
+
+  it('does not offer a batch action for a lone finding or a manual one', async () => {
+    // Only the 2.4.2 finding + a manual finding: no siblings to batch.
+    await render({ queue: [QUEUE[3], { id: 5, file: 'e.pdf', title: 'PDF · Scanned page, no text', rule_id: '1.1.1' }], decisions: {} })
+    // 2.4.2 is selected first (document sort → d.docx before e.pdf); it has no 2.4.2 sibling.
+    expect(detailHeading()).toBe('Document has no title')
+    expect(container.textContent).not.toContain('share this issue')
+  })
+})
