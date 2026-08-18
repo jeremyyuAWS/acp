@@ -1,4 +1,4 @@
-# GPU variant of deploy/ollama/Dockerfile (ADR: GPU-backed Ollama, West US 3).
+# GPU variant of deploy/ollama/Dockerfile (ADR: GPU-backed Ollama, Azure ACA serverless T4).
 #
 # Same base as the CPU image, but bakes in a real vision-language model instead of the
 # compact 'moondream' captioner the 8Gi CPU Consumption profile forced us down to. Only
@@ -11,17 +11,33 @@
 #
 # Wire the app: OLLAMA_BASE_URL=<this app's https FQDN>, OLLAMA_MODEL=llama3.1:8b,
 # OLLAMA_VISION_MODEL=llava:13b. Provisioning runbook: deploy/ollama/gpu-runbook.sh.
+#
+# WHY OLLAMA_MODELS=/models AND NOT THE DEFAULT /root/.ollama:
+# The ollama/ollama base image declares `VOLUME /root/.ollama`. Under a runtime that mounts an
+# empty volume over that path (Azure Container Apps, Kubernetes emptyDir), the models baked into
+# the image layer at /root/.ollama are SHADOWED — the container boots with an empty model list
+# even though the image shipped ~13GB of models (the push is large, `/api/tags` is empty). Baking
+# to /models — a path the base image does NOT declare as a volume — keeps the models visible at
+# runtime. This is the durability fix; without it every restart/node-move loses the models.
 FROM ollama/ollama:latest
 
 ENV OLLAMA_MAX_LOADED_MODELS=2
+# Bake + serve models from a non-VOLUME path so the runtime volume mount can't shadow them.
+ENV OLLAMA_MODELS=/models
 
-# Start the server, pull both models into /root/.ollama (persisted in the layer), then stop.
-# The models ship inside the image so there's no multi-GB cold-start download at startup.
-RUN bash -c 'ollama serve & SP=$!; \
-    for i in $(seq 1 30); do curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 && break; sleep 1; done; \
+# Start the server, pull both models into /models (persisted in the layer, NOT shadowed at
+# runtime), verify they're present, then stop. `set -e` + no error-swallowing `|| true` means a
+# failed pull FAILS the build instead of silently shipping an empty image — the exact defect this
+# file used to have (the trailing `wait || true` masked pull failures). `ollama list` prints the
+# baked inventory into the build log as proof.
+RUN set -e; \
+    ollama serve & SP=$!; \
+    for i in $(seq 1 60); do curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 && break; sleep 1; done; \
     ollama pull llama3.1:8b; \
     ollama pull llava:13b; \
-    kill $SP 2>/dev/null; wait $SP 2>/dev/null || true'
+    ollama list; \
+    test -d /models/manifests; \
+    kill $SP 2>/dev/null || true
 
 ENV OLLAMA_HOST=0.0.0.0:11434
 EXPOSE 11434

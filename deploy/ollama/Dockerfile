@@ -17,14 +17,25 @@
 FROM ollama/ollama:latest
 
 ENV OLLAMA_MAX_LOADED_MODELS=2
+# Bake + serve models from a NON-volume path. The base image declares `VOLUME /root/.ollama`,
+# so under a runtime that mounts an empty volume there (Azure Container Apps / K8s emptyDir) the
+# models baked into the image layer are SHADOWED — the container starts with an empty model list
+# and vision silently falls back / templates. Baking to /models (not a declared volume) keeps them
+# visible at runtime. Without this the image "ships" the models but the container never sees them.
+ENV OLLAMA_MODELS=/models
 
-# Start the server, pull both models into /root/.ollama (persisted in the layer),
-# then stop the server. The models ship inside the image.
-RUN bash -c 'ollama serve & SP=$!; \
-    for i in $(seq 1 30); do curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 && break; sleep 1; done; \
+# Start the server, pull both models into /models (persisted in the layer, not shadowed at
+# runtime), verify, then stop. `set -e` + no error-swallowing `|| true` means a failed pull FAILS
+# the build instead of shipping an empty image (the defect this used to have). `ollama list` prints
+# the baked inventory into the build log.
+RUN set -e; \
+    ollama serve & SP=$!; \
+    for i in $(seq 1 60); do curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 && break; sleep 1; done; \
     ollama pull llama3.1:8b; \
     ollama pull moondream; \
-    kill $SP 2>/dev/null; wait $SP 2>/dev/null || true'
+    ollama list; \
+    test -d /models/manifests; \
+    kill $SP 2>/dev/null || true
 
 ENV OLLAMA_HOST=0.0.0.0:11434
 EXPOSE 11434
