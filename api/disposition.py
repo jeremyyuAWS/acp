@@ -16,12 +16,23 @@ complex, at the cost of fetching the full documents table per preview. Fine
 at today's scale; revisit if/when that table gets large enough to matter.
 """
 from __future__ import annotations
+import posixpath
 from datetime import datetime, timezone
 
 ACTIONS = {"leave", "archive", "rename", "move", "delete"}
 
 FIELDS = {"department", "business_criticality", "regulatory_tags", "triage_score",
-         "source", "owner", "age_days"}
+         "source", "owner", "age_days",
+         # Folder/path + lifecycle conditions (Discover/Assess Lifecycle PRD, Phase B1).
+         "path", "parent_folder", "modified_age_days", "modified_at", "created_at"}
+
+
+def _iso_before(a, b) -> bool:
+    """True iff ISO-date string a is strictly earlier than b. None or malformed
+    on either side yields False (never raises) — an unknown date matches nothing."""
+    da, db = _parse_iso(a), _parse_iso(b)
+    return da is not None and db is not None and da < db
+
 
 _OPS = {
     "eq": lambda a, b: a == b,
@@ -31,6 +42,11 @@ _OPS = {
     "lt": lambda a, b: a is not None and b is not None and a < b,
     "lte": lambda a, b: a is not None and b is not None and a <= b,
     "contains": lambda a, b: b is not None and str(b).lower() in str(a or "").lower(),
+    # Case-insensitive "starts with" — e.g. target everything under "/Finance/".
+    "prefix": lambda a, b: b is not None and str(a or "").lower().startswith(str(b).lower()),
+    # ISO-date comparisons for "modified before <date>" style lifecycle rules.
+    "before": _iso_before,
+    "after": lambda a, b: _iso_before(b, a),
 }
 
 
@@ -48,22 +64,54 @@ def validate_match(match: list[dict]) -> None:
             raise ValueError(f"unknown op: {cond['op']!r} (allowed: {sorted(_OPS)})")
 
 
-def _age_days(created_at: str | None) -> int | None:
-    if not created_at:
+def _parse_iso(value: str | None) -> datetime | None:
+    """Parse an ISO-8601 string to a tz-aware datetime (assume UTC if naive).
+    Returns None on empty, non-string, or malformed input — never raises."""
+    if not value or not isinstance(value, str):
         return None
     try:
-        created = datetime.fromisoformat(created_at)
-        if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
-        return (datetime.now(timezone.utc) - created).days
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except Exception:
         return None
+
+
+def _days_since(iso: str | None) -> int | None:
+    """Whole days between an ISO timestamp and now (UTC), or None if unparseable."""
+    dt = _parse_iso(iso)
+    if dt is None:
+        return None
+    return (datetime.now(timezone.utc) - dt).days
+
+
+def _age_days(created_at: str | None) -> int | None:
+    """Age in days from a document's created_at. Thin wrapper over _days_since
+    kept for existing callers."""
+    return _days_since(created_at)
+
+
+def _parent_folder(path: str | None) -> str | None:
+    """Directory portion of a document path (POSIX-style "/" separators, as the
+    documents.path column stores). None when there is no path."""
+    if not path:
+        return None
+    return posixpath.dirname(path)
 
 
 def matches(doc: dict, match: list[dict]) -> bool:
     """True iff `doc` satisfies every condition (AND) in `match`. Assumes
     validate_match already passed — does not re-check field/op safety."""
-    values = {**doc, "age_days": _age_days(doc.get("created_at"))}
+    # source_modified is a documents-table column other work is adding; read it
+    # only via .get() so this module never assumes it exists.
+    values = {
+        **doc,
+        "age_days": _days_since(doc.get("created_at")),
+        "modified_age_days": _days_since(doc.get("source_modified")),
+        "modified_at": doc.get("source_modified"),
+        "parent_folder": _parent_folder(doc.get("path")),
+    }
     for cond in match:
         if not _OPS[cond["op"]](values.get(cond["field"]), cond.get("value")):
             return False
