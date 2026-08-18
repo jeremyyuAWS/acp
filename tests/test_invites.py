@@ -110,10 +110,14 @@ def test_graph_error_is_surfaced_readably(monkeypatch):
 
 # ── least privilege, pinned in source ─────────────────────────────────────────────────────────
 def test_invites_module_invites_a_guest_never_creates_a_user():
-    src = (ROOT / "api" / "invites.py").read_text()
-    assert "/invitations" in src                       # the one Graph write it makes
-    assert "User.ReadWrite" not in src                 # never the directory-write scope
-    assert not re.search(r"/users\b", src)             # never the user-create endpoint
+    # Strip docstrings first: the module's prose says "deliberately NOT User.ReadWrite.All", so a
+    # naive substring search matches the explanation, not the code. Same trap the repo already hit
+    # (see test_control_plane_route.py) — assert against CODE, not comments.
+    raw = (ROOT / "api" / "invites.py").read_text()
+    code = re.sub(r'#.*', '', re.sub(r'"""(?:.|\n)*?"""', '', raw))
+    assert "/invitations" in code                      # the one Graph write it makes
+    assert "User.ReadWrite" not in code                # never the directory-write scope
+    assert not re.search(r"/users\b", code)            # never the user-create endpoint
 
 
 # ── endpoint wiring (source-level, matching the repo's route-test style) ───────────────────────
