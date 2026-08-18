@@ -353,6 +353,10 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   4.1.2, a slide animation for 2.1.1, autoplay audio for 1.4.2, a true colour-only PDF link for 1.4.1)
   are listed per file under `not_seeded` with the reason, so the manifest never claims coverage it did
   not produce.
+- **Sharded the backend suite across four free runners** (#321). The ~9-minute backend job (2800+ tests +
+  the four matrix/todo/progress-log guards) was the long pole on every PR; splitting it across four
+  standard GitHub-hosted runners cuts wall-clock at no added cost (free-tier runners, not larger paid
+  ones). Another session's change, recorded here since it landed on `main` in this window.
 
 ## Feature: Remediation reaching the file · #4606
 
@@ -902,6 +906,67 @@ three-denominator model (#297, under Documentation).
   SHARED badge; sorts biggest-first, shared-first, or by name — the three lenses that matter
   at 30k-file PHI-estate scale. Missing metadata degrades to null/false, never a wrong value (#304).
 
+---
+
+## Feature: Discover & Assess lifecycle rules
+
+Two conflated scopes pulled apart, per the "Discover & Assess Lifecycle Rules" PRD (Deva). Discover must
+inventory *every* file so nothing is invisible by omission; Assess is narrowed on purpose to supported
+document types and a chosen set of WCAG criteria; and configurable rules — folder/path, modified-before —
+govern archive / delete / tag as *candidates* during the same discovery run, with flagged files kept out of
+Assess by default. Built as eight independently-CI'd PRs across isolated worktrees on disjoint files,
+foundation first so the shared `store.py` schema never became a merge chokepoint.
+
+- **Lifecycle inventory foundation** (#310). The per-file `scan_inventory` row gained the source metadata
+  lifecycle rules need — `created_at`, `source_modified`, `owner`, `parent_folder`, and a per-file
+  `discovered_at` (the scan's `started_at` was the only timestamp before, and it is not per-row) — plus a
+  7-state `lifecycle_status` (Active / Archive Candidate / Archived / Delete Candidate / Deleted / Failed /
+  Exempted) carrying the rule id and reason that set it, and a `file_tags` table for system/user tags.
+  `documents.source_modified` and Drive `createdTime`/`parents` were added so the modified-before and
+  folder conditions have real inputs. Additive only — no primary-key change, no behaviour change; landed
+  before any consumer so three feature tracks could build in parallel without colliding on `store.py`.
+- **Rule conditions: folder/path and modified-before** (#309). The disposition engine gained `path` /
+  `parent_folder` fields with a case-insensitive `prefix` op (target everything under `/Finance/`) and
+  `modified_at` / `created_at` date fields with `before` / `after` ops reading `documents.source_modified`
+  — malformed or missing dates evaluate false, never raise. Exactly the two condition kinds the PRD names;
+  39 unit tests.
+- **Tag as a disposition action** (#314). Added the PRD's third action alongside archive and delete: `tag`
+  attaches tags via the new `file_tags` table and — unlike archive/delete — needs no Drive connection, so
+  it works for any source; a tag policy with no tags is rejected at creation. Frontend gained the Tag
+  action + a tags input.
+- **Discover inventories every file type, with full metadata** (#315). Discovery previously persisted
+  per-file rows only for the scannable subset (docx/pdf/pptx/xlsx/html); everything else lived as counts
+  plus a capped sample. Now every accessible file — media, archives, executables, extensionless — gets a
+  durable inventory row with its real MIME, owner, size, created/modified date and folder lineage, on both
+  the Drive and SharePoint paths. The safety property is explicit and tested: Assess re-derives
+  assessability from name + real MIME and never downloads a non-assessable file, and the real source MIME
+  is kept separate from the overloaded export-selector MIME so a plain `application/pdf` is never fed to
+  the Google-export map. This changes what is *inventoried*, never what is scanned.
+- **Rules evaluated during Discover; flagged files excluded from Assess** (#320). After discovery persists
+  the inventory, enabled policies run over each row candidate-first: an archive match sets Archive
+  Candidate, a delete match Delete Candidate, a tag match writes tags — each recording the matching rule id
+  and a human reason, no Drive action taken. Idempotent (a re-run adds no duplicate tags or audit rows),
+  Exempted files are never moved, and delete overrides archive only with an explicit `override_archive`
+  flag and an authorized actor. Assess then excludes Archive/Delete-flagged files by default, with an
+  owner-gated `include_lifecycle_flagged` override, and the assess record retains the status + exclusion
+  reason that applied at run creation.
+- **Assess scoped to a chosen WCAG code-set, with a live eligibility count** (#311, #316). A read-only
+  `/assess/eligibility` endpoint and a Core-17 code-set catalog (`{code, name, formats}`) back a new
+  Assess-time scope UI: document-type selection moved out of Discover into Assess, a Core-17 picker showing
+  code + name ("1.4.3 — Contrast (Minimum)") for one / several / all criteria, and a debounced "N files
+  eligible" count before the run. Core 17 is the canonical set — the "15" a draft mentioned is only its
+  docx-format projection. The old "two filters, last-touched-wins" ambiguity (ScanSetup vs FileTypeConfig
+  both writing `scan_scope`) was resolved by making the Assess selection the single authority; Discover
+  lost its file-type gate and gained a source/folder/path Document Location view filter.
+- **Corrected a RESET-safety regression I introduced** (#312). The foundation's `file_tags` table was not
+  declared in `_ANALYTICS_TABLES`, so the reset-completeness guard (`test_reset_leaves_no_customer_data`)
+  failed closed on `main` — file_tags is per-file customer output and must be purged on RESET. One-line
+  fix. Honest cause: I let `--auto` merge the foundation before its full backend suite finished, and a
+  targeted test run had missed that guard; every merge after this waited on the required checks actually
+  going green, and I switched the merge watch to the required Actions jobs so a stuck Netlify preview could
+  not hang it. (A second session fixed the same bug in parallel as #313, leaving a duplicate list entry —
+  harmless; cleanup flagged.)
+
 ## Open items (backlog candidates)
 
 - **The docx header/footer parity audit is complete.** All six body-only content checks now read
@@ -987,6 +1052,20 @@ three-denominator model (#297, under Documentation).
   Drive write-back "bug" was verified stale and its ~2–3.5 person-day estimate corrected to ≈ zero
   (#258); and the `deva-final` → `engagement-14` preset rename means any environment still persisting
   `scan_scope=deva-final` must be re-set by hand (#259).
+- **Lifecycle scoping by location/owner/department is deferred (PRD C4 / AC-09)** — Assess code-sets
+  scoped per folder/owner/department with a precedence resolver was explicitly held out of the first pass
+  as the heaviest, net-new axis (`scan_scope` today has only criterion × format). The natural fast-follow;
+  the eligibility endpoint and Core-17 picker it would build on already exist (#311, #316).
+- **Lifecycle PRD — thin-UI / semantics follow-ups, backend complete.** (a) The new folder/path and
+  modified-before *conditions* evaluate end-to-end (#309/#320), but confirm the disposition rule-builder in
+  `Disposition.jsx` actually exposes those fields to click together — may be a small UI wire-up. (b) The
+  delete-over-archive "authorized actor" (PRD §6) is interim: an `override_archive` flag + a non-`demo`
+  actor, because the codebase has no RBAC role model — worth a product decision. (c) Tags are keyed two
+  ways — discover-time by `scan_id`/`file`, approval-time disposition by `doc_id`/`path` — reconcile if a
+  single tag view must span both. (d) State reconciliation (discovered → active/archived/flagged/…,
+  AC-14): `store.count_lifecycle_by_status` exists but no dashboard renders it yet. (e) The duplicate
+  `file_tags` entry in `_ANALYTICS_TABLES` (from #312 + #313 fixing the same bug) is being de-duplicated in
+  a separate session.
 
 ---
 
@@ -1080,3 +1159,13 @@ three-denominator model (#297, under Documentation).
   MovaIO-Build, Active; each description carries the heading's first 12 Tasks. IDs bound
   above. `## Documentation` deliberately left unbound — it is cross-cutting, not a capability.
   Every Feature heading in this log is now bound.
+- **2026-08-18 (evening)** — Documented the "Discover & Assess Lifecycle Rules" PRD as one new Feature
+  (**Discover & Assess lifecycle rules**, unbound — a new capability that doesn't fit the estate-coverage
+  Feature), covering eight PRs: foundation schema (#310), folder/path + modified-before conditions (#309),
+  Tag action (#314), inventory-all-types (#315), rule-eval-during-Discover + Assess-exclusion (#320),
+  Core-17 code-set + eligibility endpoint (#311), the Assess/Discover frontend (#316), and the RESET
+  classification fix (#312). Recorded the honest #310→#312 correction (premature `--auto` merge before the
+  full suite; caught by the reset guard, fixed forward). Added #321 (backend-suite sharding) under Test
+  corpus and CI. Two Open items added: the deferred C4 location/owner/department scoping (AC-09) and the
+  lifecycle thin-UI/semantics follow-ups. Excluded as non-feature: the parallel duplicate reset-fix (#313,
+  same bug as #312). Sync marker advanced from `d7c7a055` to `27827405`.
