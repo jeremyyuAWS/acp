@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { resetDemoData, getAllowlist, setAllowlist, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, getAiStatus } from './api.js'
+import { resetDemoData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, getAiStatus } from './api.js'
 import { SIM } from './sim.js'
 
 // What a write is allowed to claim when the API layer marked its own answer `simulated`.
@@ -322,13 +322,35 @@ function AllowList() {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [loaded, setLoaded] = useState(false)
+  // Guest-invite (ADR 0033) — hidden unless the backend reports the credential is configured.
+  const [inviteEnabled, setInviteEnabled] = useState(false)
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteBusy, setInviteBusy] = useState(false)
+  const [inviteMsg, setInviteMsg] = useState('')
 
   useEffect(() => {
     getAllowlist()
-      .then((d) => { setEmails(d.emails || []); setOwner(d.owner || ''); setDomains(d.domains || []) })
+      .then((d) => {
+        setEmails(d.emails || []); setOwner(d.owner || ''); setDomains(d.domains || [])
+        setInviteEnabled(!!d.invite_enabled)
+      })
       .catch(() => setMsg('Could not load the test-user list.'))
       .finally(() => setLoaded(true))
   }, [])
+
+  const invite = () => {
+    const e = inviteEmail.trim().toLowerCase()
+    if (!e.includes('@')) { setInviteMsg('Enter a valid email.'); return }
+    setInviteBusy(true); setInviteMsg('')
+    inviteTester(e)
+      .then((d) => {
+        setEmails(d.emails || [])                 // reflect the auto-add to the list
+        setInviteEmail('')
+        setInviteMsg(`✓ Invited ${e} — a Microsoft invitation is on its way, and they’re now on the list.`)
+      })
+      .catch((err) => setInviteMsg(`Invite failed: ${err.message || err}`))
+      .finally(() => setInviteBusy(false))
+  }
 
   const add = () => {
     const e = input.trim().toLowerCase()
@@ -396,6 +418,28 @@ function AllowList() {
           </div>
         </div>
       </div>
+
+      {/* Invite a tester (ADR 0033) — hidden unless the Entra guest-invite credential is configured.
+          Sends a Microsoft B2B guest invitation AND adds the email to the list in one step, so a
+          tester needs no separate Entra step. Least-privilege: it invites a guest, never creates a
+          tenant user. */}
+      {inviteEnabled && (
+        <div style={{ margin: '14px 0 0', padding: '12px 14px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>Invite a tester (Microsoft)</div>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 8, lineHeight: 1.5 }}>
+            Sends an Entra guest invitation and adds them to the list below in one step. They sign in
+            with their own Microsoft account — no tenant account is created.
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)}
+                   onKeyDown={(e) => e.key === 'Enter' && invite()}
+                   placeholder="tester@example.com" aria-label="Invite a tester by email" type="email"
+                   style={{ flex: 1, padding: '8px 11px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'inherit', fontSize: 14 }} />
+            <button onClick={invite} disabled={inviteBusy}>{inviteBusy ? 'Inviting…' : 'Invite'}</button>
+          </div>
+          {inviteMsg && <div role="status" aria-live="polite" className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>{inviteMsg}</div>}
+        </div>
+      )}
 
       {/* Add */}
       <div style={{ display: 'flex', gap: 8, margin: '14px 0 10px' }}>
