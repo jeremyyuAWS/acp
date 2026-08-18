@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { estateModel, statusFiles } from './estateFunnel.js'
+import { estateModel, statusFiles, formatBytes, STATUS_SORTS } from './estateFunnel.js'
 
 // Estate coverage from a scan report's `scope.inventory` — the funnel, format composition, and
 // capability-status split, rendered from REAL discovery data (the illustrative dashboard artifact
@@ -118,27 +118,57 @@ export default function EstateCoverage({ report, inventory, progress }) {
   )
 }
 
-/** The files behind one capability-status count — a capped, scrollable sample. Honest about the
- *  cap ("showing N of <total>") so an unsupported bucket of thousands is never mistaken for the
- *  handful shown. */
+const SORT_LABEL = { size: 'Largest', shared: 'Shared first', name: 'Name' }
+
+/** The files behind one capability-status count — a capped, scrollable, sortable sample with triage
+ *  metadata (size, owner, shared). Honest about the cap ("showing N of <total>") so an unsupported
+ *  bucket of thousands is never mistaken for the handful shown. */
 function StatusDrilldown({ inv, status }) {
-  const d = statusFiles(inv, status)
+  const [sort, setSort] = useState('size')
+  const d = statusFiles(inv, status, sort)
   return (
     <div style={{ marginTop: 12, border: '1px solid var(--line, #e2dce4)', borderRadius: 8, overflow: 'hidden' }}>
-      <div className="muted" style={{ fontSize: 12, padding: '8px 12px', background: 'var(--surface-2, #f0f0f3)' }}>
-        {d.capped
-          ? <>Showing <b>{nf.format(d.shown)}</b> of <b>{nf.format(d.total)}</b> files — sample capped for size</>
-          : <>All <b>{nf.format(d.total)}</b> file{d.total === 1 ? '' : 's'}</>}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap',
+                    fontSize: 12, padding: '8px 12px', background: 'var(--surface-2, #f0f0f3)' }}>
+        <span className="muted">
+          {d.capped
+            ? <>Showing <b>{nf.format(d.shown)}</b> of <b>{nf.format(d.total)}</b> files — sample capped for size</>
+            : <>All <b>{nf.format(d.total)}</b> file{d.total === 1 ? '' : 's'}</>}
+        </span>
+        <span style={{ display: 'inline-flex', gap: 4 }} role="group" aria-label="Sort files">
+          {STATUS_SORTS.map((k) => (
+            <button key={k} type="button" onClick={() => setSort(k)} aria-pressed={sort === k}
+                    style={{ fontSize: 11, padding: '2px 9px', borderRadius: 999, cursor: 'pointer', font: 'inherit',
+                             border: '1px solid var(--line, #e2dce4)',
+                             background: sort === k ? 'var(--accent, #0e7c86)' : 'transparent',
+                             color: sort === k ? '#fff' : 'inherit' }}>
+              {SORT_LABEL[k]}
+            </button>
+          ))}
+        </span>
       </div>
       {d.files.length === 0 ? (
         <div className="muted" style={{ fontSize: 12.5, padding: 12 }}>No files in this bucket.</div>
       ) : (
-        <ul style={{ margin: 0, padding: 0, listStyle: 'none', maxHeight: 260, overflowY: 'auto' }}>
+        <ul style={{ margin: 0, padding: 0, listStyle: 'none', maxHeight: 300, overflowY: 'auto' }}>
           {d.files.map((f, i) => (
-            <li key={f.id || i} style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between',
+            <li key={f.id || i} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, alignItems: 'center',
                                          fontSize: 12.5, padding: '6px 12px', borderTop: i ? '1px solid var(--line, #e2dce4)' : 'none' }}>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.name}>{f.name || '(unnamed)'}</span>
-              <span className="muted" style={{ fontSize: 11, flexShrink: 0 }}>{f.label}</span>
+              <span style={{ minWidth: 0 }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.name}>{f.name || '(unnamed)'}</span>
+                  {f.shared && (
+                    <span title="Shared / externally visible"
+                          style={{ flexShrink: 0, fontSize: 10, fontWeight: 700, color: 'var(--warn-fg, #9a6a12)',
+                                   background: 'var(--warn-bg, #f6ecd6)', padding: '1px 5px', borderRadius: 4 }}>SHARED</span>
+                  )}
+                </span>
+                {f.owner && <span className="muted" style={{ fontSize: 11, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.owner}</span>}
+              </span>
+              <span style={{ textAlign: 'right', flexShrink: 0 }}>
+                <span style={{ display: 'block', fontVariantNumeric: 'tabular-nums' }}>{formatBytes(f.size)}</span>
+                <span className="muted" style={{ fontSize: 11 }}>{f.label}</span>
+              </span>
             </li>
           ))}
         </ul>

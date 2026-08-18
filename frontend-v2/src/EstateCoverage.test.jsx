@@ -63,4 +63,27 @@ describe('EstateCoverage', () => {
     expect(container.textContent).toContain('archive.zip')            // the file behind the count
     expect(container.textContent).toMatch(/Showing\s*1\s*of\s*2,374/)  // sample of the true total, said plainly
   })
+
+  it('drill-down shows size/owner, flags shared files, and re-sorts', async () => {
+    const inv = { ...INV, samples: { unsupported: [
+      { id: 'a', name: 'small.txt', format: 'other', size: 1024, owner: 'Ann', shared: false },
+      { id: 'b', name: 'huge.mov', format: 'av', size: 500000000, owner: 'Bo', shared: true },
+    ] } }
+    await render({ inventory: inv })
+    const chip = [...container.querySelectorAll('button')].find((b) => /Unsupported/.test(b.textContent))
+    await act(async () => { chip.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    // triage metadata is visible: owner, a human size, and the SHARED flag
+    expect(container.textContent).toContain('Bo')
+    expect(container.textContent).toContain('477 MB')     // 500,000,000 bytes, humanised
+    expect(container.textContent).toContain('SHARED')
+    // default sort is largest-first → huge.mov before small.txt
+    const order = () => [...container.querySelectorAll('li')].map((li) => li.textContent)
+    let items = order()
+    expect(items.findIndex((t) => /huge\.mov/.test(t))).toBeLessThan(items.findIndex((t) => /small\.txt/.test(t)))
+    // re-sort by Name — 'huge' still sorts before 'small' alphabetically, but via a different path
+    const nameBtn = [...container.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Name')
+    await act(async () => { nameBtn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    items = order()
+    expect(items.findIndex((t) => /huge\.mov/.test(t))).toBeLessThan(items.findIndex((t) => /small\.txt/.test(t)))
+  })
 })

@@ -53,15 +53,38 @@ export function statusRows(inv) {
     .map((k) => ({ status: k, label: STATUS_LABEL[k], count: by[k] }))
 }
 
-/** Drill-down for one capability status: the capped file sample from `inventory.samples`, plus the
- *  TRUE total from `by_status`, so a caller renders "showing N of <total>" and never mistakes the
- *  sample for the whole bucket. `capped` is true when the bucket has more files than the sample. */
-export function statusFiles(inv, status) {
+// Drill-down sort orders. size (biggest-first) is the default — the largest files are where
+// remediation effort and risk concentrate; shared surfaces externally-visible files first, which
+// matter most for a PHI estate. Ties break by name so the order is stable.
+export const STATUS_SORTS = ['size', 'shared', 'name']
+const SORTERS = {
+  size: (a, b) => (b.size || 0) - (a.size || 0) || (a.name || '').localeCompare(b.name || ''),
+  name: (a, b) => (a.name || '').localeCompare(b.name || ''),
+  shared: (a, b) => (b.shared === true) - (a.shared === true) || (b.size || 0) - (a.size || 0),
+}
+
+/** Human file size from a byte count (null → an em dash). */
+export function formatBytes(n) {
+  if (n == null) return '—'
+  if (n < 1024) return `${n} B`
+  const u = ['KB', 'MB', 'GB', 'TB']
+  let v = n / 1024, i = 0
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++ }
+  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${u[i]}`
+}
+
+/** Drill-down for one capability status: the capped file sample from `inventory.samples` — each row
+ *  carrying triage metadata {size, owner, shared} — plus the TRUE total from `by_status`, so a caller
+ *  renders "showing N of <total>" and never mistakes the sample for the whole bucket. `capped` is true
+ *  when the bucket has more files than the sample. `sort` orders the returned sample (default 'size'). */
+export function statusFiles(inv, status, sort = 'size') {
   const files = ((inv && inv.samples && inv.samples[status]) || []).map((f) => ({
     id: f.id, name: f.name, format: f.format, label: FORMAT_LABEL[f.format] || f.format,
+    size: f.size ?? null, owner: f.owner ?? null, shared: !!f.shared, modified: f.modified ?? null,
   }))
+  files.sort(SORTERS[sort] || SORTERS.size)
   const total = (inv && inv.by_status && inv.by_status[status]) || 0
-  return { status, files, shown: files.length, total, capped: total > files.length }
+  return { status, sort, files, shown: files.length, total, capped: total > files.length }
 }
 
 /** The nine funnel stages. Stages 1–3 come from the inventory (real today); 4–9 come from
