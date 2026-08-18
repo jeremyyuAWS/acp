@@ -40,8 +40,11 @@ ACP_SOURCE_KEY = "acpSourceFile"
 # omits `properties` entirely and `is_acp_generated` silently answers False for everything.
 # size / owners / shared feed the estate drill-down's triage metadata (biggest-first, by owner,
 # externally-shared-first); all are cheap list fields, so they ride the same page with no extra call.
-DRIVE_FIELDS = ("id,name,mimeType,md5Checksum,modifiedTime,properties,"
-                "size,owners(displayName,emailAddress),shared")
+# createdTime / parents feed the lifecycle inventory (ADR 0003 / Discover-completeness PRD): the
+# per-file discovery record needs a created date (for age/lifecycle rules) and the parent folder id
+# (for folder/path-scoped rules and the Document Location filter). Both are cheap list fields.
+DRIVE_FIELDS = ("id,name,mimeType,md5Checksum,createdTime,modifiedTime,properties,"
+                "size,owners(displayName,emailAddress),shared,parents")
 
 
 def stamp(source_filename: str | None = None) -> dict[str, str]:
