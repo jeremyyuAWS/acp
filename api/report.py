@@ -345,6 +345,38 @@ def _scope_section(files, facts, h2, body, cell, muted) -> list:
             f"so {_n}. They were not downloaded, opened or checked, and this report makes no "
             "statement about them whatsoever — neither conformant nor failing. Anything outside "
             f"{_esc(_fmt_txt)} is outside this assertion.", muted))
+
+    # WHOLE-ESTATE FUNNEL — the widest boundary of all. Everything above narrows within the scanned
+    # source; this states how much of the DISCOVERED estate was ever an assessable format. Three
+    # counts, never one percentage (estate_inventory's founding rule): discovered ≥ assessable ≥ the
+    # documents this report actually covers. Rendered only when the scan recorded an inventory.
+    estate = scope.get("estate")
+    if estate and estate.get("discovered"):
+        floor = "at least " if estate.get("truncated") else ""
+        na = estate.get("not_assessable", 0)
+        comp = []
+        if estate.get("metadata_only"):
+            comp.append(f"{estate['metadata_only']} image, audio or video (no accessibility test exists)")
+        if estate.get("unsupported"):
+            comp.append(f"{estate['unsupported']} of file types ACP does not parse")
+        if estate.get("excluded"):
+            comp.append(f"{estate['excluded']} excluded as ACP's own output or by policy")
+        comp_txt = (" — " + "; ".join(comp)) if comp else ""
+        scored = len(docs)
+        remediated = (facts or {}).get("remediated_total", 0)
+        covers = (f"This report covers the <b>{scored}</b> document{'' if scored == 1 else 's'} "
+                  f"actually scored"
+                  + (f", <b>{remediated}</b> of which the platform remediated." if remediated else "."))
+        el.append(Spacer(1, 4))
+        el.append(Paragraph(
+            f"<b>Estate coverage</b> — discovery found {floor}<b>{estate['discovered']}</b> "
+            f"file{'' if estate['discovered'] == 1 else 's'} in this source. "
+            f"<b>{estate['assessable']}</b> {'is' if estate['assessable'] == 1 else 'are'} a file "
+            f"type ACP can assess; the remaining <b>{na}</b> {'is' if na == 1 else 'are'} outside any "
+            f"automated accessibility assertion{comp_txt}. " + covers + " These are deliberately three "
+            "separate denominators, not one percentage: discovered, assessable, and scored are "
+            "different questions and collapsing them would overstate the coverage.", muted))
+
     el.append(Spacer(1, 4))
     el.append(Paragraph(
         "<b>A score of 100 therefore means: no blocking findings among the criteria ACP evaluated "

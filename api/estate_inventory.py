@@ -165,3 +165,39 @@ def summarize(files: list[dict], *, truncated: bool = False, sample_per_status: 
         "sample_cap": sample_per_status,
         "truncated": bool(truncated),
     }
+
+
+def funnel_facts(summary: dict | None) -> dict | None:
+    """The estate-coverage funnel for the conformance report's scope section, derived from a stored
+    `summarize()` output.
+
+    The report's scope section narrows the assertion by CRITERION ("no check for 2.4.3 on a PDF")
+    and by unread file-type ("47 documents of other types were not opened"). Neither of those
+    states the whole-estate shape: of everything discovered, how much is even an assessable format.
+    A conformance report that omits it lets an auditor read the scanned subset as the estate.
+
+    Returns the three honest denominators as separate counts — never one percentage (the taxonomy's
+    founding rule): `discovered` (every file), `assessable` (formats with at least one applicable
+    test), and the `not_assessable` remainder broken out by why (image/audio/video that has no
+    accessibility test, unsupported types, ACP-excluded). `truncated` carries through so the report
+    can mark the counts a floor rather than the whole estate.
+
+    Returns None when there is no inventory to report (a local scan, or one predating the field), so
+    the report simply omits the funnel rather than printing zeros.
+    """
+    if not isinstance(summary, dict) or not summary.get("discovered"):
+        return None
+    by_status = summary.get("by_status") or {}
+    discovered = int(summary.get("discovered") or 0)
+    assessable = int(summary.get("assessment_eligible", by_status.get(ASSESSABLE, 0)) or 0)
+    return {
+        "discovered": discovered,
+        "assessable": assessable,
+        "metadata_only": int(by_status.get(METADATA_ONLY, 0)),
+        "unsupported": int(by_status.get(UNSUPPORTED, 0)),
+        "excluded": int(by_status.get(EXCLUDED, 0)),
+        # Counted, not subtracted from a possibly-stale assessable: the remainder is whatever of the
+        # discovered estate is not an assessable format, and can never read negative.
+        "not_assessable": max(0, discovered - assessable),
+        "truncated": bool(summary.get("truncated")),
+    }

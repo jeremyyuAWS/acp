@@ -2252,6 +2252,30 @@ class Store:
         fmts = sorted({f for v in (scan_scope or {}).values() for f in (v or ())})
         return {"unread_documents": skipped, "formats_read": fmts}
 
+    def _estate_scope_facts(self, scan_id: str) -> dict:
+        """The whole-estate coverage funnel this scan recorded, for the report's scope section.
+
+        Read off the scan's OWN frozen scope (scan_runs.scope), the same rule as
+        _unread_scope_facts: a report states what happened, so it must not re-describe its past from
+        the live setting. The `inventory` block is what scanner._list wrote (discovered / by_status /
+        truncated); estate_inventory.funnel_facts reshapes it into the three honest denominators.
+
+        Returns {} when the scan recorded no inventory — a local scan, or one predating the field —
+        so the report simply omits the funnel rather than printing zeros.
+        """
+        import json as _json
+        import estate_inventory
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur, "SELECT scope FROM scan_runs WHERE id=%s", (scan_id,))
+                row = self._db.fetchone(cur)
+            raw = (row or {}).get("scope")
+            sc = (_json.loads(raw) if isinstance(raw, str) else raw) or {}
+        except Exception:
+            return {}
+        funnel = estate_inventory.funnel_facts(sc.get("inventory"))
+        return {"estate": funnel} if funnel else {}
+
     def get_certification_facts(self, scan_id: str) -> dict:
         """Facts backing the certification-decision block, the richer file inventory, and the
         scope-of-assertion statement (backlog R2 / R6 / R-A). Every number is COUNTED from
@@ -2371,6 +2395,12 @@ class Store:
                 # matters most for the reader this section is written for: an auditor asking
                 # "does this cover the estate?" gets "yes" from silence.
                 **self._unread_scope_facts(scan_id),
+                # WHOLE-ESTATE SHAPE — the other half again, one level out. The unread-formats line
+                # above states what was skipped WITHIN the scanned source; this states how much of the
+                # discovered estate was ever an assessable format at all. Both are absent-by-silence
+                # failures; both are stated here so the auditor's "does this cover the estate?" is
+                # answered by numbers, not by omission.
+                **self._estate_scope_facts(scan_id),
             },
             "approvals_total": sum(approvals.values()),
             "remediated_total": sum(d["remediated"] for d in docs),
