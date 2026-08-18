@@ -35,6 +35,20 @@ def _drive_svc(request: Request):
     return handlers._drive_client(token)
 
 
+def _persist_tags(doc: dict, cfg: dict, policy_id: str) -> None:
+    """Write a tag policy's tags to file_tags after execute_action applied them.
+
+    The disposition governance layer (the documents table) has no scan grain, so
+    system tags are keyed by the document's STABLE doc_id (as scan_id) and its path
+    (as file) — unique per document and idempotent by the file_tags primary key, so
+    a re-run adds nothing new. kind='system'; rule_id is the policy that applied it,
+    matching store.add_file_tags' contract (PRD §4.2 Tag / §3 auto-tagging)."""
+    tags = disposition.tag_list(cfg)
+    if tags:
+        core.store.add_file_tags(doc["doc_id"], doc.get("path") or doc["doc_id"],
+                                 tags, kind="system", rule_id=policy_id)
+
+
 class PolicyCreate(BaseModel):
     name: str
     match: list[dict]
@@ -51,6 +65,7 @@ def create_policy(body: PolicyCreate, request: Request):
         raise HTTPException(422, f"action must be one of {sorted(disposition.ACTIONS)}")
     try:
         disposition.validate_match(body.match)
+        disposition.validate_action_config(body.action, body.action_config)
     except ValueError as e:
         raise HTTPException(422, str(e))
     policy_id = uuid.uuid4().hex[:12]
@@ -106,7 +121,8 @@ def execute_policy(policy_id: str, request: Request):
     match = json.loads(policy["match"])
     cfg = json.loads(policy.get("action_config") or "{}")
     svc = _drive_svc(request)
-    if policy["action"] != "leave" and not policy.get("requires_approval") and svc is None:
+    # 'leave' and 'tag' never touch Drive, so they can act immediately with no svc.
+    if policy["action"] not in ("leave", "tag") and not policy.get("requires_approval") and svc is None:
         raise HTTPException(400, "this policy acts on Drive files immediately — "
                                  "connect Google Drive first")
     summary = {"matched": 0, "pending_approval": 0, "applied": 0, "failed": 0, "skipped": 0}
@@ -126,6 +142,8 @@ def execute_policy(policy_id: str, request: Request):
             summary["pending_approval"] += 1
         else:
             result, detail = disposition.execute_action(doc, policy["action"], cfg, svc)
+            if result == "applied" and policy["action"] == "tag":
+                _persist_tags(doc, cfg, policy_id)
             core.store.create_disposition_audit(
                 audit_id, doc_id=doc["doc_id"], policy_id=policy_id,
                 action=policy["action"], result=result, detail=detail)
@@ -166,6 +184,8 @@ def approve_disposition(audit_id: str, request: Request):
         core.store.set_disposition_audit_result(audit_id, "failed", "document no longer exists")
         raise HTTPException(410, "document no longer exists")
     result, detail = disposition.execute_action(doc, row["action"], cfg, _drive_svc(request))
+    if result == "applied" and row["action"] == "tag":
+        _persist_tags(doc, cfg, row["policy_id"])
     core.store.set_disposition_audit_result(audit_id, result, detail)
     core.store.log_decision("admin", f"disposition.{result}",
                             detail=f"{row['action']} {row['doc_id']}: {detail}"[:200])

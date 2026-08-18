@@ -81,6 +81,32 @@ def test_leave_needs_no_drive():
     assert result == "applied"
 
 
+def test_tag_executes_without_drive_and_needs_no_svc():
+    # Tag is metadata-only: applies for any source, with svc=None, never touching Drive.
+    result, detail = disposition.execute_action(
+        _doc(doc_id="sp:abc", source="sharepoint"), "tag", {"tags": ["legacy", "review"]}, None)
+    assert result == "applied" and detail == "tagged: legacy, review"
+
+
+def test_tag_dedupes_and_trims_in_detail():
+    result, detail = disposition.execute_action(
+        _doc(), "tag", {"tags": [" legacy ", "legacy", "", "review"]}, None)
+    assert result == "applied" and detail == "tagged: legacy, review"
+
+
+def test_tag_with_no_tags_fails_cleanly():
+    result, detail = disposition.execute_action(_doc(), "tag", {"tags": []}, None)
+    assert result == "failed" and "no tags" in detail
+
+
+def test_validate_action_config_requires_tags_for_tag():
+    disposition.validate_action_config("tag", {"tags": ["x"]})       # ok, no raise
+    disposition.validate_action_config("archive", {})               # non-tag unaffected
+    for bad in ({}, {"tags": []}, {"tags": ["", "  "]}, None):
+        with pytest.raises(ValueError):
+            disposition.validate_action_config("tag", bad)
+
+
 def test_non_drive_source_fails_cleanly():
     result, detail = disposition.execute_action(
         _doc(doc_id="local:abc", source="local"), "delete", {}, FakeDrive())
@@ -129,3 +155,97 @@ def test_audit_list_filters(store):
     pending = store.list_disposition_audit(result="pending_approval")
     assert [r["id"] for r in pending] == ["b1"]
     assert len(store.list_disposition_audit(policy_id="p1")) == 2
+
+
+# ── Route-level: Tag policy end-to-end (execute writes file_tags via store) ────
+
+class _Req:
+    """Minimal stand-in for a FastAPI Request — headers.get + a bare .state, which
+    is all the disposition routes touch (no Drive token → svc is None, fine for tag)."""
+    def __init__(self, token=None):
+        self.headers = {"x-drive-token": token} if token else {}
+        self.state = type("S", (), {})()
+
+
+@pytest.fixture()
+def routed(monkeypatch):
+    """Fresh store wired into core + owner gate disabled — routes act as owner."""
+    import core
+    import store as store_mod
+    import routes.disposition as rd
+    tmp = Path(tempfile.mkdtemp()) / "disp-route.db"
+    monkeypatch.setattr(store_mod, "_SQLITE_PATH", tmp)
+    st = store_mod.Store()
+    monkeypatch.setattr(core, "store", st)
+    monkeypatch.setattr(core, "OWNER_EMAIL", "")
+    return rd, core, st
+
+
+def _seed_doc(st, doc_id="drive:t1", path="Reports/old.docx", source="drive"):
+    st.upsert_document(doc_id, source=source, path=path, content_hash=None, owner=None,
+                       created_at="2019-01-01T00:00:00+00:00",
+                       last_seen="2019-01-01T00:00:00+00:00", triage_score=0, triage_rationale="")
+
+
+def _make_tag_policy(rd, name, *, requires_approval, tags=("legacy", "review")):
+    body = rd.PolicyCreate(name=name, match=[{"field": "source", "op": "eq", "value": "drive"}],
+                           action="tag", action_config={"tags": list(tags)},
+                           requires_approval=requires_approval, enabled=True)
+    return rd.create_policy(body, _Req())["policy_id"]
+
+
+def test_tag_policy_execute_writes_file_tags_idempotently(routed):
+    rd, core, st = routed
+    _seed_doc(st)
+    pid = _make_tag_policy(rd, "tag legacy drive", requires_approval=False)
+
+    summary = rd.execute_policy(pid, _Req())
+    assert summary["matched"] == 1 and summary["applied"] == 1
+
+    tags = st.list_file_tags("drive:t1", "Reports/old.docx")
+    assert sorted(t["tag"] for t in tags) == ["legacy", "review"]
+    assert all(t["kind"] == "system" and t["rule_id"] == pid for t in tags)
+
+    # Idempotent: the (doc, policy) pair now has a live outcome, so a re-run skips it
+    # and the tag set is unchanged (file_tags PK also makes the write itself idempotent).
+    summary2 = rd.execute_policy(pid, _Req())
+    assert summary2["applied"] == 0 and summary2["skipped"] == 1
+    assert len(st.list_file_tags("drive:t1", "Reports/old.docx")) == 2
+
+
+def test_tag_policy_needs_no_drive_connection_on_execute(routed):
+    # A non-Drive document, no x-drive-token header: archive/delete would 400 here,
+    # but tag applies because it never calls Drive.
+    rd, core, st = routed
+    _seed_doc(st, doc_id="sp:x1", path="site/policy.docx", source="drive")
+    pid = _make_tag_policy(rd, "tag any", requires_approval=False)
+    summary = rd.execute_policy(pid, _Req())          # _Req() has no drive token
+    assert summary["applied"] == 1
+    assert st.list_file_tags("sp:x1", "site/policy.docx")
+
+
+def test_tag_policy_writes_tags_only_on_approval(routed):
+    rd, core, st = routed
+    _seed_doc(st)
+    pid = _make_tag_policy(rd, "tag gated", requires_approval=True)
+
+    summary = rd.execute_policy(pid, _Req())
+    assert summary["pending_approval"] == 1 and summary["applied"] == 0
+    assert st.list_file_tags("drive:t1", "Reports/old.docx") == []   # nothing applied yet
+
+    audit_id = st.list_disposition_audit(result="pending_approval")[0]["id"]
+    rd.approve_disposition(audit_id, _Req())
+    tags = st.list_file_tags("drive:t1", "Reports/old.docx")
+    assert sorted(t["tag"] for t in tags) == ["legacy", "review"]
+    assert all(t["rule_id"] == pid for t in tags)
+
+
+def test_tag_policy_create_rejects_empty_tags(routed):
+    from fastapi import HTTPException
+    rd, core, st = routed
+    body = rd.PolicyCreate(name="bad tag", match=[{"field": "source", "op": "eq", "value": "drive"}],
+                           action="tag", action_config={"tags": []},
+                           requires_approval=False, enabled=True)
+    with pytest.raises(HTTPException) as ei:
+        rd.create_policy(body, _Req())
+    assert ei.value.status_code == 422
