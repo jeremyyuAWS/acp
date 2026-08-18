@@ -77,3 +77,40 @@ def test_estate_samples_carry_triage_metadata_like_drive(monkeypatch):
     assert sample["size"] == 2048
     assert sample["shared"] is True
     assert sample["modified"] == "2024-06-01T00:00:00Z"
+
+
+# ── multi-library (SharePoint site) truncation — the branch OneDrive tests can't reach ──
+def test_multi_library_truncation_when_a_later_library_is_never_reached(monkeypatch):
+    # A SITE with two document libraries. The scannable cap (1) is filled in the FIRST library, so
+    # the for-loop over targets breaks and the SECOND library is never listed → the estate is a
+    # floor and must be truncated (the `i < len(targets) - 1` arm, unreachable from OneDrive tests).
+    monkeypatch.setattr(scanner, "_sp_drives",
+                        lambda token, site: [{"id": "libA"}, {"id": "libB"}])
+
+    def sp_get(token, url):
+        assert "libB" not in url, "libB must never be fetched — the cap was hit in libA"
+        return {"value": [_item("1", "a.docx", DOCX), _item("2", "b.docx", DOCX)]}
+    monkeypatch.setattr(scanner, "_sp_get", sp_get)
+
+    scope: dict = {}
+    scanner._sp_list("tok", max_files=1, site="contoso.sharepoint.com,g1,g2", scope_out=scope)
+    assert scope["inventory"]["truncated"] is True
+    assert scope["inventory"]["discovered"] == 2          # a floor: only libA was listed
+
+
+def test_multi_library_is_not_truncation_when_every_library_is_fully_listed(monkeypatch):
+    # Two libraries, both fully listed under the cap → NOT truncated, and the estate spans both
+    # (the False side of the same branch: a fully-read multi-library site is complete, not a floor).
+    monkeypatch.setattr(scanner, "_sp_drives",
+                        lambda token, site: [{"id": "libA"}, {"id": "libB"}])
+
+    def sp_get(token, url):
+        return {"value": [_item("1", "a.docx", DOCX)]} if "libA" in url \
+            else {"value": [_item("2", "b.docx", DOCX)]}
+    monkeypatch.setattr(scanner, "_sp_get", sp_get)
+
+    scope: dict = {}
+    result = scanner._sp_list("tok", max_files=10, site="contoso.sharepoint.com,g1,g2", scope_out=scope)
+    assert sorted(r["name"] for r in result) == ["a.docx", "b.docx"]   # both libraries scanned
+    assert scope["inventory"]["discovered"] == 2
+    assert scope["inventory"]["truncated"] is False
