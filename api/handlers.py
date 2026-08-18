@@ -795,6 +795,132 @@ import tempfile as _tempfile
 from pathlib import Path as _Path
 
 
+# ── Lifecycle rule evaluation during Discover (PRD §4.3 / §6, Phase B4) ─────────
+# disposition_policy has no priority column, so NAME is the deterministic precedence order
+# (list_disposition_policies() returns rows ORDER BY name). Documented here rather than added as
+# a schema change — the accessor already yields a stable order and the PRD's precedence is a
+# per-file archive-vs-delete decision, not a global rank.
+_DELETE_OVERRIDE_KEYS = ("override_archive", "supersedes_archive", "supersede_archive")
+
+
+def _delete_supersedes_archive(action_config: dict | None) -> bool:
+    """True iff a delete policy's action_config explicitly permits it to win over an archive
+    rule that also matched the same file (PRD §6). The default is the safe one — a delete rule
+    does NOT silently outrank an archive rule."""
+    cfg = action_config or {}
+    return any(bool(cfg.get(k)) for k in _DELETE_OVERRIDE_KEYS)
+
+
+def _actor_authorized_for_delete(actor: str | None) -> bool:
+    """A discover-time actor may let a delete rule supersede an archive rule only when they are a
+    real authenticated owner (PRD §6) — the keyless 'demo'/anonymous path never produces the
+    irreversible-leaning Delete Candidate when an archive rule also matched. Mirrors the
+    scan-owner gate the routes already apply."""
+    return bool(actor) and actor != "demo"
+
+
+def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | None) -> None:
+    """Evaluate enabled disposition policies against the freshly persisted inventory and record
+    CANDIDATE outcomes (PRD §4.3 / §6, Phase B4). Candidate-first: a matching archive rule flags
+    the file 'Archive Candidate' and a delete rule 'Delete Candidate' — the actual Drive
+    move/delete is NEVER performed here (that stays behind the approval/execute path). A tag rule
+    writes system tags. Idempotent (AC-13): re-running Discover adds no duplicate tags (file_tags
+    PK) and logs no duplicate audit row (doc_has_disposition guard), so unchanged inputs+rules
+    produce no new actions.
+
+    Keying: tags/status are keyed by (scan_id, file) — the file_tags / scan_inventory grain. The
+    audit doc_id is a discover-grain key ("scan:<scan_id>:<file>"), deliberately distinct from the
+    approval-time drive:<fileId> key the Tag-action PR (#314) uses, so the two paths never collide.
+    """
+    import disposition
+    import uuid
+    policies = [p for p in core.store.list_disposition_policies() if p.get("enabled")]
+    if not policies:
+        return
+    for r in core.store.list_inventory(scan_id):
+        file = r.get("file")
+        # An Exempted file (legal hold etc.) is never moved to a candidate status, tagged, or
+        # re-audited by a rule run (PRD §6).
+        if r.get("lifecycle_status") == "Exempted":
+            continue
+        doc_id = f"scan:{scan_id}:{file}"
+        doc = {
+            "doc_id": doc_id,
+            "source": source,
+            "path": r.get("path"),
+            "parent_folder": r.get("parent_folder"),
+            "created_at": r.get("created_at"),
+            # matches() maps source_modified -> modified_at so "modified before <date>" works.
+            "source_modified": r.get("source_modified"),
+            "owner": r.get("owner"),
+        }
+        matched = []
+        for p in policies:
+            try:
+                match = _json.loads(p.get("match") or "[]")
+            except Exception:
+                continue
+            if disposition.matches(doc, match):
+                matched.append(p)
+        if not matched:
+            continue
+        # ── Tag rules: apply EVERY matching tag policy. Tag + Archive both match → tags AND the
+        # Archive candidate status are applied (PRD §6), so tags are never suppressed by a
+        # co-matching disposition rule.
+        for p in matched:
+            if p.get("action") != "tag":
+                continue
+            if core.store.doc_has_disposition(doc_id, p["policy_id"]):
+                continue  # already tagged + audited on an earlier Discover — idempotent
+            try:
+                cfg = _json.loads(p.get("action_config") or "{}")
+            except Exception:
+                cfg = {}
+            tags = disposition.tag_list(cfg)
+            if not tags:
+                continue
+            core.store.add_file_tags(scan_id, file, tags, kind="system", rule_id=p["policy_id"])
+            core.store.create_disposition_audit(
+                uuid.uuid4().hex, doc_id=doc_id, policy_id=p["policy_id"], action="tag",
+                result="applied", detail="tagged: " + ", ".join(tags))
+        # ── Candidate status: archive-vs-delete precedence (PRD §6). Take the first (name-order)
+        # matching rule of each kind.
+        archive_p = next((p for p in matched if p.get("action") == "archive"), None)
+        delete_p = next((p for p in matched if p.get("action") == "delete"), None)
+        chosen = new_status = reason = None
+        if delete_p and archive_p:
+            try:
+                dcfg = _json.loads(delete_p.get("action_config") or "{}")
+            except Exception:
+                dcfg = {}
+            if _delete_supersedes_archive(dcfg) and _actor_authorized_for_delete(actor):
+                chosen, new_status = delete_p, "Delete Candidate"
+                reason = (f"delete rule '{delete_p.get('name')}' supersedes archive rule "
+                          f"'{archive_p.get('name')}' (override permitted, actor authorized)")
+            else:
+                # Safe default: keep the reversible outcome and flag for review rather than let a
+                # delete rule silently win.
+                chosen, new_status = archive_p, "Archive Candidate"
+                reason = (f"matched archive rule '{archive_p.get('name')}' — flagged for review: "
+                          f"delete rule '{delete_p.get('name')}' also matched but its override is "
+                          f"not permitted or the actor is not authorized")
+        elif delete_p:
+            chosen, new_status = delete_p, "Delete Candidate"
+            reason = f"matched delete rule '{delete_p.get('name')}'"
+        elif archive_p:
+            chosen, new_status = archive_p, "Archive Candidate"
+            reason = f"matched archive rule '{archive_p.get('name')}'"
+        if chosen is None:
+            continue
+        if core.store.doc_has_disposition(doc_id, chosen["policy_id"]):
+            continue  # this rule already flagged + audited this file on an earlier Discover
+        core.store.set_lifecycle_status(scan_id, file, new_status,
+                                        rule_id=chosen["policy_id"], reason=reason)
+        core.store.create_disposition_audit(
+            uuid.uuid4().hex, doc_id=doc_id, policy_id=chosen["policy_id"],
+            action=chosen.get("action"), result="pending_approval", detail=reason)
+
+
 @handler("scan_discover")
 def _scan_discover(payload: dict, job: dict) -> None:
     """List the source (paginated, no cap), create the scan_runs row, and enqueue one
@@ -865,6 +991,11 @@ def _scan_discover(payload: dict, job: dict) -> None:
         _dedupe_inventory_files(inv)
         if inv:
             core.store.add_inventory(scan_id, inv)
+        # Phase B4 — with the inventory persisted, run enabled disposition rules against it and
+        # record candidate lifecycle outcomes (never executing the Drive move/delete here). Runs
+        # before the no-assessable-items short-circuit below because a rule may match a
+        # non-scannable estate row (old media to archive, a /tmp file to flag for deletion).
+        _evaluate_discover_lifecycle_rules(scan_id, source, user)
         if not items:
             # The estate is inventoried, but nothing in it is assessable — close the run rather
             # than leave it waiting for an Assess that would enqueue zero files.
@@ -906,6 +1037,12 @@ def _scan_assess(payload: dict, job: dict) -> None:
     pii = bool(params.get("pii", False))
     incremental = bool(params.get("incremental", True))
     exclude_rem = bool(params.get("exclude_remediated", False))
+    # Phase C3 (PRD §4.5) — by default Assess skips inventory rows a lifecycle rule flagged for
+    # archive/deletion (LIFECYCLE_EXCLUDED_DEFAULT). include_lifecycle_flagged is the authorized
+    # override; it reaches here only through the assess route, which already gates on the scan
+    # owner (get_scan owner=...), so being present in the payload is the owner-gate.
+    include_flagged = bool(payload.get("include_lifecycle_flagged")
+                           or params.get("include_lifecycle_flagged"))
     core.store.set_scan_status(scan_id, "running")
     # CRITICAL — the inventory now records the WHOLE estate, including media / unsupported /
     # extensionless files that must NEVER be downloaded or analysed. Rebuild the fan-out from the
@@ -918,6 +1055,25 @@ def _scan_assess(payload: dict, job: dict) -> None:
     for r in inv:
         if _est.classify({"name": r.get("file"), "mimeType": r.get("mime")})["status"] != _est.ASSESSABLE:
             continue
+        # Phase C3 (PRD §4.5) — a file a lifecycle rule flagged for archive/deletion is excluded
+        # from Assess by default. Either way the assess record retains the lifecycle status + the
+        # exclusion reason that applied when this run was created (status/rule/reason preserved).
+        lc = r.get("lifecycle_status")
+        if lc in core.store.LIFECYCLE_EXCLUDED_DEFAULT:
+            base = r.get("lifecycle_reason")
+            if include_flagged:
+                excl = (f"included in Assess despite lifecycle status '{lc}' (authorized override)"
+                        + (f" — {base}" if base else ""))
+                core.store.set_lifecycle_status(scan_id, r["file"], lc,
+                                                rule_id=r.get("lifecycle_rule_id"), reason=base,
+                                                exclusion_reason=excl)
+            else:
+                excl = (f"excluded from Assess: lifecycle status '{lc}'"
+                        + (f" — {base}" if base else ""))
+                core.store.set_lifecycle_status(scan_id, r["file"], lc,
+                                                rule_id=r.get("lifecycle_rule_id"), reason=base,
+                                                exclusion_reason=excl)
+                continue
         # `mime` on the analysis item is the Google-native EXPORT selector, NOT the stored source
         # MIME — feeding a real "application/pdf" here would KeyError in _download's EXPORT_MAP.
         src_mime = r.get("mime")

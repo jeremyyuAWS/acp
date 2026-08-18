@@ -273,7 +273,8 @@ async def confirm_review_criterion(sid: str, filename: str, request: Request):
 
 
 @router.post("/scans/{sid}/assess")
-def assess(sid: str, request: Request, level: str = Query("AA")):
+def assess(sid: str, request: Request, level: str = Query("AA"),
+           include_lifecycle_flagged: bool = Query(False)):
     """Run the assessment. In the deferred-analysis model (ADR 0020) a Discover-only scan has an
     inventory but no assessed file_records yet, so this KICKS OFF the download+WCAG fan-out (the
     heavy work now lives here, not in Discover) — assessed_at is stamped when that analysis
@@ -291,7 +292,13 @@ def assess(sid: str, request: Request, level: str = Query("AA")):
         and core.store.get_setting(f"assess_params:{sid}") is not None
     )
     if deferred_pending:
-        jid = core.store.enqueue_job("scan_assess", {"scan_id": sid, "user": _owner(request)}, scan_id=sid)
+        # include_lifecycle_flagged (PRD §4.5) is the authorized override that pulls
+        # archive/delete-flagged files back into Assess. This route already gates on the scan
+        # owner (get_scan owner=... above), so reaching here IS the owner-gate.
+        jid = core.store.enqueue_job(
+            "scan_assess",
+            {"scan_id": sid, "user": _owner(request),
+             "include_lifecycle_flagged": include_lifecycle_flagged}, scan_id=sid)
         return {"scan_id": sid, "level": level, "job_id": jid, "workers": core.WORKERS,
                 "worker_tier_alive": core.store.worker_tier_alive(),
                 "phase": "assessing", "deferred": True}
