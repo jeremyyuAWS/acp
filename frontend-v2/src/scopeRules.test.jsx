@@ -76,6 +76,16 @@ describe('the Core-17 multi-select renders code + name', () => {
   })
 })
 
+describe('naming reconciliation with the source-drawer Rules tab (#328)', () => {
+  it('titles itself "WCAG scope rules" and disambiguates from lifecycle rules', async () => {
+    const { c } = await render()
+    // "WCAG scope rules" (assessment criteria) must read distinctly from the SourceDrawer
+    // "Rules" tab, which is lifecycle/disposition (tag/archive/deletion review).
+    expect(c.querySelector('h2').textContent).toBe('WCAG scope rules')
+    expect(c.textContent).toContain('lifecycle rules')
+  })
+})
+
 
 describe('the create form posts the right body', () => {
   it('sends selector, value, selected codes, priority, override and enabled', async () => {

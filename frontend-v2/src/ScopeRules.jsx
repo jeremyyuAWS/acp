@@ -108,11 +108,13 @@ export default function ScopeRules() {
 
   return (
     <section className="panel scoperules">
-      <h2 style={{ margin: 0 }}>Scope rules</h2>
+      <h2 style={{ margin: 0 }}>WCAG scope rules</h2>
       <p className="muted" style={{ margin: '3px 0 14px', fontSize: 13, lineHeight: 1.5 }}>
         Assess different parts of the estate against different WCAG criteria — target files by
         folder, owner or department and assign a Core-17 subset. A file's checks are the
         <b> union</b> of every matching rule, unless an <b>override</b> replaces that union.
+        These decide <i>which checks</i> run where — separate from <b>lifecycle rules</b>
+        (tag / archive / deletion review), which live in each source's <b>Rules</b> tab.
       </p>
 
       {/* ── CREATE FORM ─────────────────────────────────────────────────────────── */}

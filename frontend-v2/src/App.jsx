@@ -882,7 +882,7 @@ export default function App() {
                 override precedence. Collapsed alongside the assess-scope picker so it is one
                 click away without displacing the run button. */}
             <details className="panel scopestep scoperulesstep">
-              <summary><b>Scope rules</b><span className="muted"> · per-folder / owner / department WCAG subsets, with overrides</span></summary>
+              <summary><b>WCAG scope rules</b><span className="muted"> · per-folder / owner / department WCAG subsets, with overrides</span></summary>
               <ScopeRules />
             </details>
             <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy} onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase} />
