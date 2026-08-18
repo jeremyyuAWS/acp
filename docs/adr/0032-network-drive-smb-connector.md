@@ -35,6 +35,34 @@ a place the customer didn't authorize" is the decision.
 customer network and talks to ACP over an outbound-only HTTPS channel.** PHI stays in the perimeter
 until a file is explicitly pulled for assessment; nothing inbound is opened.
 
+### Topology
+
+```
+        HOSPITAL NETWORK  (trust perimeter — PHI stays inside)         │        AZURE  ·  ACP
+   ────────────────────────────────────────────────────────────────── │ ──────────────────────────────
+                                                                        │
+    ┌──────────────────┐                                                │
+    │  SMB / CIFS       │        ┌────────────────────────────────┐     │     ┌────────────────────────┐
+    │  file server / NAS│  read  │        ACP CONNECTOR            │     │     │   ACP control plane    │
+    │  \\fileserver\dept│──────▶ │   (worker image + SMB adapter)  │     │     │       (acp-app)        │
+    │  \\nas\phi  ·  H:\ │  only  │                                │  out-│     │                        │
+    └──────────────────┘        │  1  walk share → classify every │  bound    │  • dispatch scan jobs  │
+              ▲                  │     file (3-denominator invy)   │  HTTPS ═════▶  • receive results     │
+              │ svc-acp          │  2  assess / remediate locally  │  :443│     │                        │
+              │ (read-only NTFS) │  3  write fixes ──────┐         │     │     └───────────┬────────────┘
+              │                  └───────────────────────┼─────────┘     │                 │
+    ┌─────────┴──────────┐                               ▼               │     ┌───────────▼────────────┐
+    │ \\...\ACP-Remediated│ ◀──── fixed files (never over the original)   │     │  acp-worker + Azure T4 │
+    │  (new path)         │                                               │     │  vision  (findings)    │
+    └────────────────────┘                                               │     └────────────────────────┘
+                                                                         │
+    ══════════ FIREWALL: OUTBOUND 443 ONLY ═══════════════════════════════   (no inbound rule · no SMB/445 over WAN)
+```
+
+Three properties this buys: (1) PHI never leaves the perimeter to be *discovered* — only findings/
+coverage (and, if allowed, remediated bytes) egress; (2) outbound-only — no inbound hole, no SMB over
+the WAN; (3) read-only + non-destructive — `svc-acp` reads, and fixes land in a new path.
+
 ### The adapter interface (mirrors the existing sources)
 
 A network-drive source is defined by:
