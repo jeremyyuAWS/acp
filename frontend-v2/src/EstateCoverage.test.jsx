@@ -51,4 +51,16 @@ describe('EstateCoverage', () => {
     await render({ report: { scope: {} } })
     expect(container.textContent).toContain('No estate inventory yet')
   })
+
+  it('drills a capability-status count open to the files behind it, honest about the cap', async () => {
+    const inv = { ...INV, samples: { unsupported: [{ id: 'a', name: 'archive.zip', format: 'other' }] } }
+    await render({ inventory: inv })
+    // the files are not shown until the status is expanded
+    expect(container.textContent).not.toContain('archive.zip')
+    const btn = [...container.querySelectorAll('button')].find((b) => /Unsupported/.test(b.textContent))
+    expect(btn).toBeTruthy()
+    await act(async () => { btn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(container.textContent).toContain('archive.zip')            // the file behind the count
+    expect(container.textContent).toMatch(/Showing\s*1\s*of\s*2,374/)  // sample of the true total, said plainly
+  })
 })

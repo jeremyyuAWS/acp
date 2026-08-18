@@ -1,4 +1,5 @@
-import { estateModel } from './estateFunnel.js'
+import { useState } from 'react'
+import { estateModel, statusFiles } from './estateFunnel.js'
 
 // Estate coverage from a scan report's `scope.inventory` — the funnel, format composition, and
 // capability-status split, rendered from REAL discovery data (the illustrative dashboard artifact
@@ -22,6 +23,7 @@ function Bar({ value, of, color, pending }) {
 }
 
 export default function EstateCoverage({ report, inventory, progress }) {
+  const [openStatus, setOpenStatus] = useState(null)
   const inv = inventory || report?.scope?.inventory
   if (!inv || !inv.discovered) {
     return (
@@ -91,17 +93,56 @@ export default function EstateCoverage({ report, inventory, progress }) {
         })}
       </div>
 
-      {/* Capability status */}
+      {/* Capability status — each chip drills into the files behind the count */}
       <h4 style={{ margin: '0 0 8px', fontSize: 13, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--muted-fg,#8a8f98)' }}>Capability status</h4>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-        {m.status.map((r) => (
-          <span key={r.status} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5,
-                                        border: '1px solid var(--line, #e2dce4)', borderRadius: 999, padding: '4px 11px' }}>
-            <span style={{ width: 9, height: 9, borderRadius: '50%', background: STATUS_COLOR[r.status] }} />
-            {r.label} <b style={{ fontVariantNumeric: 'tabular-nums' }}>{nf.format(r.count)}</b>
-          </span>
-        ))}
+        {m.status.map((r) => {
+          const open = openStatus === r.status
+          return (
+            <button key={r.status} type="button" aria-expanded={open}
+                    onClick={() => setOpenStatus(open ? null : r.status)}
+                    title={`Show the files counted as ${r.label}`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, cursor: 'pointer',
+                             border: '1px solid var(--line, #e2dce4)', borderRadius: 999, padding: '4px 11px',
+                             background: open ? 'var(--surface-2, #f0f0f3)' : 'transparent',
+                             color: 'inherit', font: 'inherit' }}>
+              <span style={{ width: 9, height: 9, borderRadius: '50%', background: STATUS_COLOR[r.status] }} />
+              {r.label} <b style={{ fontVariantNumeric: 'tabular-nums' }}>{nf.format(r.count)}</b>
+              <span aria-hidden="true" className="muted" style={{ fontSize: 10 }}>{open ? '▾' : '▸'}</span>
+            </button>
+          )
+        })}
       </div>
+      {openStatus && <StatusDrilldown inv={inv} status={openStatus} />}
     </section>
+  )
+}
+
+/** The files behind one capability-status count — a capped, scrollable sample. Honest about the
+ *  cap ("showing N of <total>") so an unsupported bucket of thousands is never mistaken for the
+ *  handful shown. */
+function StatusDrilldown({ inv, status }) {
+  const d = statusFiles(inv, status)
+  return (
+    <div style={{ marginTop: 12, border: '1px solid var(--line, #e2dce4)', borderRadius: 8, overflow: 'hidden' }}>
+      <div className="muted" style={{ fontSize: 12, padding: '8px 12px', background: 'var(--surface-2, #f0f0f3)' }}>
+        {d.capped
+          ? <>Showing <b>{nf.format(d.shown)}</b> of <b>{nf.format(d.total)}</b> files — sample capped for size</>
+          : <>All <b>{nf.format(d.total)}</b> file{d.total === 1 ? '' : 's'}</>}
+      </div>
+      {d.files.length === 0 ? (
+        <div className="muted" style={{ fontSize: 12.5, padding: 12 }}>No files in this bucket.</div>
+      ) : (
+        <ul style={{ margin: 0, padding: 0, listStyle: 'none', maxHeight: 260, overflowY: 'auto' }}>
+          {d.files.map((f, i) => (
+            <li key={f.id || i} style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between',
+                                         fontSize: 12.5, padding: '6px 12px', borderTop: i ? '1px solid var(--line, #e2dce4)' : 'none' }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.name}>{f.name || '(unnamed)'}</span>
+              <span className="muted" style={{ fontSize: 11, flexShrink: 0 }}>{f.label}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }

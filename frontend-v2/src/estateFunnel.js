@@ -53,6 +53,17 @@ export function statusRows(inv) {
     .map((k) => ({ status: k, label: STATUS_LABEL[k], count: by[k] }))
 }
 
+/** Drill-down for one capability status: the capped file sample from `inventory.samples`, plus the
+ *  TRUE total from `by_status`, so a caller renders "showing N of <total>" and never mistakes the
+ *  sample for the whole bucket. `capped` is true when the bucket has more files than the sample. */
+export function statusFiles(inv, status) {
+  const files = ((inv && inv.samples && inv.samples[status]) || []).map((f) => ({
+    id: f.id, name: f.name, format: f.format, label: FORMAT_LABEL[f.format] || f.format,
+  }))
+  const total = (inv && inv.by_status && inv.by_status[status]) || 0
+  return { status, files, shown: files.length, total, capped: total > files.length }
+}
+
 /** The nine funnel stages. Stages 1–3 come from the inventory (real today); 4–9 come from
  *  `progress` (scan/remediation records) when available, and are null — "pending" — until then.
  *  Every stage carries `of` (the discovered denominator) so a caller can render a proportion. */
