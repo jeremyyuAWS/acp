@@ -110,12 +110,19 @@ def classify(f: dict) -> dict:
     }
 
 
-def summarize(files: list[dict], *, truncated: bool = False) -> dict:
+def summarize(files: list[dict], *, truncated: bool = False, sample_per_status: int = 200) -> dict:
     """The whole-estate summary the dashboard funnel and composition read.
 
     `files` is the raw Drive listing (every type, folders already removed by the caller — a folder
     is not content). Returns discovered totals plus by-format and by-status breakdowns, and the
     assessment-eligible count — the honest split between "found" and "can act on".
+
+    `samples` carries, per capability status, up to `sample_per_status` of the actual files in that
+    bucket ({id, name, format}) so the dashboard can drill from an aggregate ("unsupported: 4,231")
+    into the files behind it. It is a CAP, not the whole list: `by_status[status]` is the true total,
+    so a consumer renders "showing N of <total>" and never mistakes the sample for the estate. The
+    cap bounds the report size at 30k-file scale (4 statuses x cap rows), and the per-file paginated
+    export is a separate follow-up.
 
     `truncated` is True when the listing hit its cap before reaching the end of the estate: the
     counts are then a FLOOR, not the whole estate, and a consumer must say so rather than present
@@ -123,14 +130,20 @@ def summarize(files: list[dict], *, truncated: bool = False) -> dict:
     """
     by_format: dict[str, int] = {}
     by_status: dict[str, int] = {}
+    samples: dict[str, list[dict]] = {}
     rows = [classify(f) for f in files if f.get("mimeType") != FOLDER_MIME]
     for r in rows:
         by_format[r["format"]] = by_format.get(r["format"], 0) + 1
         by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+        bucket = samples.setdefault(r["status"], [])
+        if len(bucket) < sample_per_status:
+            bucket.append({"id": r["id"], "name": r["name"], "format": r["format"]})
     return {
         "discovered": len(rows),
         "assessment_eligible": by_status.get(ASSESSABLE, 0),
         "by_format": by_format,
         "by_status": by_status,
+        "samples": samples,
+        "sample_cap": sample_per_status,
         "truncated": bool(truncated),
     }

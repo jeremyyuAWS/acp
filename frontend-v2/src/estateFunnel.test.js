@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   assessablePct, isTruncated, compositionRows, statusRows, funnelStages, estateModel,
-  ASSESSABLE_FORMATS,
+  statusFiles, ASSESSABLE_FORMATS,
 } from './estateFunnel.js'
 
 const INV = {
@@ -47,5 +47,27 @@ describe('estateFunnel model', () => {
     expect(isTruncated(INV)).toBe(false)
     expect(isTruncated({ discovered: 5, truncated: true })).toBe(true)
     expect(estateModel({ discovered: 5, truncated: true }).truncated).toBe(true)
+  })
+
+  it('statusFiles drills into a bucket and is honest when the sample is capped', () => {
+    const inv = {
+      by_status: { unsupported: 2374, excluded: 1 },
+      samples: {
+        unsupported: [{ id: 'a', name: 'notes.txt', format: 'other' }, { id: 'b', name: 'clip.mp3', format: 'av' }],
+        excluded: [{ id: 'z', name: 'remediated_report.pdf', format: 'pdf' }],
+      },
+    }
+    const big = statusFiles(inv, 'unsupported')
+    expect(big.total).toBe(2374)          // the TRUE bucket size, not the sample
+    expect(big.shown).toBe(2)
+    expect(big.capped).toBe(true)         // 2 shown of 2374 — say so
+    expect(big.files[0]).toMatchObject({ name: 'notes.txt', format: 'other', label: 'Other' })
+
+    const small = statusFiles(inv, 'excluded')
+    expect(small.capped).toBe(false)      // whole bucket fits in the sample
+    expect(small.shown).toBe(1)
+
+    const empty = statusFiles(inv, 'assessable')   // no samples/total for this status
+    expect(empty).toMatchObject({ files: [], shown: 0, total: 0, capped: false })
   })
 })

@@ -80,6 +80,21 @@ def test_summary_counts_by_format_and_status_and_drops_folders():
     assert s["by_status"] == {inv.ASSESSABLE: 3, inv.METADATA_ONLY: 2, inv.UNSUPPORTED: 1}
 
 
+def test_summary_samples_the_files_behind_each_status_capped_with_true_totals():
+    # The drill-down needs the actual files behind a count, but the sample is a CAP — by_status stays
+    # the true total so the UI shows "N of <total>" and an unsupported bucket of thousands is never
+    # mistaken for the handful sampled.
+    files = [_f(str(i), f"u{i}.txt", "text/plain") for i in range(5)]  # 5 unsupported
+    files.append(_f("d", "a.docx", DOC))                               # 1 assessable
+    s = inv.summarize(files, sample_per_status=3)
+    assert s["sample_cap"] == 3
+    assert s["by_status"][inv.UNSUPPORTED] == 5                        # true total, uncapped
+    assert len(s["samples"][inv.UNSUPPORTED]) == 3                     # sample capped at 3
+    assert len(s["samples"][inv.ASSESSABLE]) == 1                      # whole bucket fits
+    row = s["samples"][inv.ASSESSABLE][0]                              # carries what the list renders
+    assert row["name"] == "a.docx" and row["format"] == "docx" and "id" in row
+
+
 # ── discovery integration: report the whole estate, scan only the scannable ───────────────────
 class _Exec:
     def __init__(self, payload):
