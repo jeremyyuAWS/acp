@@ -300,11 +300,16 @@ export const remediateScan = (scanId, scope) => {
 }
 // Access allow-list (who can use the app) — managed from Settings.
 export const getAllowlist = () => (SIM
-  ? sim({ emails: ['demo@sim'], owner: 'demo@sim', domains: [] })
+  ? sim({ emails: ['demo@sim'], owner: 'demo@sim', domains: [], invite_enabled: false })
   : fetch(`${BASE}/admin/allowlist`, { headers: headers() }).then(j))
 export const setAllowlist = (emails) => (SIM
   ? sim({ emails })
   : fetch(`${BASE}/admin/allowlist`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ emails }) }).then(j))
+// Invite a tester as an Entra B2B guest AND add them to the allowlist in one step (ADR 0033).
+// Owner-only; the endpoint 409s (and the UI hides) unless the guest-invite credential is configured.
+export const inviteTester = (email) => (SIM
+  ? sim({ email, emails: ['demo@sim', email], status: 'PendingAcceptance' })
+  : fetch(`${BASE}/admin/invite`, { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ email }) }).then(j))
 // Per-scan decision snapshots (PRD: time-travel) — restore/persist triage + action decisions.
 export const getDecisions = (scanId) => (SIM
   ? sim({})

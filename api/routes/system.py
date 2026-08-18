@@ -102,10 +102,41 @@ async def alert_webhook(request: Request, key: str = Query("")):
 @router.get("/admin/allowlist")
 def get_allowlist():
     """Test users who can use the app: the editable list, the protected owner (can't be
-    removed), and any always-allowed domains."""
+    removed), and any always-allowed domains. `invite_enabled` tells the UI whether the opt-in
+    guest-invite action is configured (ADR 0033) — it hides when the credential is unset."""
+    import invites
     return {"emails": core.store.get_allowlist(),
             "owner": core.OWNER_EMAIL,
-            "domains": core.ALLOWED_DOMAINS}
+            "domains": core.ALLOWED_DOMAINS,
+            "invite_enabled": invites.invite_configured()}
+
+
+@router.post("/admin/invite")
+def invite_tester(body: dict, request: Request):
+    """Invite an external tester as an Entra B2B guest AND add them to the allowlist in one step
+    (ADR 0033). Owner-only. 409 when the invite credential isn't configured — the feature ships
+    dark, so this path simply doesn't exist until an operator opts in. Least-privilege: this sends
+    a guest invite (Graph User.Invite.All), it does NOT create a tenant user."""
+    _require_admin(request)
+    import invites
+    email = (body.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(400, "a valid email is required")
+    if not invites.invite_configured():
+        raise HTTPException(409, "guest invite is not configured — set ACP_INVITE_* to enable it")
+    try:
+        result = invites.send_guest_invite(email, body.get("redirect_url"))
+    except Exception as e:
+        raise HTTPException(502, f"invite failed: {e}")
+    # Auto-add to the allowlist so the guest is admitted on first sign-in — keep the existing list,
+    # dedupe, and never drop the owner (same anti-lockout rule as the PUT path).
+    keep = list(dict.fromkeys([*core.store.get_allowlist(), email]
+                              + ([core.OWNER_EMAIL] if core.OWNER_EMAIL else [])))
+    saved = core.store.set_allowlist(keep)
+    core.store.log_decision("admin", "settings.invite",
+                            detail=f"invited {email} as a guest and added to the allowlist")
+    return {"email": email, "emails": saved, "owner": core.OWNER_EMAIL,
+            "redemption_url": result.get("redemption_url"), "status": result.get("status")}
 
 
 @router.put("/admin/allowlist")
