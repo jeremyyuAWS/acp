@@ -1346,6 +1346,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .srccard-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
 .srccard-badge { display: inline-flex; align-items: center; gap: 5px; color: #3B6D11; font-weight: 500; }
 .srccard-err { font-size: 12px; color: #A32D2D; margin-top: 6px; }
+.srccard-inv { font-size: 12px; margin-top: 4px; }
 .srccard-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .srccard-connect { display: inline-flex; align-items: center; gap: 7px; padding: 9px 18px;
   font-size: 13px; font-weight: 500; border-radius: 10px; white-space: nowrap; cursor: pointer; }

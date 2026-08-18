@@ -4,6 +4,7 @@ import { SIM } from './sim.js'
 import { googleUserInfo } from './googleIdentity.js'
 import SourceDrawer from './SourceDrawer.jsx'
 import FileDrawer from './FileDrawer.jsx'
+import { filesForSource, inventoryFacts, fmtSize } from './sourceOps.js'
 import FolderPicker from './FolderPicker.jsx'
 
 const AZURE_CLIENT_ID  = import.meta.env.VITE_AZURE_CLIENT_ID  || ''
@@ -142,7 +143,8 @@ const HEALTH_BADGE = {
 export default function Integrations({ sources, files = [], scans = [], onScan, busy, hasDriveToken, hasSPToken, onConnect,
                                        deepScan = true, setDeepScan, queuedScan = false, setQueuedScan,
                                        excludeRemediated = true, setExcludeRemediated,
-                                       incremental = true, setIncremental, scanId = null }) {
+                                       incremental = true, setIncremental, scanId = null,
+                                       onOpenAssess = null }) {
   const [selSrc,      setSelSrc]      = useState(null)
   const [selFile,     setSelFile]     = useState(null)
   const [pickerSrc,   setPickerSrc]   = useState(null)
@@ -158,6 +160,12 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
   }, [])
 
   const driveBackend   = sources.find((s) => s.type === 'google_drive')
+  // The OneDrive card is a hard-coded CONNECTABLE row (`sp-root`) carrying nothing but an id, a
+  // type and a name. Its backend row arrives under type 'onedrive' OR 'sharepoint' — Graph serves
+  // both from one connection — and nothing here looked for either, so the card had no user, no
+  // file count and no schedule. That is where `undefined · 0 docs · agent: undefined` in the
+  // drawer came from: not an empty estate, a source row nobody joined to the card.
+  const spBackend      = sources.find((s) => s.type === 'onedrive' || s.type === 'sharepoint')
   const connectedCount = (hasDriveToken ? 1 : 0) + (hasSPToken ? 1 : 0)
   const total          = sources.reduce((a, s) => a + (s.files || 0), 0)
 
@@ -282,7 +290,9 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
         {CONNECTABLE.map((s) => {
           const isGdrive     = s.type === 'google_drive'
           const connected    = isGdrive ? hasDriveToken : hasSPToken
-          const enriched     = isGdrive && hasDriveToken ? (driveBackend || s) : s
+          const enriched     = isGdrive
+            ? (hasDriveToken ? (driveBackend || s) : s)
+            : (spBackend ? { ...spBackend, ...s } : s)
           const isConnecting = isGdrive ? gdConnecting : spConnecting
           const error        = isGdrive ? gdError : spError
           const desc         = isGdrive
@@ -290,6 +300,9 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
             : 'Scan OneDrive & SharePoint for accessibility issues'
           const lastScan     = lastScanLabel(scans, s.type)
           const health       = sourceHealth(scans, s.type)
+          // The file rows ACP holds for THIS source — resolved by every key that names it, since
+          // the card id (`sp-root`) is not what a file row's `source` says (`sharepoint`).
+          const inv          = inventoryFacts(filesForSource(files, enriched))
 
           return (
             <div className={`srccard${connected ? ' srccard--on' : ''}`} key={s.id}>
@@ -302,7 +315,7 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                 {connected ? (
                   <div className="srccard-meta">
                     {enriched.user && <span>{enriched.user}</span>}
-                    {enriched.files != null && <span>{enriched.files.toLocaleString()} files</span>}
+                    {enriched.files != null && <span>{enriched.files.toLocaleString()} in {isGdrive ? 'Drive' : 'OneDrive'}</span>}
                     <span>{lastScan ? `last scanned ${lastScan}` : 'not yet scanned'}</span>
                     <span className="srccard-badge">
                       <span className="pulsedot" aria-hidden="true" />connected · read-only
@@ -317,6 +330,22 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                 ) : (
                   <div className="srccard-desc">{desc}</div>
                 )}
+                {/* What ACP has actually seen, as distinct from what the store reports it holds.
+                    A gap between the two is a scope fact worth noticing, not a rounding error —
+                    and a connected source with nothing discovered says WHY, rather than sitting
+                    there looking broken. */}
+                {connected && (inv.documents > 0 ? (
+                  <div className="srccard-inv muted">
+                    {inv.documents.toLocaleString()} discovered
+                    {inv.bytesKb != null && ` · ${fmtSize(inv.bytesKb)}`}
+                    {inv.owners != null && ` · ${inv.owners.toLocaleString()} owner${inv.owners === 1 ? '' : 's'}`}
+                    {inv.departments != null && ` · ${inv.departments.toLocaleString()} department${inv.departments === 1 ? '' : 's'}`}
+                  </div>
+                ) : !lastScan ? (
+                  <div className="srccard-inv muted">
+                    No discovery completed — ACP has access, but the source has not yet been inventoried.
+                  </div>
+                ) : null)}
                 {error && <div className="srccard-err">{error}</div>}
               </div>
 
@@ -360,7 +389,12 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
         <FolderPicker onScan={handlePickerScan} onClose={() => setPickerSrc(null)} />
       )}
 
-      {selSrc  && <SourceDrawer source={selSrc}  files={files.filter((f) => f.source === selSrc.id)}
+      {/* The drawer resolves its own file rows (sourceOps.filesForSource): a card id is not a file
+          row's `source` key — `sp-root` never matched `sharepoint` — and filtering here on
+          `f.source === selSrc.id` is what handed it an empty list to call "0 docs". */}
+      {selSrc  && <SourceDrawer source={selSrc} files={files} scans={scans} busy={busy}
+                                onScan={(src) => { setSelSrc(null); handleScan(src.id) }}
+                                onOpenAssess={onOpenAssess}
                                 onClose={() => setSelSrc(null)}  onPickFile={setSelFile} />}
       {selFile && <FileDrawer   file={selFile}   onClose={() => setSelFile(null)} scanId={scanId} />}
     </>

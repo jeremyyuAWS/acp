@@ -1413,6 +1413,7 @@ input:focus-visible, [role="tab"]:focus-visible {
 .srccard-health { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600;
   padding: 2px 10px; border-radius: 999px; }
 .srccard-health-sub { font-size: 12px; margin-top: 4px; }
+.srccard-inv { font-size: 12px; margin-top: 4px; }
 .srccard-conn { margin-top: 8px; font-size: 12px; }
 .srccard-conn > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .srccard-ovf { position: relative; }
