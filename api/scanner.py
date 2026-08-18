@@ -770,12 +770,22 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                     continue
                 # The estate row for EVERY file (scannable or not), classified the same way the Drive
                 # inventory is. Placed after dedup + folder-skip so it counts exactly what a scan sees.
+                # It also carries the triage fields estate_inventory._sample_meta reads off a Drive file
+                # object (owners[] / size / shared / modifiedTime), mapped from the Graph item's own
+                # field names — without them the estate drill-down's owner / biggest-first / shared
+                # lenses (the ones the Drive path populates) come back blank for SharePoint.
+                cb = (item.get("createdBy") or {}).get("user") or {}
+                lb = (item.get("lastModifiedBy") or {}).get("user") or {}
+                owner = (cb.get("displayName") or cb.get("email")
+                         or lb.get("displayName") or lb.get("email"))
                 est_files.append({"id": item_id, "name": name,
-                                  "mimeType": (item.get("file") or {}).get("mimeType")})
+                                  "mimeType": (item.get("file") or {}).get("mimeType"),
+                                  "owners": ([{"displayName": owner}] if owner else []),
+                                  "size": item.get("size"),
+                                  "shared": item.get("shared"),
+                                  "modifiedTime": item.get("lastModifiedDateTime")})
                 if Path(name).suffix.lower() in exts:
                     fmeta = item.get("file") or {}
-                    cb = (item.get("createdBy") or {}).get("user") or {}
-                    lb = (item.get("lastModifiedBy") or {}).get("user") or {}
                     rec = {"name": _safe_name(name), "id": item_id, "sp": True,
                            # Source metadata for the inventory row (see _scan_discover). None-safe:
                            # a Graph stub without these fields just yields None.
@@ -783,8 +793,7 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                            "size_kb": _inv_size_kb(item.get("size")),
                            "created_at": item.get("createdDateTime"),
                            "source_modified": item.get("lastModifiedDateTime"),
-                           "owner": (cb.get("displayName") or cb.get("email")
-                                     or lb.get("displayName") or lb.get("email")),
+                           "owner": owner,
                            "parent_folder": (item.get("parentReference") or {}).get("path")}
                     if drive_id:
                         rec["driveId"] = drive_id
