@@ -4,6 +4,7 @@ import { SIM } from './sim.js'
 import { googleUserInfo } from './googleIdentity.js'
 import SourceDrawer from './SourceDrawer.jsx'
 import FileDrawer from './FileDrawer.jsx'
+import { filesForSource, inventoryFacts, fmtSize } from './sourceOps.js'
 // Single source of truth for the SharePoint/Graph scopes, so this sign-in path and SharePoint.jsx
 // can never request different permissions than IT consented to (read-only; see that module).
 import { SP_SCOPES } from './sharepointScopes.js'
@@ -145,7 +146,7 @@ function sourceHealth(scans, type) {
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function Integrations({ sources, files = [], scans = [], onScan, busy, hasDriveToken, hasSPToken, onConnect,
-                                       scanId = null }) {
+                                       scanId = null, onOpenAssess = null }) {
   const [selSrc,      setSelSrc]      = useState(null)
   const [selFile,     setSelFile]     = useState(null)
   const [gdConnecting, setGdConnecting] = useState(false)
@@ -161,6 +162,12 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
   }, [])
 
   const driveBackend   = sources.find((s) => s.type === 'google_drive')
+  // The OneDrive card is a hard-coded CONNECTABLE row (`sp-root`) carrying nothing but an id, a
+  // type and a name. Its backend row arrives under type 'onedrive' OR 'sharepoint' — Graph serves
+  // both from one connection — and nothing here looked for either, so the card had no user, no
+  // file count and no schedule. That is where `undefined · 0 docs · agent: undefined` in the
+  // drawer came from: not an empty estate, a source row nobody joined to the card.
+  const spBackend      = sources.find((s) => s.type === 'onedrive' || s.type === 'sharepoint')
 
   // ── OAuth connect ────────────────────────────────────────────────────────────
 
@@ -222,8 +229,14 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
   const canScanAll = SIM || hasDriveToken || hasSPToken
 
   // The connected connectable sources (Drive / OneDrive) — the ones a scan can actually run against.
+  // Card fields win over the backend row's, so the OneDrive card keeps its id/type/name (the
+  // logo and the scan argument key off `type`) while inheriting user, file count, access and
+  // schedule from the row that actually knows them.
   const connectedSources = CONNECTABLE.filter((s) => (s.type === 'google_drive' ? hasDriveToken : hasSPToken))
-    .map((s) => (s.type === 'google_drive' && hasDriveToken ? (driveBackend || s) : s))
+    .map((s) => {
+      if (s.type === 'google_drive') return hasDriveToken ? (driveBackend || s) : s
+      return spBackend ? { ...spBackend, ...s } : s
+    })
 
   // One dominant health state per source — never more than one badge (see plan §4).
   const healthState = (h) => {
@@ -274,6 +287,11 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
               const health    = healthState(sourceHealth(scans, src.type))
               const [hfg, hbg] = HEALTH_STATE[health.key]
               const err       = isGdrive ? gdError : spError
+              // Inventory the card can prove: the file rows ACP holds for THIS source, not the
+              // store's own total. `src.files` above is what the connector reports it contains;
+              // this is what ACP has actually seen. Both are shown, labelled differently, because
+              // a gap between them is a scope fact worth noticing rather than a rounding error.
+              const inv       = inventoryFacts(filesForSource(files, src))
               return (
                 <div className="srccard srccard--on" key={src.id}>
                   <div className="srccard-logo" aria-hidden="true">{LOGO[src.type] || LOGO.web}</div>
@@ -289,6 +307,27 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                       </span>
                       <span>{lastScan ? `Last scanned ${lastScan}` : 'Not yet scanned'}</span>
                     </div>
+                    {/* What Discovery found, in the order an operator reads it: how much, then
+                        when, then what went wrong. A source with no completed run says so and
+                        says why the count is empty — "Healthy · 0 files" with no explanation is
+                        the line that makes a working connection look broken. */}
+                    {inv.documents > 0 ? (
+                      <div className="srccard-inv muted">
+                        {inv.documents.toLocaleString()} discovered
+                        {inv.bytesKb != null && ` · ${fmtSize(inv.bytesKb)}`}
+                        {inv.owners != null && ` · ${inv.owners.toLocaleString()} owner${inv.owners === 1 ? '' : 's'}`}
+                        {inv.departments != null && ` · ${inv.departments.toLocaleString()} department${inv.departments === 1 ? '' : 's'}`}
+                      </div>
+                    ) : !lastRun ? (
+                      <div className="srccard-inv muted">
+                        No discovery completed — ACP has access, but the source has not yet been inventoried.
+                      </div>
+                    ) : null}
+                    {lastRun && (lastRun.error || 0) > 0 && (
+                      <div className="srccard-inv muted">
+                        {Number(lastRun.error).toLocaleString()} file{lastRun.error === 1 ? '' : 's'} could not be read in the last run
+                      </div>
+                    )}
                     <div style={{ marginTop: 6 }}>
                       <span className="srccard-health" style={{ background: hbg, color: hfg }}>{health.label}</span>
                       {health.sub && <div className="srccard-health-sub muted">{health.sub}</div>}
@@ -304,7 +343,7 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
 
                   <div className="srccard-actions">
                     <button disabled={busy} onClick={() => onScan(cardScanArg(src))}>
-                      {busy ? 'Scanning…' : 'New scan'}
+                      {busy ? 'Scanning…' : lastRun ? 'New scan' : 'Run first discovery'}
                     </button>
                     <button className="ghost small" onClick={() => setSelSrc(src)}>Manage</button>
                     <details className="srccard-ovf">
@@ -361,7 +400,12 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
         </div>
       </section>
 
-      {selSrc  && <SourceDrawer source={selSrc}  files={files.filter((f) => f.source === selSrc.id)}
+      {/* The drawer resolves its own file rows (sourceOps.filesForSource): a card id is not a file
+          row's `source` key — `sp-root` never matched `sharepoint` — and filtering here on
+          `f.source === selSrc.id` is what handed it an empty list to call "0 docs". */}
+      {selSrc  && <SourceDrawer source={selSrc} files={files} scans={scans} busy={busy}
+                                onScan={(src) => onScan(cardScanArg(src))}
+                                onOpenAssess={onOpenAssess}
                                 onClose={() => setSelSrc(null)}  onPickFile={setSelFile} />}
       {selFile && <FileDrawer   file={selFile}   onClose={() => setSelFile(null)} scanId={scanId} />}
     </>
