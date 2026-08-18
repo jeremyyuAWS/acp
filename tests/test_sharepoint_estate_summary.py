@@ -58,3 +58,22 @@ def test_a_fully_listed_page_is_not_truncation_even_past_the_cap(monkeypatch):
     scanner._sp_list("tok", max_files=1, site=None, scope_out=scope)
     assert scope["inventory"]["discovered"] == 2
     assert scope["inventory"]["truncated"] is False
+
+
+def test_estate_samples_carry_triage_metadata_like_drive(monkeypatch):
+    # The drill-down's owner / biggest-first / shared lenses read _sample_meta(owners[]/size/shared/
+    # modifiedTime). The SharePoint estate row must map the Graph item's own field names into those,
+    # or every SharePoint sample comes back with a blank owner, no size and not-shared (the gap).
+    item = {"id": "1", "name": "brief.docx", "file": {"mimeType": DOCX},
+            "parentReference": {"path": "/drive/root:"},
+            "size": 2048, "shared": {"scope": "users"},
+            "createdBy": {"user": {"displayName": "Dana Owner", "email": "dana@x.com"}},
+            "lastModifiedDateTime": "2024-06-01T00:00:00Z"}
+    monkeypatch.setattr(scanner, "_sp_get", lambda token, url: {"value": [item]})
+    scope: dict = {}
+    scanner._sp_list("tok", max_files=10, site=None, scope_out=scope)
+    sample = scope["inventory"]["samples"]["assessable"][0]
+    assert sample["owner"] == "Dana Owner"
+    assert sample["size"] == 2048
+    assert sample["shared"] is True
+    assert sample["modified"] == "2024-06-01T00:00:00Z"
