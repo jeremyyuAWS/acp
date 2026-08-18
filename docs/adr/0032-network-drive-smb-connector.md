@@ -112,6 +112,34 @@ and this keeps the service account's write scope to a single, reviewable directo
 The connector wins because it is the only option where PHI does not traverse the WAN or land in a
 second store just to be *discovered*, and it needs no change to the customer's inbound firewall.
 
+## Amendment (2026-08-18) — UTSW pilot selects a VNet-integrated variant
+
+UTSW's architecture review chose a topology this ADR listed as an *alternative*, but in a form that
+resolves the objection that alternative carried. Rather than ACP's outbound connector, or a direct
+mount over VPN into *our* Azure, the pilot runs the **ACP worker inside UTSW's own Azure
+subscription**, VNet-integrated, reaching on-prem file servers over **UTSW's VPN/ExpressRoute private
+hybrid route** (SMB allowed by UTSW policy; no public internet path). Because the worker and all
+processing live in **UTSW's** cloud, PHI never leaves UTSW's control boundary — which is exactly the
+property the on-prem connector was chosen to protect, achieved a different way.
+
+Concretely (per UTSW's diagram):
+
+- **Worker in UTSW subscription**, VNet-integrated Container Apps env; read-only SMB session to the
+  on-prem shares (up to ~10), enumerate → stage a working copy → assess/remediate.
+- **SMB credential in Azure Key Vault**, accessed via a **Managed Identity** — and the MI is *not*
+  the SMB identity; the SMB read-only service account is separate (UTSW-issued).
+- **Evidence/decisions → PostgreSQL; remediated copies → Azure Blob.** No write-back to source shares.
+- **UTSW controls the connection** end to end: selects shares, grants read, controls the network
+  route, and can revoke access.
+
+**What this changes for effort:** it *removes* the connector-packaging line item — the biggest cost
+in the Phase-1 LOE — because there is no agent to build, enroll, or ship; the existing worker image
+deploys into UTSW's env. The ACP-side work reduces to the `kind: "smb"` adapter + staging + Key
+Vault/Managed-Identity wiring + Blob output + deploy/test. **Estimate for this variant: ~1–1.5
+engineer-weeks**, gated entirely on UTSW's prerequisites being live: the VNet-integrated environment,
+the VPN/ExpressRoute route with SMB permitted, firewall+DNS validation, and the read-only SMB service
+account. Those four are UTSW's to deliver and are the real critical path for a next-week target.
+
 ## Consequences
 
 - **New artifact to build and ship:** the connector (packaging, an enrollment/pairing flow for the
