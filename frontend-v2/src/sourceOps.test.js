@@ -13,7 +13,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   sourceKeys, filesForSource, runsForSource, inventoryFacts, dispositionOf, dispositionRows,
-  runOutcome, runDurationMs, needsAttention, scopeFacts,
+  runOutcome, runDurationMs, needsAttention, scopeFacts, inventoryChangeLine,
   fmtSize, fmtDuration, fmtWhen, fmtCount, orAbsent, NOT_AVAILABLE, NOT_CONFIGURED,
 } from './sourceOps.js'
 
@@ -184,5 +184,49 @@ describe('nothing renders as undefined', () => {
     expect(fmtWhen('not-a-date')).toBe(NOT_AVAILABLE)
     expect(fmtCount(null)).toBe(NOT_AVAILABLE)
     expect(fmtCount(12486)).toBe('12,486')
+  })
+})
+
+describe('the “what changed since last time” line', () => {
+  const D = (summary, over = {}) => ({ summary, prev_at: '2026-08-17T11:48:00Z', ...over })
+
+  it('is omitted entirely when there is no baseline', () => {
+    // Three zeros read as "we checked and nothing moved". That is a different claim from
+    // "we had nothing to compare against", and it is the one a reader will believe.
+    expect(inventoryChangeLine({ no_baseline: true, summary: {} })).toBeNull()
+    expect(inventoryChangeLine(null)).toBeNull()
+  })
+
+  it('is omitted when the diff is genuinely empty and unremarkable', () => {
+    expect(inventoryChangeLine(D({ new: 0, changed: 0, removed: 0, unchanged: 12, indeterminate: 0 }))).toBeNull()
+  })
+
+  it('names only the buckets that have something in them', () => {
+    const line = inventoryChangeLine(D({ new: 132, changed: 24, removed: 6 }))
+    expect(line.text).toBe('132 new · 24 changed · 6 no longer present')
+    expect(line.since).toBe('2026-08-17T11:48:00Z')
+  })
+
+  it('does not say “removed” when the scope moved, and says why', () => {
+    // The count is absent because the diff refused to claim it — the reader is told that,
+    // rather than left to notice a missing number.
+    const line = inventoryChangeLine(D({ new: 5, changed: 1, removed: 0, not_listed: 40 }, { boundary_changed: true }))
+    expect(line.text).toBe('5 new · 1 changed')
+    expect(line.note).toMatch(/scope changed/i)
+    expect(line.text).not.toMatch(/no longer present/)
+  })
+
+  it('says why a truncated listing cannot claim a removal', () => {
+    const line = inventoryChangeLine(D({ new: 2, removed: 0, not_listed: 9 }, { truncated: true }))
+    expect(line.note).toMatch(/hit its cap/i)
+  })
+
+  it('surfaces files it could not compare rather than counting them as unchanged', () => {
+    const line = inventoryChangeLine(D({ new: 1, indeterminate: 41 }))
+    expect(line.note).toMatch(/41 files could not be compared/)
+  })
+
+  it('still renders when only additions happened', () => {
+    expect(inventoryChangeLine(D({ new: 3 })).text).toBe('3 new')
   })
 })

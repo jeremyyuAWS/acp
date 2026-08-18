@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react'
 import Drawer from './Drawer.jsx'
 import { retentionOf } from './FileDrawer.jsx'
-import { listDispositionPolicies } from './api.js'
+import { listDispositionPolicies, getInventoryDiff } from './api.js'
 import {
   filesForSource, runsForSource, inventoryFacts, dispositionRows, dispositionOf,
-  runOutcome, runDurationMs, needsAttention, scopeFacts, folderOf,
+  runOutcome, runDurationMs, needsAttention, scopeFacts, folderOf, inventoryChangeLine,
   fmtSize, fmtDuration, fmtWhen, fmtCount, orAbsent, NOT_AVAILABLE, NOT_CONFIGURED,
 } from './sourceOps.js'
 
@@ -59,6 +59,7 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
   const [tab, setTab] = useState('Overview')
   const [policies, setPolicies] = useState(null)   // null = still loading / unavailable
   const [policyErr, setPolicyErr] = useState('')
+  const [invDiff, setInvDiff] = useState(null)     // null = none to show; the line is omitted
 
   // Discovery rules are a real backend resource (disposition policies), so they are fetched, not
   // described. A failed fetch says so; it does not fall back to an encouraging empty list, which
@@ -71,6 +72,22 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
       .catch((e) => { if (live) { setPolicies([]); setPolicyErr(e?.message || 'could not load discovery rules') } })
     return () => { live = false }
   }, [source])
+
+  // What changed since this source's PREVIOUS run. The baseline is passed explicitly rather than
+  // left to the route's default, because the drawer already knows which run it is naming on
+  // screen — so the number and the date beside it cannot drift apart. A failed fetch leaves
+  // invDiff null and the line simply does not render; there is no zero-filled fallback, because
+  // "0 new · 0 changed" is a claim we would not have earned.
+  const runIds = runsForSource(scans, source).slice(0, 2).map((r) => r.id)
+  const [curId, prevId] = runIds
+  useEffect(() => {
+    if (!curId || !prevId) { setInvDiff(null); return }
+    let live = true
+    getInventoryDiff(curId, prevId)
+      .then((d) => { if (live) setInvDiff(d) })
+      .catch(() => { if (live) setInvDiff(null) })
+    return () => { live = false }
+  }, [curId, prevId])
 
   if (!source) return null
 
@@ -146,6 +163,19 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
               <Fact label="Could not read" value={latest.error != null ? Number(latest.error).toLocaleString() : null} absent={NOT_AVAILABLE} />
               <Fact label="Duration" value={runDurationMs(latest) == null ? null : fmtDuration(runDurationMs(latest))} absent={NOT_AVAILABLE} />
               <Fact label="Run ID" value={latest.id} absent={NOT_AVAILABLE} />
+              {(() => {
+                const line = inventoryChangeLine(invDiff)
+                if (!line) return null
+                return (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ fontSize: 13 }}>{line.text}</div>
+                    <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                      since the previous discovery{line.since ? ` on ${fmtWhen(line.since)}` : ''}
+                    </div>
+                    {line.note && <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>{line.note}</div>}
+                  </div>
+                )
+              })()}
             </div>
           )}
 

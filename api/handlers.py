@@ -1008,6 +1008,23 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # before the no-assessable-items short-circuit below because a rule may match a
         # non-scannable estate row (old media to archive, a /tmp file to flag for deletion).
         _evaluate_discover_lifecycle_rules(scan_id, source, user)
+        # Discover-phase tracing (lf.discover_run_trace). Until this call, an ADR 0020
+        # Discover-only run emitted NOTHING to Langfuse: the "Discover" span lives on the analyse
+        # path, which under this ADR runs at Assess time, so the phase that lists the estate and
+        # evaluates the lifecycle rules was invisible — and the inventoried-but-never-assessed
+        # rows were invisible permanently, since nothing later opens them.
+        #
+        # Emitted AFTER the inventory is persisted and the rules have run, so the trace describes
+        # what actually happened rather than what was about to be attempted, and wrapped because
+        # a tracing failure must never lose an inventory that is already written.
+        try:
+            import lf as _lf                      # module-local, as every other _lf site here is
+            _spans = _lf.discover_file_spans(scan_id, inv, user=user)
+            _lf.discover_run_trace(scan_id, source, listed=len(norm), inventoried=len(inv),
+                                   scope=scope, user=user, file_spans_emitted=_spans)
+            _lf.flush()
+        except Exception:
+            pass
         if not items:
             # The estate is inventoried, but nothing in it is assessable — close the run rather
             # than leave it waiting for an Assess that would enqueue zero files.
