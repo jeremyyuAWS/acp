@@ -6,6 +6,7 @@ import {
 import { fixSteps, appName } from './remediationGuide.js'
 import { scOf } from './fixSummary.js'
 import RemediationPreview from './RemediationPreview.jsx'
+import WorkspaceProgress from './WorkspaceProgress.jsx'
 
 // Master/detail Remediation inbox. Remediation is queue work — select an item, understand it, act,
 // move to the next — so the layout is an email-style split: a 38% work queue on the left, a 62%
@@ -287,7 +288,10 @@ export default function RemediationInbox({
   }
 
   return (
-    <div className="rinbox" style={{ display: 'flex', gap: 0, border: '1px solid var(--line,#e2dce4)', borderRadius: 12, overflow: 'hidden', minHeight: 480 }}>
+    <div className="rinbox-wrap">
+      {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
+      <WorkspaceProgress queue={queue} decisions={decisions} selected={selected} />
+      <div className="rinbox" style={{ display: 'flex', gap: 0, border: '1px solid var(--line,#e2dce4)', borderRadius: 12, overflow: 'hidden', minHeight: 480 }}>
       {/* ── Left: the work queue (28%) ── */}
       <div style={{ flex: '0 0 28%', maxWidth: '28%', borderRight: '1px solid var(--line,#e2dce4)', display: 'flex', flexDirection: 'column', minHeight: 480 }}>
         <div style={{ flex: '0 0 auto', padding: '10px 12px', borderBottom: '1px solid var(--line,#e2dce4)' }}>
@@ -345,6 +349,7 @@ export default function RemediationInbox({
       {/* ── Right: contextual document preview (38%) ── */}
       <div style={{ flex: '1 1 38%', minWidth: 0 }}>
         <RemediationPreview finding={selected} scanId={selected?.scanId || scanId} aiEnabled={aiEnabled} />
+      </div>
       </div>
     </div>
   )
