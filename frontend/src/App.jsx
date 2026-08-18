@@ -797,7 +797,8 @@ export default function App() {
         {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
           deepScan={deepScan} setDeepScan={setDeepScan} queuedScan={queuedScan} setQueuedScan={setQueuedScan}
           excludeRemediated={excludeRemediated} setExcludeRemediated={setExcludeRemediated}
-          incremental={incremental} setIncremental={setIncremental} scanId={run?.id} />}
+          incremental={incremental} setIncremental={setIncremental} scanId={run?.id}
+          onOpenAssess={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />}
 
         {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} hasDriveToken={hasDriveToken} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} scope={run?.scope || null} decisions={decisions} setDecisions={setDecisions} />}
 
