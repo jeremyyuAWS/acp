@@ -98,7 +98,10 @@ describe('the review screens render the proposal, not a template', () => {
     // render-tested in RemediationInbox.test.jsx; here we pin the wiring.
     const src = read('Remediate.jsx')
     expect(src).toMatch(/<RemediationInbox/)
-    expect(src).toMatch(/queue=\{queue\}/)
+    // fed the combined queue: the human review items PLUS the auto-applied fixes folded in as
+    // green review-lane rows (autoFixRows).
+    expect(src).toMatch(/queue=\{inboxQueue\}/)
+    expect(src).toMatch(/inboxQueue = \[\.\.\.queue, \.\.\.autoFixItems\]/)
     expect(src).toMatch(/proposals: it\.proposals/)   // dbItemToUi still carries proposals through
   })
 

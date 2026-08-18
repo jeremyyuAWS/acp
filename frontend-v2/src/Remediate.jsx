@@ -3,6 +3,7 @@ import ScopeBanner from './ScopeBanner.jsx'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
 import RemediationInbox from './RemediationInbox.jsx'
+import { autoFixRows } from './remediationInboxModel.js'
 import FileDrawer, { REC_STYLE, fmtEffort, EFFORT_BASIS, SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
@@ -306,6 +307,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // straight count of these rows — never a fabricated number (see fixSummary.js).
   const [scanDiffs, setScanDiffs] = useState([])
   const [appliedFixes, setAppliedFixes] = useState([])
+  // Reviewer acknowledgements of the auto-applied (green) fixes shown in the inbox, keyed by their
+  // `af:…` id. Local: an auto fix is already applied and re-scanned, so "Approve" is a confidence
+  // check, not a re-application — it just marks the row resolved and advances to the next.
+  const [ackd, setAckd] = useState({})
   // W6 — where each file's AI actually RAN, from the real per-call ledger (one fetch for the whole
   // scan, not one per card). Maps file → 'local' | 'cloud'. This is the ACTUAL zone the bytes were
   // processed in, not the configured provider — so a GPU→CPU fallback shows the truth on the card
@@ -329,7 +334,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       .catch(() => {})
   }
   useEffect(() => {
-    setActed({ approved: 0, rejected: 0, deferred: 0 }); setDeferredItems([])
+    setActed({ approved: 0, rejected: 0, deferred: 0 }); setDeferredItems([]); setAckd({})
     clearInterval(pollRef.current); setRemProg(null); setRemBusy(false); setServerFixed(0); setRemMsg('')
     fetchFixes()
     if (!runId) { setQueue(SIM ? buildHumanQueue(files, {}) : []); return }
@@ -625,6 +630,12 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // Every count below is a straight tally of real pipeline rows — applied-fix evidence,
   // the live HITL queue, the recommendation estimate — never a fabricated number.
   const fixSource = scanDiffs.length ? scanDiffs : appliedFixes   // diffs cover all fix types; applied_fixes is the fallback for older scans
+  // Fold the auto-applied fixes into the inbox as green REVIEW-lane rows, so review-of-auto-fixes
+  // shares the master/detail flow. The human review queue (assisted/manual) comes first; the
+  // green auto-fixes follow. Ack'd ones resolve in place (RemediationInbox's Resolved tab).
+  const autoFixItems = autoFixRows(fixSource, (sc) => ITEM_NAME[sc] || sc)
+  const inboxQueue = [...queue, ...autoFixItems]
+  const inboxDecisions = { ...decisions, ...ackd }
   const fixGroups = groupFixesByRule(fixSource)
   const impact = summarizeImpact(fixSource)
   const fixedCount = totalFixes(fixSource)
@@ -850,15 +861,18 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             {actError}
           </p>
         )}
-        {queue.length === 0 ? (
+        {inboxQueue.length === 0 ? (
           <p className="muted">{totalHitl === 0
             ? 'Nothing needs your review — every fix was applied automatically. Items needing an AI-assisted fix or human sign-off will appear here.'
             : `All reviewed — ${acted.approved} approved, ${acted.rejected} rejected${acted.deferred ? `, ${acted.deferred} deferred` : ''}. Verification runs on the approved fixes.`}</p>
         ) : (
           <RemediationInbox
-            queue={queue}
-            decisions={decisions}
+            queue={inboxQueue}
+            decisions={inboxDecisions}
             onDecide={(f, d) => {
+              // Auto-applied (green) rows are already applied + re-scanned — "Approve" acknowledges
+              // them locally (resolve + advance); the human review lanes route to the hitl flow.
+              if (f.autoApplied) { setAckd((a) => ({ ...a, [f.id]: d })); return }
               if (d.state === 'accepted') act(f.id, 'approved', f.after ?? null)
               else if (d.state === 'rejected') act(f.id, 'rejected')
               else if (d.state === 'assigned') act(f.id, 'deferred')
