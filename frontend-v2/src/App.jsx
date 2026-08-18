@@ -23,6 +23,7 @@ import Publish from './Publish.jsx'
 import Overview from './Overview.jsx'
 import AssessRunner from './AssessRunner.jsx'
 import AssessScope from './AssessScope.jsx'
+import ScopeRules from './ScopeRules.jsx'
 import CoverageScorecard from './CoverageScorecard.jsx'
 import ConfidenceDashboard from './ConfidenceDashboard.jsx'
 import AccessibilityStatus from './AccessibilityStatus.jsx'
@@ -875,6 +876,14 @@ export default function App() {
             <details className="panel scopestep assessscopestep">
               <summary><b>Choose what to assess</b><span className="muted"> · document types &amp; WCAG criteria, before you run</span></summary>
               <AssessScope />
+            </details>
+            {/* Per-file WCAG scope rules (Discover/Assess PRD §4.4 / AC-09): admins assess
+                different parts of the estate against different Core-17 subsets, with union /
+                override precedence. Collapsed alongside the assess-scope picker so it is one
+                click away without displacing the run button. */}
+            <details className="panel scopestep scoperulesstep">
+              <summary><b>Scope rules</b><span className="muted"> · per-folder / owner / department WCAG subsets, with overrides</span></summary>
+              <ScopeRules />
             </details>
             <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy} onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase} />
             {/* Gated on assessPhase === 'done', not just `assessed` — `assessed` flips true the
