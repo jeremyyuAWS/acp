@@ -144,6 +144,22 @@ export const getDigest = (scanId, refresh = false) => (SIM
     ai: true, model: 'local model',   // SIM must not name a model the product never calls
   }, 1500)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/digest${refresh ? '?refresh=true' : ''}`, { headers: headers() }).then(j))
+// Discovery diff vs the previous run OF THE SAME SOURCE (per-source baseline) — what the estate
+// gained, lost and changed. Deliberately separate from getScanDiff: that one reads file_records,
+// the ASSESSED grain, which an ADR 0020 Discover-only run leaves empty. This reads the inventory,
+// so it answers for the runs a source operations panel is about.
+//
+// Callers pass `vs` explicitly where they already know the baseline (the drawer knows the source's
+// prior run from runsForSource), which keeps the number on screen tied to the run named beside it.
+export const getInventoryDiff = (scanId, vs = null) => (SIM
+  ? sim({
+      cur_id: scanId, prev_id: 'h3', cur_at: '2026-08-18T11:50:00Z', prev_at: '2026-08-17T11:48:00Z',
+      boundary_changed: false, truncated: false,
+      summary: { new: 132, changed: 24, removed: 6, unchanged: 12324, not_listed: 0, indeterminate: 41 },
+      new: [], changed: [], removed: [], not_listed: [], indeterminate: [],
+    }, 180)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/inventory-diff${vs ? `?vs=${encodeURIComponent(vs)}` : ''}`,
+          { headers: headers() }).then(j))
 // Regression diff vs a prior scan (ADR 0009) — which docs got worse/better + criteria that broke.
 export const getScanDiff = (scanId, vs = null) => {
   if (SIM) return sim({

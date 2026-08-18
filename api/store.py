@@ -1846,6 +1846,160 @@ class Store:
             "removed": removed[:50], "not_read": not_read[:50], "incomparable": incomparable[:50],
         }
 
+    def previous_run_for_source(self, scan_id: str, owner: str | None = None) -> str | None:
+        """The run of the SAME SOURCE immediately before this one, or None.
+
+        The baseline for a discovery diff, and deliberately not `list_scans()[i+1]`:
+
+          - `list_scans` filters to `completed_at IS NOT NULL`, to keep in-flight runs out of the
+            scan picker. An ADR 0020 Discover-only run sits at status='discovered' with no
+            completed_at until somebody runs Assess — so the picker's filter would hide exactly
+            the runs this diff is for, and the drawer would report "no baseline" for a source with
+            a week of daily discoveries behind it.
+          - it spans every source. With two connectors alternating, the immediately-prior scan is
+            routinely the OTHER one, and diffing across them reports its whole estate as removed
+            and this one's as new — two large numbers that look like news and are an artefact.
+
+        Ordered by COALESCE(completed_at, started_at): `started_at` is written at init_scan_run
+        for every run, so a run that never finished still orders correctly rather than sorting to
+        the end as NULL.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT source, COALESCE(completed_at, started_at) AS at FROM scan_runs WHERE id=%s",
+                (scan_id,))
+            me = self._db.fetchone(cur)
+            if not me or not me.get("at"):
+                return None
+            where, params = "source=%s AND COALESCE(completed_at, started_at) < %s", (me["source"], me["at"])
+            if owner:
+                where += " AND owner_email=%s"; params = params + (owner,)
+            self._db.execute(cur,
+                "SELECT id FROM scan_runs WHERE " + where
+                + " ORDER BY COALESCE(completed_at, started_at) DESC LIMIT 1", params)
+            row = self._db.fetchone(cur)
+            return row["id"] if row else None
+
+    def get_inventory_diff(self, cur_id: str, prev_id: str, owner: str | None = None) -> dict | None:
+        """Diff two runs' DISCOVERY inventories → what the estate gained, lost and changed.
+
+        NOT `get_scan_diff`, and the difference is the whole point. That method reads
+        `file_records`, which is the ASSESSED grain: under ADR 0020 a Discover-only run persists
+        `scan_inventory` and leaves `file_records` empty until Assess runs (handlers._scan_discover,
+        "file_records stay empty until then"). Pointing a discovery question at it would answer
+        `0 new · 0 changed · 0 removed` for exactly the runs a source panel is about, and would
+        do it confidently. `scan_inventory` is the discover grain: every listed file, with the
+        source metadata Discover recorded and no file opened.
+
+        THREE PAIRS THAT MUST NOT COLLAPSE INTO ONE ANOTHER:
+
+        1. `removed` vs `not_listed`. A file in the previous run and absent from this one is gone
+           from the estate ONLY IF this run looked in the same place. `get_scan_diff` learned this
+           the expensive way — a narrowed scope reported "45 documents disappeared" — and an
+           inventory diff has the same exposure through the LISTING boundary rather than the format
+           axis. When the boundary moved (folder → whole drive, a different site) or either listing
+           hit its cap, every prev-only file is `not_listed`: we did not look, which is not a fact
+           about the estate.
+
+        2. `changed` vs `indeterminate`. `md5Checksum` is ABSENT for native Google Workspace files
+           — Docs/Sheets/Slides have no fixed byte representation (scanner.py) — so a checksum
+           comparison covers binary uploads and nothing else. `source_modified` is the fallback.
+           Where neither side is comparable the answer is `indeterminate`, never `unchanged`:
+           "we cannot tell" reported as "nothing happened" is the shape of every defect this
+           module's comments are about.
+
+        3. A missing baseline vs a quiet estate. `no_baseline` is returned when there is nothing
+           to compare against, so the caller can OMIT the line rather than render three zeros that
+           read as "we checked, nothing moved".
+
+        Owner-scoped: both runs must belong to the caller, matching `get_scan_diff`.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id, owner_email, started_at, completed_at, source, scope "
+                "FROM scan_runs WHERE id IN (%s,%s)", (cur_id, prev_id))
+            runs = {r["id"]: r for r in self._db.fetchall(cur)}
+            if cur_id not in runs or prev_id not in runs:
+                return None
+            if owner is not None and (runs[cur_id].get("owner_email") != owner
+                                      or runs[prev_id].get("owner_email") != owner):
+                return None
+
+            def _inv(sid):
+                self._db.execute(cur,
+                    "SELECT file, checksum, source_modified, size_kb FROM scan_inventory WHERE scan_id=%s",
+                    (sid,))
+                return {r["file"]: r for r in self._db.fetchall(cur)}
+
+            ip, ic = _inv(prev_id), _inv(cur_id)
+
+        def _scope(sid):
+            import json as _json
+            raw = runs[sid].get("scope")
+            if not raw:
+                return {}
+            try:
+                val = _json.loads(raw) if isinstance(raw, str) else raw
+                return val if isinstance(val, dict) else {}
+            except ValueError:
+                return {}
+
+        ps, cs = _scope(prev_id), _scope(cur_id)
+        # The LISTING boundary, not the assessment format axis: `scan_inventory` records every
+        # discovered file whatever its type, so a format scope does not remove rows from it. What
+        # does is where we looked — kind/folder/site — and whether the listing completed.
+        def _boundary(s):
+            return (s.get("kind"), s.get("folder"), s.get("site"))
+        boundary_changed = _boundary(ps) != _boundary(cs)
+        truncated = bool(ps.get("truncated") or cs.get("truncated"))
+        # Either condition makes "absent" unreadable as "gone", so both route prev-only files to
+        # not_listed. Reported separately because they need different words on screen: one is a
+        # scope the operator changed, the other a cap ACP hit.
+        cannot_claim_removal = boundary_changed or truncated
+
+        new, changed, unchanged, indeterminate = [], [], [], []
+        for f, row in ic.items():
+            if f not in ip:
+                new.append({"file": f, "size_kb": row.get("size_kb")})
+                continue
+            was = ip[f]
+            a, b = was.get("checksum"), row.get("checksum")
+            if a and b:
+                (changed if a != b else unchanged).append(
+                    {"file": f, "basis": "checksum"})
+                continue
+            am, bm = was.get("source_modified"), row.get("source_modified")
+            if am and bm:
+                (changed if am != bm else unchanged).append(
+                    {"file": f, "basis": "modified", "prev": am, "cur": bm})
+                continue
+            # No checksum on either side (Google-native), no modified time recorded: the file is
+            # present in both runs and that is genuinely all we know about it.
+            indeterminate.append({"file": f, "reason": "no checksum or modified time to compare"})
+
+        removed, not_listed = [], []
+        for f, row in ip.items():
+            if f in ic:
+                continue
+            entry = {"file": f, "size_kb": row.get("size_kb")}
+            (not_listed if cannot_claim_removal else removed).append(entry)
+
+        return {
+            "cur_id": cur_id, "prev_id": prev_id,
+            "cur_at": runs[cur_id].get("completed_at"), "prev_at": runs[prev_id].get("completed_at"),
+            "source": runs[cur_id].get("source"),
+            # Carried so the UI can SAY why a removal count is absent, rather than leaving a
+            # reader to notice it is missing.
+            "boundary_changed": boundary_changed, "truncated": truncated,
+            "summary": {
+                "new": len(new), "changed": len(changed), "removed": len(removed),
+                "unchanged": len(unchanged), "not_listed": len(not_listed),
+                "indeterminate": len(indeterminate),
+            },
+            "new": new[:50], "changed": changed[:50], "removed": removed[:50],
+            "not_listed": not_listed[:50], "indeterminate": indeterminate[:50],
+        }
+
     def inventory(self) -> list[dict]:
         with self._db.cursor() as cur:
             self._db.execute(cur,

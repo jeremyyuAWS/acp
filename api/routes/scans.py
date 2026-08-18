@@ -672,6 +672,44 @@ def scan_diff(sid: str, request: Request, vs: str | None = Query(None)):
     return diff
 
 
+@router.get("/scans/{sid}/inventory-diff")
+def scan_inventory_diff(sid: str, request: Request, vs: str | None = Query(None)):
+    """Discovery diff: what this run's inventory gained, lost and changed vs a prior run of the
+    SAME SOURCE.
+
+    Deliberately not `/diff`, which compares `file_records` — the assessed grain, empty for an
+    ADR 0020 Discover-only run. This reads `scan_inventory`, so it answers for the runs a source
+    operations panel is actually about.
+
+    THE BASELINE IS PER-SOURCE, and that is the difference that matters here. `/diff` defaults
+    `vs` to the caller's immediately-prior scan across every source, which is the right default
+    for "did my estate regress" and the wrong one for "what did OneDrive find this time": with
+    two connectors alternating, the prior scan is routinely the OTHER source, and every file in
+    it would read as removed while every file in this one reads as new. So the default walks back
+    to the previous run of this run's own source, and returns `no_baseline` when there is none
+    rather than diffing against something unrelated.
+
+    An explicit `vs` is honoured as given — the caller may have a better baseline in mind (the
+    drawer passes the prior run it is already displaying) — but is still owner-scoped by
+    get_inventory_diff.
+    """
+    owner = _owner(request)
+    run = core.store.get_scan(sid, owner=owner)
+    if run is None:
+        raise HTTPException(404, "scan not found")
+    if not vs:
+        vs = core.store.previous_run_for_source(sid, owner=owner)
+    if not vs:
+        return {"summary": {"new": 0, "changed": 0, "removed": 0, "unchanged": 0,
+                            "not_listed": 0, "indeterminate": 0},
+                "new": [], "changed": [], "removed": [], "not_listed": [], "indeterminate": [],
+                "no_baseline": True}
+    diff = core.store.get_inventory_diff(sid, vs, owner=owner)
+    if diff is None:
+        raise HTTPException(404, "scan not found")
+    return diff
+
+
 _digest_cache: dict = {}
 
 
