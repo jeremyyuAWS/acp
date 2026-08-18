@@ -1,17 +1,16 @@
 /**
- * The first screen, RENDERED — what an operator can actually do to the two filters.
+ * The pre-scan screen, RENDERED — what an operator can actually do to the criterion scope.
  *
- * scanSetup.test.js already covers this component, but it does so by readFileSync-ing the source
- * and asserting on the text. That proves the code SAYS the right things; it cannot prove a
- * checkbox is reachable, that a format toggle narrows anything, or that an empty selection is
- * refused rather than saved. This repo has been bitten by prose-matching assertions three times
- * (see CLAUDE.md), and the component those assertions guard is the one the product opens on.
+ * scanSetup.test.js covers this component by readFileSync-ing the source and asserting on text.
+ * That proves the code SAYS the right things; it cannot prove a checkbox is reachable, that
+ * clearing the criteria collapses the scope, or that an empty selection is refused rather than
+ * saved. This repo has been bitten by prose-matching assertions three times (CLAUDE.md).
  *
- * The load-bearing case is `saving is refused when the two axes intersect to nothing`. `scope` is
- * derived as criteria × formats, so untick every file type and a full set of criteria still
- * collapses to {} — and on the backend `{}` means NO RESTRICTION, not "nothing". Saved literally
- * that is "assess everything" wearing the appearance of "assess nothing", which is both silent
- * and the exact inverse of the intent.
+ * THE FORMAT AXIS IS GONE FROM HERE (Discover/Assess PRD §4.1). Document type is chosen in Assess
+ * (AssessScope.jsx) now, so this screen no longer renders a file-type picker; it selects the WCAG
+ * criteria and derives their scope over the stored format set (default: every supported format).
+ * The load-bearing case is unchanged in spirit — an empty scope is refused, because on the backend
+ * `{}` means NO RESTRICTION, so "assess nothing" saved literally is "assess everything" in disguise.
  *
  * DOM-level, not browser-level: this repo's preview server runs vite rooted at the SHARED
  * checkout whatever worktree you are in, so a browser check of a worktree change exercises code
@@ -31,14 +30,13 @@ vi.mock('./api.js', () => ({
 }))
 
 const { default: ScanSetup } = await import('./ScanSetup.jsx')
-const { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } = await import('./scopePresets.js')
+const { SCOPE_UNIVERSE, SCOPE_FORMATS } = await import('./scopePresets.js')
 const { TRACKED_17 } = await import('./ruleDetails.js')
 
 // Derived exactly as the component derives it, so these tests assert behaviour against generated
 // data instead of re-typing the 17 — a hand-written copy would be the second source of truth the
 // codegen exists to prevent.
 const OFFERED = SCOPE_UNIVERSE.filter((r) => TRACKED_17.has(r.sc))
-const CORE = 'acp-core-17'
 
 async function render(props = {}) {
   settingsMock.get = vi.fn(async () => ({ scan_scope: '' }))
@@ -53,79 +51,34 @@ async function render(props = {}) {
 
 const click = async (el) => { await act(async () => { el.click() }) }
 const btn = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent))
-// Chips read "✓ Word · DOCX" — the tick is part of the label and moves with the state, so match
-// on the format token rather than the whole string.
 const chip = (c, fmt) => [...c.querySelectorAll('button')]
   .find((b) => new RegExp(`\\b${fmt}\\b`, 'i').test(b.textContent))
 const box = (c, sc) => [...c.querySelectorAll('input[type=checkbox]')]
   .find((e) => (e.getAttribute('aria-label') || '').startsWith(sc + ' '))
 // NOT [role="status"]: the always-present scope summary carries that role too, and reading the
-// first match silently returns the summary instead of the save message — which is how an
-// assertion about an error ends up passing against unrelated text.
+// first match silently returns the summary instead of the save message.
 const status = (c) => c.querySelector('.setupmsg')?.textContent || ''
-const FORMAT_CHIPS = ['DOCX', 'XLSX', 'PPTX', 'PDF']
-const pressed = (el) => el.getAttribute('aria-pressed') === 'true'
-// Set a format chip to a known state regardless of the component's default. The default is a
-// product decision that has already moved once (all four -> .docx only); tests that assumed it
-// were testing the default rather than the behaviour, and nine went red when it changed.
-const setFormat = async (c, fmt, on) => {
-  const el = chip(c, fmt)
-  if (pressed(el) !== on) await click(el)
-}
-
 const savedScope = () => JSON.parse(settingsMock.put.mock.calls.at(-1)[0].scan_scope)
 
 
-describe('the first screen shows both filters', () => {
-  it('renders a chip for every file type the engine supports', async () => {
+describe('the first screen selects checks, not file types', () => {
+  it('renders no file-type picker', async () => {
     const { c } = await render()
     for (const f of SCOPE_FORMATS) {
-      expect(chip(c, f), `no chip for ${f}`).toBeTruthy()
+      expect(chip(c, f), `a pressable chip for ${f} is still present`).toBeFalsy()
     }
   })
 
-  it('starts on .docx only — the format the engine is strongest on', async () => {
+  it('saves every Core-17 criterion over its full format set by default', async () => {
+    // Default is "no format restriction": each criterion carries its full generated lane set,
+    // because document type is now an Assess decision rather than a narrowing made here.
     const { c } = await render()
     await click(btn(c, /Save scope only/))
     const scope = savedScope()
-    for (const [sc, fmts] of Object.entries(scope)) {
-      expect(fmts, `${sc} saved a non-docx format by default`).toEqual(['docx'])
+    for (const row of OFFERED) {
+      expect(scope[row.sc], `${row.sc} missing from the default scope`).toBeTruthy()
+      expect([...scope[row.sc]].sort()).toEqual([...row.formats].sort())
     }
-    // ...and it is every Core-17 criterion that HAS a docx lane, not an arbitrary subset
-    const withDocx = Object.entries(SCOPE_PRESETS[CORE])
-      .filter(([, f]) => [...f].includes('docx')).map(([sc]) => sc)
-    expect(Object.keys(scope).sort()).toEqual(withDocx.sort())
-  })
-})
-
-
-describe('the file-type filter actually narrows what is saved', () => {
-  it('drops a deselected format from every criterion', async () => {
-    const { c } = await render()
-    for (const f of FORMAT_CHIPS) await setFormat(c, f, true)   // start from all-on
-    await setFormat(c, 'PDF', false)
-    await click(btn(c, /Save scope only/))
-    const scope = savedScope()
-    for (const [sc, fmts] of Object.entries(scope)) {
-      expect(fmts, `${sc} kept pdf after it was deselected`).not.toContain('pdf')
-    }
-    // and the criteria that ONLY exist on pdf drop out entirely rather than saving an empty list
-    for (const [sc, fmts] of Object.entries(scope)) {
-      expect(fmts.length, `${sc} saved with no formats`).toBeGreaterThan(0)
-    }
-  })
-
-  it('removes a criterion whose only format was deselected', async () => {
-    // 2.1.1 is pptx-only in the Core 17 — an asymmetry the preset records deliberately, so
-    // deselecting PowerPoint must take the criterion with it rather than leave it empty.
-    const pptxOnly = Object.entries(SCOPE_PRESETS[CORE])
-      .find(([, f]) => [...f].length === 1 && [...f][0] === 'pptx')
-    expect(pptxOnly, 'expected a pptx-only criterion in the preset').toBeTruthy()
-    const { c } = await render()
-    for (const f of FORMAT_CHIPS) await setFormat(c, f, true)
-    await setFormat(c, 'PPTX', false)
-    await click(btn(c, /Save scope only/))
-    expect(savedScope()).not.toHaveProperty(pptxOnly[0])
   })
 })
 
@@ -144,10 +97,11 @@ describe('the criterion filter actually narrows what is saved', () => {
 })
 
 
-describe('an empty intersection is refused, not saved', () => {
-  it('refuses when every file type is deselected, and sends nothing', async () => {
+describe('an empty selection is refused, not saved', () => {
+  it('refuses when every check is cleared, and sends nothing', async () => {
     const { c } = await render()
-    for (const f of FORMAT_CHIPS) await setFormat(c, f, false)
+    await click(btn(c, /^Custom$/))
+    await click(btn(c, /Clear all/))
     await click(btn(c, /Save scope only/))
 
     expect(settingsMock.put).not.toHaveBeenCalled()
@@ -156,7 +110,8 @@ describe('an empty intersection is refused, not saved', () => {
 
   it('disables the scan buttons rather than scanning an empty scope', async () => {
     const { c } = await render()
-    for (const f of FORMAT_CHIPS) await setFormat(c, f, false)
+    await click(btn(c, /^Custom$/))
+    await click(btn(c, /Clear all/))
     const scan = btn(c, /Save & /)
     expect(scan).toBeTruthy()
     expect(scan.disabled).toBe(true)
@@ -166,11 +121,9 @@ describe('an empty intersection is refused, not saved', () => {
 
 describe('a scan never runs on a scope that did not persist', () => {
   it('does not start the scan when the save fails', async () => {
-    // scanAndSave awaits save() and then calls onScan unconditionally, and save() swallows its
-    // own error into a status message. So a failed write — an expired session, a 500 — would
-    // otherwise scan against whatever scope was stored BEFORE, while the screen shows the
-    // selection the operator just made. The scope is the whole point of this screen; running
-    // without it is worse than not running.
+    // scanAndSave awaits save() and then calls onScan only if it returned true; save() swallows its
+    // own error into a status message. A failed write must not scan against whatever scope was
+    // stored BEFORE while the screen shows the selection the operator just made.
     const { c, onScan } = await render()
     settingsMock.put = vi.fn(async () => { throw new Error('session expired') })
     await click(btn(c, /Save & /))

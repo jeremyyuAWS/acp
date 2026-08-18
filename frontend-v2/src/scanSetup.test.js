@@ -3,24 +3,18 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-// The first screen used to explain the product and ask nothing. It held three boxes describing
-// Discover, Assess and Remediate — restating the nav directly above them — while the decision
-// that shapes all three, what to assess, was made two screens away at the top of Discover.
+// The pre-scan configurator: file source, WCAG checks, scan.
 //
-// It is now the configurator: file types, checks, source, scan.
+// THE FORMAT AXIS MOVED TO ASSESS (Discover/Assess PRD §4.1, §4.4). `scan_scope` is one map of
+// criterion → formats. Document type (the format axis) used to be Step 1 here, which is why this
+// screen once owned BOTH axes — to avoid a "last touched wins" fight with the Settings
+// FileTypeConfig panel. That decision relocated: Discover now shows the whole discovered estate,
+// and document type is chosen in Assess (AssessScope.jsx), the single authority for the format
+// axis. So this screen no longer offers file types — it selects the CRITERIA and derives their
+// scope over the stored/format set. The assertions below hold that: it still writes scan_scope
+// exactly once, still refuses an empty scope, and no longer renders a file-type picker.
 //
-// THE DESIGN CONSTRAINT THIS FILE EXISTS TO HOLD. `scan_scope` is ONE map of criterion →
-// formats, and two components already write all of it without knowing about each other:
-// FileTypeConfig saves `scopeForFormats(allowed)` — every criterion, restricted to the ticked
-// formats — so it discards a criterion narrowing; ScanScope saves its per-criterion selection
-// and ignores the type toggles. Whichever was touched last wins, silently.
-//
-// On separate screens that is latent. Putting both on ONE screen would make it immediate: tick
-// a format, watch your criteria come back. So this screen owns both axes and derives the map
-// once at save. The assertions below are what stop someone "simplifying" it back into two
-// panels side by side.
-//
-// Comment-stripped: this header names the very symbols and strings the assertions forbid.
+// Comment-stripped: this header names the very symbols and strings the assertions check.
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const code = (f) => readFileSync(join(HERE, f), 'utf8')
@@ -43,7 +37,7 @@ describe('the first screen asks before it scans', () => {
   })
 })
 
-describe('one editor, two axes, one write', () => {
+describe('one criterion axis, one write', () => {
   const s = () => code('ScanSetup.jsx')
 
   it('writes scan_scope exactly once', () => {
@@ -51,19 +45,14 @@ describe('one editor, two axes, one write', () => {
     expect(s()).toMatch(/scan_scope: JSON\.stringify\(scope\)/)
   })
 
-  it('does not compose the two panels that fight over the setting', () => {
-    // The whole reason this component exists rather than a two-panel layout.
-    // Match the ELEMENT, not the name — symmetric with the ScanScope line below, which always
-    // did. `toContain('FileTypeConfig')` also matched an import, and ScanSetup now imports one
-    // pure helper from that module (saveScopedFileTypes) to keep the localStorage view config in
-    // step with scan_scope. Rendering the panel is what would overwrite the criterion selection;
-    // importing a function that writes four keys does not, and the assertion could not tell the
-    // difference.
-    expect(s(), 'FileTypeConfig would overwrite the criterion selection').not.toMatch(/<FileTypeConfig\b/)
-    expect(s(), 'ScanScope would overwrite the format selection').not.toMatch(/<ScanScope\b/)
+  it('does not render either scope panel that also writes the setting', () => {
+    // Rendering FileTypeConfig (format axis) or ScanScope (criterion × format) here would
+    // reintroduce a second writer of scan_scope on the same screen.
+    expect(s(), 'FileTypeConfig would overwrite the format selection').not.toMatch(/<FileTypeConfig\b/)
+    expect(s(), 'ScanScope would overwrite the criterion selection').not.toMatch(/<ScanScope\b/)
   })
 
-  it('derives the map from criteria × formats', () => {
+  it('derives the map from the selected criteria over the format set', () => {
     const src = s()
     expect(src).toMatch(/if \(!criteria\.has\(row\.sc\)\) continue/)
     expect(src).toMatch(/row\.formats\.filter\(\(f\) => formats\.has\(f\)\)/)
@@ -76,20 +65,26 @@ describe('one editor, two axes, one write', () => {
   })
 })
 
+describe('the format axis is no longer chosen here', () => {
+  const s = () => code('ScanSetup.jsx')
+
+  it('renders no file-type picker', () => {
+    // The document-type chips (SCOPE_FORMATS.map into pressable chips) moved to Assess. A file-type
+    // picker here is exactly the duplicate control the PRD removed.
+    expect(s(), 'a file-type picker is still rendered here').not.toMatch(/SCOPE_FORMATS\.map/)
+    expect(s(), 'a file-type toggle handler is still here').not.toMatch(/toggleFormat/)
+  })
+
+  it('still excludes html — this is a document engagement', () => {
+    expect(s()).not.toMatch(/['"]html['"]/)
+  })
+})
+
 describe('what it offers is derived, never typed', () => {
   const s = () => code('ScanSetup.jsx')
 
   it('offers the tracked criteria the engine can judge', () => {
     expect(s()).toMatch(/SCOPE_UNIVERSE\.filter\(\(r\) => TRACKED_17\.has\(r\.sc\)\)/)
-  })
-
-  it('offers four file types from the generated list, and no html', () => {
-    // SCOPE_FORMATS is the document set; the universe generator excludes html because this is a
-    // document engagement. An html checkbox would change nothing when ticked — the defect #168
-    // removed for criteria.
-    const src = s()
-    expect(src).toMatch(/SCOPE_FORMATS\.map/)
-    expect(src).not.toMatch(/['"]html['"]/)
   })
 
   it('groups by the criterion number rather than a hand-written map', () => {
@@ -105,21 +100,7 @@ describe('it does not overstate what a selection means', () => {
   const s = () => code('ScanSetup.jsx')
 
   it('counts pairs, not just criteria', () => {
-    // "17 checks" over four file types reads as 68. The engine has no lane for some
-    // combinations, so the pair count is the honest one.
     expect(s()).toMatch(/pairCount\} criterion × format pairs/)
-  })
-
-  it('shows each criterion on the TICKED file types, not all four', () => {
-    // Was `r.formats.map(...)` — every row printed DOCX · PDF · PPTX · XLSX regardless of Step 1,
-    // making the operator reconcile two config axes by eye. Now narrowed to the ticked formats,
-    // and a criterion with no ticked-format lane is not rendered at all (availRows), so the list
-    // is never blank — the "implies all four" hazard the old assertion guarded is gone with it.
-    // The stronger proof is in scanSetupDom.test.jsx, which renders a Word-only scan and reads
-    // the row text; this line just stops the narrowing being quietly reverted in source.
-    const src = s()
-    expect(src).toMatch(/const shownFormats = r\.formats\.filter\(\(f\) => formats\.has\(f\)\)/)
-    expect(src).toMatch(/shownFormats\.map\(\(f\) => f\.toUpperCase\(\)\)/)
   })
 
   it('reports the capability lane as a set, not the best of them', () => {

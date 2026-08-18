@@ -4,35 +4,25 @@ import { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } from './scopePresets.js'
 import { TRACKED_17 } from './ruleDetails.js'
 import { parseStoredScope } from './ScanScope.jsx'
 import { CAPABILITY_FALLBACK, modeFor } from './capability.js'
-import { saveScopedFileTypes } from './FileTypeConfig.jsx'
 
-// The pre-scan setup: what ACP should inspect, decided before anything is scanned.
+// The pre-scan setup: which WCAG checks ACP should run, decided before anything is scanned.
 //
-// ONE EDITOR, TWO AXES, ONE WRITE — and that is the point of this component existing rather
-// than putting the two existing panels side by side.
+// THE FORMAT AXIS MOVED TO ASSESS. `scan_scope` is a single map of criterion → formats. Document
+// type (the format axis) used to be picked here as Step 1, which made this component own both
+// axes to avoid a "last touched wins" fight with the Settings FileTypeConfig panel. The
+// Discover/Assess PRD (§4.1, §4.4) relocated that decision: Discover now shows the whole
+// discovered estate, and document type is chosen in Assess (AssessScope.jsx), which is the single
+// authority for the format axis. So this screen no longer offers file types — it selects the
+// CRITERIA, and derives their scope over every format the engine can judge them on. An Assess-set
+// format restriction is read back on mount (see the getSettings effect) and preserved on save,
+// so re-saving criteria here never silently widens a narrowing made in Assess.
 //
-// `scan_scope` is a single map of criterion → formats. Two controls already write it and
-// neither knows about the other: FileTypeConfig saves `scopeForFormats(allowed)`, which is
-// EVERY criterion restricted to the ticked formats, so saving it silently discards a criterion
-// narrowing; ScanScope saves its per-criterion selection and pays no attention to the file-type
-// toggles. Whichever was touched last wins, and nothing says so.
-//
-// On separate screens that is a latent bug. On one screen — which is what "put the file types
-// and the SCs on the first page" means — it becomes an immediate contradiction: tick a format,
-// watch the criteria you just chose come back. So this screen owns both axes and derives the
-// map once, at save, as `criteria × formats`. It cannot disagree with itself because there is
-// only one selection.
-//
-// The two existing panels are untouched: Settings keeps them for the platform-admin path, and
-// this does not change what either does. Reconciling all three is the "two filters" backlog
-// item, and it wants a decision about which surface is authoritative, not a bigger component.
-//
-// STEP 2 IS PROFILE-FIRST. The 17 criteria are the expert surface; most operators want one of
-// two intents — "the recommended set" or "only what runs without a person" — and should reach a
-// correct scope in one click. So the checks step leads with three profiles (Recommended,
-// Automated only, Custom) and only unfolds the per-criterion list when Custom is chosen. Every
-// bulk affordance below Custom (select all, clear, per-principle tri-state, the lane filter) is
-// a shortcut into the same one `criteria` Set the profiles write — there is still one selection.
+// PROFILE-FIRST. The 17 criteria are the expert surface; most operators want one of two intents —
+// "the recommended set" or "only what runs without a person" — and should reach a correct scope in
+// one click. So the checks step leads with three profiles (Recommended, Automated only, Custom)
+// and only unfolds the per-criterion list when Custom is chosen. Every bulk affordance below
+// Custom (select all, clear, per-principle tri-state, the lane filter) is a shortcut into the same
+// one `criteria` Set the profiles write — there is still one selection.
 
 // Derived from the criterion number, not typed out: the four WCAG principles are the first digit,
 // and a hand-written map would be a fifth list to keep in step with the 17.
@@ -94,8 +84,8 @@ const availableRows = (formats) => OFFERED.filter((r) => r.formats.some((f) => f
 // The deterministic-first subset for the selected formats: every pair that would run is
 // automated. Strict on purpose — a criterion automated on Word but human-reviewed on PDF is NOT
 // in "Automated only" when both formats are ticked, because the scan it names would still route
-// something to a person. Recomputed when the formats change (see toggleFormat), so the profile
-// keeps meaning what its label says.
+// something to a person. Recomputed against the current (stored) format set, so the profile keeps
+// meaning what its label says.
 const autoOnlyCriteria = (formats) => new Set(
   availableRows(formats)
     .filter((r) => r.formats.filter((f) => formats.has(f))
@@ -103,19 +93,13 @@ const autoOnlyCriteria = (formats) => new Set(
     .map((r) => r.sc),
 )
 
-export default function ScanSetup({ onScan, busy, hasDriveToken, hasSPToken, onFileTypeChange }) {
-  // .docx ONLY by default, not all four formats.
-  //
-  // A deliberate product choice, not a technical one: .docx is where the engine is strongest.
-  // Of the Core 17, fifteen criteria have a docx lane and four can certify a PASS
-  // (1.3.1, 1.4.3, 2.4.2, 3.1.1); remediation applies nine fixes across seven criteria on a
-  // real document. The other formats are genuinely thinner — pdf cannot be assessed at all
-  // without the external ACP_PDF_ENGINE, and 2.1.1 exists only on pptx.
-  //
-  // Defaulting to everything meant a first scan inventoried an estate the product could say
-  // least about, and the weakest formats set the tone. Starting narrow makes the first result
-  // the strongest one; widening is one click, and the chips show the other three ready to add.
-  const [formats, setFormats] = useState(() => new Set(['docx']))
+export default function ScanSetup({ onScan, busy, hasDriveToken, hasSPToken }) {
+  // Formats are no longer chosen here — document type is an Assess decision now (AssessScope.jsx).
+  // Pre-scan defaults to every supported format (no format restriction); the getSettings effect
+  // below narrows it to whatever Assess last stored, so this screen respects that restriction
+  // without offering a control to change it. The criterion scope is still derived over `formats`,
+  // so a stored docx-only restriction keeps this screen's derived scope docx-only too.
+  const [formats, setFormats] = useState(() => new Set(SCOPE_FORMATS))
   const [criteria, setCriteria] = useState(() => new Set(Object.keys(SCOPE_PRESETS[CORE] || {})))
   // 'recommended' (all supported) · 'auto' (deterministic-first) · 'custom' (hand-picked). Any
   // per-criterion edit drops to 'custom', because the selection no longer matches a named intent.
@@ -176,16 +160,6 @@ export default function ScanSetup({ onScan, busy, hasDriveToken, hasSPToken, onF
     .map(([k, label]) => `${t[k]} ${k === 'mixed' ? 'vary by format' : label.toLowerCase()}`)
     .join(' · ')
 
-  const toggleFormat = (f) => {
-    const n = new Set(formats)
-    n.has(f) ? n.delete(f) : n.add(f)
-    setFormats(n)
-    // Keep a derived profile honest when its inputs move. 'auto' names a set that depends on the
-    // formats, so recompute it; 'recommended' is all-17 regardless of format and 'custom' is the
-    // operator's own list, so neither is touched here.
-    if (profile === 'auto') setCriteria(autoOnlyCriteria(n))
-  }
-
   const toggleSc = (sc) => { setProfile('custom'); setCriteria((s) => {
     const n = new Set(s); n.has(sc) ? n.delete(sc) : n.add(sc); return n
   }) }
@@ -203,8 +177,8 @@ export default function ScanSetup({ onScan, busy, hasDriveToken, hasSPToken, onF
     setMany(rows, !rows.every((r) => criteria.has(r.sc)))
   }
 
-  // Recommended = the Core 17. Only the criteria move; the file types are Step 1's decision and
-  // are left exactly as the operator set them.
+  // Recommended = the Core 17. Only the criteria move; the format axis is an Assess decision and
+  // is left exactly as it was stored.
   const useRecommended = () => {
     setCriteria(new Set(Object.keys(SCOPE_PRESETS[CORE] || {}))); setProfile('recommended'); setMsg('')
   }
@@ -217,20 +191,11 @@ export default function ScanSetup({ onScan, busy, hasDriveToken, hasSPToken, onF
     // An empty selection stored literally would read as NO restriction on the backend —
     // "assess nothing" saved as "assess everything", silently. Refused with a reason, the same
     // way ScanScope refuses it.
-    if (!scCount) { setMsg('Pick at least one check and one file type — an empty scope would assess everything.'); return false }
+    if (!scCount) { setMsg('Pick at least one check — an empty scope would assess everything.'); return false }
     setSaving(true); setMsg('')
     try {
       await updateSettings({ scan_scope: JSON.stringify(scope) })
-      // BOTH stores, because one fact is kept in two places. `scan_scope` above decides what is
-      // ASSESSED; the localStorage config decides what Discover LISTS (Discover.jsx filters on
-      // `fileTypeConfig[f.type] !== false`). Writing only the first is what made unticking PDF
-      // here scope the assessment while every PDF stayed in the inventory — the file types were
-      // honoured everywhere except the screen the operator looks at next.
-      //
-      // saveScopedFileTypes MERGES the four engine-scoped formats into the stored config; html,
-      // video, audio and custom extensions have no scan_scope axis and are left untouched.
-      onFileTypeChange?.(saveScopedFileTypes(formats))
-      setMsg(`✓ Saved · ${scCount} checks on ${formats.size} file type${formats.size === 1 ? '' : 's'}`)
+      setMsg(`✓ Saved · ${scCount} check${scCount === 1 ? '' : 's'} selected`)
       return true
     } catch (e) {
       setMsg(e?.message || 'Could not save the scan scope.')
@@ -270,27 +235,11 @@ export default function ScanSetup({ onScan, busy, hasDriveToken, hasSPToken, onF
         configure once, and every stage reports against it.
       </p>
 
-      {/* ① FILE TYPES — four, not five. `html` is deliberately absent: SCOPE_FORMATS is the
-          generated document set, and the universe generator excludes html because this is a
-          document engagement. A fifth checkbox would change nothing when ticked. */}
-      <div className="setupstep">
-        <div className="setupstep-h"><span className="setupstep-n">1</span> File types</div>
-        <div className="setupchips">
-          {SCOPE_FORMATS.map((f) => (
-            <button key={f} className={formats.has(f) ? 'setupchip on' : 'setupchip'}
-                    aria-pressed={formats.has(f)} onClick={() => toggleFormat(f)}>
-              {formats.has(f) ? '✓ ' : ''}{FORMAT_LABEL[f] || f.toUpperCase()}
-              <span className="muted"> · {f.toUpperCase()}</span>
-            </button>
-          ))}
-        </div>
-        <div className="muted setupcount">{formats.size} of {SCOPE_FORMATS.length} file types selected</div>
-      </div>
-
-      {/* ② CHECKS — profile-first. The 17 unfold only under Custom. */}
+      {/* ① CHECKS — profile-first. The 17 unfold only under Custom. Document type is no longer
+          chosen here (that moved to Assess, AssessScope.jsx); this screen selects the criteria. */}
       <div className="setupstep">
         <div className="setupstep-h">
-          <span className="setupstep-n">2</span> What should ACP check?
+          <span className="setupstep-n">1</span> What should ACP check?
           <span className="muted setuphint"> · WCAG 2.1 AA success criteria</span>
         </div>
 
@@ -391,9 +340,9 @@ export default function ScanSetup({ onScan, busy, hasDriveToken, hasSPToken, onF
         </div>
       </div>
 
-      {/* ③ SOURCE + the action */}
+      {/* ② SOURCE + the action */}
       <div className="setupstep">
-        <div className="setupstep-h"><span className="setupstep-n">3</span> Source</div>
+        <div className="setupstep-h"><span className="setupstep-n">2</span> Source</div>
         <div className="muted setupcount">
           {hasDriveToken ? 'Google Drive · connected' : 'No source connected — you can still try the sample corpus'}
           {hasSPToken ? ' · SharePoint / OneDrive · connected' : ''}

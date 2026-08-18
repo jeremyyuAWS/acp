@@ -1,5 +1,7 @@
 import { SIM, simIdentity, simGetSources, simStartScan, simGetJob, simGetScan, simListScans, simRules, simRemediationDiffs } from './sim.js'
 import { CAPABILITY_FALLBACK } from './capability.js'
+import { SCOPE_UNIVERSE } from './scopePresets.js'
+import { TRACKED_17 } from './ruleDetails.js'
 
 const BASE = import.meta.env.VITE_API ?? 'http://localhost:8077'
 
@@ -894,3 +896,50 @@ export const uploadToSharePoint = ({ scanId, file, driveId, itemId, blob, score 
 export const queueHitlVerify = (scanId, file) => (SIM
   ? sim({ queued: 1 })
   : fetch(`${BASE}/hitl/queue/${encodeURIComponent(scanId)}/verify?file=${encodeURIComponent(file)}`, { method: 'POST', headers: headers() }).then(j))
+
+// ── Assess code-set + eligibility (Phase C2, Discover/Assess PRD) ───────────────────
+// The two READ-ONLY previews the Assess scope picker calls before a run starts:
+//   fetchCodeset()          → the Core-17 catalog [{code, name, formats:[...]}] — the selectable
+//                             set the WCAG picker renders as "1.4.3 — Contrast (Minimum)".
+//   fetchEligibility(codes) → {discovered, eligible, by_format, formats, codes:[…]} for the current
+//                             selection, so the picker can show "N files eligible" before running.
+// Neither starts a scan or mutates state, so both are safe to call live as the selection changes.
+//
+// The endpoint wraps the catalog as {codes:[…]}; fetchCodeset unwraps it so callers always get the
+// array. SIM has no backend, so it projects the SAME generated Core-17 tables the rest of the UI
+// reads (SCOPE_UNIVERSE ∩ TRACKED_17) over a small fixed demo inventory — the picker and its count
+// then behave offline exactly as they do against the API, instead of a second hand-typed list.
+const _SIM_CORE17 = SCOPE_UNIVERSE
+  .filter((r) => TRACKED_17.has(r.sc))
+  .map((r) => ({ code: r.sc, name: r.name, formats: [...r.formats].sort() }))
+// A representative discovered estate for the demo count — docx-heavy, the engine's strongest lane.
+const _SIM_INVENTORY = { discovered: 175, by_format: { docx: 92, pdf: 48, pptx: 21, xlsx: 14 } }
+
+export const fetchCodeset = () => (SIM
+  ? sim({ codes: _SIM_CORE17 })
+  : fetch(`${BASE}/assess/codeset`, { headers: headers() }).then(j)
+).then((r) => (Array.isArray(r) ? r : (r?.codes || [])))
+
+const _simEligibility = (codes) => {
+  const sel = (codes && codes.length) ? codes : _SIM_CORE17.map((c) => c.code)
+  const byCode = Object.fromEntries(_SIM_CORE17.map((c) => [c.code, c.formats]))
+  const fmts = new Set()
+  for (const code of sel) for (const f of (byCode[code] || [])) fmts.add(f)
+  const by_format = {}
+  for (const f of [...fmts].sort()) { const n = _SIM_INVENTORY.by_format[f] || 0; if (n > 0) by_format[f] = n }
+  const eligible = Object.values(by_format).reduce((a, b) => a + b, 0)
+  const codes_out = sel.map((code) => {
+    const cf = byCode[code] || []
+    return { code, name: _SIM_CORE17.find((c) => c.code === code)?.name || code, formats: cf,
+             eligible: cf.reduce((a, f) => a + (_SIM_INVENTORY.by_format[f] || 0), 0) }
+  })
+  return { discovered: _SIM_INVENTORY.discovered, eligible, by_format, formats: [...fmts].sort(), codes: codes_out }
+}
+
+export const fetchEligibility = (codes = null) => {
+  const list = (Array.isArray(codes) ? codes : (codes ? String(codes).split(',') : []))
+    .map((c) => String(c).trim()).filter(Boolean)
+  if (SIM) return sim(_simEligibility(list))
+  const q = list.join(',')
+  return fetch(`${BASE}/assess/eligibility${q ? `?codes=${encodeURIComponent(q)}` : ''}`, { headers: headers() }).then(j)
+}
