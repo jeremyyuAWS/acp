@@ -79,6 +79,15 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   maps the common MSAL/Entra strings — wrong tenant → "use the ACP work account", 700016 → "use another
   account", blocked popup, consent needed — to one actionable sentence, keeping the AADSTS code for an
   admin on anything unrecognised rather than the raw wall; used by both entry points.
+- **End-to-end validated SharePoint discovery on the deployed app** (2026-08-18, no PR — testing, not
+  code). Drove the deployed app (v2026.8.18.2) as `jeremy_acp@fgxlxj` via Microsoft SSO against a
+  synthetic ~158-document medical estate uploaded to the fgxlxj Communication site, Core-17 · all four
+  formats. Confirmed discovery → download → per-file WCAG assessment all work against real SharePoint
+  content. Surfaced that `_sp_list` enumerates each library via Graph `driveItem search(q='')` — an
+  index-backed, eventually-consistent call — so a scan run minutes after a bulk upload under-reports the
+  estate: the first scan discovered **39 of ~158** files, and the same index was measured climbing
+  39 → 157 → 158 as it caught up (library `ItemCount` = 374 proved the upload was complete; 39 ≪ the
+  200-file cap ruled that out). Filed as GH #333, with the recovery confirmed and commented there.
 
 ## Feature: Operator scan scope · #4601
 
@@ -235,6 +244,20 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   `dl`/`dlErr` state, `grab()`) and the test that asserted the download-error UI. `exportDeliverables.js`
   itself stays — `pdfReport.js` still imports `statusFor` from it and its two tests still pass. Suite
   green at 1639.
+- **Scoped Platform settings to access management — Owners + Users only** (#319). Removed the other
+  six tabs (Scoring rules, Estate, File types, Remediated storage, Disposition, Data reset + its
+  AI-provider governance panel); default tab is now Users. **Hide, not delete:** the three panels local
+  to `Settings.jsx` (`ResetData`, `DriveMirror`, `AIProvidersPanel`) are exported and kept, the four
+  imported ones live in their own untouched files, and the SIM-write-honesty guard — whose header
+  documents it catching two real production incidents — now drives `DriveMirror` directly instead of
+  through the removed "Remediated storage" tab, so no admin feature or safety test was lost. The Users
+  tab gained equal-weight onboarding for both sources: **Microsoft** (the #308 Entra guest invite when
+  configured, else a guided manual-Entra link that holds no Graph permission and ships dark, preserving
+  ADR 0033) and **Google** (whitelists a Gmail in one step, mirroring the invite's auto-add, and surfaces
+  the OAuth test-user step — the tester then signs in with Google and their Drive is a read-only source).
+  New `settingsAccessScope.test.jsx` pins the two-tab scope, the kept-code exports and both onboarding
+  cards incl. a functional Google whitelist; `simAdminWriteHonesty`/`inviteTester` updated to the new
+  structure. Full v2 suite green at 1687; `vite build` clean.
 
 ## Feature: Dependency security · #4603
 
@@ -920,6 +943,20 @@ three-denominator model (#297, under Documentation).
 - Local source walks the nested tree with filesystem metadata (#325) — recursive discovery for a local
   source now descends subfolders and captures per-file metadata, matching the Drive/SharePoint inventory
   shape for local-mounted content. Another session's change, in this window.
+- SharePoint estate samples carry triage metadata, at parity with Drive (#345) — a review follow-up to
+  another session's SharePoint three-denominator summary (#337). That summary reached parity on the funnel
+  *counts* but its drill-down samples were blank: the estate rows carried only {id, name, mimeType}, and
+  `estate_inventory._sample_meta` reads a Drive file object's `owners[]`/`size`/`shared`/`modifiedTime`, so
+  the #304 owner / biggest-first / externally-shared lenses came back empty for SharePoint. #345 maps the
+  Graph item's own field names into those keys (and dedupes the owner extraction the scannable path
+  repeated). A second review finding — ACP output not excluded by provenance — was verified a non-issue and
+  left unchanged: `provenance.is_acp_generated` reads a Drive property a Graph item never carries, and
+  SharePoint already excludes ACP output by folder (mirror + archive in `skip_folders`).
+- Covered the SharePoint multi-library truncation branch (#346) — the estate-summary tests all exercised
+  OneDrive (a single target), leaving the arm that flags a floor when a later document library is never
+  reached (`i < len(targets) - 1`) untested; a regression could make a multi-library site silently report
+  `truncated=false`. Two tests now drive a site with two libraries — cap hit in the first (second never
+  fetched → truncated), and both fully listed (→ not truncated). Test-only.
 
 ---
 
@@ -1051,11 +1088,21 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   TfsGit pipeline on a different repo) was deliberately kept enabled. Left recorded rather than
   deleted so the decision — and that `acp-ci` was spared on purpose — is legible.
 - **The scheduled production probe was failing on `main`** (`.github/workflows/monitor.yml` →
-  `scripts/monitor.py` against `ACP_FQDN`) — `completed/failure` repeatedly, e.g. on `de556b5`. Two
-  monitor/deploy causes have since been fixed: a false deploy-drift red from a CI-only file (#237)
-  and a real one where an approved-late deploy shipped a stale sha (#238). A dedicated investigation
-  of any remaining cause (prod health vs. a broken probe / misconfigured `ACP_FQDN` / `ACP_MONITOR_KEY`)
-  is running in a separate session; confirm the probe is green before closing this.
+  `scripts/monitor.py` against `ACP_FQDN`) — `completed/failure` repeatedly, e.g. on `de556b5`. *(2026-08-18:
+  investigation concluded.* Not a broken probe or misconfigured `ACP_FQDN`/`ACP_MONITOR_KEY` — every liveness
+  and deep check passed; the sole failing check was `production is current` (deploy drift), and it was a **true
+  positive**: production genuinely trailed `main` because the gated auto-deploy sat unapproved. #237 fixed one
+  false-drift class (a CI-only root file miscounted as image drift) and #238 stopped an approved-late deploy
+  shipping a stale sha. The residual is the `production` environment's manual-approval gate stacking deploys —
+  ops, not a code bug. Prod was later observed live on a current build (v2026.8.18.2), so deploys are landing;
+  confirm the probe run itself is green before closing.*
+- **SharePoint discovery under-reports freshly-uploaded estates** (GH #333, found 2026-08-18 in end-to-end
+  testing). `_sp_list` enumerates via Graph `search(q='')`, which reads the eventually-consistent search index,
+  so a scan soon after a bulk upload sees a fraction of the estate with no "still indexing" signal (39 of ~158
+  observed). Fix candidate: a `children`-based recursive crawl (immediately consistent), or an index-lag
+  warning. Two more issues filed from the same test: **no way to cancel a running scan, and an in-progress scan
+  blocks all new scans** (GH #334), and **very slow local-AI assessment throughput on image-heavy docs** — 1/39
+  after ~20 min, worth confirming vision runs on the provisioned T4 GPU vs. CPU (GH #335).
 - **This log was lost once already.** It was committed locally on 2026-08-08 and discarded by a
   `git reset --hard origin/main` in a parallel session, because it had never been pushed. It was
   recovered from the dangling object. Push it, or it will happen again.
@@ -1245,3 +1292,24 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   the #303 follow-up, whose note is updated) and #325 (local source recursive walk with filesystem
   metadata). Excluded as non-feature: the C4 delivery-log commit (#336). Sync marker advanced from
   `4d176d36` to `fad0dfbe`.
+- **2026-08-18 (settings + SharePoint validation)** — Back-filled #319 (Platform settings scoped to
+  Owners + Users, hide-not-delete of the six other admin panels, equal-weight Microsoft/Google onboarding
+  on the Users tab) under v2 frontend redesign. #319 is an ancestor of the current marker `fad0dfbe`, i.e.
+  a covered-but-unlogged commit that earlier sweeps documented their own work over — this is a back-fill.
+  Recorded an end-to-end SharePoint discovery validation on the deployed app under SharePoint as a document
+  source (no commit — testing), and filed its three findings as GitHub issues, added to Open items: #333
+  (`search(q='')` index-lag under-reporting), #334 (no scan-cancel / blocks new scans), #335 (slow local-AI
+  assessment throughput). Updated the production-probe Open item in place with this session's investigation
+  outcome (a true-positive deploy-drift, not a broken probe; #237/#238 fixed two causes; residual is the
+  manual-approval gate — ops). #237/#238 confirmed already logged under Continuous deployment; not duplicated.
+  **Sync marker deliberately NOT advanced** (left at `fad0dfbe`): the sole new feature commit in the delta,
+  #337 (SharePoint three-denominator estate summary), belongs to another session's estate-coverage sweep and
+  is left for it to characterise — advancing the marker would swallow it. #339 is a delivery-log commit.
+- **2026-08-18 (#337 review follow-ups)** — Added #345 and #346 under Estate coverage — my review of another
+  session's #337 (SharePoint three-denominator summary): #345 fixes the blank drill-down samples (triage
+  metadata parity with Drive), #346 covers the multi-library truncation branch. #337 itself is still left for
+  its author's sweep (per the entry above), so these are recorded as follow-ups referencing it, not a
+  re-characterisation of #337. **Marker still NOT advanced** (`fad0dfbe`): the range also holds undocumented
+  feature work from other sessions — #340 (rejected-fix lane W2/W8), #341 (per-scan scope chip R6), #343
+  (inventory-grain new/changed/removed + Discover tracing), #344 (report scope-of-assertion funnel) — left
+  for their own sessions to characterise, the same way #337 is. #342 is a delivery-log commit.

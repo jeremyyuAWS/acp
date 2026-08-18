@@ -4,6 +4,7 @@ import {
   matchesTab, tabCounts, isResolved, TABS, SORTS,
 } from './remediationInboxModel.js'
 import { fixSteps, appName } from './remediationGuide.js'
+import { scOf } from './fixSummary.js'
 
 // Master/detail Remediation inbox. Remediation is queue work — select an item, understand it, act,
 // move to the next — so the layout is an email-style split: a 38% work queue on the left, a 62%
@@ -12,8 +13,11 @@ import { fixSteps, appName } from './remediationGuide.js'
 // thing feel fast. All derivation lives in remediationInboxModel.js; this file is presentation.
 
 const SORT_LABEL = { priority: 'Priority', document: 'Document', newest: 'Newest', fastest: 'Fastest to resolve' }
-const TAB_LABEL = { all: 'All', 'auto-fixed': 'Auto-fixed', manual: 'Manual', blocked: 'Blocked', resolved: 'Resolved' }
+const TAB_LABEL = { all: 'All', 'auto-fixed': 'Auto-fixed', 'needs-attention': 'Needs manual handling', manual: 'Manual', blocked: 'Blocked', resolved: 'Resolved' }
 const fmtOf = (file) => String(file || '').split('.').pop().toLowerCase()
+// The success-criterion key a finding shares with its siblings, used to batch a decision across
+// every other queued finding of the same rule (W8). Normalised so 'SC_1_1_1' / 'WCAG 1.1.1' / '1.1.1' all match.
+const scKeyOf = (f) => scOf(f?.rule_id || f?.ruleId || f?.wcag)
 
 function LaneRail({ lane }) {
   return <span aria-hidden="true" style={{ flex: '0 0 4px', alignSelf: 'stretch', borderRadius: 4, background: lane.color }} />
@@ -119,7 +123,7 @@ function ManualSteps({ f }) {
   )
 }
 
-function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck }) {
+function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCount = 0, onApplyToMatching }) {
   if (!f) {
     return (
       <div style={{ display: 'grid', placeItems: 'center', height: '100%', textAlign: 'center', padding: 24 }}>
@@ -132,14 +136,18 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck }) {
   }
   const r = rowModel(f, decisions)
   const lane = laneOf(f)
-  const isManual = lane.key === 'manual'
+  // Handoff (a rejected AI fix, W2) is worked by hand like a manual finding — guided steps + the
+  // "Mark as assigned" action — so it shares the manual detail treatment.
+  const isHandoff = lane.key === 'handoff'
+  const isManual = lane.key === 'manual' || isHandoff
   const resolved = isResolved(f, decisions)
+  const eyebrow = isHandoff ? 'Needs manual handling' : lane.key === 'manual' ? 'Manual remediation' : 'Review'
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ flex: '1 1 auto', overflowY: 'auto', padding: '18px 22px' }}>
         {/* 1 · What do I need to do? */}
         <p className="muted" style={{ fontSize: 11.5, letterSpacing: '.08em', textTransform: 'uppercase', margin: 0 }}>
-          {isManual ? 'Manual remediation' : 'Review'}
+          {eyebrow}
         </p>
         <h3 style={{ margin: '4px 0 6px', fontSize: 19 }}>{r.issue}</h3>
         <p style={{ fontSize: 14, color: 'var(--ink)', margin: '0 0 4px' }}>{lane.didLine}.</p>
@@ -171,23 +179,45 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck }) {
       </div>
 
       {/* 3 · Sticky action bar */}
-      <div style={{ flex: '0 0 auto', borderTop: '1px solid var(--line,#e2dce4)', padding: '12px 22px',
-                    display: 'flex', gap: 10, alignItems: 'center', background: 'var(--bg, #fff)' }}>
-        {resolved ? (
-          <span className="muted" style={{ fontSize: 13 }}>✓ Resolved — nothing left to do on this finding.</span>
-        ) : isManual ? (
-          <>
-            {onOpenWord && <button className="primary" onClick={() => onOpenWord(f)}>Open in Word</button>}
-            {onRecheck && <button className="ghost" onClick={() => onRecheck(f)}>Upload &amp; recheck</button>}
-            <button className="ghost" onClick={() => onDecide?.(f, { state: 'assigned' })}>Mark as assigned</button>
-          </>
-        ) : (
-          <>
-            <button className="primary" onClick={() => onDecide?.(f, { state: 'accepted' })}>{lane.action}</button>
-            <button className="ghost" onClick={() => onDecide?.(f, { state: 'rejected' })}>Reject</button>
-            {onOpenWord && <button className="ghost" onClick={() => onOpenWord(f)}>Open in Word</button>}
-          </>
+      <div style={{ flex: '0 0 auto', borderTop: '1px solid var(--line,#e2dce4)', background: 'var(--bg, #fff)' }}>
+        {/* W8 — batch a decision across every other queued finding of the same rule/SC. Explicit and
+            reversible-feeling: it names the count, and each target routes through the same onDecide
+            (so approvals re-validate and rejections hand off) as if the reviewer acted on them one by
+            one. Offered only for actionable (non-manual, unresolved) findings that actually have
+            matches. */}
+        {!resolved && !isManual && matchingCount > 0 && (
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
+                        padding: '10px 22px', borderBottom: '1px solid var(--line,#e2dce4)',
+                        background: 'var(--surface-2,#f6f5f8)', fontSize: 12.5 }}>
+            <span className="muted">
+              {matchingCount} other finding{matchingCount === 1 ? '' : 's'} share this issue{f.rule_id || f.ruleId ? ` (WCAG ${scKeyOf(f)})` : ''}.
+              Apply your decision to all {matchingCount + 1} matching findings:
+            </span>
+            <button className="ghost" style={{ fontSize: 12.5 }} onClick={() => onApplyToMatching?.(f, { state: 'accepted' })}>
+              Approve all {matchingCount + 1}
+            </button>
+            <button className="ghost" style={{ fontSize: 12.5 }} onClick={() => onApplyToMatching?.(f, { state: 'rejected' })}>
+              Reject all {matchingCount + 1}
+            </button>
+          </div>
         )}
+        <div style={{ padding: '12px 22px', display: 'flex', gap: 10, alignItems: 'center' }}>
+          {resolved ? (
+            <span className="muted" style={{ fontSize: 13 }}>✓ Resolved — nothing left to do on this finding.</span>
+          ) : isManual ? (
+            <>
+              {onOpenWord && <button className="primary" onClick={() => onOpenWord(f)}>Open in Word</button>}
+              {onRecheck && <button className="ghost" onClick={() => onRecheck(f)}>Upload &amp; recheck</button>}
+              <button className="ghost" onClick={() => onDecide?.(f, { state: 'assigned' })}>Mark as assigned</button>
+            </>
+          ) : (
+            <>
+              <button className="primary" onClick={() => onDecide?.(f, { state: 'accepted' })}>{lane.action}</button>
+              <button className="ghost" onClick={() => onDecide?.(f, { state: 'rejected' })}>Reject</button>
+              {onOpenWord && <button className="ghost" onClick={() => onOpenWord(f)}>Open in Word</button>}
+            </>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -223,6 +253,19 @@ export default function RemediationInbox({
   const selected = queue.find((f) => f.id === selectedId) || null
   const groups = useMemo(() => groupByDocument(visible), [visible])
 
+  // W8 — every OTHER unresolved queued finding that shares this one's rule/SC. Drives the
+  // "apply to all matching" count and the batch action. Restricted to the actionable approve/apply
+  // lanes: a batch decision must not silently sweep in a finding a person already rejected (handoff),
+  // one that needs a manual re-author, or a blocked one.
+  const ACTIONABLE = new Set(['review', 'apply', 'recheck'])
+  const matchingOf = (f) => {
+    const sc = scKeyOf(f)
+    if (!f || !sc) return []
+    return queue.filter((x) => x.id !== f.id && !isResolved(x, decisions) &&
+      scKeyOf(x) === sc && ACTIONABLE.has(laneOf(x).key))
+  }
+  const matchingCount = selected ? matchingOf(selected).length : 0
+
   // Act on a finding, then auto-advance to the next unresolved one — the behaviour that makes the
   // queue feel like a controlled worklist rather than a scroll through an audit report.
   function act(f, decision) {
@@ -230,6 +273,16 @@ export default function RemediationInbox({
     const nextDecisions = { ...decisions, [f.id]: decision }
     const nxt = nextUnresolvedId(visible, f.id, nextDecisions)
     setSelectedId(nxt)
+  }
+
+  // W8 — apply one decision to the current finding AND every matching one, in a single click. Each
+  // target routes through the same onDecide as an individual action, so approvals still re-validate
+  // and rejections still hand off; then advance past everything just decided.
+  function applyToMatching(f, decision) {
+    const targets = [f, ...matchingOf(f)]
+    const nextDecisions = { ...decisions }
+    targets.forEach((t) => { onDecide?.(t, decision); nextDecisions[t.id] = decision })
+    setSelectedId(nextUnresolvedId(visible, f.id, nextDecisions))
   }
 
   return (
@@ -284,7 +337,8 @@ export default function RemediationInbox({
 
       {/* ── Right: the remediation workspace (62%) ── */}
       <div style={{ flex: '1 1 62%', minWidth: 0 }}>
-        <DetailPane f={selected} decisions={decisions} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck} />
+        <DetailPane f={selected} decisions={decisions} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
+                    matchingCount={matchingCount} onApplyToMatching={applyToMatching} />
       </div>
     </div>
   )

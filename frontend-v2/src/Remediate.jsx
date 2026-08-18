@@ -302,6 +302,12 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // filters, and their sessionStorage rehydration) is gone with it.
   const [acted, setActed] = useState({ approved: 0, rejected: 0, deferred: 0 })
   const [deferredItems, setDeferredItems] = useState([])
+  // W2 — a rejected AI fix is not a dead end. It becomes a manual-handling item that stays visible
+  // in the inbox's "Needs manual handling" lane until a person picks it up, rather than vanishing
+  // from the queue the moment it is rejected. Kept as its own state (like deferredItems) so it
+  // survives the pending-queue reload below — the server drops it from `pending`, but the reviewer
+  // still needs to see the work it handed back.
+  const [rejectedItems, setRejectedItems] = useState([])
   // Real applied-fix evidence: scan-wide before→after (all fix types, verified-cleared) +
   // the concrete AI-written values/thumbnails. Every hero/impact/recent-fix count is a
   // straight count of these rows — never a fabricated number (see fixSummary.js).
@@ -334,7 +340,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       .catch(() => {})
   }
   useEffect(() => {
-    setActed({ approved: 0, rejected: 0, deferred: 0 }); setDeferredItems([]); setAckd({})
+    setActed({ approved: 0, rejected: 0, deferred: 0 }); setDeferredItems([]); setRejectedItems([]); setAckd({})
     clearInterval(pollRef.current); setRemProg(null); setRemBusy(false); setServerFixed(0); setRemMsg('')
     fetchFixes()
     if (!runId) { setQueue(SIM ? buildHumanQueue(files, {}) : []); return }
@@ -489,6 +495,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     if (item) {
       setQueue((q) => (q.some((x) => x.id === item.id) ? q : [item, ...q]))
       if (kind === 'deferred') setDeferredItems((d) => d.filter((x) => x.id !== item.id))
+      // W2 — the reject also created a handoff row; a refused write must pull that back too.
+      if (kind === 'rejected') setRejectedItems((r) => r.filter((x) => x.id !== item.id))
     }
     setActed((a) => ({ ...a, [kind]: Math.max(0, (a[kind] || 0) - 1) }))
     window.dispatchEvent(new Event('acp:hitl-changed'))
@@ -509,6 +517,15 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       return
     }
     setActed((a) => ({ ...a, [kind]: a[kind] + 1 }))
+    // W2 — rejecting an AI fix routes it back to the inbox as a manual-handling item instead of
+    // dropping it. Clear the AI proposal (after/proposals/hasProposal/aiDraftable) and any status so
+    // laneOf() lands it in the amber handoff lane ("Needs manual handling"), not the green/blue
+    // approve lanes. The `rejected` audit write below still fires — this only adds the destination.
+    if (kind === 'rejected' && item) {
+      const handoff = { ...item, status: undefined, after: null, proposals: null,
+                        hasProposal: false, autoApplied: false, aiDraftable: false, rejectedFix: true }
+      setRejectedItems((r) => (r.some((x) => x.id === handoff.id) ? r : [...r, handoff]))
+    }
     window.dispatchEvent(new Event('acp:hitl-changed'))
     const apiStatus = kind === 'approved' ? 'approved' : kind === 'rejected' ? 'rejected' : null
     // approved_value is the headline text (audit log, telemetry); approvedValues carries one
@@ -634,7 +651,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // shares the master/detail flow. The human review queue (assisted/manual) comes first; the
   // green auto-fixes follow. Ack'd ones resolve in place (RemediationInbox's Resolved tab).
   const autoFixItems = autoFixRows(fixSource, (sc) => ITEM_NAME[sc] || sc)
-  const inboxQueue = [...queue, ...autoFixItems]
+  // W2 — rejected AI fixes sit between the live human queue and the auto-applied rows, in the amber
+  // "Needs manual handling" lane, so a reviewer sees exactly what was bounced back for a person.
+  const inboxQueue = [...queue, ...rejectedItems, ...autoFixItems]
   const inboxDecisions = { ...decisions, ...ackd }
   const fixGroups = groupFixesByRule(fixSource)
   const impact = summarizeImpact(fixSource)
@@ -870,6 +889,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             queue={inboxQueue}
             decisions={inboxDecisions}
             onDecide={(f, d) => {
+              // W2 — a handoff row (a rejected AI fix) is already out of the hitl queue; acting on it
+              // here ("Mark as assigned") just clears it from the needs-manual-handling lane. It is
+              // owned by a person now — this is the acknowledgement that they have it.
+              if (f.rejectedFix) { setRejectedItems((r) => r.filter((x) => x.id !== f.id)); return }
               // Auto-applied (green) rows are already applied + re-scanned — "Approve" acknowledges
               // them locally (resolve + advance); the human review lanes route to the hitl flow.
               if (f.autoApplied) { setAckd((a) => ({ ...a, [f.id]: d })); return }

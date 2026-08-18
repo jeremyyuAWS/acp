@@ -58,3 +58,59 @@ def test_a_fully_listed_page_is_not_truncation_even_past_the_cap(monkeypatch):
     scanner._sp_list("tok", max_files=1, site=None, scope_out=scope)
     assert scope["inventory"]["discovered"] == 2
     assert scope["inventory"]["truncated"] is False
+
+
+def test_estate_samples_carry_triage_metadata_like_drive(monkeypatch):
+    # The drill-down's owner / biggest-first / shared lenses read _sample_meta(owners[]/size/shared/
+    # modifiedTime). The SharePoint estate row must map the Graph item's own field names into those,
+    # or every SharePoint sample comes back with a blank owner, no size and not-shared (the gap).
+    item = {"id": "1", "name": "brief.docx", "file": {"mimeType": DOCX},
+            "parentReference": {"path": "/drive/root:"},
+            "size": 2048, "shared": {"scope": "users"},
+            "createdBy": {"user": {"displayName": "Dana Owner", "email": "dana@x.com"}},
+            "lastModifiedDateTime": "2024-06-01T00:00:00Z"}
+    monkeypatch.setattr(scanner, "_sp_get", lambda token, url: {"value": [item]})
+    scope: dict = {}
+    scanner._sp_list("tok", max_files=10, site=None, scope_out=scope)
+    sample = scope["inventory"]["samples"]["assessable"][0]
+    assert sample["owner"] == "Dana Owner"
+    assert sample["size"] == 2048
+    assert sample["shared"] is True
+    assert sample["modified"] == "2024-06-01T00:00:00Z"
+
+
+# ── multi-library (SharePoint site) truncation — the branch OneDrive tests can't reach ──
+def test_multi_library_truncation_when_a_later_library_is_never_reached(monkeypatch):
+    # A SITE with two document libraries. The scannable cap (1) is filled in the FIRST library, so
+    # the for-loop over targets breaks and the SECOND library is never listed → the estate is a
+    # floor and must be truncated (the `i < len(targets) - 1` arm, unreachable from OneDrive tests).
+    monkeypatch.setattr(scanner, "_sp_drives",
+                        lambda token, site: [{"id": "libA"}, {"id": "libB"}])
+
+    def sp_get(token, url):
+        assert "libB" not in url, "libB must never be fetched — the cap was hit in libA"
+        return {"value": [_item("1", "a.docx", DOCX), _item("2", "b.docx", DOCX)]}
+    monkeypatch.setattr(scanner, "_sp_get", sp_get)
+
+    scope: dict = {}
+    scanner._sp_list("tok", max_files=1, site="contoso.sharepoint.com,g1,g2", scope_out=scope)
+    assert scope["inventory"]["truncated"] is True
+    assert scope["inventory"]["discovered"] == 2          # a floor: only libA was listed
+
+
+def test_multi_library_is_not_truncation_when_every_library_is_fully_listed(monkeypatch):
+    # Two libraries, both fully listed under the cap → NOT truncated, and the estate spans both
+    # (the False side of the same branch: a fully-read multi-library site is complete, not a floor).
+    monkeypatch.setattr(scanner, "_sp_drives",
+                        lambda token, site: [{"id": "libA"}, {"id": "libB"}])
+
+    def sp_get(token, url):
+        return {"value": [_item("1", "a.docx", DOCX)]} if "libA" in url \
+            else {"value": [_item("2", "b.docx", DOCX)]}
+    monkeypatch.setattr(scanner, "_sp_get", sp_get)
+
+    scope: dict = {}
+    result = scanner._sp_list("tok", max_files=10, site="contoso.sharepoint.com,g1,g2", scope_out=scope)
+    assert sorted(r["name"] for r in result) == ["a.docx", "b.docx"]   # both libraries scanned
+    assert scope["inventory"]["discovered"] == 2
+    assert scope["inventory"]["truncated"] is False
