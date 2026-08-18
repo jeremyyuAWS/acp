@@ -169,7 +169,8 @@ def test_the_scan_dispatcher_treats_root_as_no_site(monkeypatch):
     site literally named "root"."""
     calls: list = []
     monkeypatch.setattr(scanner, "_sp_list",
-                        lambda tok, mx, site=None, exclude_remediated=False, inventory_out=None:
+                        lambda tok, mx, site=None, exclude_remediated=False, inventory_out=None,
+                        scope_out=None:
                         calls.append(site) or [])
     for folder in (None, "", "root"):
         scanner._list("sharepoint", None, folder=folder, sp_token="t", scope_out={})
