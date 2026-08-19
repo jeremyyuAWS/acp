@@ -41,4 +41,28 @@ describe('WorkspaceFooter — workflow guide + navigation', () => {
     await click(btn('Next finding'))
     expect([prev, next]).toEqual([1, 1])
   })
+
+  const stepItems = () => [...container.querySelectorAll('[role=listitem]')]
+
+  it('without activeStep the guide is decorative — no step is marked current', async () => {
+    await render({ position: 1, total: 3 })
+    expect(container.querySelector('[aria-current=step]')).toBeNull()
+  })
+
+  it('lights the active step and checks off the ones behind it', async () => {
+    // activeStep 2 → Show + Review are done (✓), Verify is the live step.
+    await render({ position: 1, total: 3, activeStep: 2 })
+    const current = container.querySelector('[aria-current=step]')
+    expect(current.textContent).toContain('Verify the result')
+    const items = stepItems()
+    expect(items[0].textContent).toContain('✓')   // Show the problem — done
+    expect(items[1].textContent).toContain('✓')   // Review — done
+    expect(items[2].getAttribute('aria-current')).toBe('step')
+  })
+
+  it('when the finding is fully done (3) no step is active and all are checked', async () => {
+    await render({ position: 1, total: 3, activeStep: 3 })
+    expect(container.querySelector('[aria-current=step]')).toBeNull()
+    expect(stepItems().every((it) => it.textContent.includes('✓'))).toBe(true)
+  })
 })

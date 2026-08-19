@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from 'react'
 import {
   rowModel, laneOf, sortQueue, groupByDocument, nextUnresolvedId, progress,
-  matchesWorkflow, workflowCounts, isResolved, WORKFLOW_TABS, WORKFLOW_LABELS, SORTS,
+  matchesWorkflow, workflowCounts, workflowStepIndex, isResolved, WORKFLOW_TABS, WORKFLOW_LABELS, SORTS,
 } from './remediationInboxModel.js'
 import { fixSteps, appName } from './remediationGuide.js'
 import { scOf } from './fixSummary.js'
@@ -365,7 +365,8 @@ export default function RemediationInbox({
       </div>
       </div>
       {/* Sticky workflow guide (Show → Review → Verify) + Previous / N of M / Next navigation. */}
-      <WorkspaceFooter position={position} total={visIds.length} onPrev={goPrev} onNext={goNext} />
+      <WorkspaceFooter position={position} total={visIds.length} onPrev={goPrev} onNext={goNext}
+                       activeStep={selected ? workflowStepIndex(selected, decisions) : null} />
     </div>
   )
 }
