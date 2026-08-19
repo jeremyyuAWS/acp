@@ -1135,9 +1135,16 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   and 1.4.1 (#227). The never-fail-a-scan contract that backs the registry detectors is pinned
   registry-wide (#224, #228). No open siblings remain from this sweep.
 
-- **The v2 redesign is a fork** — `frontend-v2` was forked so it could move without risking
-  the live SPA, and both are now being maintained. It needs a merge path before they diverge
-  further. *(2026-08-19: the cost is now measurable rather than theoretical. Six PRs
+- **~~The v2 redesign is a fork~~ — RESOLVED 2026-08-19.** `frontend-v2/` replaced `frontend/`
+  in place; there is now one SPA tree. The duplicate CI job (ci.yml and azure-pipelines.yml both
+  carried one) is deleted per ci.yml's own note, the three deploy references that "must agree"
+  (Dockerfile, Dockerfile.base-web, redeploy.sh's WEB_HASH) move together, and the generators
+  that emitted to both trees emit to one. Netlify's `base = "frontend"` needed no change and now
+  serves the same app the Azure image already served — the two deployments had been running
+  different SPAs. The four surfaces v2 had dropped (Ontology, UserManagement, WcagCoverage,
+  WhatsChanged editors/panels) stay dropped: `v2Simplification.test.js` exists to keep them out,
+  capabilities were retained where the UI was not, and `UserManagement` in particular was deleted
+  for showing fictional people as the real list of users with access. *(2026-08-19: the cost is now measurable rather than theoretical. Six PRs
   (#328/#343/#357/#360/#365, plus the earlier panel work) each shipped to BOTH trees, so
   `sourceOps.js`, `SourceDrawer.jsx` and both their test files exist twice, byte-identical and
   hand-synced. Duplicating was correct each time — `netlify.toml` still deploys `frontend/`, so

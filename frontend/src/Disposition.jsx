@@ -17,6 +17,7 @@ const ACTIONS = [
   ['rename', 'Rename with a marker', 'Renames the Drive file, default "{name} [ARCHIVED {date}]".'],
   ['move', 'Move to a folder', 'Moves the Drive file to the folder in the action config.'],
   ['delete', 'Move to Drive trash', 'Always the trash — recoverable for 30 days, never a permanent delete.'],
+  ['tag', 'Tag the document', 'Attaches tags to matched documents — never moves or deletes a file; works for any source.'],
 ]
 const OP_LABEL = { eq: '=', ne: '≠', gt: '>', gte: '≥', lt: '<', lte: '≤', contains: 'contains' }
 
@@ -39,19 +40,23 @@ function CreatePolicy({ onCreated }) {
   const [op, setOp] = useState('gt')
   const [value, setValue] = useState('')
   const [action, setAction] = useState('leave')
+  const [tags, setTags] = useState('')
   const [approval, setApproval] = useState(true)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const numeric = field === 'triage_score' || field === 'age_days'
+  const tagList = tags.split(',').map((t) => t.trim()).filter(Boolean)
   const create = () => {
     setBusy(true); setErr('')
     const v = numeric ? Number(value) : value
-    createDispositionPolicy(name.trim(), [{ field, op, value: v }], action, {}, approval)
-      .then(() => { setName(''); setValue(''); onCreated() })
+    const config = action === 'tag' ? { tags: tagList } : {}
+    createDispositionPolicy(name.trim(), [{ field, op, value: v }], action, config, approval)
+      .then(() => { setName(''); setValue(''); setTags(''); onCreated() })
       .catch((e) => setErr(e.message || 'create failed'))
       .finally(() => setBusy(false))
   }
   const valid = name.trim() && value !== '' && (!numeric || !Number.isNaN(Number(value)))
+    && (action !== 'tag' || tagList.length > 0)
   return (
     <div style={{ marginTop: 18, padding: '14px', border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface)' }}>
       <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 10 }}>New policy</div>
@@ -73,6 +78,11 @@ function CreatePolicy({ onCreated }) {
             {ACTIONS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
           </select>
         </label>
+        {action === 'tag' && (
+          <input value={tags} onChange={(e) => setTags(e.target.value)}
+                 placeholder="tags, comma-separated" aria-label="Tags"
+                 style={{ ...inp, flex: '1 1 200px' }} />
+        )}
         <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, cursor: 'pointer' }}>
           <input type="checkbox" checked={approval} onChange={() => setApproval(!approval)} />
           require approval per file

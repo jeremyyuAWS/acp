@@ -2,12 +2,12 @@ import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } fro
 import HitlBell from './HitlBell.jsx'
 import { refreshDriveToken } from './driveAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, SESSION_EXPIRED } from './api'
+import { getSources, getRubric, getConfig, getMe, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, SESSION_EXPIRED } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
 import { loadRolePrivileges } from './RolePrivilege.jsx'
-import { loadFileTypeConfig } from './FileTypeConfig.jsx'
+import { loadFileTypeConfig, visibleForFileTypes } from './FileTypeConfig.jsx'
 import { annotate, loadPublished } from './ontology.js'
 import { RuleBreakdown } from './Transparency.jsx'
 import Logo from './Logo.jsx'
@@ -22,6 +22,8 @@ import Monitor from './Monitor.jsx'
 import Publish from './Publish.jsx'
 import Overview from './Overview.jsx'
 import AssessRunner from './AssessRunner.jsx'
+import AssessScope from './AssessScope.jsx'
+import ScopeRules from './ScopeRules.jsx'
 import CoverageScorecard from './CoverageScorecard.jsx'
 import ConfidenceDashboard from './ConfidenceDashboard.jsx'
 import AccessibilityStatus from './AccessibilityStatus.jsx'
@@ -30,12 +32,12 @@ import Integrations from './Integrations.jsx'
 import Discover from './Discover.jsx'
 import Dashboard from './Dashboard.jsx'
 import Remediate from './Remediate.jsx'
-import Upload from './Upload.jsx'
 import EmptyState, { Loading } from './EmptyState.jsx'
+import ScanReviewModal from './ScanReviewModal.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
 import { applyScopeConfig } from './activeScope.js'
 import A11ySelfCheck from './A11ySelfCheck.jsx'
-import { scanPhaseLine, NARRATION_STEPS } from './phaseNarration.js'
+import { scanPhaseLine, NARRATION_STEPS, activityLine } from './phaseNarration.js'
 import { useScanRefetch } from './scanRefetch.js'
 
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
@@ -44,13 +46,12 @@ const SHOW_A11Y = import.meta.env.DEV || (typeof location !== 'undefined' && new
 // step=0 → utility tab (no number); step>0 → workflow step with numbered badge
 const TABS = [
   ['overview',      'Overview',      'at a glance',         0],
-  ['integrations',  'Integrations',  'connect sources',     0],
+  ['integrations',  'Sources',       'connect sources',     0],
   ['discover',      'Discover',      'inventory · classify', 1],
   ['assess',        'Assess',        'score vs WCAG',       2],
   ['remediate',     'Remediate',     'fix issues',          3],
-  ['publish',       'Publish',       'certify',             4],
+  ['publish',       'Release',       'approve & deploy',    4],
   ['monitor',       'Monitor',       'track compliance',    5],
-  ['upload',        'Upload',        'try it live',         0],
   ['graph',         'Knowledge Graph', 'explore findings',   0],
 ]
 
@@ -69,7 +70,7 @@ function timeAgo(iso) {
 function fmtStamp(iso) {
   if (!iso) return null
   // timeZoneName: 'short' stamps the viewer's zone (e.g. "PDT" / "CDT") so cross-timezone
-  // viewers (you in PT, Deva in CT) can tell at a glance it's THEIR local time.
+  // viewers (you in PT, a teammate in CT) can tell at a glance it's THEIR local time.
   return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })
 }
 
@@ -203,7 +204,7 @@ export default function App() {
   const [ontology, setOntology] = useState(loadPublished)
   const [aiEnabled, setAiEnabled] = useState(true)
   const [hitlCount, setHitlCount] = useState(0)  // pending HITL items, reported up from Remediate for the nav badge
-  const [queuedScan, setQueuedScan] = useState(true)   // durable fan-out queue by default; "This session" is the opt-out
+  const [queuedScan, setQueuedScan] = useState(false)  // session-scoped is the pilot default; opt into Durable (background queue) via the switch
   const [deepScan, setDeepScan] = useState(false)      // off by default → Fast scan; opt in to PII scan via the switch
   const [excludeRemediated, setExcludeRemediated] = useState(true)  // on by default — skip re-discovering ACP's own Remediated/ output
   const [incremental, setIncremental] = useState(true)  // ADR 0011 — skip re-analysing byte-identical files already scored under the same rubric
@@ -221,6 +222,13 @@ export default function App() {
   // Rendered as an alert, because the alternative — which is what shipped — is an empty score.
   const [scanUnavailable, setScanUnavailable] = useState(null)
   const recoveringRef = useRef(false)      // one recovery at a time; getScan() below can 404 too
+  // Ownership of the platform `scan_scope` setting (PUT /settings is owner-only). null = unknown
+  // until /config reports `is_scope_owner`. Fail-open: unknown/absent leaves scope editing enabled
+  // (current behavior); only an explicit `false` gates a non-owner to a read-only scope wizard.
+  const [scopeOwner, setScopeOwner] = useState(null)
+  // Universal scan gate: `{ source, folder }` while the app-level review modal is open. Declared
+  // with the other hooks (above the `!me` early return) so the hook order never changes.
+  const [pendingScan, setPendingScan] = useState(null)
 
   useEffect(() => {
     const t = setInterval(() => setTick((n) => n + 1), 60_000)
@@ -239,6 +247,9 @@ export default function App() {
       // variable, so without it the UI would keep rendering the fallback's arithmetic and the
       // fetch would be pointless. Bumped only when something actually changed.
       if (applyScopeConfig(c)) setScopeTick((n) => n + 1)
+      // Ownership of the owner-only `scan_scope` setting. Only trust an explicit boolean; a build
+      // whose backend predates this field leaves `scopeOwner` null → scope editing stays enabled.
+      if (typeof c?.is_scope_owner === 'boolean') setScopeOwner(c.is_scope_owner)
     }).catch(() => { /* keep the build-time fallback */ })
   }, [])
 
@@ -257,6 +268,16 @@ export default function App() {
     window.addEventListener('acp:session-expired', onExpired)
     return () => window.removeEventListener('acp:session-expired', onExpired)
   }, [])
+
+  // Deep-link into Settings from anywhere in the app (P1: the review card's empty-state honesty hint
+  // points an admin at Settings → AI Providers). Reuses the same custom-event pattern as
+  // acp:session-expired / acp:scan-unavailable rather than threading a callback through the tree.
+  // Gated on the settings permission exactly as the ⚙ button and the modal render already are.
+  useEffect(() => {
+    const onOpenSettings = () => { if (me?.allow?.includes('settings')) setSettingsOpen(true) }
+    window.addEventListener('acp:open-settings', onOpenSettings)
+    return () => window.removeEventListener('acp:open-settings', onOpenSettings)
+  }, [me])
 
   // Refetch the scan when a remediation or a deferred assessment announces that the server's
   // file_records changed — see scanRefetch.js for which events and why.
@@ -295,13 +316,31 @@ export default function App() {
   // Attach the per-file remediation recommendation. In SIM the sim builder already sets it;
   // for a REAL backend scan the files arrive without it, so compute it here — otherwise
   // `remediable` is empty and server-side remediation finds nothing to do.
-  const files = useMemo(() => annotate(scan?.files ?? [], ontology).map((f) => (f.rec ? f : { ...f, rec: recommendFor(f) })), [scan, ontology])
+  const allFiles = useMemo(() => annotate(scan?.files ?? [], ontology).map((f) => (f.rec ? f : { ...f, rec: recommendFor(f) })), [scan, ontology])
+
+  // The file-type filter applies to EVERY tab, not just Discover.
+  //
+  // It used to be filtered inside Discover alone (`visibleFiles`), so an operator who scoped the
+  // scan to .docx saw a docx-only inventory and then a full estate everywhere after it: Assess
+  // scored the PDFs, Remediate queued them, Overview counted them, Publish certified against
+  // them. The filter looked like it worked and then silently stopped applying one tab later,
+  // which is worse than not having one — every number downstream described a different
+  // population than the screen the operator set it on.
+  //
+  // Filtered once, here, so every tab inherits the same population by construction rather than
+  // by each component remembering to. `scan_scope` on the server is the other half and gates
+  // which CRITERIA are evaluated; this gates which FILES are shown. Both are needed: the server
+  // returns the whole estate because a scan inventories everything it can see.
+  //
+  // An empty config means no restriction, matching Discover's original `!== false` test — a
+  // type absent from the map has never been excluded, only ones explicitly set false.
+  const files = useMemo(() => visibleForFileTypes(allFiles, fileTypeConfig), [allFiles, fileTypeConfig])
 
   // Real accounts that get elevated privileges on source connect (never shown in demo list)
   const PRIV_PROFILE = {
     id: 'jeremy-yu', name: 'Jeremy Yu', role: 'Compliance Officer & Admin',
     scope: { label: 'Full estate · all departments', departments: 'all' },
-    allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'settings', 'upload'],
+    allow: ['overview', 'integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor', 'settings'],
   }
   const PRIVILEGED = { 'jeremyyu.movate@gmail.com': PRIV_PROFILE }
 
@@ -342,7 +381,11 @@ export default function App() {
     } catch { /* ignore */ }
     setSignedOutReason(null)    // the sign-in worked; the expiry notice must not outlive it
     setScanUnavailable(null)    // ditto: a new session's scan list is about to be re-read
-    if (p.token) {
+    if (p.token && p.sso === 'Microsoft') {
+      // Microsoft: the Entra token is the API bearer (backend verifies it via Graph /me). It is
+      // ALSO the SharePoint token, wired below from sp_token — no Drive scopes on this one.
+      setMsToken(p.token)
+    } else if (p.token) {
       setGoogleToken(p.token)   // API Bearer auth
       setDriveToken(p.token)    // Same token has Drive scopes — no separate connect needed
       setHasDriveToken(true)
@@ -363,6 +406,11 @@ export default function App() {
     setOntology(loadPublished())
     setSettingsOpen(false); setView((p.allow || ['overview'])[0])
     setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label, allow: p.allow || [] })
+    // Scope editing is owner-only (PUT /settings = _require_admin). GET /me returns the
+    // authoritative per-user `is_scope_owner` post-auth (the sign-in payload doesn't carry it,
+    // and /config is fetched pre-auth so its copy is null). A non-owner → read-only scope in the
+    // review modal instead of a silently-dropped edit; fail-open (null) keeps the owner editable.
+    getMe().then((m2) => { if (typeof m2?.is_scope_owner === 'boolean') setScopeOwner(m2.is_scope_owner) }).catch(() => {})
   }
 
   // Called from Integrations when a source OAuth succeeds
@@ -478,6 +526,15 @@ export default function App() {
     } catch { /* leave current scan */ } finally { setScanLoading(false) }
   }
 
+  // ── Universal scan gate ──────────────────────────────────────────────────────
+  // Every scan entry point calls `requestScan` (wired as their `onScan` prop), which OPENS the
+  // app-level review modal instead of scanning. The only path that actually dispatches a scan is
+  // the modal's "Start scan" confirm → `doScan`. This is what makes the scope/behavior review
+  // unbypassable from Discover, Overview, EmptyState/ScanSetup, the Sources tab, and the
+  // Drive/SharePoint browse panels alike — before this, the modal lived inside Integrations and
+  // only the Sources tab reached it. (`pendingScan` state is declared with the other hooks above.)
+  const requestScan = (source, folder = null) => setPendingScan({ source, folder })
+
   const doScan = async (source, folder = null) => {
     if (busy) return                              // a scan/assessment is already running — don't launch another
     setBusy(true); setErr(null); setProgress({ phase: 'queued' })
@@ -543,7 +600,7 @@ export default function App() {
       if (prevAvg != null && newAvg != null && newAvg !== prevAvg) { setDelta(newAvg - prevAvg); setDeltaKey((k) => k + 1) }
       // Guide the user into the workflow: land on Discover (step 1) after a scan.
       setView(me?.allow && !me.allow.includes('discover') ? 'overview' : 'discover')
-    } catch (e) { setErr(`scan failed: ${e}`) } finally { setBusy(false); setProgress(null); setLiveScanId(null) }
+    } catch (e) { setErr(`scan failed: ${e?.message ?? e}`) } finally { setBusy(false); setProgress(null); setLiveScanId(null) }
   }
 
   // Reconnect to an in-flight scan after a page reload — the durable fan-out keeps
@@ -593,7 +650,7 @@ export default function App() {
     acc[action] = (acc[action] || 0) + 1; acc.total += 1
     return acc
   }, { auto: 0, assisted: 0, review: 0, archive: 0, keep: 0, manual: 0, total: 0 })
-  const placeholder = loaded ? <EmptyState onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} /> : <Loading />
+  const placeholder = loaded ? <EmptyState onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onFileTypeChange={setFileTypeConfig} /> : <Loading />
   // The scan panel renders inside whichever view is open, so scope its narration to that view
   // when the view is a pipeline step that owns scan phases. The view ids ARE the step names in
   // PHASE_STEP ('discover', 'assess'); anything else is a non-step view and narrates the job.
@@ -787,23 +844,57 @@ export default function App() {
               {scanPhaseLine(progress.phase, { deepScan, step: narrationStep })}
             </div>
           )}
+          {/* Under the narration, not instead of it. The line above says what the PHASE is doing
+              and is identical for the whole time a long document sits in `analysing`; this one
+              names the document and the criterion, which is the question someone watching a
+              spinner is actually asking. Rendered only when the backend reported one — see
+              activityLine, which returns null rather than inventing a plausible sentence. */}
+          {activityLine(progress) && (
+            <div className="muted" data-testid="scan-activity"
+                 style={{ marginTop: 4, fontSize: 12, opacity: 0.85,
+                          fontVariantNumeric: 'tabular-nums' }}>
+              {activityLine(progress)}
+            </div>
+          )}
         </div>
       )}
 
       <main id="main-content" tabIndex={-1}>
       <ErrorBoundary key={view}>
-        {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} me={me} /> : assessGate) : placeholder)}
+        {/* onScan/busy/tokens are threaded so Overview can offer the scan-scope editor after a
+            scan exists. Before one, `placeholder` (EmptyState → ScanSetup) is the whole screen;
+            without these the editor would still be reachable exactly once per workspace. */}
+        {view === 'overview' && (run ? (assessed ? <Overview run={run} files={files} trend={trend} trendDates={trendDates} onGo={setView} scanList={scanList} onPickScan={switchScan} me={me} onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onFileTypeChange={setFileTypeConfig} /> : assessGate) : placeholder)}
 
-        {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={doScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
-          deepScan={deepScan} setDeepScan={setDeepScan} queuedScan={queuedScan} setQueuedScan={setQueuedScan}
-          excludeRemediated={excludeRemediated} setExcludeRemediated={setExcludeRemediated}
-          incremental={incremental} setIncremental={setIncremental} scanId={run?.id}
+        {view === 'integrations' && <Integrations sources={sources} files={files} scans={scanList} onScan={requestScan} busy={busy} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} onConnect={handleConnect}
+          scanId={run?.id}
           onOpenAssess={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={doScan} hasDriveToken={hasDriveToken} delegations={delegations} fileTypeConfig={fileTypeConfig} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} scope={run?.scope || null} decisions={decisions} setDecisions={setDecisions} />}
+        {view === 'discover' && <Discover sources={sources} files={files} busy={busy} onScan={requestScan} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} delegations={delegations} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} scope={run?.scope || null} decisions={decisions} setDecisions={setDecisions}
+          /* Upload lost its top-level tab in the v2 simplification, but not its capability:
+             it is a secondary action inside Discover now, which is where "get files in front
+             of ACP" already lives. Dropping it outright would have removed the only way to try
+             a single ad-hoc file without wiring a whole source. */
+          me={me} onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
 
         {view === 'assess' && (run ? (
           <>
+            {/* The assessment scope lives here now (Discover/Assess PRD §4.4): document types +
+                the Core-17 WCAG picker, with a live eligible-file count, written to scan_scope as
+                the single authority for the format axis. Collapsed by default so it does not
+                displace the run button, and left one click away for when the scope needs changing. */}
+            <details className="panel scopestep assessscopestep">
+              <summary><b>Choose what to assess</b><span className="muted"> · document types &amp; WCAG criteria, before you run</span></summary>
+              <AssessScope />
+            </details>
+            {/* Per-file WCAG scope rules (Discover/Assess PRD §4.4 / AC-09): admins assess
+                different parts of the estate against different Core-17 subsets, with union /
+                override precedence. Collapsed alongside the assess-scope picker so it is one
+                click away without displacing the run button. */}
+            <details className="panel scopestep scoperulesstep">
+              <summary><b>WCAG scope rules</b><span className="muted"> · per-folder / owner / department WCAG subsets, with overrides</span></summary>
+              <ScopeRules />
+            </details>
             <AssessRunner key={run.id} files={files} runId={run.id} scanBusy={busy} onAssessed={() => setJustAssessed(run.id)} onPhase={setAssessPhase} />
             {/* Gated on assessPhase === 'done', not just `assessed` — `assessed` flips true the
                 instant Assess is clicked (before AssessRunner's own progress animation even
@@ -818,11 +909,10 @@ export default function App() {
 
         {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id).then(setScan).catch(() => {})} onHitlCount={setHitlCount} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /> : placeholder)}
 
-        {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
+        {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
 
         {view === 'monitor' && (run ? (assessed ? <Monitor me={me} run={run} scanList={scanList} sources={sources} files={files} ratified={ratified} decisions={decisions} publishedFiles={publishedFiles} readOnly={isTimeTravel} aiEnabled={aiEnabled} onAiToggle={setAiEnabled} busy={busy} progress={progress} scanPct={busy ? progressPct(progress) : 0} /> : assessGate) : placeholder)}
 
-        {view === 'upload' && <Upload me={me} onCertified={(e) => setCertifiedDocs((c) => [{ file: e.file, id: c.length + 1 }, ...c].slice(0, 12))} />}
 
         {/* Standalone Knowledge Graph — was nested inside Assess (findable only after
             scrolling past the score/dashboard); now its own tab so it's directly
@@ -833,7 +923,7 @@ export default function App() {
 
         {/* Guided workflow: a "next step" CTA on each workflow tab once a scan exists.
             'discover' is excluded — it owns a sub-step CTA (Inventory → Classify → Actions → Assess). */}
-        {run && ['integrations', 'assess', 'remediate', 'publish'].includes(view) && (() => {
+        {run && ['assess', 'remediate', 'publish'].includes(view) && (() => {
           const flow = ['integrations', 'discover', 'assess', 'remediate', 'publish', 'monitor']
           const label = { discover: '1 · Discover — classify the estate', assess: '2 · Assess — score vs WCAG',
                           remediate: '3 · Remediate — fix the issues', publish: '4 · Publish — certify what passes',
@@ -867,8 +957,29 @@ export default function App() {
 
       <ChatWidget files={files} run={run} trend={trend} trendDates={trendDates} me={me} />
       {SHOW_A11Y && <A11ySelfCheck />}
-      {settingsOpen && me.allow?.includes('settings') && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onOntologyChange={() => setOntology(loadPublished())} onDelegationChange={setDelegations} onFileTypeChange={(cfg) => setFileTypeConfig(cfg)}
-            onPrivilegeChange={setRolePrivileges} />}
+      {/* onOntologyChange / onPrivilegeChange are gone with the Business ontology and Permissions
+          panels. The ontology DATA path below is untouched — App still annotates the corpus from
+          whatever was last published; only its editor left Settings. */}
+      {settingsOpen && me.allow?.includes('settings') && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onDelegationChange={setDelegations} onFileTypeChange={(cfg) => setFileTypeConfig(cfg)} />}
+
+      {/* The universal scan gate. Opened by `requestScan` from every entry point; the wizard's
+          "Start scan" confirm is the only thing that dispatches `doScan`. The behavior toggles are
+          bound to the App-level state so a choice here carries into the scan that follows. */}
+      {pendingScan && (
+        <ScanReviewModal
+          source={pendingScan.source} folder={pendingScan.folder}
+          deepScan={deepScan} setDeepScan={setDeepScan}
+          queuedScan={queuedScan} setQueuedScan={setQueuedScan}
+          excludeRemediated={excludeRemediated} setExcludeRemediated={setExcludeRemediated}
+          incremental={incremental} setIncremental={setIncremental}
+          estCount={sources.filter((s) => (pendingScan.source === 'sharepoint'
+            ? (s.type === 'onedrive' || s.type === 'sharepoint')
+            : (pendingScan.source === 'all' || s.type === 'google_drive')))
+            .reduce((a, s) => a + (s.files || 0), 0)}
+          hasDrive={hasDriveToken} hasSP={hasSPToken} canEditScope={scopeOwner !== false}
+          onConfirm={() => { const { source, folder } = pendingScan; setPendingScan(null); doScan(source, folder) }}
+          onCancel={() => setPendingScan(null)} />
+      )}
     </div>
   )
 }

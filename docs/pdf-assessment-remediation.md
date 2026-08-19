@@ -134,7 +134,7 @@ gate — an unproven fix is never claimed. White-on-dark text at 21:1 is now lef
 **Backend source of truth:** `api/remediation_capability.py` — `REMEDIATION["pdf"]`, two axes (ADR
 0023). The remediation lane (auto/assisted/human) is authored + round-trip proven; the assessment lane
 (🟢/🟡/🔴) is *derived* with audited `ASSESSMENT_OVERRIDES`. **Frontend mirror:**
-`frontend-v2/src/capability.js::CAPABILITY_FALLBACK["pdf"]` (offline fallback for `GET /capability`).
+`frontend/src/capability.js::CAPABILITY_FALLBACK["pdf"]` (offline fallback for `GET /capability`).
 
 Key declared gaps:
 - **4.1.2** is auto-fixable for AcroForm names but its *assessment* is held at **review** because the
@@ -168,7 +168,7 @@ Key declared gaps:
 
 ## 5. Frontend
 
-- **Preview:** `frontend-v2/src/PdfPreview.jsx` lazy-loads **pdfjs-dist `^6.0.227`**, renders the first
+- **Preview:** `frontend/src/PdfPreview.jsx` lazy-loads **pdfjs-dist `^6.0.227`**, renders the first
   ~2 pages to canvas; falls back to an "Open the document ↗" link on error.
 - **Evidence thumbnails/geometry are server-side**, not from pdfjs: `remediate_pdf._render_page_png`
   (pypdfium2) produces page thumbnails (320px review / 96px receipt), base64-stored in

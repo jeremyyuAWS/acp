@@ -20,7 +20,7 @@ endpoint answers only in the first, so a SIM build would still need a fallback c
 second copy again, on the surface where nobody would notice it going stale. A generated module
 is one copy, derived, and `--check` fails CI the moment the Python moves.
 
-Emitted to BOTH SPAs — `frontend/` and the redesign fork `frontend-v2/` (see OUTS).
+Emitted to the SPA at `frontend/` (see OUTS).
 
 Usage:
     python scripts/gen_scope_presets.py            # write every target in OUTS
@@ -39,21 +39,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# BOTH SPAs get this module. `frontend-v2` is the redesign fork (#139) — a separate checkout of
-# the same app, not a symlink — so it needs its own copy of every generated file.
+# ONE SPA now. The v2 redesign replaced `frontend/` in place, so the `frontend-v2/` fork this
+# list used to carry a second entry for no longer exists.
 #
-# Until this list existed it had one that nothing wrote and nothing checked. It forked at
-# 0e8f55d, *before* #145 added SCOPE_UNIVERSE, so the v2 copy was already stale on the day the
-# redesign started and would have stayed that way: a scope panel ported into v2 would import an
-# export that is not there, and the preset list behind it would drift from the backend with no
-# guard to say so. That is the same failure `documents20.js` is cited for in the docstring
-# above, reintroduced by copying the directory.
+# The history is worth keeping, because it is the reason this list is explicit at all: the fork
+# was made at 0e8f55d, *before* #145 added SCOPE_UNIVERSE, so the v2 copy was stale on the day
+# the redesign started and nothing wrote or checked it — a scope panel ported into v2 would have
+# imported an export that was not there, with no guard to say so. Copying a directory is how a
+# generated file goes stale silently.
 #
-# Listed explicitly rather than globbed `frontend*`: a glob would silently adopt any future
-# directory that happened to match and start writing generated code into it.
+# Still a tuple, and still listed explicitly rather than globbed `frontend*`: a glob would
+# silently adopt any future directory that happened to match and start writing generated code
+# into it, which is precisely how the stale second copy came about.
 OUTS = (
     ROOT / "frontend" / "src" / "scopePresets.js",
-    ROOT / "frontend-v2" / "src" / "scopePresets.js",
 )
 
 # Read through api/store.py rather than api/assessment_policy.py. PR #94 moves the definitions

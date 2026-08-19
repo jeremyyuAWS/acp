@@ -353,6 +353,11 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
             A delete rule tags files for <b>deletion review</b>. ACP never deletes on a rule alone —
             an approval is recorded first, and the action is a recoverable trash move.
           </p>
+          <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+            These are <b>lifecycle rules</b> — they tag, archive or flag files as they are discovered.
+            <i> Which WCAG criteria</i> get assessed where is set separately, under
+            <b> Assess → WCAG scope rules</b>.
+          </p>
         </>
       )}
 

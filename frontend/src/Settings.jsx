@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { resetDemoData, getAllowlist, setAllowlist, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, getAiStatus } from './api.js'
+import { resetDemoData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, getAiStatus } from './api.js'
 import { SIM } from './sim.js'
 
 // What a write is allowed to claim when the API layer marked its own answer `simulated`.
@@ -16,7 +16,11 @@ const msgColor = (m) => (m.startsWith('✓') ? '#3B6D11' : m.startsWith('SIM') ?
 
 // Danger zone — wipe scan results (Grafana + in-app charts) and/or Langfuse
 // traces so the dashboards start fresh. Settings are preserved. Typed-confirm.
-function ResetData() {
+//
+// EXPORTED, but no longer surfaced as a Settings tab (the panel is scoped to access management —
+// Owners + Users). Kept in the module so the feature and its tests survive; re-add a tab in
+// Settings() to bring it back. Same for DriveMirror and AIProvidersPanel below.
+export function ResetData() {
   const [scope, setScope] = useState('all')
   const [typed, setTyped] = useState('')
   const [busy, setBusy] = useState(false)
@@ -80,7 +84,7 @@ function ResetData() {
 // ADR 0010: Blob is always the primary, must-succeed write for a remediated file.
 // This controls whether it's ALSO auto-mirrored to Drive right after, and which
 // Drive folder that mirror lands in.
-function DriveMirror() {
+export function DriveMirror() {
   const [settings, setSettings] = useState(null)
   const [folder, setFolder] = useState('')
   const [busy, setBusy] = useState(false)
@@ -303,17 +307,11 @@ function DriveMirror() {
     </div>
   )
 }
-import Rubric from './Rubric.jsx'
-import ScanScope from './ScanScope.jsx'
-import Disposition from './Disposition.jsx'
-import WcagCoverage from './WcagCoverage.jsx'
-import Ontology from './Ontology.jsx'
+// Rubric / ControlPlane / Disposition / FileTypeConfig live in their own files and are no longer
+// imported here: their tabs were removed (this panel is now access-only). Re-import + re-add a tab
+// to surface one again — none of those files were deleted.
 import OwnerDelegate from './OwnerDelegate.jsx'
-import FileTypeConfig from './FileTypeConfig.jsx'
-import RolePrivilege from './RolePrivilege.jsx'
-import UserManagement from './UserManagement.jsx'
 import { useDialog } from './a11y.js'
-import { downloadUpdatedXlsx, downloadUpdatedPptx } from './exportDeliverables.js'
 
 // Platform settings, behind the header cog — gated to the Platform Admin. Holds
 // the scoring rules (Rubric), the validation coverage (WCAG 2.1 + 2.2 matrix), and
@@ -327,13 +325,57 @@ function AllowList() {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [loaded, setLoaded] = useState(false)
+  // Guest-invite (ADR 0033) — hidden unless the backend reports the credential is configured.
+  const [inviteEnabled, setInviteEnabled] = useState(false)
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteBusy, setInviteBusy] = useState(false)
+  const [inviteMsg, setInviteMsg] = useState('')
+  // Google onboarding — no backend invite exists for Google (Drive access is per-user OAuth), so
+  // "onboard" here is: whitelist the Gmail (persisted immediately, like the MS invite auto-adds),
+  // then the guided OAuth-test-user + sign-in steps. Kept symmetric with the Microsoft card.
+  const [gEmail, setGEmail] = useState('')
+  const [gBusy, setGBusy] = useState(false)
+  const [gMsg, setGMsg] = useState('')
 
   useEffect(() => {
     getAllowlist()
-      .then((d) => { setEmails(d.emails || []); setOwner(d.owner || ''); setDomains(d.domains || []) })
+      .then((d) => {
+        setEmails(d.emails || []); setOwner(d.owner || ''); setDomains(d.domains || [])
+        setInviteEnabled(!!d.invite_enabled)
+      })
       .catch(() => setMsg('Could not load the test-user list.'))
       .finally(() => setLoaded(true))
   }, [])
+
+  const invite = () => {
+    const e = inviteEmail.trim().toLowerCase()
+    if (!e.includes('@')) { setInviteMsg('Enter a valid email.'); return }
+    setInviteBusy(true); setInviteMsg('')
+    inviteTester(e)
+      .then((d) => {
+        setEmails(d.emails || [])                 // reflect the auto-add to the list
+        setInviteEmail('')
+        setInviteMsg(`✓ Invited ${e} — a Microsoft invitation is on its way, and they’re now on the list.`)
+      })
+      .catch((err) => setInviteMsg(`Invite failed: ${err.message || err}`))
+      .finally(() => setInviteBusy(false))
+  }
+
+  // Whitelist a Google tester and PERSIST in one step — the parallel to the Microsoft invite's
+  // auto-add. The plain "+ Add user" below stages a change for the Save button; this commits it,
+  // so onboarding one Google tester is a single action.
+  const addGoogle = () => {
+    const e = gEmail.trim().toLowerCase()
+    if (!e.includes('@')) { setGMsg('Enter a valid email.'); return }
+    if (emails.includes(e)) { setGMsg('Already on the list.'); setGEmail(''); return }
+    const next = [...emails, e].sort()
+    setGBusy(true); setGMsg('')
+    setAllowlist(next)
+      .then((d) => { setEmails(d.emails || next); setGEmail('')
+                     setGMsg(`✓ Whitelisted ${e} — they sign in with Google and their Drive becomes a scannable source.`) })
+      .catch((err) => setGMsg(`Could not save: ${err.message || err}`))
+      .finally(() => setGBusy(false))
+  }
 
   const add = () => {
     const e = input.trim().toLowerCase()
@@ -356,18 +398,109 @@ function AllowList() {
   return (
     <section style={{ maxWidth: 640 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-        <h3 style={{ margin: 0 }}>Test users</h3>
-        <span className="muted" style={{ fontSize: 13 }}>{emails.length} added · who can sign in &#38; scan</span>
+        <h3 style={{ margin: 0 }}>Users with access</h3>
+        <span className="muted" style={{ fontSize: 13 }}>who can sign in &#38; scan</span>
       </div>
 
-      {/* How access works — the two gates, stated plainly */}
-      <div style={{ marginTop: 12, padding: '12px 14px', borderRadius: 10, background: '#EEF2FB', border: '1px solid #D3DDF1' }}>
-        <div style={{ fontSize: 12.5, fontWeight: 700, color: '#2B4A7E', marginBottom: 6 }}>Two things let someone in:</div>
-        <div style={{ fontSize: 12.5, color: '#33405C', lineHeight: 1.55 }}>
-          <div><b>1.</b> They’re on this list <span className="muted">— manage it right here; applies on their next sign-in.</span></div>
-          <div><b>2.</b> They’re a Google <b>test user</b> <span className="muted">— required until the app is Google-verified. Add them once in&nbsp;</span>
-            <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noopener noreferrer" style={{ color: '#2B6CB0', fontWeight: 600 }}>Google Cloud → OAuth consent screen ↗</a>.
+      {/* THE DOMAIN RULE, which this screen used to load and not render.
+          `core.email_allowed()` admits three ways: the owner, this list, or ANY address at an
+          allowed domain. The third was fetched into `domains` and never shown — so on a
+          deployment with ACP_ALLOWED_DOMAINS set, an entire company could sign in while the
+          screen that answers "who has access" listed a handful of names and looked complete.
+          That is the failure this panel exists to prevent, on the panel itself. */}
+      {domains.length > 0 && (
+        <div role="note" style={{ marginTop: 12, padding: '12px 14px', borderRadius: 10, background: '#FBF1DF', border: '1px solid #EAD9BF' }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: '#854F0B', marginBottom: 5 }}>
+            ⚠ Anyone at {domains.length === 1 ? 'this domain' : 'these domains'} can sign in without being listed below
           </div>
+          <div style={{ fontSize: 12.5, color: '#5C3D0B', lineHeight: 1.55 }}>
+            {domains.map((d) => <b key={d} style={{ marginRight: 10 }}>@{d}</b>)}
+            <div className="muted" style={{ marginTop: 4 }}>
+              Set by <code>ACP_ALLOWED_DOMAINS</code> at deploy time — it cannot be changed here, and
+              the people it admits do not appear in the list below.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* How access works — every gate email_allowed() actually checks, in its order */}
+      <div style={{ marginTop: 12, padding: '12px 14px', borderRadius: 10, background: '#EEF2FB', border: '1px solid #D3DDF1' }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: '#2B4A7E', marginBottom: 6 }}>What lets someone in:</div>
+        <div style={{ fontSize: 12.5, color: '#33405C', lineHeight: 1.55 }}>
+          <div><b>1.</b> They’re the <b>owner</b> <span className="muted">— set at deploy time, can never be removed.</span></div>
+          <div><b>2.</b> They’re on this list <span className="muted">— manage it right here; applies on their next sign-in.</span></div>
+          <div><b>3.</b> Their email is at an <b>allowed domain</b>{' '}
+            <span className="muted">{domains.length > 0 ? '— see the notice above.' : '— none configured on this deployment.'}</span>
+          </div>
+          {/* Kept, but demoted: this is a Google OAuth prerequisite, not one of ACP's gates.
+              Listing it as gate 2 of 2 implied the app checked it, and left the domain rule
+              unmentioned entirely. */}
+          <div className="muted" style={{ marginTop: 6 }}>
+            Separately, until the app is Google-verified each person must also be a Google{' '}
+            <b>test user</b> — added once in{' '}
+            <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noopener noreferrer" style={{ color: '#2B6CB0', fontWeight: 600 }}>Google Cloud → OAuth consent screen ↗</a>.
+            That is a Google requirement, not an ACP one.
+          </div>
+        </div>
+      </div>
+
+      {/* Onboard a tester — two equal paths. Microsoft (SharePoint / OneDrive) and Google (Drive)
+          both end at the same allowlist; each also carries the source-specific step that makes that
+          person's own content scannable. The Microsoft card sends a real Entra B2B guest invite
+          when configured (ADR 0033); otherwise it falls back to the guided manual invite. */}
+      <div style={{ margin: '16px 0 0' }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>Onboard a tester</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 10 }}>
+
+          {/* Microsoft — SharePoint / OneDrive */}
+          <div style={{ padding: '12px 14px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>Microsoft <span className="muted" style={{ fontWeight: 400 }}>· SharePoint / OneDrive</span></div>
+            {inviteEnabled ? (
+              <>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 8, lineHeight: 1.5 }}>
+                  Sends an Entra guest invitation and adds them to the list below in one step. They sign in
+                  with their own Microsoft account — no tenant account is created.
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)}
+                         onKeyDown={(e) => e.key === 'Enter' && invite()}
+                         placeholder="tester@example.com" aria-label="Invite a Microsoft tester by email" type="email"
+                         style={{ flex: 1, padding: '8px 11px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'inherit', fontSize: 14 }} />
+                  <button onClick={invite} disabled={inviteBusy}>{inviteBusy ? 'Inviting…' : 'Invite'}</button>
+                </div>
+                {inviteMsg && <div role="status" aria-live="polite" className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>{inviteMsg}</div>}
+              </>
+            ) : (
+              <div className="muted" style={{ fontSize: 12, lineHeight: 1.55 }}>
+                One-click invite isn’t configured here (<code>ACP_INVITE_*</code> unset). To onboard a Microsoft
+                tester, invite them as a guest in{' '}
+                <a href="https://entra.microsoft.com/" target="_blank" rel="noopener noreferrer" style={{ color: '#2B6CB0', fontWeight: 600 }}>Entra admin center → Identity → Users → Invite external user ↗</a>,
+                then add their email below. They can then scan the SharePoint / OneDrive sites they’re granted access to.
+              </div>
+            )}
+          </div>
+
+          {/* Google — Drive */}
+          <div style={{ padding: '12px 14px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>Google <span className="muted" style={{ fontWeight: 400 }}>· Drive</span></div>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 8, lineHeight: 1.5 }}>
+              Whitelists a Gmail so they can sign in. After they sign in with Google, their own Drive becomes a
+              scannable source — no copy is taken, ACP reads it read-only.
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input value={gEmail} onChange={(e) => setGEmail(e.target.value)}
+                     onKeyDown={(e) => e.key === 'Enter' && addGoogle()}
+                     placeholder="tester@gmail.com" aria-label="Whitelist a Google tester by email" type="email"
+                     style={{ flex: 1, padding: '8px 11px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'inherit', fontSize: 14 }} />
+              <button onClick={addGoogle} disabled={gBusy}>{gBusy ? 'Adding…' : 'Whitelist'}</button>
+            </div>
+            <div className="muted" style={{ fontSize: 11.5, marginTop: 8, lineHeight: 1.5 }}>
+              Until the app is Google-verified, also add them once as a test user in{' '}
+              <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noopener noreferrer" style={{ color: '#2B6CB0', fontWeight: 600 }}>Google Cloud → OAuth consent screen ↗</a>.
+            </div>
+            {gMsg && <div role="status" aria-live="polite" className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>{gMsg}</div>}
+          </div>
+
         </div>
       </div>
 
@@ -432,7 +565,7 @@ const ADAPTER_READY = new Set(['azure_openai'])
 // ADR 0019 §6 — the admin's AI provider governance page. The KEY is never entered here: an admin's
 // ops team provisions it as a container/Key-Vault secret, and this stores only the secret's NAME
 // (key_secret_ref). The page shows whether the referenced secret is present, never its value.
-function AIProvidersPanel({ onAccess }) {
+export function AIProvidersPanel({ onAccess }) {
   const [providers, setProviders] = useState(null)
   const [draft, setDraft] = useState({})     // provider -> edited fields
   const [busy, setBusy] = useState('')
@@ -555,69 +688,31 @@ const SimNotice = () => (
 const INP = { display: 'block', width: '100%', padding: '4px 8px', marginTop: 4, border: '1px solid var(--line)', borderRadius: 6, boxSizing: 'border-box' }
 const L = ({ label, children }) => (<label style={{ fontSize: 12 }} className="muted">{label}{children}</label>)
 
-export default function Settings({ onClose, onRubricSaved, files = [], onOntologyChange, onDelegationChange, onFileTypeChange, onPrivilegeChange }) {
-  const [tab, setTab] = useState('rules')
-  const [dl, setDl] = useState(null) // 'xlsx' | 'pptx' while a deliverable is generating
-  const [dlErr, setDlErr] = useState('')
+export default function Settings({ onClose, files = [], onDelegationChange }) {
+  const [tab, setTab] = useState('users')
   const panelRef = useRef(null)
   useDialog(panelRef, onClose)
-  // console.error alone made a failed export indistinguishable from a slow one: the spinner
-  // stopped, no file arrived, and nothing said why. Now the reason reaches the person who
-  // clicked — these errors name a missing asset or a server returning the app instead of it,
-  // which is a deployment fact an operator can act on.
-  const grab = async (kind, fn) => {
-    if (dl) return
-    setDl(kind); setDlErr('')
-    try { await fn() } catch (e) {
-      console.error('deliverable export failed', e)
-      setDlErr(e?.message || 'The download could not be prepared.')
-    } finally { setDl(null) }
-  }
   return (
     <div className="setoverlay" role="dialog" aria-modal="true" aria-label="Platform settings" onClick={onClose}>
       <div className="setpanel" ref={panelRef} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <div className="sethead">
-          <div><b>⚙ Platform settings</b><span className="muted"> · admin · rules &amp; validation</span></div>
+          <div><b>⚙ Platform settings</b><span className="muted"> · admin · access</span></div>
           <button className="ghost small" aria-label="Close settings" onClick={onClose}>✕</button>
         </div>
-        {/* Above the subtabs on purpose — it is true of every tab in this panel, not just the
-            settings write paths. Rubric, Test users, Disposition and Reset data are SIM stubs too. */}
+        {/* Above the subtabs on purpose — the SIM badge is true of every write path in this panel
+            (the Users allowlist included), not only the panels reachable from a tab. */}
         {SIM && <SimNotice />}
-        <div className="setexports">
-          <span className="setexporthint">Updated deliverables — original format, with a live <b>Status</b> column reflecting what the platform ships today:</span>
-          <div className="setexportbtns">
-            <button className="dlbtn" disabled={!!dl} onClick={() => grab('xlsx', downloadUpdatedXlsx)}>{dl === 'xlsx' ? 'Preparing…' : '⤓ Coverage matrix · Excel'}</button>
-            <button className="dlbtn" disabled={!!dl} onClick={() => grab('pptx', downloadUpdatedPptx)}>{dl === 'pptx' ? 'Preparing…' : '⤓ Method deck · PPT'}</button>
-          </div>
-          {dlErr && <p role="alert" style={{ fontSize: 12.5, color: '#A32D2D', margin: '6px 0 0' }}>⚠ {dlErr}</p>}
-        </div>
+        {/* Scoped to access management: Owners + Users only. The other admin panels (Scoring rules,
+            Estate, File types, Remediated storage, Disposition, Data reset, AI-provider governance)
+            are still exported from this module and covered by tests — add a button + body to
+            resurface one. */}
         <div className="subtabs" role="tablist" aria-label="Settings sections">
-          <button role="tab" aria-selected={tab === 'rules'} className={tab === 'rules' ? 'fchip on' : 'fchip'} onClick={() => setTab('rules')}>Scoring rules</button>
-          <button role="tab" aria-selected={tab === 'validation'} className={tab === 'validation' ? 'fchip on' : 'fchip'} onClick={() => setTab('validation')}>Validation coverage</button>
-          <button role="tab" aria-selected={tab === 'scope'} className={tab === 'scope' ? 'fchip on' : 'fchip'} onClick={() => setTab('scope')}>Scan scope</button>
-          <button role="tab" aria-selected={tab === 'ontology'} className={tab === 'ontology' ? 'fchip on' : 'fchip'} onClick={() => setTab('ontology')}>Business ontology</button>
-          <button role="tab" aria-selected={tab === 'filetypes'} className={tab === 'filetypes' ? 'fchip on' : 'fchip'} onClick={() => setTab('filetypes')}>File types</button>
           <button role="tab" aria-selected={tab === 'owners'} className={tab === 'owners' ? 'fchip on' : 'fchip'} onClick={() => setTab('owners')}>Owners</button>
-          <button role="tab" aria-selected={tab === 'permissions'} className={tab === 'permissions' ? 'fchip on' : 'fchip'} onClick={() => setTab('permissions')}>Permissions</button>
           <button role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'fchip on' : 'fchip'} onClick={() => setTab('users')}>Users</button>
-          <button role="tab" aria-selected={tab === 'access'} className={tab === 'access' ? 'fchip on' : 'fchip'} onClick={() => setTab('access')}>Test users</button>
-          <button role="tab" aria-selected={tab === 'drivemirror'} className={tab === 'drivemirror' ? 'fchip on' : 'fchip'} onClick={() => setTab('drivemirror')}>Remediated storage</button>
-          <button role="tab" aria-selected={tab === 'disposition'} className={tab === 'disposition' ? 'fchip on' : 'fchip'} onClick={() => setTab('disposition')}>Disposition</button>
-          <button role="tab" aria-selected={tab === 'data'} className={tab === 'data' ? 'fchip on' : 'fchip'} onClick={() => setTab('data')}>Data</button>
         </div>
         <div className="setbody">
-          {tab === 'rules' && <Rubric onSaved={onRubricSaved} />}
-          {tab === 'validation' && <WcagCoverage />}
-          {tab === 'scope' && <ScanScope />}
-          {tab === 'ontology' && <Ontology files={files} onPublished={onOntologyChange} />}
-          {tab === 'filetypes' && <FileTypeConfig onChanged={(cfg, custom) => onFileTypeChange?.(cfg, custom)} />}
           {tab === 'owners' && <OwnerDelegate files={files} onChanged={onDelegationChange} />}
-          {tab === 'permissions' && <RolePrivilege onChanged={onPrivilegeChange} />}
-          {tab === 'users' && <UserManagement />}
-          {tab === 'access' && <AllowList />}
-          {tab === 'drivemirror' && <DriveMirror />}
-          {tab === 'disposition' && <Disposition />}
-          {tab === 'data' && <ResetData />}
+          {tab === 'users' && <AllowList />}
         </div>
       </div>
     </div>

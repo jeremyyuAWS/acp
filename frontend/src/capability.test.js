@@ -33,10 +33,6 @@ describe('remediation capability — format-aware single source of truth', () =>
     it('reports real auto-fixable criteria for a docx', () => {
       // Proven by round-trip in tests/test_remediation_capability.py: includes 3.1.1 (language)
       // and 3.3.2 (form labels), which the earlier hand map / sparse table omitted.
-      //
-      // 4.1.2 is the same write as 3.3.2, not a second fixer: form_labels borrows a field's
-      // label from adjacent visible text into <w:alias>, which is both the visible prompt and
-      // the accessible name. It was already being written; only 3.3.2 claimed it.
       expect(autoSCs(CAP, 'docx')).toEqual(new Set(['1.3.1', '1.4.3', '2.4.2', '2.4.6', '3.1.1', '3.3.2', '4.1.2']))
     })
     it('includes docx contrast (1.4.3), which the old hand map omitted', () => {

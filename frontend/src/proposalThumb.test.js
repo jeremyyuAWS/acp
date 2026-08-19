@@ -91,15 +91,19 @@ describe('the review screens render the proposal, not a template', () => {
     expect(src).not.toMatch(/after: \(\) =>/)
   })
 
-  it('Remediate renders the unified EvidenceCard, which sources its own comparison so late diffs still show', () => {
-    // Canonical vision #1: the Human-review list now renders the SAME EvidenceCard as the AI Work
-    // Inbox — fed the raw hitl row (q._raw). EvidenceCard fetches its own remediation diffs
-    // (getFileRemediationDiffs) in an effect and derives the before/after at render, so a
-    // late-arriving diff still shows without baking a stale value into the mapped item.
+  it('Remediate renders the master/detail RemediationInbox, fed the live queue', () => {
+    // The AI Work Inbox is now a master/detail queue (RemediationInbox): selecting a finding
+    // populates a detail pane whose before/after shows the ACTUAL proposed value (the mapped
+    // item's `after`, from firstProposed), never a template. The proposal-rendering is
+    // render-tested in RemediationInbox.test.jsx; here we pin the wiring.
     const src = read('Remediate.jsx')
-    expect(src).toMatch(/<EvidenceCard[^>]*item=\{q\._raw \|\| q\}/)
+    expect(src).toMatch(/<RemediationInbox/)
+    // fed the combined queue: the human review items PLUS the auto-applied fixes folded in as
+    // green review-lane rows (autoFixRows).
+    expect(src).toMatch(/queue=\{inboxQueue\}/)
+    // …plus the rejected-fix handoff rows (W2), which sit between the two.
+    expect(src).toMatch(/inboxQueue = \[\.\.\.queue, \.\.\.rejectedItems, \.\.\.autoFixItems\]/)
     expect(src).toMatch(/proposals: it\.proposals/)   // dbItemToUi still carries proposals through
-    expect(read('EvidenceCard.jsx')).toMatch(/getFileRemediationDiffs/)
   })
 
   it('EvidenceCard shows the large page hero AND the object thumb (ADR 0018 visual-first)', () => {

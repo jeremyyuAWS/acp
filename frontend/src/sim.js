@@ -280,7 +280,7 @@ function genCorpus() {
       seen.add(file)
       // "Unanalysable" ⟺ "could not open": every document the engine can't score is one
       // it couldn't read, so the could-not-open count always equals the unanalysable
-      // bucket (Deva: no 9-vs-25 mismatch between the estate bar and the status donut).
+      // bucket (customer note: no 9-vs-25 mismatch between the estate bar and the status donut).
       const cycle = STATUS_CYCLE[i % STATUS_CYCLE.length]
       const status = (i % 21 === 5 || cycle === 'error') ? 'error' : cycle
       const locked = status === 'error'
@@ -302,7 +302,7 @@ function genCorpus() {
       const hiTraffic = tags.includes('high-traffic') || tags.includes('public-facing')
       // "Superseded" = an older copy a newer version replaced. Such a document is, by
       // definition, no longer in active use, and a public/high-traffic page is never
-      // archived as superseded (Deva: don't archive a doc with 237 views). So a
+      // archived as superseded (customer note: don't archive a doc with 237 views). So a
       // superseded doc is always quiet — we give it low views, never a high count.
       const superseded = ageDays >= 600 && i % 3 === 0 && !hiTraffic && status !== 'error'
       const views90d = superseded ? 6 + ((i * 17) % 45) : hiTraffic ? 380 + ((i * 137) % 8200) : 3 + ((i * 53) % 240)

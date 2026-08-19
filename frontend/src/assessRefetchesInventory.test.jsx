@@ -138,7 +138,8 @@ describe('a deferred assessment tells the app to re-read the scan when it finali
     // The POST resolved {phase:'assessing', deferred:true} and the first poll saw no
     // assessed_at. Announcing here is the trap: the scan still serves the inventory fallback,
     // so a refetch would repaint the identical "not assessed" rows and read as fixed.
-    expect(api.assessScan).toHaveBeenCalledWith(SID, 'AA')
+    // Third arg is the include-lifecycle-flagged override; false by default (archival/deletion ignored).
+    expect(api.assessScan).toHaveBeenCalledWith(SID, 'AA', false)
     expect(serving).toBe(PRE_ASSESS)
     expect(seen).toEqual([])
 

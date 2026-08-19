@@ -62,7 +62,7 @@ def test_every_target_exists_and_is_current(out):
 
     The aggregate check above would go red either way; this says WHICH. That mattered on
     2026-08-07: #145 generated the file from a base that predated #149's removal of docx from
-    the 4.1.2 tables, and frontend-v2/ had never been generated at all — two different staleness
+    the 4.1.2 tables, and the since-retired frontend-v2/ fork had never been generated at all — two different staleness
     causes in one run, and one message naming only "frontend/" would have hidden the second.
     """
     assert out.exists(), f"{out.relative_to(ROOT)} was never generated"

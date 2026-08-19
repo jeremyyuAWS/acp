@@ -1,5 +1,6 @@
 // Shared role registry — built-in roles + admin-created custom roles.
-// Both RolePrivilege and UserManagement import from here so dropdowns stay in sync.
+// RolePrivilege imports from here. (UserManagement did too, until it was deleted — it was a
+// hardcoded roster of fictional people presented as the list of users with access.)
 
 const LS_ROLES = 'mova_custom_roles'
 

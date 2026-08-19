@@ -148,7 +148,7 @@ def check_sharepoint() -> None:
     # Read the scopes from the frontend rather than restating them here. A preflight that carries
     # its own copy of the list is a second source of truth, and the failure it produces is the
     # worst kind: it passes while the app asks for something else.
-    src = ROOT / "frontend-v2" / "src" / "sharepointScopes.js"
+    src = ROOT / "frontend" / "src" / "sharepointScopes.js"
     try:
         line = next(l for l in src.read_text().splitlines() if "export const SP_SCOPES" in l)
         scopes = [s.strip().strip("'\"") for s in line.split("[", 1)[1].split("]", 1)[0].split(",")]

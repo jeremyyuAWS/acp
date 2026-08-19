@@ -136,7 +136,7 @@ def test_scopes_are_read_from_the_app_not_restated(pf):
     fails in the worst direction: it passes while the app asks for something else."""
     pf.check_sharepoint()
     d = detail(pf, "delegated scopes")
-    src = (ROOT / "frontend-v2" / "src" / "sharepointScopes.js").read_text()
+    src = (ROOT / "frontend" / "src" / "sharepointScopes.js").read_text()
     for scope in ("User.Read", "Files.Read.All", "Sites.Read.All"):
         assert scope in d and scope in src
 

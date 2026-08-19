@@ -57,57 +57,17 @@ describe('v2: scan scope is a pre-discovery step', () => {
     expect(s).not.toMatch(/const\s+SCOPE_UNIVERSE\s*=/)
   })
 
-  it('differs from the frontend/ copy in exactly one way: the criteria it offers', () => {
-    // This was a byte-identity check — two SPAs, one component — and it held until v2 deliberately
-    // narrowed the grid to the 17 tracked criteria while frontend/ stayed the backup of the
-    // shipped app. Byte-identity is the wrong guard for a fork, but the property it protected is
-    // still worth having: any OTHER divergence should be a decision someone made, not a patch
-    // that landed in one tree and not the other.
-    //
-    // So compare code lines and pin the divergence in BOTH directions. An unrelated fix applied to
-    // one SPA shows up here as an unexpected line, exactly as it did before. Comments are excluded
-    // — the v2 rationale lives in them and is expected to differ.
-    const code = (s) => s.split('\n').map((l) => l.trim())
-      .filter((l) => l && !l.startsWith('//'))
-    const v2 = code(read('ScanScope.jsx'))
-    const v1 = code(readFileSync(join(HERE, '..', '..', 'frontend', 'src', 'ScanScope.jsx'), 'utf8'))
-    // Multiset difference, then sorted. Sorted because a line that appears in both files a
-    // different NUMBER of times (`)}` does) leaves its unmatched copy at whichever position the
-    // matching happened to consume last — an ordering that carries no meaning and would fail on a
-    // reformat. The set of differing lines is the claim; where they sit is not.
-    const only = (a, b) => {
-      const rest = [...b]
-      return a.filter((l) => {
-        const i = rest.indexOf(l)
-        if (i === -1) return true
-        rest.splice(i, 1)
-        return false
-      }).sort()
-    }
-
-    expect(only(v1, v2), 'frontend/ has code v2 dropped').toEqual([
-      'const total = SCOPE_UNIVERSE.reduce((n, r) => n + r.formats.length, 0)',
-      '{SCOPE_UNIVERSE.map((row) => (',
-    ])
-    expect(only(v2, v1), 'v2 has code frontend/ does not').toEqual([
-      ')}',
-      '.filter(([sc, fmts]) => fmts.size && !OFFERED.some((r) => r.sc === sc))',
-      '.map(([sc]) => sc)',
-      '.sort()',
-      "<> · <b title={`Not shown: ${hidden.join(', ')}`}>{hidden.length} outside the tracked list</b></>",
-      'const OFFERED = SCOPE_UNIVERSE.filter((r) => TRACKED_17.has(r.sc))',
-      'const hidden = Object.entries(sel)',
-      'const total = OFFERED.reduce((n, r) => n + r.formats.length, 0)',
-      "import { TRACKED_17 } from './ruleDetails.js'",
-      '{OFFERED.map((row) => (',
-      '{hidden.length > 0 && (',
-    ])
-  })
-
-  it('keeps the divergence one-directional — frontend/ stays the backup, unnarrowed', () => {
-    // The v1 SPA is the working backup of what is deployed today. Narrowing it too would make the
-    // fork invisible and remove the thing being backed up.
-    const v1 = readFileSync(join(HERE, '..', '..', 'frontend', 'src', 'ScanScope.jsx'), 'utf8')
-    expect(v1).not.toContain('TRACKED_17')
-  })
+  // REMOVED 2026-08-19 — the two cross-tree comparisons that lived here.
+  //
+  // They guarded the fork: one pinned the exact divergence between frontend/'s ScanScope and
+  // v2's in both directions, so "an unrelated fix applied to one SPA shows up here as an
+  // unexpected line"; the other kept frontend/ unnarrowed, as the working backup of the
+  // deployed app.
+  //
+  // Both properties are now unreachable rather than unimportant: the v2 redesign replaced
+  // frontend/ in place, so there is one tree and no second copy for a patch to miss. Deleting
+  // them is not a loosening — with the fork gone, they compared a file to itself and passed
+  // vacuously, which is a worse guard than none. The four cases above still assert the real
+  // wiring (the grid ships, renders inside Discover and not Settings, sits above the estate
+  // bar, opens before an estate exists).
 })

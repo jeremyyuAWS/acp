@@ -5,7 +5,8 @@ import FileDrawer from './FileDrawer.jsx'
 import { WCAG } from './wcagCatalog.js'
 import { allRules } from './rules/index.js'
 import { DOCUMENTS_20 } from './documents20.js'
-import { SCOPE_SIZE, SCOPE_LABEL, OUT_OF_SCOPE_SCS, DENOMINATOR, outOfScopeNote, criteriaFor } from './activeScope.js'
+import { RULE_DETAILS, RULES_BY_SC, TRACKED_17 } from './ruleDetails.js'
+import { OUT_OF_SCOPE_SCS, DENOMINATOR, outOfScopeNote, criteriaFor, CORE_SCS, SCOPE_SIZE, SCOPE_LABEL } from './activeScope.js'
 
 // SCs a rule module exists for — distinguishes "check built, no data in this scan"
 // from "no automated check exists yet".
@@ -121,6 +122,42 @@ function FailureHeatmap({ rows, files, topRules, onCellClick }) {
   )
 }
 
+// What ACP actually checks for a criterion, and what it does about a failure — the answer to
+// "are we checking H1 and H2?", which the product could not previously give.
+//
+// The prose is GENERATED from docs/rules/*.md (scripts/gen_rule_details.py, CI-guarded), so it
+// is the same text an engineer maintains beside the detector rather than a marketing paraphrase
+// that drifts the first time a rule changes.
+//
+// `remediation` is null for the six rules whose doc has no "Fix mode rationale" section, and
+// those render NOTHING rather than a plausible sentence. A panel that fabricates the fix story
+// for a sixth of the catalog is worse than one that stays quiet: the reader cannot tell which
+// half is real, so neither half can be trusted.
+function RuleDetail({ sc }) {
+  const ids = RULES_BY_SC[sc] || []
+  if (!ids.length) return null
+  return (
+    <details className="ruledetail">
+      <summary>what we check</summary>
+      {ids.map((id) => {
+        const d = RULE_DETAILS[id]
+        if (!d) return null
+        return (
+          <div className="rd-rule" key={id}>
+            <div className="rd-hd"><b>{id}</b> <span className="muted">· {d.title}</span>
+              <span className="lvlpill">{d.severity}</span></div>
+            <p className="rd-checks"><b>Assess:</b> {d.checks}</p>
+            {d.remediation
+              ? <p className="rd-fix"><b>Remediate ({d.fixMode}):</b> {d.remediation}</p>
+              : <p className="rd-fix muted"><b>Remediate ({d.fixMode}):</b> not documented for this rule yet</p>}
+          </div>
+        )
+      })}
+    </details>
+  )
+}
+
+
 // "By WCAG criterion" breakdown — aggregates the authoritative per-rule outcomes
 // (PASS / FAIL / SKIP) the scanner recorded into scan_rule_traces, so users see exactly
 // what each check did across the estate instead of only the summary tiles.
@@ -135,8 +172,21 @@ export function RuleBreakdown({ scanId, files }) {
   const [showAllCore, setShowAllCore] = useState(false)
   const [seg, setSeg] = useState(null)
   const [sel, setSel] = useState(null)
-  const criteria = criteriaFor(showAllCore)     // the 14 in the agreed scope, or all 20 core
-  const den = showAllCore ? DENOMINATOR.core : DENOMINATOR.scope
+  // The 17 Mova iO tracks (column G), or all 20 document-core when widened. Defined once in
+  // api/assessment_policy.py:MOVA_TRACKED and generated in — this file must never retype it,
+  // because it is the fifth total this product quotes and the sixth would be unrecoverable.
+  //
+  // The agreed scope (14) is NOT a third view. It is what the backend GATES on, so it is already
+  // reported by outOfScopeNote below; adding a third toggle state would ask the reader to hold
+  // three denominators at once to answer one question.
+  const criteria = showAllCore ? criteriaFor(true) : TRACKED_17
+  // DENOMINATOR.scope names the AGREED scope (14). The narrowed view is the tracked 17 now, so
+  // reusing it would print "of 17 criteria in the agreed scope" — a label describing one set
+  // above a count of another, which is the reconcilability problem in miniature.
+  const den = showAllCore
+    ? DENOMINATOR.core
+    : { total: criteria.size, noun: 'criteria tracked for this engagement',
+        question: `what do we track? — the ${criteria.size} criteria Mova iO follows, of the ${CORE_SCS.size} document core` }
   const [hideNA, setHideNA] = useState(true)   // default to hiding the N/A rows; the toggle reveals them
   const [exporting, setExporting] = useState(false)
   const doScanExport = async () => {
@@ -181,8 +231,15 @@ export function RuleBreakdown({ scanId, files }) {
   // narrowing the view would otherwise make them disappear with no account of themselves — the
   // same trust problem as a total that cannot be reconciled on screen (#77, #84). Reported in
   // the note below whether or not it flatters the score.
+  //
+  // WHICH set that is changed when the default became the tracked 17. It must be the criteria
+  // THIS VIEW hides — the 3 untracked — not the 6 outside the agreed scope. Reporting the 6 while
+  // rendering 17 rows would put a note on screen that cannot be reconciled against the rows above
+  // it, which is the exact defect this panel shipped with (a "20 of 20" header above six rows)
+  // and the reason ruleBreakdownScope14.test.jsx renders rather than reads the source.
+  const untrackedScs = [...CORE_SCS].filter((sc) => !criteria.has(sc))
   const outOfScopeFindings = rulesAll
-    .filter((r) => (LEVEL_RANK[r.level] || 1) <= targetRank && OUT_OF_SCOPE_SCS.has(r.id))
+    .filter((r) => (LEVEL_RANK[r.level] || 1) <= targetRank && untrackedScs.includes(r.id))
     .reduce((n, r) => n + (r.findings || r.fail), 0)
   // A row is "N/A" when the criterion doesn't apply to this file type — the engine ran it but it
   // can't fire (no pass, no fail, only skip). The Hide-N/A toggle collapses those to the ones that
@@ -250,6 +307,12 @@ export function RuleBreakdown({ scanId, files }) {
           return (
             <div className="rulerow" key={r.id}>
               <div className="rulemeta"><b>{r.id}</b> <span className="lvlpill">{r.level}</span> <span>{r.name}</span></div>
+              {/* OUTSIDE .rulemeta, deliberately. That element identifies the row's criterion, and
+                  `.rulemeta b` is how callers read it — RuleDetail emits a <b> per rule doc, so
+                  nesting it here made one row report 1 criterion plus 6 rule ids. Caught by
+                  ruleBreakdownScope14.test.jsx counting 125 ids where 17 were expected; any other
+                  consumer of that selector would have broken the same way, silently. */}
+              <RuleDetail sc={r.id} />
               <div className="rulebar" title={`${r.pass} pass · ${r.fail} document(s) failed${r.findings > r.fail ? ` · ${r.findings} findings` : ''} · ${r.skip} N/A`}>
                 <i className="rb-pass" style={{ width: `${(r.pass / total) * 100}%` }} />
                 <i className="rb-fail" style={{ width: `${(r.fail / total) * 100}%` }} />
@@ -295,16 +358,31 @@ export function RuleBreakdown({ scanId, files }) {
           where the narrowing really is holding back recorded failures. */}
       {!showAllCore && (
         <p className="muted" style={{ fontSize: 11.5, margin: '10px 0 0' }}>
-          {outOfScopeNote(outOfScopeFindings)}
+          {untrackedScs.length} of the {CORE_SCS.size} document-core criteria
+          ({untrackedScs.sort().join(', ')}) are not tracked for this engagement and are not
+          counted above — resize, reflow and text spacing are viewer behaviours rather than
+          properties of a static document
+          {outOfScopeFindings > 0
+            ? `, including ${outOfScopeFindings} recorded finding${outOfScopeFindings === 1 ? '' : 's'}`
+            : ''}.
+        </p>
+      )}
+      {/* The agreed scope is a DIFFERENT fact from what this table shows, and it is the one the
+          backend gates on — so it is stated separately rather than folded into the line above.
+          Collapsing the two would make one number answer two questions. */}
+      {!showAllCore && OUT_OF_SCOPE_SCS.size > 0 && (
+        <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>
+          Assessment itself is gated by the {SCOPE_LABEL}: {SCOPE_SIZE} of these criteria.
+          {' '}{outOfScopeNote(0)}
         </p>
       )}
       <button className="ghost small" style={{ marginTop: 8 }} onClick={() => setShowAllCore((v) => !v)}
               title={showAllCore
-                ? `Narrow back to the ${SCOPE_SIZE} criteria in this engagement's ${SCOPE_LABEL}`
-                : `Widen to all ${DOCUMENTS_20.size} document-core criteria — the list ACP certifies against, ${OUT_OF_SCOPE_SCS.size} of which are outside the ${SCOPE_LABEL}`}>
+                ? `Narrow back to the ${TRACKED_17.size} criteria tracked for this engagement`
+                : `Widen to all ${DOCUMENTS_20.size} document-core criteria — the list ACP certifies against. The ${DOCUMENTS_20.size - TRACKED_17.size} extra (resize, reflow, text spacing) are viewer behaviours rather than properties of a static document, which is why they are not tracked`}>
         {showAllCore
-          ? `Show only the ${SCOPE_SIZE} in the ${SCOPE_LABEL}`
-          : `Show all ${DOCUMENTS_20.size} in-scope criteria (+${OUT_OF_SCOPE_SCS.size} outside the ${SCOPE_LABEL})`}
+          ? `Show only the ${TRACKED_17.size} tracked criteria`
+          : `Show all ${DOCUMENTS_20.size} document-core criteria (+${DOCUMENTS_20.size - TRACKED_17.size} not tracked)`}
       </button>
       {showAllCore && (hiddenAboveLevel > 0 || hiddenWebOnly > 0) && (
         <p className="muted" style={{ fontSize: 11.5, margin: '8px 0 0' }}>

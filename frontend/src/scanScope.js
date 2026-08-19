@@ -34,10 +34,18 @@ export function isNarrowScope(scope) {
   // scanning one site and then OneDrive produced two counts with the same caption, which is the
   // incident at the top of this file with the source swapped.
   //
-  // Fixed in BOTH SPAs even though only frontend-v2 has the picker: the scan lands in scan_runs,
+  // Fixed in BOTH SPAs even though only the redesign had the picker: the scan lands in scan_runs,
   // and frontend/ renders the same row from the same column. A scan started in one app and read
   // in the other is the case where a stale label is least likely to be questioned.
-  return scope.kind === 'folder' || !!scope.site || !!scope.truncated
+  // A file-type scope that actually excluded something belongs here for the same reason a
+  // folder does: the count on screen is smaller than the estate, and the reader needs telling.
+  //
+  // Gated on the COUNT, not on the setting. A `.docx` scope over an all-Word estate excluded
+  // nothing, so the number IS the estate and a ⚠ there would be a warning about nothing —
+  // which is how a callout stops being read. `skipped_out_of_scope > 0` is the difference
+  // between "narrowed" and "narrowed and it mattered".
+  return (scope.kind === 'folder' || !!scope.site || !!scope.truncated
+          || (Number(scope.skipped_out_of_scope) || 0) > 0)
 }
 
 // True when the scan hit a cap and there ARE files it did not list. Strictly different from a
@@ -99,6 +107,21 @@ export function scopeSentence(scope, count) {
     s += ` This scan hit its ${
       Number.isFinite(scope.cap) ? scope.cap.toLocaleString() + '-file ' : ''
     }limit before listing everything, so there are more documents it did not see.`
+  }
+  // Files the FILE-TYPE scope kept ACP from opening at all. Said as "not read", not "excluded":
+  // the operator's own setting caused it, and the load-bearing fact is that the content was
+  // never opened, rasterised, OCR'd or cached — which is the whole point of scoping the scan for
+  // a customer whose documents are PHI.
+  //
+  // Reported rather than left implicit because narrowing the scope makes the estate SMALLER, and
+  // a reader who cannot see why cannot tell a scoped scan from a source that lost files. That
+  // shape — a number that changed for a reason nobody could see — is the incident this whole
+  // module exists because of. It is also the sentence that answers "did you look at everything?"
+  // in an audit, where the honest answer is "no, deliberately, and here is how many".
+  const skipped = Number(scope.skipped_out_of_scope) || 0
+  if (skipped > 0) {
+    s += ` ${skipped.toLocaleString()} ${plural(skipped)} of other file types ${
+      skipped === 1 ? 'was' : 'were'} not read, because the scan is scoped by file type.`
   }
   return s
 }

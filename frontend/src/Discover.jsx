@@ -4,6 +4,10 @@ import WindowedRows from './WindowedRows.jsx'
 import FileDrawer, { retentionOf } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FolderPicker from './FolderPicker.jsx'
+import SitePicker from './SitePicker.jsx'
+import Upload from './Upload.jsx'
+import DispositionRules from './DispositionRules.jsx'
+import ScanScope from './ScanScope.jsx'
 import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
 import { dupeCountOf, duplicateFiles } from './dedupe.js'
@@ -72,9 +76,14 @@ function ExposureRisk({ pub, internal, internalRisk, onPick }) {
 // makes decide()/undoDec() below actually survive a reload instead of resetting on every
 // visit to this tab, and is also what feeds the campaign "resolved" counts (ADR 0003
 // Phase 4) real data instead of always reading 0.
-export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, fileTypeConfig = {}, onAdvance, progress = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp }) {
+// `me` / `onCertified` arrive with Upload, which folded in here when v2 dropped its top-level
+// tab. Both OPTIONAL: every existing caller and test constructs Discover without them, and the
+// ad-hoc panel simply does not render when `me` is absent rather than throwing.
+export default function Discover({ sources, files, busy, onScan, hasDriveToken = false, delegations = {}, onAdvance, progress = null, scanPct = 0, scanId = null, scope = null, decisions: decisionsProp, setDecisions: setDecisionsProp, me = null, onCertified,
+  hasSPToken = false }) {
   const [sel, setSel] = useState(null)
   const [showPicker, setShowPicker] = useState(false)   // Drive folder picker modal (Choose folder to scan)
+  const [showSites, setShowSites] = useState(false)     // SharePoint site picker modal
   const [open, setOpen] = useState(() => new Set())
   const toggle = (d) => setOpen((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n })
   // Cross-department search + facet filters — a match auto-expands ITS department
@@ -87,13 +96,36 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   const [classState, setClassState] = useState({})
   const [editAct, setEditAct] = useState(null)
   const [seg, setSeg] = useState(null)
+  // Document Location — a VIEW filter over the discovered files (PRD §4.1). It narrows what is
+  // shown by source drive / folder / path; it does NOT restrict discovery, and it does not touch
+  // any stored setting. Document TYPE is no longer a Discover concern — that decision moved to
+  // Assess (AssessScope), so Discover shows the whole discovered estate.
+  const [loc, setLoc] = useState({ source: 'all', path: '' })
 
-  const visibleFiles = Object.keys(fileTypeConfig).length
-    ? files.filter((f) => fileTypeConfig[f.type] !== false)
-    : files
-  const excludedCount = files.length - visibleFiles.length
-  // Stated against the count actually on screen (post file-type filtering), not the raw listing
-  // count — the sentence sits beside that number and has to be about it.
+  // The folder portion of a file's path, when it carries one — real scans name files by path
+  // (`HR/policies/leave.docx`), SIM by bare filename. Empty string when there is no folder.
+  const folderOf = (f) => {
+    const p = f.folder || f.path || f.file || ''
+    const i = String(p).lastIndexOf('/')
+    return i > 0 ? String(p).slice(0, i) : ''
+  }
+  const sourceNames = [...new Set(files.map((f) => f.sourceName).filter(Boolean))].sort()
+  const locMatch = (f) => {
+    if (loc.source !== 'all' && f.sourceName !== loc.source) return false
+    const q = loc.path.trim().toLowerCase()
+    if (q) {
+      const hay = `${f.sourceName || ''} ${folderOf(f)} ${f.file || ''}`.toLowerCase()
+      if (!hay.includes(q)) return false
+    }
+    return true
+  }
+  const locActive = loc.source !== 'all' || !!loc.path.trim()
+  // Everything downstream (the charts, the department list, the search bar) reads the
+  // location-filtered view, so a narrowed location narrows the whole Discover surface coherently.
+  const visibleFiles = locActive ? files.filter(locMatch) : files
+  const hiddenByLoc = files.length - visibleFiles.length
+  // Stated against the raw discovered count — the estate line describes discovery, which the
+  // location view filter never restricts.
   const scopeLine = scopeSentence(scope, files.length)
   const ownerOf = (f) => delegations[f.owner] || f.owner
   const isDelegated = (f) => !!delegations[f.owner]
@@ -241,6 +273,24 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
 
   return (
     <>
+      {/* Scan scope, ABOVE the scan controls, because that is the order the decision happens in:
+          what to assess is chosen BEFORE discovery runs, not corrected afterwards in an admin
+          screen nobody opens. In frontend/ this panel lives behind Platform settings -> Scan
+          scope; that is the right place for a rarely-touched platform default and the wrong one
+          for a per-engagement choice the operator makes every time.
+
+          Open by default only until an estate exists. `files.length === 0` is the pre-discovery
+          state, and it is exactly when the choice is both consequential and free — narrowing
+          after a scan means the results on screen no longer match the scope beside them. Once
+          files are in, it collapses to a summary line and stays one click away. */}
+      <details className="panel scopestep" open={files.length === 0}>
+        <summary>
+          <b>1 · Choose what to assess</b>
+          <span className="muted"> · criteria and file types, before you scan</span>
+        </summary>
+        <ScanScope />
+      </details>
+
       <div className="estatebar">
         <div>
           <b>{files.length} documents</b> discovered across {sources.length} sources · {Object.keys(groups).length} departments
@@ -261,13 +311,22 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               )}
             </div>
           )}
-          <div className="muted" style={{ marginTop: 2 }}>the agent crawls metadata, proposes a classification &amp; a lifecycle action — you confirm or override{lockedCount ? <> · <span className="lockwarn">🔒 {lockedCount} could not be opened (password-protected / unsupported)</span></> : null}{excludedCount > 0 ? <> · <span className="muted">{excludedCount} file{excludedCount !== 1 ? 's' : ''} excluded by file-type settings</span></> : null}</div>
+          <div className="muted" style={{ marginTop: 2 }}>the agent crawls metadata, proposes a classification &amp; a lifecycle action — you confirm or override{lockedCount ? <> · <span className="lockwarn">🔒 {lockedCount} could not be opened (password-protected / unsupported)</span></> : null}</div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           {hasDriveToken && (
             <button className="ghost" disabled={busy} onClick={() => setShowPicker(true)}
                     title="Browse your Google Drive and scan just one folder (and its subfolders)">
               Choose folder to scan…
+            </button>
+          )}
+          {/* Gated on the SharePoint token for the same reason the Drive button is gated on its
+              own: offering a picker that cannot authenticate produces an error where a missing
+              button would have produced an obvious next step (connect the source). */}
+          {hasSPToken && (
+            <button className="ghost" disabled={busy} onClick={() => setShowSites(true)}
+                    title="Choose a SharePoint site — every document library on it is scanned">
+              Choose SharePoint site…
             </button>
           )}
           <button disabled={busy} onClick={() => onScan('all')}>{busy ? 'scanning…' : 'Re-scan all sources'}</button>
@@ -280,13 +339,58 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           onClose={() => setShowPicker(false)} />
       )}
 
+      {/* The site id travels as `folder`, which is what the backend reads it as — _list treats
+          `folder` as the site for source='sharepoint' (#156). One parameter, not two. */}
+      {showSites && (
+        <SitePicker
+          onScan={(siteId) => { setShowSites(false); onScan('sharepoint', siteId) }}
+          onClose={() => setShowSites(false)} />
+      )}
+
+      {/* Upload, folded in from its own tab. Collapsed by default so it stays a secondary
+          action: the primary path is a connected source, and a permanently-open drop zone
+          would compete with it for the eye at the top of the estate view. <details> is
+          natively keyboard-operable, so this adds no focus handling of its own. */}
+      {me && (
+        <details className="panel adhocupload">
+          <summary>Assess a single file <span className="muted">· without connecting a source</span></summary>
+          <Upload me={me} onCertified={onCertified} />
+        </details>
+      )}
+
+      {/* Deva #3 — define archival/deletion rules right here in Discover. The rules run at discovery
+          time and mark matched files as candidates; Assess excludes them by default. */}
+      <DispositionRules />
+
       {files.length === 0 ? (
-        <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Integrations.</p>
+        <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Sources.</p>
       ) : (() => {
         const totalWidth = files.length || 1
         return (
         <>
           <SH id="disc-documents" label="Documents" desc="grouped by department · click to expand · tag &amp; decide right in the row" />
+
+          {/* Document Location — a view filter over source drive / folder / path (PRD §4.1). It
+              narrows only what is shown here; discovery still found every file above, and no
+              stored setting changes. Document type is chosen in Assess, not here. */}
+          <div className="doclocbar" role="group" aria-label="Document location filter">
+            <span className="muted doclocbar-lbl">Document location</span>
+            <select aria-label="Filter by source" value={loc.source}
+                    onChange={(e) => setLoc((s) => ({ ...s, source: e.target.value }))}>
+              <option value="all">All sources</option>
+              {sourceNames.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <input type="text" aria-label="Filter by folder or path" placeholder="folder or path…"
+                   value={loc.path} onChange={(e) => setLoc((s) => ({ ...s, path: e.target.value }))} />
+            {locActive && (
+              <>
+                <span className="muted doclocbar-count" role="status">
+                  {visibleFiles.length} of {files.length} shown{hiddenByLoc ? ` · ${hiddenByLoc} hidden by location` : ''}
+                </span>
+                <button className="linklike" onClick={() => setLoc({ source: 'all', path: '' })}>Clear</button>
+              </>
+            )}
+          </div>
 
           <SearchFilterBar ctl={sf} items={visibleFiles} facets={SF_FACETS}
                            placeholder="Search all departments by filename…" noun="documents" />
@@ -355,7 +459,9 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               <b style={{ color: 'var(--ink)' }}>{dcount('accepted')}</b> accepted · <b style={{ color: 'var(--ink)' }}>{dcount('override')}</b> changed
             </span>
           </div>
-          {deptList()}
+          {locActive && visibleFiles.length === 0
+            ? <p className="muted" style={{ marginTop: 14 }}>No documents match this location filter. <button className="linklike" onClick={() => setLoc({ source: 'all', path: '' })}>Clear the filter</button> to see all {files.length}.</p>
+            : deptList()}
         </>
         )
       })()}

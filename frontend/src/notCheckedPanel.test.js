@@ -13,7 +13,9 @@ const src = readFileSync(join(here, 'FileDrawer.jsx'), 'utf8')
 
 describe('"What we did NOT check automatically" — the honest boundary panel', () => {
   it('derives from the same rows as the manifest and covers all four unassessable outcomes', () => {
-    expect(src).toMatch(/const notChecked = rows\.filter\(\(r\) => \['HUMAN', 'AT', 'GAP', 'NA'\]\.includes\(r\.outcome\)\)/)
+    // W4 — dispositioned criteria (attested / out-of-scope) drop out of the panel, so the filter
+    // now also excludes rows carrying a recorded disposition.
+    expect(src).toMatch(/const notChecked = rows\.filter\(\(r\) => \['HUMAN', 'AT', 'GAP', 'NA'\]\.includes\(r\.outcome\) && !r\.disposition\)/)
     expect(src).toMatch(/What we did NOT check automatically/)
   })
 

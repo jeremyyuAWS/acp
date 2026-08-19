@@ -1,12 +1,14 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
+import ScopeBanner from './ScopeBanner.jsx'
 import { Bars } from './charts.jsx'
 import ReviewDrawer from './ReviewDrawer.jsx'
-import EvidenceCard from './EvidenceCard.jsx'
+import RemediationInbox from './RemediationInbox.jsx'
+import { autoFixRows } from './remediationInboxModel.js'
 import FileDrawer, { REC_STYLE, fmtEffort, EFFORT_BASIS, SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { recommendationSummary, SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_COLOR, PRI_RANK } from './ontology.js'
-import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, openTraceUrl } from './api.js'
+import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl } from './api.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
 import QueuePanel from './QueuePanel.jsx'
@@ -14,7 +16,8 @@ import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummar
 import { firstProposed, firstBefore, firstThumb, firstKind, firstRationale, firstSource, pageOf,
          appliedFixAlt } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
-import { remediableFiles, emptyScopeReason, scopeSummary, ineligibleReason } from './remediableScope.js'
+import { remediableFiles, emptyScopeReason, scopeSummary, ineligibleReason,
+         hasDocumentSelection, documentSelection, documentScopeSentence } from './remediableScope.js'
 import { measuredReviewTime, REVIEW_TIME_BASIS } from './reviewerTime.js'
 
 // Steps 6-8: Automated Remediation + HITL + Re-validate. Owns the remediation plan
@@ -122,11 +125,14 @@ function dbItemToUi(it, files) {
     // Distinguishes a real model draft from the canned fallback, so the UI never labels a
     // template as a suggestion the AI made.
     hasProposal: !!firstProposed(it),
+    // The finding's severity (from the matched issue), carried so the collapsed inbox row can show
+    // it and search can match on it. Null when the file record has no matching issue.
+    severity: issue.severity || null,
   }
 }
 
 function buildHumanQueue(files, triage = {}) {
-  const hasInscope = Object.values(triage).some((v) => v === 'inscope')
+  const hasInscope = hasDocumentSelection(triage)
   const active = files.filter((f) => !(f.remediated_at || f.drive_write_url))  // exclude already-fixed
   const candidates = hasInscope ? active.filter((f) => triage[f.file] === 'inscope') : active
   const assisted = candidates.filter((f) => (f.rec?.action === 'assisted' || f.rec?.action === 'review') && (f.issues || []).length > 0)
@@ -241,6 +247,35 @@ function GroupedFixes({ fixGroups, appliedFixes = [], impact }) {
 }
 
 // Verification state (§8) — real, tied to the re-scan/job state; never "0 → 0".
+// A remediation section that collapses. Remediate stacks eight panels, and an operator working
+// the queue reads one of them — the rest are reference they scroll past every time.
+//
+// TWO RULES, both learned from the panels this replaces:
+//
+//   * The SUMMARY carries the number. A collapsed section that says only "Deferred" hides the one
+//     fact you need to decide whether to open it; the count has to survive the collapse or the
+//     control just costs a click.
+//   * `defaultOpen` is DERIVED from content, never a constant. A section with nothing in it opens
+//     to disappointment, and a section with work in it should not need discovering. Callers pass
+//     the same expression that decides whether to render at all.
+//
+// <details> rather than a button + state: it is natively keyboard-operable and announces its own
+// expanded state, so this adds no focus handling and no aria-expanded to keep in sync — which is
+// the kind of thing that rots silently on a product that certifies accessibility.
+function RemSection({ id, title, count, hint, defaultOpen = false, children }) {
+  return (
+    <details className="panel rem-sec" id={id} open={defaultOpen}>
+      <summary className="rem-sec-sum">
+        <h2 className="rem-sec-title">{title}</h2>
+        {count != null && <span className="reviewpill">{count}</span>}
+        {hint && <span className="muted rem-sec-hint">{hint}</span>}
+      </summary>
+      <div className="rem-sec-body">{children}</div>
+    </details>
+  )
+}
+
+
 function VerifyState({ state, pct, remaining, ready, latest }) {
   if (state === 'running') return (
     <div className="verify-run" role="status" aria-live="polite">
@@ -262,22 +297,50 @@ function VerifyState({ state, pct, remaining, ready, latest }) {
 // are the time-travel feature itself).
 export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, aiEnabled = true, readOnly = false, onRefresh, onHitlCount, onNavigate }) {
   const [queue, setQueue] = useState([])
+  // The master/detail RemediationInbox owns its own view state (search, tabs, sort, selection),
+  // so the old accordion/prefs plumbing (single-open openId, the search/severity/criterion/group
+  // filters, and their sessionStorage rehydration) is gone with it.
   const [acted, setActed] = useState({ approved: 0, rejected: 0, deferred: 0 })
   const [deferredItems, setDeferredItems] = useState([])
+  // W2 — a rejected AI fix is not a dead end. It becomes a manual-handling item that stays visible
+  // in the inbox's "Needs manual handling" lane until a person picks it up, rather than vanishing
+  // from the queue the moment it is rejected. Kept as its own state (like deferredItems) so it
+  // survives the pending-queue reload below — the server drops it from `pending`, but the reviewer
+  // still needs to see the work it handed back.
+  const [rejectedItems, setRejectedItems] = useState([])
   // Real applied-fix evidence: scan-wide before→after (all fix types, verified-cleared) +
   // the concrete AI-written values/thumbnails. Every hero/impact/recent-fix count is a
   // straight count of these rows — never a fabricated number (see fixSummary.js).
   const [scanDiffs, setScanDiffs] = useState([])
   const [appliedFixes, setAppliedFixes] = useState([])
+  // Reviewer acknowledgements of the auto-applied (green) fixes shown in the inbox, keyed by their
+  // `af:…` id. Local: an auto fix is already applied and re-scanned, so "Approve" is a confidence
+  // check, not a re-application — it just marks the row resolved and advances to the next.
+  const [ackd, setAckd] = useState({})
+  // W6 — where each file's AI actually RAN, from the real per-call ledger (one fetch for the whole
+  // scan, not one per card). Maps file → 'local' | 'cloud'. This is the ACTUAL zone the bytes were
+  // processed in, not the configured provider — so a GPU→CPU fallback shows the truth on the card
+  // instead of the config's intent. Any cloud call for a file wins (privacy-conservative); a file
+  // with no AI call at all stays absent (deterministic fix — no badge, nothing to claim).
+  const [aiZoneByFile, setAiZoneByFile] = useState({})
   const runId = run?.id
   const fetchFixes = () => {
-    if (!runId) { setScanDiffs([]); setAppliedFixes([]); return }
-    Promise.all([getScanRemediationDiffs(runId), getAppliedFixes(runId)])
-      .then(([d, a]) => { setScanDiffs(Array.isArray(d) ? d : []); setAppliedFixes(Array.isArray(a) ? a : []) })
+    if (!runId) { setScanDiffs([]); setAppliedFixes([]); setAiZoneByFile({}); return }
+    Promise.all([getScanRemediationDiffs(runId), getAppliedFixes(runId), getScanAiCalls(runId)])
+      .then(([d, a, calls]) => {
+        setScanDiffs(Array.isArray(d) ? d : []); setAppliedFixes(Array.isArray(a) ? a : [])
+        const byFile = {}
+        ;(Array.isArray(calls) ? calls : []).forEach((c) => {
+          if (!c || !c.file) return
+          if (byFile[c.file] === 'cloud') return
+          byFile[c.file] = c.zone === 'local' ? (byFile[c.file] || 'local') : 'cloud'
+        })
+        setAiZoneByFile(byFile)
+      })
       .catch(() => {})
   }
   useEffect(() => {
-    setActed({ approved: 0, rejected: 0, deferred: 0 }); setDeferredItems([])
+    setActed({ approved: 0, rejected: 0, deferred: 0 }); setDeferredItems([]); setRejectedItems([]); setAckd({})
     clearInterval(pollRef.current); setRemProg(null); setRemBusy(false); setServerFixed(0); setRemMsg('')
     fetchFixes()
     if (!runId) { setQueue(SIM ? buildHumanQueue(files, {}) : []); return }
@@ -432,6 +495,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     if (item) {
       setQueue((q) => (q.some((x) => x.id === item.id) ? q : [item, ...q]))
       if (kind === 'deferred') setDeferredItems((d) => d.filter((x) => x.id !== item.id))
+      // W2 — the reject also created a handoff row; a refused write must pull that back too.
+      if (kind === 'rejected') setRejectedItems((r) => r.filter((x) => x.id !== item.id))
     }
     setActed((a) => ({ ...a, [kind]: Math.max(0, (a[kind] || 0) - 1) }))
     window.dispatchEvent(new Event('acp:hitl-changed'))
@@ -452,6 +517,15 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       return
     }
     setActed((a) => ({ ...a, [kind]: a[kind] + 1 }))
+    // W2 — rejecting an AI fix routes it back to the inbox as a manual-handling item instead of
+    // dropping it. Clear the AI proposal (after/proposals/hasProposal/aiDraftable) and any status so
+    // laneOf() lands it in the amber handoff lane ("Needs manual handling"), not the green/blue
+    // approve lanes. The `rejected` audit write below still fires — this only adds the destination.
+    if (kind === 'rejected' && item) {
+      const handoff = { ...item, status: undefined, after: null, proposals: null,
+                        hasProposal: false, autoApplied: false, aiDraftable: false, rejectedFix: true }
+      setRejectedItems((r) => (r.some((x) => x.id === handoff.id) ? r : [...r, handoff]))
+    }
     window.dispatchEvent(new Event('acp:hitl-changed'))
     const apiStatus = kind === 'approved' ? 'approved' : kind === 'rejected' ? 'rejected' : null
     // approved_value is the headline text (audit log, telemetry); approvedValues carries one
@@ -478,14 +552,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       )
     }
   }
-  // Adapter for the unified EvidenceCard: it calls onAct(id, status, note, finalValue, telemetry);
-  // map to this tab's act(id, kind, editedValue, approvedValues). EvidenceCard's "I'll fix it" sends
-  // status='skipped' → this tab's self-fix lane. The per-image approved values ride in telemetry.
-  const evAct = (id, status, _note, finalValue, tel) => {
-    if (readOnly) return   // time-travel replay is look-only — never mutate a historical scan
-    act(id, status === 'skipped' ? 'self' : status, finalValue, tel && tel.approvedValues)
-  }
-
   const draftAi = (item) => suggestFix(item.scanId || runId, item.file, item.ruleId).then((r) => r?.suggestion)
   const rescan = (id) => {
     const item = self.find((x) => x.id === id)
@@ -519,6 +585,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const pendingHitlFiles = new Set(queue.map((q) => q.file))
   const totalHitl = queue.length + acted.approved + acted.rejected + acted.deferred + self.length
   const hitlProgress = totalHitl > 0 ? Math.round(((totalHitl - queue.length) / totalHitl) * 100) : 0
+  // Redesign R4: the ONE dominant statement — how many findings across how many documents. Both are
+  // real counts (the live queue and its distinct files); no fabricated time estimate is shown until
+  // per-finding review time is grounded (Phase 2).
+  const reviewDocCount = new Set(queue.map((q) => q.file).filter(Boolean)).size
   useEffect(() => { onHitlCount?.(queue.length) }, [queue.length, onHitlCount])
   // Don't surface remediation numbers until the user has actually started remediating
   // (ran "Remediate all" or acted on a review item) — pre-engagement estimates read as
@@ -531,7 +601,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // Published business ontology takes precedence in the queue order (Critical → Low),
   // then the AI risk triage breaks ties.
   const ontRank = (f) => f.ont?.priority ? PRI_RANK[f.ont.priority] : 9
-  const hasInscopeSelections = Object.values(triage).some((v) => v === 'inscope')
+  const hasInscopeSelections = hasDocumentSelection(triage)
   // One eligibility test, shared with emptyScopeReason() — so what the button acts on and what
   // it says when it can't act on anything are derived from the same rules, in the same order.
   const scopeOpts = { triage, hasInscopeSelections, remActions: REM_ACTIONS }
@@ -577,6 +647,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // Every count below is a straight tally of real pipeline rows — applied-fix evidence,
   // the live HITL queue, the recommendation estimate — never a fabricated number.
   const fixSource = scanDiffs.length ? scanDiffs : appliedFixes   // diffs cover all fix types; applied_fixes is the fallback for older scans
+  // Fold the auto-applied fixes into the inbox as green REVIEW-lane rows, so review-of-auto-fixes
+  // shares the master/detail flow. The human review queue (assisted/manual) comes first; the
+  // green auto-fixes follow. Ack'd ones resolve in place (RemediationInbox's Resolved tab).
+  const autoFixItems = autoFixRows(fixSource, (sc) => ITEM_NAME[sc] || sc)
+  // W2 — rejected AI fixes sit between the live human queue and the auto-applied rows, in the amber
+  // "Needs manual handling" lane, so a reviewer sees exactly what was bounced back for a person.
+  const inboxQueue = [...queue, ...rejectedItems, ...autoFixItems]
+  const inboxDecisions = { ...decisions, ...ackd }
   const fixGroups = groupFixesByRule(fixSource)
   const impact = summarizeImpact(fixSource)
   const fixedCount = totalFixes(fixSource)
@@ -658,7 +736,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // that runs it. The two branches were mutually exclusive and nobody could reach the second.
   const remRunning = remBusy || (remProg != null && remProg.done < remProg.total)
   const primary = readOnly ? null
-    : queue.length > 0 ? { label: `Review ${queue.length} Remaining Issue${queue.length === 1 ? '' : 's'} →`, onClick: () => window.dispatchEvent(new Event('acp:open-inbox')) }
+    : queue.length > 0 ? { label: `Review ${queue.length} Remaining Issue${queue.length === 1 ? '' : 's'} →`,
+        onClick: () => { setOpenId(queue[0]?.id ?? null); requestAnimationFrame(() => document.getElementById('rem-review')?.scrollIntoView({ behavior: 'smooth', block: 'start' })) } }
     : remRunning ? { label: '⏳ Remediating…', disabled: true }
     : verifyState === 'running' ? { label: '⏳ Verifying…', disabled: true }
     : remediable.length > 0 ? { label: '⚡ Run Remediation →', onClick: () => runServerRemediation(remediable), disabled: !runId }
@@ -693,6 +772,19 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       {/* GitHub-style progress rail (§2) — where am I in the pipeline. */}
       <ProgressRail steps={progressSteps} />
 
+      {/* Above the hero, which carries the headline finding counts — the numbers a reader would
+          otherwise take as "the estate". No findings count is passed: there is no open-findings
+          total in scope here, and inventing one to fill the sentence would be the opposite of
+          what this banner is for. */}
+      {/* Redesign R4: the scope-counting banner is disclosure, not a permanent fixture on the work
+          surface. It stays one click away for anyone reconciling the count, without occupying the page. */}
+      <details className="rem-scope-disc" style={{ margin: '0 0 6px' }}>
+        <summary style={{ cursor: 'pointer', fontSize: 12.5, color: 'var(--muted)', padding: '4px 2px', userSelect: 'none' }}>
+          Assessment scope
+        </summary>
+        <ScopeBanner run={run} fileCount={files.length}
+                     docScope={documentScopeSentence(documentSelection(files, triage))} />
+      </details>
       {/* HERO (§1) — the 5-second story + ONE primary action (§11). Every count is real:
           documents from the scan, issues fixed from applied-fix evidence, review from the
           live HITL queue, savings from the recommendation model. */}
@@ -702,7 +794,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           <div className="rem-hero-line">
             <b>{files.length}</b> document{files.length === 1 ? '' : 's'} processed
             {fixedCount > 0 && <> · <b className="rh-fixed">{fixedCount}</b> issue{fixedCount === 1 ? '' : 's'} fixed automatically</>}
-            {queue.length > 0 && <> · <b className="rh-review">{queue.length}</b> need your review</>}
+            {/* Redesign R4: "N need your review" removed here — the Review queue section below is the
+                single dominant place that count lives, so the hero no longer repeats it. */}
             {measured && (
               <span title={REVIEW_TIME_BASIS}> · avg review <b className="rh-review">{measured.avg}</b>
                 <span className="muted"> over {measured.reviewed} decision{measured.reviewed === 1 ? '' : 's'}</span>
@@ -723,11 +816,21 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           "Why am I reviewing this?" panel (real confidence + reason + suggested value). ── */}
       <section className="panel rem-review-panel" id="rem-review">
         <div className="rem-sec-hd">
-          <h2 style={{ margin: 0 }}>AI Work Inbox {queue.length > 0 ? <span className="reviewpill">{queue.length}</span> : <span className="muted">· all clear</span>}</h2>
+          {/* Redesign R4: one dominant statement (findings × documents) replaces the repeated `N`
+              badges. The numeric pill is gone — the count lives in the sentence, said once. */}
+          <div>
+            <h2 style={{ margin: 0 }}>AI Work Inbox</h2>
+            {queue.length > 0
+              ? <p className="rem-review-lead" style={{ margin: '2px 0 0', fontSize: 13 }}>
+                  <b>{queue.length}</b> finding{queue.length === 1 ? '' : 's'} need review across{' '}
+                  <b>{reviewDocCount}</b> document{reviewDocCount === 1 ? '' : 's'}
+                </p>
+              : <p className="muted" style={{ margin: '2px 0 0', fontSize: 13 }}>All clear — nothing needs your review.</p>}
+          </div>
           {totalHitl > 0 && (
             <div className="rem-sec-prog">
               <div className="conftrack" style={{ width: 120 }}><i style={{ width: `${hitlProgress}%`, background: hitlProgress === 100 ? '#3B6D11' : '#1F5FA8' }} /></div>
-              <span className="muted">{totalHitl - queue.length} of {totalHitl} reviewed</span>
+              <span className="muted">{totalHitl - queue.length} of {totalHitl} resolved</span>
             </div>
           )}
           {/* Reviewer analytics (vision #39) — real counts from hitl_events, not a fabricated score:
@@ -777,28 +880,37 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             {actError}
           </p>
         )}
-        {queue.length === 0 ? (
+        {inboxQueue.length === 0 ? (
           <p className="muted">{totalHitl === 0
             ? 'Nothing needs your review — every fix was applied automatically. Items needing an AI-assisted fix or human sign-off will appear here.'
             : `All reviewed — ${acted.approved} approved, ${acted.rejected} rejected${acted.deferred ? `, ${acted.deferred} deferred` : ''}. Verification runs on the approved fixes.`}</p>
         ) : (
-          <div className="reviewlist">
-            {/* Unified review card (canonical vision #1): the SAME rich EvidenceCard the AI Work
-                Inbox uses — pipeline ladder, ✨ Explain, Grounding/Validation trust states, provenance
-                badge, grouped evidence, cert preview, native verify steps — now renders here too,
-                fed the raw hitl_queue row. `q._raw` is the untransformed row (live); SIM falls back
-                to the UI item. */}
-            {queue.map((q) => (
-              <EvidenceCard key={q.id} item={q._raw || q} onAct={evAct}
-                traceUrl={q._raw?.scan_id ? openTraceUrl(q._raw.scan_id, 'file', q._raw.file) : null} />
-            ))}
-          </div>
+          <RemediationInbox
+            queue={inboxQueue}
+            decisions={inboxDecisions}
+            scanId={run?.id}
+            aiEnabled={aiEnabled}
+            onDecide={(f, d) => {
+              // W2 — a handoff row (a rejected AI fix) is already out of the hitl queue; acting on it
+              // here ("Mark as assigned") just clears it from the needs-manual-handling lane. It is
+              // owned by a person now — this is the acknowledgement that they have it.
+              if (f.rejectedFix) { setRejectedItems((r) => r.filter((x) => x.id !== f.id)); return }
+              // Auto-applied (green) rows are already applied + re-scanned — "Approve" acknowledges
+              // them locally (resolve + advance); the human review lanes route to the hitl flow.
+              if (f.autoApplied) { setAckd((a) => ({ ...a, [f.id]: d })); return }
+              if (d.state === 'accepted') act(f.id, 'approved', f.after ?? null)
+              else if (d.state === 'rejected') act(f.id, 'rejected')
+              else if (d.state === 'assigned') act(f.id, 'deferred')
+            }}
+          />
         )}
       </section>
 
       {/* ── VERIFICATION (§8) — real state, tied to the re-scan/job, auto-begins on approval. ── */}
-      <section className="panel" id="rem-verify">
-        <div className="rem-sec-hd"><h2 style={{ margin: 0 }}>Verification</h2></div>
+      <RemSection id="rem-verify" title="Verification"
+                  count={revalidated.length || null}
+                  hint={verifyState === 'idle' ? '· nothing to verify yet' : null}
+                  defaultOpen={verifyState === 'running' || revalidated.length > 0}>
         <VerifyState state={verifyState} pct={verifyPct} remaining={queue.length} ready={revalidated.length} latest={remProg?.latest} />
         {revalidated.length > 0 && (
           <div className="publist" style={{ marginTop: 12 }}>
@@ -811,13 +923,13 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             {revalidated.length > 12 && <div className="muted" style={{ fontSize: 12, padding: '6px 2px' }}>+{revalidated.length - 12} more</div>}
           </div>
         )}
-      </section>
+      </RemSection>
 
       {/* ── DOCUMENTS (§5) — file triage + remediation plan merged into ONE list: per-doc
           progress · fixes · items needing you · scope · Open. Everything about a doc here. ── */}
-      <section className="panel" id="rem-docs">
+      <RemSection id="rem-docs" title="Documents" count={docList.length}
+                  defaultOpen={docList.length > 0}>
         <div className="rem-sec-hd">
-          <h2 style={{ margin: 0 }}>Documents <span className="muted">· {docList.length}</span></h2>
           <button className="exportbtn" onClick={downloadRemediationReport} disabled={reportBusy}
                   title="A signed record of every change applied, with a checkbox per item and how to verify it in Word / PowerPoint / Excel / Acrobat on Mac and Windows">
             {reportBusy ? 'Generating…' : '⤓ Remediation report (PDF)'}
@@ -891,15 +1003,15 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             )
           })}
         </div>
-      </section>
+      </RemSection>
 
       {/* ── Recent AI fixes, grouped (§6) + Accessibility improvements impact (§7) ── */}
       <GroupedFixes fixGroups={fixGroups} appliedFixes={appliedFixes} impact={impact} />
 
       {/* Self-remediation — you're fixing these yourself; visible whenever active. */}
       {self.length > 0 && (
-        <section className="panel">
-          <h2>Self-remediation <span className="muted">· you’re fixing these — re-scan to confirm</span></h2>
+        <RemSection id="rem-self" title="Self-remediation" count={self.length}
+                    hint="· you’re fixing these — re-scan to confirm" defaultOpen>
           <div className="queue">
             {self.map((it) => (
               <div className={`qrow${it.status === 'verified' ? ' qdone' : ''}`} key={it.id}>
@@ -923,12 +1035,12 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             ))}
           </div>
           <p className="muted" style={{ marginTop: 12 }}>When you remediate a document yourself, the agent re-runs every engine to independently confirm the fix before it’s certified — no manual sign-off taken on trust.</p>
-        </section>
+        </RemSection>
       )}
 
       {deferredItems.length > 0 && (
-        <section className="panel">
-          <h2>Deferred <span className="muted">· {deferredItems.length} item{deferredItems.length !== 1 && "s"} &mdash; resurface on next scan</span></h2>
+        <RemSection id="rem-deferred" title="Deferred" count={deferredItems.length}
+                    hint="— resurface on next scan">
           <div className="queue">
             {deferredItems.map((it) => (
               <div className="qrow" key={it.id} style={{ opacity: 0.7 }}>
@@ -943,7 +1055,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             ))}
           </div>
           <p className="muted" style={{ marginTop: 10 }}>Deferred findings are tracked in the compliance record and flagged automatically when the next scheduled scan runs.</p>
-        </section>
+        </RemSection>
       )}
 
       {/* ── ADVANCED (§10) — the engine, hidden by default: live metrics, worker queue,
@@ -1069,7 +1181,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           {remediable.length > 0 && (
             <section className="panel">
               <h2>Documents to remediate <span className="muted">· {remediable.length} · <b style={{ color: 'var(--ink)', fontWeight: 500 }}>AI-triaged</b> by business risk — exposure × severity × ownership — accept / reject / modify</span></h2>
-              {ontCount > 0 && <div className="ontbanner">⬆ Ordered by your <b>business ontology</b> — {ontCount} document{ontCount === 1 ? '' : 's'} elevated by published rules (Settings → Business ontology)</div>}
+              {ontCount > 0 && <div className="ontbanner">⬆ Ordered by your <b>business ontology</b> — {ontCount} document{ontCount === 1 ? '' : 's'} elevated by published rules (published from the ontology rules)</div>}
               <div className="remlist">
                 {remediable.map((f) => {
                   const rec = f.rec; const dec = decisions[f.file]
