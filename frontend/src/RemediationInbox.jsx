@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react'
+import { useMemo, useState, useEffect, useRef } from 'react'
 import {
   rowModel, laneOf, sortQueue, groupByDocument, nextUnresolvedId, progress, railColorOf,
   matchesWorkflow, workflowCounts, workflowStepIndex, isResolved, WORKFLOW_TABS, WORKFLOW_LABELS, SORTS,
@@ -279,9 +279,56 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
   )
 }
 
+// ── Workspace layout: how the guided pane and the document preview share the space beside the
+// inbox. Split = side by side, Stacked = preview below the guided pane, Focus = preview hidden so
+// the fix has the whole workspace (text-only fixes rarely need the render). Named to NOT collide
+// with the preview's own Before/After/Side-by-side control, which is about the document diff. ──
+const LAYOUTS = [
+  ['split', 'Split', 'Guided remediation and document preview side by side'],
+  ['stacked', 'Stacked', 'Document preview stacked below the guided pane'],
+  ['focus', 'Focus', 'Hide the document preview and focus on the fix'],
+]
+const LAYOUT_KEYS = LAYOUTS.map(([k]) => k)
+
+// A workspace preference (the reviewer sets it once), so it lives in localStorage keyed globally —
+// unlike search/filter state, which is per-scan sessionStorage. Every access is guarded: storage
+// can throw (private mode, disabled) and must never take the inbox down with it.
+const LS = 'acp.remediate.'
+function readLS(k, dflt) { try { const v = localStorage.getItem(LS + k); return v == null ? dflt : v } catch { return dflt } }
+function readNum(k, dflt) { const n = parseFloat(readLS(k, '')); return Number.isFinite(n) ? n : dflt }
+function writeLS(k, v) { try { localStorage.setItem(LS + k, String(v)) } catch { /* storage unavailable — keep the in-memory value */ } }
+const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n))
+
+// A keyboard-operable resize handle. Pointer drag resizes in the browser; Arrow keys nudge it,
+// which is both an accessibility requirement for role="separator" and what makes the resize
+// verifiable in jsdom (which has no layout, so getBoundingClientRect is zero and pointer math
+// no-ops). aria-valuenow carries the current split so assistive tech can read the ratio.
+function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
+  const dragging = useRef(false)
+  const vertical = orientation === 'vertical' // the bar is vertical → it divides left|right
+  const down = (e) => { dragging.current = true; try { e.currentTarget.setPointerCapture(e.pointerId) } catch {} e.preventDefault() }
+  const move = (e) => { if (dragging.current) onDrag(e.clientX, e.clientY) }
+  const up = (e) => { dragging.current = false; try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {} }
+  const key = (e) => {
+    const dec = vertical ? 'ArrowLeft' : 'ArrowUp'
+    const inc = vertical ? 'ArrowRight' : 'ArrowDown'
+    if (e.key === dec) { onNudge(-1); e.preventDefault() }
+    else if (e.key === inc) { onNudge(1); e.preventDefault() }
+  }
+  return (
+    <div role="separator" tabIndex={0} aria-label={label}
+         aria-orientation={vertical ? 'vertical' : 'horizontal'}
+         aria-valuenow={Math.round(value)} aria-valuemin={min} aria-valuemax={max}
+         onPointerDown={down} onPointerMove={move} onPointerUp={up} onKeyDown={key}
+         style={{ flex: '0 0 7px', alignSelf: 'stretch', cursor: vertical ? 'col-resize' : 'row-resize',
+                  background: 'var(--line,#e2dce4)', touchAction: 'none',
+                  ...(vertical ? {} : { width: '100%' }) }} />
+  )
+}
+
 export default function RemediationInbox({
   queue = [], decisions = {}, onDecide, onOpenWord, onRecheck,
-  initialSort = 'priority', initialTab = 'inbox', scanId = null,
+  initialSort = 'priority', initialTab = 'inbox', scanId = null, initialLayout = null,
 }) {
   const [selectedId, setSelectedId] = useState(null)
   const [tab, setTab] = useState(initialTab)
@@ -289,6 +336,27 @@ export default function RemediationInbox({
   const [search, setSearch] = useState('')
   const [collapsed, setCollapsed] = useState({}) // file -> true when a document group is collapsed
   const [drafts, setDrafts] = useState({}) // finding id -> reviewer-edited proposed value (null until edited)
+
+  // Workspace layout + pane sizes, restored from the reviewer's last session (localStorage).
+  const [layout, setLayout] = useState(() => {
+    const v = initialLayout ?? readLS('layout', 'split')
+    return LAYOUT_KEYS.includes(v) ? v : 'split'
+  })
+  const [leftW, setLeftW] = useState(() => clamp(readNum('leftW', 28), 18, 45))   // inbox width, % of the row
+  const [centerW, setCenterW] = useState(() => clamp(readNum('centerW', 34), 20, 60)) // guided width in Split, % of the row
+  const [topFrac, setTopFrac] = useState(() => clamp(readNum('topFrac', 0.5), 0.25, 0.75)) // guided height in Stacked
+  useEffect(() => { writeLS('layout', layout) }, [layout])
+  useEffect(() => { writeLS('leftW', leftW) }, [leftW])
+  useEffect(() => { writeLS('centerW', centerW) }, [centerW])
+  useEffect(() => { writeLS('topFrac', topFrac) }, [topFrac])
+
+  const rowRef = useRef(null)   // the .rinbox flex row — the frame for horizontal (column) resizes
+  const wsRef = useRef(null)    // the stacked workspace column — the frame for the vertical resize
+  // Drag: translate a pointer position into a percentage of the relevant frame. Guarded on a real
+  // measured size, so jsdom's zero-size rects leave the value untouched (keyboard drives the tests).
+  const dragLeft = (x) => { const r = rowRef.current?.getBoundingClientRect(); if (r?.width) setLeftW(clamp(((x - r.left) / r.width) * 100, 18, 45)) }
+  const dragCenter = (x) => { const r = rowRef.current?.getBoundingClientRect(); if (r?.width) setCenterW(clamp(((x - r.left) / r.width) * 100 - leftW, 20, Math.max(20, 100 - leftW - 15))) }
+  const dragTop = (_x, y) => { const r = wsRef.current?.getBoundingClientRect(); if (r?.height) setTopFrac(clamp((y - r.top) / r.height, 0.25, 0.75)) }
 
   const counts = useMemo(() => workflowCounts(queue, decisions), [queue, decisions])
   const prog = useMemo(() => progress(queue, decisions), [queue, decisions])
@@ -350,6 +418,38 @@ export default function RemediationInbox({
   const goPrev = () => { if (curIdx > 0) setSelectedId(visIds[curIdx - 1]) }
   const goNext = () => { if (curIdx >= 0 && curIdx < visIds.length - 1) setSelectedId(visIds[curIdx + 1]) }
 
+  // The two workspace panes, defined once and placed differently per layout (side by side, stacked,
+  // or guided-only). The layout toggle sits on the guided header — the pane that is always shown.
+  const guidedHeader = (
+    <div style={{ flex: '0 0 auto', padding: '8px 12px', borderBottom: '1px solid var(--line,#e2dce4)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 13, fontWeight: 700 }}>Guided remediation</span>
+      <div role="group" aria-label="Workspace layout"
+           style={{ display: 'inline-flex', border: '1px solid var(--line,#e2dce4)', borderRadius: 8, overflow: 'hidden' }}>
+        {LAYOUTS.map(([key, label, title]) => (
+          <button key={key} type="button" aria-pressed={layout === key} title={title} onClick={() => setLayout(key)}
+                  style={{ fontSize: 11.5, padding: '4px 9px', cursor: 'pointer', border: 'none',
+                           borderLeft: key === 'split' ? 'none' : '1px solid var(--line,#e2dce4)',
+                           background: layout === key ? 'var(--accent,#3b6fd6)' : 'var(--bg,#fff)',
+                           color: layout === key ? '#fff' : 'inherit', fontWeight: layout === key ? 700 : 500 }}>
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+  const guidedBody = (
+    <DetailPane f={selected} decisions={decisions} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
+                matchingCount={matchingCount} onApplyToMatching={applyToMatching}
+                scanId={selected?.scanId || scanId}
+                draft={selected ? (drafts[selected.id] ?? null) : null}
+                onDraftChange={(v) => selected && setDrafts((d) => ({ ...d, [selected.id]: v }))} />
+  )
+  const previewHeader = (
+    <div style={{ flex: '0 0 auto', padding: '10px 12px', borderBottom: '1px solid var(--line,#e2dce4)', fontSize: 13, fontWeight: 700 }}>Document preview</div>
+  )
+  const previewBody = <RemediationPreview finding={selected} scanId={selected?.scanId || scanId} />
+
   return (
     <div className="rinbox-wrap">
       {/* Dark app header (mockup): the section title + the workflow-status tabs as the page's top
@@ -373,9 +473,9 @@ export default function RemediationInbox({
       </div>
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
       <WorkspaceProgress queue={queue} decisions={decisions} selected={selected} />
-      <div className="rinbox" style={{ display: 'flex', gap: 0, border: '1px solid var(--line,#e2dce4)', borderRadius: '0 0 12px 12px', overflow: 'hidden', minHeight: 480 }}>
-      {/* ── Left: the work queue (28%) — find and select the next finding ── */}
-      <div style={{ flex: '0 0 28%', maxWidth: '28%', borderRight: '1px solid var(--line,#e2dce4)', display: 'flex', flexDirection: 'column', minHeight: 480 }}>
+      <div className="rinbox" data-layout={layout} ref={rowRef} style={{ display: 'flex', gap: 0, border: '1px solid var(--line,#e2dce4)', borderRadius: '0 0 12px 12px', overflow: 'hidden', minHeight: 480 }}>
+      {/* ── Left: the work queue — find and select the next finding (resizable) ── */}
+      <div style={{ flex: `0 0 ${leftW}%`, maxWidth: `${leftW}%`, display: 'flex', flexDirection: 'column', minHeight: 480 }}>
         <div style={{ flex: '0 0 auto', padding: '10px 12px', borderBottom: '1px solid var(--line,#e2dce4)' }}>
           <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Remediation Inbox</div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -419,25 +519,46 @@ export default function RemediationInbox({
         </div>
       </div>
 
-      {/* ── Centre: guided remediation (34%) — problem → proposed change → decision, one at a time ── */}
-      <div style={{ flex: '0 0 34%', maxWidth: '34%', minWidth: 0, borderRight: '1px solid var(--line,#e2dce4)', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ flex: '0 0 auto', padding: '10px 12px', borderBottom: '1px solid var(--line,#e2dce4)', fontSize: 13, fontWeight: 700 }}>Guided remediation</div>
-        <div style={{ flex: '1 1 auto', minHeight: 0 }}>
-          <DetailPane f={selected} decisions={decisions} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
-                      matchingCount={matchingCount} onApplyToMatching={applyToMatching}
-                      scanId={selected?.scanId || scanId}
-                      draft={selected ? (drafts[selected.id] ?? null) : null}
-                      onDraftChange={(v) => selected && setDrafts((d) => ({ ...d, [selected.id]: v }))} />
-        </div>
-      </div>
+      {/* Divider between the inbox and the workspace — present in every layout. */}
+      <Divider orientation="vertical" label="Resize the inbox" value={leftW} min={18} max={45}
+               onDrag={dragLeft} onNudge={(d) => setLeftW((w) => clamp(w + d * 2, 18, 45))} />
 
-      {/* ── Right: document preview (38%) — the finding shown in its own document (mockup's third pane) ── */}
-      <div style={{ flex: '1 1 38%', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        <div style={{ flex: '0 0 auto', padding: '10px 12px', borderBottom: '1px solid var(--line,#e2dce4)', fontSize: 13, fontWeight: 700 }}>Document preview</div>
-        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}>
-          <RemediationPreview finding={selected} scanId={selected?.scanId || scanId} />
+      {layout === 'stacked' ? (
+        /* ── Stacked: guided remediation above, document preview below, one workspace column ── */
+        <div ref={wsRef} style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 480 }}>
+          <div style={{ flex: `0 0 ${topFrac * 100}%`, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            {guidedHeader}
+            <div style={{ flex: '1 1 auto', minHeight: 0 }}>{guidedBody}</div>
+          </div>
+          <Divider orientation="horizontal" label="Resize the document preview" value={topFrac * 100} min={25} max={75}
+                   onDrag={dragTop} onNudge={(d) => setTopFrac((t) => clamp(t + d * 0.05, 0.25, 0.75))} />
+          <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            {previewHeader}
+            <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}>{previewBody}</div>
+          </div>
         </div>
-      </div>
+      ) : (
+        <>
+          {/* ── Centre: guided remediation — problem → proposed change → decision, one at a time ── */}
+          <div style={{ flex: layout === 'focus' ? '1 1 auto' : `0 0 ${centerW}%`, maxWidth: layout === 'focus' ? 'none' : `${centerW}%`,
+                        minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+            {guidedHeader}
+            <div style={{ flex: '1 1 auto', minHeight: 0 }}>{guidedBody}</div>
+          </div>
+
+          {/* ── Right: document preview (Split only — hidden in Focus) ── */}
+          {layout === 'split' && (
+            <>
+              <Divider orientation="vertical" label="Resize the document preview" value={centerW} min={20} max={60}
+                       onDrag={dragCenter} onNudge={(d) => setCenterW((w) => clamp(w + d * 2, 20, Math.max(20, 100 - leftW - 15)))} />
+              <div style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+                {previewHeader}
+                <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}>{previewBody}</div>
+              </div>
+            </>
+          )}
+        </>
+      )}
       </div>
       {/* Sticky workflow guide (Show → Review → Verify) + Previous / N of M / Next navigation. */}
       <WorkspaceFooter position={position} total={visIds.length} onPrev={goPrev} onNext={goNext}
