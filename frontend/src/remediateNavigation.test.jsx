@@ -54,6 +54,15 @@ describe('the Remediate page has one navigation system, not two', () => {
     expect(r).not.toMatch(/<b>\{queue\.length\}<\/b> finding/)
   })
 
+  it('reports the SAME needs-review count to the nav badge (onHitlCount) as the hero + tab', () => {
+    // The top-nav bell badge (App.jsx hitlCount) is fed by onHitlCount. It must show the same "needs
+    // review" number as the hero and the tab — reviewCount — not the raw human queue.length that
+    // excluded unconfirmed auto-fixes, so all three review-count surfaces agree.
+    const r = read('Remediate.jsx')
+    expect(r).toMatch(/onHitlCount\?\.\(reviewCount\)/)
+    expect(r).not.toMatch(/onHitlCount\?\.\(queue\.length\)/)
+  })
+
   it('still says where verification stands — with more detail than the rail had', () => {
     // <VerifyState> carries state, percentage, remaining and ready. The rail step carried one of
     // 'done' | 'active' | 'pending'. Removing the rail loses nothing here; it drops a summary of
