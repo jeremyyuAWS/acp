@@ -76,6 +76,26 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(container.textContent).toContain('2 of 3 resolved')         // progress agrees
   })
 
+  it('offers specific decision actions (no bare "Reject") and hides verification until a fix is saved', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    expect(detailHeading()).toBe('Image needs alt text')          // id2, apply lane, unresolved
+    expect(btnByText('Reject & handle manually')).toBeTruthy()    // the specific outcome
+    expect(btnByText('Defer')).toBeTruthy()
+    // The ambiguous bare "Reject" button is gone.
+    const bareReject = [...container.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Reject')
+    expect(bareReject).toBe(false)
+    // Verification (Written → Re-scan → Certified) is not shown before the decision is saved.
+    expect(container.textContent).not.toContain('Re-scan')
+  })
+
+  it('shows the verification path (Written → Re-scan → Certified) once a finding is saved', async () => {
+    await render({ queue: QUEUE, decisions: { 2: { state: 'accepted' } } })
+    await click(btnByText('Ready to validate'))                   // where the saved fix now sits
+    await click(btnByText('Image needs alt text'))
+    expect(container.textContent).toContain('Re-scan')
+    expect(container.textContent).toContain('Certified')
+  })
+
   it('folds the document preview into the workspace as an Evidence section (no separate third pane)', async () => {
     await render({ queue: QUEUE, decisions: {} })
     // The single workspace column carries the issue heading AND the preview (its mode tabs), stacked

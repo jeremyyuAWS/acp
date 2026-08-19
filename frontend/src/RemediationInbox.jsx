@@ -228,19 +228,28 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
             </button>
           </div>
         )}
-        <div style={{ padding: '12px 22px', display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div style={{ padding: '12px 22px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           {resolved ? (
-            <span className="muted" style={{ fontSize: 13 }}>✓ Resolved — nothing left to do on this finding.</span>
+            // Verification appears only AFTER a fix is saved (spec §10): the decision is recorded and a
+            // fresh scan re-validates it before it can be certified — shown here, not before the work.
+            <span className="muted" style={{ fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 600 }}>✓ Saved.</span>
+              <span>Verification: <b>Written</b> → Re-scan → Certified — a fresh scan confirms it before it’s certified.</span>
+            </span>
           ) : isManual ? (
             <>
               {onOpenWord && <button className="primary" onClick={() => onOpenWord(f)}>Open in Word</button>}
               {onRecheck && <button className="ghost" onClick={() => onRecheck(f)}>Upload &amp; recheck</button>}
-              <button className="ghost" onClick={() => onDecide?.(f, { state: 'assigned' })}>Mark as assigned</button>
+              <button className="ghost" onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
             </>
           ) : (
             <>
               <button className="primary" onClick={() => onDecide?.(f, { state: 'accepted' })}>{lane.action}</button>
-              <button className="ghost" onClick={() => onDecide?.(f, { state: 'rejected' })}>Reject</button>
+              {/* A specific action, not a bare "Reject": declining an AI fix hands the finding to a
+                  person (the handoff lane), so the label names that outcome rather than leaving the
+                  reviewer to guess what "Reject" does. */}
+              <button className="ghost" onClick={() => onDecide?.(f, { state: 'rejected' })}>Reject &amp; handle manually</button>
+              <button className="ghost" onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
               {onOpenWord && <button className="ghost" onClick={() => onOpenWord(f)}>Open in Word</button>}
             </>
           )}
@@ -328,10 +337,18 @@ export default function RemediationInbox({
       {/* ── Left: the work queue (35%) — find and select the next finding ── */}
       <div style={{ flex: '0 0 35%', maxWidth: '35%', borderRight: '1px solid var(--line,#e2dce4)', display: 'flex', flexDirection: 'column', minHeight: 480 }}>
         <div style={{ flex: '0 0 auto', padding: '10px 12px', borderBottom: '1px solid var(--line,#e2dce4)' }}>
-          <input type="search" value={search} onChange={(e) => setSearch(e.target.value)}
-                 placeholder="Search findings…" aria-label="Search findings"
-                 style={{ width: '100%', fontSize: 13, padding: '6px 10px', borderRadius: 8, border: '1px solid var(--line,#e2dce4)' }} />
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+          {/* Compact toolbar — search + sort on ONE row (was three stacked rows: search, tabs, sort+count). */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="search" value={search} onChange={(e) => setSearch(e.target.value)}
+                   placeholder="Search findings…" aria-label="Search findings"
+                   style={{ flex: '1 1 auto', minWidth: 0, fontSize: 13, padding: '6px 10px', borderRadius: 8, border: '1px solid var(--line,#e2dce4)' }} />
+            <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort findings" title="Sort findings"
+                    style={{ flex: '0 0 auto', fontSize: 11.5, padding: '5px 6px', borderRadius: 6, border: '1px solid var(--line,#e2dce4)' }}>
+              {SORTS.map((s) => <option key={s} value={s}>{SORT_LABEL[s]}</option>)}
+            </select>
+          </div>
+          {/* Status filter (pipeline stage) with counts + the single resolved summary, one row. */}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
             {WORKFLOW_TABS.map((t) => (
               <button key={t} type="button" aria-pressed={tab === t} onClick={() => setTab(t)}
                       style={{ fontSize: 11.5, padding: '2px 9px', borderRadius: 20, cursor: 'pointer',
@@ -341,16 +358,7 @@ export default function RemediationInbox({
                 {WORKFLOW_LABELS[t]} {counts[t] > 0 ? counts[t] : ''}
               </button>
             ))}
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
-            <label className="muted" style={{ fontSize: 11.5, display: 'flex', gap: 5, alignItems: 'center' }}>
-              Sort
-              <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort findings"
-                      style={{ fontSize: 11.5, padding: '2px 6px', borderRadius: 6, border: '1px solid var(--line,#e2dce4)' }}>
-                {SORTS.map((s) => <option key={s} value={s}>{SORT_LABEL[s]}</option>)}
-              </select>
-            </label>
-            <span className="muted" style={{ fontSize: 11.5, fontWeight: 600 }}>{prog.resolved} of {prog.total} resolved</span>
+            <span className="muted" style={{ marginLeft: 'auto', fontSize: 11.5, fontWeight: 600 }}>{prog.resolved} of {prog.total} resolved</span>
           </div>
         </div>
         <div style={{ flex: '1 1 auto', overflowY: 'auto' }}>
