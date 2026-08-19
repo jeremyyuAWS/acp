@@ -7,10 +7,13 @@
 // can see (and defend) exactly what this run will and won't cover.
 //
 // HONESTY (ADR 0016): every count here comes straight from the eligibility aggregate the scope
-// screen already fetches (`discovered`, `eligible`, `by_format`). It does NOT model the lifecycle-
-// exclusion or changed-since-last-assessment stages — those need aggregates this screen doesn't
-// load (count_lifecycle_by_status, the inventory diff) and will be a later increment. Nothing here
-// is fabricated: a stage we can't back is simply absent, not guessed.
+// screen already fetches (`discovered`, `eligible`, `by_format`, and — when the backend supplies it —
+// `lifecycle_eligible_excluded`). It does NOT model the changed-since-last-assessment stage — that
+// needs the inventory diff this screen doesn't load, and stays a later increment. Nothing here is
+// fabricated: a stage we can't back (older backend / no lifecycle field) is simply absent, not
+// guessed. The lifecycle drop is exact when every document type is selected (the default) and a
+// defensive bound when the operator has narrowed formats — the backend count spans all eligible
+// formats, so it is clamped to never drop more than are actually in scope.
 
 const sumFormats = (byFormat = {}, keep = null) =>
   Object.entries(byFormat).reduce((n, [f, v]) => n + ((keep == null || keep.has(f)) ? (v || 0) : 0), 0)
@@ -30,6 +33,14 @@ export function scopeImpact(elig, formats = new Set()) {
   const noMethod = Math.max(0, discovered - eligible)   // unsupported type, or no lane for any picked criterion
   const deselected = Math.max(0, eligible - inScope)    // eligible, but in a format the operator excluded
 
+  // Archival/deletion lifecycle exclusion — only when the backend reported it (older responses /
+  // SIM omit the field, so the stage is absent rather than guessed). `lifecycle_eligible_excluded`
+  // is the assessable flagged count over ALL eligible formats; clamp it to the in-scope total so a
+  // narrowed format selection can never drop more than are actually queued.
+  const hasLifecycle = Number.isFinite(elig.lifecycle_eligible_excluded)
+  const lifecycleDrop = hasLifecycle ? Math.min(inScope, Math.max(0, elig.lifecycle_eligible_excluded)) : 0
+  const assessed = Math.max(0, inScope - lifecycleDrop)
+
   const funnel = [
     { key: 'discovered', label: 'Discovered', count: discovered, drop: 0,
       note: 'Every file ACP inventoried across the connected sources' },
@@ -38,17 +49,24 @@ export function scopeImpact(elig, formats = new Set()) {
     { key: 'inscope', label: 'In your selected document types', count: inScope, drop: deselected,
       note: deselected ? `${deselected.toLocaleString()} eligible file${deselected === 1 ? '' : 's'} in document types you didn't select` : 'All eligible files are in your selected types' },
   ]
+  if (lifecycleDrop > 0) {
+    funnel.push({ key: 'assessed', label: 'Queued to assess — archival/deletion excluded', count: assessed, drop: lifecycleDrop,
+      note: `${lifecycleDrop.toLocaleString()} flagged for archival or deletion, skipped by this run` })
+  }
 
   const excluded = [
     noMethod > 0 && { key: 'nomethod', label: 'Inventory only — no assessment method', count: noMethod,
       why: 'Unsupported file type, or no lane for any selected criterion' },
     deselected > 0 && { key: 'deselected', label: 'Excluded by your document-type selection', count: deselected,
       why: "Eligible, but in a format you didn't tick" },
+    lifecycleDrop > 0 && { key: 'lifecycle', label: 'Flagged for archival or deletion', count: lifecycleDrop,
+      why: 'A discovery rule marked these Archive/Delete Candidate, Archived or Deleted — skipped unless you include them' },
   ].filter(Boolean)
 
+  const queued = lifecycleDrop > 0 ? assessed : inScope
   return {
-    discovered, eligible, inScope, noMethod, deselected,
-    pct: discovered ? Math.round((inScope / discovered) * 100) : 0,
+    discovered, eligible, inScope, noMethod, deselected, lifecycleExcluded: lifecycleDrop, assessed: queued,
+    pct: discovered ? Math.round((queued / discovered) * 100) : 0,
     funnel, excluded,
   }
 }
