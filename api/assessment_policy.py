@@ -725,6 +725,27 @@ def file_in_scope(filename: str, scope: dict | None = None) -> bool:
     return fmt in fmts
 
 
+def selected_documents(decisions: dict | None) -> frozenset | None:
+    """The per-document twin of `scan_scope`: the files the operator marked in-scope at Remediate
+    time (triage == 'inscope'), or `None` when no document selection was made.
+
+    `decisions` is `store.get_decisions(scan_id)` — `{file: {kind: value}}`. This mirrors the
+    frontend `remediableScope.hasDocumentSelection` semantics exactly: once ANY file is marked
+    in-scope, ONLY marked files stay in scope; before any mark there is no restriction. Returning
+    `None` (not the empty set) for "no selection" preserves the same fail-open, unscoped-behaves-as-
+    before contract `_remediation_scope` and `in_scope` use — a caller that does not opt in, or a
+    scan with no marks, is unaffected. Read-time by design: the marks are made in Remediate, AFTER
+    the traces are written, so this is consulted when the facts are read, never frozen at scan time.
+    """
+    if not decisions:
+        return None
+    sel = frozenset(
+        f for f, kinds in decisions.items()
+        if isinstance(kinds, dict) and kinds.get("triage") == "inscope"
+    )
+    return sel or None
+
+
 def filter_issues_to_scope(issues: list[dict], fmt: str | None,
                            scope: dict | None = None) -> list[dict]:
     """Drop findings whose (criterion, format) pair the operator left out of scope.

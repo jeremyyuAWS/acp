@@ -154,7 +154,7 @@ def scan_status(store, scan_id: str, *, per_item_secs: int = DEFAULT_REVIEW_SECS
 
     Uses the batched count_unapplied_approved_values_by_file (one query per scan) when the store
     provides it, falling back to the per-document call otherwise."""
-    facts = store.get_certification_facts(scan_id)
+    facts = store.get_certification_facts(scan_id, apply_document_selection=True)
     docs = facts.get("documents", [])
     if path_prefix:
         docs = [d for d in docs if str(d.get("file") or "").startswith(path_prefix)]

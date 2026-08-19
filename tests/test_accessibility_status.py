@@ -114,7 +114,7 @@ def test_transient_states_override():
 class _FakeStore:
     def __init__(self, docs, decisions, unapplied):
         self._docs, self._decisions, self._unapplied = docs, decisions, unapplied
-    def get_certification_facts(self, sid):
+    def get_certification_facts(self, sid, apply_document_selection=False):
         return {"documents": self._docs}
     def list_decisions(self, sid, limit=500):
         return self._decisions
