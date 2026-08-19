@@ -63,6 +63,22 @@ describe('RemediationPreview — contextual document pane', () => {
     expect(container.textContent).toContain('re-validated by a fresh scan')
   })
 
+  it('embedded mode is the document view only — no duplicate file header, no repeated value diff', async () => {
+    // Folded into the workspace Evidence section: the workspace already names the file and shows the
+    // before/after value in "How to fix", so embedded Visual shows the page/structure view only.
+    await render({ finding: VISUAL, embedded: true })
+    expect(tab('Visual')).toBeTruthy()                         // mode tabs still offered
+    expect(tab('Properties')).toBeTruthy()
+    expect(tab('After')).toBeFalsy()                           // no Before/After value tabs here
+    expect(container.textContent).not.toContain('#D9D9D9 on #FFFFFF')  // the value diff isn't repeated
+    expect(container.textContent).not.toContain('Select a finding')    // the empty note is the workspace's job
+  })
+
+  it('embedded structure finding folds to the honest structure note, not an empty frame', async () => {
+    await render({ finding: STRUCTURAL, embedded: true })
+    expect(container.textContent).toContain('structure')
+  })
+
   it('Side by side shows the found and proposed states together', async () => {
     await render({ finding: VISUAL })
     await click(tab('Side by side'))

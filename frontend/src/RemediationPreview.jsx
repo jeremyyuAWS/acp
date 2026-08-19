@@ -163,11 +163,14 @@ function StructureNote({ f }) {
   )
 }
 
-export default function RemediationPreview({ finding, scanId = null }) {
+export default function RemediationPreview({ finding, scanId = null, embedded = false }) {
   const [mode, setMode] = useState('visual')
   const [view, setView] = useState('before')
 
   if (!finding) {
+    // Embedded in the workspace, the empty case is owned by the workspace (it shows the preview only
+    // when a finding is selected), so render nothing rather than a second "select a finding" note.
+    if (embedded) return null
     return (
       <div className="rem-prev" style={{ display: 'grid', placeItems: 'center', height: '100%', textAlign: 'center', padding: 24 }}>
         <p className="muted" style={{ fontSize: 13 }}>Select a finding to see it in the document.</p>
@@ -188,6 +191,40 @@ export default function RemediationPreview({ finding, scanId = null }) {
   // Guard against a stale mode if the selected finding changes shape (structure → visible): fall back
   // to Visual, which every finding supports.
   const activeMode = MODES.some(([m]) => m === mode) ? mode : 'visual'
+
+  const modeTabs = (
+    <div role="tablist" aria-label="Preview mode" style={{ display: 'inline-flex', border: '1px solid var(--line,#e2dce4)', borderRadius: 8, overflow: 'hidden' }}>
+      {MODES.map(([m, label]) => (
+        <button key={m} role="tab" aria-selected={activeMode === m} onClick={() => setMode(m)}
+                style={{ fontSize: 12, fontWeight: 600, padding: '4px 13px', cursor: 'pointer', border: 'none',
+                         background: activeMode === m ? 'var(--ink)' : 'transparent', color: activeMode === m ? '#fff' : 'var(--ink)' }}>
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+
+  // Folded into the remediation workspace as its Evidence section: no duplicate file header (the
+  // workspace's Problem block names the file), no fixed height / internal scroll (the workspace
+  // scrolls as one column), and Visual mode is the DOCUMENT view only — the before/after value diff
+  // is shown once, in the workspace's "How to fix" section, so it is not repeated beneath the preview.
+  if (embedded) {
+    return (
+      <div className="rem-prev rem-prev-embedded">
+        {modeTabs}
+        <div style={{ marginTop: 12 }}>
+          {activeMode === 'properties' && <Properties f={finding} fmt={fmt} />}
+          {activeMode === 'structure' && <StructureNote f={finding} />}
+          {activeMode === 'visual' && <PageView f={finding} scanId={scanId} />}
+        </div>
+        {sourceUrl && (
+          <p style={{ margin: '10px 0 0' }}>
+            <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className="linklike" style={{ fontSize: 12.5 }}>Open original ↗</a>
+          </p>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="rem-prev" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
