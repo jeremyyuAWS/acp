@@ -5,6 +5,8 @@ import {
 } from './remediationInboxModel.js'
 import { fixSteps, appName } from './remediationGuide.js'
 import { scOf } from './fixSummary.js'
+import { changeSentence, isContrastFinding } from './remediationEvidence.js'
+import GroundedBeforeAfter from './GroundedBeforeAfter.jsx'
 import RemediationPreview from './RemediationPreview.jsx'
 import WorkspaceProgress from './WorkspaceProgress.jsx'
 import RemediationTransform from './RemediationTransform.jsx'
@@ -89,34 +91,6 @@ function QueueRow({ f, decisions, selected, onSelect, showFile = true }) {
   )
 }
 
-function BeforeAfter({ f }) {
-  const [view, setView] = useState('after') // 'before' | 'after'
-  const hasBoth = f.before != null && f.after != null
-  return (
-    <div>
-      {hasBoth && (
-        <div role="tablist" aria-label="Before and after" style={{ display: 'inline-flex', border: '1px solid var(--line,#e2dce4)', borderRadius: 8, overflow: 'hidden', marginBottom: 10 }}>
-          {['before', 'after'].map((v) => (
-            <button key={v} role="tab" aria-selected={view === v} onClick={() => setView(v)}
-                    style={{ fontSize: 12, fontWeight: 600, padding: '4px 14px', cursor: 'pointer', border: 'none',
-                             background: view === v ? 'var(--ink)' : 'transparent', color: view === v ? '#fff' : 'var(--ink)' }}>
-              {v === 'before' ? 'Before' : 'After'}
-            </button>
-          ))}
-        </div>
-      )}
-      <div style={{ border: '1px solid var(--line,#e2dce4)', borderRadius: 8, padding: 12, fontSize: 13 }}>
-        {view === 'before'
-          ? <div><span className="difftag">before</span> {String(f.before ?? '—')}</div>
-          : <div><span className="difftag">after</span> {String(f.after ?? f.before ?? '—')}</div>}
-      </div>
-      {f.evidence && (
-        <div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>{f.evidence}</div>
-      )}
-    </div>
-  )
-}
-
 function ManualSteps({ f }) {
   const fmt = fmtOf(f.file)
   const [os, setOs] = useState('win') // 'win' | 'mac'
@@ -137,6 +111,31 @@ function ManualSteps({ f }) {
   )
 }
 
+// The plain, imperative "Your task" line — what a normal reviewer is expected to DO, framed as a
+// remediation task rather than an engineering evidence record. Criterion- and lane-aware so a contrast
+// fix reads like a contrast decision, not a generic "review the change".
+function taskLineOf(f, lane) {
+  const contrast = isContrastFinding(f)
+  switch (lane.key) {
+    case 'review':
+      return contrast
+        ? 'Review ACP’s contrast fix — confirm the darker text still looks right for this document, then approve it.'
+        : 'Review ACP’s fix — confirm it looks right for this document, then approve it.'
+    case 'apply':
+      return contrast
+        ? 'Review ACP’s contrast fix — confirm the darker text reads well, then apply it (or edit it first).'
+        : 'Review ACP’s proposed fix — apply it, edit it first, or reject it to a person.'
+    case 'handoff':
+      return 'ACP’s fix was rejected — pick this one up by hand in the source app using the steps below.'
+    case 'recheck':
+      return 'This was edited — re-scan to confirm it now passes.'
+    case 'blocked':
+      return 'This can’t be remediated as-is — review what’s blocking it.'
+    default: // manual
+      return 'ACP can’t safely change this automatically — fix it by hand in the source app using the steps below.'
+  }
+}
+
 function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCount = 0, onApplyToMatching, scanId = null, draft = null, onDraftChange }) {
   if (!f) {
     return (
@@ -154,59 +153,92 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
   // "Mark as assigned" action — so it shares the manual detail treatment.
   const isHandoff = lane.key === 'handoff'
   const isManual = lane.key === 'manual' || isHandoff
+  // A deterministic fix ACP already applied. Its decision is a plain approve / "this looks wrong",
+  // not an edit-and-apply — the change is already written, so we don't offer an editable draft.
+  const isAutoFix = lane.key === 'review'
   const resolved = isResolved(f, decisions)
   const eyebrow = isHandoff ? 'Needs manual handling' : lane.key === 'manual' ? 'Manual remediation' : 'Review'
   // A drafted AI value the reviewer can adjust before applying. `draft` falls back to the finding's
   // proposed value until the reviewer types; `edited` flips the primary action to "Save edited fix".
-  const canEdit = !isManual && f.after != null && f.after !== ''
+  const canEdit = !isManual && !isAutoFix && f.after != null && f.after !== ''
   const draftValue = draft ?? (f.after ?? '')
   const edited = canEdit && draftValue !== (f.after ?? '')
+  // The plain-language "What ACP changed" sentence — real values only (null when nothing to describe).
+  const changed = !isManual ? changeSentence(f) : null
+  const hasProposedValue = f.after != null && f.after !== ''
+  const sectionLabel = { fontSize: 11.5, letterSpacing: '.08em', textTransform: 'uppercase' }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ flex: '1 1 auto', overflowY: 'auto', padding: '18px 22px' }}>
-        {/* 1 · What do I need to do? */}
-        <p className="muted" style={{ fontSize: 11.5, letterSpacing: '.08em', textTransform: 'uppercase', margin: 0 }}>
-          {eyebrow}
-        </p>
+        {/* 1 · What is this — and what do I need to DO about it? */}
+        <p className="muted" style={{ ...sectionLabel, margin: 0 }}>{eyebrow}</p>
         <h3 style={{ margin: '4px 0 6px', fontSize: 19 }}>{r.issue}</h3>
         <p style={{ fontSize: 14, color: 'var(--ink)', margin: '0 0 4px' }}>{lane.didLine}.</p>
         <Meta row={{ ...r, wcag: (f.rule_id || f.ruleId || '') }} />
 
-        {/* Evidence — seeing the finding in the document — is the dedicated Document-preview pane on
-            the right (mockup layout), not folded in here, so the guided column stays a compact
-            problem → change → decision flow. */}
+        {/* Your task — the imperative, so the reviewer is never left guessing what to do here. Hidden
+            once the finding is resolved (the verification line below then speaks instead). */}
+        {!resolved && (
+          <div style={{ marginTop: 14, border: '1px solid var(--line,#e2dce4)', borderLeft: '3px solid var(--accent,#3b6fd6)',
+                        borderRadius: 8, padding: '10px 12px', background: 'var(--surface-2,#f6f5f8)' }}>
+            <p className="muted" style={{ ...sectionLabel, margin: '0 0 4px' }}>Your task</p>
+            <p style={{ fontSize: 13.5, lineHeight: 1.45, margin: 0 }}>{taskLineOf(f, lane)}</p>
+          </div>
+        )}
 
-        {/* 3 · What changed? (or, for manual, how to change it) */}
-        <div style={{ marginTop: 18 }}>
-          <p className="muted" style={{ fontSize: 11.5, letterSpacing: '.08em', textTransform: 'uppercase', margin: '0 0 8px' }}>
-            {isManual ? 'How to fix it' : 'What changed'}
-          </p>
-          {isManual
-            ? <ManualSteps f={f} />
-            : canEdit
-              ? (
-                <>
-                  <RemediationTransform finding={f} decisions={decisions} />  {/* Found → Proposed → Verified */}
-                  {/* Editable draft — the reviewer adjusts the exact text ACP will write, then applies
-                      their version. Empties reset to the AI's proposal (placeholder), never a blank fix. */}
-                  <div style={{ marginTop: 10 }}>
-                    <label className="muted" htmlFor="rem-draft" style={{ fontSize: 11.5, letterSpacing: '.08em', textTransform: 'uppercase', display: 'block', margin: '0 0 6px' }}>
-                      Edit before applying
-                    </label>
-                    <textarea id="rem-draft" value={draftValue} onChange={(e) => onDraftChange?.(e.target.value)}
-                              aria-label="Edit the proposed fix" rows={2}
-                              style={{ width: '100%', fontSize: 13.5, padding: '8px 10px', borderRadius: 8,
-                                       border: '1px solid var(--line,#e2dce4)', fontFamily: 'inherit', resize: 'vertical' }} />
-                    {edited && <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>Edited — “Save edited fix” writes your version instead of the AI’s.</p>}
-                  </div>
-                </>
-              )
-              : <BeforeAfter f={f} />}
-        </div>
+        {isManual ? (
+          /* Manual / handoff: there is no applied change to judge — show HOW to make it instead. */
+          <div style={{ marginTop: 18 }}>
+            <ManualSteps f={f} />
+          </div>
+        ) : (
+          <>
+            {/* 2 · Before / after — SEE the change, so a normal reviewer can judge whether the document
+                still looks acceptable. Grounded in the finding's real before/after (contrast swatches
+                with the ratio computed from the real colours, or the literal value change). */}
+            <div style={{ marginTop: 18 }}>
+              <p className="muted" style={{ ...sectionLabel, margin: '0 0 8px' }}>Before / after</p>
+              <GroundedBeforeAfter finding={f} />
+            </div>
 
-        {/* Collapsed context — kept out of the default view (spec: two collapsed sections). */}
-        {(f.rationale || f.whyMatters) && (
+            {/* 3 · What ACP changed — the plain sentence + the real values. */}
+            {changed && (
+              <div style={{ marginTop: 18 }}>
+                <p className="muted" style={{ ...sectionLabel, margin: '0 0 6px' }}>What ACP changed</p>
+                <p style={{ fontSize: 13.5, lineHeight: 1.5, margin: 0 }}>{changed}</p>
+              </div>
+            )}
+
+            {/* Editable draft (apply lane only) — the reviewer adjusts the exact text ACP will write,
+                then applies their version. Empties reset to the AI's proposal, never a blank fix.
+                Preserves the #412/#415 "Save edited fix" behaviour. */}
+            {canEdit && (
+              <div style={{ marginTop: 14 }}>
+                <label className="muted" htmlFor="rem-draft" style={{ ...sectionLabel, display: 'block', margin: '0 0 6px' }}>
+                  Edit before applying
+                </label>
+                <textarea id="rem-draft" value={draftValue} onChange={(e) => onDraftChange?.(e.target.value)}
+                          aria-label="Edit the proposed fix" rows={2}
+                          style={{ width: '100%', fontSize: 13.5, padding: '8px 10px', borderRadius: 8,
+                                   border: '1px solid var(--line,#e2dce4)', fontFamily: 'inherit', resize: 'vertical' }} />
+                {edited && <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>Edited — “Save edited fix” writes your version instead of the AI’s.</p>}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* 5 · Supporting details — collapsed by default. Useful evidence, but NOT a substitute for
+            seeing the change above. The Issue found → Proposed fix → Verified result strip lives here. */}
+        {!isManual && hasProposedValue && (
           <details style={{ marginTop: 16 }}>
+            <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Detection &amp; verification detail</summary>
+            <div style={{ marginTop: 10 }}>
+              <RemediationTransform finding={f} decisions={decisions} />  {/* Found → Proposed → Verified */}
+            </div>
+          </details>
+        )}
+        {(f.rationale || f.whyMatters) && (
+          <details style={{ marginTop: 8 }}>
             <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Why this matters</summary>
             <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>{f.whyMatters || f.rationale}</p>
           </details>
@@ -221,7 +253,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
         )}
       </div>
 
-      {/* 3 · Sticky action bar */}
+      {/* 4 · Sticky decision bar */}
       <div style={{ flex: '0 0 auto', borderTop: '1px solid var(--line,#e2dce4)', background: 'var(--bg, #fff)' }}>
         {/* W8 — batch a decision across every other queued finding of the same rule/SC. Explicit and
             reversible-feeling: it names the count, and each target routes through the same onDecide
@@ -259,6 +291,17 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
               <button className="ghost" onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
               {/* Out of scope — this criterion doesn't apply to the document. Resolves the finding and
                   takes it out of the coverage denominator (persisted as an out_of_scope resolution). */}
+              <button className="ghost" onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
+            </>
+          ) : isAutoFix ? (
+            /* An auto-applied fix: the change is already written, so the decision is a clear approve or
+               a flag that it looks wrong — not an edit-and-apply. "This looks wrong" hands the finding
+               back for a person; it does NOT auto-revert the applied change (no backend undo exists —
+               see PR body), so it is labelled as a flag, not a "reject & revert". */
+            <>
+              <button className="primary" onClick={() => onDecide?.(f, { state: 'accepted' })}>Approve ACP’s fix</button>
+              <button className="ghost" onClick={() => onDecide?.(f, { state: 'rejected' })}>This looks wrong</button>
+              {onOpenWord && <button className="ghost" onClick={() => onOpenWord(f)}>Open in Word</button>}
               <button className="ghost" onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
             </>
           ) : (

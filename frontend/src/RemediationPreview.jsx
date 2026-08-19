@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import Thumbnail from './Thumbnail.jsx'
 import { locationLabel } from './remediationInboxModel.js'
+import { natureOf, contrastEvidence } from './remediationEvidence.js'
+import GroundedBeforeAfter from './GroundedBeforeAfter.jsx'
 
 // The third pane of the remediation workspace: a CONTEXTUAL PREVIEW of the actual document.
 //
@@ -77,8 +79,11 @@ function Zoomable({ zoom, children }) {
   )
 }
 
-// Findings whose evidence is a region of the rendered page (vs. document structure/metadata).
-// A locator, an embedded-element thumb, or a page number all mean "there is something to point at".
+// Whether we have COORDINATES to point at on the rendered page — a locator, an embedded-element
+// thumb, or a page number. This is a data-availability question (can we draw a box / render the right
+// page?), NOT the "is this visible?" question — that one is answered by the criterion's NATURE
+// (remediationEvidence.natureOf). Keeping the two separate is the whole fix for the copy bug: a
+// contrast finding with no locator is still a VISIBLE finding, just one we can't pinpoint.
 function hasVisualAnchor(f) {
   return !!(f?.locator || f?.proposals?.[0]?.locator || f?.thumb || (f?.page != null && f?.page !== ''))
 }
@@ -126,8 +131,9 @@ function Original({ f }) {
 
 function PageView({ f, scanId }) {
   // The rendered page with the flagged element boxed (Thumbnail draws the measured bbox + zoom).
-  // Self-hides when there is no render; we detect that by asking whether there is anything to
-  // anchor on, and otherwise show the honest structure note.
+  // Real geometry only: for pptx/xlsx a resolvable locator yields a measured box + zoom-to-object
+  // crop; for docx/pdf there is no per-element box, so we render the page (or, with no scan, an
+  // honest note) — never a fabricated highlight.
   if (scanId && hasVisualAnchor(f)) {
     return (
       <div style={{ display: 'grid', placeItems: 'center' }}>
@@ -135,17 +141,21 @@ function PageView({ f, scanId }) {
       </div>
     )
   }
-  const structural = !hasVisualAnchor(f)
+  // The message depends on the criterion's NATURE, not on whether we have coordinates. A structural /
+  // metadata finding genuinely isn't on the page; a visible finding we simply can't pinpoint is still
+  // visible — so it must NOT be mislabelled "structure or metadata" (the copy bug this fixes).
+  const structural = natureOf(f, hasVisualAnchor(f)) === 'structural'
+  const message = structural
+    ? 'This finding is about the document’s structure or metadata — it isn’t visible on the rendered page.'
+    : hasVisualAnchor(f)
+      ? 'A live page preview appears here when the workspace is connected to a scan.'
+      : 'We can’t pinpoint this on the page automatically, but the change is shown below.'
   return (
     <div className="muted" style={{ display: 'grid', placeItems: 'center', textAlign: 'center', padding: '28px 18px',
                                     border: '1px dashed var(--line,#e2dce4)', borderRadius: 10, minHeight: 160 }}>
       <div>
         <div style={{ fontSize: 26 }} aria-hidden="true">{structural ? '⌘' : '🖼'}</div>
-        <p style={{ margin: '8px 0 0', fontSize: 13 }}>
-          {structural
-            ? 'This finding is about the document’s structure or metadata — it isn’t visible on the rendered page.'
-            : 'A live page preview appears here when the workspace is connected to a scan.'}
-        </p>
+        <p style={{ margin: '8px 0 0', fontSize: 13 }}>{message}</p>
       </div>
     </div>
   )
@@ -229,10 +239,14 @@ export default function RemediationPreview({ finding, scanId = null, embedded = 
   const fmt = String(finding.file || '').split('.').pop().toUpperCase()
   const sourceUrl = finding.sourceUrl || finding.source_url || null
 
-  // Structure mode is offered ONLY when the finding has no visual anchor — i.e. it really is a
-  // structure/metadata issue. Adding it for a visible finding would promise a view we cannot honestly
-  // fill, so the mode list itself stays truthful.
-  const structural = !hasVisualAnchor(finding)
+  // Structure mode is offered ONLY when the finding really is a structure/metadata issue — judged by
+  // the criterion's NATURE, not by whether we have coordinates. A contrast finding with no locator is
+  // visible, not structural, so it does NOT get a Structure tab (and never the "structure or metadata"
+  // copy). Adding Structure to a visible finding would promise a view we cannot honestly fill.
+  const structural = natureOf(finding, hasVisualAnchor(finding)) === 'structural'
+  // Grounded contrast evidence (real before/after colours) when the finding carries it — surfaced in
+  // Visual mode so the reviewer SEES the change even with no page render (docx/pdf have no crop).
+  const contrast = contrastEvidence(finding)
   const MODES = structural
     ? [['visual', 'Visual'], ['properties', 'Properties'], ['structure', 'Structure']]
     : [['visual', 'Visual'], ['properties', 'Properties']]
@@ -281,6 +295,7 @@ export default function RemediationPreview({ finding, scanId = null, embedded = 
           {activeMode === 'visual' && (
             <>
               <Zoomable zoom={zoom}><PageView f={finding} scanId={scanId} /></Zoomable>
+              {contrast && <div style={{ marginTop: 12 }}><GroundedBeforeAfter finding={finding} /></div>}
               <FixCallouts f={finding} />
             </>
           )}
@@ -360,6 +375,12 @@ export default function RemediationPreview({ finding, scanId = null, embedded = 
               <FixCallouts f={finding} />
             </div>
           </div>
+        )}
+        {/* Grounded contrast swatches — the affected text at the real old vs new colour, on the real
+            background, with the ratio computed from those colours. Shown in every Visual view because
+            it IS the before→after, and it is the honest stand-in where docx/pdf have no page crop. */}
+        {activeMode === 'visual' && contrast && (
+          <div style={{ marginTop: 14 }}><GroundedBeforeAfter finding={finding} /></div>
         )}
       </div>
 
