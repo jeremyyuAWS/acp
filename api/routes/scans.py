@@ -107,7 +107,12 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
             from handlers import _scan_discover
             scan_id = uuid.uuid4().hex[:12]
             core.register_scan_tokens(scan_id, drive=token, sp=sp_token)  # in-memory only
-            _scan_discover({"source": source, "scan_id": scan_id, "folder": folder, "ai": ai,
+            # `folders`/`exclude_folders` MUST come along. Deferred discovery is the default
+            # since #436, so this is the primary path — and a payload that carries only `folder`
+            # drops a chosen scope silently: the card says "Scans: HR" and the scan covers the
+            # whole Drive. Widening is the one direction nobody re-checks.
+            _scan_discover({"source": source, "scan_id": scan_id, "folder": folder,
+                            "folders": folders, "exclude_folders": exclude_folders, "ai": ai,
                             "user": user, "pii": pii, "batch": batch,
                             "exclude_remediated": exclude_remediated, "incremental": incremental},
                            {"scan_id": scan_id})
@@ -146,7 +151,10 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
                 from handlers import _scan_discover
                 sid = uuid.uuid4().hex[:12]
                 core.register_scan_tokens(sid, drive=token, sp=sp_token)  # in-memory only
-                _scan_discover({"source": source, "scan_id": sid, "folder": folder, "ai": ai,
+                # Same as the sync branch above: the chosen scope has to travel with the
+                # payload or the default scan silently widens to the whole source.
+                _scan_discover({"source": source, "scan_id": sid, "folder": folder,
+                                "folders": folders, "exclude_folders": exclude_folders, "ai": ai,
                                 "user": user, "pii": pii, "batch": batch,
                                 "exclude_remediated": exclude_remediated,
                                 "incremental": incremental}, {"scan_id": sid})

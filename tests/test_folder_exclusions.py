@@ -164,3 +164,47 @@ def test_a_single_root_with_no_exclusions_is_byte_identical_to_before():
     assert scope["kind"] == "folder" and scope["folder_id"] == "prog"
     assert scope["folder_name"] == "Programme"
     assert "excluded" not in scope
+
+
+# ── the chosen scope has to REACH the scan ───────────────────────────────────────────────────
+# Deferred (metadata-only) discovery became the DEFAULT in #436, which made routes/scans.py's two
+# defer branches the primary scan paths. Both built a _scan_discover payload carrying only
+# `folder` — so a chosen folder set was dropped and the scan silently covered the whole source.
+# The card said "Scans: HR" and every scan still read the whole Drive.
+#
+# Widening is the one direction nobody re-checks: the count goes UP, which reads as MORE coverage
+# rather than as a broken boundary. Asserted on the payload, because that is where the loss
+# happened — asserting on a result would need a live Drive to show anything at all.
+
+def test_the_deferred_path_carries_the_chosen_folders(monkeypatch):
+    import core
+    import handlers
+    from routes import scans as scans_route
+
+    seen: dict = {}
+    monkeypatch.setattr(handlers, "_scan_discover", lambda payload, job: seen.update(payload),
+                        raising=True)
+    monkeypatch.setattr(handlers, "_defer_analysis_to_assess", lambda: True, raising=True)
+    monkeypatch.setattr(core, "register_scan_tokens", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(core.store, "get_ai_enabled", lambda: True, raising=False)
+    monkeypatch.setattr(core, "GOOGLE_CLIENT_ID", "", raising=False)
+
+    class _State:
+        user_email = "u@example.com"
+
+    class Req:
+        headers = {"x-drive-token": "t"}
+        state = _State()
+
+    # Every Query-defaulted parameter is passed explicitly: calling the route function directly
+    # bypasses FastAPI's dependency resolution, so anything omitted arrives as a Query object
+    # rather than its default and blows up somewhere unrelated.
+    scans_route.start_scan(Req(), source="drive", sync=True, folder=None,
+                           folders=["hr", "fin"], exclude_folders=["arch"],
+                           ai=True, queue=False, pii=False, fanout=False, batch=False,
+                           exclude_remediated=False, incremental=True)
+
+    assert seen.get("folders") == ["hr", "fin"], \
+        f"the chosen folders never reached discovery: {seen.get('folders')!r}"
+    assert seen.get("exclude_folders") == ["arch"], \
+        f"the exclusions never reached discovery: {seen.get('exclude_folders')!r}"

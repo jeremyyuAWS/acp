@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } fro
 import HitlBell from './HitlBell.jsx'
 import { refreshDriveToken } from './driveAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, SESSION_EXPIRED } from './api'
+import { getSources, getRubric, getConfig, getMe, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, getScanLocations, SESSION_EXPIRED } from './api'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
@@ -559,11 +559,34 @@ export default function App() {
       wantDrive && hasDriveToken ? 'drive' :
       'local'
     )
+    // THE SAVED SCOPE HAS TO REACH THE SCAN. The Sources card persists which folders a
+    // connection covers, and until this it was displayed and never sent: the card said
+    // "Scans: HR" and every scan still read the whole Drive. A scope that is shown but not
+    // applied is worse than none — it is a boundary the user believes in.
+    //
+    // Read here rather than held in state so it is never stale: the card can be edited in
+    // another tab between mount and scan, and one extra GET is cheaper than a scan that
+    // covered something else.
+    let picked = null
+    let excluded = null
+    if (!SIM && (apiSource === 'drive' || apiSource === 'sharepoint') && !folder) {
+      try {
+        const { locations } = await getScanLocations()
+        picked = (locations || {})[apiSource] || []
+        excluded = ((locations || {})._exclude || {})[apiSource] || []
+      } catch {
+        // A failed lookup must not silently widen the scan to the whole source, and must not
+        // block it either. Null means "not narrowed", which is what the server already does
+        // without the parameters — and the scope line on the result will say so honestly.
+        picked = null; excluded = null
+      }
+    }
+
     try {
       let fresh
       if (queuedScan) {
         // Durable path: enqueue a scan job, then poll until the scan is persisted.
-        const { scan_id, workers, worker_tier_alive } = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental)
+        const { scan_id, workers, worker_tier_alive } = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded)
         // Split topology (#113): the API's local pool is 0 by design — the standalone worker
         // container's heartbeat is what proves the queue is manned.
         if (!SIM && !workers && !worker_tier_alive) throw new Error('no workers available — the worker service looks down; check Monitor')
@@ -591,7 +614,7 @@ export default function App() {
         }
         if (!fresh) throw new Error('scan still processing — watch it finish in the Monitor queue')
       } else {
-        const { job_id } = await startScan(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental)
+        const { job_id } = await startScan(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded)
         let job
         do {
           await new Promise((r) => setTimeout(r, 350))
