@@ -1535,10 +1535,14 @@ def ensure_assess_trace(scan_id: str, level: str = "AA") -> None:
     RANK = {"A": 1, "AA": 2, "AAA": 3}
     target = RANK.get(str(level).upper(), 2)
     by_file: dict[str, dict] = {}              # file → {rule_id: count} for ALL failures (spans)
+    outcomes_by_file: dict[str, dict] = {}     # file → {PASS/FAIL/REVIEW/NOT_EVALUATED: count}
     blocking_files: set[str] = set()           # files with a failure at/below the target level
     for r in rows:
         f = r["file"]
         by_file.setdefault(f, {})
+        oc = outcomes_by_file.setdefault(f, {})
+        outcome = r.get("outcome") or "NOT_EVALUATED"
+        oc[outcome] = oc.get(outcome, 0) + 1
         if r["outcome"] == "FAIL":
             by_file[f][r["rule_id"]] = r.get("finding_count") or 1
             if RANK.get((r.get("level") or "A").upper(), 1) <= target:
@@ -1551,6 +1555,17 @@ def ensure_assess_trace(scan_id: str, level: str = "AA") -> None:
     # on a later scan doesn't reset any progress already made on it.
     from documents import resolve_doc_id
     identities = {r["file"]: r for r in core.store.list_file_identities(scan_id)}
+    # PII flag per file — fetched once, grouped by file. `pii_type` is a CATEGORY ('us_ssn',
+    # 'email_address'), never the value (the same `sensitive_data_types` the PII span already
+    # sends); masked samples are deliberately not read here.
+    pii_by_file: dict[str, dict] = {}
+    for p in core.store.list_pii(scan_id):
+        e = pii_by_file.setdefault(p["file"], {"types": set(), "findings": 0, "critical": False})
+        if p.get("pii_type"):
+            e["types"].add(p["pii_type"])
+        e["findings"] += int(p.get("count") or 0)
+        if str(p.get("severity") or "").lower() in ("critical", "high"):
+            e["critical"] = True
     for f in (res or {}).get("files", []):
         fname = f["file"]
         ftrace = _lf.file_trace(scan_id, fname, user=owner)
@@ -1570,11 +1585,21 @@ def ensure_assess_trace(scan_id: str, level: str = "AA") -> None:
             conformant = not bool(f.get("issues"))
         aspan.end(output={"conformant": conformant, "failing_criteria": len(sc_counts or {})})
         _lf.file_score(scan_id, fname, f.get("score"))
-        # Trace-level verdict, so the Langfuse session list shows the outcome per file instead of
-        # "no input or output" — the score, conformance, and the failing WCAG criteria + counts.
+        pe = pii_by_file.get(fname)
+        pii_payload = ({"flagged": True, "types": sorted(pe["types"]),
+                        "findings": pe["findings"], "critical": pe["critical"]}
+                       if pe else {"flagged": False, "types": [], "findings": 0, "critical": False})
+        remediation = {"remediated": bool(f.get("remediated_at")),
+                       "written_back": bool(f.get("drive_write_url")),
+                       "published": bool(f.get("published_at"))}
+        # Trace-level verdict for the session list: score + conformance + failing WCAG criteria,
+        # the full per-check pass/fail/review/not-evaluated breakdown, a PII flag, and remediation
+        # status. Structured only — no document content (see lf.file_assessment_result).
         _lf.file_assessment_result(scan_id, fname, score=f.get("score"),
                                    conformant=conformant, level=level,
-                                   failing_criteria=sc_counts)
+                                   failing_criteria=sc_counts,
+                                   outcomes=outcomes_by_file.get(fname),
+                                   pii=pii_payload, remediation=remediation)
     _lf.flush()
 
 

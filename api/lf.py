@@ -850,27 +850,42 @@ def file_score(scan_id: str, file: str, score: float | None) -> None:
 
 def file_assessment_result(scan_id: str, file: str, *, score: float | None,
                            conformant: bool, level: str,
-                           failing_criteria: dict | None = None) -> None:
+                           failing_criteria: dict | None = None,
+                           outcomes: dict | None = None, pii: dict | None = None,
+                           remediation: dict | None = None) -> None:
     """Attach the WCAG assessment RESULT to a file's trace as trace-level OUTPUT, so the session
     view shows the outcome instead of 'no input or output'. Complements file_score (a Langfuse
     SCORE) and the per-rule spans (the ✓/✗ detail); this is the one-line verdict the list view
-    reads. Structured only — a number, a boolean, the failing WCAG SC codes and their counts,
-    and tallies. Never document content or a finding's text (docs/audit-langfuse-phi.md): the
-    keys are WCAG identifiers like '1.4.3', the values are counts. Idempotent — a re-assess
-    upserts the trace's output by id."""
+    reads. Structured only — numbers, booleans, WCAG SC codes and PII TYPE categories. Never
+    document content, a finding's text, or a raw PII value (docs/audit-langfuse-phi.md): the SC
+    keys are identifiers like '1.4.3', the PII entries are type categories like 'us_ssn' (the
+    same `sensitive_data_types` the PII span already sends), everything else is a count/flag.
+    Idempotent — a re-assess upserts the trace's output by id.
+
+    `outcomes` — full per-check breakdown {PASS/FAIL/REVIEW/NOT_EVALUATED: count}.
+    `pii`      — {flagged, types:[…], findings:int, critical:bool}.
+    `remediation` — {remediated, written_back, published} booleans.
+    """
     lf = _lf()
     if lf is None:
         return
     fc = {str(k): int(v) for k, v in (failing_criteria or {}).items()}
+    out = {
+        "score": float(score) if score is not None else None,
+        "conformant": bool(conformant),
+        "level": level,
+        "checks_failed": len(fc),
+        "failing_criteria": fc,                 # {WCAG SC code: finding_count} — no free text
+        "findings_total": sum(fc.values()),
+    }
+    if outcomes is not None:
+        out["checks"] = {str(k): int(v) for k, v in outcomes.items()}
+    if pii is not None:
+        out["pii"] = pii                        # {flagged, types(categories), findings, critical}
+    if remediation is not None:
+        out["remediation"] = {k: bool(v) for k, v in remediation.items()}
     try:
-        lf.trace(id=_trace_id(scan_id, file)).update(output={
-            "score": float(score) if score is not None else None,
-            "conformant": bool(conformant),
-            "level": level,
-            "checks_failed": len(fc),
-            "failing_criteria": fc,                 # {WCAG SC code: finding_count} — no free text
-            "findings_total": sum(fc.values()),
-        })
+        lf.trace(id=_trace_id(scan_id, file)).update(output=out)
     except Exception:
         pass
 
