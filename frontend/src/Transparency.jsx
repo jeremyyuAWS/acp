@@ -3,6 +3,7 @@ import { openTraceUrl, getTraceStatus, getScanTraces } from './api.js'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer from './FileDrawer.jsx'
 import TracePanel from './TracePanel.jsx'
+import SessionPanel from './SessionPanel.jsx'
 import { WCAG } from './wcagCatalog.js'
 import { allRules } from './rules/index.js'
 import { DOCUMENTS_20 } from './documents20.js'
@@ -34,10 +35,13 @@ const assessLevel = (scanId) => {
 export function TraceChip({ scanId, kind = 'session', file = null, label = 'View trace', title, refreshKey = 0 }) {
   const url = openTraceUrl(scanId, kind, file)
   const [available, setAvailable] = useState(null)
-  // A per-FILE trace renders IN-APP (TracePanel) rather than sending the user out to
-  // Langfuse — its public page hangs for logged-out users on our self-hosted v3 and can't
-  // be iframed. Session chips (a whole scan) keep the outbound link for now.
-  const inApp = kind === 'file' && !!file
+  // Traces render IN-APP rather than sending the user out to Langfuse — its page hangs for
+  // logged-out users on our self-hosted v3 and can't be iframed. A per-FILE chip opens the file
+  // TracePanel; a whole-scan SESSION chip opens the SessionPanel (the aggregate that used to hang
+  // Langfuse itself). Both report their own state, so neither is gated on the availability probe.
+  const inAppFile = kind === 'file' && !!file
+  const inAppSession = kind === 'session' && !!scanId
+  const inApp = inAppFile || inAppSession
   const [panelOpen, setPanelOpen] = useState(false)
   useEffect(() => {
     if (!url || inApp) return   // in-app chips render unconditionally; the panel reports state
@@ -66,10 +70,14 @@ export function TraceChip({ scanId, kind = 'session', file = null, label = 'View
   if (inApp) return (
     <>
       <button type="button" className="tracechip" onClick={() => setPanelOpen(true)}
-              title={title || 'View this document’s trace inside AccessOps (no Langfuse login)'}>
+              title={title || (inAppSession
+                ? 'View this scan’s traces inside AccessOps (no Langfuse login)'
+                : 'View this document’s trace inside AccessOps (no Langfuse login)')}>
         📊 {label}
       </button>
-      {panelOpen && <TracePanel scanId={scanId} file={file} onClose={() => setPanelOpen(false)} />}
+      {panelOpen && (inAppSession
+        ? <SessionPanel scanId={scanId} onClose={() => setPanelOpen(false)} />
+        : <TracePanel scanId={scanId} file={file} onClose={() => setPanelOpen(false)} />)}
     </>
   )
   if (available === false) return (

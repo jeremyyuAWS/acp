@@ -381,6 +381,28 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
     return {"scan_id": sid, "level": level, "job_id": jid, "workers": core.WORKERS}
 
 
+@router.get("/scans/{sid}/trace/session/data")
+def session_trace_data(sid: str):
+    """Data source for the IN-APP session panel: the whole scan's Langfuse session (every file's
+    trace) fetched server-side (lf.fetch_session) and returned as a PHI-safe list + rollup, so ACP
+    renders the aggregate inline. This is the view that hung the Langfuse UI on large scans; in-app
+    it is a plain, capped list ACP controls. Honest states like the file /data route:
+      • {"status": "not_configured"} — tracing keys absent
+      • {"status": "pending"}        — session not ingested yet
+      • {"status": "ok", "session": …}
+    Registered BEFORE the literal /trace/session and the /trace/{kind} wildcard (registration
+    order), though its two-segment suffix already keeps it unambiguous. Public — read-only."""
+    import lf as _lf
+    if core.store.get_scan(sid) is None:
+        raise HTTPException(404, "scan not found")
+    if not _lf.enabled():
+        return {"status": "not_configured"}
+    data = _lf.fetch_session(sid)
+    if data is None:
+        return {"status": "pending"}
+    return {"status": "ok", "session": data}
+
+
 @router.get("/scans/{sid}/trace/session")
 def open_session(sid: str):
     """'View this scan' target under file-centric tracing (see lf.file_trace): every file

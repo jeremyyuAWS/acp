@@ -285,6 +285,17 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .tp-obs-dur { font-size: 11px; margin-left: auto; }
 .tp-obs-meta { display: flex; gap: 10px; font-size: 11px; margin-top: 4px; }
 .tp-obs-status { font-size: 11px; margin-top: 4px; }
+
+/* Session panel (SessionPanel) — the whole-scan document list. */
+.sp-list { display: flex; flex-direction: column; gap: 6px; }
+.sp-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+  cursor: pointer; font: inherit; color: var(--ink); }
+.sp-row:hover { background: #faf7fd; border-color: #D9CCF2; }
+.sp-row-doc { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.sp-row-score { font-size: 13px; font-weight: 700; color: var(--ink); }
+.sp-row-ok { color: #1E6B37; font-weight: 700; }
+.sp-row-bad { color: #9A2727; font-weight: 700; }
 .rulebreak .rulerows { display: flex; flex-direction: column; gap: 7px; margin-top: 6px; }
 .rulerow { display: grid; grid-template-columns: minmax(170px, 1.3fr) 2fr minmax(135px, auto); align-items: center; gap: 12px; }
 .rulemeta { font-size: 12.5px; display: flex; align-items: center; gap: 6px; min-width: 0; }
