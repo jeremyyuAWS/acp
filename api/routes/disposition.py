@@ -49,6 +49,23 @@ def _persist_tags(doc: dict, cfg: dict, policy_id: str) -> None:
                                  tags, kind="system", rule_id=policy_id)
 
 
+def _trace_decision(doc_id: str, path: str | None, *, action: str, status: str,
+                    policy_id: str | None, reason: str | None) -> None:
+    """Best-effort Langfuse span for a disposition/approval decision (Langfuse audit N2).
+
+    Disposition was the one decision surface with no trace — the approval queue (#360) records
+    to disposition_audit but emitted nothing to Langfuse, unlike the HITL review decisions. This
+    mirrors that coverage. PHI-safe by construction: the helper sends only counts, statuses and
+    ids and reduces the free-text `reason` to a length (see api/lf.trace_disposition_decision and
+    docs/audit-langfuse-phi.md). Never blocks the decision it observes."""
+    try:
+        import lf as _lf
+        _lf.trace_disposition_decision(doc_id, path, action=action, status=status,
+                                       policy_id=policy_id, reason=reason)
+    except Exception:
+        pass
+
+
 class PolicyCreate(BaseModel):
     name: str
     match: list[dict]
@@ -171,11 +188,13 @@ def execute_policy(policy_id: str, request: Request):
             continue
         audit_id = uuid.uuid4().hex[:12]
         if policy.get("requires_approval"):
+            detail = f"queued by policy '{policy['name']}' — awaiting approval"
             core.store.create_disposition_audit(
                 audit_id, doc_id=doc["doc_id"], policy_id=policy_id,
-                action=policy["action"], result="pending_approval",
-                detail=f"queued by policy '{policy['name']}' — awaiting approval")
+                action=policy["action"], result="pending_approval", detail=detail)
             summary["pending_approval"] += 1
+            _trace_decision(doc["doc_id"], doc.get("path"), action=policy["action"],
+                            status="pending_approval", policy_id=policy_id, reason=detail)
         else:
             result, detail = disposition.execute_action(doc, policy["action"], cfg, svc)
             if result == "applied" and policy["action"] == "tag":
@@ -184,6 +203,8 @@ def execute_policy(policy_id: str, request: Request):
                 audit_id, doc_id=doc["doc_id"], policy_id=policy_id,
                 action=policy["action"], result=result, detail=detail)
             summary[result] += 1
+            _trace_decision(doc["doc_id"], doc.get("path"), action=policy["action"],
+                            status=result, policy_id=policy_id, reason=detail)
     core.store.log_decision("admin", "disposition.policy_executed",
                             detail=f"{policy['name']}: {summary}")
     return {"policy_id": policy_id, **summary}
@@ -244,10 +265,13 @@ def approve_disposition(audit_id: str, request: Request,
     if row is None or row["result"] != "pending_approval":
         raise HTTPException(404, "no pending approval with that id")
     if not execute:
-        core.store.set_disposition_audit_result(audit_id, "approved",
-                                                "approved by admin — decision recorded, file not touched")
+        detail = "approved by admin — decision recorded, file not touched"
+        core.store.set_disposition_audit_result(audit_id, "approved", detail)
         core.store.log_decision("admin", "disposition.approved",
                                 detail=f"{row['action']} {row['doc_id']}: recorded, not executed")
+        _trace_decision(row["doc_id"], (core.store.get_document(row["doc_id"]) or {}).get("path"),
+                        action=row["action"], status="approved", policy_id=row["policy_id"],
+                        reason=detail)
         return core.store.get_disposition_audit(audit_id)
     policy = core.store.get_disposition_policy(row["policy_id"]) or {}
     cfg = json.loads(policy.get("action_config") or "{}")
@@ -255,6 +279,8 @@ def approve_disposition(audit_id: str, request: Request,
     doc = docs.get(row["doc_id"])
     if doc is None:
         core.store.set_disposition_audit_result(audit_id, "failed", "document no longer exists")
+        _trace_decision(row["doc_id"], None, action=row["action"], status="failed",
+                        policy_id=row["policy_id"], reason="document no longer exists")
         raise HTTPException(410, "document no longer exists")
     result, detail = disposition.execute_action(doc, row["action"], cfg, _drive_svc(request))
     if result == "applied" and row["action"] == "tag":
@@ -262,6 +288,8 @@ def approve_disposition(audit_id: str, request: Request,
     core.store.set_disposition_audit_result(audit_id, result, detail)
     core.store.log_decision("admin", f"disposition.{result}",
                             detail=f"{row['action']} {row['doc_id']}: {detail}"[:200])
+    _trace_decision(row["doc_id"], doc.get("path"), action=row["action"], status=result,
+                    policy_id=row["policy_id"], reason=detail)
     return core.store.get_disposition_audit(audit_id)
 
 
@@ -277,4 +305,7 @@ def reject_disposition(audit_id: str, request: Request):
     core.store.set_disposition_audit_result(audit_id, "rejected", "declined by admin")
     core.store.log_decision("admin", "disposition.rejected",
                             detail=f"{row['action']} {row['doc_id']}")
+    _trace_decision(row["doc_id"], (core.store.get_document(row["doc_id"]) or {}).get("path"),
+                    action=row["action"], status="rejected", policy_id=row["policy_id"],
+                    reason="declined by admin")
     return core.store.get_disposition_audit(audit_id)
