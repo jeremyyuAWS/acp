@@ -19,7 +19,9 @@ const QUEUE = [
 ]
 
 let container, root
-beforeEach(() => { ;({ container, root } = createTestRoot()) })
+// The workspace layout + pane sizes persist in localStorage; clear it so each test starts from the
+// Split default rather than inheriting a previous test's choice.
+beforeEach(() => { try { localStorage.clear() } catch {} ;({ container, root } = createTestRoot()) })
 
 // Interaction tests use a deterministic document sort so the queue order is stable;
 // the priority-default ordering (critical-first) is covered by remediationInboxModel.test.js.
@@ -140,5 +142,67 @@ describe('RemediationInbox — workflow-status queue', () => {
     const rows = [...container.querySelectorAll('.rinbox-row')]
     expect(rows.some((r) => r.textContent.includes('Image needs alt text'))).toBe(true)
     expect(rows.some((r) => r.textContent.includes('Scanned page'))).toBe(false)
+  })
+
+  // ── Workspace layout controls: Split / Stacked / Focus + resizable dividers ──
+  const layoutBtn = (label) => [...container.querySelectorAll('[role=group][aria-label="Workspace layout"] button')]
+    .find((b) => b.textContent.trim() === label)
+  const rinbox = () => container.querySelector('.rinbox')
+  const sep = (label) => [...container.querySelectorAll('[role=separator]')].find((s) => s.getAttribute('aria-label') === label)
+
+  it('offers a Split / Stacked / Focus layout toggle, defaulting to Split with both workspace panes', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    expect(layoutBtn('Split')).toBeTruthy()
+    expect(layoutBtn('Stacked')).toBeTruthy()
+    expect(layoutBtn('Focus')).toBeTruthy()
+    expect(rinbox().getAttribute('data-layout')).toBe('split')
+    expect(layoutBtn('Split').getAttribute('aria-pressed')).toBe('true')
+    // Split shows both the guided pane and the document preview.
+    expect(container.textContent).toContain('Guided remediation')
+    expect(container.textContent).toContain('Document preview')
+  })
+
+  it('Focus hides the document preview; switching back to Split restores it', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    await click(layoutBtn('Focus'))
+    expect(rinbox().getAttribute('data-layout')).toBe('focus')
+    expect(container.textContent).not.toContain('Document preview')  // preview pane removed
+    expect(container.textContent).toContain('Guided remediation')    // the fix still has the workspace
+    await click(layoutBtn('Split'))
+    expect(container.textContent).toContain('Document preview')
+  })
+
+  it('Stacked keeps both panes and exposes a horizontal resize between them', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    await click(layoutBtn('Stacked'))
+    expect(rinbox().getAttribute('data-layout')).toBe('stacked')
+    expect(container.textContent).toContain('Guided remediation')
+    expect(container.textContent).toContain('Document preview')
+    // In Split the preview divider is vertical; in Stacked it is horizontal.
+    expect(sep('Resize the document preview').getAttribute('aria-orientation')).toBe('horizontal')
+  })
+
+  it('persists the layout choice and restores it on the next mount', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    await click(layoutBtn('Stacked'))
+    expect(localStorage.getItem('acp.remediate.layout')).toBe('stacked')
+    // A fresh mount (no initialLayout prop) reads the stored preference. Await the teardown — it is
+    // async, and a floating unmount rips the DOM out from under the next test.
+    await unmountAll()
+    ;({ container, root } = createTestRoot())
+    await render({ queue: QUEUE, decisions: {} })
+    expect(rinbox().getAttribute('data-layout')).toBe('stacked')
+  })
+
+  it('dividers are keyboard-resizable (role=separator, Arrow keys change the split)', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    const d = sep('Resize the inbox')
+    expect(d.getAttribute('aria-orientation')).toBe('vertical')
+    const before = Number(d.getAttribute('aria-valuenow'))     // 28 by default
+    await act(async () => { d.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })) })
+    const after = Number(sep('Resize the inbox').getAttribute('aria-valuenow'))
+    expect(after).toBeGreaterThan(before)
+    // …and the widened inbox width is persisted.
+    expect(Number(localStorage.getItem('acp.remediate.leftW'))).toBeGreaterThan(before)
   })
 })
