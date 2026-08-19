@@ -1155,6 +1155,19 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
             scope_out.update({"kind": "sharepoint", "site": site, "kept": len(result),
                               "site_name": _sp_site_name(sp_token, site) if site else None,
                               "truncated": bool((scope_out.get("inventory") or {}).get("truncated"))})
+    elif source == "smb":
+        # Network drive (ADR 0032). `folder` carries the in-scope SMB share root (a UNC path), the
+        # same parameter Drive uses to narrow a scan and SharePoint reuses for the site id. The
+        # adapter lists the same file dicts and builds the same scope_out["inventory"] the other
+        # sources do — everything downstream is source-agnostic. The live SMB transport is
+        # deployment-gated (see smb_source._walk); discovery shape and inventory are real here.
+        import smb_source
+        root = folder if folder not in (None, "", "root") else (smb_source.smb_config()["shares"] or [""])[0]
+        result = smb_source.list_smb(root, max_files=max_files or 2000, scope_out=scope_out,
+                                     inventory_out=inventory_out)
+        if scope_out is not None:
+            scope_out.update({"kind": "smb", "root": root, "kept": len(result),
+                              "truncated": bool((scope_out.get("inventory") or {}).get("truncated"))})
     elif folder and folder != "root":
         # Specific folder: recursive BFS
         result = _search_folder(svc, folder, max_files or 1000,

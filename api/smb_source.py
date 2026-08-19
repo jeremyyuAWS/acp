@@ -1,0 +1,173 @@
+"""Network-drive (SMB/CIFS) source adapter — Phase 1 scaffolding (ADR 0032).
+
+A hospital's estate is not only Drive and SharePoint: a large, PHI-heavy share of it lives on on-prem
+SMB file servers (`\\\\fileserver\\dept`, `H:\\`). ADR 0032 decides that a network drive is *a new
+adapter, not a new pipeline* — everything downstream (the three-denominator inventory, the capability
+matrix, the remediation appliers) is source-agnostic, so this only has to (1) LIST the tree into the
+same file dicts discovery already consumes and (2) FETCH a file's bytes.
+
+Deployment (per the UTSW variant of ADR 0032): the worker runs inside the customer's own VNet and
+reaches on-prem shares over their private route; the read-only SMB service account credential comes
+from Key Vault via Managed Identity. None of that lives here — this module is the adapter, and the
+live SMB transport is isolated behind `_walk` / `_read` so the discovery logic is unit-testable
+against a mock share with no server and no `smbprotocol` installed. What is DEPLOYMENT-GATED and
+intentionally thin here: the real `smbprotocol` calls in `_walk`/`_read`, and Key Vault credential
+resolution (see `smb_config`). The shaping, inventory, folder-skipping and truncation logic is real.
+
+Mirrors `scanner._sp_list`: same file-dict shape, the same `scope_out["inventory"]` three-denominator
+summary, the same honest truncation floor, the same `inventory_out` for non-scannable files.
+"""
+from __future__ import annotations
+
+import mimetypes
+import os
+from pathlib import PurePath
+
+import estate_inventory
+
+# The six formats ACP assesses — identical to the Drive/SharePoint adapters. Everything else is
+# inventoried (counted, classified) but never opened, exactly as on the other sources.
+_SCANNABLE_EXTS = {".docx", ".pptx", ".xlsx", ".pdf", ".html", ".htm"}
+
+# ACP's own output must never be re-ingested (see provenance.py for the Drive equivalent): a share
+# holding a `.../ACP-Remediated/` mirror would otherwise inflate the count and show "remediated" on a
+# scan that remediated nothing. Skipped by PATH SEGMENT, so "ACP-Remediated Reports" is not matched.
+SMB_MIRROR_FOLDER = "ACP-Remediated"
+
+
+def smb_config() -> dict:
+    """The SMB connection config, from the environment. Shares are the in-scope UNC roots; the
+    credential is a read-only service account (`DOMAIN\\svc-acp`).
+
+    In the UTSW/VNet deployment the password is not an env var — it is a Key Vault secret the worker's
+    Managed Identity resolves. `ACP_SMB_CREDENTIAL_KV` names that secret; resolving it is deployment
+    wiring (the worker's MI + Key Vault client), left to the caller/runtime rather than done here so
+    this module has no cloud dependency. `password` is whichever of the two is present.
+    """
+    shares = [s.strip() for s in (os.environ.get("ACP_SMB_SHARES") or "").split(",") if s.strip()]
+    return {
+        "shares": shares,
+        "domain": os.environ.get("ACP_SMB_DOMAIN") or None,
+        "username": os.environ.get("ACP_SMB_USERNAME") or None,
+        "password": os.environ.get("ACP_SMB_PASSWORD") or None,
+        "credential_kv": os.environ.get("ACP_SMB_CREDENTIAL_KV") or None,  # Key Vault secret name
+    }
+
+
+def _mime_of(name: str) -> str | None:
+    """Best-effort MIME from the file name — an SMB directory listing carries no content type, so the
+    extension is all we have, exactly as the `local` adapter does."""
+    return mimetypes.guess_type(name)[0]
+
+
+def _size_kb(size) -> int | None:
+    try:
+        return round(int(size) / 1024) if size is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _join_unc(parent: str, name: str) -> str:
+    """The UNC path of a child — the file's stable `id`, the SMB analogue of a Drive file id. Uses
+    backslashes so the value round-trips as a real UNC (`\\\\server\\share\\dir\\file.docx`)."""
+    return parent.rstrip("\\") + "\\" + name
+
+
+def _file_dict(entry: dict, parent_unc: str) -> dict:
+    """Shape one directory entry into the scannable-file dict discovery consumes — the SMB counterpart
+    of `_sp_list`'s `rec`. `size`/`modified` come free from the listing (they feed the drill-down's
+    biggest-first / recency lenses with no extra round trip); SMB gives no cheap owner, so owner is
+    None rather than a wrong value."""
+    name = entry["name"]
+    return {
+        "name": name,
+        "path": _join_unc(parent_unc, name),      # UNC id + the download path
+        "smb": True,
+        "source_mime": _mime_of(name),
+        "size_kb": _size_kb(entry.get("size")),
+        "source_modified": entry.get("modified"),
+        "owner": None,
+        "parent_folder": parent_unc,
+    }
+
+
+# ── live SMB transport (deployment-gated; isolated so discovery is testable without it) ────────────
+def _walk(root: str, cfg: dict):
+    """Yield directory entries under an SMB root, recursively. Each entry is a dict
+    {name, is_dir, size, modified, path}. This is the ONLY function that speaks SMB, so tests
+    monkeypatch it and the discovery logic runs against a mock share.
+
+    The live implementation uses `smbprotocol` (SMB2/3, NTLM/Kerberos). It is imported lazily and
+    absent from api/requirements for now: standing up the transport is part of the connector/VNet
+    deployment work (ADR 0032), not this scaffolding. Calling it without that raises a clear error
+    rather than pretending to scan.
+    """
+    try:
+        import smbclient  # noqa: F401  (smbprotocol's high-level client)
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(
+            "SMB transport not available: install smbprotocol/smbclient and configure the read-only "
+            "service account (ADR 0032). Discovery logic is tested against a mock `_walk`; the live "
+            "walk is deployment-gated."
+        ) from e
+    # Live walk intentionally not implemented in this scaffolding PR — see ADR 0032 Phase 1.
+    raise NotImplementedError("live SMB walk is deployment-gated (ADR 0032 Phase 1)")
+
+
+def _read(path: str, cfg: dict) -> bytes:
+    """Read one file's bytes for assessment/remediation. Deployment-gated, same as `_walk`."""
+    try:
+        import smbclient  # noqa: F401
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError("SMB transport not available (see _walk)") from e
+    raise NotImplementedError("live SMB read is deployment-gated (ADR 0032 Phase 1)")
+
+
+# ── discovery (real, testable) ─────────────────────────────────────────────────────────────────
+def list_smb(root: str, *, max_files: int = 2000, cfg: dict | None = None,
+             scope_out: dict | None = None, inventory_out: list | None = None) -> list[dict]:
+    """List scannable files under an SMB `root`, with the whole-estate inventory on the side.
+
+    The RETURN value is the scannable analysis set (the six supported extensions) — unchanged shape,
+    so search/assess scope is exactly the other sources'. `scope_out["inventory"]` gets the same
+    three-denominator estate summary `_search_drive`/`_sp_list` build (discovered / by_status /
+    truncated), so a SMB scan's coverage dashboard is populated. `inventory_out`, when given, collects
+    a row for every NON-scannable file so Discover reports the whole estate while Assess only opens
+    supported types. `truncated` is honest: True only when the cap stopped the walk with items still
+    unlisted, never merely because the analysis set equalled the cap.
+    """
+    cfg = cfg or smb_config()
+    files: list[dict] = []
+    est_files: list[dict] = []           # every file (scannable or not) → the estate classifier
+    hit_cap = False
+
+    for entry in _walk(root, cfg):
+        if entry.get("is_dir"):
+            continue
+        parent = entry.get("path") or root
+        # Skip ACP's own remediation mirror by path segment (see SMB_MIRROR_FOLDER).
+        segments = PurePath(parent.replace("\\", "/")).parts
+        if SMB_MIRROR_FOLDER in segments:
+            continue
+        name = entry["name"]
+        scannable = PurePath(name).suffix.lower() in _SCANNABLE_EXTS
+        # Cap check BEFORE counting this file anywhere: a scannable file past the cap is the floor
+        # boundary — stop, and do not count it, so `discovered` matches exactly what was listed and
+        # `truncated` truthfully says there is more.
+        if scannable and len(files) >= max_files:
+            hit_cap = True
+            break
+        est_files.append({"id": _join_unc(parent, name), "name": name, "mimeType": _mime_of(name)})
+        if scannable:
+            files.append(_file_dict(entry, parent))
+        elif inventory_out is not None:
+            inventory_out.append(_file_dict(entry, parent))
+
+    if scope_out is not None:
+        scope_out["inventory"] = estate_inventory.summarize(est_files, truncated=hit_cap)
+    return files
+
+
+def fetch_smb(path: str, cfg: dict | None = None) -> bytes:
+    """Read one file for assessment/remediation. Thin pass-through to the gated transport."""
+    return _read(path, cfg or smb_config())
