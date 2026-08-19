@@ -117,39 +117,49 @@ describe('ScanReviewModal — chrome and labels', () => {
   })
 })
 
-describe('ScanReviewModal — scan behavior toggles', () => {
-  it('carries the four behavior toggles when their setters are wired', async () => {
+describe('ScanReviewModal — the engine switches are not on this surface', () => {
+  // PII scan, Durable scan, Skip Remediated/ and Incremental scan used to sit in front of every
+  // user before they could start a basic scan. They are platform behaviour, not per-run decisions
+  // a compliance officer should be asked to make: the wrong combination is slow, expensive, or
+  // silently narrowing, and none is answerable without knowing how the scanner works.
+  //
+  // Inverted rather than deleted, because "removed" is a claim that decays. The likeliest way this
+  // regresses is somebody restoring them behind an "Advanced" reveal — which is still surface, and
+  // Skip Remediated/ is exactly the one nobody should toggle casually.
+  it('renders none of the four, even when every setter is wired', async () => {
     const c = await mount({ source: 'all', ...BEHAVIOR })
     const d = dialog(c)
-    expect(d.textContent).toMatch(/Scan behavior/)
+    expect(d.textContent).not.toMatch(/Scan behavior/)
     for (const label of ['PII scan', 'Durable scan', 'Skip Remediated/', 'Incremental scan']) {
-      expect([...d.querySelectorAll('[role="switch"]')].some((s) => (s.getAttribute('aria-label') || '').includes(label)),
-        `missing behavior toggle "${label}"`).toBe(true)
+      expect([...d.querySelectorAll('[role="switch"]')].some((sw) => (sw.getAttribute('aria-label') || '').includes(label)),
+        `behaviour toggle "${label}" is back on the scan modal`).toBe(false)
     }
   })
 
-  it('omits the Scan behavior section entirely when no setters are wired (browse panels)', async () => {
-    const c = await mount({ source: 'drive', estCount: 3 })   // no toggle setters
-    expect(dialog(c).textContent).not.toMatch(/Scan behavior/)
-    expect([...dialog(c).querySelectorAll('[role="switch"]')].length).toBe(0)
-    // The wizard is still there — scope review always shows.
-    expect(dialog(c).textContent).toMatch(/Formats & WCAG criteria/)
+  it('does not hide them behind an Advanced reveal either', async () => {
+    const c = await mount({ source: 'all', ...BEHAVIOR })
+    const d = dialog(c)
+    expect(d.textContent).not.toMatch(/Advanced/i)
+    expect([...d.querySelectorAll('[role="switch"]')].length).toBe(0)
   })
 
-  it('flips a toggle through its setter', async () => {
-    const setDeepScan = vi.fn()
-    const c = await mount({ source: 'all', ...BEHAVIOR, setDeepScan })
-    const pii = [...dialog(c).querySelectorAll('[role="switch"]')].find((s) => (s.getAttribute('aria-label') || '').includes('PII scan'))
-    await click(pii)
-    expect(setDeepScan).toHaveBeenCalled()
+  it('still accepts the props, so callers keep working', async () => {
+    // The props are deliberately still in the signature: App passes them, and removing them from
+    // both sides at once would make this change bigger than it needs to be.
+    const c = await mount({ source: 'drive', estCount: 3, ...BEHAVIOR })
+    expect(dialog(c).textContent).toMatch(/Formats & WCAG criteria/)
   })
 })
 
 describe('ScanReviewModal — confirm / cancel', () => {
   it('mounts the wizard and runs onConfirm on Start scan', async () => {
+    // Three steps now, so Start is on the last one — walk there, as a user does.
     const onConfirm = vi.fn()
     const c = await mount({ source: 'drive', estCount: 5, onConfirm })
     expect(dialog(c).textContent).toMatch(/Formats & WCAG criteria/)
+    const cont = () => [...dialog(c).querySelectorAll('button')].find((b) => /Continue/.test(b.textContent))
+    await click(cont())
+    await click(cont())
     const start = startBtn(c)
     expect(start).toBeTruthy()
     await click(start)

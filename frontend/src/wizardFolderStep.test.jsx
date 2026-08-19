@@ -55,6 +55,18 @@ async function mount(onStartScan = () => {}, props = {}) {
 
 const btn = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent))
 
+// Start lives on step 3 of the wizard now. Walking there is what a user does, so the tests do it
+// too rather than reaching past the flow.
+async function toStart(c) {
+  for (let i = 0; i < 2; i++) {
+    const cont = btn(c, /Continue/)
+    if (!cont) break
+    // eslint-disable-next-line no-await-in-loop
+    await act(async () => { cont.click() })
+  }
+  return btn(c, /Start scan/)
+}
+
 describe('the card seeds the wizard', () => {
   it('shows the connection default rather than an empty scope', async () => {
     // If it opened empty, the user would see "entire source" and believe it — while the card said
@@ -77,7 +89,8 @@ describe('a change applies to this run only', () => {
   it('hands the chosen folders to the caller', async () => {
     const seen = []
     const c = await mount((o) => seen.push(o))
-    await act(async () => { btn(c, /Start scan/).click() })
+    const start = await toStart(c)
+    await act(async () => { start.click() })
     expect(seen[0]).toMatchObject({ folders: SAVED })
   })
 
@@ -86,7 +99,8 @@ describe('a change applies to this run only', () => {
     // configuration, and every later scheduled scan silently covers less.
     setScanLocations.mockClear()
     const c = await mount()
-    await act(async () => { btn(c, /Start scan/).click() })
+    const start = await toStart(c)
+    await act(async () => { start.click() })
     expect(setScanLocations).not.toHaveBeenCalled()
   })
 
