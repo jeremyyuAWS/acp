@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from 'react'
 import {
-  rowModel, laneOf, sortQueue, groupByDocument, nextUnresolvedId, progress,
+  rowModel, laneOf, sortQueue, groupByDocument, nextUnresolvedId, progress, railColorOf,
   matchesWorkflow, workflowCounts, workflowStepIndex, isResolved, WORKFLOW_TABS, WORKFLOW_LABELS, SORTS,
 } from './remediationInboxModel.js'
 import { fixSteps, appName } from './remediationGuide.js'
@@ -23,7 +23,7 @@ const fmtOf = (file) => String(file || '').split('.').pop().toLowerCase()
 const scKeyOf = (f) => scOf(f?.rule_id || f?.ruleId || f?.wcag)
 
 function LaneRail({ lane }) {
-  return <span aria-hidden="true" style={{ flex: '0 0 4px', alignSelf: 'stretch', borderRadius: 4, background: lane.color }} />
+  return <span aria-hidden="true" style={{ flex: '0 0 4px', alignSelf: 'stretch', borderRadius: 4, background: railColorOf(lane) }} />
 }
 
 function Meta({ row }) {
@@ -38,8 +38,13 @@ function Meta({ row }) {
   )
 }
 
-function QueueRow({ f, decisions, selected, onSelect }) {
+// `showFile` is false for rows sitting under a document group header (the header already names the
+// file) and true for a standalone single-finding row (no header, so the row carries the filename).
+// Either way the filename appears exactly once on screen for a given finding.
+function QueueRow({ f, decisions, selected, onSelect, showFile = true }) {
   const r = rowModel(f, decisions)
+  const railed = railColorOf(r.lane)
+  const subline = showFile ? `${r.file}${r.location ? ` · ${r.location}` : ''}` : r.location
   return (
     <button
       type="button"
@@ -50,7 +55,7 @@ function QueueRow({ f, decisions, selected, onSelect }) {
         display: 'flex', gap: 10, width: '100%', textAlign: 'left', cursor: 'pointer',
         padding: '10px 12px', border: 'none', borderBottom: '1px solid var(--line, #e2dce4)',
         background: selected ? 'var(--sel, #eef3ff)' : 'transparent',
-        borderLeft: selected ? `3px solid ${r.lane.color}` : '3px solid transparent',
+        borderLeft: selected ? `3px solid ${railed}` : '3px solid transparent',
       }}
     >
       <LaneRail lane={r.lane} />
@@ -60,10 +65,13 @@ function QueueRow({ f, decisions, selected, onSelect }) {
                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {r.issue}
         </span>
-        <span className="muted" style={{ display: 'block', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {r.file}{r.location ? ` · ${r.location}` : ''}
-        </span>
-        <span style={{ display: 'block', fontSize: 12, color: r.lane.color, marginTop: 2 }}>{r.did}</span>
+        {subline && (
+          <span className="muted" style={{ display: 'block', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {subline}
+          </span>
+        )}
+        {/* The lane's status is the badge below — the full sentence (r.did) is stated once, in the
+            workspace detail, not repeated on every row. */}
         <span style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 11, fontWeight: 600, color: r.lane.color,
                          border: `1px solid ${r.lane.color}`, borderRadius: 20, padding: '1px 8px' }}>
@@ -337,18 +345,26 @@ export default function RemediationInbox({
           {visible.length === 0 ? (
             <p className="muted" style={{ padding: 16, fontSize: 13 }}>Nothing here. {tab !== 'inbox' && <button className="linklike" onClick={() => setTab('inbox')}>Back to Inbox</button>}</p>
           ) : groups.map((g) => (
-            <div key={g.file}>
-              <button type="button" onClick={() => setCollapsed((c) => ({ ...c, [g.file]: !c[g.file] }))}
-                      style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, padding: '6px 12px', cursor: 'pointer',
-                               border: 'none', borderBottom: '1px solid var(--line,#e2dce4)', background: 'var(--surface-2,#f6f5f8)', fontSize: 12, fontWeight: 700 }}>
-                <span aria-hidden="true">{collapsed[g.file] ? '▸' : '▾'}</span>
-                <span style={{ flex: '1 1 auto', minWidth: 0, textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>📄 {g.file}</span>
-                <span className="muted" style={{ fontWeight: 400 }}>{g.items.length}</span>
-              </button>
-              {!collapsed[g.file] && g.items.map((f) => (
-                <QueueRow key={f.id} f={f} decisions={decisions} selected={f.id === selectedId} onSelect={setSelectedId} />
-              ))}
-            </div>
+            // A document with a SINGLE finding needs no expandable group header — the row itself
+            // names the file. Only multi-finding documents get the collapsible 📄 header, so the file
+            // is stated once either way.
+            g.items.length === 1 ? (
+              <QueueRow key={g.items[0].id} f={g.items[0]} decisions={decisions}
+                        selected={g.items[0].id === selectedId} onSelect={setSelectedId} showFile />
+            ) : (
+              <div key={g.file}>
+                <button type="button" onClick={() => setCollapsed((c) => ({ ...c, [g.file]: !c[g.file] }))}
+                        style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, padding: '6px 12px', cursor: 'pointer',
+                                 border: 'none', borderBottom: '1px solid var(--line,#e2dce4)', background: 'var(--surface-2,#f6f5f8)', fontSize: 12, fontWeight: 700 }}>
+                  <span aria-hidden="true">{collapsed[g.file] ? '▸' : '▾'}</span>
+                  <span style={{ flex: '1 1 auto', minWidth: 0, textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>📄 {g.file}</span>
+                  <span className="muted" style={{ fontWeight: 400 }}>{g.items.length}</span>
+                </button>
+                {!collapsed[g.file] && g.items.map((f) => (
+                  <QueueRow key={f.id} f={f} decisions={decisions} selected={f.id === selectedId} onSelect={setSelectedId} showFile={false} />
+                ))}
+              </div>
+            )
           ))}
         </div>
       </div>

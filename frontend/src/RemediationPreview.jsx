@@ -65,7 +65,10 @@ function ProposedValue({ f }) {
 }
 
 function Original({ f }) {
-  const before = f?.beforeLiteral ?? f?.before ?? null
+  // The ORIGINAL value to show — always `f.before` (the string). `beforeLiteral` is a boolean flag
+  // (Remediate.jsx sets `!!firstBefore(it)`), so the old `beforeLiteral ?? before` rendered the flag
+  // itself: "before true" when it had a literal, "before false" when it didn't — never the value.
+  const before = f?.before ?? null
   if (before == null || before === '') return null
   return (
     <div style={{ border: '1px solid var(--line,#e2dce4)', borderRadius: 8, padding: '10px 12px', fontSize: 13.5, marginTop: 10 }}>
