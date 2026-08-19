@@ -1,9 +1,10 @@
 # ACP — System Architecture
 
-> Accessibility Compliance Platform (mova.io). A read‑only document‑accessibility
-> assessment + server‑side remediation platform for Office/PDF/HTML, deployed on
-> Azure Container Apps. This document describes **how it is built** — the worker model,
-> the durable job queue, and every runtime component — as of `origin/main`.
+> **Movate AccessOps** (customer-facing name; **ACP** is the internal codebase name used
+> throughout). A read‑only document‑accessibility assessment + server‑side remediation platform
+> for Office/PDF/HTML, deployed on Azure Container Apps. This document describes **how it is
+> built** — the worker model, the durable job queue, and every runtime component — as of
+> `origin/main`.
 >
 > Grounded in the code (file:line anchors throughout). Diagrams are Mermaid and render on
 > GitHub. Companion to the slide deck in `docs/acp-architecture-deck.md`.
@@ -414,8 +415,11 @@ all — anything with a model in the decision path caps at *drafted‑then‑app
 
 ## 8. AI lanes (ADR 0019 / 0022)
 
-No commercial LLM SDK is in the dependency list — no Anthropic, no OpenAI, no key. The AI lane is a
-**governed provider gateway** with a local floor.
+No commercial LLM SDK is in the dependency list — every provider adapter is hand‑rolled `httpx`
+against the vendor API, so there is no key and no SDK in the build. `api/providers.py` defines
+**five vision adapters** — Ollama (local CPU floor), Azure OpenAI (`zone=tenant`), OpenAI, Anthropic,
+and RunPod serverless — behind a **governed provider gateway** with a local floor and an
+acceptance‑gated escalation.
 
 ```mermaid
 flowchart TB
@@ -431,14 +435,29 @@ flowchart TB
   key rides only in the request header, never persisted). On any miss it **falls back to the local
   CPU floor** (`_vision_generate`, `ai.py:556-582`) and provenance records whichever provider actually
   served — it never claims GPU when CPU ran. So enabling GPU "can only upgrade quality, never break AI."
+- **Acceptance‑gated cloud escalation** (ADR 0019 §2 / 0030) — a local CPU draft is quality‑gated by
+  `_is_usable_alt`: a weak model returning non‑empty **garbage** (symbol runs, single tokens) is
+  rejected, and the image escalates to a **customer‑approved cloud** provider (Azure OpenAI / OpenAI /
+  Anthropic) **only when an admin enabled one and its secret is present** — otherwise it defers to a
+  human. Provenance records the transparent numbered escalation path + `cost_usd`.
+- **Two GPU options** — RunPod serverless (`zone=cloud` 🟡) and an **in‑tenant Azure T4** (`gpu_up.sh`:
+  `NC8AS_T4`, `qwen2.5vl:7b`, in the same ACA env as acp-app, **internal ingress :11434**,
+  scale‑to‑zero). Both are reached through the Ollama adapter by repointing `OLLAMA_BASE_URL`, so it
+  is a "no‑code" cutover; the Azure T4's internal ingress deliberately keeps the zone chip **local 🟢**
+  (data never leaves the tenant), where external ingress would flip it to cloud.
 - **Text** — `OLLAMA_MODEL` (llama3.2) via Ollama; degrades to deterministic prose when unreachable.
 - **Runtime repoint** — `_maybe_refresh_endpoint()` (30s TTL) re‑reads admin overrides
   (`ai_base_url` / `ai_vision_model`) from `app_settings` and reassigns module globals **live, no
   restart** — the GPU‑burst pattern (`Settings → AI endpoint`, or `PUT /settings`).
 - **Provenance 🟢/🟡** — `zone` is derived from the endpoint host (localhost/`.internal`/private IP →
   local 🟢, else cloud 🟡): the "did my document leave my network?" answer.
-- **Langfuse** — one trace per file (`user:` tag for per‑user attribution), and PHI‑safe: the
-  filename is HMAC‑masked to `doc-<6hex>.<ext>`, the completion is sent as a **length**, not text.
+- **Langfuse (observability)** — env‑gated no‑op when unconfigured (`api/lf.py`). **Two traces per
+  scan**: a Scan/Discover trace (file→rule span tree, PII spans) and a separate Assess trace carrying
+  the 0–100 `compliance_score`; AI calls are Langfuse *generations* with model / tokens / **cost** /
+  zone. PHI‑safe: `user:` tag for per‑user attribution, the filename HMAC‑masked to `doc-<6hex>.<ext>`,
+  completions sent as **lengths**, not text. **v2 on one Postgres today; the v3 (ClickHouse + Redis +
+  S3/MinIO) migration is committed** — a backing‑store change, not an app rewrite. Deployed in
+  **eastus2**, project `acp-compliance`; see the deck's Observability slide for the full picture.
 
 ---
 
@@ -467,9 +486,17 @@ flowchart TB
   every read enforces `owner_email` (`get_scan` returns None on mismatch, `store.py:1423`).
 - **Token verification** asks the provider (Google `tokeninfo` / MS Graph `/me`), 9‑min cache — no
   local JWKS. `verify_ms_token` (`core.py:248`) gives Microsoft/Entra users the same posture as Google.
-- **Scope‑owner gating** — `scan_scope` is owner‑only (`PUT /settings` → `_require_admin` on
-  `OWNER_EMAIL`); `is_scope_owner` (surfaced on `/me` and `/config`) lets the SPA hide the scope editor
-  for non‑owners.
+- **Scope resolution** — the owner sets a global `scan_scope` (`PUT /settings` → `_require_admin` on
+  `OWNER_EMAIL`; `is_scope_owner`, on `/me` and `/config`, hides the editor for non‑owners). A
+  **per‑user override** now layers on top (ADR 0035, `store.set_user_setting` / `resolve_setting`):
+  precedence is **per‑user override → owner global default → no restriction**. The storage/resolution
+  primitive is shipped; threading it through the whole assessment hot path is in progress.
+- **Sources authenticate differently** — Google Drive (keyless ADC or per‑user GIS), SharePoint/
+  OneDrive (Entra via Graph), and the new **SMB on‑prem connector** (ADR 0032/0036): a read‑only
+  `svc-acp` NTFS account, credential from Key Vault via Managed Identity, running **inside** the
+  customer network and talking to Azure over **outbound‑only HTTPS :443** — so PHI never leaves the
+  perimeter to be discovered. (Discovery logic shipped; the live `smbprotocol` transport is
+  deployment‑gated — in pilot, not live.)
 
 ---
 
@@ -501,6 +528,12 @@ flowchart LR
   its own FQDN while blue serves 100%, then promotes in one weight change (instant rollback).
 - **Version** — CalVer `YYYY.M.D.N` baked as a build arg, surfaced at `/healthz`
   (`version_stamped:true`); `/readyz` reports worker heartbeat + engine availability separately.
+- **Staging tier (unattended)** — a second chain: `.github/workflows/deploy-staging.yml` +
+  `deploy/public/staging_up.sh` ship the **same green commit** to `acp-app-staging` + `acp-worker-staging`
+  (same RG, **separate DATABASE_URL**) with **no reviewer gate**, so `main`'s tip is live within
+  minutes. Reuses `redeploy.sh` unchanged (same guards); **dormant until** a `STAGING_FQDN` repo
+  variable is set. This is why the production gate above can stay strict — the fast, unattended lane
+  is staging, not prod (`docs/pipeline.md → Chain B — staging`).
 
 > **Ops note:** the auto‑deploy has been observed to wedge in the Actions queue (runs sit `pending`);
 > the documented bypass is `workflow_dispatch` + approval, or a manual `redeploy.sh` under `az login`.
