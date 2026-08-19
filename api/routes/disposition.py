@@ -77,6 +77,42 @@ def create_policy(body: PolicyCreate, request: Request):
     return core.store.get_disposition_policy(policy_id)
 
 
+def _readable(rows: list[dict]) -> list[dict]:
+    """Join the human-readable facts onto audit rows: the document's source/path/department and
+    the policy's NAME.
+
+    A row as stored is (doc_id, policy_id, action, result) — four ids and an enum. Rendering that
+    asks a reviewer to authorise "archive sp:1 under p2", which is not a decision anybody can
+    make, and an auditor reading it back later has no way to tell what happened.
+
+    `source` is what makes the rows SCOPEABLE. disposition_audit has no source column, so without
+    this join a per-source panel would have to render the whole estate's history under a heading
+    naming one source — the count-without-its-boundary error the rule match counts avoid.
+
+    Shared by the approval queue and the audit trail deliberately: two endpoints enriching the
+    same table differently is how one of them ends up missing a field nobody noticed.
+
+    `document_exists` is false when the document has since been removed. Left visible, not
+    filtered: for a pending row it is what a reviewer needs before deciding, and for a historical
+    row it is part of what happened.
+    """
+    if not rows:
+        return []
+    docs = {d["doc_id"]: d for d in core.store.list_all_documents()}
+    policies = {p["policy_id"]: p for p in core.store.list_disposition_policies()}
+    out = []
+    for r in rows:
+        d = docs.get(r.get("doc_id")) or {}
+        p = policies.get(r.get("policy_id")) or {}
+        out.append({**r,
+                    "source": d.get("source"), "path": d.get("path"),
+                    "department": d.get("department"), "document_exists": bool(d),
+                    # None, not the id, when the policy is gone: a deleted rule is a fact, and
+                    # showing its id here would read as a name.
+                    "policy_name": p.get("name")})
+    return out
+
+
 @router.get("/disposition/policies")
 def list_policies():
     return core.store.list_disposition_policies()
@@ -158,7 +194,7 @@ def disposition_audit(request: Request, limit: int = Query(200, ge=1, le=1000)):
     """Full disposition history, newest first — the visible face of the append-only
     audit table (pending, applied, rejected, failed alike)."""
     _require_admin(request)
-    return core.store.list_disposition_audit(limit=limit)
+    return _readable(core.store.list_disposition_audit(limit=limit))
 
 
 @router.get("/disposition/approvals")
@@ -177,15 +213,7 @@ def list_approvals(request: Request):
     exactly what a reviewer should see before deciding, and approve() already fails it with 410.
     """
     _require_admin(request)
-    rows = core.store.list_disposition_audit(result="pending_approval")
-    docs = {d["doc_id"]: d for d in core.store.list_all_documents()}
-    out = []
-    for r in rows:
-        d = docs.get(r.get("doc_id")) or {}
-        out.append({**r, "source": d.get("source"), "path": d.get("path"),
-                    "department": d.get("department"),
-                    "document_exists": bool(d)})
-    return out
+    return _readable(core.store.list_disposition_audit(result="pending_approval"))
 
 
 @router.post("/disposition/approvals/{audit_id}/approve")
