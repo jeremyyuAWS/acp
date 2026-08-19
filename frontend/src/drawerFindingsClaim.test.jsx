@@ -184,6 +184,20 @@ describe('the drawer renders through the reconciled claim, not a second derivati
   it('colours the badge for what it can assert', () => {
     expect(drawerSrc).toMatch(/STATUS_BADGE\[claim === 'has-findings' \? 'issues' : st\]/)
   })
+
+  // The remediation action lives INSIDE the status hero (actionSlot), not in a second
+  // "Auto-remediate" card below it. That second card duplicated the coverage bar's counts, a
+  // second time estimate, and a second CTA — the redundancy this merge removed. Guard both halves
+  // at the source so it can't quietly come back.
+  it('renders the remediation action inside the status hero, not as a second reccard', () => {
+    expect(drawerSrc).toMatch(/<AccessibilityStatus[^]*?actionSlot=\{/)   // the action is the hero's slot
+    expect(drawerSrc).toMatch(/⚡ Remediate this file now/)               // the real action still exists
+    // The standalone Auto-remediate card's own chrome — its ETA row and its "…mode" line — is gone.
+    // (The generic .reccard/.recbadge/.recwhy classes stay: a DIFFERENT card, the retention
+    // recommendation, still uses them.)
+    expect(drawerSrc).not.toMatch(/className="receta"/)
+    expect(drawerSrc).not.toMatch(/className="recmeta"/)
+  })
 })
 
 // ── The replay banner (item 2) ───────────────────────────────────────────────

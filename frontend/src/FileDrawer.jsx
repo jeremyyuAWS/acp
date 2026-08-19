@@ -26,20 +26,6 @@ import { statusIn, remediationIn } from './assessCoverage.js'
 import { fmtEffort, EFFORT_BASIS } from './effort.js'
 export { fmtEffort, EFFORT_BASIS }
 
-// Prescriptive-action styling, shared with the Discover inventory.
-// Distinct hue per action so a long list scans at a glance. The human-touch
-// actions form an intuitive escalation — blue (light approve) → amber (evaluate)
-// → red (rebuild) — while no-human actions sit in the green/teal/slate family.
-export const REC_STYLE = {
-  auto: ['Auto-remediate', '#E3F1D8', '#2E6B0E', '⚡'],
-  assisted: ['Remediate + review', '#E2EDFB', '#1F5FA8', '✎'],
-  review: ['Human review', '#FBEBCB', '#8A5A00', '◐'],
-  archive: ['Archive', '#ECEEF1', '#475569', '📦'],
-  keep: ['Keep · monitor', '#D8F0EA', '#176B5B', '✓'],
-  manual: ['Manual rebuild', '#E2EDFB', '#1F5FA8', '⚠'],
-}
-const MODE_LABEL = { auto: 'fully automatic', assisted: 'AI + human review', manual: 'manual', monitor: 'monitor only' }
-
 // Single-file remediation narration — mirrors the real pipeline order in
 // api/handlers.py's _remediate_file: deterministic fix -> Blob (primary, must-succeed)
 // -> Drive mirror (best-effort) -> record + re-verify. Staged by elapsed progress since
@@ -799,7 +785,54 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           setReviewSc(scOfWcag(hitlItems[0].rule_id) || hitlItems[0].rule_id)
           setTimeout(() => document.querySelector('.evcard')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150)
         }
-      }} />
+      }}
+        // The remediation action lives INSIDE the status card (one card, one CTA) rather than in a
+        // second "Auto-remediate" card below that duplicated the coverage bar's counts and estimate.
+        // Only for a file with an auto/assisted recommendation; a manual/monitor/clean file falls
+        // back to the hero's own default CTA. The auto-fixable count is derived from the same
+        // findingAuto lanes the Findings list uses, so the two can't disagree.
+        actionSlot={(() => {
+          const r = file.rec
+          if (!scanId || !r || issues.length === 0 || r.mode === 'manual' || r.mode === 'monitor') return null
+          const nAuto = issues.filter(findingAuto).length
+          return (
+            <>
+              <p className="rem-actionlead">
+                <span>⚡ <b>{nAuto}</b> {r.mode === 'auto' ? 'auto-fixable — no human needed' : 'can be AI-drafted for your review'}</span>
+                {r.etaMin != null && <span className="muted" title={EFFORT_BASIS}> · {fmtEffort(r.etaMin)}</span>}
+              </p>
+              {remNow === null && (
+                <button className="ctago" disabled={readOnly || effectiveRemediated}
+                        title={readOnly ? 'Time-travel replay — switch to the latest scan to remediate'
+                               : effectiveRemediated ? 'Already remediated — the fixed copy is stored; re-validate to refresh the score' : undefined}
+                        onClick={remediateNow}>{effectiveRemediated ? '✓ Remediated — fixed copy stored' : '⚡ Remediate this file now'}</button>
+              )}
+              {remNow === 'queued' && (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span className="muted" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, flex: '0 0 auto' }}>
+                      <span className="spinner" /> Remediating…
+                    </span>
+                    <span className="track" style={{ width: 120 }}>
+                      <i style={{ width: `${remProgress}%`, background: 'var(--plum)', transition: 'width .4s linear' }} />
+                    </span>
+                  </div>
+                  <div className="muted" style={{ fontSize: 12, marginTop: 5 }} role="status" aria-live="polite">
+                    {remStage || remStageLine(remProgress)}
+                  </div>
+                </div>
+              )}
+              {remNow?.done && (
+                <span className="dectag ok" style={{ fontSize: 12, padding: '3px 10px' }}>✓ Remediated — fixed copy stored{hitlQueued ? ' · queued for human review' : ''}</span>
+              )}
+              {remNow === 'error' && (
+                <span style={{ color: '#B43A2A' }}>
+                  Couldn't remediate this file — <button className="ghost small" onClick={remediateNow}>try again</button>
+                </span>
+              )}
+            </>
+          )
+        })()} />
       <div className="drawerstats">
         <span className="badge" style={{ background: sbg, color: sfg }}>
           {claim === 'has-findings' ? 'needs remediation'
@@ -901,57 +934,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
 
       {ontBlock}
 
-      {file.rec && issues.length > 0 && (() => {
-        // Suppress the remediation recommendation entirely when there are no findings — a
-        // clean file has nothing to auto-fix, so an "Auto-remediate · no human needed" card
-        // (built from the empty findings list) directly contradicted the coverage table.
-        const r = file.rec; const [label, bg, fg, icon] = REC_STYLE[r.action] || REC_STYLE.review
-        return (
-          <div className="reccard" style={{ borderColor: fg + '55' }}>
-            <div className="recheadrow">
-              <span className="recbadge" style={{ background: bg, color: fg }}>{icon} {label}</span>
-              <span className="receta" title={EFFORT_BASIS}>{fmtEffort(r.etaMin)}</span>
-            </div>
-            <p className="recwhy">{r.rationale}</p>
-            <div className="recmeta">
-              <span><b>{MODE_LABEL[r.mode] || r.mode}</b><span className="muted"> mode</span></span>
-            </div>
-            {scanId && r.mode !== 'manual' && r.mode !== 'monitor' && (
-              <div style={{ marginTop: 10 }}>
-                {remNow === null && (
-                  <button className="ctago" disabled={readOnly || effectiveRemediated}
-                          title={readOnly ? 'Time-travel replay — switch to the latest scan to remediate'
-                                 : effectiveRemediated ? 'Already remediated — the fixed copy is stored; re-validate to refresh the score' : undefined}
-                          onClick={remediateNow}>{effectiveRemediated ? '✓ Remediated — fixed copy stored' : '⚡ Remediate this file now'}</button>
-                )}
-                {remNow === 'queued' && (
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span className="muted" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, flex: '0 0 auto' }}>
-                        <span className="spinner" /> Remediating…
-                      </span>
-                      <span className="track" style={{ width: 120 }}>
-                        <i style={{ width: `${remProgress}%`, background: 'var(--plum)', transition: 'width .4s linear' }} />
-                      </span>
-                    </div>
-                    <div className="muted" style={{ fontSize: 12, marginTop: 5 }} role="status" aria-live="polite">
-                      {remStage || remStageLine(remProgress)}
-                    </div>
-                  </div>
-                )}
-                {remNow?.done && (
-                  <span className="dectag ok" style={{ fontSize: 12, padding: '3px 10px' }}>✓ Remediated — fixed copy stored{hitlQueued ? ' · queued for human review' : ''}</span>
-                )}
-                {remNow === 'error' && (
-                  <span style={{ color: '#B43A2A' }}>
-                    Couldn't remediate this file — <button className="ghost small" onClick={remediateNow}>try again</button>
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-        )
-      })()}
+      {/* The remediation recommendation used to render here as a second "Auto-remediate" card
+          below the status hero — a duplicate CTA, a second time estimate, and its own count that
+          disagreed with the coverage bar. It now lives inside the status card as `actionSlot`
+          (see the <AccessibilityStatus> above), so there is one card, one action, one estimate. */}
 
       {metaBlock}
       <FileLocation file={file} />
