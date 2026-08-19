@@ -33,6 +33,8 @@ FAKE_SK = "sk-lf-0000000000000000000000000000000000"
 FAKE_PK = "pk-lf-1111111111111111111111111111111111"
 FAKE_CID = "11111111-2222-3333-4444-555555555555"
 FAKE_TID = "66666666-7777-8888-9999-000000000000"
+FAKE_EID = "2c90hp3hvbq27p"
+FAKE_RPKEY = "rpa_FAKEKEYFAKEKEYFAKEKEYFAKEKEY"
 
 
 def _stub_az(tmp_path, log: Path, *, worker_exists: bool = True, fail_on: str = "") -> Path:
@@ -88,7 +90,8 @@ def _run(tmp_path, binn: Path, **env_extra) -> subprocess.CompletedProcess:
     # exported would silently change what these assert.
     for v in ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY",
               "ACP_AZURE_CLIENT_ID", "ACP_AZURE_TENANT_ID", "ACP_SUBSCRIPTION",
-              "ACP_RG", "ACP_APP", "ACP_WORKER", "ACP_SET_ENV_DRY_RUN"):
+              "ACP_RG", "ACP_APP", "ACP_WORKER", "ACP_SET_ENV_DRY_RUN",
+              "RUNPOD_ENDPOINT_ID", "RUNPOD_API_KEY", "RUNPOD_VISION_MODEL"):
         env.pop(v, None)
     env.update(env_extra)
     return subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True,
@@ -208,7 +211,89 @@ def test_a_single_tier_deployment_configures_the_app_and_says_there_is_no_worker
 def test_dry_run_changes_nothing(tmp_path):
     log = tmp_path / "calls.log"
     r = _run(tmp_path, _stub_az(tmp_path, log), LANGFUSE_SECRET_KEY=FAKE_SK,
-             ACP_AZURE_CLIENT_ID=FAKE_CID, ACP_SET_ENV_DRY_RUN="1")
+             ACP_AZURE_CLIENT_ID=FAKE_CID, RUNPOD_ENDPOINT_ID=FAKE_EID,
+             RUNPOD_API_KEY=FAKE_RPKEY, ACP_SET_ENV_DRY_RUN="1")
     assert r.returncode == 0, r.stdout + r.stderr
     assert _writes(log) == [], "a dry run wrote to Azure"
     assert "DRY RUN" in r.stdout
+
+
+# ── GPU vision ───────────────────────────────────────────────────────────────────────────────
+# The switch is the whole point of this group. providers.active_vision_provider() reads
+# ACP_VISION_PROVIDER and defaults to 'ollama', so the endpoint id and key can both be present
+# and correct while every scan silently runs on the local CPU floor — observed in production on
+# 2026-08-19 with the endpoint warm at `workers ready=2`. Setting the credentials WITHOUT the
+# switch reproduces exactly that, so it must not be a state this script can produce.
+
+
+@requires_bash
+def test_the_switch_moves_with_the_credentials_on_both_apps(tmp_path):
+    log = tmp_path / "calls.log"
+    r = _run(tmp_path, _stub_az(tmp_path, log),
+             RUNPOD_ENDPOINT_ID=FAKE_EID, RUNPOD_API_KEY=FAKE_RPKEY)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    for app in ("acp-app", "acp-worker"):
+        calls = " ".join(_for_app(log, app))
+        assert "ACP_VISION_PROVIDER=runpod_serverless" in calls, \
+            f"{app} got RunPod credentials but not the switch — the exact silent-CPU state"
+        assert f"RUNPOD_ENDPOINT_ID={FAKE_EID}" in calls, f"{app} missing the endpoint id"
+        assert "RUNPOD_API_KEY=secretref:runpod-api-key" in calls, \
+            f"{app} never had RUNPOD_API_KEY wired to the secret"
+
+
+@requires_bash
+def test_the_runpod_key_never_appears_in_an_env_var_argument(tmp_path):
+    log = tmp_path / "calls.log"
+    r = _run(tmp_path, _stub_az(tmp_path, log),
+             RUNPOD_ENDPOINT_ID=FAKE_EID, RUNPOD_API_KEY=FAKE_RPKEY)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    updates = [ln for ln in _writes(log) if ln.startswith("containerapp update")]
+    assert updates, "nothing was updated — the assertion below would pass vacuously"
+    for ln in updates:
+        assert FAKE_RPKEY not in ln, f"the RunPod key was passed as an env-var value: {ln}"
+    assert FAKE_RPKEY not in r.stdout and FAKE_RPKEY not in r.stderr
+
+
+@requires_bash
+def test_an_endpoint_id_without_a_key_is_refused_before_anything_is_written(tmp_path):
+    """Half-configured is worse than unconfigured here, because it looks configured.
+
+    serverless_vision_provider() returns None without the key, and active_vision_provider() then
+    falls through to the local floor — so ACP_VISION_PROVIDER=runpod_serverless with no key gives
+    you a deployment that CLAIMS the GPU and uses the CPU. Refuse rather than produce it.
+    """
+    log = tmp_path / "calls.log"
+    r = _run(tmp_path, _stub_az(tmp_path, log), RUNPOD_ENDPOINT_ID=FAKE_EID)
+    assert r.returncode != 0
+    assert _writes(log) == [], "a write happened despite the endpoint being half-configured"
+
+
+@requires_bash
+def test_it_says_the_env_is_not_the_last_word(tmp_path):
+    """An admin setting overrides the env, and this script can neither see nor change it.
+
+    providers.py reads store.get_setting('ai_vision_provider') AFTER the env and lets it win. A
+    script that sets the env and reports success would be telling the operator the GPU is on when
+    a stored setting may still pin it to ollama — so it must point at the resolver instead.
+    """
+    log = tmp_path / "calls.log"
+    r = _run(tmp_path, _stub_az(tmp_path, log),
+             RUNPOD_ENDPOINT_ID=FAKE_EID, RUNPOD_API_KEY=FAKE_RPKEY)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "resolved provider" in r.stdout, \
+        "the operator is not told which line of the preflight actually answers the question"
+    assert "ai_vision_provider" in r.stdout, "the overriding setting is not named"
+
+
+@requires_bash
+def test_the_gpu_group_is_independent_of_the_other_two(tmp_path):
+    log = tmp_path / "calls.log"
+    r = _run(tmp_path, _stub_az(tmp_path, log),
+             RUNPOD_ENDPOINT_ID=FAKE_EID, RUNPOD_API_KEY=FAKE_RPKEY)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Langfuse SKIPPED" in r.stdout
+    assert "SharePoint SKIPPED" in r.stdout
+    # …and nothing from those groups was written.
+    assert not [ln for ln in _writes(log) if "langfuse" in ln or "ACP_AZURE" in ln]
