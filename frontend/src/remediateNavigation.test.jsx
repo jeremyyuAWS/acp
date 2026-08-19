@@ -46,6 +46,12 @@ describe('the Remediate page has one navigation system, not two', () => {
     const r = read('Remediate.jsx')
     expect(r).toMatch(/need review across/)
     expect(r).toMatch(/<div className="conftrack"/)
+    // The hero count is derived from the SAME population as the "Needs review" tab (workflowStatusOf
+    // over the inbox queue), so the headline and the tab can never diverge — and it must NOT be the
+    // raw human-queue length, which excludes the auto-fixes the tab now counts.
+    expect(r).toMatch(/matchesWorkflow\(f, 'needs-review', inboxDecisions\)/)
+    expect(r).toMatch(/<b>\{reviewCount\}<\/b> finding/)
+    expect(r).not.toMatch(/<b>\{queue\.length\}<\/b> finding/)
   })
 
   it('still says where verification stands — with more detail than the rail had', () => {
