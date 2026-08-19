@@ -173,20 +173,29 @@ export function tabCounts(list, decisions = {}) {
   return counts
 }
 
-// ── Workflow-status tabs (the Outlook-style top bar) ─────────────────────────────────────────────
-// A SECOND lens on the same findings, by pipeline STAGE rather than remediation lane: where a
-// finding is on the journey Inbox → In progress → Ready to validate → Done, plus Blocked. This is
-// what the top tabs answer ("what's new / being worked / awaiting the re-scan / done"), whereas the
-// lane taxonomy above answers "what kind of fix is it".
+// ── Workflow-status tabs (the top bar) ───────────────────────────────────────────────────────────
+// The top tabs partition the queue by what the reviewer must DO next, into five stages that each
+// carry a precise operational meaning (no vague "in progress" that could mean anything):
+//
+//   Needs review        — awaiting a human decision (an AI draft to approve, an auto-fix to confirm)
+//   Manual fixes         — needs hand-editing in the source app (manual-from-start, a rejected AI
+//                          fix handed back, or one a reviewer deferred/assigned to do by hand)
+//   Awaiting validation  — a fix is IN but the confirming re-scan has not certified it yet
+//   Blocked              — cannot be remediated as-is
+//   Completed            — certified by the re-scan, rejected outright, or judged not-applicable
+//
+// The critical distinction (ADR 0016 / the verify-after-save UX): "Awaiting validation" is NOT
+// "Completed" — the UI must never claim a fix is done before the re-scan earns it. And "resolved"
+// for the progress line means REVIEWED (a decision is recorded), never conflated with a tab count,
+// so a finding is never shown as both resolved AND awaiting validation.
 //
 // HONESTY (ADR 0016): every stage is derived from REAL state — the finding's status, its lane, and
-// the recorded decision. There is no invented "in progress" flag; it is inferred only from states
-// that genuinely mean a person is mid-way (an assigned/deferred decision). A stage we cannot
-// evidence is never assigned.
-export const WORKFLOW_TABS = ['inbox', 'in-progress', 'ready-to-validate', 'blocked', 'done']
+// the recorded decision. "Manual fixes" absorbs the old "in progress" (assigned/deferred), which is
+// still inferred only from a genuine decision, never an invented marker.
+export const WORKFLOW_TABS = ['needs-review', 'manual', 'awaiting-validation', 'blocked', 'completed']
 export const WORKFLOW_LABELS = {
-  inbox: 'Inbox', 'in-progress': 'In progress', 'ready-to-validate': 'Ready to validate',
-  blocked: 'Blocked', done: 'Done',
+  'needs-review': 'Needs review', manual: 'Manual fixes',
+  'awaiting-validation': 'Awaiting validation', blocked: 'Blocked', completed: 'Completed',
 }
 
 /** The pipeline stage a finding sits in, for the workflow top tabs. */
@@ -196,22 +205,26 @@ export function workflowStatusOf(f, decisions = {}) {
   const lane = laneOf(f)
 
   if (lane.key === 'blocked') return 'blocked'
-  // Closed out: fully re-validated, a rejection that ended the work, or an out-of-scope (not
-  // applicable) judgement — the last two are settled with no re-scan to await, so they are Done.
-  if (st === 'verified') return 'done'
-  if (d && d.state === 'rejected') return 'done'
-  if (d && d.state === 'not_applicable') return 'done'
-  // A fix is in and awaiting the re-scan that confirms it: an approved decision not yet verified,
-  // the recheck lane (edited, re-scanning), or a deterministic auto-fix already applied.
-  if (d && (d.state === 'accepted' || d.state === 'approved')) return 'ready-to-validate'
-  if (lane.key === 'recheck') return 'ready-to-validate'
-  if (f?.autoApplied || f?.applied) return 'ready-to-validate'
-  // A person has explicitly taken it on but no fix is in yet: assigned or deferred. A rejected-AI-fix
-  // handoff is NOT here — its action is still "Mark as assigned", i.e. nobody has started it, so it
-  // waits in the Inbox as untriaged manual work until someone assigns it.
-  if (d && (d.state === 'assigned' || d.state === 'deferred')) return 'in-progress'
-  // Untouched, awaiting first attention.
-  return 'inbox'
+  // Completed: fully re-validated, a rejection that ended the work, or an out-of-scope (not
+  // applicable) judgement — the last two are settled with no re-scan to await. not_applicable also
+  // LEAVES the coverage denominator (accessibility_status.py) — do not re-count it elsewhere.
+  if (st === 'verified') return 'completed'
+  if (d && d.state === 'rejected') return 'completed'
+  if (d && d.state === 'not_applicable') return 'completed'
+  // A fix is IN and awaiting the re-scan that certifies it: an approved/accepted decision not yet
+  // verified, or the recheck lane (edited, re-scanning). Kept distinct from Completed so the UI
+  // never claims done before the re-scan confirms it.
+  if (d && (d.state === 'accepted' || d.state === 'approved')) return 'awaiting-validation'
+  if (lane.key === 'recheck') return 'awaiting-validation'
+  // Needs hand-editing: a reviewer who deferred/assigned it, a manual-from-start finding, or a
+  // rejected AI fix handed back for a person. An UNACKNOWLEDGED auto-applied fix is deliberately NOT
+  // here and NOT in Awaiting validation — it still needs the reviewer to confirm it, so it falls
+  // through to Needs review below. (This is the fix for the auto-fix double-count: an auto-fix used
+  // to count as both awaiting-validation AND resolved.)
+  if (d && (d.state === 'assigned' || d.state === 'deferred')) return 'manual'
+  if (lane.key === 'manual' || lane.key === 'handoff') return 'manual'
+  // Awaiting a human decision: an AI draft to approve/reject, or an auto-fix to confirm.
+  return 'needs-review'
 }
 
 export function matchesWorkflow(f, tab, decisions = {}) {
@@ -220,7 +233,7 @@ export function matchesWorkflow(f, tab, decisions = {}) {
 }
 
 export function workflowCounts(list, decisions = {}) {
-  const counts = { all: list.length, inbox: 0, 'in-progress': 0, 'ready-to-validate': 0, blocked: 0, done: 0 }
+  const counts = { all: list.length, 'needs-review': 0, manual: 0, 'awaiting-validation': 0, blocked: 0, completed: 0 }
   for (const f of list) counts[workflowStatusOf(f, decisions)] += 1
   return counts
 }
@@ -231,8 +244,8 @@ export function workflowCounts(list, decisions = {}) {
 // active). Derived from the same real state as workflowStatusOf, never an invented step marker.
 export function workflowStepIndex(f, decisions = {}) {
   const status = workflowStatusOf(f, decisions)
-  if (status === 'done') return 3
-  if (status === 'ready-to-validate') return 2              // a fix is in — verify it via the re-scan
+  if (status === 'completed') return 3
+  if (status === 'awaiting-validation') return 2           // a fix is in — verify it via the re-scan
   const lane = laneOf(f)
   if (lane.key === 'apply' || lane.key === 'review') return 1  // an AI proposal is waiting for review
   return 0                                                   // manual / fresh / blocked — show the problem

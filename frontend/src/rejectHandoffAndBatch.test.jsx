@@ -49,8 +49,10 @@ describe('W2 — rejected fix appears in the inbox as manual-handling work', () 
   ]
   it('shows the needs-manual-handling treatment, not an approve button', async () => {
     await render({ queue: QUEUE, decisions: {} })
+    // A rejected AI fix needs hand-editing, so it lives in the Manual fixes tab (not Needs review).
+    await click(btnByText('Manual fixes'))
     expect(detailHeading()).toBe('Image needs alt text')
-    expect(container.textContent).toContain('Needs manual handling')   // eyebrow + tab
+    expect(container.textContent).toContain('Needs manual handling')   // eyebrow + lane label
     expect(container.textContent).toContain('Fix this in Word')          // guided manual steps (docx → Word)
     expect(btnByText('Defer')).toBeTruthy()                              // set aside for later (state: assigned)
     expect(btnByText('Approve fix')).toBeFalsy()
@@ -58,6 +60,7 @@ describe('W2 — rejected fix appears in the inbox as manual-handling work', () 
   it('acting on it clears it via onDecide(assigned)', async () => {
     const calls = []
     await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
+    await click(btnByText('Manual fixes'))
     await click(btnByText('Defer'))
     expect(calls).toEqual([[9, 'assigned']])
   })
