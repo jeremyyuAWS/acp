@@ -6,6 +6,7 @@
 #   ACP_GPU_ACTIVATE=1 bash deploy/public/gpu_up.sh    # …and flip the app onto it
 #   ACP_GPU_DRY_RUN=1 bash deploy/public/gpu_up.sh     # print, change nothing
 #   ACP_GPU_PROFILE_TYPE=<sku> bash …                  # pin the SKU instead of discovering it
+#   ACP_GPU_FIND_REGION=1 bash …                       # survey which regions have GPU, change nothing
 #
 # The GPU SKU is DISCOVERED from `az containerapp env workload-profile list-supported` for the
 # environment's own region, not hard-coded. Availability varies by region and the SKU strings
@@ -80,6 +81,53 @@ command -v az >/dev/null 2>&1 || die "az CLI not found — run this from a host 
 SUB="$(az account show ${ACP_SUBSCRIPTION:+--subscription "$ACP_SUBSCRIPTION"} --query id -o tsv 2>/dev/null || true)"
 [ -n "$SUB" ] || die "no active Azure subscription — run 'az login', or set ACP_SUBSCRIPTION"
 AZ=(--subscription "$SUB")
+
+# ── 0. where IS there a GPU? (survey only, changes nothing) ───────────────────────────────────
+# East US 2 — where mdk-accessibility-env lives — offers D/E/Consumption/Flex and no GPU profile
+# at all. The obvious next thought is "use another region", and this answers WHICH, from Azure
+# rather than from memory.
+#
+# READ THE CAVEAT BEFORE ACTING ON THE ANSWER. Internal ingress resolves only INSIDE a Container
+# Apps environment, and an environment lives in one region. A GPU app in another region is a
+# different environment, so acp-app could only reach it over EXTERNAL ingress — which
+# zone_for_url() labels "cloud", making a reviewer's provenance chip say the document left your
+# network. It would be telling the truth. That is the property this whole migration is for, so a
+# cross-region GPU app trades away the thing being bought.
+#
+# So this survey informs one of two real decisions, not a quick fix:
+#   · move the WHOLE environment (app + worker) to a region that has GPU, or
+#   · reach a GPU elsewhere over PRIVATE networking (VNet peering / Private Link), where the
+#     host resolves to a private address and zone_for_url() still says "local".
+# A third option needs no region at all: an Azure VM running Ollama on a private address is
+# in-tenant today and already labelled "local".
+if [ "${ACP_GPU_FIND_REGION:-0}" = 1 ]; then
+  say "surveying regions for a GPU workload profile (read-only)"
+  REGIONS="${ACP_GPU_REGIONS:-$(az account list-locations "${AZ[@]}" \
+    --query "[?metadata.regionType=='Physical'].name" -o tsv 2>/dev/null || true)}"
+  [ -n "$REGIONS" ] || die "could not list regions for this subscription"
+  FOUND=0
+  for R in $REGIONS; do
+    # A region that errors or returns nothing is reported as such rather than skipped: "we did
+    # not look" and "we looked and there is none" are different facts, and a survey that blurs
+    # them sends you to request quota somewhere that never had capacity.
+    SK="$(az containerapp env workload-profile list-supported "${AZ[@]}" -l "$R" \
+      --query '[].name' -o tsv 2>/dev/null || true)"
+    if [ -z "$SK" ]; then printf '  ?  %-22s could not query\n' "$R"; continue; fi
+    G="$(printf '%s\n' "$SK" | grep -iE 'gpu|NC[0-9]|A100|T4' | tr '\n' ' ' || true)"
+    if [ -n "$G" ]; then printf '  ✓  %-22s %s\n' "$R" "$G"; FOUND=$((FOUND + 1)); fi
+  done
+  echo
+  if [ "$FOUND" -eq 0 ]; then
+    echo "  No region offers this subscription a GPU workload profile. That is a subscription-level"
+    echo "  entitlement, not a region choice — request GPU quota for Container Apps before"
+    echo "  planning any move."
+  else
+    echo "  $FOUND region(s) above. Re-read the caveat in this script's section 0 before moving:"
+    echo "  a GPU in another region cannot be reached on internal ingress, and external ingress"
+    echo "  makes the provenance chip say 'cloud' — correctly."
+  fi
+  exit 0
+fi
 
 # ── 1. the environment must be the app's own ─────────────────────────────────────────────────
 # Internal ingress is only reachable from INSIDE the environment. Provisioning this in a second
