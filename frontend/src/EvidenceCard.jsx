@@ -11,6 +11,7 @@ import { runAutoDraft, resetAutoDraftBreaker } from './autoDraft.js'
 import { escalationPath, escalationFromDraft } from './escalationPath.js'
 import { loadAiModels } from './aiModel.js'
 import HowToConfirm from './HowToConfirm.jsx'
+import TracePanel from './TracePanel.jsx'
 
 // Evidence Card (PRD v2) — a PR-style review of ONE accessibility issue. The human APPROVES
 // ACP's recommendation; ACP applies it. Assembles only shipped primitives (confidence basis,
@@ -28,6 +29,10 @@ const trustIcon = (tone) => (tone === 'ok' ? '✓' : tone === 'warn' ? '◐' : '
 
 export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null, actualZone = null }) {
   const [diffs, setDiffs] = useState([])
+  // In-app trace: when we know the scan + file we render the trace INSIDE AccessOps
+  // (TracePanel) instead of linking out to Langfuse, whose page needs a login. Falls back
+  // to the outbound traceUrl only when those aren't available.
+  const [tracePanel, setTracePanel] = useState(false)
   // One editor per proposal: the row carries one proposal per image, and a single text box
   // could never describe ten different pictures. Seeded from each image's own draft, so
   // approving without touching anything means "the drafts I was shown are correct" — the
@@ -1150,7 +1155,11 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
             <button className="qbtn" disabled={busy}
                     title="Not applicable — this criterion does not apply to the document. Resolves the finding without writing any text and removes it from the coverage denominator."
                     onClick={() => decide('approved', null, 'out_of_scope')}>⊘ Not applicable</button>
-            {traceUrl && <a className="rc-trace" href={traceUrl} target="_blank" rel="noopener noreferrer">📊 View trace</a>}
+            {item?.scan_id && item?.file
+              ? <button type="button" className="rc-trace" onClick={() => setTracePanel(true)}
+                        title="View this document’s trace inside AccessOps (no Langfuse login)">📊 View trace</button>
+              : traceUrl && <a className="rc-trace" href={traceUrl} target="_blank" rel="noopener noreferrer">📊 View trace</a>}
+            {tracePanel && <TracePanel scanId={item.scan_id} file={item.file} onClose={() => setTracePanel(false)} />}
           </div>
           {/* Feedback intelligence: one more click captures WHY. Each rejection becomes training
               signal for "which rules/doc types are weakest" — real reviewer behaviour, not

@@ -118,6 +118,12 @@ def _det_id(*parts) -> str:
     return hashlib.sha1("::".join(str(p) for p in parts).encode()).hexdigest()
 
 
+def enabled() -> bool:
+    """Is Langfuse tracing configured (all of host + public + secret key present)?
+    Lets a route tell 'tracing off' apart from 'trace not ingested yet'."""
+    return _ENABLED
+
+
 def _lf():
     global _client
     if not _ENABLED:
@@ -917,3 +923,77 @@ def trace_exists(trace_id: str) -> bool:
         return r.status_code == 200
     except Exception:
         return False
+
+
+# ── In-app trace view (backend proxy) ─────────────────────────────────────────
+# Langfuse's own trace page hangs for a logged-out visitor on our self-hosted v3
+# build, and it sends X-Frame-Options: SAMEORIGIN, so it can neither be linked-to
+# without a login nor iframed. Instead ACP fetches the trace server-side with its
+# OWN api keys (the caller has already authenticated to ACP) and renders it in-app.
+# That needs no public/world-readable trace — so it also avoids exposing the trace
+# NAME, which carries the operator's email (`who · doc-xxxx.docx`); we strip it here.
+def _obs_summary(o: dict) -> dict:
+    """One observation reduced to a curated, PHI-safe set of fields for the timeline.
+
+    Deliberately drops the raw input/output/metadata blobs. Those already route
+    through _doc_label at write time, but the panel doesn't need them and the
+    conservative default for an observability payload leaving the trust boundary is
+    to surface only structural fields — type, name, timing, model, token usage, cost,
+    level and a short status — never anything that could carry document content."""
+    usage = o.get("usage") or {}
+    # v3 renamed usage fields (input/output/total) but older rows use promptTokens/…
+    in_tok = usage.get("input", usage.get("promptTokens"))
+    out_tok = usage.get("output", usage.get("completionTokens"))
+    cost = o.get("calculatedTotalCost")
+    if cost is None:
+        cost = o.get("totalCost") or o.get("cost")
+    return {
+        "type": o.get("type"),
+        "name": o.get("name"),
+        "start": o.get("startTime"),
+        "end": o.get("endTime"),
+        "level": o.get("level"),
+        "status": o.get("statusMessage"),
+        "model": o.get("model"),
+        "input_tokens": in_tok,
+        "output_tokens": out_tok,
+        "cost": cost,
+    }
+
+
+def fetch_trace(trace_id: str) -> dict | None:
+    """Normalized, PHI-safe view of a trace for in-app rendering.
+
+    Fetched with ACP's own keys (never depends on the trace being public). Returns
+    None when tracing isn't configured, the trace isn't ingested yet, or the fetch
+    errors — the route turns each of those into an honest UI state. The trace NAME is
+    dropped (it carries the operator email); `document`/`format` come from the
+    already-redacted trace input, and the assessment summary from its output."""
+    if not _ENABLED:
+        return None
+    try:
+        import httpx
+        r = httpx.get(f"{_HOST.rstrip('/')}/api/public/traces/{trace_id}",
+                      auth=(_PK, _SK), timeout=6.0)
+        if r.status_code != 200:
+            return None
+        t = r.json() or {}
+    except Exception:
+        return None
+    tin = t.get("input") if isinstance(t.get("input"), dict) else {}
+    out = t.get("output") if isinstance(t.get("output"), dict) else {}
+    obs = t.get("observations") or []
+    # Sort the timeline by start time so Discover → Assess → Remediate reads in order.
+    obs_sorted = sorted(
+        (o for o in obs if isinstance(o, dict)),
+        key=lambda o: o.get("startTime") or "",
+    )
+    return {
+        "id": t.get("id"),
+        "document": (tin or {}).get("document"),
+        "format": (tin or {}).get("format"),
+        "timestamp": t.get("timestamp"),
+        # The assessment summary is written as trace output by file_assessment_result.
+        "result": out or None,
+        "observations": [_obs_summary(o) for o in obs_sorted],
+    }

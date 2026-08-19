@@ -141,6 +141,28 @@ export const getTraceStatus = (scanId, kind = 'session', file = null) => {
     return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/trace/file/${encodeURIComponent(file)}/exists`).then(j).catch(() => ({ available: false }))
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/trace/${kind}/exists`).then(j).catch(() => ({ available: false }))
 }
+// One file's trace, fetched server-side and returned as PHI-safe JSON, for the IN-APP trace
+// panel (TracePanel). Langfuse's own trace page hangs for logged-out users on our self-hosted
+// v3 and can't be iframed (X-Frame-Options), so ACP renders the trace itself instead of linking
+// out. Returns {status: 'ok'|'pending'|'not_configured', trace?}; never rejects — the panel maps
+// each state to an honest message. SIM returns a canned trace so the demo needs no backend.
+export const getFileTraceData = (scanId, file) => {
+  if (SIM) return sim({ status: 'ok', trace: {
+    id: `${scanId}::${file}`, document: file || 'doc-3f9a2c.docx', format: 'docx',
+    timestamp: '2026-06-29T17:04:10Z',
+    result: { score: 82, conformant: false, level: 'AA',
+      failing_criteria: ['1.1.1', '1.4.3'],
+      pii: { present: true, types: { ssn: 2, email: 5 } },
+      remediation: { remediated: true, written_back: false, published: false } },
+    observations: [
+      { type: 'SPAN', name: 'Discover', start: '2026-06-29T17:04:10Z', end: '2026-06-29T17:04:11Z', level: 'DEFAULT', model: null, input_tokens: 0, output_tokens: 0, cost: 0 },
+      { type: 'SPAN', name: 'Assess · WCAG 2.1 AA', start: '2026-06-29T17:04:12Z', end: '2026-06-29T17:04:18Z', level: 'DEFAULT', model: null, input_tokens: 0, output_tokens: 0, cost: 0 },
+      { type: 'GENERATION', name: 'alt-text', start: '2026-06-29T17:04:14Z', end: '2026-06-29T17:04:16Z', level: 'DEFAULT', model: 'llava:13b', input_tokens: 512, output_tokens: 48, cost: 0 },
+    ] } })
+  if (!scanId || !file) return Promise.resolve({ status: 'not_configured' })
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/trace/file/${encodeURIComponent(file)}/data`, { headers: headers() })
+    .then(j).catch(() => ({ status: 'pending' }))
+}
 // Sensitive-data (PII) findings for a scan (ADR 0006) — rollup + per-type counts (masked).
 export const getScanPii = (scanId) => (SIM
   ? sim({ summary: { documents: 6, items: 23, by_type: [

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { openTraceUrl, getTraceStatus, getScanTraces } from './api.js'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import FileDrawer from './FileDrawer.jsx'
+import TracePanel from './TracePanel.jsx'
 import { WCAG } from './wcagCatalog.js'
 import { allRules } from './rules/index.js'
 import { DOCUMENTS_20 } from './documents20.js'
@@ -33,8 +34,13 @@ const assessLevel = (scanId) => {
 export function TraceChip({ scanId, kind = 'session', file = null, label = 'View trace', title, refreshKey = 0 }) {
   const url = openTraceUrl(scanId, kind, file)
   const [available, setAvailable] = useState(null)
+  // A per-FILE trace renders IN-APP (TracePanel) rather than sending the user out to
+  // Langfuse — its public page hangs for logged-out users on our self-hosted v3 and can't
+  // be iframed. Session chips (a whole scan) keep the outbound link for now.
+  const inApp = kind === 'file' && !!file
+  const [panelOpen, setPanelOpen] = useState(false)
   useEffect(() => {
-    if (!url) return
+    if (!url || inApp) return   // in-app chips render unconditionally; the panel reports state
     let cancelled = false
     // refreshKey re-checks availability after an event that may have CREATED the
     // trace (e.g. remediate-now just wrote a Remediate span) — with retries to ride
@@ -53,6 +59,19 @@ export function TraceChip({ scanId, kind = 'session', file = null, label = 'View
   }, [scanId, kind, file, url, refreshKey])
 
   if (!url) return null
+  // In-app file traces show the button whenever tracing is configured (url != null) and open
+  // the panel, which reports its own not-configured / pending / ok state. We deliberately do NOT
+  // gate this on the availability probe: a file trace often doesn't exist until Assess runs, and
+  // the panel's synchronous rebuild + honest "still recording" beats a permanently greyed chip.
+  if (inApp) return (
+    <>
+      <button type="button" className="tracechip" onClick={() => setPanelOpen(true)}
+              title={title || 'View this document’s trace inside AccessOps (no Langfuse login)'}>
+        📊 {label}
+      </button>
+      {panelOpen && <TracePanel scanId={scanId} file={file} onClose={() => setPanelOpen(false)} />}
+    </>
+  )
   if (available === false) return (
     <span className="tracechip tracechip--unavailable"
           title="Trace not available — this scan predates observability wiring">

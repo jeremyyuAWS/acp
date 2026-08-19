@@ -437,6 +437,50 @@ def trace_exists(sid: str, kind: str):
     return {"available": _lf.trace_exists(trace_id)}
 
 
+# MUST be registered BEFORE open_file_trace below: that route's {filename:path} is a greedy
+# catch-all (`.*`) that also matches ".../{file}/data", and Starlette returns the first
+# matching route — so a later /data route would be shadowed and 302 to Langfuse instead of
+# serving JSON. Declaring it first lets the trailing literal /data win. (The same greedy match
+# already shadows /exists above; that route is best-effort and the SPA tolerates it, so it is
+# left as-is rather than reordered in this change.)
+@router.get("/scans/{sid}/trace/file/{filename:path}/data")
+def file_trace_data(sid: str, filename: str, level: str = Query("AA")):
+    """Data source for the IN-APP trace panel: the file's Langfuse trace fetched
+    server-side (lf.fetch_trace) and returned as PHI-safe JSON, so ACP renders it
+    inline with no Langfuse login. Langfuse's own trace page hangs for logged-out
+    users on our self-hosted v3 and sends X-Frame-Options: SAMEORIGIN, so it can be
+    neither linked-to nor iframed — this is the replacement.
+
+    Honest states, never a 500 for a missing trace:
+      • {"status": "not_configured"} — tracing keys absent
+      • {"status": "pending"}        — trace not ingested yet (async after flush)
+      • {"status": "ok", "trace": …} — the normalized trace
+    Public — read-only apart from the same best-effort assess-trace rebuild the
+    redirect route does, so a never-opened Assess trace still materializes."""
+    import lf as _lf
+    if core.store.get_scan(sid) is None:
+        raise HTTPException(404, "scan not found")
+    if not _lf.enabled():
+        return {"status": "not_configured"}
+    trace_id = f"{sid}::{filename}"
+    data = _lf.fetch_trace(trace_id)
+    if data is None:
+        try:
+            from handlers import ensure_assess_trace
+            ensure_assess_trace(sid, level)
+        except Exception:
+            pass
+        import time
+        for _ in range(5):
+            time.sleep(0.6)
+            data = _lf.fetch_trace(trace_id)
+            if data is not None:
+                break
+    if data is None:
+        return {"status": "pending"}
+    return {"status": "ok", "trace": data}
+
+
 @router.get("/scans/{sid}/trace/file/{filename:path}")
 def open_file_trace(sid: str, filename: str, level: str = Query("AA")):
     """Reliable 'View trace' target for ONE file — its Discover/Assess/Remediate spans
