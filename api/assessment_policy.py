@@ -746,6 +746,42 @@ def selected_documents(decisions: dict | None) -> frozenset | None:
     return sel or None
 
 
+def assignments(decisions: dict | None) -> dict:
+    """The per-file assignee axis, `{file: assignee_email}`, for the "Assigned to me" inbox filter.
+
+    The exact sibling of `selected_documents`: it reads ONE decision kind off the same
+    `store.get_decisions(scan_id, owner)` map — `{file: {kind: value}}` — where an assignment is a
+    decision with `kind='assignee'` and `value=<assignee email>`. No new persistence: an assignee
+    rides `scan_decisions` on its `(scan_id, file, kind)` PK like triage and action do, so it is
+    owner-scoped for free and one file carries at most one assignee (a re-assign upserts the row).
+
+    Only files with a non-empty assignee appear; a file never marked, or whose assignee was cleared
+    (the row deleted), is simply absent. Pure and read-time — the frontend filters the inbox by
+    calling `files_assigned_to(decisions, current_user)`; this dict is the same data unfiltered.
+    """
+    if not decisions:
+        return {}
+    out: dict = {}
+    for f, kinds in decisions.items():
+        if isinstance(kinds, dict):
+            who = kinds.get("assignee")
+            if who:
+                out[f] = who
+    return out
+
+
+def files_assigned_to(decisions: dict | None, email: str | None) -> frozenset:
+    """The files on this scan assigned to `email` — the set behind the "Assigned to me" filter.
+
+    Owner-scoping (whose decisions) is `get_decisions`'s job; this narrows that owner's assignments
+    to one assignee. An empty/None `email` matches nothing (never "everything"), so a signed-out or
+    unknown caller sees an empty inbox rather than the whole estate.
+    """
+    if not email:
+        return frozenset()
+    return frozenset(f for f, who in assignments(decisions).items() if who == email)
+
+
 def filter_issues_to_scope(issues: list[dict], fmt: str | None,
                            scope: dict | None = None) -> list[dict]:
     """Drop findings whose (criterion, format) pair the operator left out of scope.

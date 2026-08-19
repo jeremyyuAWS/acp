@@ -100,11 +100,27 @@ jobs:
         # the exact path tests/engines.py probes. bin/ stays gitignored: built, not committed.
 
       - name: Install tesseract (OCR)
+        id: tesseract
         # Bounded + retried so a slow or unreachable apt mirror can't hang the job. The plain
         # `apt-get install` stalled for up to an HOUR on a bad mirror on 2026-08-18, blocking every
         # deploy that gates on this suite. Each attempt is capped (`timeout`) and retried with
         # backoff; a genuine outage now fails fast after three tries instead of hanging forever.
         # Same package set as before (recommends kept) — reliability only, no behaviour change.
+        #
+        # WHY THIS NO LONGER EXITS 1 HERE, and why that is NOT the job going soft on OCR.
+        # On 2026-08-19 the mirror degraded mid-afternoon: at 15:29 three of four shards installed
+        # tesseract in 1m50s-3m15s and one failed; by 15:49 all four failed. The job died at THIS
+        # step, so `Install API + test dependencies` and the suite itself never ran — and a red
+        # backend job that never executed a single test tells you nothing about the change under
+        # review. Two PRs sat blocked with no signal at all.
+        #
+        # So the failure is RECORDED and the suite still runs; the job is failed at the end by
+        # `Fail if OCR coverage was lost` below. The outcome is the same colour — red, always, no
+        # exceptions — because the trailing comment on this step is right that silently dropping
+        # 1.4.5/1.4.9 is exactly the shape of gap this repo has been bitten by twice. What changes
+        # is that you now get "3074 passed, OCR skipped, failed because tesseract was unavailable"
+        # instead of a dead job, so a real regression is still visible during an outage.
+        continue-on-error: true
         run: |
           for i in 1 2 3; do
             if sudo timeout 90 apt-get update -qq \
@@ -205,6 +221,31 @@ jobs:
           name: backend-test-results-${{ matrix.group }}
           path: test-results-${{ matrix.group }}.xml
           if-no-files-found: warn
+
+      - name: Fail if OCR coverage was lost
+        # The other half of `Install tesseract (OCR)`'s continue-on-error. That step no longer
+        # ends the job, so THIS one does — and it is deliberately the LAST step, after the suite
+        # and all three guards have run.
+        #
+        # The job is red either way. That is the point, not a limitation: ocr.is_available()
+        # gates 1.4.5 and 1.4.9, every test driving them self-skips without tesseract, and a
+        # green tick over a suite silently missing two criteria is precisely what the install
+        # step was added to prevent. Nothing here softens that.
+        #
+        # What moves is WHERE the job dies. Before, it died at the install and never ran a test,
+        # so an apt outage produced a red job carrying zero information about the change under
+        # review — on 2026-08-19 two PRs sat blocked exactly that way, with the mirror degrading
+        # from one failing shard at 15:29 to all four at 15:49. Now the suite runs first: you get
+        # the real pass/fail on everything that does not need OCR, and then this explains the red.
+        #
+        # `if: always()` so it also reports when the suite itself failed — otherwise a run with
+        # both problems would show only the test failures and quietly regain the OCR gap.
+        if: always() && steps.tesseract.outcome != 'success'
+        run: |
+          echo "::error::OCR (tesseract) was unavailable, so 1.4.5 and 1.4.9 were NOT exercised."
+          echo "The suite above ran WITHOUT OCR coverage — read its result as partial."
+          echo "This is an apt/mirror failure, not a defect in the change under review."
+          exit 1
 
   frontend:
     name: Frontend tests + build

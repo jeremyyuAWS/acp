@@ -30,6 +30,53 @@ import { locationLabel } from './remediationInboxModel.js'
 
 const VIEWS = [['before', 'Before'], ['after', 'After'], ['both', 'Side by side']]
 
+// A fix callout is grounded ONLY on REAL applied/verified state, never on a bare proposal (ADR 0016).
+// `applied`/`autoApplied` (or an applied/approved/accepted status) mean the change was actually
+// written to the document; `verified` means the confirming re-scan cleared the finding. A finding
+// that merely carries a drafted `after` value is NOT applied — the After view already frames that as
+// "applied on approval", so it gets no callout.
+const APPLIED_STATUSES = new Set(['applied', 'approved', 'accepted', 'verified'])
+const isFixApplied = (f) => !!(f?.applied || f?.autoApplied || APPLIED_STATUSES.has(String(f?.status || '').toLowerCase()))
+const isReVerified = (f) => String(f?.status || '').toLowerCase() === 'verified'
+
+// Small inline confirmations shown next to the fix — "✓ <what changed>", "✓ Re-scan cleared" — but
+// ONLY when the finding records that the fix genuinely landed. Nothing here is fabricated: the "what
+// changed" text is the finding's own applied `after` value, and "Re-scan cleared" appears only for a
+// `verified` finding. No applied/verified state → this renders nothing (never a stock "Text color
+// updated").
+function FixCallouts({ f }) {
+  if (!isFixApplied(f)) return null
+  const after = f?.after ?? f?.proposals?.[0]?.proposed_value ?? null
+  const chip = {
+    display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600,
+    padding: '3px 9px', borderRadius: 999, border: '1px solid var(--ok-line,#bfe3c9)',
+    background: 'var(--ok-bg,#eafaef)', color: 'var(--ok-ink,#217a3b)',
+  }
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+      <span className="fix-callout" style={chip}>
+        <span aria-hidden="true">✓</span> {after != null && after !== '' ? String(after) : 'Fix applied'}
+      </span>
+      {isReVerified(f) && (
+        <span className="fix-callout" style={chip}><span aria-hidden="true">✓</span> Re-scan cleared</span>
+      )}
+    </div>
+  )
+}
+
+// UI-only zoom of the rendered preview (mockup "− 100% +"). Purely presentational — it scales what is
+// already on screen and fetches nothing, so it is honest to add regardless of the finding's data.
+function Zoomable({ zoom, children }) {
+  if (!zoom || zoom === 1) return children
+  return (
+    <div style={{ overflow: 'auto' }}>
+      <div style={{ transform: `scale(${zoom})`, transformOrigin: 'top center', transition: 'transform .12s ease' }}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
 // Findings whose evidence is a region of the rendered page (vs. document structure/metadata).
 // A locator, an embedded-element thumb, or a page number all mean "there is something to point at".
 function hasVisualAnchor(f) {
@@ -166,6 +213,7 @@ function StructureNote({ f }) {
 export default function RemediationPreview({ finding, scanId = null, embedded = false }) {
   const [mode, setMode] = useState('visual')
   const [view, setView] = useState('before')
+  const [zoom, setZoom] = useState(1)
 
   if (!finding) {
     // Embedded in the workspace, the empty case is owned by the workspace (it shows the preview only
@@ -192,6 +240,18 @@ export default function RemediationPreview({ finding, scanId = null, embedded = 
   // to Visual, which every finding supports.
   const activeMode = MODES.some(([m]) => m === mode) ? mode : 'visual'
 
+  const zoomPct = Math.round(zoom * 100)
+  const zoomBtn = { fontSize: 14, fontWeight: 700, lineHeight: 1, padding: '3px 10px', cursor: 'pointer', border: 'none', background: 'transparent', color: 'var(--ink)' }
+  const zoomControl = (
+    <div role="group" aria-label="Zoom" style={{ display: 'inline-flex', alignItems: 'center', border: '1px solid var(--line,#e2dce4)', borderRadius: 8, overflow: 'hidden' }}>
+      <button type="button" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))}
+              disabled={zoom <= 0.5} style={{ ...zoomBtn, opacity: zoom <= 0.5 ? 0.4 : 1 }}>−</button>
+      <span aria-live="polite" style={{ fontSize: 12, fontWeight: 600, minWidth: 44, textAlign: 'center' }}>{zoomPct}%</span>
+      <button type="button" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(2, Math.round((z + 0.25) * 100) / 100))}
+              disabled={zoom >= 2} style={{ ...zoomBtn, opacity: zoom >= 2 ? 0.4 : 1 }}>+</button>
+    </div>
+  )
+
   const modeTabs = (
     <div role="tablist" aria-label="Preview mode" style={{ display: 'inline-flex', border: '1px solid var(--line,#e2dce4)', borderRadius: 8, overflow: 'hidden' }}>
       {MODES.map(([m, label]) => (
@@ -211,11 +271,19 @@ export default function RemediationPreview({ finding, scanId = null, embedded = 
   if (embedded) {
     return (
       <div className="rem-prev rem-prev-embedded">
-        {modeTabs}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+          {modeTabs}
+          {activeMode === 'visual' && zoomControl}
+        </div>
         <div style={{ marginTop: 12 }}>
           {activeMode === 'properties' && <Properties f={finding} fmt={fmt} />}
           {activeMode === 'structure' && <StructureNote f={finding} />}
-          {activeMode === 'visual' && <PageView f={finding} scanId={scanId} />}
+          {activeMode === 'visual' && (
+            <>
+              <Zoomable zoom={zoom}><PageView f={finding} scanId={scanId} /></Zoomable>
+              <FixCallouts f={finding} />
+            </>
+          )}
         </div>
         {sourceUrl && (
           <p style={{ margin: '10px 0 0' }}>
@@ -246,16 +314,19 @@ export default function RemediationPreview({ finding, scanId = null, embedded = 
             </button>
           ))}
         </div>
-        {/* Before / After / Side-by-side — only meaningful inside the Visual mode */}
+        {/* Before / After / Side-by-side + zoom — only meaningful inside the Visual mode */}
         {activeMode === 'visual' && (
-          <div role="tablist" aria-label="Preview view" style={{ display: 'inline-flex', marginLeft: 8, marginTop: 10, border: '1px solid var(--line,#e2dce4)', borderRadius: 8, overflow: 'hidden' }}>
-            {VIEWS.map(([v, label]) => (
-              <button key={v} role="tab" aria-selected={view === v} onClick={() => setView(v)}
-                      style={{ fontSize: 12, fontWeight: 600, padding: '4px 13px', cursor: 'pointer', border: 'none',
-                               background: view === v ? 'var(--ink)' : 'transparent', color: view === v ? '#fff' : 'var(--ink)' }}>
-                {label}
-              </button>
-            ))}
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+            <div role="tablist" aria-label="Preview view" style={{ display: 'inline-flex', border: '1px solid var(--line,#e2dce4)', borderRadius: 8, overflow: 'hidden' }}>
+              {VIEWS.map(([v, label]) => (
+                <button key={v} role="tab" aria-selected={view === v} onClick={() => setView(v)}
+                        style={{ fontSize: 12, fontWeight: 600, padding: '4px 13px', cursor: 'pointer', border: 'none',
+                                 background: view === v ? 'var(--ink)' : 'transparent', color: view === v ? '#fff' : 'var(--ink)' }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            {zoomControl}
           </div>
         )}
       </div>
@@ -266,21 +337,27 @@ export default function RemediationPreview({ finding, scanId = null, embedded = 
         {activeMode === 'structure' && <StructureNote f={finding} />}
         {activeMode === 'visual' && view === 'before' && (
           <>
-            <PageView f={finding} scanId={scanId} />
+            <Zoomable zoom={zoom}><PageView f={finding} scanId={scanId} /></Zoomable>
             <Original f={finding} />
           </>
         )}
-        {activeMode === 'visual' && view === 'after' && <ProposedValue f={finding} />}
+        {activeMode === 'visual' && view === 'after' && (
+          <Zoomable zoom={zoom}>
+            <ProposedValue f={finding} />
+            <FixCallouts f={finding} />
+          </Zoomable>
+        )}
         {activeMode === 'visual' && view === 'both' && (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
               <p className="muted" style={{ fontSize: 11.5, letterSpacing: '.08em', textTransform: 'uppercase', margin: '0 0 6px' }}>Found</p>
-              <PageView f={finding} scanId={scanId} />
+              <Zoomable zoom={zoom}><PageView f={finding} scanId={scanId} /></Zoomable>
               <Original f={finding} />
             </div>
             <div>
               <p className="muted" style={{ fontSize: 11.5, letterSpacing: '.08em', textTransform: 'uppercase', margin: '0 0 6px' }}>Proposed</p>
               <ProposedValue f={finding} />
+              <FixCallouts f={finding} />
             </div>
           </div>
         )}

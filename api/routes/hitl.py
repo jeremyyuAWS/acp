@@ -29,7 +29,7 @@ class HitlUpdate(BaseModel):
     # alternative is required) or 'essential_exception' (1.4.5/1.4.9: a logo/brand mark is exempt
     # from the images-of-text rule). Recorded in the immutable audit trail as WHY the finding was
     # resolved, so the certification report never implies a written fix that never happened.
-    resolution: str | None = None       # decorative | essential_exception
+    resolution: str | None = None       # decorative | essential_exception | out_of_scope
 
 
 REJECT_REASONS = {"incorrect_object", "too_vague", "hallucinated", "missed_text", "org_preference", "other", "unspecified"}
@@ -38,6 +38,11 @@ REJECT_REASONS = {"incorrect_object", "too_vague", "hallucinated", "missed_text"
 RESOLUTIONS = {
     "decorative": "reviewer marked image decorative — no text alternative required (WCAG 1.1.1)",
     "essential_exception": "reviewer marked essential logo/brand mark — exempt from images-of-text (WCAG 1.4.5/1.4.9)",
+    # Unlike the two above (which RESOLVE a finding that IS in scope, so it stays a human_verified
+    # pass), out_of_scope means the criterion does not APPLY to this document — the reviewer's
+    # judgement that it is not applicable. It leaves the coverage denominator (accessibility_status
+    # counts it as its own `not_applicable` bucket, outside in_scope), like an N/A cell on the matrix.
+    "out_of_scope": "reviewer marked finding not applicable / out of scope for this document",
 }
 
 

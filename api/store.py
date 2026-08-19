@@ -83,8 +83,9 @@ _SCHEMA = [
       source_modified TEXT,
       PRIMARY KEY (scan_id, file)
     )""",
-    # Per-scan decision snapshots (PRD: time-travel). kind='triage' (value inscope|na|defer)
-    # or 'action' (value = JSON {state, action}). Owner-scoped, one row per (scan,file,kind).
+    # Per-scan decision snapshots (PRD: time-travel). kind='triage' (value inscope|na|defer),
+    # 'action' (value = JSON {state, action}), or 'assignee' (value = assignee email, for the
+    # "Assigned to me" inbox filter). Owner-scoped, one row per (scan,file,kind).
     """CREATE TABLE IF NOT EXISTS scan_decisions (
       scan_id TEXT, file TEXT, kind TEXT, value TEXT,
       owner_email TEXT, updated_at TEXT,
@@ -479,7 +480,8 @@ from assessment_policy import (  # noqa: F401,E402  (re-export)
     _LEGACY_NOT_EVALUATED, _SUPERSEDING_OUTCOMES, _SC_LEVEL, _ALL_FORMATS,
     active_scope, scope_problem, parse_scope_setting,
     in_scope, in_target, parse_target, config_target,
-    formats_in_scope, file_in_scope, selected_documents, scope_as_json, scope_from_json, criteria_for_format,
+    formats_in_scope, file_in_scope, selected_documents, assignments, files_assigned_to,
+    scope_as_json, scope_from_json, criteria_for_format,
     filter_issues_to_target, filter_issues_to_scope, _rule_outcome, _certify, _registry_for,
     _split_sc_counts, _file_format, _extract_sc, _pages_csv,
 )

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import mimetypes
 import os
+from datetime import datetime, timezone
 from pathlib import PurePath
 
 import estate_inventory
@@ -122,35 +123,111 @@ def _file_dict(entry: dict, parent_unc: str) -> dict:
 
 
 # ── live SMB transport (deployment-gated; isolated so discovery is testable without it) ────────────
-def _walk(root: str, cfg: dict):
-    """Yield directory entries under an SMB root, recursively. Each entry is a dict
-    {name, is_dir, size, modified, path}. This is the ONLY function that speaks SMB, so tests
-    monkeypatch it and the discovery logic runs against a mock share.
+#
+# ADR 0036 fills in the live walk/read. The split below is deliberate: everything ACP OWNS — the
+# recursion, the parent-path shaping, the mtime→ISO conversion, the size handling — lives in the pure
+# `_walk_tree` generator and is unit-tested against a fake `scandir` with no server (see
+# test_smb_source). What stays deployment-gated is only the irreducible `smbprotocol` surface: opening
+# an authenticated session (Kerberos-first, NTLM fallback — ADR 0036 §1) and the `smbclient.scandir` /
+# `smbclient.open_file` calls themselves. Those ~4 lines are validated by the opt-in Samba-container CI
+# lane (ADR 0036 "How it is tested"), NOT locally, and are commented as such — never claimed as proven.
 
-    The live implementation uses `smbprotocol` (SMB2/3, NTLM/Kerberos). It is imported lazily and
-    absent from api/requirements for now: standing up the transport is part of the connector/VNet
-    deployment work (ADR 0032), not this scaffolding. Calling it without that raises a clear error
-    rather than pretending to scan.
-    """
+
+def _server_of(unc: str) -> str:
+    r"""The server host of a UNC root — `\\fs\dept` → `fs`. `smbclient.register_session` keys sessions
+    by server, so the walk registers once per server before scandir'ing that server's shares. Parsed by
+    hand rather than via PurePath: POSIX PurePath collapses a leading `\\`→`//` into a special root and
+    would return `//` as the first part."""
+    return unc.replace("\\", "/").lstrip("/").split("/")[0] if unc else ""
+
+
+def _iso_mtime(mtime) -> str | None:
+    """A POSIX mtime (float epoch seconds, what `smbclient` stat returns) → an ISO-8601 UTC string, so
+    an SMB file's `source_modified` matches the shape the Drive/SharePoint paths already emit and feeds
+    `store.get_inventory_diff` (#343) unchanged — the generic staleness diff keys on this (ADR 0036 §4).
+    None passes through as None (a listing that carried no mtime), never a fabricated timestamp."""
+    if mtime is None:
+        return None
     try:
-        import smbclient  # noqa: F401  (smbprotocol's high-level client)
+        return datetime.fromtimestamp(float(mtime), tz=timezone.utc).isoformat()
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _walk_tree(scandir, root: str):
+    r"""Recursively yield entries under `root` using a `scandir`-like callable, in the exact shape the
+    discovery layer consumes: {name, is_dir, size, modified, path} where `path` is the entry's PARENT
+    directory UNC (so `_file_dict`'s `_join_unc(parent, name)` reconstructs the file's own UNC id).
+
+    `scandir(path)` yields objects exposing `.name`, `.is_dir()`, and `.stat()` (with `.st_size` /
+    `.st_mtime`) — the `smbclient.scandir` contract, and equally a fake in tests. This is where the
+    walk's real logic lives, so it is provable without a server: directory entries are yielded (the
+    consumer skips them) and then recursed into; a size is only read for files. `scandir` errors on a
+    single directory (a permission-denied subtree) propagate — the caller decides policy — rather than
+    being swallowed into a silently short estate.
+    """
+    for de in scandir(root):
+        is_dir = de.is_dir()
+        st = de.stat()
+        yield {
+            "name": de.name,
+            "is_dir": is_dir,
+            "size": None if is_dir else getattr(st, "st_size", None),
+            "modified": _iso_mtime(getattr(st, "st_mtime", None)),
+            "path": root,                                   # PARENT dir UNC — the shaping contract
+        }
+        if is_dir:
+            yield from _walk_tree(scandir, _join_unc(root, de.name))
+
+
+def _register_session(server: str, cfg: dict) -> None:
+    """Open an authenticated SMB session to `server` (ADR 0036 §1). DEPLOYMENT-GATED wiring: Kerberos
+    is the default (a hospital AD environment, no NTLM-relay exposure — the container carries a krb5
+    config + keytab/TGT for the service account), and an explicit username+password (from Key Vault in
+    the VNet variant) is the NTLM fallback, used only when configured, never silently. Validated by the
+    Samba-container CI lane and a real deploy, not by the local suite."""
+    import smbclient
+    user, password, domain = cfg.get("username"), cfg.get("password"), cfg.get("domain")
+    if user and password:                                   # NTLM fallback (explicit creds)
+        smbclient.register_session(
+            server, username=f"{domain}\\{user}" if domain else user, password=password)
+    else:                                                   # Kerberos default (ambient TGT/keytab)
+        smbclient.register_session(server)
+
+
+def _smbclient_or_raise():
+    """Import `smbclient` or fail LOUDLY. The library ships with the worker image, not the default API
+    image (ADR 0036 consequences), so its absence means the SMB transport is not provisioned — a scan
+    must raise here, never return an empty estate a customer would read as "nothing to remediate"."""
+    try:
+        import smbclient
     except Exception as e:  # noqa: BLE001
         raise RuntimeError(
             "SMB transport not available: install smbprotocol/smbclient and configure the read-only "
-            "service account (ADR 0032). Discovery logic is tested against a mock `_walk`; the live "
-            "walk is deployment-gated."
+            "service account (ADR 0032/0036). Discovery logic is tested against a mock `_walk`/a fake "
+            "scandir; the live session + scandir/open are deployment-gated."
         ) from e
-    # Live walk intentionally not implemented in this scaffolding PR — see ADR 0032 Phase 1.
-    raise NotImplementedError("live SMB walk is deployment-gated (ADR 0032 Phase 1)")
+    return smbclient
+
+
+def _walk(root: str, cfg: dict):
+    r"""Yield every entry under an SMB `root`, recursively (see `_walk_tree` for the shape). The ONLY
+    SMB-native steps are registering the session and handing `smbclient.scandir` to the pure walker;
+    both are deployment-gated and covered by the Samba CI lane, so tests monkeypatch `_walk` (or drive
+    `_walk_tree` directly) and run the discovery logic against a mock share."""
+    smbclient = _smbclient_or_raise()
+    _register_session(_server_of(root), cfg)                # gated: real auth, CI-validated
+    yield from _walk_tree(smbclient.scandir, root)          # gated seam: smbclient.scandir
 
 
 def _read(path: str, cfg: dict) -> bytes:
-    """Read one file's bytes for assessment/remediation. Deployment-gated, same as `_walk`."""
-    try:
-        import smbclient  # noqa: F401
-    except Exception as e:  # noqa: BLE001
-        raise RuntimeError("SMB transport not available (see _walk)") from e
-    raise NotImplementedError("live SMB read is deployment-gated (ADR 0032 Phase 1)")
+    r"""Read one file's bytes for assessment/remediation. Registers the session (same gated auth as
+    `_walk`) and reads through `smbclient.open_file` — a read-only open, no write-back to the share
+    (ADR 0036 §5). Deployment-gated; fails loudly when the library is absent."""
+    smbclient = _smbclient_or_raise()
+    _register_session(_server_of(path), cfg)
+    with smbclient.open_file(path, mode="rb") as fh:        # gated seam: smbclient.open_file
+        return fh.read()
 
 
 # ── discovery (real, testable) ─────────────────────────────────────────────────────────────────
