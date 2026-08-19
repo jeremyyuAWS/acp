@@ -6,6 +6,7 @@ import { SCOPE_PRESETS, SCOPE_UNIVERSE, SCOPE_FORMATS } from './scopePresets.js'
 import { TRACKED_17, RULE_DETAILS } from './ruleDetails.js'
 import { ASSESSMENT_FALLBACK, assessmentFor } from './capability.js'
 import { reusableScopes, describeScope, whenLabel } from './recentScopes.js'
+import { lastRunOfScope, coverageSentence } from './scopeHistory.js'
 
 // ── Scan-scope WIZARD (Phase 1) ─────────────────────────────────────────────────────────────────
 //
@@ -317,6 +318,14 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
     }).catch(() => { /* the panel still renders; a save reports the real failure */ })
     return () => { alive = false }
   }, [])
+
+  // What this EXACT scope covered last time, matched on the whole frozen boundary — locations,
+  // carve-outs and criteria together, in the shape scanner records them. Recomputed on every
+  // render rather than memoised: `scans` is one user's run list and the match is a few string
+  // comparisons, and a stale memo here would caption one boundary's count with another's, which
+  // is the precise failure this is meant to prevent.
+  const lastRun = lastRunOfScope(scans,
+    { folders, excluded, scan_scope: restrict ? toPayload(sel) : null }, locKey)
 
   const profile = profileFor(restrict, sel)
 
@@ -1030,9 +1039,16 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
 
       {/* ── 3. Review ───────────────────────────────────────────────────────── */}
       {/* A scope CONTRACT: what is about to be covered, stated once, in the order it was decided.
-          Deliberately without an estimated file count — ACP has no pre-scan count, and a number
-          invented here would be the one thing on this screen a reader would most reasonably trust.
-          The count arrives with the scan, carrying its own boundary (scanScope.js). */}
+          Still no ESTIMATED file count. A number invented here would be the one thing on this
+          screen a reader would most reasonably trust, and under ADR 0020 a Discover run IS the
+          listing — so an estimate is not a cheap preview of an expensive operation, it is very
+          nearly the operation run twice, producing a SECOND number for the same estate at a
+          different moment under a different cap. Two numbers that can disagree, both correct, is
+          the 2026-07-30 defect (scanScope.js).
+          What IS shown is a number that was actually measured: what THIS EXACT SCOPE covered the
+          last time it ran, matched on the whole frozen boundary and captioned with its date. When
+          no such run exists the line says so and stops — inventing a figure for precisely the case
+          with no evidence behind it would be the least checkable number on the screen. */}
       {showStartButton && step === 3 && (
         <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '12px 14px' }}>
           <div style={{ fontSize: 13, fontWeight: 650, marginBottom: 8 }}>Ready to scan</div>
@@ -1070,6 +1086,13 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
               )}
             </dd>
           </dl>
+          {/* Below the contract, not inside it: this is evidence ABOUT the scope, not part of it.
+              `aria-live` because it changes as the scope does, and a count whose boundary silently
+              moved underneath it is the failure mode this whole screen is built against. */}
+          <div role="status" aria-live="polite" className="muted"
+               style={{ fontSize: 12, marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--line)' }}>
+            {coverageSentence(lastRun, lastRun ? whenLabel(lastRun.at) : '')}
+          </div>
         </div>
       )}
 
