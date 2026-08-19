@@ -74,6 +74,10 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   const saved = loadSaved(runId)
   // Derived from the selected scope, not a picker — see deriveLevel above.
   const level = DERIVED_LEVEL
+  // Deva's Assess filter #6: ignore files a discovery rule flagged for archival or deletion. ON by
+  // default — the run already skips them (PRD §4.5), and this surfaces that as a controllable choice
+  // rather than a silent one. Unchecking sends the authorized include-flagged override to the run.
+  const [ignoreLifecycle, setIgnoreLifecycle] = useState(true)
   const [phase, setPhase] = useState(saved?.phase || 'idle') // idle | running | done
   const [progress, setProgress] = useState(0)
   const [currentFile, setCurrentFile] = useState(null)
@@ -278,7 +282,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     // container restart) has a stale/absent token and every file would 401. Push a fresh Drive
     // token from the live session first (best-effort; the endpoint 422s harmlessly for a local /
     // SharePoint scan with no token). Then kick off the assessment.
-    Promise.resolve(refreshScanDriveToken(runId)).catch(() => {}).then(() => assessScan(runId, level)).then((resp) => {
+    Promise.resolve(refreshScanDriveToken(runId)).catch(() => {}).then(() => assessScan(runId, level, !ignoreLifecycle)).then((resp) => {
       if (resp && resp.deferred) {
         // The analysis is running now — track it for real.
         save({ phase: 'running', startedAt, level, deferred: true })
@@ -377,6 +381,17 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
         from the <b>{ruleCount}</b> success criteria you selected in your {SCOPE_LABEL}. A finding blocks conformance when its
         criterion is at or below Level {level}. All {assessN} {deferredPending ? 'discovered' : 'parsable'} files are assessed.
       </p>
+
+      {phase !== 'running' && (
+        <label className="assess-lifecycle-ignore" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, margin: '8px 0 0', fontSize: 12.5, lineHeight: 1.5, cursor: 'pointer' }}>
+          <input type="checkbox" checked={ignoreLifecycle} onChange={(e) => setIgnoreLifecycle(e.target.checked)}
+                 aria-label="Ignore files flagged for archival or deletion" style={{ marginTop: 2 }} />
+          <span>
+            <b>Ignore files flagged for archival or deletion</b>
+            <span className="muted"> — files a discovery rule marked <i>Archive Candidate</i>, <i>Archived</i>, <i>Delete&nbsp;Candidate</i> or <i>Deleted</i> are skipped; there is no point assessing a document you are about to remove. Uncheck to assess them anyway.</span>
+          </span>
+        </label>
+      )}
 
       <div role="status" aria-live="polite">
         {phase === 'running' && (

@@ -109,3 +109,28 @@ describe('AssessRunner names the file it is reading', () => {
     expect(container.querySelector('[role="radiogroup"]')).toBeNull()
   })
 })
+
+describe('AssessRunner — ignore archival/deletion filter (Deva #6)', () => {
+  const toggle = () => container.querySelector('input[aria-label="Ignore files flagged for archival or deletion"]')
+
+  it('is checked by default and assesses with archival/deletion IGNORED (override off)', async () => {
+    assessScan.mockResolvedValue({ deferred: false })
+    await mount(SCORED)
+    expect(toggle().checked).toBe(true)
+    await clickText('Assess')
+    await settle()
+    expect(assessScan).toHaveBeenCalledWith('s1', 'AA', false)
+    expect(realErrors()).toEqual([])
+  })
+
+  it('unchecking it sends the include-flagged override so those files are assessed too', async () => {
+    assessScan.mockResolvedValue({ deferred: false })
+    await mount(SCORED)
+    await act(async () => { toggle().dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(toggle().checked).toBe(false)
+    await clickText('Assess')
+    await settle()
+    expect(assessScan).toHaveBeenCalledWith('s1', 'AA', true)
+    expect(realErrors()).toEqual([])
+  })
+})
