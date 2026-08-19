@@ -262,6 +262,22 @@ def list_provider_views() -> list[dict]:
     return out
 
 
+def cloud_status() -> dict:
+    """Non-admin, secret-free answer to 'is a governed cloud vision provider a configured, usable
+    fallback?' — for the review card's empty-state honesty message, which must know WITHOUT admin
+    rights whether escalation can happen (ADR 0019).
+
+    Computed from the SAFE provider views only: `enabled` is True when some cloud provider is both
+    admin-enabled AND its ops-provisioned secret is present (`key_present`), and `provider`/`zone`
+    name that provider display-safely. It exposes NO secret — never the key value, the
+    key_secret_ref value, or the endpoint — a boolean plus a provider name and a 'local'/'cloud'
+    zone only. When nothing qualifies it reports the out-of-box state (disabled, no provider)."""
+    for v in list_provider_views():
+        if v.get("enabled") and v.get("key_present"):
+            return {"enabled": True, "provider": v.get("provider"), "zone": v.get("zone")}
+    return {"enabled": False, "provider": None, "zone": None}
+
+
 # Per-1M-token list prices (USD) for cost accounting. These are REAL billing inputs multiplied by
 # the token counts the API returns — a measured cost, never a fabricated score (ADR 0016). Unknown
 # model → cost stays 0 (we don't invent one); tokens are still recorded.
