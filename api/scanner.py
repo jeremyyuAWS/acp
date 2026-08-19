@@ -1287,6 +1287,14 @@ def cache_source_bytes(tmp: Path, name: str, scan_id: str, user: str | None) -> 
 
 def _download(item: dict, dest: Path, svc=None, sp_token: str | None = None) -> None:
     out = dest / item["name"]
+    if item.get("smb"):
+        # SMB items carry a UNC `path` (\\server\share\...), which is NOT a local filesystem path —
+        # the plain-`path` branch below would misread it. Route through the SMB transport instead.
+        # fetch_smb is deployment-gated (ADR 0032/0036): until the live transport exists it raises a
+        # clear error, so an SMB fetch fails loudly rather than silently producing an empty file.
+        import smb_source
+        out.write_bytes(smb_source.fetch_smb(item["path"]))
+        return
     if "path" in item:
         out.write_bytes(Path(item["path"]).read_bytes())
         return
