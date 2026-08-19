@@ -552,6 +552,47 @@ def trace_hitl_decision(scan_id, file, rule_id, status, *, note=None, approved_v
         pass
 
 
+def trace_disposition_decision(scan_id, file, *, action, status, policy_id=None,
+                               reason=None) -> None:
+    """Trace a file-disposition / pending-approval decision (queued / approved / rejected /
+    applied / failed) as a span on the document's trace. Disposition (routes/disposition.py)
+    was the one decision surface with zero Langfuse coverage — the approval queue from #360
+    records the decision to disposition_audit but emitted no trace, unlike the HITL review
+    decisions traced one function up.
+
+    PHI-SAFE, the same contract as trace_hitl_decision (docs/audit-langfuse-phi.md). Only
+    statuses, ids and counts leave:
+
+      • the disposition `detail` is free text (a policy NAME, a Drive error string, a doc id
+        spliced into a sentence) with no cap and no schema, so it is sent as `reason_chars`,
+        a COUNT, never the text — the same treatment reviewer notes and prompts already get;
+      • the document is a `_doc_label` HMAC, never a raw path or filename;
+      • `action`/`status`/`policy_id` are enums and ids, safe to carry.
+
+    Disposition has no scan grain — the governance layer keys off the stable doc_id — so callers
+    pass doc_id as scan_id and the document PATH as file, the convention _persist_tags already
+    uses. That routes the file through _doc_label/_trace_id and groups every decision for a
+    document onto one session, like the other traces. `file` may be None (the document has since
+    disappeared): the decision still traces, grouped by session, with no fabricated document.
+
+    No-op when tracing is disabled.
+    """
+    lf = _lf()
+    if lf is None:
+        return
+    try:
+        tid = _trace_id(scan_id, file)
+        t = lf.trace(id=tid, name="disposition:decision", session_id=scan_id,
+                     metadata={"file": _doc_label(file), "policy_id": policy_id,
+                               "action": action})
+        s = t.span(name=f"disposition.{status}",
+                   input={"action": action, "policy_id": policy_id},
+                   output={"status": status, "reason_chars": len(reason or "")})
+        s.end()
+    except Exception:
+        pass
+
+
 def trace_deep_link(trace_id: str) -> str | None:
     """Public Langfuse URL for a trace — the same shape /config exposes to the SPA.
     Returns None when tracing isn't configured (no LANGFUSE_HOST)."""

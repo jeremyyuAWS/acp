@@ -130,6 +130,43 @@ def test_the_approved_value_is_still_sent_and_still_capped(captured):
     assert vals and len(vals[0]) == 500
 
 
+DISPOSITION_DETAIL = (
+    "queued by policy 'Archive intake for John Smith MRN 0114233' — awaiting approval")
+
+
+def test_disposition_decision_reason_never_leaves_as_text(captured):
+    """N2. The disposition surface (the pending-approval queue, #360) now traces its decisions.
+    Its `detail` is free text — a policy NAME, a Drive error, a doc id spliced into a sentence —
+    with no cap and no schema, so it must be reduced to a length, never sent verbatim."""
+    lf.trace_disposition_decision("drive:1a2b3c", "intake.docx", action="archive",
+                                  status="pending_approval", policy_id="p2",
+                                  reason=DISPOSITION_DETAIL)
+    blob = captured.everything()
+    assert DISPOSITION_DETAIL not in blob, (
+        "the disposition detail reached Langfuse verbatim — it is free text that can carry a "
+        "patient (a policy name, a note) and must be reduced to a length")
+    assert "John Smith" not in blob and "0114233" not in blob
+
+
+def test_disposition_decision_reports_status_ids_and_reason_length(captured):
+    """Bounded, not deleted: the span still shows the action, status, policy id and how long the
+    reason was — status/counts/redacted ids only, which is what the observability was for."""
+    lf.trace_disposition_decision("drive:1a2b3c", "intake.docx", action="archive",
+                                  status="rejected", policy_id="p2", reason=DISPOSITION_DETAIL)
+    fields = captured.fields()
+    assert any(p.get("reason_chars") == len(DISPOSITION_DETAIL) for p in fields), fields
+    assert not any("reason" in p for p in fields), (
+        "'reason' must be gone entirely, not carried alongside 'reason_chars'")
+    assert any(p.get("status") == "rejected" for p in fields)
+    assert any(p.get("action") == "archive" and p.get("policy_id") == "p2" for p in fields)
+
+
+def test_disposition_decision_absent_reason_reports_zero(captured):
+    lf.trace_disposition_decision("drive:1a2b3c", "intake.docx", action="leave",
+                                  status="approved", policy_id="p3", reason=None)
+    assert any(p.get("reason_chars") == 0 for p in captured.fields())
+
+
 def test_prompts_are_still_sent_as_a_length_only(captured):
     """The invariant the whole Langfuse audit turned on, now pinned.
 
@@ -215,6 +252,9 @@ def test_nothing_is_sent_at_all_when_tracing_is_disabled(monkeypatch):
     monkeypatch.setattr(lf, "_lf", lambda: None)
     # Must not raise, and must reach no client.
     lf.trace_hitl_decision("scan-1", "intake.docx", "1.1.1", "rejected", note=SECRET)
+    lf.trace_disposition_decision("drive:1a2b3c", "intake.docx", action="archive",
+                                  status="pending_approval", policy_id="p2",
+                                  reason=DISPOSITION_DETAIL)
     lf.trace_ai_call("describe_image", "moondream", 1, ok=True, completion=SECRET,
                      prompt_tokens=1, completion_tokens=1, cost=0.5)
     # generation() and remediate_span() are no-ops on a _Noop trace, so they never touch a client.

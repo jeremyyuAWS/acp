@@ -123,6 +123,17 @@ def test_ai_and_hitl_and_score_redact(lf_mod):
     _clean(lf_mod)
 
 
+def test_disposition_decision_redacts(lf_mod):
+    """N2. The disposition/approval decision trace routes its document through _doc_label too —
+    it passes doc_id as scan_id and the document PATH as file, so a patient's name in the path
+    (or the trace id it builds from it) must not reach Langfuse."""
+    lf_mod.trace_disposition_decision("drive:1a2b3c", PATIENT, action="archive",
+                                      status="pending_approval", policy_id="p2",
+                                      reason="queued — awaiting approval")
+    blob = _clean(lf_mod)
+    assert "doc-" in blob, "the document must still be identifiable by a stable label"
+
+
 # ── the properties that make the label worth having ──────────────────────────
 
 def test_the_label_is_stable_so_a_document_stays_followable(lf_mod):
