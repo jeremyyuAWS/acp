@@ -1490,6 +1490,21 @@ invariant the redaction tests pin).
   scale on a live scan. Old v2 app deleted; its trace data (not migrated — deliberate start-fresh) still
   sits in the shared Postgres. **#447** adds `deploy/langfuse-v3/` (compose + provision/cutover scripts +
   a runbook) so the hand-provisioned migration is reproducible and reversible. No app code changed.
+- **View a document's Langfuse trace INSIDE AccessOps, with no Langfuse login** (#454). The "📊 View
+  trace" chips deep-linked to Langfuse, which meant a login — and verification against the live v3
+  instance found the built-in "make the trace public" path does not give a usable no-login view on this
+  build: the `public` flag works at the data layer (public trace → `200` unauthenticated, non-public →
+  `401`), but Langfuse's own public *page* hangs at "Loading …" for a logged-out visitor and sends
+  `X-Frame-Options: SAMEORIGIN`, so it can be neither deep-linked without a login nor iframed. So instead
+  ACP fetches the trace server-side with its own keys (`lf.fetch_trace`) and renders it in-app: a new
+  `GET /scans/{sid}/trace/file/{file}/data` returns a normalized, PHI-safe payload — the trace NAME is
+  dropped (it carried the operator email) and observations are reduced to structural fields only (no raw
+  input/output blobs) — and a `TracePanel` drawer shows the score, failing WCAG criteria, PII *categories*
+  (never values), remediation status and the Discover→Assess→Remediate timeline. The per-file chips
+  (review card, file drawer) open the panel; the whole-scan *session* view is left as a follow-up (a
+  bigger, aggregate surface). Registered the `/data` route BEFORE the greedy `{filename:path}` catch-all
+  so Starlette's first-match doesn't shadow it — the same catch-all already shadows the pre-existing
+  `/exists` route, left as-is since the SPA tolerates it. Backend + frontend tests; not a RULE_PATHS change.
 
 ## Open items (backlog candidates)
 
@@ -1884,3 +1899,10 @@ invariant the redaction tests pin).
   to say v3 is **live**. The Remediate workspace/layout/taxonomy/count PRs (#418/#427/#430/#434/#435/#442)
   were already logged under #4598 by the state-model owner's session, so nothing was added there. Docs-only,
   not RULE_PATHS. **Sync marker deliberately NOT advanced** (same convention).
+- **2026-08-19 (in-app trace panel)** — Added #454 as one Task under Observability — AI tracing and cost
+  (Langfuse): viewing a document's trace INSIDE AccessOps with no Langfuse login. Recorded the verification
+  that drove the design — Langfuse's own public trace page hangs for a logged-out visitor on our self-hosted
+  v3 and can't be iframed, so the durable path is a server-side proxy (`lf.fetch_trace` + a `/trace/file/
+  {file}/data` route) rendered by a `TracePanel` drawer, not a public deep-link. Backend + frontend, CI green
+  on `main`; not a RULE_PATHS change. **Sync marker still NOT advanced** (`fad0dfbe`, same convention as the
+  prior entries): the large delta since it remains other sessions' undocumented feature work.
