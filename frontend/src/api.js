@@ -434,6 +434,25 @@ export const updateSettings = (patch) => (SIM
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(patch),
     }).then(j))
+// Per-user scan-scope override (ADR 0035 stage 2). A signed-in user's OWN override — the server keys it
+// to their identity and only ever lets it WIDEN the owner default (the union lives in active_scope), so
+// this surface can never narrow below what the owner mandated. `owner_default` is returned so the editor
+// can show the baseline the override adds onto. PUT sends `{scan_scope: <map | "">}`; DELETE clears the
+// override so scans fall back to the owner default (distinct from PUT "" which is a real "no restriction").
+const _simMyScope = { scan_scope: '', owner_default: '' }
+export const getMyScope = () => (SIM
+  ? sim({ ..._simMyScope, simulated: true })
+  : fetch(`${BASE}/settings/mine`, { headers: headers() }).then(j))
+export const putMyScope = (payload) => (SIM
+  ? sim((() => { _simMyScope.scan_scope = typeof payload === 'string' ? payload : JSON.stringify(payload); return { scan_scope: _simMyScope.scan_scope, simulated: true } })())
+  : fetch(`${BASE}/settings/mine`, {
+      method: 'PUT',
+      headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ scan_scope: payload }),
+    }).then(j))
+export const clearMyScope = () => (SIM
+  ? sim((() => { _simMyScope.scan_scope = ''; return { scan_scope: '', simulated: true } })())
+  : fetch(`${BASE}/settings/mine`, { method: 'DELETE', headers: headers() }).then(j))
 // Download a remediated file's fixed bytes (ADR 0010) — Blob primary, Drive-mirror
 // fallback server-side. Authenticated fetch → blob → download, same pattern as
 // openReport (a bare <a href> would drop the Authorization header).

@@ -207,7 +207,18 @@ export default function App() {
   const [queuedScan, setQueuedScan] = useState(false)  // session-scoped is the pilot default; opt into Durable (background queue) via the switch
   const [deepScan, setDeepScan] = useState(false)      // off by default → Fast scan; opt in to PII scan via the switch
   const [excludeRemediated, setExcludeRemediated] = useState(true)  // on by default — skip re-discovering ACP's own Remediated/ output
-  const [incremental, setIncremental] = useState(true)  // ADR 0011 — skip re-analysing byte-identical files already scored under the same rubric
+  // ADR 0011 skips re-analysing byte-identical files already scored under the same rubric. OFF by
+  // default from 2026-08-19: every switch in this group now starts off, so the scan a user gets
+  // without touching anything is the plainest one — nothing skipped, nothing inferred, and the
+  // four toggles read as additions to a known baseline rather than as a mix whose starting state
+  // has to be checked. Opting IN to the skip is the deliberate act; it is a speed and cost
+  // optimisation, and a stale score kept by a skip is harder to notice than a slow scan.
+  //
+  // `exclude_remediated` deliberately stays ON and is NOT part of this: off, ACP re-discovers its
+  // own Remediated/ output as source documents, which inflates the file count and shows
+  // "remediated ✓" on a scan that remediated nothing (provenance.py). That is a wrong number
+  // pointing at MORE coverage, which is the direction nobody checks.
+  const [incremental, setIncremental] = useState(false)
   // The in-flight durable scan's id — what the banner's Stop button cancels. null when
   // no queued scan is being polled (sync scans finish in-request and can't be stopped).
   const [liveScanId, setLiveScanId] = useState(null)

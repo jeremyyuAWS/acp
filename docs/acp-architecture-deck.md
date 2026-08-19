@@ -339,6 +339,77 @@ auto-advance to the next.
 
 ---
 
+## Which SC you scan for decides whether the GPU runs
+
+The vision/GPU lane is entered **only** for image‑understanding criteria; everything else is
+CPU‑deterministic and never touches a GPU — so a scan's cost and latency track which WCAG SCs are
+in scope.
+
+```
+  per-file assessment ── each detector = one WCAG SC ──┐
+                                                        ▼
+        ┌──────────────── which SC? ─────────────────────┐
+        ▼                                                 ▼
+  DETERMINISTIC SCs                               VISION SCs  (must SEE the image)
+  1.4.3 contrast · 3.1.1 lang · 1.3.1 headings    1.1.1 alt text · 1.4.5/1.4.9 images-of-text
+  tables · forms · link text                      scanned-PDF reading order (ADR 0027)
+        │                                                 │
+        ▼                                                 ▼
+   CPU analysers only                         ┌────────── VISION LANE ──────────┐
+   PASS / FAIL / REVIEW                        │ [1] Ollama moondream   CPU 🟢    │
+        │                                      │       │ acceptance gate: weak?  │
+        │                                      │       ▼ escalate                │
+        │                                      │ [2] GPU: Azure T4 🟢 / RunPod 🟡 │
+        │                                      │       ▼ still weak & admin-on    │
+        │                                      │ [3] Cloud: AzureOpenAI / OpenAI /│
+        │                                      │       Anthropic 🟡               │
+        │                                      │       ▼ none enabled             │
+        │                                      │ [4] Defer to a human (HITL)      │
+        │                                      └────────────────┬─────────────────┘
+        └──────────────────► findings ◄─────────────────────────┘
+                                 │
+      deterministic fix (write → re-scan → certify)   OR   AI-drafted alt text
+                                 ▼
+      HITL review → Blob (managed identity) + conformance report
+      every model call → Langfuse  (cost · zone · filename HMAC-masked, PHI-safe)
+```
+
+| Success criterion | Vision? | Compute |
+|---|---|---|
+| 1.1.1 alt text · 1.4.5 / 1.4.9 images‑of‑text · scanned‑PDF reading order | **Yes** | vision lane: CPU floor → GPU → cloud |
+| 1.4.3 contrast · 3.1.1 language · 1.3.1 headings · tables · forms · link text | No | CPU analysers, no model |
+
+---
+
+## The compute & GPU tiers, and why the GPU is region‑bound
+
+```
+ ┌──────── REGION A  (US — current) ────────┐   ┌──── REGION B  (e.g. Asia — pattern) ────┐
+ │ acp-app · acp-worker    one ACA env       │   │ acp-app · acp-worker  (replicated)      │
+ │ acp-ollama (GPU) ─ SAME env/region ─ T4   │   │ acp-ollama (GPU) ─ T4 IF the region      │
+ │ Postgres · Redis · Blob  (PHI in-region)  │   │ offers it (SKU discovered, else A100/…)  │
+ └───────────────────────────────────────────┘   └──────────────────────────────────────────┘
+   acp-langfuse → eastus2  (PHI-safe traces)       RunPod serverless GPU → GLOBAL  🟡 cloud
+```
+
+The in‑tenant GPU **must share the app's ACA environment**, and an environment is one region — so a
+GPU app in another region defeats its own in‑tenant/low‑latency purpose (`gpu_up.sh` says exactly
+this). Serving **Asia** means replicating the environment there; the T4 SKU is **discovered from that
+region's supported list** (`ACP_GPU_FIND_REGION`), not hard‑coded.
+
+| Tier | Where | Hardware / model | Zone | Scale |
+|---|---|---|---|---|
+| **CPU floor** | in‑process (acp‑app/worker, 1 CPU/2 GiB) | Ollama `moondream` / `llama3.2` | 🟢 local | always |
+| **Azure T4 (in‑tenant)** | `acp-ollama`, same env | ACA profile **`NC8AS_T4`** = 8 vCPU + 1× **NVIDIA T4 (16 GB)**; `qwen2.5vl:7b` | 🟢 local | **scale‑to‑zero** |
+| **RunPod serverless** | RunPod cloud (global) | serverless GPU (size configurable); `Qwen2.5‑VL‑7B` | 🟡 cloud | scale‑to‑zero |
+| **Cloud vision** | provider API | Azure OpenAI (tenant) / OpenAI / Anthropic | 🟡 (Azure = tenant) | n/a |
+
+> **Honest caveats for the slide:** no Asia region is deployed today (a single ACA env + Langfuse in
+> eastus2); Region B is the deploy *pattern*, not a live region. And the RunPod GPU **class** is
+> configurable — the repo pins the model, not the GPU tier.
+
+---
+
 ## The honesty bar & the status model
 
 The design constraint that costs the most and matters the most: **ACP will not report a pass it
