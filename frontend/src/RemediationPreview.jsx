@@ -160,7 +160,7 @@ function StructureNote({ f }) {
   )
 }
 
-export default function RemediationPreview({ finding, scanId = null, aiEnabled = true }) {  // eslint-disable-line no-unused-vars
+export default function RemediationPreview({ finding, scanId = null }) {
   const [mode, setMode] = useState('visual')
   const [view, setView] = useState('before')
 

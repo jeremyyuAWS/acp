@@ -232,7 +232,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
 
 export default function RemediationInbox({
   queue = [], decisions = {}, onDecide, onOpenWord, onRecheck,
-  initialSort = 'priority', initialTab = 'inbox', scanId = null, aiEnabled = true,
+  initialSort = 'priority', initialTab = 'inbox', scanId = null,
 }) {
   const [selectedId, setSelectedId] = useState(null)
   const [tab, setTab] = useState(initialTab)
@@ -361,7 +361,7 @@ export default function RemediationInbox({
 
       {/* ── Right: contextual document preview (38%) ── */}
       <div style={{ flex: '1 1 38%', minWidth: 0 }}>
-        <RemediationPreview finding={selected} scanId={selected?.scanId || scanId} aiEnabled={aiEnabled} />
+        <RemediationPreview finding={selected} scanId={selected?.scanId || scanId} />
       </div>
       </div>
       {/* Sticky workflow guide (Show → Review → Verify) + Previous / N of M / Next navigation. */}

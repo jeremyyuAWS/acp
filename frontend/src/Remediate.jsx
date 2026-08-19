@@ -853,7 +853,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             queue={inboxQueue}
             decisions={inboxDecisions}
             scanId={run?.id}
-            aiEnabled={aiEnabled}
             onDecide={(f, d) => {
               // W2 — a handoff row (a rejected AI fix) is already out of the hitl queue; acting on it
               // here ("Mark as assigned") just clears it from the needs-manual-handling lane. It is

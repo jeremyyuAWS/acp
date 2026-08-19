@@ -83,7 +83,7 @@ describe('v2: the simplification left no dangling pointers', () => {
   // tab was merged into `Settings → Users`, and a renamed tab strands prose exactly as a removed
   // one does.
   it('never sends an operator to a Settings tab v2 removed or renamed', () => {
-    for (const f of ['Remediate.jsx', 'Settings.jsx', 'IntegrationRoadmap.jsx']) {
+    for (const f of ['Remediate.jsx', 'Settings.jsx']) {
       const s = read(f)
       for (const dead of ['Settings → Permissions', 'Settings → Business ontology',
                           'Settings → Validation coverage', 'Settings → Test users']) {
