@@ -645,6 +645,18 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   the real new tradeoff — v3 is a self-managed VM to patch/back-up/TLS, provisioned by a runbook not the
   pipeline — and both topology ASCIIs + the Azure inventory now read `acp-langfuse-v3` (VM), not the v2
   Container App. Docs-only, not RULE_PATHS.
+- **ADR 0037 — staged, bounded assessment pipeline (measure-first)** (#464, Track B design). The design for
+  parallelising the assessment fan-out at pilot scale without the failure modes uncontrolled concurrency
+  would cause — the load-bearing principle being to tune worker counts from **measured** per-stage time, not
+  guesses. Grounded in what already exists (a bounded worker pool, per-file isolation, idempotent upserts,
+  retry + dead-letter #347, checkpointed progress, safe cancellation, Langfuse tracing), it corrects the
+  real gaps: a flat pool where five stages with opposite constraints share one concurrency limit, no GPU
+  micro-batching / VRAM-shaped limit, and no per-stage instrumentation to even locate the bottleneck.
+  Decides: separate the chain into bounded per-stage pools over the existing durable jobs queue; per-stage
+  concurrency as benchmark starting points (not constants); GPU gets only vision work, micro-batched, with
+  concurrency the knob most likely LOWERED by measurement; adaptive counts driven by
+  throttling/CPU/VRAM/DB-latency/error signals; plus the full safety contract. Design only — no runtime
+  change yet. Docs-only, not RULE_PATHS.
 
 ## Feature: docx Core-17 criterion coverage · #4610
 
@@ -1583,6 +1595,42 @@ invariant the redaction tests pin).
   pinned to the shared checkout — which is 47 commits behind and holds another session's uncommitted
   delivery-log work, so it was deliberately left untouched (see the "preview root" note in CLAUDE.md).
 
+## Feature: Scan-run experience — live progress and transparency (Track A)
+
+The scan progress panel rebuilt from an implementation-centric spinner into an outcome-oriented,
+transparent view of a running scan. Six merged slices; the owning session designed the "Track A" program
+(alongside the Track B pipeline ADR below) and logged the #459 session view, so these scan-progress slices
+are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the program has one.
+
+- **Outcome-oriented progress line** (#452, slice 1). The live line was implementation-centric — "Reading
+  files · 145/250 · Document2.pptx" — naming one worker's current file while the fan-out processes many at
+  once, so the filename was never an honest signal. Replaced by a pure, tested view-model
+  (`assessmentProgress.js`) that turns the live payload into how much is done, how fast, and how long is
+  left — a statement about the **run**, not one worker.
+- **Live outcome chips** (#455, slice 2). Adds WHAT is emerging from the run — "97 passed · 23 need review ·
+  7 failed · 105 processing" — streamed as files land. No backend change: `get_scan`'s run summary already
+  carries certifiable/uncertain/error derived live from `file_records` (the same source `finalize_scan_run`
+  aggregates), so the live chips and the final numbers cannot diverge.
+- **Expandable "Processing details" table** (#458, slice 3a). A collapsed-by-default per-file table — each
+  landed file with its format, result (Passed / Needs review / Failed / Queued) and score, filterable by
+  All / Findings / Failed / Completed. Transparency for technical users without forcing everyone to watch a
+  scrolling event log; fed entirely by the `file_records` that already stream.
+- **Live scope funnel** (#460, slice 3b). Answers, inline and mid-scan, why a 250-file selection assesses
+  fewer: "250 discovered · 214 assessable · 25 metadata-only · 11 unsupported · 5 couldn't open". Reuses the
+  three-denominator inventory (`estateFunnel.statusRows` over `inventory.by_status`) — the SAME numbers
+  EstateCoverage shows on Discover/Overview (#4597), never a second count that could disagree; `blocked`
+  (password-protected / couldn't-open) surfaced separately since those files are eligible.
+- **Folders as step 1 of the scan wizard** (#461). `ScanScopeWizard` owned the evaluation scope (criteria +
+  formats) but never asked WHICH folders — folder choice lived only on the Sources card, so the wizard tuned
+  ~50 checks without saying which half of the Drive they applied to. The folder step now goes **first**,
+  seeded from the source. The load-bearing decision is the precedence rule: the card holds a folder set per
+  **connection**, the wizard chooses one per **run**; the card seeds the wizard (so they agree unless
+  diverged), a change applies to THIS run only, and write-back to the card is an explicit tick shown only
+  once they differ — closing the 2026-07-30 config-vs-run boundary-mismatch class one level up.
+- **"Notify me when complete"** (#463, slice 3c). The scan runs server-side and the banner is non-modal, so
+  a user could always work elsewhere; this arms a browser notification that pings the outcome when the scan
+  finishes ("145 of 250 assessed · 23 need review"). `scanNotify.js` asks permission once, only on opt-in.
+
 ## Open items (backlog candidates)
 
 - **The docx header/footer parity audit is complete.** All six body-only content checks now read
@@ -2009,3 +2057,12 @@ invariant the redaction tests pin).
   the Track-A scan-progress/transparency stream (#452, #455, #458, #460, #461, #463) — a cohesive sequence of
   slices being logged by that session. **Sync marker deliberately NOT advanced** (same convention as the
   prior entries).
+- **2026-08-19 (Track A scan-run experience + ADR 0037)** — Picked up the Track-A scan-progress stream the
+  prior entry had deferred: the owning session logged the #459 session view (under Observability) but not the
+  six scan-progress slices, so with the log now current elsewhere they are added here as a new **Feature —
+  Scan-run experience (Track A)** (unbound, no ADO id yet): #452 (outcome-oriented progress line), #455 (live
+  outcome chips), #458 (Processing-details table), #460 (live scope funnel, reusing #4597's three denominators),
+  #461 (folders as step 1 of the scan wizard, with the connection-vs-run precedence rule) and #463 ("notify me
+  when complete"). To **Documentation**: #464 — ADR 0037, the measure-first staged/bounded assessment-pipeline
+  design (Track B; design only, no runtime change). **Sync marker deliberately NOT advanced** (same convention
+  as the prior entries).
