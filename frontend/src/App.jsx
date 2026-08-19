@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, useCallback, useRef, lazy, Suspense } fro
 import HitlBell from './HitlBell.jsx'
 import { assessmentLine, outcomesFromRun, outcomeChips } from './assessmentProgress.js'
 import ProcessingDetails from './ProcessingDetails.jsx'
+import ScopeFunnel from './ScopeFunnel.jsx'
 import { refreshDriveToken } from './driveAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
 import { getSources, getRubric, getConfig, getMe, listScans, getScan, getActiveScan, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, getScanLocations, SESSION_EXPIRED } from './api'
@@ -144,7 +145,8 @@ function queuedProgress(g, elapsed) {
   // file_records as each file lands) — so the progress chips show real state, not just a counter.
   // `files` carries the per-file results get_scan streams, for the expandable Processing details table.
   return { phase, files_found: total, files_done: done, current: null, elapsed, pct,
-           outcomes: outcomesFromRun(run), files: (g && g.files) || [] }
+           outcomes: outcomesFromRun(run), files: (g && g.files) || [],
+           inventory: (run && run.scope && run.scope.inventory) || null }
 }
 
 // Shown on results views (Overview / Dashboard / Monitor) until the user runs Assess —
@@ -916,6 +918,9 @@ export default function App() {
           )}
           {/* Expandable per-file transparency — collapsed by default, so it does not force everyone to
               watch a scrolling log. Fed by the live file results get_scan streams. */}
+          {/* Why 250 selected → fewer assessed: the eligibility breakdown, so fewer-assessed is
+              explained, not glossed over. Same three-denominator inventory EstateCoverage uses. */}
+          <ScopeFunnel inventory={progress.inventory} blocked={progress.blocked} />
           <ProcessingDetails files={progress.files} processing={progress.outcomes?.processing || 0} />
           {/* Narrate the phase the scanner reports, or say nothing. The old line came from a
               timer, so it could never be absent — and it was wrong whenever the timer and the
