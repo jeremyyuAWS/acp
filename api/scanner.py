@@ -2347,7 +2347,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
              folder: str | None = None, sp_token: str | None = None,
              ai_enabled: bool = True, scan_id: str | None = None,
              user: str | None = None, detect_pii: bool = False,
-             exclude_remediated: bool = False) -> dict:
+             exclude_remediated: bool = False, inventory_out: list | None = None) -> dict:
     from store import RULE_CATALOG, _extract_sc  # import here to avoid circular at module load
     rb = Rubric.load_active(ACP / "config")
     started = datetime.now(timezone.utc).isoformat()
@@ -2402,7 +2402,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
         items = _list(source, svc, folder=effective_folder, sp_token=sp_token,
                      max_files=FANOUT_MAX_FILES,
                      exclude_remediated=exclude_remediated, scope_out=scope,
-                     scope_files=_scope_for_listing())
+                     scope_files=_scope_for_listing(), inventory_out=inventory_out)
         n = len(items)
         progress({"phase": "discovering", "files_found": n, "files_done": 0, "current": None})
 
