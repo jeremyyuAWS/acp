@@ -146,7 +146,7 @@ def test_scan_handler_runs_persists_finalizes(store, monkeypatch):
 
     def fake_run_scan(source, *, drive_token=None, sp_token=None, folder=None,
                       ai_enabled=True, scan_id=None, user=None, detect_pii=True,
-                      exclude_remediated=False):
+                      exclude_remediated=False, inventory_out=None):
         captured["scan_id"] = scan_id
         captured["drive_token"] = drive_token
         captured["ai_enabled"] = ai_enabled

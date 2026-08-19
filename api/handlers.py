@@ -131,6 +131,7 @@ def _scan(payload: dict, job: dict) -> None:
     effective_ai = ai and core.store.get_ai_enabled()
     toks = core.get_scan_tokens(scan_id)
 
+    inv: list = []
     report = run_scan(
         source,
         drive_token=toks.get("drive"),
@@ -141,8 +142,11 @@ def _scan(payload: dict, job: dict) -> None:
         user=payload.get("user"),
         detect_pii=payload.get("pii", False),
         exclude_remediated=bool(payload.get("exclude_remediated", False)),
+        inventory_out=inv,
     )
     core.store.save_scan(report)
+    # Persist per-file inventory + evaluate archival/deletion rules, as the fanout path does.
+    persist_discovery_inventory(scan_id, inv, source, payload.get("user"))
     core.finalize_scan(scan_id, effective_ai, source)
     core.clear_scan_tokens(scan_id)
 
@@ -931,6 +935,23 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
         core.store.create_disposition_audit(
             uuid.uuid4().hex, doc_id=doc_id, policy_id=chosen["policy_id"],
             action=chosen.get("action"), result="pending_approval", detail=reason)
+
+
+def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, actor: str | None) -> None:
+    """Persist the per-file discovery inventory and evaluate the lifecycle (archival/deletion) rules
+    over it — the shared post-discovery step so a scan marks Archive/Delete candidates regardless of
+    which scan path ran it. Historically only the fanout path (_scan_discover) did this inline; the
+    default in-process scan (routes/scans.py) skipped it, so archive/delete rules were silently NOT
+    evaluated on a normal Discover, and that path also left the per-file inventory (which the Assess
+    eligibility count reads) unpopulated. Both are fixed by routing every path through here.
+
+    Idempotent: add_inventory de-dupes on (scan_id, file) and the rule evaluation is candidate-first
+    and guarded (doc_has_disposition), so a re-run adds nothing. Never executes a Drive move/delete."""
+    from scanner import _dedupe_inventory_files
+    _dedupe_inventory_files(inv)
+    if inv:
+        core.store.add_inventory(scan_id, inv)
+    _evaluate_discover_lifecycle_rules(scan_id, source, actor)
 
 
 @handler("scan_discover")
