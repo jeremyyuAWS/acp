@@ -3,10 +3,14 @@ import { listAllHitl, updateHitlItem } from './api.js'
 import { metaFor, SEV, sevOf, reasonOf, priorityScore, bellSeverity } from './hitlMeta.js'
 import ReviewCenter from './ReviewCenter.jsx'
 
-// Global "AI Work Inbox" entry point — a notification bell in the top nav. The queue is
-// an inbox of AI work awaiting human approval, not just a counter: colour signals the
-// most-urgent pending item, the dropdown previews the top few, and "View all" opens the
-// full-screen Review Center.
+// Global "Review queue" entry point — a notification bell in the top nav. The queue is the
+// findings awaiting a human decision, not just a counter: colour signals the most-urgent
+// pending item, the dropdown previews the top few, and "View all" opens the full-screen
+// Review Center.
+//
+// Named for the WORK, not for how the work was produced (redesign spec R4 §3). "AI Work
+// Inbox" described the generator; whether a finding carries an AI draft is an attribute of
+// that finding — surfaced on the card — not the identity of the queue it sits in.
 export default function HitlBell() {
   const [items, setItems] = useState([])      // ALL items (metrics need resolved ones too)
   const [open, setOpen] = useState(false)      // dropdown
@@ -65,9 +69,9 @@ export default function HitlBell() {
     <div className="hitlbell" ref={wrap}>
       <button
         className={`hitlbell-btn hitlbell-${sev}`}
-        aria-label={`AI Work Inbox — ${pending.length} pending`}
+        aria-label={`Review queue — ${pending.length} pending`}
         aria-expanded={open}
-        title={err ? 'AI Work Inbox (unavailable)' : `AI Work Inbox — ${pending.length} pending`}
+        title={err ? 'Review queue (unavailable)' : `Review queue — ${pending.length} pending`}
         onClick={() => setOpen((v) => !v)}>
         <span aria-hidden="true">🔔</span>
         {pending.length > 0 && <span className="hitlbell-badge">{pending.length > 99 ? '99+' : pending.length}</span>}
@@ -76,7 +80,7 @@ export default function HitlBell() {
       {open && (
         <div className="hitlbell-pop" role="menu">
           <div className="hitlbell-pophead">
-            <b>AI Work Inbox</b>
+            <b>Review queue</b>
             <span className="muted">{pending.length} awaiting approval</span>
           </div>
           <div className="hitlbell-tally">

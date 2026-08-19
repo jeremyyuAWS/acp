@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import EvidenceCard from './EvidenceCard.jsx'
 
-// The single-box draft is now AUTOMATIC (AI Work Inbox): a value-fix that reaches the inbox with no
+// The single-box draft is now AUTOMATIC (Review queue): a value-fix that reaches the inbox with no
 // AI value drafts its preview on sight, so the old "✨ Draft with AI" button is gone. These pins are
 // on the STATIC render (renderToStaticMarkup runs no effects, so the auto-draft never fires here) —
 // the auto-draft firing itself is covered in evidenceCardAutoDraft.test.jsx.

@@ -153,7 +153,7 @@ function buildHumanQueue(files, triage = {}) {
   }).filter(Boolean)
 }
 
-// GitHub-style progress rail (§2) — where am I in Scan → Assess → Remediate → AI Work Inbox
+// GitHub-style progress rail (§2) — where am I in Scan → Assess → Remediate → Review queue
 // → Verify → Publish. `state` is 'done' | 'active' | 'pending'; an active step may carry a
 // count (the human-review backlog).
 function ProgressRail({ steps }) {
@@ -713,7 +713,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     { key: 'scan', label: 'Scan', state: 'done' },
     { key: 'assess', label: 'Assess', state: 'done' },
     { key: 'remediate', label: 'Remediate', state: (remStarted || fixedCount > 0) ? 'done' : 'active' },
-    { key: 'review', label: 'AI Work Inbox', state: queue.length > 0 ? 'active' : 'done', count: queue.length },
+    { key: 'review', label: 'Review queue', state: queue.length > 0 ? 'active' : 'done', count: queue.length },
     { key: 'verify', label: 'Verify', state: verifyState === 'complete' ? 'done' : verifyState === 'running' ? 'active' : 'pending' },
     { key: 'publish', label: 'Publish', state: written > 0 ? 'done' : 'pending' },
   ]
@@ -783,7 +783,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           {/* Redesign R4: one dominant statement (findings × documents) replaces the repeated `N`
               badges. The numeric pill is gone — the count lives in the sentence, said once. */}
           <div>
-            <h2 style={{ margin: 0 }}>AI Work Inbox</h2>
+            <h2 style={{ margin: 0 }}>Review queue</h2>
             {queue.length > 0
               ? <p className="rem-review-lead" style={{ margin: '2px 0 0', fontSize: 13 }}>
                   <b>{queue.length}</b> finding{queue.length === 1 ? '' : 's'} need review across{' '}

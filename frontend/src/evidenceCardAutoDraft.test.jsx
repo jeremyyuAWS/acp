@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
 
-// Auto-generate the preview (AI Work Inbox): a value-fix that reaches the inbox with no draft must
+// Auto-generate the preview (Review queue): a value-fix that reaches the inbox with no draft must
 // generate its AI suggestion on its own — the reviewer never clicks "Draft with AI". These pin the
 // automatic firing, the once-only guard, and the do-no-harm rules (never overwrite the reviewer's
 // text; never fire when a proposal is already present).

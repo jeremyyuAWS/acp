@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
 
-// Progressive disclosure (AI Work Inbox): the card must LEAD with the decision (intent + the
+// Progressive disclosure (Review queue): the card must LEAD with the decision (intent + the
 // editor/recommendation) and COLLAPSE the audit jargon — the trust-state enums, provenance, and the
 // "why human review" reason — under a "Details ▾" disclosure. This pins the structure so a later
 // edit can't quietly pull the machinery back into the primary flow.
