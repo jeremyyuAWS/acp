@@ -10,8 +10,9 @@
 // renders at 2.75:1 and no palette review ever catches it — the hex in the stylesheet is still
 // correct. De-emphasis has to be expressed as a colour (or weight/size), never as transparency.
 //
-// This file guards both halves: the tokens are actually compliant, and the four sites that
-// dimmed them do not come back.
+// This file guards both halves: the tokens are actually compliant, and the three sites that
+// dimmed them do not come back. (A fourth — the retired "Remediation plan" band's buttons — went
+// away with the band itself.)
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -102,7 +103,7 @@ describe('every colour ACP puts text in clears 4.5:1', () => {
   })
 })
 
-describe('the four sites that dimmed text do not come back', () => {
+describe('the three sites that dimmed text do not come back', () => {
   it('.sfn is coloured, not transparent', () => {
     expect(code('styles.css')).toMatch(/\.sfn \{ color: var\(--muted\)/)
     expect(code('styles.css')).not.toMatch(/\.sfn \{[^}]*opacity/)
@@ -118,11 +119,5 @@ describe('the four sites that dimmed text do not come back', () => {
     const f = code('RiskChip.jsx')
     expect(f).toMatch(/<span style=\{\{ fontWeight: 500 \}\}>· est/)
     expect(f).not.toMatch(/opacity/)
-  })
-
-  it('neither plan button dims its sub-label', () => {
-    const f = code('Remediate.jsx')
-    expect(f).not.toMatch(/opacity: 0\.85, fontWeight: 400/)
-    expect(f).toMatch(/<span style=\{\{ fontWeight: 400 \}\}>· no review needed<\/span>/)
   })
 })
