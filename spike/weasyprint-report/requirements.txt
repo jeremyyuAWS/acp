@@ -1,0 +1,5 @@
+# Spike-only deps (NOT added to api/requirements.txt — this is a throwaway evaluation harness).
+# WeasyPrint needs native libs at runtime: Pango, cairo, GDK-PixBuf, HarfBuzz.
+weasyprint==69.0
+pikepdf
+pdfplumber
