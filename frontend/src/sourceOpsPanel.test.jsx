@@ -45,6 +45,16 @@ vi.mock('./api.js', () => ({
       { doc_id: 'gd3', source: 'drive', path: '/HR/e.docx', department: 'HR' },
     ],
   })),
+  listDispositionApprovals: vi.fn(async () => ([
+    { id: 'a1', doc_id: 'sp:1', policy_id: 'p2', action: 'delete', result: 'pending_approval',
+      detail: 'matched temporary-files rule', ts: '2026-08-18T11:00:00Z',
+      source: 'sharepoint', path: '/Finance/tmp.docx', document_exists: true },
+    { id: 'a2', doc_id: 'gd:9', policy_id: 'p1', action: 'archive', result: 'pending_approval',
+      detail: 'matched archive rule', ts: '2026-08-18T11:00:00Z',
+      source: 'drive', path: '/HR/old.docx', document_exists: true },
+  ])),
+  approveDisposition: vi.fn(async () => ({ result: 'approved' })),
+  rejectDisposition: vi.fn(async () => ({ result: 'rejected' })),
   getScanTraces: vi.fn(async () => []),
   getScanRemediationDiffs: vi.fn(async () => []),
   remediateFile: vi.fn(async () => ({})),
@@ -272,5 +282,76 @@ describe('the Rules tab match counts and review queues', () => {
     await click(tab(c, 'Rules'))
     expect(c.textContent).toMatch(/Could not count matches/)
     expect(c.textContent).toMatch(/Archive files not modified for 7 years/)
+  })
+})
+
+describe('the pending-approval queue', () => {
+  const link = (c, re) => [...c.querySelectorAll('button')].find((b) => re.test(b.textContent))
+
+  it('shows only this source’s approvals, and says how many are elsewhere', async () => {
+    // disposition_audit has no source column — the route joins it in from `documents`. Rendering
+    // the whole estate's queue under a heading naming one source is the boundary error the rule
+    // match counts already avoid.
+    const c = await mount()
+    await click(tab(c, 'Rules'))
+    expect(c.textContent).toMatch(/\/Finance\/tmp\.docx/)
+    expect(c.textContent).not.toMatch(/\/HR\/old\.docx/)
+    expect(c.textContent).toMatch(/1 more pending on other sources/)
+  })
+
+  it('states that Approve records a decision and does not touch the file', async () => {
+    // ACP holds read-only scopes and the executor is Drive-only, so a button implying a move
+    // would promise what the deployment cannot do.
+    const c = await mount()
+    await click(tab(c, 'Rules'))
+    expect(c.textContent).toMatch(/Approve records the decision and leaves the file untouched/)
+    expect(c.textContent).toMatch(/read-only access/)
+  })
+
+  it('approves with execute:false — never executing from this panel', async () => {
+    const api = await import('./api.js')
+    api.approveDisposition.mockClear()
+    const c = await mount()
+    await click(tab(c, 'Rules'))
+    await click(link(c, /Approve/))
+    expect(api.approveDisposition).toHaveBeenCalledWith('a1', { execute: false })
+  })
+
+  it('rejects through the reject endpoint', async () => {
+    const api = await import('./api.js')
+    api.rejectDisposition.mockClear()
+    const c = await mount()
+    await click(tab(c, 'Rules'))
+    await click(link(c, /Reject/))
+    expect(api.rejectDisposition).toHaveBeenCalledWith('a1')
+  })
+
+  it('shows a vanished document to every source rather than hiding it', async () => {
+    // It belongs to no source, and it is the row most in need of a decision.
+    const api = await import('./api.js')
+    api.listDispositionApprovals.mockResolvedValueOnce([
+      { id: 'a3', doc_id: 'ghost:1', action: 'delete', result: 'pending_approval',
+        detail: 'queued', source: null, path: null, document_exists: false },
+    ])
+    const c = await mount()
+    await click(tab(c, 'Rules'))
+    expect(c.textContent).toMatch(/document no longer exists/)
+  })
+
+  it('says nothing is awaiting approval rather than showing an empty box', async () => {
+    const api = await import('./api.js')
+    api.listDispositionApprovals.mockResolvedValueOnce([])
+    const c = await mount()
+    await click(tab(c, 'Rules'))
+    expect(c.textContent).toMatch(/Nothing is awaiting approval for this source/)
+  })
+
+  it('a failed queue load does not imply anything ran', async () => {
+    const api = await import('./api.js')
+    api.listDispositionApprovals.mockRejectedValueOnce(new Error('boom'))
+    const c = await mount()
+    await click(tab(c, 'Rules'))
+    expect(c.textContent).toMatch(/Could not load the approval queue/)
+    expect(c.textContent).toMatch(/none of them run without a decision/)
   })
 })
