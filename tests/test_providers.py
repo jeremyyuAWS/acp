@@ -221,3 +221,84 @@ def test_cloud_vision_provider_picks_enabled(monkeypatch):
 def test_cloud_adapters_conform_to_protocol():
     assert isinstance(providers.OpenAIVisionProvider("k", model="gpt-4o"), providers.VisionProvider)
     assert isinstance(providers.AnthropicVisionProvider("k", model="claude-opus-4-8"), providers.VisionProvider)
+
+
+# ── Token usage surfaces on the normalized result (Langfuse audit N1) ────────────────────────
+# Every adapter already reads the API's token usage to compute cost; N1 also surfaces those counts
+# on the result as prompt_tokens/completion_tokens so ai._trace_ai can forward them to the Langfuse
+# generation's `usage`. Numbers only — never any prompt/completion text (docs/audit-langfuse-phi.md).
+
+def test_ollama_result_surfaces_token_usage(monkeypatch):
+    class _R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"response": "A bar chart of Q4 revenue",
+                    "prompt_eval_count": 266, "eval_count": 31}
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", lambda url, json=None, timeout=None: _R())
+    res = providers.OllamaVisionProvider("http://localhost:11434", "llava:13b").generate("d", b"B")
+    assert res["prompt_tokens"] == 266 and res["completion_tokens"] == 31   # prompt_eval_count/eval_count
+
+
+def test_openai_result_surfaces_token_usage(monkeypatch):
+    class _R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content": "A pie chart"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1000, "completion_tokens": 500}}
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", lambda url, json=None, headers=None, timeout=None: _R())
+    res = providers.OpenAIVisionProvider("sk-abc", model="gpt-4o").generate("d", b"B")
+    assert res["prompt_tokens"] == 1000 and res["completion_tokens"] == 500
+
+
+def test_azure_result_surfaces_token_usage(monkeypatch):
+    class _R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content": "A line chart"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 800, "completion_tokens": 40}}
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", lambda url, json=None, headers=None, timeout=None: _R())
+    res = providers.AzureOpenAIVisionProvider("https://x.openai.azure.com", "gpt-4o", "k",
+                                              model="gpt-4o").generate("d", b"B")
+    assert res["prompt_tokens"] == 800 and res["completion_tokens"] == 40
+
+
+def test_anthropic_result_surfaces_token_usage(monkeypatch):
+    class _R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"stop_reason": "end_turn",
+                    "content": [{"type": "text", "text": "A bar chart."}],
+                    "usage": {"input_tokens": 1000, "output_tokens": 200}}
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", lambda url, json=None, headers=None, timeout=None: _R())
+    res = providers.AnthropicVisionProvider("sk-ant", model="claude-opus-4-8").generate("d", b"B")
+    # Messages API names them input/output; the result normalizes to prompt/completion.
+    assert res["prompt_tokens"] == 1000 and res["completion_tokens"] == 200
+
+
+def test_runpod_result_surfaces_token_usage(monkeypatch):
+    class _R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content": "A scatter plot"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 512, "completion_tokens": 64}}
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", lambda url, json=None, headers=None, timeout=None: _R())
+    res = providers.RunPodServerlessVisionProvider("eid", "k", model="qwen2.5-vl").generate("d", b"B")
+    assert res["prompt_tokens"] == 512 and res["completion_tokens"] == 64
+
+
+def test_failed_call_reports_no_token_usage(monkeypatch):
+    import httpx
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    res = providers.OpenAIVisionProvider("k", model="gpt-4o").generate("d", b"B")
+    assert res["ok"] is False
+    assert res["prompt_tokens"] is None and res["completion_tokens"] is None   # nothing to count
