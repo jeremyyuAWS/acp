@@ -1177,6 +1177,8 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
     (ADR 0008). A
     fetch/analyse failure is recorded as an 'error' file so the scan still finalizes."""
     from scanner import _download, analyse_and_assess
+    import time as _time
+    import stage_timing as _st
     name = item["file"]
     checksum = item.get("checksum")
     drive_file_id = item.get("drive_file_id")
@@ -1193,6 +1195,7 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
         dedup = core.store.find_prior_analysis(user, drive_file_id, checksum, rubric_hash)
     tmp = _Path(_tempfile.mkdtemp(prefix="acp-scanone-"))
     fdict = pinfo = None
+    _timings = _st.ScanTimings()          # ADR 0037 Step 0 — measure download vs analyse (side-channel)
     try:
         if dedup:
             dedup_of = dedup.pop("dedup_of", None)
@@ -1257,12 +1260,14 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                     it["mime"] = item["mime"]
                 if item.get("path"):                       # local source — read from disk
                     it["path"] = item["path"]
+                _dl_t0 = _time.monotonic()
                 _download(it, tmp, svc, sp_token=toks.get("sp"))
                 # ADR 0020 §1 — cache the source bytes for a later Assess phase (best-effort,
                 # never blocks the scan). Dedup'd files skip this branch entirely: their bytes
                 # live under the PRIOR scan's key, which the stage-3 reader will fall back to.
                 from scanner import cache_source_bytes
                 cache_source_bytes(tmp, name, scan_id, user)
+                _timings.add("download", _time.monotonic() - _dl_t0)   # ADR 0037 Step 0
                 # Stop BEFORE the expensive analysis. This file shares its logical name with
                 # another discovered file and carries ACP's in-document stamp, so it is our own
                 # remediated copy shadowing its source. Scanning it ran the Office/PDF engine,
@@ -1288,7 +1293,9 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
                     # scan_id threads the per-rule progress line through. This is the PRODUCTION
                     # fan-out path (ADR 0007) — run_scan's in-process pool is the local one — so
                     # without it the line works in development and is silent where users are.
+                    _an_t0 = _time.monotonic()
                     fdict, pinfo = analyse_and_assess(tmp, name, detect_pii=pii, scan_id=scan_id)
+                    _timings.add("analyse", _time.monotonic() - _an_t0)   # ADR 0037 Step 0
             except Exception as e:
                 # A credential failure is true of the whole scan, so it is named once, acted on
                 # once, and every remaining file skips its doomed download (drive_auth_failure).
@@ -1326,6 +1333,15 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
         if pinfo:
             fdict["pii"] = pinfo
         core.store.save_file_result(scan_id, fdict, now)
+        # ADR 0037 Step 0 — record this file's stage timing (side-channel, best-effort: a timing write
+        # must never fail the scan). Skipped when nothing was measured — the reuse/dedup path downloads
+        # and analyses nothing, so it has no timing to record.
+        try:
+            _t = _timings.as_dict()
+            if _t.get("totals_s"):
+                core.store.record_file_timing(scan_id, name, _t)
+        except Exception:
+            pass
         # Document-centric layer (ADR 0003, Phase 1): every scan upserts the long-lived
         # document row (api/documents.py), independent of file_records' per-scan snapshot.
         # Defensively wrapped -- must never break the scan pipeline itself, only lose this
