@@ -1,9 +1,12 @@
 # ADR 0034 — A tagged, accessible conformance-report PDF (renderer migration)
 
-**Status:** Proposed. Proof-of-concept verified locally; ready to schedule.
+**Status:** Proposed. Renderer selected; POC passed the structural detector; a bounded spike has run
+(`spike/weasyprint-report/`). **Representative visual and PDF/UA validation pending** before the full
+migration is approved.
 **Date:** 2026-08-18
 **Related:** `api/report.py`, `tests/test_report_is_itself_accessible.py`,
-`engine/pdf-analyser/analysers/rules/pdf/tagged_pdf.py`, ADR 0029 (vendor the PDF analyser).
+`engine/pdf-analyser/analysers/rules/pdf/tagged_pdf.py`, ADR 0029 (vendor the PDF analyser),
+`spike/weasyprint-report/` (the bounded spike + structural inspector).
 
 ## Context
 
@@ -67,8 +70,41 @@ Opened with `pikepdf` and checked against exactly what `TaggedPdfRule` checks:
 
 Because the tree comes from HTML, three checks that pass *vacuously* today (an untagged PDF gives them
 nothing to inspect) become **real**: `pdf.tagged` (1.3.1), `pdf.missing-alt-text` (1.1.1 — via
-`<img alt>`), and `pdf.table-headers` (1.3.1 — via `<th>`). The report would be held to a *higher* bar,
-honestly met.
+`<img alt>`), and `pdf.table-headers` (1.3.1 — via `<th>`).
+
+**What this proves, precisely — and what it does not.** Passing `TaggedPdfRule` proves the *structural
+objects exist* (`MarkInfo`, a populated `StructTreeRoot`). It does **not** prove the finished report is
+PDF/UA-conformant or usable with a screen reader — WeasyPrint's own docs state that selecting
+`pdf/ua-1` does not guarantee a valid document; the author must validate the result. Structural
+correctness is necessary, not sufficient. The validation gate below is the honest bar.
+
+## Validation gate (before the full migration is approved)
+
+A bounded spike (`spike/weasyprint-report/`) rendered the four page types the report is built from —
+cover, narrative, complex table, chart-heavy — and a structural inspector walked the result. **Hard
+structural checks passed**: clean `H1→H2→H3` outline, tables tag as `Table/THead/TR/TH…TBody/TR/TD`
+with DOM reading order, and running header/footer are Artifacts (kept out of reading order via `@page`
+margin boxes). It also **surfaced two findings** that tag-existence hides:
+
+1. **`<th scope>` emits no PDF `/Scope`** (0/16 TH scoped). Header association may still validate via
+   table position — a **veraPDF** question, not an assumption.
+2. **`aria-hidden` does not artifact an SVG** — the decorative chart became an *orphan* `/Figure`
+   marked-content (real content, neither tagged-with-alt nor Artifact — PDF/UA forbids it). The
+   "charts are decorative, exclude them" plan does not work as-is; a chart needs a real `alt` (or a
+   genuine Artifact wrap) **plus** its adjacent data table — an HTML chart is not accessible by default.
+
+The representative report must pass **all** of the following before the rewrite is committed — none is
+satisfied by tag-existence alone:
+
+- **Visual parity** for every page type (regression vs the current ReportLab output).
+- Correct **heading hierarchy and reading order** *(checked structurally in the spike)*.
+- **Properly scoped table headers** — finding 1; confirm in veraPDF.
+- **Meaningful alt / artifact treatment for every chart** — finding 2; needs rework.
+- Page furniture and decoration **excluded from reading order** *(header/footer confirmed)*.
+- Searchable/selectable text and **working links**.
+- **veraPDF or PAC 2024** validation (the automated PDF/UA gate — not `TaggedPdfRule` alone).
+- A **manual NVDA / VoiceOver** spot check.
+- Stable rendering and acceptable **runtime in CI and production** (WeasyPrint adds native deps).
 
 ### Why WeasyPrint over the alternatives
 
@@ -102,9 +138,12 @@ honestly met.
 - **`api/report.py` is rewritten** as an HTML template + a thin WeasyPrint render shim. The section
   content (decision block, scope-of-assertion incl. the estate funnel, per-document inventory table,
   remediation evidence appendix) ports to HTML/CSS.
-- **The two charts must be reauthored accessibly** — inline `<svg>` with `<title>`/`role="img"`, or,
-  better, an accessible data `<table>` beside/behind each chart so the numbers are in the tag tree,
-  not only in pixels. This is the real work, not the tagging itself.
+- **The two charts must be reauthored accessibly, and this is the real work.** The spike proved an
+  HTML chart is *not* accessible by default: an `aria-hidden` decorative SVG became an orphan `/Figure`
+  (PDF/UA-forbidden), so each chart needs (a) a concise text alternative stating its *conclusion*,
+  (b) an adjacent real data `<table>` so the numbers are in the tag tree, and (c) the decorative
+  drawing genuinely excluded — as a proper Artifact or replaced by an image with a real `alt`. Not the
+  `aria-hidden` shortcut this spike disproved.
 - **Fonts must be embedded** for PDF/UA; pick an embeddable family and declare it in CSS.
 - **The self-test flips.** Delete `test_untagged_is_still_the_open_finding` and add the alt-text and
   table-header self-checks the current test's docstring already asks for — the report is then held to
@@ -129,7 +168,10 @@ Low technical risk (the tagging path is proven); the cost is porting fidelity an
 
 ## Status / next step
 
-Proposed, POC-verified. Recommend scheduling as a **committed-for-pilot** item: a hospital's own
-accessibility auditor is the reader most likely to check, and an untagged accessibility report is the
-one self-inflicted finding we can fully control. Until it lands, the gap stays honestly disclosed and
+Renderer selected; the bounded spike passed the hard structural checks and surfaced the two findings
+above. **Next, on the representative sample (not the full report):** rework the chart treatment
+(finding 2), then run veraPDF/PAC and an NVDA/VoiceOver pass (finding 1 + usability). Only if that
+clears do we commit the full `report.py` migration. A hospital's own accessibility auditor is the
+reader most likely to run a checker on this PDF, so it stays a **committed-for-pilot** item — but as a
+*gated* one, not an unqualified "ready to build." Until it lands, the gap stays honestly disclosed and
 the self-test keeps it visible.
