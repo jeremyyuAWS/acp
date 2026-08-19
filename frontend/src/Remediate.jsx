@@ -153,23 +153,31 @@ function buildHumanQueue(files, triage = {}) {
   }).filter(Boolean)
 }
 
-// GitHub-style progress rail (§2) — where am I in Scan → Assess → Remediate → Review queue
-// → Verify → Publish. `state` is 'done' | 'active' | 'pending'; an active step may carry a
-// count (the human-review backlog).
-function ProgressRail({ steps }) {
-  return (
-    <nav className="progressrail" aria-label="Remediation progress">
-      {steps.map((s, i) => (
-        <div key={s.key} className={`prstep pr-${s.state}`}>
-          <span className="prmark" aria-hidden="true">{s.state === 'done' ? '✓' : s.state === 'active' ? '●' : '○'}</span>
-          <span className="prlabel">{s.label}</span>
-          {s.count != null && s.count > 0 && <span className="prcount">{s.count}</span>}
-          {i < steps.length - 1 && <span className="prsep" aria-hidden="true">›</span>}
-        </div>
-      ))}
-    </nav>
-  )
-}
+// REMOVED 2026-08-19 — the ProgressRail (redesign spec R4 item 1: "drop the ProgressRail as a
+// persistent element").
+//
+// It rendered Scan › Assess › Remediate › Review queue › Verify › Publish across the top of the
+// page. The spec's complaint was four competing navigation systems; this was one of them, and by
+// now it was the LAST redundant one — every state it showed is said better, and closer to the
+// work, somewhere else on the page:
+//
+//   Scan, Assess      hard-coded 'done'. Constants, not state — decorative by construction.
+//   Remediate         the hero line ("N documents processed · N issues fixed automatically").
+//   Review queue      the section's own sentence and progress bar. #272/#273 deduplicated the
+//                     repeated `N` badges down to one dominant statement; the rail was a fourth.
+//   Verify            the Verification RemSection, whose <VerifyState> carries state, percentage,
+//                     remaining and ready — strictly more than 'done' | 'active' | 'pending'.
+//   Publish           the hero's primary CTA becomes "Publish Certified Copy →", and Publish is
+//                     a top-level tab of its own.
+//
+// What made this safe to delete NOW rather than when the spec was written is that the contextual
+// status the spec asked for in its place has since been built: #366's workflow tablist inside
+// RemediationInbox, and #370's footer lighting each finding's live step. Deleting the rail before
+// those existed would have removed a wayfinder and put nothing there.
+//
+// Guarded by remediateNavigation.test.jsx, which asserts the rail is gone AND that each of those
+// replacements is still on the page — deleting a duplicate is only correct while the original
+// survives.
 
 // Recent AI fixes — a GROUPED summary (§6), not a repetitive per-row list. One chip per
 // rule ("Added 14 image descriptions"), an "Accessibility improvements" impact row (§7),
@@ -708,16 +716,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     : (verifyState === 'complete' || revalidated.length > 0) ? { label: 'Publish Certified Copy →', onClick: () => onNavigate?.('publish') }
     : null
 
-  // Progress rail state (§2).
-  const progressSteps = [
-    { key: 'scan', label: 'Scan', state: 'done' },
-    { key: 'assess', label: 'Assess', state: 'done' },
-    { key: 'remediate', label: 'Remediate', state: (remStarted || fixedCount > 0) ? 'done' : 'active' },
-    { key: 'review', label: 'Review queue', state: queue.length > 0 ? 'active' : 'done', count: queue.length },
-    { key: 'verify', label: 'Verify', state: verifyState === 'complete' ? 'done' : verifyState === 'running' ? 'active' : 'pending' },
-    { key: 'publish', label: 'Publish', state: written > 0 ? 'done' : 'pending' },
-  ]
-
   // Documents list (§5): triage + plan merged — one row per doc. Not-yet-fixed first, then
   // business priority. Triage counts drive the summary chips.
   const inscopeCount = _triageFiles.filter((f) => triage[f.file] === 'inscope').length
@@ -733,9 +731,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
   return (
     <>
-      {/* GitHub-style progress rail (§2) — where am I in the pipeline. */}
-      <ProgressRail steps={progressSteps} />
-
       {/* Above the hero, which carries the headline finding counts — the numbers a reader would
           otherwise take as "the estate". No findings count is passed: there is no open-findings
           total in scope here, and inventing one to fill the sentence would be the opposite of
