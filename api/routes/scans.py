@@ -86,10 +86,14 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
                 "worker_tier_alive": core.store.worker_tier_alive()}
 
     if sync:  # synchronous path for scripts/tests
+        inv: list = []
         report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token,
                           ai_enabled=effective_ai, user=user, detect_pii=pii,
-                          exclude_remediated=exclude_remediated)
+                          exclude_remediated=exclude_remediated, inventory_out=inv)
         sid = core.store.save_scan(report)
+        # Persist per-file inventory + evaluate archival/deletion rules — same as the fanout path.
+        from handlers import persist_discovery_inventory
+        persist_discovery_inventory(sid, inv, source, user)
         core.finalize_scan(sid, effective_ai, source)
         return {"scan_id": sid, "source": source, "summary": report["summary"]}
 
@@ -104,11 +108,16 @@ def start_scan(request: Request, source: str = Query("local", pattern="^(local|d
 
     def work():
         try:
+            inv: list = []
             report = run_scan(source, progress=lambda d: core.update_job(job_id, d),
                               drive_token=token, folder=folder, sp_token=sp_token,
                               ai_enabled=effective_ai, user=user, detect_pii=pii,
-                              exclude_remediated=exclude_remediated)
+                              exclude_remediated=exclude_remediated, inventory_out=inv)
             sid = core.store.save_scan(report)
+            # Persist per-file inventory + evaluate archival/deletion rules — same as the fanout path,
+            # so a default in-process Discover marks Archive/Delete candidates too (not only fanout).
+            from handlers import persist_discovery_inventory
+            persist_discovery_inventory(sid, inv, source, user)
             core.finalize_scan(sid, effective_ai, source)
             done = core.get_job_state(job_id) or {}
             core.update_job(job_id, {"phase": "done", "done": True, "scan_id": sid,
