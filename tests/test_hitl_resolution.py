@@ -79,6 +79,19 @@ def test_essential_exception_records_the_logo_exemption(st, route):
     assert "essential" in (hitl_line.get("detail") or "").lower()
 
 
+def test_out_of_scope_resolves_a_finding_as_not_applicable(st, route):
+    # A third resolution: the criterion does not APPLY to this document (out of scope / N/A). Accepted,
+    # persisted on the row (status stays approved so it never blocks certification), and audited.
+    hitl_update, HitlUpdate, _jobs, decisions = route
+    row = _row(st, rule="1.4.5")
+    hitl_update(row["id"], HitlUpdate(status="approved", resolution="out_of_scope"), _req())
+    item = st.get_hitl_item(row["id"])
+    assert item["status"] == "approved"
+    assert item["resolution"] == "out_of_scope"
+    hitl_line = next(d for d in decisions if d["action"] == "hitl.approved")
+    assert "out of scope" in (hitl_line.get("detail") or "").lower()
+
+
 def test_a_resolution_writes_no_value_into_the_document(st, route):
     """The whole point: an exception is NOT a written fix. No VALUE may be written, or the report
     would claim alt text was authored when the reviewer explicitly said none was needed.

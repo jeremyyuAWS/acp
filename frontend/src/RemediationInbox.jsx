@@ -262,6 +262,9 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
               {onOpenWord && <button className="primary" onClick={() => onOpenWord(f)}>Open in Word</button>}
               {onRecheck && <button className="ghost" onClick={() => onRecheck(f)}>Upload &amp; recheck</button>}
               <button className="ghost" onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
+              {/* Out of scope — this criterion doesn't apply to the document. Resolves the finding and
+                  takes it out of the coverage denominator (persisted as an out_of_scope resolution). */}
+              <button className="ghost" onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
             </>
           ) : (
             <>
@@ -271,6 +274,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
                   reviewer to guess what "Reject" does. */}
               <button className="ghost" onClick={() => onDecide?.(f, { state: 'rejected' })}>Reject &amp; handle manually</button>
               <button className="ghost" onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
+              <button className="ghost" onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
               {onOpenWord && <button className="ghost" onClick={() => onOpenWord(f)}>Open in Word</button>}
             </>
           )}

@@ -91,8 +91,10 @@ describe('the approve payload carries one value per image', () => {
 
   it('Remediate.act forwards approvedValues to the API', () => {
     const src = read('Remediate.jsx')
-    expect(src).toMatch(/const act = \(id, kind, editedValue, approvedValues\)/)
-    expect(src).toMatch(/\{ approvedValues: apiStatus === 'approved' \? \(approvedValues \|\| null\) : null \}/)
+    expect(src).toMatch(/const act = \(id, kind, editedValue, approvedValues, resolution = null\)/)
+    expect(src).toMatch(/approvedValues: apiStatus === 'approved' \? \(approvedValues \|\| null\) : null/)
+    // The out-of-scope / WCAG-exception resolution is forwarded on an approval too.
+    expect(src).toMatch(/resolution: apiStatus === 'approved' \? \(resolution \|\| null\) : null/)
   })
 })
 

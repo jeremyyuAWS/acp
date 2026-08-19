@@ -109,7 +109,7 @@ export function effortLabel(f) {
 export function isResolved(f, decisions = {}) {
   if (RESOLVED_STATUSES.has(String(f?.status || '').toLowerCase())) return true
   const d = decisions[f?.id] ?? decisions[f?.file]
-  return !!(d && (d.state === 'accepted' || d.state === 'approved' || d.state === 'rejected'))
+  return !!(d && (d.state === 'accepted' || d.state === 'approved' || d.state === 'rejected' || d.state === 'not_applicable'))
 }
 
 /** The plain-language issue — the dominant text in a row. Strips the "DOCX · " format prefix that
@@ -196,9 +196,11 @@ export function workflowStatusOf(f, decisions = {}) {
   const lane = laneOf(f)
 
   if (lane.key === 'blocked') return 'blocked'
-  // Closed out: fully re-validated, or a rejection that ended the work.
+  // Closed out: fully re-validated, a rejection that ended the work, or an out-of-scope (not
+  // applicable) judgement — the last two are settled with no re-scan to await, so they are Done.
   if (st === 'verified') return 'done'
   if (d && d.state === 'rejected') return 'done'
+  if (d && d.state === 'not_applicable') return 'done'
   // A fix is in and awaiting the re-scan that confirms it: an approved decision not yet verified,
   // the recheck lane (edited, re-scanning), or a deterministic auto-fix already applied.
   if (d && (d.state === 'accepted' || d.state === 'approved')) return 'ready-to-validate'
