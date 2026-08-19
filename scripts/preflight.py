@@ -83,25 +83,58 @@ def check_gpu(live: bool) -> None:
     # Resolve the provider the way the app does, so this reports what will ACTUALLY run rather
     # than what the env implies. An admin setting overrides the env default, and that override is
     # invisible from the environment alone.
+    #
+    # TWO legitimate GPU paths, not one. ADR 0022's RunPod-serverless path is still valid, but the
+    # CURRENT deployment runs the GPU as OLLAMA pointing at an Azure GPU host (ACP_VISION_PROVIDER=
+    # ollama, OLLAMA_BASE_URL at the GPU). So `ollama` is NOT automatically the CPU floor — it is the
+    # GPU when its endpoint is a remote GPU host (zone != local), and the floor only when it points at
+    # the in-cluster CPU box. Reporting ollama as "not the GPU" (as this once did) would flag the
+    # correct current production config as broken.
     try:
         import providers
         p = providers.active_vision_provider()
         name = getattr(p, "name", type(p).__name__)
+        zone = getattr(p, "zone", "?")
+        endpoint = getattr(p, "base_url", "") or getattr(p, "endpoint", "")
         if name == "runpod_serverless":
-            record(g, "resolved provider", PASS, f"{name} (zone={getattr(p, 'zone', '?')})")
+            record(g, "resolved provider", PASS, f"{name} (zone={zone})")
+        elif name == "ollama":
+            floor = zone == "local"
+            # A misconfig ONLY when RunPod was configured (the GPU was *meant* to be RunPod) yet we
+            # fell back to the local CPU floor — the ADR 0022 trap. An ollama endpoint that is itself
+            # the GPU is the intended current path, not a fault.
+            if floor and eid and key:
+                record(g, "resolved provider", FAIL,
+                       f"ollama CPU floor at {endpoint or '(unset)'} — RunPod is configured but NOT selected")
+            else:
+                record(g, "resolved provider", PASS,
+                       f"ollama at {endpoint or '(unset)'} (zone={zone}) — "
+                       f"{'local CPU floor' if floor else 'GPU/remote endpoint'}")
         else:
-            record(g, "resolved provider", WARN if not (eid and key) else FAIL,
-                   f"{name} — the GPU provider is NOT what a scan will use")
+            record(g, "resolved provider", PASS, f"{name} (zone={zone})")
     except Exception as e:                       # a store-less/partial env must not crash preflight
         record(g, "resolved provider", WARN, f"could not resolve ({type(e).__name__}: {e})")
 
     if not live:
-        record(g, "endpoint reachable", WARN, "not checked — pass --live to reach RunPod")
+        record(g, "endpoint reachable", WARN,
+               "not checked — pass --live to probe the vision endpoint")
         return
-    if not (eid and key):
-        record(g, "endpoint reachable", WARN, "skipped — endpoint id and key are not both set")
-        return
-    _probe_runpod(g)
+    # Probe the endpoint the RESOLVED provider will actually use — RunPod health for the serverless
+    # path, or the ollama vision endpoint (reachability + the vision MODEL being present) for the
+    # ollama/GPU path. The ollama probe reuses the runtime's own reason string, so preflight and a
+    # live scan can never disagree about "can vision run?".
+    try:
+        import providers
+        resolved = getattr(providers.active_vision_provider(), "name", "")
+    except Exception:
+        resolved = ""
+    if resolved == "runpod_serverless":
+        if not (eid and key):
+            record(g, "endpoint reachable", WARN, "skipped — endpoint id and key are not both set")
+        else:
+            _probe_runpod(g)
+    else:
+        _probe_ollama_vision(g)
 
 
 def _probe_runpod(g: str) -> None:
@@ -131,6 +164,32 @@ def _probe_runpod(g: str) -> None:
             record(g, "endpoint reachable", FAIL, f"HTTP {e.code}")
     except Exception as e:
         record(g, "endpoint reachable", FAIL, f"{type(e).__name__}: {e}")
+
+
+def _probe_ollama_vision(g: str) -> None:
+    """Reachability + vision-model-present probe for the ollama vision path — the CURRENT GPU path
+    (ACP_VISION_PROVIDER=ollama, OLLAMA_BASE_URL at the GPU host). Reuses the runtime's own
+    ai.vision_unavailable_reason(), so preflight and a live scan can never disagree on 'can vision
+    run?'.
+
+    This is the check that would have caught #302: the GPU endpoint was reachable, but its baked
+    vision model was shadowed by the container VOLUME, so vision produced NOTHING for 45 days with no
+    error anywhere — the exact silent-in-the-reassuring-direction failure this tool exists for. A bare
+    'is it reachable' probe passes in that state; only asking 'is the vision MODEL present' catches it."""
+    try:
+        import ai
+        reason = ai.vision_unavailable_reason()
+    except Exception as e:
+        record(g, "endpoint reachable", WARN, f"could not probe ({type(e).__name__}: {e})")
+        return
+    if reason is None:
+        import ai as _ai
+        record(g, "endpoint reachable", PASS,
+               f"reachable — vision model '{_ai.OLLAMA_VISION_MODEL}' present at {_ai.OLLAMA_BASE_URL}")
+    else:
+        # e.g. "Ollama at <url> is not reachable", or "the configured vision model '<m>' is not
+        # present at <url> (available: ...)" — the model-name / volume-shadow case (#302).
+        record(g, "endpoint reachable", FAIL, reason)
 
 
 # ── SharePoint / OneDrive (Microsoft Graph) ──────────────────────────────────
