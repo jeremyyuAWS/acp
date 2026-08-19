@@ -6,6 +6,7 @@ import SegmentDrawer from './SegmentDrawer.jsx'
 import FolderPicker from './FolderPicker.jsx'
 import SitePicker from './SitePicker.jsx'
 import Upload from './Upload.jsx'
+import DispositionRules from './DispositionRules.jsx'
 import ScanScope from './ScanScope.jsx'
 import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
@@ -356,6 +357,10 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           <Upload me={me} onCertified={onCertified} />
         </details>
       )}
+
+      {/* Deva #3 — define archival/deletion rules right here in Discover. The rules run at discovery
+          time and mark matched files as candidates; Assess excludes them by default. */}
+      <DispositionRules />
 
       {files.length === 0 ? (
         <p className="muted" style={{ marginTop: 20 }}>No documents yet — run a scan from Sources.</p>
