@@ -45,3 +45,14 @@ deploy/public/vendor/
 # The live-path analyser projects are OWNED and vendored under engine/office-analysers/
 # (ADR 0012); only this full working clone stays ignored.
 digital-accessibility/
+
+# Session worktrees. CLAUDE.md makes `git worktree` under this path the standard way to isolate
+# concurrent work here, so every session that follows the rule leaves a full second checkout in
+# this directory — plus whatever node_modules it installed to run the frontend suite.
+#
+# Scoped to worktrees/ rather than to .claude/, which also holds tracked config (launch.json).
+#
+# Untracked, it is not merely noise: the stop hook asks for untracked files to be committed and
+# pushed, and this is what it points at. Following that prompt literally would commit a copy of
+# the repo into the repo.
+.claude/worktrees/
