@@ -565,6 +565,75 @@ def update_settings(body: SettingsUpdate, request: Request):
     return get_settings()
 
 
+# ── per-user scan-scope override (ADR 0035 stage 2 — the non-admin surface) ────────────
+# The owner default is admin-gated above; this lets a SIGNED-IN USER set their OWN scan-scope
+# override, keyed to their email, never able to write anyone else's. The override can only WIDEN the
+# owner mandate — the widen-only union in active_scope keeps every owner criterion/format regardless
+# of what is stored here — so this surface can never be used to skip a check the owner required.
+class MyScopeUpdate(BaseModel):
+    # Same shape the admin scan_scope accepts — a preset NAME or the scope as DATA. "" is a REAL
+    # value here: the user opting into NO restriction (assess everything), which is distinct from
+    # HAVING no override (to clear the override and fall back to the owner default, use DELETE).
+    scan_scope: dict[str, list[str]] | str | None = None
+
+
+def _require_user(request: Request) -> str:
+    """The signed-in user's email, or 401. Per-user settings are keyed to identity, so — unlike the
+    admin gate, which no-ops in local dev — this REQUIRES a stamped user: there is no per-user
+    override without a user, and falling back to the shared 'demo' owner would let one user's
+    override leak onto everyone on a shared-estate deployment."""
+    email = (getattr(request.state, "user_email", None) or "").strip()
+    if not email:
+        raise HTTPException(401, "sign-in required for per-user settings")
+    return email
+
+
+@router.get("/settings/mine")
+def get_my_settings(request: Request):
+    """This signed-in user's OWN scan-scope override, plus the owner default it widens onto — both as
+    the RAW stored values (the edit surface, mirroring GET /settings), so an editor round-trips.
+    `scan_scope` is "" when the user has no override; the RESOLVED effective map is /config's job."""
+    user = _require_user(request)
+    return {
+        "scan_scope": core.store.get_user_setting(user, "scan_scope") or "",
+        "owner_default": core.store.get_setting("scan_scope", "") or "",
+    }
+
+
+@router.put("/settings/mine")
+def update_my_settings(body: MyScopeUpdate, request: Request):
+    """Set THIS user's own scan-scope override. Validated BEFORE writing — a malformed scope is a 422
+    and is never stored (same discipline as the admin PUT), because a stored-but-unparseable override
+    is silently ignored at read time. `{}` and "" both store as "" (no restriction)."""
+    user = _require_user(request)
+    if body.scan_scope is None:
+        return {"scan_scope": core.store.get_user_setting(user, "scan_scope") or ""}
+    from store import parse_scope_setting
+    raw = (json.dumps(body.scan_scope) if isinstance(body.scan_scope, dict)
+           else str(body.scan_scope).strip())
+    if raw and raw != "{}":
+        problem = parse_scope_setting(raw)[1]
+        if problem:
+            raise HTTPException(422, f"scan_scope: {problem}")
+    else:
+        raw = ""            # {} and "" both mean 'no restriction' — store the simpler one
+    core.store.set_user_setting(user, "scan_scope", raw)
+    core.store.log_decision(user, "settings.mine.scan_scope",
+                            detail=f"per-user scan_scope set to {raw or '(no restriction)'}")
+    return {"scan_scope": raw}
+
+
+@router.delete("/settings/mine")
+def clear_my_settings(request: Request):
+    """Remove THIS user's override so their scans fall back to the owner default. Distinct from PUT
+    with "" (a real override meaning 'no restriction'): DELETE means 'I have no preference, use the
+    owner's'. Idempotent."""
+    user = _require_user(request)
+    core.store.clear_user_setting(user, "scan_scope")
+    core.store.log_decision(user, "settings.mine.scan_scope", detail="per-user scan_scope cleared")
+    return {"scan_scope": ""}
+
+
 # ── AI provider gateway config (ADR 0019 §6, secret-ref design) ────────────────
 class AIProviderUpdate(BaseModel):
     # extra='forbid' is a load-bearing security guard: the model has NO key/api_key field, so a
