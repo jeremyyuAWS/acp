@@ -8,6 +8,7 @@ import { scOf } from './fixSummary.js'
 import RemediationPreview from './RemediationPreview.jsx'
 import WorkspaceProgress from './WorkspaceProgress.jsx'
 import RemediationTransform from './RemediationTransform.jsx'
+import WorkspaceFooter from './WorkspaceFooter.jsx'
 
 // Master/detail Remediation inbox. Remediation is queue work — select an item, understand it, act,
 // move to the next — so the layout is an email-style split: a 38% work queue on the left, a 62%
@@ -292,6 +293,14 @@ export default function RemediationInbox({
     setSelectedId(nextUnresolvedId(visible, f.id, nextDecisions))
   }
 
+  // Explicit linear navigation through the visible queue — Previous / Next step the SELECTION without
+  // acting, so a reviewer can look before deciding and always sees their place ("N of M").
+  const visIds = visible.map((f) => f.id)
+  const curIdx = visIds.indexOf(selectedId)
+  const position = curIdx >= 0 ? curIdx + 1 : 0
+  const goPrev = () => { if (curIdx > 0) setSelectedId(visIds[curIdx - 1]) }
+  const goNext = () => { if (curIdx >= 0 && curIdx < visIds.length - 1) setSelectedId(visIds[curIdx + 1]) }
+
   return (
     <div className="rinbox-wrap">
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
@@ -356,6 +365,8 @@ export default function RemediationInbox({
         <RemediationPreview finding={selected} scanId={selected?.scanId || scanId} aiEnabled={aiEnabled} />
       </div>
       </div>
+      {/* Sticky workflow guide (Show → Review → Verify) + Previous / N of M / Next navigation. */}
+      <WorkspaceFooter position={position} total={visIds.length} onPrev={goPrev} onNext={goNext} />
     </div>
   )
 }
