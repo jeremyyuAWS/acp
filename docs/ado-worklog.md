@@ -657,6 +657,14 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   concurrency the knob most likely LOWERED by measurement; adaptive counts driven by
   throttling/CPU/VRAM/DB-latency/error signals; plus the full safety contract. Design only — no runtime
   change yet. Docs-only, not RULE_PATHS.
+- **Reconciled the long-form `acp-architecture.md` to current** (#475). Patched for what shipped since #439:
+  §8 Observability rewritten to Langfuse **v3 live** (ClickHouse + Redis + MinIO + Postgres on the
+  `acp-langfuse-v3` Azure VM, why-a-VM-not-Container-Apps, host-only cutover); §9 corrected per-user scan
+  scope from "in progress" to **wired end to end** (widen-only union through the two listing chokepoints,
+  frozen into `scan_runs.scope`, `/settings/mine` + editor), plus the sign-in account chooser and
+  folder-level source scope; §1 diagram + deps gained the in-tenant Azure T4 and the v3 VM; §11 added the
+  flat-worker-pool concurrency weakness with **ADR 0037** named as the committed-but-unbuilt fix. §2–§7 core
+  reviewed and already current. Docs-only, not RULE_PATHS.
 
 ## Feature: docx Core-17 criterion coverage · #4610
 
@@ -1630,6 +1638,32 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
 - **"Notify me when complete"** (#463, slice 3c). The scan runs server-side and the banner is non-modal, so
   a user could always work elsewhere; this arms a browser notification that pings the outcome when the scan
   finishes ("145 of 250 assessed · 23 need review"). `scanNotify.js` asks permission once, only on opt-in.
+- **Three-step scan wizard with progressive disclosure** (#470). The scan modal was a folder selector, scan
+  configurator, WCAG matrix and engine panel all at once; #461 put folders first but *inside* that same dense
+  panel, which made it worse. Rebuilt as **three steps — Drive locations → Formats & criteria → Review** —
+  folders first because they decide which estate is judged, criteria only how each document in it is judged
+  (asking criteria first invites tuning 53 checks over the wrong half of a Drive).
+- **Two-column folder browser inline in step 1** (#472). Step 1 embeds the picker — tree on the left, CURRENT
+  SCOPE on the right, both visible at once — replacing the "Choose folders…" link into a modal. One
+  implementation, two layouts: `FolderPicker` grows `layout="inline"`; the Sources card and Discover keep the
+  modal. Adds a folder-scoped, honestly-labelled filter box.
+- **Reuse a recent scope, symmetric criteria write-back** (#473). Step 1 offers the boundaries this user has
+  **actually run**, derived from `scan_runs.scope` rather than a new saved-scopes store — a run's frozen scope
+  is a record of what WAS covered, and only that can be re-offered. Runs with no recorded scope are refused
+  (NULL is unknown, and applying unknown applies as *everything*), as are cross-family scopes and the wizard's
+  own default; carve-outs carry through by id, labelled, not dropped.
+- **Review step reports what this exact scope covered last time** (#474). Deliberately **not** a live pre-scan
+  estimate: under ADR 0020 a Discover run *is* the listing, so an estimate is nearly the operation run twice,
+  and it would put a second number for the same estate on screen under a different cap — the 2026-07-30 defect
+  again. Instead the review step reports a number that was **measured** — what this exact scope covered on its
+  last run.
+- **Per-stage timing instrumentation (ADR 0037 Step 0)** (#467). The measure-first first step of the Track B
+  pipeline design: `stage_timing.py` (pure — `ScanTimings` monotonic-clock accumulator, `merge_rollups` /
+  `bottleneck` / `summarize`) times each file's scan by stage (download vs analyse) into its own
+  `file_stage_timings` table, surfaced as a per-scan rollup (totals, per-stage average, bottleneck stage). A
+  strict **side-channel** — every function is total (malformed input dropped, never raised), so timing can
+  never disturb the scoring path it measures. No behaviour change; it exists so the staged speed-up is tuned
+  from real numbers, not guesses.
 
 ## Open items (backlog candidates)
 
@@ -2066,3 +2100,13 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   when complete"). To **Documentation**: #464 — ADR 0037, the measure-first staged/bounded assessment-pipeline
   design (Track B; design only, no runtime change). **Sync marker deliberately NOT advanced** (same convention
   as the prior entries).
+- **2026-08-19 (scan wizard + timing instrumentation + arch-doc reconcile)** — To **Scan-run experience
+  (Track A)**: the wizard build‑out on top of #461 — #470 (three‑step progressive‑disclosure wizard), #472
+  (inline two‑column folder browser), #473 (reuse a recent run's frozen scope, symmetric write‑back), #474
+  (review step reports the *measured* last‑run coverage, not a fabricated estimate) — plus #467, ADR 0037
+  **Step 0** per‑stage timing instrumentation (a total side‑channel that measures download‑vs‑analyse without
+  touching the scoring path). To **Documentation**: #475, the long‑form `acp-architecture.md` reconcile
+  (Langfuse v3 live, per‑user scope end‑to‑end, GPU T4, ADR 0037 as the concurrency fix). **Deliberately left
+  to their owning streams:** #419 (SMB walk/read logic, ADR 0036) belongs to the multi‑session SMB source
+  program (#388–#397) this log already defers to its owner; #476 is a trivial `.gitignore` chore. **Sync
+  marker deliberately NOT advanced** (same convention as the prior entries).
