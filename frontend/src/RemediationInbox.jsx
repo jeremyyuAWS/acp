@@ -172,14 +172,9 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
         <p style={{ fontSize: 14, color: 'var(--ink)', margin: '0 0 4px' }}>{lane.didLine}.</p>
         <Meta row={{ ...r, wcag: (f.rule_id || f.ruleId || '') }} />
 
-        {/* 2 · Evidence — see the finding in the document (the folded-in preview). Adaptive: a boxed
-            page region for a visible finding, an honest note for a structure/metadata one. */}
-        <div style={{ marginTop: 18 }}>
-          <p className="muted" style={{ fontSize: 11.5, letterSpacing: '.08em', textTransform: 'uppercase', margin: '0 0 8px' }}>
-            Evidence
-          </p>
-          <RemediationPreview finding={f} scanId={scanId} embedded />
-        </div>
+        {/* Evidence — seeing the finding in the document — is the dedicated Document-preview pane on
+            the right (mockup layout), not folded in here, so the guided column stays a compact
+            problem → change → decision flow. */}
 
         {/* 3 · What changed? (or, for manual, how to change it) */}
         <div style={{ marginTop: 18 }}>
@@ -353,34 +348,43 @@ export default function RemediationInbox({
 
   return (
     <div className="rinbox-wrap">
+      {/* Dark app header (mockup): the section title + the workflow-status tabs as the page's top
+          chrome — one lens on where every finding sits in the pipeline (Inbox → In progress →
+          Ready to validate → Blocked → Done), spanning the three panes below. */}
+      <div className="rinbox-topbar" role="tablist" aria-label="Workflow status"
+           style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
+                    background: '#1f2b3a', color: '#fff', borderRadius: '12px 12px 0 0', padding: '9px 16px' }}>
+        <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: '-.01em' }}>Remediate</span>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {WORKFLOW_TABS.map((t) => (
+            <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}
+                    style={{ fontSize: 12, padding: '3px 11px', borderRadius: 20, cursor: 'pointer',
+                             border: `1px solid ${tab === t ? 'transparent' : 'rgba(255,255,255,.22)'}`,
+                             background: tab === t ? '#3b6fd6' : 'transparent', color: '#fff',
+                             fontWeight: tab === t ? 700 : 500 }}>
+              {WORKFLOW_LABELS[t]} {counts[t] > 0 ? counts[t] : ''}
+            </button>
+          ))}
+        </div>
+      </div>
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
       <WorkspaceProgress queue={queue} decisions={decisions} selected={selected} />
-      <div className="rinbox" style={{ display: 'flex', gap: 0, border: '1px solid var(--line,#e2dce4)', borderRadius: 12, overflow: 'hidden', minHeight: 480 }}>
-      {/* ── Left: the work queue (35%) — find and select the next finding ── */}
-      <div style={{ flex: '0 0 35%', maxWidth: '35%', borderRight: '1px solid var(--line,#e2dce4)', display: 'flex', flexDirection: 'column', minHeight: 480 }}>
+      <div className="rinbox" style={{ display: 'flex', gap: 0, border: '1px solid var(--line,#e2dce4)', borderRadius: '0 0 12px 12px', overflow: 'hidden', minHeight: 480 }}>
+      {/* ── Left: the work queue (28%) — find and select the next finding ── */}
+      <div style={{ flex: '0 0 28%', maxWidth: '28%', borderRight: '1px solid var(--line,#e2dce4)', display: 'flex', flexDirection: 'column', minHeight: 480 }}>
         <div style={{ flex: '0 0 auto', padding: '10px 12px', borderBottom: '1px solid var(--line,#e2dce4)' }}>
-          {/* Compact toolbar — search + sort on ONE row (was three stacked rows: search, tabs, sort+count). */}
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Remediation Inbox</div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <input type="search" value={search} onChange={(e) => setSearch(e.target.value)}
-                   placeholder="Search findings…" aria-label="Search findings"
+                   placeholder="Search documents" aria-label="Search documents"
                    style={{ flex: '1 1 auto', minWidth: 0, fontSize: 13, padding: '6px 10px', borderRadius: 8, border: '1px solid var(--line,#e2dce4)' }} />
             <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort findings" title="Sort findings"
                     style={{ flex: '0 0 auto', fontSize: 11.5, padding: '5px 6px', borderRadius: 6, border: '1px solid var(--line,#e2dce4)' }}>
               {SORTS.map((s) => <option key={s} value={s}>{SORT_LABEL[s]}</option>)}
             </select>
           </div>
-          {/* Status filter (pipeline stage) with counts + the single resolved summary, one row. */}
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
-            {WORKFLOW_TABS.map((t) => (
-              <button key={t} type="button" aria-pressed={tab === t} onClick={() => setTab(t)}
-                      style={{ fontSize: 11.5, padding: '2px 9px', borderRadius: 20, cursor: 'pointer',
-                               border: `1px solid ${tab === t ? 'var(--ink)' : 'var(--line,#e2dce4)'}`,
-                               background: tab === t ? 'var(--ink)' : 'transparent', color: tab === t ? '#fff' : 'var(--ink)',
-                               fontWeight: tab === t ? 700 : 500 }}>
-                {WORKFLOW_LABELS[t]} {counts[t] > 0 ? counts[t] : ''}
-              </button>
-            ))}
-            <span className="muted" style={{ marginLeft: 'auto', fontSize: 11.5, fontWeight: 600 }}>{prog.resolved} of {prog.total} resolved</span>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+            <span className="muted" style={{ fontSize: 11.5, fontWeight: 600 }}>{prog.resolved} of {prog.total} resolved</span>
           </div>
         </div>
         <div style={{ flex: '1 1 auto', overflowY: 'auto' }}>
@@ -411,15 +415,24 @@ export default function RemediationInbox({
         </div>
       </div>
 
-      {/* ── Right: the remediation workspace (65%) — one scrolling column that stacks
-           Problem → Evidence → How to fix → Decision, with the document preview folded into the
-           Evidence section rather than living as a separate, often-empty third pane. ── */}
-      <div style={{ flex: '1 1 65%', minWidth: 0 }}>
-        <DetailPane f={selected} decisions={decisions} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
-                    matchingCount={matchingCount} onApplyToMatching={applyToMatching}
-                    scanId={selected?.scanId || scanId}
-                    draft={selected ? (drafts[selected.id] ?? null) : null}
-                    onDraftChange={(v) => selected && setDrafts((d) => ({ ...d, [selected.id]: v }))} />
+      {/* ── Centre: guided remediation (34%) — problem → proposed change → decision, one at a time ── */}
+      <div style={{ flex: '0 0 34%', maxWidth: '34%', minWidth: 0, borderRight: '1px solid var(--line,#e2dce4)', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: '0 0 auto', padding: '10px 12px', borderBottom: '1px solid var(--line,#e2dce4)', fontSize: 13, fontWeight: 700 }}>Guided remediation</div>
+        <div style={{ flex: '1 1 auto', minHeight: 0 }}>
+          <DetailPane f={selected} decisions={decisions} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
+                      matchingCount={matchingCount} onApplyToMatching={applyToMatching}
+                      scanId={selected?.scanId || scanId}
+                      draft={selected ? (drafts[selected.id] ?? null) : null}
+                      onDraftChange={(v) => selected && setDrafts((d) => ({ ...d, [selected.id]: v }))} />
+        </div>
+      </div>
+
+      {/* ── Right: document preview (38%) — the finding shown in its own document (mockup's third pane) ── */}
+      <div style={{ flex: '1 1 38%', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: '0 0 auto', padding: '10px 12px', borderBottom: '1px solid var(--line,#e2dce4)', fontSize: 13, fontWeight: 700 }}>Document preview</div>
+        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}>
+          <RemediationPreview finding={selected} scanId={selected?.scanId || scanId} />
+        </div>
       </div>
       </div>
       {/* Sticky workflow guide (Show → Review → Verify) + Previous / N of M / Next navigation. */}
