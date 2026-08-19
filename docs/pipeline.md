@@ -148,6 +148,33 @@ long-lived deploy credential in a repo secret is the thing you least want to rot
 Until those exist the workflow fails at `azure/login`, which is the correct failure — it is the
 only step that cannot be verified from here.
 
+### Chain B — staging (unattended)
+
+`deploy.yml` is auto-*triggered* but human-*approved*: production only moves when someone clears
+the `production` gate, so its CalVer legitimately sits behind `main` while an approval waits.
+`.github/workflows/deploy-staging.yml` is the complement — it ships the **same green commit** to a
+staging container app with **no reviewer gate**, so `main`'s tip is live *somewhere* within
+minutes of every merge. It reuses `redeploy.sh` unchanged; the only differences from prod are the
+four it sets — no approval, staging app/worker names, staging FQDN, and a dormancy guard.
+
+It is **dormant until provisioned.** The job is gated on `vars.STAGING_FQDN != ''`, so this file
+is inert on merge until the staging target exists, then turns on the moment that variable is set.
+`redeploy.sh` *updates* apps and health-checks **both** `acp-app-staging` and `acp-worker-staging`
+as `Running` before it will deploy — it does not create them. One-time setup, all outside this
+repo:
+
+| what | where |
+|---|---|
+| `acp-app-staging` + `acp-worker-staging` container apps, each with its **own** config and a **separate** `DATABASE_URL` | Azure (`deploy.sh` stands them up) |
+| `staging` environment with **no** required reviewers | repo → Settings → Environments |
+| `STAGING_FQDN` (staging hostname, no scheme) — also the switch that un-dormants the workflow | repo → Settings → Variables |
+| optional `STAGING_RG` / `STAGING_APP` / `STAGING_WORKER` if provisioned under other names | repo → Settings → Variables |
+
+Give staging a **separate database**: both environments pull the same registry image, so a staging
+app pointed at the production `DATABASE_URL` would write to production data. The Azure secrets and
+OIDC federation are shared with prod — the service principal's Contributor on `mdk-accessibility`
+already covers the staging apps in that same group, so no new credential is needed.
+
 ### Deploying locally
 
 Every image in the registry before this was built from a laptop (`runType: QuickRun`,
